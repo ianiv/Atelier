@@ -14,6 +14,7 @@ final class CreateModel {
   }
 
   let engine = GenerationEngine()
+  let history: HistoryStore
 
   var models: [MediaGenerationResolvedModel] = []
   var selectedModel: String? {
@@ -39,6 +40,9 @@ final class CreateModel {
 
   private var generationTask: Task<Void, Never>?
   private var loadTask: Task<Void, Never>?
+  /// Settings from a history item to apply once the model's defaults finish loading.
+  private var pendingSettings: GenerationSettings?
+  private var generateWhenLoaded = false
 
   var isBusy: Bool {
     if case .idle = phase { return false }
@@ -50,8 +54,44 @@ final class CreateModel {
       && !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
 
-  init() {
+  init(history: HistoryStore) {
+    self.history = history
     Task { await reloadModels() }
+  }
+
+  /// Whether `item`'s model is downloaded, so its settings can be loaded here.
+  func canUse(_ item: HistoryItem) -> Bool {
+    !isBusy && item.sidecar.settings != nil && models.contains { $0.file == item.sidecar.model }
+  }
+
+  /// Loads a history item's prompt, model, seed and settings into Create. With `newSeed`, rolls a
+  /// fresh seed and generates as soon as the model is ready.
+  func use(_ item: HistoryItem, newSeed: Bool = false) {
+    guard canUse(item), let settings = item.sidecar.settings else { return }
+    let sidecar = item.sidecar
+    prompt = sidecar.prompt
+    negativePrompt = sidecar.negativePrompt
+    errorMessage = nil
+    if newSeed {
+      seedLocked = false
+    } else {
+      seed = sidecar.seed
+      seedLocked = true
+    }
+    image = NSImage(contentsOf: item.imageURL)?.cgImage(
+      forProposedRect: nil, context: nil, hints: nil)
+    if selectedModel == sidecar.model, phase != .loadingModel {
+      self.settings = settings
+      if newSeed { generate() }
+    } else {
+      pendingSettings = settings
+      generateWhenLoaded = newSeed
+      if selectedModel == sidecar.model {
+        loadDefaults(for: sidecar.model)
+      } else {
+        selectedModel = sidecar.model
+      }
+    }
   }
 
   func setModelsDirectory(_ directory: String) {
@@ -104,9 +144,10 @@ final class CreateModel {
         var used = configuration
         request.settings.apply(to: &used)
         used.seed = request.seed
-        let url = try HistoryStore.save(
+        let url = try history.save(
           result, request: request, configuration: used, startedAt: startedAt,
-          finishedAt: Date())
+          finishedAt: Date()
+        ).imageURL
         lastSavedURL = url
         image = NSImage(contentsOf: url)?.cgImage(forProposedRect: nil, context: nil, hints: nil)
       } catch is CancellationError {
@@ -150,11 +191,16 @@ final class CreateModel {
         guard !Task.isCancelled, selectedModel == model else { return }
         let recommended = ModelDefaults.recommended(for: model, configuration: configuration)
         self.recommended = recommended
-        settings = recommended
+        settings = pendingSettings ?? recommended
       } catch {
         errorMessage = error.localizedDescription
       }
-      if selectedModel == model { phase = .idle }
+      guard selectedModel == model else { return }
+      let shouldGenerate = generateWhenLoaded && pendingSettings != nil && errorMessage == nil
+      pendingSettings = nil
+      generateWhenLoaded = false
+      phase = .idle
+      if shouldGenerate { generate() }
     }
   }
 

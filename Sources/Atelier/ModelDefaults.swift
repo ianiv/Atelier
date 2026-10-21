@@ -12,6 +12,20 @@ struct GenerationSettings: Equatable {
   var resolutionDependentShift: Bool
   var hiresFix: Bool
 
+  init(
+    width: Int, height: Int, steps: Int, guidanceScale: Float, shift: Float,
+    sampler: SamplerType, resolutionDependentShift: Bool, hiresFix: Bool
+  ) {
+    self.width = width
+    self.height = height
+    self.steps = steps
+    self.guidanceScale = guidanceScale
+    self.shift = shift
+    self.sampler = sampler
+    self.resolutionDependentShift = resolutionDependentShift
+    self.hiresFix = hiresFix
+  }
+
   init(configuration: MediaGenerationPipeline.Configuration) {
     width = configuration.width
     height = configuration.height

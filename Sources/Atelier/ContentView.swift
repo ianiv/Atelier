@@ -1,4 +1,12 @@
+import Observation
 import SwiftUI
+
+/// The selected sidebar section, shared so other screens (and Automation) can switch it.
+@MainActor
+@Observable
+final class Navigation {
+  var section: ContentView.Section? = .create
+}
 
 struct ContentView: View {
   enum Section: String, CaseIterable, Identifiable {
@@ -21,18 +29,21 @@ struct ContentView: View {
     }
   }
 
-  @State private var section: Section? = .create
+  @Environment(Navigation.self) private var navigation
 
   var body: some View {
+    @Bindable var navigation = navigation
     NavigationSplitView {
-      List(Section.allCases, selection: $section) { section in
+      List(Section.allCases, selection: $navigation.section) { section in
         Label(section.rawValue, systemImage: section.symbol).tag(section)
       }
       .navigationSplitViewColumnWidth(min: 160, ideal: 180)
     } detail: {
-      switch section {
+      switch navigation.section {
       case .create, nil:
         CreateView()
+      case .history:
+        HistoryView()
       case .some(let section):
         ContentUnavailableView(
           section.rawValue, systemImage: section.symbol,

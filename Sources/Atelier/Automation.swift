@@ -1,14 +1,29 @@
 import AppKit
+import ImageIO
 
 /// Launch-argument driver for scripted checks: fills the Create screen, presses Generate, logs
 /// progress to stdout and snapshots the window. Does nothing unless `--generate` is passed.
 ///
 ///   Atelier --generate --model moss_image_sft_i8x.ckpt --prompt "…" --width 1152 --height 896
 ///           [--seed N] [--steps N] [--cancel-at-step N] [--snapshot-dir DIR] [--quit]
+///
+/// `--show history` opens that sidebar section at launch.
+///
+/// `--reuse latest|PNG [--new-seed]` instead loads a history item through "Use settings" (or
+/// "Rerun with new seed"), generates, and compares the new PNG's pixels with the original.
 @MainActor
 enum Automation {
-  static func runIfRequested(_ model: CreateModel) {
+  static func runIfRequested(_ model: CreateModel, navigation: Navigation) {
     let args = CommandLine.arguments
+    if let index = args.firstIndex(of: "--show"), index + 1 < args.count,
+      let section = ContentView.Section(rawValue: args[index + 1].capitalized)
+    {
+      navigation.section = section
+    }
+    if args.contains("--reuse") {
+      reuse(model, navigation: navigation)
+      return
+    }
     guard args.contains("--generate") else { return }
     func value(_ name: String) -> String? {
       guard let index = args.firstIndex(of: name), index + 1 < args.count else { return nil }
@@ -89,6 +104,103 @@ enum Automation {
       if let snapshotDir { snapshot(to: snapshotDir.appendingPathComponent("final.png")) }
       if args.contains("--quit") { NSApp.terminate(nil) }
     }
+  }
+
+  private static func reuse(_ model: CreateModel, navigation: Navigation) {
+    let args = CommandLine.arguments
+    func value(_ name: String) -> String? {
+      guard let index = args.firstIndex(of: name), index + 1 < args.count else { return nil }
+      return args[index + 1]
+    }
+    let snapshotDir = value("--snapshot-dir").map { URL(fileURLWithPath: $0) }
+    Task { @MainActor in
+      let started = Date()
+      func log(_ message: String) {
+        print(String(format: "[%7.2fs] ", Date().timeIntervalSince(started)) + message)
+        fflush(stdout)
+      }
+      func finish() { if args.contains("--quit") { NSApp.terminate(nil) } }
+      while !model.history.isLoaded || model.models.isEmpty || model.isBusy {
+        try? await Task.sleep(for: .milliseconds(100))
+      }
+      log("history: \(model.history.items.count) items")
+      let target = value("--reuse") ?? "latest"
+      guard
+        let item = target == "latest"
+          ? model.history.items.first
+          : model.history.items.first(where: { $0.imageURL.path == target })
+      else {
+        log("no history item \(target)")
+        return finish()
+      }
+      navigation.section = .history
+      try? await Task.sleep(for: .milliseconds(800))
+      if let snapshotDir { snapshot(to: snapshotDir.appendingPathComponent("history.png")) }
+
+      let newSeed = args.contains("--new-seed")
+      log(
+        "\(newSeed ? "rerun" : "use settings") \(item.imageURL.lastPathComponent): \(item.sidecar.model) seed \(item.sidecar.seed) steps \(item.sidecar.steps)"
+      )
+      guard model.canUse(item) else {
+        log("item can't be used (model not downloaded?)")
+        return finish()
+      }
+      let previous = model.lastSavedURL
+      model.use(item, newSeed: newSeed)
+      navigation.section = .create
+      if !newSeed {
+        while model.isBusy { try? await Task.sleep(for: .milliseconds(100)) }
+        log("loaded: model \(model.selectedModel ?? "?") seed \(model.seed) locked \(model.seedLocked) settings match \(model.settings == item.sidecar.settings)")
+        model.generate()
+      }
+      while !model.isBusy && model.lastSavedURL == previous && model.errorMessage == nil {
+        try? await Task.sleep(for: .milliseconds(50))
+      }
+      while model.isBusy { try? await Task.sleep(for: .milliseconds(100)) }
+      if let error = model.errorMessage { log("error: \(error)") }
+      guard let url = model.lastSavedURL, url != previous else {
+        log("no new image")
+        return finish()
+      }
+      log("saved \(url.path) seed \(model.seed)")
+      if let difference = pixelDifference(item.imageURL, url) {
+        log("pixels differing from original: \(difference.count) of \(difference.total), max channel delta \(difference.maxDelta)")
+      }
+      if let snapshotDir { snapshot(to: snapshotDir.appendingPathComponent("create.png")) }
+      finish()
+    }
+  }
+
+  private static func pixelDifference(_ a: URL, _ b: URL) -> (count: Int, total: Int, maxDelta: Int)? {
+    func rgba(_ url: URL) -> (Int, Int, [UInt8])? {
+      guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+        let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+      else { return nil }
+      let (width, height) = (image.width, image.height)
+      var bytes = [UInt8](repeating: 0, count: width * height * 4)
+      guard let context = CGContext(
+        data: &bytes, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+      else { return nil }
+      context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+      return (width, height, bytes)
+    }
+    guard let (w1, h1, p1) = rgba(a), let (w2, h2, p2) = rgba(b), w1 == w2, h1 == h2 else {
+      return nil
+    }
+    var count = 0
+    var maxDelta = 0
+    for pixel in 0..<(w1 * h1) {
+      var differs = false
+      for channel in 0..<3 {
+        let delta = abs(Int(p1[pixel * 4 + channel]) - Int(p2[pixel * 4 + channel]))
+        if delta > 0 { differs = true }
+        maxDelta = max(maxDelta, delta)
+      }
+      if differs { count += 1 }
+    }
+    return (count, w1 * h1, maxDelta)
   }
 
   /// Renders the main window into a PNG; needs no screen-recording permission.

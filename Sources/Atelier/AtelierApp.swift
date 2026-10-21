@@ -3,14 +3,24 @@ import SwiftUI
 @main
 struct AtelierApp: App {
   @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
-  @State private var create = CreateModel()
+  @State private var history: HistoryStore
+  @State private var create: CreateModel
+  @State private var navigation = Navigation()
+
+  init() {
+    let history = HistoryStore()
+    _history = State(initialValue: history)
+    _create = State(initialValue: CreateModel(history: history))
+  }
 
   var body: some Scene {
     WindowGroup("Atelier") {
       ContentView()
         .environment(create)
+        .environment(history)
+        .environment(navigation)
         .frame(minWidth: 960, minHeight: 640)
-        .task { Automation.runIfRequested(create) }
+        .task { Automation.runIfRequested(create, navigation: navigation) }
     }
     Settings {
       SettingsView()

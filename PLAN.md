@@ -41,6 +41,12 @@ The CLI's generation code is almost all `private` inside `/Users/ianiv/Code/draw
 - **Toolchain:** with the Command Line Tools selected, the macOS 27 SDK's `@State` macro has no plugin (`SwiftUIMacros` ships only in Xcode). `Package.swift` adds Xcode's macOS plugin path to the Atelier target when Xcode is installed (same compiler build, 6.4.0.34.1).
 - `generate` returns `[Result]` and reports `State` with `generating(step:totalSteps:)` and a lazily decoded `Preview`; second-pass work (hires fix) shows as `.postprocessing`.
 
+**Phase 2 notes:**
+- `HistoryStore` is an `@Observable` index (newest first) shared by Create and History; new outputs are inserted as they save. Each PNG now carries its sidecar JSON as an `iTXt` chunk (keyword `Atelier`, UTF-8) inserted after IHDR, so no re-encode.
+- "Use settings" restores model, prompt, negative prompt, seed (locked) and the inspector settings, applied onto the fresh pipeline's recommended configuration. Other configuration fields aren't written back; they come from the same recommended template, and the saved configurations of a run and its "Use settings" rerun compared equal field for field.
+- Same settings and seed give a visually identical image but not a bit-identical one: reruns differ by up to 3 to 5 levels out of 255 on many pixels, including two reruns of each other with identical saved configurations (Klein 4 steps, MOSS 8 steps). Inferred to be GPU run-to-run noise in the engine, not missing settings.
+- Delete moves the PNG and sidecar to the Trash. `Automation` gained `--reuse latest|PNG [--new-seed]` (compares pixels with the original) and `--show history`.
+
 Gaps to fill. These are small additions in MGK or the app, guided by `/Users/ianiv/Code/draw-things-community/Libraries/MediaGenerationKit/AGENTS.md`: small, value-based API, no request objects, async for long work.
 1. **Per-call LoRA metadata** for LoRAs that aren't registered yet. Port the CLI's `loraOverrideMapping` (`DrawThingsCLI.swift:1015`), or register LoRAs through `LoRAZoo.appendCustomSpecification` when importing.
 2. **Fallback defaults for models missing from the community config catalog.** MOSS today falls back to generic 20 steps / UniPC AYS. Add an app-side table that seeds the inspector from the catalog description values, for example MOSS: 50 steps, Text Guidance 3, Shift 5, `resolutionDependentShift = false`, DDIM Trailing.
