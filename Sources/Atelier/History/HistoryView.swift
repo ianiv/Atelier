@@ -255,10 +255,21 @@ struct Thumbnail: View {
 struct ProjectMenu: View {
   @Environment(HistoryStore.self) private var history
   @State private var naming: Naming?
-  @State private var name = ""
   @State private var error: String?
 
-  enum Naming { case new, rename }
+  enum Naming: Identifiable {
+    case new(suggested: String), rename(current: String)
+    var id: String { title }
+    var title: String {
+      if case .new = self { "New Project" } else { "Rename Project" }
+    }
+    var initialName: String {
+      switch self {
+      case .new(let suggested): suggested
+      case .rename(let current): current
+      }
+    }
+  }
 
   var body: some View {
     Menu {
@@ -270,14 +281,8 @@ struct ProjectMenu: View {
             set: { if $0 { Task { await history.open(project) } } }))
       }
       Divider()
-      Button("New Project…") {
-        name = history.availableName()
-        naming = .new
-      }
-      Button("Rename “\(history.project.name)”…") {
-        name = history.project.name
-        naming = .rename
-      }
+      Button("New Project…") { naming = .new(suggested: history.availableName()) }
+      Button("Rename “\(history.project.name)”…") { naming = .rename(current: history.project.name) }
       Button("Show in Finder") {
         NSWorkspace.shared.activateFileViewerSelecting([history.project.url])
       }
@@ -286,14 +291,10 @@ struct ProjectMenu: View {
         .labelStyle(.titleAndIcon)
     }
     .help("Project: images are saved to the current project")
-    .alert(
-      naming == .rename ? "Rename Project" : "New Project",
-      isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })
-    ) {
-      TextField("Name", text: $name)
-      Button(naming == .rename ? "Rename" : "Create") { commit() }
-        .disabled(!HistoryStore.isValidName(name))
-      Button("Cancel", role: .cancel) { naming = nil }
+    // A sheet rather than an alert with a text field: the alert showed an empty field and put
+    // keyboard focus on Cancel.
+    .sheet(item: $naming) { naming in
+      ProjectNameSheet(naming: naming) { commit(naming, name: $0) }
     }
     .alert(
       "Couldn't rename the project",
@@ -302,9 +303,7 @@ struct ProjectMenu: View {
       message: { Text(error ?? "") })
   }
 
-  private func commit() {
-    let kind = naming
-    naming = nil
+  private func commit(_ kind: Naming, name: String) {
     let name = name.trimmingCharacters(in: .whitespaces)
     guard HistoryStore.isValidName(name) else { return }
     Task {
@@ -317,9 +316,50 @@ struct ProjectMenu: View {
         } catch {
           self.error = error.localizedDescription
         }
-      case nil:
-        break
       }
     }
+  }
+}
+
+/// Names a new project or renames the current one. Opens with the name filled in and selected,
+/// and Return confirms.
+private struct ProjectNameSheet: View {
+  let naming: ProjectMenu.Naming
+  let commit: (String) -> Void
+  @Environment(\.dismiss) private var dismiss
+  @State private var name = ""
+  @FocusState private var nameFocused: Bool
+
+  private var isNew: Bool {
+    if case .new = naming { true } else { false }
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Text(naming.title).font(.headline)
+      TextField("Name", text: $name)
+        .focused($nameFocused)
+        .onSubmit(confirm)
+      HStack {
+        Spacer()
+        Button("Cancel", role: .cancel) { dismiss() }
+          .keyboardShortcut(.cancelAction)
+        Button(isNew ? "Create" : "Rename", action: confirm)
+          .keyboardShortcut(.defaultAction)
+          .disabled(!HistoryStore.isValidName(name))
+      }
+    }
+    .padding(20)
+    .frame(width: 320)
+    .onAppear {
+      name = naming.initialName
+      nameFocused = true
+    }
+  }
+
+  private func confirm() {
+    guard HistoryStore.isValidName(name) else { return }
+    dismiss()
+    commit(name)
   }
 }
