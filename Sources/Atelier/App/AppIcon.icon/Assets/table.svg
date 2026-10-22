@@ -1,0 +1,3 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024"><defs><linearGradient id="t" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#b07a4f"/><stop offset="1" stop-color="#7f5233"/></linearGradient></defs>
+<rect x="0" y="720" width="1024" height="304" fill="url(#t)"/><rect x="0" y="720" width="1024" height="12" fill="#d29c6c"/>
+<ellipse cx="512" cy="800" rx="250" ry="24" fill="#4a2c18" opacity=".35"/></svg>

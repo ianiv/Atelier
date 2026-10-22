@@ -71,6 +71,7 @@
 		1A2A67114ED9030A8948E8ED /* InspectorSize.swift in Sources */ = {isa = PBXBuildFile; fileRef = 767CBEA7FD85E530CA5726C1 /* InspectorSize.swift */; };
 		FEC22431AE15251468257CA2 /* LibraryErrorAlert.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAFF310E4AA538AA8C02FC77 /* LibraryErrorAlert.swift */; };
 		600FFF1041FD67847B794622 /* LoRAsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 434F7495899302690802E139 /* LoRAsView.swift */; };
+		A7E11C0A1C0A7E11C0A7E102 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = A7E11C0A1C0A7E11C0A7E101 /* AppIcon.icon */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -158,6 +159,7 @@
 		767CBEA7FD85E530CA5726C1 /* InspectorSize.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorSize.swift; sourceTree = "<group>"; };
 		DAFF310E4AA538AA8C02FC77 /* LibraryErrorAlert.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryErrorAlert.swift; sourceTree = "<group>"; };
 		434F7495899302690802E139 /* LoRAsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoRAsView.swift; sourceTree = "<group>"; };
+		A7E11C0A1C0A7E11C0A7E101 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = AppIcon.icon; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -220,6 +222,7 @@
 		882062C245F2B93A25F1D212 /* App */ = {
 			isa = PBXGroup;
 			children = (
+				A7E11C0A1C0A7E11C0A7E101 /* AppIcon.icon */,
 				3C8D5C8071A6037BDD1122F9 /* AppSettings.swift */,
 				716BE47B7D8EFA0449CAF4AF /* AtelierApp.swift */,
 				75FDC53060CFC4942FDDBF2D /* ContentView.swift */,
@@ -383,6 +386,7 @@
 			buildPhases = (
 				29B4432F7D3CAC37BE48BE65 /* Sources */,
 				0EBA40430215D0464E852C5D /* Frameworks */,
+				A7E11C0A1C0A7E11C0A7E103 /* Resources */,
 				3C1F9027ACE508F70F1D6A69 /* Embed Frameworks */,
 				886CAAD4AAB7CC8A179150DA /* Copy tiny autoencoders from Draw Things.app */,
 			);
@@ -432,6 +436,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A7E11C0A1C0A7E11C0A7E103 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A7E11C0A1C0A7E11C0A7E102 /* AppIcon.icon in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
 		886CAAD4AAB7CC8A179150DA /* Copy tiny autoencoders from Draw Things.app */ = {
