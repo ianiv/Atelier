@@ -26,7 +26,6 @@ struct HistoryView: View {
 
   var body: some View {
     grid
-      .searchable(text: $search, placement: .toolbar, prompt: "Filter by prompt")
       .toolbar {
         ToolbarItem(placement: .navigation) { ProjectMenu() }
         ToolbarItem {
@@ -36,6 +35,7 @@ struct HistoryView: View {
           }
           .frame(minWidth: 180)
         }
+        ToolbarItem { ToolbarSearchField(prompt: "Filter by prompt", text: $search) }
       }
       .inspector(isPresented: .constant(true)) {
         Group {

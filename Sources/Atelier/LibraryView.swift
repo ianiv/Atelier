@@ -41,7 +41,6 @@ struct ModelsView: View {
 
   var body: some View {
     table
-      .searchable(text: $search, placement: .toolbar, prompt: "Filter models")
       .toolbar {
         ToolbarItem {
           Picker("Show", selection: $filter) {
@@ -56,6 +55,7 @@ struct ModelsView: View {
           .disabled(library.isLoadingCatalog)
           .help("Reload the model catalog and the models folder")
         }
+        ToolbarItem { ToolbarSearchField(prompt: "Filter models", text: $search) }
       }
       .safeAreaInset(edge: .bottom, spacing: 0) { footer }
       .inspector(isPresented: .constant(true)) {
@@ -303,7 +303,6 @@ struct LoRAsView: View {
         library.prepareImport(urls)
         return true
       } isTargeted: { dropTargeted = $0 }
-      .searchable(text: $search, placement: .toolbar, prompt: "Filter LoRAs")
       .toolbar {
         ToolbarItem {
           Picker("Family", selection: $family) {
@@ -316,6 +315,7 @@ struct LoRAsView: View {
           Button("Import…", systemImage: "plus") { chooseFiles() }
             .help("Import .safetensors LoRA files (or drop them here)")
         }
+        ToolbarItem { ToolbarSearchField(prompt: "Filter LoRAs", text: $search) }
       }
       .inspector(isPresented: .constant(true)) {
         Group {
