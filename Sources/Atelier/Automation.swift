@@ -290,6 +290,24 @@ enum Automation {
       let steps = SettingsRegistry.byID["steps"]!
       let guidance = SettingsRegistry.byID["guidanceScale"]!
 
+      if args.contains("--show-customize") {
+        layouts.customizing = true
+        try? await Task.sleep(for: .seconds(2))
+        if let sheet = NSApp.windows.first(where: { $0.isSheet && $0.isVisible }),
+          let view = sheet.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds),
+          let snapshotDir
+        {
+          view.cacheDisplay(in: view.bounds, to: rep)
+          try? rep.representation(using: .png, properties: [:])?.write(
+            to: snapshotDir.appendingPathComponent("customize.png"))
+          log("customize sheet snapshotted")
+        } else {
+          log("no customize sheet window")
+        }
+        layouts.customizing = false
+        try? await Task.sleep(for: .seconds(1))
+        return finish()
+      }
       if let expected = value("--expect-layout") {
         check(layouts.current.name == expected, "layout after relaunch is “\(layouts.current.name)” (expected “\(expected)”)")
         check(!layouts.current.isShown("shift"), "Shift is still hidden after relaunch")

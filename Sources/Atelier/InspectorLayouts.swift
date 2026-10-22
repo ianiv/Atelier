@@ -67,6 +67,7 @@ final class LayoutStore {
   // Inspector view state shared with the menu bar and Automation.
   var searchText = ""
   var showAll = false
+  var customizing = false
 
   static var directory: URL {
     FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]

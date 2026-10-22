@@ -11,8 +11,6 @@ struct InspectorView: View {
   @Environment(\.undoManager) private var undoManager
   @State private var optionHeld = false
   @State private var flagsMonitor: Any?
-  @State private var customizing = false
-
   private var showAll: Bool { layouts.showAll || optionHeld }
   private var query: String { layouts.searchText.trimmingCharacters(in: .whitespaces) }
 
@@ -25,7 +23,7 @@ struct InspectorView: View {
         .padding(.top, 10)
       HStack(spacing: 6) {
         SearchField(text: $layouts.searchText, prompt: "Search Settings")
-        LayoutMenu(customizing: $customizing)
+        LayoutMenu(customizing: $layouts.customizing)
       }
       .padding(.horizontal, 10)
       .padding(.vertical, 8)
@@ -46,7 +44,7 @@ struct InspectorView: View {
         }
       }
     }
-    .sheet(isPresented: $customizing) { CustomizeInspectorSheet() }
+    .sheet(isPresented: $layouts.customizing) { CustomizeInspectorSheet() }
     .onAppear {
       flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
         optionHeld = event.modifierFlags.contains(.option)
@@ -242,13 +240,6 @@ struct InspectorSection: View {
     // The whole header (except the checkbox and reset button) expands and collapses the section.
     .contentShape(.rect)
     .onTapGesture { layouts.setExpanded(section, !expanded) }
-    .contextMenu {
-      let order = layouts.current.sections
-      Button("Move Section Up") { layouts.moveSection(section, by: -1) }
-        .disabled(order.first == section)
-      Button("Move Section Down") { layouts.moveSection(section, by: 1) }
-        .disabled(order.last == section)
-    }
   }
 
   /// On when a file is picked; turning it on restores the last file picked.
@@ -860,6 +851,7 @@ struct CustomizeInspectorSheet: View {
   @State private var items: [SettingSection: [Item]] = [:]
   @State private var expanded: Set<String> = []
   @State private var sectionOrder: [SettingSection] = []
+  @State private var selected: SettingSection? = .essentials
 
   var body: some View {
     VStack(spacing: 0) {
@@ -869,30 +861,40 @@ struct CustomizeInspectorSheet: View {
         TextField("Layout name", text: $name).frame(width: 200)
       }
       .padding()
-      List {
-        Section("Section Order") {
+      Divider()
+      // Sections on the left (drag to reorder), the selected section's settings on the right.
+      HStack(spacing: 0) {
+        List(selection: $selected) {
           ForEach(sectionOrder) { section in
-            Label(section.title, systemImage: "line.3.horizontal")
-          }
-          .onMove { sectionOrder.move(fromOffsets: $0, toOffset: $1) }
-        }
-        ForEach(sectionOrder) { section in
-          Section {
-            ForEach(binding(section)) { $item in
-              Toggle(item.title, isOn: $item.shown)
-            }
-            .onMove { from, to in items[section, default: []].move(fromOffsets: from, toOffset: to) }
-          } header: {
             HStack {
               Text(section.title)
               Spacer()
-              Toggle("Starts expanded", isOn: Binding(
-                get: { expanded.contains(section.id) },
-                set: { if $0 { expanded.insert(section.id) } else { expanded.remove(section.id) } }))
-              .toggleStyle(.checkbox)
-              .controlSize(.small)
+              Text("\((items[section] ?? []).filter(\.shown).count)")
+                .foregroundStyle(.secondary).monospacedDigit()
+                .help("Settings shown")
+            }
+            .tag(section)
+          }
+          .onMove { sectionOrder.move(fromOffsets: $0, toOffset: $1) }
+        }
+        .frame(width: 200)
+        Divider()
+        if let section = selected {
+          VStack(alignment: .leading, spacing: 0) {
+            Toggle("Starts expanded", isOn: Binding(
+              get: { expanded.contains(section.id) },
+              set: { if $0 { expanded.insert(section.id) } else { expanded.remove(section.id) } }))
+            .toggleStyle(.checkbox)
+            .padding(10)
+            List {
+              ForEach(binding(section)) { $item in
+                Toggle(item.title, isOn: $item.shown)
+              }
+              .onMove { from, to in items[section, default: []].move(fromOffsets: from, toOffset: to) }
             }
           }
+        } else {
+          Text("Select a section").foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
         }
       }
       Divider()
@@ -908,7 +910,7 @@ struct CustomizeInspectorSheet: View {
       }
       .padding()
     }
-    .frame(width: 460, height: 600)
+    .frame(width: 620, height: 560)
     .onAppear(perform: load)
   }
 
