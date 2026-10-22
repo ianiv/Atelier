@@ -1,0 +1,937 @@
+import AppKit
+import SwiftUI
+import _MediaGenerationKit
+
+/// The settings inspector: search, the Changed group, the current layout's sections and a reset.
+struct InspectorView: View {
+  @Environment(CreateModel.self) private var model
+  @Environment(LayoutStore.self) private var layouts
+  @Environment(\.undoManager) private var undoManager
+  @State private var optionHeld = false
+  @State private var flagsMonitor: Any?
+  @State private var customizing = false
+
+  private var showAll: Bool { layouts.showAll || optionHeld }
+  private var query: String { layouts.searchText.trimmingCharacters(in: .whitespaces) }
+
+  var body: some View {
+    @Bindable var layouts = layouts
+    VStack(spacing: 0) {
+      HStack(spacing: 6) {
+        SearchField(text: $layouts.searchText, prompt: "Search Settings")
+        LayoutMenu(customizing: $customizing)
+      }
+      .padding(.horizontal, 10)
+      .padding(.vertical, 8)
+      Divider()
+      if model.settings == nil {
+        ContentUnavailableView {
+          if model.phase == .loadingModel { ProgressView() } else { Text("No model") }
+        } description: {
+          Text(model.phase == .loadingModel ? "Loading model defaults…" : "Choose a model.")
+        }
+      } else if !query.isEmpty {
+        searchResults
+      } else {
+        sections
+      }
+    }
+    .sheet(isPresented: $customizing) { CustomizeInspectorSheet() }
+    .onAppear {
+      flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+        optionHeld = event.modifierFlags.contains(.option)
+        return event
+      }
+    }
+    .onDisappear {
+      if let flagsMonitor { NSEvent.removeMonitor(flagsMonitor) }
+      flagsMonitor = nil
+    }
+  }
+
+  private var sections: some View {
+    let traits = model.traits
+    let changed = model.changedSettings
+    return Form {
+      if !changed.isEmpty {
+        Section {
+          ForEach(changed) { SettingRow(descriptor: $0) }
+        } header: {
+          HStack {
+            Text("Changed")
+            Spacer()
+            Text("\(changed.count)").foregroundStyle(.secondary).monospacedDigit()
+          }
+        }
+      }
+      ForEach(SettingSection.allCases) { section in
+        InspectorSection(section: section, traits: traits, showAll: showAll)
+      }
+      Section {
+        Button("Reset All to Model Defaults") {
+          model.resetToModelDefaults(undoManager: undoManager)
+        }
+        .disabled(changed.isEmpty)
+        .frame(maxWidth: .infinity)
+      }
+    }
+    .formStyle(.grouped)
+  }
+
+  private var searchResults: some View {
+    let matches = SettingsRegistry.all.filter { $0.matches(query) }
+    let traits = model.traits
+    return Form {
+      if matches.isEmpty && !"seed".localizedCaseInsensitiveContains(query) {
+        Text("No settings match “\(query)”.").foregroundStyle(.secondary)
+      }
+      if "seed".localizedCaseInsensitiveContains(query) {
+        Section(SettingSection.essentials.title) { SeedControls() }
+      }
+      ForEach(SettingSection.allCases) { section in
+        let inSection = matches.filter { $0.section == section }
+        if !inSection.isEmpty {
+          Section(section.title) {
+            ForEach(inSection) { descriptor in
+              SettingRow(descriptor: descriptor)
+                .opacity(descriptor.applies(traits) ? 1 : 0.5)
+            }
+          }
+        }
+      }
+    }
+    .formStyle(.grouped)
+  }
+}
+
+/// One registry section: header (with an enable checkbox for feature sections), shown rows, and
+/// tucked rows under "More".
+struct InspectorSection: View {
+  let section: SettingSection
+  let traits: ModelTraits
+  let showAll: Bool
+  @Environment(CreateModel.self) private var model
+  @Environment(LayoutStore.self) private var layouts
+  @Environment(\.undoManager) private var undoManager
+
+  var body: some View {
+    let (layoutShown, layoutTucked) = layouts.current.ordered(section)
+    let toggleID = section.featureToggle
+    let applicable = { (d: SettingDescriptor) in d.applies(traits) && d.id != toggleID }
+    let shown = (showAll ? layoutShown + layoutTucked : layoutShown).filter(applicable)
+    let tucked = showAll ? [] : layoutTucked.filter(applicable)
+    let toggle = toggleID.flatMap { SettingsRegistry.byID[$0] }.flatMap {
+      $0.applies(traits) ? $0 : nil
+    }
+    let toggleShown = toggle.map { showAll || layouts.current.isShown($0.id) } ?? false
+    if section == .essentials || !shown.isEmpty || toggleShown {
+      Section(isExpanded: expansion) {
+        ForEach(shown) { SettingRow(descriptor: $0) }
+        if section == .essentials { SeedControls() }
+        if !tucked.isEmpty {
+          DisclosureGroup("More: \(tucked.count)") {
+            ForEach(tucked) { SettingRow(descriptor: $0) }
+          }
+          .foregroundStyle(.secondary)
+        }
+      } header: {
+        header(toggle: toggle, descriptors: shown + tucked)
+      }
+    }
+  }
+
+  private var expansion: Binding<Bool> {
+    Binding(
+      get: { layouts.isExpanded(section) },
+      set: { layouts.setExpanded(section, $0) })
+  }
+
+  private func header(toggle: SettingDescriptor?, descriptors: [SettingDescriptor]) -> some View {
+    let all = descriptors + (toggle.map { [$0] } ?? [])
+    let changed = all.filter(model.isChanged)
+    return HStack(spacing: 6) {
+      if let toggle {
+        Toggle(section.title, isOn: SettingBindings(descriptor: toggle, model: model, undoManager: undoManager).bool)
+          .toggleStyle(.checkbox)
+          .help(toggle.help)
+          .contextMenu { SettingContextMenu(descriptor: toggle) }
+      } else {
+        Text(section.title)
+      }
+      Spacer()
+      if !changed.isEmpty {
+        Button {
+          for descriptor in changed { model.reset(descriptor, undoManager: undoManager) }
+        } label: {
+          Image(systemName: "arrow.uturn.backward")
+        }
+        .buttonStyle(.borderless)
+        .help("Reset \(section.title) to the model defaults")
+      }
+    }
+  }
+}
+
+/// Typed bindings onto one registry setting of the current settings.
+@MainActor
+struct SettingBindings {
+  let descriptor: SettingDescriptor
+  let model: CreateModel
+  let undoManager: UndoManager?
+
+  var json: Binding<JSONValue> {
+    Binding(
+      get: { model.value(descriptor) ?? .null },
+      set: { model.set(descriptor, to: $0, undoManager: undoManager) })
+  }
+
+  var bool: Binding<Bool> {
+    Binding(
+      get: { if case .bool(let v) = model.value(descriptor) { return v } else { return false } },
+      set: { model.set(descriptor, to: .bool($0), undoManager: undoManager) })
+  }
+
+  var double: Binding<Double> {
+    Binding(
+      get: { model.value(descriptor)?.doubleValue ?? 0 },
+      set: { model.set(descriptor, to: .number($0), undoManager: undoManager) })
+  }
+
+  var int: Binding<Int> {
+    Binding(
+      get: { Int(model.value(descriptor)?.doubleValue ?? 0) },
+      set: { model.set(descriptor, to: .number(Double($0)), undoManager: undoManager) })
+  }
+
+  var text: Binding<String> {
+    Binding(
+      get: { if case .string(let v) = model.value(descriptor) { return v } else { return "" } },
+      set: { model.set(descriptor, to: $0.isEmpty ? .null : .string($0), undoManager: undoManager) })
+  }
+}
+
+/// A label/control row for one setting, with a changed marker, tooltip and context menu.
+struct SettingRow: View {
+  let descriptor: SettingDescriptor
+  @Environment(CreateModel.self) private var model
+  @Environment(\.undoManager) private var undoManager
+
+  var body: some View {
+    control
+      .help(help)
+      .contextMenu { SettingContextMenu(descriptor: descriptor) }
+  }
+
+  private var bindings: SettingBindings {
+    SettingBindings(descriptor: descriptor, model: model, undoManager: undoManager)
+  }
+
+  private var help: String {
+    var help = descriptor.help
+    if !descriptor.applies(model.traits) {
+      help += " Not used by \(model.selectedModelInfo?.name ?? "this model")."
+    }
+    return help
+  }
+
+  private var label: some View {
+    HStack(spacing: 4) {
+      Text(descriptor.title)
+      if model.isChanged(descriptor) {
+        Button {
+          model.reset(descriptor, undoManager: undoManager)
+        } label: {
+          Image(systemName: "circle.fill")
+            .font(.system(size: 6))
+            .foregroundStyle(Color.accentColor)
+        }
+        .buttonStyle(.plain)
+        .help(
+          "Changed from the model default (\(SettingFormat.display(model.defaultValue(descriptor), for: descriptor))). Click to reset."
+        )
+      }
+    }
+  }
+
+  /// Files offered for a file setting, plus the current value if it isn't among them.
+  private func fileOptions(_ source: (SettingContext) -> [SettingOption]) -> [SettingOption] {
+    var options = source(model.settingContext)
+    if case .string(let file)? = model.value(descriptor),
+      !options.contains(where: { $0.value == .string(file) })
+    {
+      options.append(SettingOption(value: .string(file), title: file))
+    }
+    return options
+  }
+
+  @ViewBuilder private var control: some View {
+    switch descriptor.control {
+    case .toggle:
+      Toggle(isOn: bindings.bool) { label }
+    case .integer(let range, let step):
+      LabeledContent {
+        HStack(spacing: 4) {
+          TextField("", value: bindings.int, format: .number.grouping(.never))
+            .labelsHidden()
+            .multilineTextAlignment(.trailing)
+            .frame(width: 64)
+          Stepper("", value: bindings.int, in: range, step: step).labelsHidden()
+        }
+      } label: {
+        label
+      }
+    case .slider(let range, let step, let digits):
+      LabeledContent {
+        HStack(spacing: 6) {
+          Slider(value: bindings.double, in: range, step: step) { editing in
+            if editing {
+              model.beginCoalescedEdit(descriptor, undoManager: undoManager)
+            } else {
+              model.endCoalescedEdit()
+            }
+          }
+          .frame(minWidth: 90)
+          TextField(
+            "", value: bindings.double, format: .number.precision(.fractionLength(0...digits))
+          )
+          .labelsHidden()
+          .multilineTextAlignment(.trailing)
+          .frame(width: 52)
+        }
+      } label: {
+        label
+      }
+    case .choice(let options):
+      Picker(selection: bindings.json) {
+        ForEach(options, id: \.self) { Text($0.title).tag($0.value) }
+      } label: {
+        label
+      }
+    case .file(let source):
+      let options = fileOptions(source)
+      Picker(selection: bindings.json) {
+        Text("None").tag(JSONValue.null)
+        ForEach(options, id: \.self) { Text($0.title).tag($0.value) }
+      } label: {
+        label
+      }
+    case .text:
+      TextField(text: bindings.text, prompt: Text("Same as prompt"), axis: .vertical) { label }
+        .lineLimit(1...4)
+    case .size:
+      LabeledContent {
+        SizeButton(descriptor: descriptor)
+      } label: {
+        label
+      }
+    case .loras:
+      LoRAEditor(descriptor: descriptor)
+    }
+  }
+}
+
+struct SettingContextMenu: View {
+  let descriptor: SettingDescriptor
+  @Environment(CreateModel.self) private var model
+  @Environment(LayoutStore.self) private var layouts
+  @Environment(\.undoManager) private var undoManager
+
+  var body: some View {
+    Button("Reset to Default") { model.reset(descriptor, undoManager: undoManager) }
+      .disabled(!model.isChanged(descriptor))
+    Button("Copy Value") {
+      NSPasteboard.general.clearContents()
+      NSPasteboard.general.setString(
+        SettingFormat.display(model.value(descriptor), for: descriptor), forType: .string)
+    }
+    Divider()
+    if layouts.current.isShown(descriptor.id) {
+      Button("Hide from Inspector") { layouts.setShown(descriptor.id, false) }
+    } else {
+      Button("Show in Inspector") { layouts.setShown(descriptor.id, true) }
+    }
+  }
+}
+
+enum SettingFormat {
+  static func display(_ value: JSONValue?, for descriptor: SettingDescriptor) -> String {
+    guard let value else { return "" }
+    switch (descriptor.control, value) {
+    case (_, .null): return "None"
+    case (.toggle, .bool(let on)): return on ? "On" : "Off"
+    case (.choice(let options), _): return options.first { $0.value == value }?.title ?? "\(value)"
+    case (.size, .object(let size)):
+      return "\(Int(size["width"]?.doubleValue ?? 0)) × \(Int(size["height"]?.doubleValue ?? 0))"
+    case (.loras, .array(let entries)):
+      if entries.isEmpty { return "None" }
+      return entries.compactMap { entry -> String? in
+        guard case .object(let fields) = entry, case .string(let file)? = fields["file"] else {
+          return nil
+        }
+        return "\(file) \(fields["weight"]?.doubleValue?.formatted() ?? "")"
+      }.joined(separator: ", ")
+    case (_, .number(let number)): return number.formatted(.number.grouping(.never))
+    case (_, .string(let text)): return text
+    case (_, .bool(let on)): return on ? "On" : "Off"
+    default: return "\(value)"
+    }
+  }
+}
+
+// MARK: - Size
+
+struct SizeButton: View {
+  let descriptor: SettingDescriptor
+  @Environment(CreateModel.self) private var model
+  @Environment(\.undoManager) private var undoManager
+  @State private var showing = false
+
+  var body: some View {
+    let size = model.settings.map { ($0.width, $0.height) } ?? (0, 0)
+    Button {
+      showing.toggle()
+    } label: {
+      HStack(spacing: 4) {
+        Text(verbatim: "\(size.0) × \(size.1)").monospacedDigit()
+        Image(systemName: "chevron.down").font(.caption2)
+      }
+    }
+    .popover(isPresented: $showing, arrowEdge: .leading) {
+      SizePopover(width: size.0, height: size.1) { width, height in
+        model.set(
+          descriptor,
+          to: .object(["width": .number(Double(width)), "height": .number(Double(height))]),
+          undoManager: undoManager)
+      }
+    }
+  }
+}
+
+struct SizePopover: View {
+  let width: Int
+  let height: Int
+  let set: (Int, Int) -> Void
+
+  var body: some View {
+    let match = SizePreset.match(width: width, height: height)
+    let megapixels = match?.1 ?? closestMegapixels
+    VStack(alignment: .leading, spacing: 12) {
+      Text("Aspect Ratio").font(.headline)
+      LazyVGrid(columns: Array(repeating: GridItem(.fixed(64), spacing: 8), count: 4), spacing: 8) {
+        ForEach(SizePreset.aspectRatios) { aspect in
+          let selected = match?.0 == aspect
+          Button {
+            let size = SizePreset.size(aspect: aspect, megapixels: megapixels)
+            set(size.width, size.height)
+          } label: {
+            VStack(spacing: 4) {
+              let scale = 28 / Double(max(aspect.width, aspect.height))
+              RoundedRectangle(cornerRadius: 2)
+                .strokeBorder(selected ? Color.accentColor : .secondary, lineWidth: selected ? 2 : 1)
+                .frame(width: Double(aspect.width) * scale, height: Double(aspect.height) * scale)
+                .frame(height: 30)
+              Text(aspect.label).font(.caption).monospacedDigit()
+            }
+            .frame(width: 64, height: 52)
+            .contentShape(.rect)
+          }
+          .buttonStyle(.plain)
+          .background(selected ? Color.accentColor.opacity(0.12) : .clear, in: .rect(cornerRadius: 6))
+        }
+      }
+      Picker("Megapixels", selection: Binding(
+        get: { match?.1 },
+        set: { mp in
+          guard let mp else { return }
+          let size = SizePreset.size(aspect: match?.0 ?? closestAspect, megapixels: mp)
+          set(size.width, size.height)
+        })
+      ) {
+        if match == nil { Text("Custom").tag(Double?.none) }
+        ForEach(SizePreset.megapixels, id: \.self) { Text($0.formatted()).tag(Optional($0)) }
+      }
+      .pickerStyle(.segmented)
+      HStack {
+        dimension("W", value: width) { set($0, height) }
+        Button {
+          set(height, width)
+        } label: {
+          Image(systemName: "arrow.left.arrow.right")
+        }
+        .buttonStyle(.borderless)
+        .help("Swap width and height")
+        dimension("H", value: height) { set(width, $0) }
+      }
+      Text("\((Double(width * height) / 1_048_576).formatted(.number.precision(.fractionLength(2)))) megapixels; sizes snap to 64 px.")
+        .font(.caption).foregroundStyle(.secondary)
+    }
+    .padding(16)
+    .frame(width: 320)
+  }
+
+  private func dimension(_ title: String, value: Int, set: @escaping (Int) -> Void) -> some View {
+    let binding = Binding(get: { value }, set: { set(SizePreset.snap(min(max($0, 64), 4096))) })
+    return HStack(spacing: 4) {
+      Text(title).foregroundStyle(.secondary)
+      TextField(title, value: binding, format: .number.grouping(.never))
+        .labelsHidden()
+        .multilineTextAlignment(.trailing)
+        .frame(width: 60)
+      Stepper(title, value: binding, in: 64...4096, step: 64).labelsHidden()
+    }
+  }
+
+  private var closestMegapixels: Double {
+    let mp = Double(width * height) / 1_048_576
+    return SizePreset.megapixels.min { abs($0 - mp) < abs($1 - mp) } ?? 1
+  }
+
+  private var closestAspect: SizePreset.AspectRatio {
+    let ratio = Double(width) / Double(max(height, 1))
+    return SizePreset.aspectRatios.min {
+      abs(Double($0.width) / Double($0.height) - ratio)
+        < abs(Double($1.width) / Double($1.height) - ratio)
+    } ?? SizePreset.aspectRatios[0]
+  }
+}
+
+// MARK: - LoRAs
+
+/// LoRAs registered in the models directory's custom_lora.json.
+enum LoRACatalog {
+  struct Entry: Decodable, Hashable {
+    var name: String
+    var file: String
+  }
+
+  static func load(_ directory: String) -> [Entry] {
+    let url = URL(fileURLWithPath: directory).appendingPathComponent("custom_lora.json")
+    guard let data = try? Data(contentsOf: url),
+      let entries = try? JSONDecoder().decode([Entry].self, from: data)
+    else { return [] }
+    return entries.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+  }
+}
+
+struct LoRAEditor: View {
+  let descriptor: SettingDescriptor
+  @Environment(CreateModel.self) private var model
+  @Environment(\.undoManager) private var undoManager
+  @State private var catalog: [LoRACatalog.Entry] = []
+  @State private var picking = false
+
+  private struct Item: Hashable {
+    var file: String
+    var weight: Double
+    var mode: JSONValue
+  }
+
+  private var items: [Item] {
+    guard case .array(let entries)? = model.value(descriptor) else { return [] }
+    return entries.compactMap { entry in
+      guard case .object(let fields) = entry, case .string(let file)? = fields["file"] else {
+        return nil
+      }
+      return Item(
+        file: file, weight: fields["weight"]?.doubleValue ?? 1,
+        mode: fields["mode"] ?? .string("all"))
+    }
+  }
+
+  private func write(_ items: [Item], undo: Bool = true) {
+    let value = JSONValue.array(items.map {
+      .object(["file": .string($0.file), "weight": .number($0.weight), "mode": $0.mode])
+    })
+    model.set(descriptor, to: value, undoManager: undo ? undoManager : nil)
+  }
+
+  var body: some View {
+    let items = items
+    VStack(alignment: .leading, spacing: 6) {
+      if items.isEmpty {
+        Text("No LoRAs").foregroundStyle(.secondary)
+      }
+      ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+        VStack(alignment: .leading, spacing: 2) {
+          HStack {
+            Text(name(item.file)).lineLimit(1).truncationMode(.middle)
+              .help(item.file)
+            Spacer()
+            Button {
+              var items = items
+              items.remove(at: index)
+              write(items)
+            } label: {
+              Image(systemName: "minus.circle")
+            }
+            .buttonStyle(.borderless)
+            .help("Remove this LoRA")
+          }
+          HStack(spacing: 6) {
+            Slider(
+              value: Binding(
+                get: { item.weight },
+                set: { weight in
+                  var items = items
+                  items[index].weight = (weight * 100).rounded() / 100
+                  write(items)
+                }), in: -1.5...2.5
+            ) { editing in
+              if editing {
+                model.beginCoalescedEdit(descriptor, undoManager: undoManager)
+              } else {
+                model.endCoalescedEdit()
+              }
+            }
+            TextField(
+              "", value: Binding(
+                get: { item.weight },
+                set: { weight in
+                  var items = items
+                  items[index].weight = weight
+                  write(items)
+                }), format: .number.precision(.fractionLength(0...2))
+            )
+            .labelsHidden()
+            .multilineTextAlignment(.trailing)
+            .frame(width: 52)
+          }
+        }
+      }
+      Button("Add LoRA…", systemImage: "plus") { picking = true }
+        .buttonStyle(.borderless)
+        .popover(isPresented: $picking, arrowEdge: .leading) {
+          LoRAPicker(catalog: catalog) { entry in
+            write(items + [Item(file: entry.file, weight: 1, mode: .string("all"))])
+            picking = false
+          }
+        }
+    }
+    .onAppear { catalog = LoRACatalog.load(model.modelsDirectory) }
+    .onChange(of: model.modelsDirectory) { catalog = LoRACatalog.load(model.modelsDirectory) }
+  }
+
+  private func name(_ file: String) -> String {
+    catalog.first { $0.file == file }?.name ?? file
+  }
+}
+
+struct LoRAPicker: View {
+  let catalog: [LoRACatalog.Entry]
+  let pick: (LoRACatalog.Entry) -> Void
+  @State private var query = ""
+
+  var body: some View {
+    let filtered = query.isEmpty
+      ? catalog
+      : catalog.filter {
+        $0.name.localizedCaseInsensitiveContains(query) || $0.file.localizedCaseInsensitiveContains(query)
+      }
+    VStack(spacing: 0) {
+      SearchField(text: $query, prompt: "Search LoRAs").padding(8)
+      Divider()
+      if catalog.isEmpty {
+        Text("No LoRAs in custom_lora.json.").foregroundStyle(.secondary).padding()
+      }
+      List(filtered, id: \.file) { entry in
+        Button {
+          pick(entry)
+        } label: {
+          VStack(alignment: .leading) {
+            Text(entry.name)
+            Text(entry.file).font(.caption).foregroundStyle(.secondary)
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+      }
+      .listStyle(.plain)
+    }
+    .frame(width: 340, height: 360)
+  }
+}
+
+// MARK: - Layout menu and customization
+
+struct LayoutMenu: View {
+  @Binding var customizing: Bool
+  @Environment(LayoutStore.self) private var layouts
+
+  var body: some View {
+    @Bindable var layouts = layouts
+    Menu {
+      Picker(
+        "Layout",
+        selection: Binding(
+          get: { layouts.current.name },
+          set: { name in
+            if let layout = layouts.all.first(where: { $0.name == name }) { layouts.select(layout) }
+          })
+      ) {
+        ForEach(InspectorLayout.builtIns) { Text($0.name).tag($0.name) }
+        if !layouts.custom.isEmpty {
+          Divider()
+          ForEach(layouts.custom) { Text($0.name).tag($0.name) }
+        }
+      }
+      .pickerStyle(.inline)
+      Divider()
+      Toggle("Show All Settings", isOn: $layouts.showAll)
+      Button("Customize Inspector…") { customizing = true }
+      Divider()
+      Button("Export Layout…") {
+        if let url = FilePanels.saveJSON(named: layouts.current.name) {
+          try? layouts.export(layouts.current, to: url)
+        }
+      }
+      Button("Import Layout…") {
+        if let url = FilePanels.openJSON() { try? layouts.importLayout(from: url) }
+      }
+      Button("Delete “\(layouts.current.name)”") { layouts.delete(layouts.current) }
+        .disabled(layouts.isBuiltIn(layouts.current))
+      Button("Show Layouts Folder") {
+        try? FileManager.default.createDirectory(
+          at: LayoutStore.directory, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(LayoutStore.directory)
+      }
+    } label: {
+      Text(layouts.current.name)
+    }
+    .menuStyle(.borderlessButton)
+    .fixedSize()
+    .help("Inspector layout. Hold ⌥ to show every setting.")
+  }
+}
+
+struct CustomizeInspectorSheet: View {
+  @Environment(LayoutStore.self) private var layouts
+  @Environment(\.dismiss) private var dismiss
+
+  private struct Item: Identifiable, Hashable {
+    var id: String
+    var title: String
+    var shown: Bool
+  }
+
+  @State private var name = ""
+  @State private var items: [SettingSection: [Item]] = [:]
+  @State private var expanded: Set<String> = []
+
+  var body: some View {
+    VStack(spacing: 0) {
+      HStack {
+        Text("Customize Inspector").font(.headline)
+        Spacer()
+        TextField("Layout name", text: $name).frame(width: 200)
+      }
+      .padding()
+      List {
+        ForEach(SettingSection.allCases) { section in
+          Section {
+            ForEach(binding(section)) { $item in
+              Toggle(item.title, isOn: $item.shown)
+            }
+            .onMove { from, to in items[section, default: []].move(fromOffsets: from, toOffset: to) }
+          } header: {
+            HStack {
+              Text(section.title)
+              Spacer()
+              Toggle("Starts expanded", isOn: Binding(
+                get: { expanded.contains(section.id) },
+                set: { if $0 { expanded.insert(section.id) } else { expanded.remove(section.id) } }))
+              .toggleStyle(.checkbox)
+              .controlSize(.small)
+            }
+          }
+        }
+      }
+      Divider()
+      HStack {
+        Text("Drag to reorder. Unchecked settings are tucked under More.")
+          .font(.caption).foregroundStyle(.secondary)
+        Spacer()
+        Button("Cancel", role: .cancel) { dismiss() }
+          .keyboardShortcut(.cancelAction)
+        Button("Save") { save() }
+          .keyboardShortcut(.defaultAction)
+          .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+      }
+      .padding()
+    }
+    .frame(width: 460, height: 600)
+    .onAppear(perform: load)
+  }
+
+  private func binding(_ section: SettingSection) -> Binding<[Item]> {
+    Binding(get: { items[section] ?? [] }, set: { items[section] = $0 })
+  }
+
+  private func load() {
+    let layout = layouts.current
+    name = layouts.isBuiltIn(layout) ? layouts.uniqueName("\(layout.name) Custom") : layout.name
+    expanded = Set(layout.expanded)
+    for section in SettingSection.allCases {
+      let (shown, tucked) = layout.ordered(section)
+      items[section] =
+        shown.map { Item(id: $0.id, title: $0.title, shown: true) }
+        + tucked.map { Item(id: $0.id, title: $0.title, shown: false) }
+    }
+  }
+
+  private func save() {
+    let shown = SettingSection.allCases.flatMap { section in
+      (items[section] ?? []).filter(\.shown).map(\.id)
+    }
+    var layout = InspectorLayout(
+      name: name.trimmingCharacters(in: .whitespaces), shown: shown,
+      expanded: SettingSection.allCases.map(\.id).filter(expanded.contains))
+    if layouts.isBuiltIn(layout) { layout.name = layouts.uniqueName("\(layout.name) Custom") }
+    layouts.update(layout)
+    layouts.select(layout)
+    dismiss()
+  }
+}
+
+// MARK: - Presets
+
+struct PresetMenu: View {
+  @Environment(CreateModel.self) private var model
+  @Environment(PresetStore.self) private var presets
+  @Environment(\.undoManager) private var undoManager
+  @State private var saving = false
+
+  var body: some View {
+    Menu {
+      if presets.presets.isEmpty {
+        Text("No presets yet")
+      }
+      ForEach(presets.presets) { preset in
+        Button(preset.name) { model.apply(preset, undoManager: undoManager) }
+          .help(preset.values.keys.sorted().joined(separator: ", "))
+      }
+      Divider()
+      Button("Save Current Settings as Preset…") { saving = true }
+        .disabled(model.settings == nil)
+      Button("Import Preset…") {
+        if let url = FilePanels.openJSON() { try? presets.importPreset(from: url) }
+      }
+      if !presets.presets.isEmpty {
+        Menu("Export") {
+          ForEach(presets.presets) { preset in
+            Button(preset.name) {
+              if let url = FilePanels.saveJSON(named: preset.name) {
+                try? presets.export(preset, to: url)
+              }
+            }
+          }
+        }
+        Menu("Delete") {
+          ForEach(presets.presets) { preset in
+            Button(preset.name) { presets.delete(preset) }
+          }
+        }
+      }
+      Button("Show Presets Folder") {
+        try? FileManager.default.createDirectory(
+          at: PresetStore.directory, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(PresetStore.directory)
+      }
+    } label: {
+      Label("Presets", systemImage: "square.stack.3d.up")
+    }
+    .help("Presets: saved setting values applied on top of the model's defaults")
+    .sheet(isPresented: $saving) { SavePresetSheet() }
+  }
+}
+
+struct SavePresetSheet: View {
+  @Environment(CreateModel.self) private var model
+  @Environment(PresetStore.self) private var presets
+  @Environment(\.dismiss) private var dismiss
+  @State private var name = ""
+  @State private var included: Set<String> = []
+  @State private var error: String?
+
+  var body: some View {
+    let changed = model.changedSettings
+    VStack(alignment: .leading, spacing: 12) {
+      Text("Save Preset").font(.headline)
+      TextField("Name", text: $name)
+      if presets.presets.contains(where: { $0.name == name }) {
+        Text("Replaces the existing preset “\(name)”.").font(.caption).foregroundStyle(.secondary)
+      }
+      Text("Settings to include (those changed from the model defaults):")
+        .font(.callout)
+      if changed.isEmpty {
+        Text("Nothing differs from the model defaults.").foregroundStyle(.secondary)
+      }
+      List(changed) { descriptor in
+        Toggle(isOn: Binding(
+          get: { included.contains(descriptor.id) },
+          set: { if $0 { included.insert(descriptor.id) } else { included.remove(descriptor.id) } })
+        ) {
+          HStack {
+            Text(descriptor.title)
+            Spacer()
+            Text(SettingFormat.display(model.value(descriptor), for: descriptor))
+              .foregroundStyle(.secondary).lineLimit(1)
+          }
+        }
+      }
+      .frame(minHeight: 160)
+      if let error { Text(error).foregroundStyle(.red) }
+      HStack {
+        Spacer()
+        Button("Cancel", role: .cancel) { dismiss() }
+          .keyboardShortcut(.cancelAction)
+        Button("Save") {
+          do {
+            try presets.save(
+              Preset(name: name.trimmingCharacters(in: .whitespaces),
+                values: model.values(for: Array(included))))
+            dismiss()
+          } catch {
+            self.error = error.localizedDescription
+          }
+        }
+        .keyboardShortcut(.defaultAction)
+        .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || included.isEmpty)
+      }
+    }
+    .padding(20)
+    .frame(width: 420, height: 440)
+    .onAppear { included = Set(changed.map(\.id)) }
+  }
+}
+
+// MARK: - Search field
+
+struct SearchField: NSViewRepresentable {
+  @Binding var text: String
+  var prompt: String
+
+  func makeNSView(context: Context) -> NSSearchField {
+    let field = NSSearchField()
+    field.placeholderString = prompt
+    field.delegate = context.coordinator
+    field.controlSize = .regular
+    return field
+  }
+
+  func updateNSView(_ field: NSSearchField, context: Context) {
+    if field.stringValue != text { field.stringValue = text }
+  }
+
+  func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+
+  final class Coordinator: NSObject, NSSearchFieldDelegate {
+    var text: Binding<String>
+    init(text: Binding<String>) { self.text = text }
+
+    func controlTextDidChange(_ notification: Notification) {
+      guard let field = notification.object as? NSSearchField else { return }
+      text.wrappedValue = field.stringValue
+    }
+  }
+}

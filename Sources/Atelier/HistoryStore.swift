@@ -37,15 +37,6 @@ final class HistoryStore {
     var hiresFix: Bool
     /// Every public field of the pipeline configuration actually used.
     var configuration: [String: JSONValue]
-
-    /// The inspector settings this output was made with; nil if the sampler name is unknown.
-    var settings: GenerationSettings? {
-      guard let sampler = SamplerType.allCases.first(where: { String(describing: $0) == sampler })
-      else { return nil }
-      return GenerationSettings(
-        width: width, height: height, steps: steps, guidanceScale: guidanceScale, shift: shift,
-        sampler: sampler, resolutionDependentShift: resolutionDependentShift, hiresFix: hiresFix)
-    }
   }
 
   private(set) var items: [HistoryItem] = []
@@ -65,7 +56,6 @@ final class HistoryStore {
   func save(
     _ result: MediaGenerationPipeline.Result,
     request: GenerationEngine.Request,
-    configuration: MediaGenerationPipeline.Configuration,
     startedAt: Date,
     finishedAt: Date
   ) throws -> HistoryItem {
@@ -87,7 +77,8 @@ final class HistoryStore {
     }
     let pngURL = folder.appendingPathComponent(base + ".png")
 
-    let settings = request.settings
+    var settings = request.configuration
+    settings.seed = request.seed
     let sidecar = Sidecar(
       createdAt: finishedAt,
       durationSeconds: finishedAt.timeIntervalSince(startedAt),
@@ -103,7 +94,7 @@ final class HistoryStore {
       sampler: String(describing: settings.sampler),
       resolutionDependentShift: settings.resolutionDependentShift,
       hiresFix: settings.hiresFix,
-      configuration: JSONValue.fields(of: configuration)
+      configuration: JSONValue.fields(of: settings)
     )
     let json = try Self.encoder.encode(sidecar)
     try json.write(to: folder.appendingPathComponent(base + ".json"))
@@ -193,7 +184,7 @@ enum PNGText {
 }
 
 /// Minimal JSON tree for dumping Configuration, which isn't Codable in MGK.
-enum JSONValue: Codable {
+enum JSONValue: Codable, Hashable {
   case null
   case bool(Bool)
   case number(Double)
@@ -225,7 +216,7 @@ enum JSONValue: Codable {
     case let value as Int: self = .number(Double(value))
     case let value as Int32: self = .number(Double(value))
     case let value as UInt32: self = .number(Double(value))
-    case let value as Float: self = .number(Double(value))
+    case let value as Float: self = JSONValue(value)
     case let value as Double: self = .number(value)
     case let value as String: self = .string(value)
     default:

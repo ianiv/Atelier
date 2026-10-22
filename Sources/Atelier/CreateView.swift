@@ -3,26 +3,60 @@ import _MediaGenerationKit
 
 struct CreateView: View {
   @Environment(CreateModel.self) private var model
+  @AppStorage("inspectorShown") private var inspectorShown = true
 
   var body: some View {
-    CanvasView()
-      .inspector(isPresented: .constant(true)) {
-        InspectorView()
-          .inspectorColumnWidth(min: 300, ideal: 340, max: 440)
+    VStack(spacing: 0) {
+      CanvasView()
+      Divider()
+      PromptComposer()
+    }
+    .inspector(isPresented: $inspectorShown) {
+      InspectorView()
+        .inspectorColumnWidth(min: 300, ideal: 340, max: 460)
+    }
+    .toolbar(id: "create") {
+      ToolbarItem(id: "model", placement: .navigation) {
+        ModelPicker()
       }
-      .toolbar {
-        ToolbarItemGroup {
-          if model.isBusy, model.phase != .loadingModel {
-            Button("Cancel", systemImage: "stop.fill") { model.cancel() }
-              .keyboardShortcut(.escape, modifiers: [])
-              .disabled(model.phase == .cancelling)
-          } else {
-            Button("Generate", systemImage: "sparkles") { model.generate() }
-              .keyboardShortcut(.return, modifiers: .command)
-              .disabled(!model.canGenerate)
-          }
+      ToolbarItem(id: "presets", placement: .primaryAction) {
+        PresetMenu()
+      }
+      ToolbarItem(id: "generate", placement: .primaryAction) {
+        if model.isBusy, model.phase != .loadingModel {
+          Button("Cancel", systemImage: "stop.fill") { model.cancel() }
+            .disabled(model.phase == .cancelling)
+            .help("Cancel the running generation (⎋)")
+        } else {
+          Button("Generate", systemImage: "sparkles") { model.generate() }
+            .disabled(!model.canGenerate)
+            .help("Generate (⌘↩)")
         }
       }
+      ToolbarItem(id: "inspector", placement: .primaryAction) {
+        Button("Inspector", systemImage: "sidebar.trailing") { inspectorShown.toggle() }
+          .help(inspectorShown ? "Hide Inspector (⌥⌘I)" : "Show Inspector (⌥⌘I)")
+      }
+    }
+  }
+}
+
+struct ModelPicker: View {
+  @Environment(CreateModel.self) private var model
+
+  var body: some View {
+    @Bindable var model = model
+    Picker("Model", selection: $model.selectedModel) {
+      if model.models.isEmpty {
+        Text("No downloaded models").tag(String?.none)
+      }
+      ForEach(model.models, id: \.file) { entry in
+        Text(entry.name).tag(Optional(entry.file))
+      }
+    }
+    .pickerStyle(.menu)
+    .frame(minWidth: 180, idealWidth: 240, maxWidth: 300)
+    .help(model.selectedModelInfo.map { "\($0.name) (\($0.version ?? "unknown family"))" } ?? "Model")
   }
 }
 
@@ -42,7 +76,7 @@ struct CanvasView: View {
         } else {
           ContentUnavailableView(
             "No image yet", systemImage: "photo",
-            description: Text("Write a prompt and press Generate (⌘↩)."))
+            description: Text("Write a prompt below and press Generate (⌘↩)."))
         }
       }
       statusBar
@@ -86,105 +120,61 @@ struct CanvasView: View {
   }
 }
 
-struct InspectorView: View {
+/// The prompt box under the canvas: grows to about six lines, with the negative prompt tucked
+/// under a disclosure and Generate beside it.
+struct PromptComposer: View {
   @Environment(CreateModel.self) private var model
-  @State private var advancedExpanded = false
+  @AppStorage("showNegativePrompt") private var showNegative = false
+  @FocusState private var promptFocused: Bool
 
   var body: some View {
     @Bindable var model = model
-    Form {
-      Section("Essentials") {
-        Picker("Model", selection: $model.selectedModel) {
-          if model.models.isEmpty {
-            Text("No downloaded models").tag(String?.none)
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(alignment: .bottom, spacing: 10) {
+        TextField("Describe the image…", text: $model.prompt, axis: .vertical)
+          .lineLimit(3...6)
+          .textFieldStyle(.plain)
+          .font(.body)
+          .focused($promptFocused)
+          .onSubmit { model.generate() }
+          .padding(8)
+          .background(Color(nsColor: .textBackgroundColor), in: .rect(cornerRadius: 8))
+          .overlay(
+            RoundedRectangle(cornerRadius: 8)
+              .strokeBorder(promptFocused ? Color.accentColor : Color(nsColor: .separatorColor))
+          )
+          .help("Prompt. Return generates; ⌥↩ adds a line. ⌘L focuses this field.")
+        if model.isBusy, model.phase != .loadingModel {
+          Button {
+            model.cancel()
+          } label: {
+            Label("Cancel", systemImage: "stop.fill").frame(minWidth: 90)
           }
-          ForEach(model.models, id: \.file) { entry in
-            Text(entry.name).tag(Optional(entry.file))
+          .controlSize(.large)
+          .keyboardShortcut(.escape, modifiers: [])
+          .disabled(model.phase == .cancelling)
+        } else {
+          Button {
+            model.generate()
+          } label: {
+            Label("Generate", systemImage: "sparkles").frame(minWidth: 90)
           }
+          .controlSize(.large)
+          .buttonStyle(.borderedProminent)
+          .keyboardShortcut(.return, modifiers: .command)
+          .disabled(!model.canGenerate)
         }
-        VStack(alignment: .leading, spacing: 4) {
-          Text("Prompt")
-          TextEditor(text: $model.prompt)
-            .font(.body)
-            .frame(minHeight: 90)
-            .scrollContentBackground(.hidden)
-            .background(Color(nsColor: .textBackgroundColor), in: .rect(cornerRadius: 6))
-        }
-        TextField("Negative prompt", text: $model.negativePrompt, axis: .vertical)
+      }
+      DisclosureGroup("Negative Prompt", isExpanded: $showNegative) {
+        TextField("What to avoid", text: $model.negativePrompt, axis: .vertical)
           .lineLimit(1...4)
-        if let settings = Binding($model.settings) {
-          SizeControls(settings: settings)
-        }
-        SeedControls()
+          .textFieldStyle(.roundedBorder)
       }
-      if let settings = Binding($model.settings) {
-        Section("Advanced", isExpanded: $advancedExpanded) {
-          AdvancedControls(settings: settings)
-          Button("Reset to model defaults") { model.resetToModelDefaults() }
-            .disabled(model.settings == nil)
-        }
-      }
+      .font(.callout)
     }
-    .formStyle(.grouped)
-    .disabled(model.isBusy && model.phase != .loadingModel)
-  }
-}
-
-struct SizeControls: View {
-  @Binding var settings: GenerationSettings
-
-  var body: some View {
-    let match = SizePreset.match(width: settings.width, height: settings.height)
-    Picker(
-      "Aspect",
-      selection: Binding(
-        get: { match?.0 },
-        set: { aspect in
-          guard let aspect else { return }
-          let mp = match?.1 ?? closestMegapixels
-          (settings.width, settings.height) = SizePreset.size(aspect: aspect, megapixels: mp)
-        })
-    ) {
-      if match == nil { Text("Custom").tag(SizePreset.AspectRatio?.none) }
-      ForEach(SizePreset.aspectRatios) { Text($0.label).tag(Optional($0)) }
-    }
-    Picker(
-      "Megapixels",
-      selection: Binding(
-        get: { match?.1 },
-        set: { mp in
-          guard let mp else { return }
-          let aspect = match?.0 ?? closestAspect
-          (settings.width, settings.height) = SizePreset.size(aspect: aspect, megapixels: mp)
-        })
-    ) {
-      if match == nil { Text("Custom").tag(Double?.none) }
-      ForEach(SizePreset.megapixels, id: \.self) { mp in
-        Text(mp.formatted()).tag(Optional(mp))
-      }
-    }
-    HStack {
-      Stepper(value: $settings.width, in: 256...4096, step: 64) {
-        Text("W \(settings.width)").monospacedDigit()
-      }
-      Spacer()
-      Stepper(value: $settings.height, in: 256...4096, step: 64) {
-        Text("H \(settings.height)").monospacedDigit()
-      }
-    }
-  }
-
-  private var closestMegapixels: Double {
-    let mp = Double(settings.width * settings.height) / 1_048_576
-    return SizePreset.megapixels.min { abs($0 - mp) < abs($1 - mp) } ?? 1
-  }
-
-  private var closestAspect: SizePreset.AspectRatio {
-    let ratio = Double(settings.width) / Double(settings.height)
-    return SizePreset.aspectRatios.min {
-      abs(Double($0.width) / Double($0.height) - ratio)
-        < abs(Double($1.width) / Double($1.height) - ratio)
-    } ?? SizePreset.aspectRatios[0]
+    .padding(12)
+    .background(.bar)
+    .onChange(of: model.focusPromptRequest) { promptFocused = true }
   }
 }
 
@@ -204,64 +194,17 @@ struct SeedControls: View {
         } label: {
           Image(systemName: "dice")
         }
-        .help("New random seed")
+        .buttonStyle(.borderless)
+        .help("New random seed (⌘R)")
         Toggle(isOn: $model.seedLocked) {
           Image(systemName: model.seedLocked ? "lock.fill" : "lock.open")
         }
         .toggleStyle(.button)
+        .buttonStyle(.borderless)
         .help(model.seedLocked ? "Seed is locked" : "A new seed is rolled for each generation")
       }
     }
-  }
-}
-
-struct AdvancedControls: View {
-  @Binding var settings: GenerationSettings
-
-  var body: some View {
-    explained("Number of denoising steps. More is slower and usually finer.") {
-      Stepper(value: $settings.steps, in: 1...150) {
-        LabeledContent("Steps", value: "\(settings.steps)")
-      }
-    }
-    explained("How strongly the image follows the prompt.") {
-      LabeledContent("Guidance") {
-        HStack {
-          Slider(value: $settings.guidanceScale, in: 0...20, step: 0.5)
-          Text(settings.guidanceScale.formatted(.number.precision(.fractionLength(1))))
-            .monospacedDigit().frame(width: 36, alignment: .trailing)
-        }
-      }
-    }
-    explained("Shifts the noise schedule toward high noise; flow models like 3 to 6.") {
-      LabeledContent("Shift") {
-        HStack {
-          Slider(value: $settings.shift, in: 0...12, step: 0.1)
-          Text(settings.shift.formatted(.number.precision(.fractionLength(1))))
-            .monospacedDigit().frame(width: 36, alignment: .trailing)
-        }
-      }
-    }
-    explained("Scale shift with image size. Off uses the shift above as is.") {
-      Toggle("Resolution-dependent shift", isOn: $settings.resolutionDependentShift)
-    }
-    explained("The sampling algorithm and its noise schedule.") {
-      Picker("Sampler", selection: $settings.sampler) {
-        ForEach(SamplerType.allCases, id: \.self) { Text(String(describing: $0)).tag($0) }
-      }
-    }
-    explained("Renders small, then upscales and runs a second sampling pass. Off by default.") {
-      Toggle("Hires fix", isOn: $settings.hiresFix)
-    }
-  }
-
-  private func explained<Content: View>(_ text: String, @ViewBuilder content: () -> Content)
-    -> some View
-  {
-    VStack(alignment: .leading, spacing: 2) {
-      content()
-      Text(text).font(.caption).foregroundStyle(.secondary)
-    }
+    .help("The random seed. Lock it to reproduce an image.")
   }
 }
 

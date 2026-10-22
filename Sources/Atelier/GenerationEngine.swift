@@ -9,7 +9,8 @@ actor GenerationEngine {
     var prompt: String
     var negativePrompt: String
     var seed: UInt32
-    var settings: GenerationSettings
+    /// Every setting for this run, taken from the inspector when the job started.
+    var configuration: PipelineConfiguration
   }
 
   enum Progress: Sendable {
@@ -47,7 +48,7 @@ actor GenerationEngine {
     progress: @escaping @Sendable (Progress) -> Void
   ) async throws -> MediaGenerationPipeline.Result {
     var pipeline = try await pipeline(for: request.model)
-    request.settings.apply(to: &pipeline.configuration)
+    pipeline.configuration = request.configuration
     pipeline.configuration.seed = request.seed
     pipeline.configuration.batchCount = 1
     pipeline.configuration.batchSize = 1
