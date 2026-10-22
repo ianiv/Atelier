@@ -60,11 +60,18 @@ Gaps to fill. These are small additions in MGK or the app, guided by `/Users/ian
 - **`ModelLibrary`**. Wraps the `MediaGenerationEnvironment` catalog and LoRAZoo. Shows downloaded vs available, download progress and disk usage, and filters LoRAs by the selected model's version.
 
 **UI layout:** a `NavigationSplitView` with sidebar sections Create, Queue, History, Models and LoRAs.
-- **Create:** canvas (live preview, then the result) plus an inspector.
-  - The inspector has an **Essentials** section: prompt, model, size presets (aspect ratio × megapixels, snapped to 64px), seed with lock and dice buttons, LoRAs with weight sliders, and an input-image drop zone with strength. Video models add frames and audio.
-  - A collapsed **Advanced** section holds steps, guidance, shift, sampler and hires fix. Each control has a one-line explanation, and a "Reset to model defaults" button returns everything to the recommended settings.
+- **Create:** canvas (live preview, then the result), a prompt composer under it, and a settings inspector. Phases 1 and 2 shipped a simple version with prompt, model, size and seed in an Essentials section and a collapsed Advanced section. Phase 3 replaces it with the design below.
 - **History:** a grid with a detail pane. Actions: "Use settings" (loads them into Create), "Rerun with new seed", "Reveal in Finder", delete, and filter by model or prompt text.
 - **Models / LoRAs:** a catalog list with search, download, delete and drag-to-import (`.safetensors` goes through LoRAImporter or ModelImporter).
+
+**Settings inspector (Phase 3).** Full write-up with rationale: `/mnt/project-files/design/settings-inspector.md` (project files).
+- **Decisions (Ianiv, 2026-10-21):** the prompt is not in the inspector; layouts are switched by hand, not per model family; presets are wanted, separate from layouts.
+- **Layout of Create.** The prompt composer sits under the canvas: multi-line, grows to about 6 lines, negative prompt as a disclosure, Generate beside it. The toolbar holds the model picker, preset menu, Generate/Cancel and the inspector toggle, and is customizable (`.toolbar(id:)`). The inspector holds a search field, a **Changed** group when anything differs from defaults, the current layout's sections, and "Reset All to Model Defaults" at the bottom.
+- **macOS conventions.** Inspector collapsible and remembered (`@SceneStorage`, `InspectorCommands`, ⌥⌘I). Dense label/control rows with `.help` tooltips instead of captions. Feature sections (hires fix, tiling, refiner, TeaCache, CFG-Zero*, upscaler) get an enable checkbox, reset and disclosure in the header, with expansion persisted. Changed values are marked, with per-row reset. Every row has a context menu: Reset to Default, Copy Value, Hide from/Show in Inspector. Sliders pair with editable number fields. Size is one row that opens a popover (aspect grid, megapixels, W/H); LoRAs and sampler use searchable popovers or menus with readable names. Setting changes are undoable, with slider drags coalesced. The inspector stays editable while a job runs; edits apply to the next run. Shortcuts: ⌘L focus prompt, ⌘R roll seed.
+- **Settings registry.** One descriptor per `Configuration` field (about 80): stable id, title, help, section, control kind and range, key path, parent toggle, and an applicability predicate on the selected model (`MediaGenerationResolvedModel.version`, video or not). The inspector, search, changed markers, reset, presets and History's "Use settings" all read from it. This also lets "Use settings" write back every field, not just the Phase 2 subset.
+- **Visibility.** Each setting is **shown**, **tucked** (under a "More: N" disclosure in its section) or **not applicable** (hidden automatically for the selected model). Everything stays reachable through the search field, a Show All toggle (or ⌥), and the Changed group, which always surfaces tucked settings whose value differs from the model default.
+- **Layouts** (which controls are shown, their order, which sections start expanded). Edit with right-click Hide/Show or a Customize Inspector… sheet (grouped checklist, drag to reorder). Stored as JSON in `~/Library/Application Support/Atelier/Layouts/`, exportable and importable. Built-ins: Simple, Standard, Everything. Switched by hand from the inspector header menu.
+- **Presets** (saved values). Toolbar menu with "Save Current Settings as Preset…"; a preset applies on top of the model's defaults. Stored as JSON next to layouts and exportable. Presets don't change the layout, and layouts don't change values.
 
 **Settings:** models directory (default `/Volumes/External 2TB/DrawThings/Models`, or the `DRAWTHINGS_MODELS_DIR` resolution) and weights cache size.
 
@@ -74,7 +81,7 @@ Gaps to fill. These are small additions in MGK or the app, guided by `/Users/ian
   `.package(url: "https://github.com/drawthingsai/draw-things-community", revision: "8dbbb5c69b83c6312eb10622611d46a943de6f88")` (upstream `main` as of 2026-10-21, includes MOSS Image support). Bump the revision deliberately to pick up new models.
 - The only library product upstream exports is `_MediaGenerationKit`, so the app uses **only MGK's public API**. Fill the gaps above in the app (fallback defaults, LoRA registration via `custom_lora.json`, video writing, metadata).
 - If the app truly needs an engine change or a non-exported module (e.g. `ModelZoo`/`LoRAZoo`), switch the dependency to the local fork (`.package(path: "../draw-things-community")`, or `swift package edit`), make the change there as a separate commit, and note it here.
-- **Known fork-only fix:** `327c0386` "Fix Qwen3 attention layout when vision embeddings are injected" (`Libraries/SwiftDiffusion/Sources/Models/Qwen3.swift`) isn't upstream. In phase 5 (image-to-image/references), test reference-image generation on models whose Qwen3 text encoder takes vision embeddings. If it's broken, point the dependency at the fork.
+- **Known fork-only fix:** `327c0386` "Fix Qwen3 attention layout when vision embeddings are injected" (`Libraries/SwiftDiffusion/Sources/Models/Qwen3.swift`) isn't upstream. In phase 6 (image-to-image/references), test reference-image generation on models whose Qwen3 text encoder takes vision embeddings. If it's broken, point the dependency at the fork.
 - `Scripts/build.sh` runs `swift build -c release --build-system native --product Atelier`; the native build system is required for Metal 4 and i8x models.
 - `Scripts/package_app.sh` builds, then wraps the binary in `Atelier.app` (Info.plist, icon placeholder, ad-hoc codesign) at `build/Atelier.app`.
 - Keep generated build products and `build/` out of git via `.gitignore`.
@@ -82,15 +89,17 @@ Gaps to fill. These are small additions in MGK or the app, guided by `/Users/ian
 ## Phases (each one usable on its own)
 1. Skeleton: model picker, prompt, Essentials, generate with live preview and cancel, save to history folder.
 2. History browser with "Use settings" and rerun.
-3. Queue, batch and variations.
-4. Model and LoRA library: download, import, delete, filtered LoRA picker.
-5. Image-to-image and reference inputs.
-6. Video: frames, output writing and an inline player.
+3. Settings inspector: prompt composer under the canvas, inspector conventions, settings registry covering the full `Configuration`, search and Changed group, customizable layouts, presets. Comes before the queue because the queue needs an inspector that stays editable while jobs run.
+4. Queue, batch and variations.
+5. Model and LoRA library: download, import, delete, filtered LoRA picker.
+6. Image-to-image and reference inputs.
+7. Video: frames, output writing and an inline player.
 
 ## Verification
 - In `~/Code/Atelier`: `Scripts/build.sh` builds and `Scripts/package_app.sh` produces a launchable `build/Atelier.app`.
 - Generate with `moss_image_sft_i8x.ckpt` at 1152×896. Check that live previews advance through 50 steps with no second pass, cancel stops within a step, and the PNG plus sidecar appear and reload in History.
 - "Use settings" on a history item reproduces the same image for the same seed.
+- Settings inspector: the prompt is under the canvas; hiding a setting and then changing it from search puts it in the Changed group; a custom layout survives relaunch and round-trips through export/import; a preset applied to a different model keeps that model's defaults for settings the preset doesn't set; "Use settings" restores every registry field.
 - Queue 5 variations, then pause, reorder and cancel one.
 - Import a `.safetensors` LoRA from ~/Downloads. It should show up only for matching models, and a generation with it should run.
 - Run an LTX video at a small frame count and check that it writes and plays back.
