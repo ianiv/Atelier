@@ -57,7 +57,7 @@ struct ModelsView: View {
         }
       }
       .searchable(text: $search, placement: .toolbar, prompt: "Filter models")
-      .safeAreaInset(edge: .bottom, spacing: 0) { footer }
+      .safeAreaBar(edge: .bottom, spacing: 0) { footer }
       .inspector(isPresented: .constant(true)) {
         Group {
           if let selected {
@@ -161,7 +161,6 @@ struct ModelsView: View {
     .foregroundStyle(.secondary)
     .padding(.horizontal, 12)
     .padding(.vertical, 6)
-    .background(.bar)
   }
 
   static func bytes(_ count: Int64) -> String {

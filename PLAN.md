@@ -104,12 +104,12 @@ Gaps to fill. These are small additions in MGK or the app, guided by `/Users/ian
 **Settings:** models directory (default `/Volumes/External 2TB/DrawThings/Models`, or the `DRAWTHINGS_MODELS_DIR` resolution) and weights cache size.
 
 ## Repo, build and packaging
-- Git repo at `~/Code/Atelier` with a checked-in `Atelier.xcodeproj` (macOS 14 deployment target): an app target `Atelier` (`Sources/Atelier/`) and a static framework `ProjectFormat` (`Sources/ProjectFormat/`, its own module because its enum names clash with DataModels').
+- Git repo at `~/Code/Atelier` with a checked-in `Atelier.xcodeproj` (macOS 27 deployment target, so Liquid Glass APIs need no availability checks): an app target `Atelier` (`Sources/Atelier/`) and a static framework `ProjectFormat` (`Sources/ProjectFormat/`, its own module because its enum names clash with DataModels').
 - Package dependencies are Xcode package references pinned to revisions (Project > Package Dependencies): draw-things-community `8dbbb5c69b83c6312eb10622611d46a943de6f88` (upstream `main` as of 2026-10-21, includes MOSS Image support), and dflat and flatbuffers at the revisions the engine pins. Bump the engine revision deliberately to pick up new models.
 - The only library product upstream exports is `_MediaGenerationKit`, so the app uses **only MGK's public API**. Fill the gaps above in the app (fallback defaults, LoRA registration via `custom_lora.json`, video writing, metadata).
 - If the app truly needs an engine change or a non-exported module (e.g. `ModelZoo`/`LoRAZoo`), switch the dependency to the local fork (drag `../draw-things-community` into the project as a local package, which overrides the remote one), make the change there as a separate commit, and note it here.
 - **Known fork-only fix:** `327c0386` "Fix Qwen3 attention layout when vision embeddings are injected" (`Libraries/SwiftDiffusion/Sources/Models/Qwen3.swift`) isn't upstream. In phase 7 (image-to-image/references), test reference-image generation on models whose Qwen3 text encoder takes vision embeddings. If it's broken, point the dependency at the fork.
-- `Scripts/build.sh [Debug|Release]` runs `xcodebuild` on the project (derived data and package checkouts under `build/`) and copies the result to `build/Atelier.app` for scripted runs. Ad-hoc signed, bundle id `local.atelier.Atelier`.
+- `Scripts/build.sh [Debug|Release]` runs `xcodebuild` on the project (derived data and package checkouts under `build/`) and copies the result to `build/Atelier.app` for scripted runs. Signed automatically with the personal team, bundle id `ca.blogaholics.Atelier`.
 - No SwiftPM package of our own (removed 2026-10-22, Ianiv): an SwiftPM executable is stamped `sdk 14.0` when Xcode builds it, which breaks i8x models. Check a build with `vtool -show-build`.
 - Keep generated build products and `build/` out of git via `.gitignore`.
 

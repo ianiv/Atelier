@@ -6,12 +6,16 @@ struct CreateView: View {
   @AppStorage("inspectorShown") private var inspectorShown = true
 
   var body: some View {
-    VStack(spacing: 0) {
-      CanvasView()
-      Divider()
-      PromptComposer()
-    }
-    .inspector(isPresented: $inspectorShown) {
+    CanvasView()
+      // A safe-area bar rather than a stacked view: the canvas runs underneath it and the system
+      // draws the bar's edge, so the composer sits on the canvas like the toolbar does.
+      .safeAreaBar(edge: .bottom, spacing: 0) {
+        VStack(spacing: 0) {
+          StatusBar()
+          PromptComposer()
+        }
+      }
+      .inspector(isPresented: $inspectorShown) {
       InspectorView()
         .inspectorColumnWidth(min: 300, ideal: 340, max: 460)
     }
@@ -19,20 +23,12 @@ struct CreateView: View {
     // min/max size is nan") switching between a customizable toolbar and the other sections'
     // `.searchable` toolbars.
     .toolbar {
+      // Generate lives in the prompt composer only; the toolbar keeps presets and the inspector
+      // toggle, each in its own glass capsule.
       ToolbarItem(placement: .primaryAction) {
         PresetMenu()
       }
-      ToolbarItem(placement: .primaryAction) {
-        if model.isBusy, model.phase != .loadingModel {
-          Button("Cancel", systemImage: "stop.fill") { model.cancel() }
-            .disabled(model.phase == .cancelling)
-            .help("Cancel the running generation (⎋)")
-        } else {
-          Button("Generate", systemImage: "sparkles") { model.generate() }
-            .disabled(!model.canGenerate)
-            .help("Generate (⌘↩)")
-        }
-      }
+      ToolbarSpacer(.fixed, placement: .primaryAction)
       ToolbarItem(placement: .primaryAction) {
         Button("Inspector", systemImage: "sidebar.trailing") { inspectorShown.toggle() }
           .help(inspectorShown ? "Hide Inspector (⌥⌘I)" : "Show Inspector (⌥⌘I)")
@@ -61,29 +57,34 @@ struct ModelPicker: View {
 
 struct CanvasView: View {
   @Environment(CreateModel.self) private var model
+
+  var body: some View {
+    ZStack {
+      Color(nsColor: .underPageBackgroundColor)
+        .ignoresSafeArea()
+      if let image = model.image {
+        Image(decorative: image, scale: 1)
+          .resizable()
+          .interpolation(.high)
+          .aspectRatio(contentMode: .fit)
+          .padding(24)
+      } else {
+        ContentUnavailableView(
+          "No image yet", systemImage: "photo",
+          description: Text("Write a prompt below and press Generate (⌘↩)."))
+      }
+    }
+    // Continues the canvas softly under the floating sidebar and inspector.
+    .backgroundExtensionEffect()
+  }
+}
+
+/// Generation progress, or what happened last, above the prompt composer.
+struct StatusBar: View {
+  @Environment(CreateModel.self) private var model
   @Environment(Navigation.self) private var navigation
 
   var body: some View {
-    VStack(spacing: 0) {
-      ZStack {
-        Color(nsColor: .underPageBackgroundColor)
-        if let image = model.image {
-          Image(decorative: image, scale: 1)
-            .resizable()
-            .interpolation(.high)
-            .aspectRatio(contentMode: .fit)
-            .padding(24)
-        } else {
-          ContentUnavailableView(
-            "No image yet", systemImage: "photo",
-            description: Text("Write a prompt below and press Generate (⌘↩)."))
-        }
-      }
-      statusBar
-    }
-  }
-
-  private var statusBar: some View {
     HStack(spacing: 12) {
       switch model.phase {
       case .idle:
@@ -116,7 +117,6 @@ struct CanvasView: View {
     .font(.callout)
     .padding(.horizontal, 12)
     .frame(height: 32)
-    .background(.bar)
   }
 }
 
@@ -138,10 +138,10 @@ struct PromptComposer: View {
           .focused($promptFocused)
           .onSubmit { model.generate() }
           .padding(8)
-          .background(Color(nsColor: .textBackgroundColor), in: .rect(cornerRadius: 8))
+          .background(Color(nsColor: .textBackgroundColor), in: Self.fieldShape)
           .overlay(
-            RoundedRectangle(cornerRadius: 8)
-              .strokeBorder(promptFocused ? Color.accentColor : Color(nsColor: .separatorColor))
+            Self.fieldShape
+              .stroke(promptFocused ? Color.accentColor : Color(nsColor: .separatorColor))
           )
           .help("Prompt. Return generates; ⌥↩ adds a line. ⌘L focuses this field.")
         if model.isBusy, model.phase != .loadingModel {
@@ -160,7 +160,7 @@ struct PromptComposer: View {
             Label("Generate", systemImage: "sparkles").frame(minWidth: 90)
           }
           .controlSize(.large)
-          .buttonStyle(.borderedProminent)
+          .buttonStyle(.glassProminent)
           .keyboardShortcut(.return, modifiers: .command)
           .disabled(!model.canGenerate)
         }
@@ -175,9 +175,11 @@ struct PromptComposer: View {
       .font(.callout)
     }
     .padding(12)
-    .background(.bar)
     .onChange(of: model.focusPromptRequest) { promptFocused = true }
   }
+
+  /// Follows the window's corners, never tighter than a text field's.
+  private static let fieldShape = ConcentricRectangle(corners: .concentric(minimum: .fixed(8)), isUniform: true)
 }
 
 struct SeedControls: View {

@@ -128,8 +128,9 @@ struct InspectorGroup<Header: View, Content: View>: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 10)
       .padding(.vertical, 4)
-      .background(Color.primary.opacity(0.04), in: .rect(cornerRadius: 8))
-      .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.08)))
+      .background(
+        Color.primary.opacity(0.05),
+        in: ConcentricRectangle(corners: .concentric(minimum: .fixed(8)), isUniform: true))
       }
     }
   }

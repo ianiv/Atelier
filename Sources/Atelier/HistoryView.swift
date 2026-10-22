@@ -71,7 +71,7 @@ struct HistoryView: View {
         message: { Text(deleteError ?? "") })
       .onDeleteCommand { pendingDelete = selected }
       .task(id: history.isLoaded) { if selected == nil { selection = filtered.first?.id } }
-      .safeAreaInset(edge: .bottom) {
+      .safeAreaBar(edge: .bottom) {
         if let progress = history.importProgress {
           HStack {
             ProgressView(value: Double(progress.done), total: Double(max(progress.total, 1)))
@@ -81,7 +81,6 @@ struct HistoryView: View {
           }
           .padding(8)
           .frame(maxWidth: .infinity)
-          .background(.bar)
         }
       }
   }
