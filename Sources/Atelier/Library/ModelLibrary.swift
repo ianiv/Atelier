@@ -6,13 +6,14 @@ import ModelZoo
 import Observation
 import _MediaGenerationKit
 
-/// Models and LoRAs in the models directory: the download catalog, downloads, LoRA imports and
-/// deletes.
+/// Models and LoRAs in the models directory: the download catalog, downloads, model and LoRA
+/// imports, and deletes.
 ///
 /// `ModelZoo`, `ModelOp` and `Diffusion` aren't products of the engine package, but they're built
 /// as dependencies of `_MediaGenerationKit` and import fine from the pinned revision. They're
-/// needed for what MGK doesn't cover: registering an imported LoRA with the running engine
-/// (`LoRAZoo.appendCustomSpecification`) and the importer's LoHa flag.
+/// needed for what MGK doesn't cover: registering an imported model or LoRA with the running engine
+/// (`ModelZoo`/`LoRAZoo.appendCustomSpecification`), checkpoint import, and the LoRA importer's
+/// LoHa flag.
 @MainActor
 @Observable
 final class ModelLibrary {
@@ -50,6 +51,22 @@ final class ModelLibrary {
     var progress: Double?
   }
 
+  /// A model checkpoint waiting to be imported or being imported.
+  struct ModelImport: Identifiable {
+    let id = UUID()
+    var source: URL
+    var name = ""
+    /// `ModelVersion` raw value the importer detected, once the file has been inspected.
+    var version: String?
+    var isInspecting = true
+    /// Why the file can't be imported, if it can't.
+    var problem: String?
+    var progress: Double?
+
+    var canImport: Bool { !isInspecting && problem == nil }
+    var family: String? { version.map(ModelLibrary.familyName) }
+  }
+
   let create: CreateModel
 
   /// Every catalog model (built-in, community and custom.json), downloaded or not.
@@ -62,11 +79,13 @@ final class ModelLibrary {
   private(set) var loras: [LoRA] = []
   private(set) var downloads: [String: Download] = [:]
   private(set) var importing: [LoRAImport] = []
+  private(set) var importingModels: [ModelImport] = []
   private(set) var freeSpace: Int64?
   var errorMessage: String?
 
   private var downloadTasks: [String: Task<Void, Never>] = [:]
   private var importTask: Task<Void, Never>?
+  private var modelImportTask: Task<Void, Never>?
 
   init(create: CreateModel) {
     self.create = create
@@ -154,19 +173,26 @@ final class ModelLibrary {
     downloadTasks[file]?.cancel()
   }
 
-  /// Whether `model` can be deleted now: downloaded, and not the model Create is running.
+  /// Whether `model` can be deleted now: downloaded (or imported, whose entry can go even when
+  /// its file is missing), and not the model Create is running.
   func canDelete(_ model: MediaGenerationResolvedModel) -> Bool {
-    model.isDownloaded && downloads[model.file] == nil
+    (model.isDownloaded || isCustom(model)) && downloads[model.file] == nil
       && !(create.isBusy && create.selectedModel == model.file)
   }
 
-  /// Moves the model's own files to the Trash. Shared files (text encoders, VAEs) stay.
+  /// Moves the model's own files to the Trash. Shared files (text encoders, VAEs) stay. An
+  /// imported model also loses its custom.json entry and the companion files its import wrote.
   func delete(_ model: MediaGenerationResolvedModel) async {
     guard canDelete(model) else { return }
+    let isCustom = isCustom(model)
+    let companions = isCustom ? Self.importedCompanions(of: model.file) : []
     do {
-      for url in Self.files(of: model.file, in: directory) {
-        try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+      for file in [model.file] + companions {
+        for url in Self.files(of: file, in: directory) {
+          try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+        }
       }
+      if isCustom { try unregisterModel(model.file) }
     } catch {
       errorMessage = "Couldn't delete \(model.name): \(error.localizedDescription)"
     }
@@ -185,6 +211,241 @@ final class ModelLibrary {
   private func afterChange() async {
     await refresh(offline: true)
     await create.refreshModelList()
+  }
+
+  // MARK: - Model import
+
+  static let checkpointExtensions: Set<String> = ["safetensors", "ckpt", "pt", "pth"]
+
+  /// Families ModelImporter detects but can't convert: it traps on them (`fatalError`) instead
+  /// of throwing, so they're turned away after inspection.
+  private nonisolated static let unconvertibleVersions: Set<ModelVersion> = [
+    .mossImage, .minimaxH3, .hiDreamO1, .qwenImage2_1, .ltx2, .ltx2_3, .seedvr2_3b, .seedvr2_7b,
+    .kandinsky21, .wurstchenStageB, .longcatVideoAvatar1_5,
+  ]
+
+  var isImportingModels: Bool { modelImportTask != nil }
+
+  /// Queues checkpoints for import (shown in the import sheet until confirmed) and inspects each
+  /// to detect its family.
+  func prepareModelImport(_ urls: [URL]) {
+    let accepted = urls.filter {
+      Self.checkpointExtensions.contains($0.pathExtension.lowercased())
+    }
+    if accepted.count < urls.count {
+      errorMessage = "Only .safetensors, .ckpt and .pt model checkpoints can be imported."
+    }
+    for url in accepted {
+      let item = ModelImport(source: url)
+      importingModels.append(item)
+      Task { await inspect(item.id, source: url) }
+    }
+  }
+
+  private func inspect(_ id: UUID, source: URL) async {
+    let result: Result<ModelVersion, Error> = await Task.detached {
+      Result {
+        try ModelImporter(
+          filePath: source.path, modelName: "", isTextEncoderCustomized: false,
+          autoencoderFilePath: nil, textEncoderFilePath: nil, textEncoder2FilePath: nil
+        ).inspect().version
+      }
+    }.value
+    guard let index = importingModels.firstIndex(where: { $0.id == id }) else { return }
+    importingModels[index].isInspecting = false
+    switch result {
+    case .success(let version):
+      importingModels[index].version = version.rawValue
+      if Self.unconvertibleVersions.contains(version) {
+        importingModels[index].problem =
+          "\(ModelZoo.humanReadableNameForVersion(version)) checkpoints can't be converted yet."
+      }
+    case .failure:
+      importingModels[index].problem = "Not a model checkpoint the importer recognizes."
+    }
+  }
+
+  func updateModelImport(_ id: UUID, name: String) {
+    guard let index = importingModels.firstIndex(where: { $0.id == id }) else { return }
+    importingModels[index].name = name
+  }
+
+  func removeModelImport(_ id: UUID) {
+    guard modelImportTask == nil else { return }
+    importingModels.removeAll { $0.id == id }
+  }
+
+  func cancelModelImports() {
+    guard modelImportTask == nil else { return }
+    importingModels.removeAll()
+  }
+
+  /// Converts the queued checkpoints one by one into the models directory, registers each in
+  /// custom.json and with the running engine, then downloads the text encoders and VAE it needs.
+  func runModelImports() {
+    guard modelImportTask == nil, importingModels.contains(where: \.canImport) else { return }
+    errorMessage = nil
+    modelImportTask = Task {
+      var failures: [String] = []
+      var imported: [String] = []
+      while let item = importingModels.first {
+        if item.canImport {
+          do {
+            imported.append(try await importModel(item))
+          } catch {
+            failures.append("\(item.source.lastPathComponent): \(error.localizedDescription)")
+          }
+        }
+        importingModels.removeFirst()
+      }
+      await afterChange()
+      for file in imported {
+        if let model = catalog.first(where: { $0.file == file }) { download(model) }
+      }
+      modelImportTask = nil
+      if !failures.isEmpty {
+        errorMessage = "Couldn't import " + failures.joined(separator: "\n")
+      }
+    }
+  }
+
+  /// Imports one checkpoint and returns the model file it registered.
+  private func importModel(_ item: ModelImport) async throws -> String {
+    let stem = item.source.deletingPathExtension().lastPathComponent
+    let modelName = Self.availableModelName(for: stem, in: directory)
+    let trimmedName = item.name.trimmingCharacters(in: .whitespacesAndNewlines)
+    let displayName = trimmedName.isEmpty ? stem : trimmedName
+    let source = item.source
+    let id = item.id
+    let progress: @Sendable (Float) -> Void = { [weak self] value in
+      Task { @MainActor [weak self] in
+        guard let self, let index = importingModels.firstIndex(where: { $0.id == id }) else {
+          return
+        }
+        importingModels[index].progress = Double(value)
+      }
+    }
+    if let index = importingModels.firstIndex(where: { $0.id == id }) {
+      importingModels[index].progress = 0
+    }
+    // ModelImporter writes `<modelName>_f16.ckpt` to ModelZoo.filePathForModelDownloaded, which
+    // resolves against the models directory the engine set (as LoRA import does).
+    let specification = try await Task.detached {
+      let importer = ModelImporter(
+        filePath: source.path, modelName: modelName, isTextEncoderCustomized: false,
+        autoencoderFilePath: nil, textEncoderFilePath: nil, textEncoder2FilePath: nil)
+      // Inspect first: the importer traps on families it can't convert.
+      let detected = try importer.inspect().version
+      guard !Self.unconvertibleVersions.contains(detected) else {
+        throw ImportError.unconvertible(ModelZoo.humanReadableNameForVersion(detected))
+      }
+      let (files, version, modifier, inspection) = try importer.import(
+        versionCheck: { _ in }, progress: progress)
+      return ModelImporter.inferModelSpecification(
+        modelName: displayName, fileName: modelName,
+        fileNames: files.map { URL(fileURLWithPath: $0).lastPathComponent },
+        modelVersion: version, modifier: modifier, inspectionResult: inspection, prefix: "",
+        objective: nil, conditioning: nil, noiseDiscretization: nil, upcastAttention: false,
+        finetuneScale: Self.defaultImportScale(for: version, fileName: source.lastPathComponent)
+      ).specification
+    }.value
+    guard
+      FileManager.default.fileExists(
+        atPath: directory.appendingPathComponent(specification.file).path)
+    else {
+      throw CocoaError(.fileNoSuchFile)
+    }
+    backUpModelRegistryOnce()
+    // custom.json resolves to ~/Documents/Models unless external URLs are preferred, which MGK
+    // leaves off. Prefer them just for this call (on the main thread, as the engine requires).
+    let preferred = ModelZoo.isExternalUrlsPreferred
+    ModelZoo.isExternalUrlsPreferred = true
+    ModelZoo.appendCustomSpecification(specification)
+    ModelZoo.isExternalUrlsPreferred = preferred
+    return specification.file
+  }
+
+  enum ImportError: LocalizedError {
+    case unconvertible(String)
+    var errorDescription: String? {
+      switch self {
+      case .unconvertible(let family): "\(family) checkpoints can't be converted yet."
+      }
+    }
+  }
+
+  /// The checkpoint scale (in 64-px units) a new import gets, as draw-things-cli picks it.
+  private nonisolated static func defaultImportScale(for version: ModelVersion, fileName: String)
+    -> UInt16
+  {
+    switch version {
+    case .hunyuanVideo, .wan21_14b, .wan22_5b, .longcatVideoAvatar1_5, .minimaxH3:
+      return 12
+    case .wan21_1_3b:
+      return 8
+    case .pixart:
+      return fileName.contains("512") ? 8 : 16
+    case .v1, .v2, .kandinsky21, .svdI2v, .seedvr2_3b, .seedvr2_7b:
+      return 8
+    default:
+      return 16
+    }
+  }
+
+  /// `<cleaned stem>`, numbered if `<stem>_f16.ckpt` is taken. ModelImporter adds `_f16.ckpt`
+  /// (and `_vae_f16.ckpt` and the like for companion files).
+  private static func availableModelName(for stem: String, in directory: URL) -> String {
+    let base = Importer.cleanup(filename: stem)
+    var candidate = base
+    var counter = 2
+    while FileManager.default.fileExists(
+      atPath: directory.appendingPathComponent(candidate + "_f16.ckpt").path)
+    {
+      candidate = "\(base)_\(counter)"
+      counter += 1
+    }
+    return candidate
+  }
+
+  /// Files an import of `file` wrote next to it (`<name>_vae_f16.ckpt` and the like, the
+  /// suffixes ModelImporter uses), when its specification names them. Shared encoders and VAEs
+  /// stay.
+  private static func importedCompanions(of file: String) -> [String] {
+    guard file.hasSuffix("_f16.ckpt"), let specification = ModelZoo.specificationForModel(file)
+    else { return [] }
+    let stem = String(file.dropLast("f16.ckpt".count))
+    let suffixes = [
+      "vae_f16.ckpt", "clip_vit_l14_f16.ckpt", "open_clip_vit_h14_f16.ckpt",
+      "open_clip_vit_bigg14_f16.ckpt", "ministral_3_3b_q8p.ckpt",
+    ]
+    let named = Set(
+      [specification.autoencoder, specification.textEncoder, specification.clipEncoder]
+        .compactMap { $0 } + (specification.additionalClipEncoders ?? []))
+    return suffixes.map { stem + $0 }.filter(named.contains)
+  }
+
+  /// Removes `file`'s custom.json entry, keeping every other entry as written, and drops it from
+  /// the running engine's model list.
+  private func unregisterModel(_ file: String) throws {
+    backUpModelRegistryOnce()
+    let url = directory.appendingPathComponent("custom.json")
+    if let data = try? Data(contentsOf: url),
+      let entries = try JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+    {
+      let remaining = entries.filter { $0["file"] as? String != file }
+      try JSONSerialization.data(
+        withJSONObject: remaining, options: [.prettyPrinted, .withoutEscapingSlashes]
+      ).write(to: url, options: .atomic)
+    }
+    ModelZoo.availableSpecifications.removeAll { $0.file == file }
+  }
+
+  /// Copies custom.json aside before the app first changes it in a session.
+  private var backedUpModels = false
+  private func backUpModelRegistryOnce() {
+    guard !backedUpModels else { return }
+    backedUpModels = true
+    Self.backUp("custom.json", in: directory)
   }
 
   // MARK: - LoRAs
@@ -367,8 +628,13 @@ final class ModelLibrary {
   private func backUpLoRARegistryOnce() {
     guard !backedUp else { return }
     backedUp = true
-    let registry = directory.appendingPathComponent("custom_lora.json")
-    let backup = directory.appendingPathComponent("custom_lora.json.bak-atelier")
+    Self.backUp("custom_lora.json", in: directory)
+  }
+
+  /// Copies a registry file to `<name>.bak-atelier`, replacing an older copy.
+  private static func backUp(_ name: String, in directory: URL) {
+    let registry = directory.appendingPathComponent(name)
+    let backup = directory.appendingPathComponent(name + ".bak-atelier")
     guard FileManager.default.fileExists(atPath: registry.path) else { return }
     try? FileManager.default.removeItem(at: backup)
     try? FileManager.default.copyItem(at: registry, to: backup)

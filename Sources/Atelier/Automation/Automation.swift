@@ -275,12 +275,13 @@ enum Automation {
   ///   Atelier --library-check [--import-lora FILE [--lora-name NAME]]
   ///           [--generate-with-lora MODEL [--steps N] [--seed N] [--lora-weight W]]
   ///           [--delete-lora FILE] [--download MODEL [--cancel-after-bytes N]]
+  ///           [--import-model FILE [--model-name NAME]] [--generate-model [MODEL] [--steps N]]
   ///           [--delete-model MODEL]
   ///           [--snapshot-dir DIR] [--quit]
   ///
   /// Loads the catalog, imports a LoRA and checks it's registered and offered only for models of
-  /// its family, generates with it in the same session, deletes a LoRA, and starts (and
-  /// optionally cancels) a model download.
+  /// its family, generates with it in the same session, deletes a LoRA, starts (and optionally
+  /// cancels) a model download, and imports a model checkpoint and generates with it.
   private static func libraryCheck(
     _ model: CreateModel, navigation: Navigation, layouts: LayoutStore, presets: PresetStore,
     library: ModelLibrary
@@ -427,6 +428,81 @@ enum Automation {
         log("last progress: \(last)")
         check(cancelAfter == nil ? isDownloaded : !isDownloaded, "download \(cancelAfter == nil ? "finished" : "cancelled"): downloaded \(isDownloaded), in Create's picker \(model.models.contains { $0.file == file })")
       }
+      var importedModel: String?
+      if let path = value("--import-model") {
+        let source = URL(fileURLWithPath: path)
+        let before = Set(library.catalog.map(\.file))
+        library.prepareModelImport([source])
+        while library.importingModels.contains(where: \.isInspecting) {
+          try? await Task.sleep(for: .milliseconds(100))
+        }
+        if let item = library.importingModels.first {
+          log("inspected \(source.lastPathComponent): \(item.family ?? "?") \(item.problem ?? "")")
+          if let name = value("--model-name") { library.updateModelImport(item.id, name: name) }
+        }
+        navigation.section = .models
+        await shot("model-import-sheet.png")
+        let importStart = Date()
+        let canImport = library.importingModels.contains(where: \.canImport)
+        library.runModelImports()
+        if !canImport { library.cancelModelImports() }
+        var loggedTenth = -1
+        while library.isImportingModels {
+          if let progress = library.importingModels.first?.progress, Int(progress * 10) != loggedTenth {
+            loggedTenth = Int(progress * 10)
+            log(String(format: "import progress: %.0f%%", progress * 100))
+          }
+          try? await Task.sleep(for: .milliseconds(250))
+        }
+        if let error = library.errorMessage { log("error: \(error)") }
+        let added = library.catalog.filter { !before.contains($0.file) }
+        check(
+          canImport ? added.count == 1 : added.isEmpty,
+          String(format: "import of %@ in %.1fs: %@", source.lastPathComponent, Date().timeIntervalSince(importStart), added.map { "\($0.file) (\($0.name), \($0.version ?? "?"))" }.joined()))
+        if let entry = added.first {
+          let registry = (try? String(contentsOfFile: model.modelsDirectory + "/custom.json", encoding: .utf8)) ?? ""
+          check(library.isCustom(entry) && registry.contains(entry.file), "registered in custom.json as Imported")
+          while library.downloads[entry.file] != nil {
+            if let progress = library.downloads[entry.file] { log("dependencies: \(ModelStatus.describe(progress))") }
+            try? await Task.sleep(for: .seconds(2))
+          }
+          let ready = library.catalog.first { $0.file == entry.file }?.isDownloaded ?? false
+          check(ready && model.models.contains { $0.file == entry.file }, "ready (dependencies present) and in Create's model picker")
+          await shot("models-imported.png")
+          importedModel = entry.file
+        }
+      }
+
+      if args.contains("--generate-model") {
+        let named = value("--generate-model").flatMap { $0.hasPrefix("--") ? nil : $0 }
+        if let file = named ?? importedModel {
+          model.selectedModel = file
+          try? await Task.sleep(for: .milliseconds(300))
+          while model.isBusy { try? await Task.sleep(for: .milliseconds(100)) }
+          if var settings = model.settings, model.selectedModel == file {
+            if let steps = value("--steps").flatMap(Int.init) { settings.steps = steps }
+            settings.width = 512
+            settings.height = 512
+            model.settings = settings
+            model.seed = value("--seed").flatMap(UInt32.init) ?? 42
+            model.seedLocked = true
+            model.prompt = value("--prompt") ?? "a lighthouse on a cliff at sunset"
+            navigation.section = .create
+            let previous = model.lastSavedStep
+            log("generate with \(file), \(settings.steps) steps")
+            model.generate()
+            while model.isBusy { try? await Task.sleep(for: .milliseconds(100)) }
+            if let error = model.errorMessage { log("error: \(error)") }
+            check(model.lastSavedStep != nil && model.lastSavedStep != previous, "generated with \(file)")
+            await shot("create-model.png")
+          } else {
+            check(false, "model \(file) didn't load")
+          }
+        } else {
+          log("no model to generate with")
+        }
+      }
+
       if let file = value("--delete-model"),
         let entry = library.catalog.first(where: { $0.file == file })
       {
