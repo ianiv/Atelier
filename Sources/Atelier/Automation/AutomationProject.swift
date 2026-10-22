@@ -203,7 +203,7 @@ extension Automation {
         print("\(ok ? "PASS" : "FAIL") \(message)")
         fflush(stdout)
       }
-      func finish() {
+      @MainActor func finish() {
         print(failures == 0 ? "edit input check: all passed" : "edit input check: \(failures) failed")
         fflush(stdout)
         if args.contains("--quit") { NSApp.terminate(nil) }
