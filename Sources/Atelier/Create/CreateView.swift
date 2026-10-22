@@ -203,6 +203,8 @@ struct SeedControls: View {
         .labelsHidden()
         .multilineTextAlignment(.trailing)
         .frame(maxWidth: 120)
+        // Always random rolls a new seed on every Generate, so the field only shows the last one.
+        .disabled(!model.seedLocked)
         Button {
           model.rollSeed()
         } label: {
