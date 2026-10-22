@@ -42,6 +42,26 @@ actor GenerationEngine {
   /// `dropCachedModelsIfInputsChanged`.
   private var lastImageInputs: (model: String, canvas: Bool, sizes: [[Int]])?
 
+  private var isRunning = false
+  private var waiting: [CheckedContinuation<Void, Never>] = []
+
+  private func waitForTurn() async {
+    guard isRunning else {
+      isRunning = true
+      return
+    }
+    await withCheckedContinuation { waiting.append($0) }
+  }
+
+  /// Hands the engine to the next waiting run, if any.
+  private func endTurn() {
+    if waiting.isEmpty {
+      isRunning = false
+    } else {
+      waiting.removeFirst().resume()
+    }
+  }
+
   /// Points MGK's default environment at `directory` and drops any cached pipeline.
   func setModelsDirectory(_ directory: String) {
     MediaGenerationEnvironment.default.externalUrls = [
@@ -78,6 +98,11 @@ actor GenerationEngine {
     _ request: Request,
     progress: @escaping @Sendable (Progress) -> Void
   ) async throws -> MediaGenerationPipeline.Result {
+    // Create and agents (AgentServer) share this engine. The actor alone would interleave two
+    // runs at their awaits, so each waits its turn.
+    await waitForTurn()
+    defer { endTurn() }
+    try Task.checkCancellation()
     var pipeline = try await pipeline(for: request.model)
     await applyPerformanceSettings(using: pipeline)
     dropCachedModelsIfInputsChanged(request)

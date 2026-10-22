@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C442D7B6FB6852DA4CD2C251 /* AgentServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 859B3EF300FEC1C99AACF6D2 /* AgentServer.swift */; };
+		0B152D751338FB383E5A2E19 /* AgentTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = 400358130C88D5B11EEB3F3E /* AgentTools.swift */; };
+		2D94FAD45270F10383644DDE /* LoopbackHTTPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3BEC1F1293FFB633DE61829 /* LoopbackHTTPServer.swift */; };
 		0113D79A95442376FD07EB82 /* clip_query_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FEF4CE7AD32E77D359D8F85 /* clip_query_generated.swift */; };
 		019DECB5A1E70541745FDF70 /* ModelLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 248FF150659188D7C4B12A12 /* ModelLibrary.swift */; };
 		02980CB68834C5E6EA77013B /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75FDC53060CFC4942FDDBF2D /* ContentView.swift */; };
@@ -95,6 +98,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		859B3EF300FEC1C99AACF6D2 /* AgentServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentServer.swift; sourceTree = "<group>"; };
+		400358130C88D5B11EEB3F3E /* AgentTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTools.swift; sourceTree = "<group>"; };
+		C3BEC1F1293FFB633DE61829 /* LoopbackHTTPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopbackHTTPServer.swift; sourceTree = "<group>"; };
 		0141CE30714817680C910054 /* tensor_data_data_model_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = tensor_data_data_model_generated.swift; sourceTree = "<group>"; };
 		020B954C3465D02C24F95C3C /* ProjectMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectMapping.swift; sourceTree = "<group>"; };
 		0963659342F5DFDDA1ED7457 /* tensor_data_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = tensor_data_generated.swift; sourceTree = "<group>"; };
@@ -188,6 +194,7 @@
 		946934439EEA51DC6E75A261 /* Atelier */ = {
 			isa = PBXGroup;
 			children = (
+				EBA0E9A95AF290DB5AB242DA /* Agents */,
 				882062C245F2B93A25F1D212 /* App */,
 				3E8C58D16B915F2CC9BB95A5 /* Automation */,
 				ADEF5850836026B0FCB26117 /* Create */,
@@ -198,6 +205,16 @@
 				52499566B8E250F1140E5815 /* Projects */,
 			);
 			path = Atelier;
+			sourceTree = "<group>";
+		};
+		EBA0E9A95AF290DB5AB242DA /* Agents */ = {
+			isa = PBXGroup;
+			children = (
+				859B3EF300FEC1C99AACF6D2 /* AgentServer.swift */,
+				400358130C88D5B11EEB3F3E /* AgentTools.swift */,
+				C3BEC1F1293FFB633DE61829 /* LoopbackHTTPServer.swift */,
+			);
+			path = Agents;
 			sourceTree = "<group>";
 		};
 		882062C245F2B93A25F1D212 /* App */ = {
@@ -446,6 +463,9 @@
 				10171A503FBA24116D0D87F6 /* AppSettings.swift in Sources */,
 				CAD7FD050009B33BA8188223 /* AtelierApp.swift in Sources */,
 				B7FB8865E905277764CD70D9 /* Automation.swift in Sources */,
+				C442D7B6FB6852DA4CD2C251 /* AgentServer.swift in Sources */,
+				0B152D751338FB383E5A2E19 /* AgentTools.swift in Sources */,
+				2D94FAD45270F10383644DDE /* LoopbackHTTPServer.swift in Sources */,
 				4549FF9554EB66628271351A /* AutomationProject.swift in Sources */,
 				02980CB68834C5E6EA77013B /* ContentView.swift in Sources */,
 				90D46F51CBD101C88E0BD1B0 /* CreateModel.swift in Sources */,

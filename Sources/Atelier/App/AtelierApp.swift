@@ -9,6 +9,7 @@ struct AtelierApp: App {
   @State private var layouts: LayoutStore
   @State private var presets: PresetStore
   @State private var library: ModelLibrary
+  @State private var agents: AgentServer
   @AppStorage("inspectorShown") private var inspectorShown = true
   @AppStorage("moodboardShown") private var moodboardShown = true
 
@@ -26,6 +27,7 @@ struct AtelierApp: App {
     _presets = State(initialValue: presets)
     let library = ModelLibrary(create: create)
     _library = State(initialValue: library)
+    _agents = State(initialValue: AgentServer(create: create, presets: presets))
     // Started here rather than from a view's .task: SwiftUI doesn't put windows up while the
     // screen is locked, and scripted checks still need to run then.
     Task { @MainActor in
@@ -99,8 +101,16 @@ struct AtelierApp: App {
       }
     }
     Settings {
-      SettingsView()
-        .environment(create)
+      TabView {
+        Tab("General", systemImage: "gearshape") {
+          SettingsView()
+            .environment(create)
+        }
+        Tab("Agents", systemImage: "sparkles") {
+          AgentSettingsView()
+            .environment(agents)
+        }
+      }
     }
   }
 }
