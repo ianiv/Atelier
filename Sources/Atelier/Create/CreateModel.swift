@@ -426,7 +426,14 @@ final class CreateModel {
   }
 
   /// Applies a preset on top of the model's defaults; settings it doesn't name keep the defaults.
+  /// A preset for another downloaded model switches to that model first, then applies on top of
+  /// its defaults (and its default preset) once they load.
   func apply(_ preset: Preset, undoManager: UndoManager?) {
+    if let model = preset.model, model != selectedModel, models.contains(where: { $0.file == model }) {
+      pendingSettings = DrawThingsJSON.Pasted(preset).dump
+      selectedModel = model
+      return
+    }
     guard var configuration = recommended, let settings else { return }
     for (id, value) in preset.values {
       SettingsRegistry.byID[id]?.set(&configuration, value)

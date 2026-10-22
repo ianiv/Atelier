@@ -784,6 +784,16 @@ enum Automation {
       model.rollAndLockSeed()
       model.resetToModelDefaults(undoManager: nil)
       check(!model.seedLocked, "Reset with a default preset turned Random on")
+      // Picking another model's preset switches to that model; its default preset doesn't win.
+      if let modelB {
+        model.selectedModel = modelB
+        await settle()
+        let other = Preset(name: "Inspector Check Other Model", values: ["steps": .number(14)], model: modelA)
+        model.apply(other, undoManager: nil)
+        await settle()
+        check(model.selectedModel == modelA && model.settings?.steps == 14,
+          "\(modelA)'s preset picked on \(modelB) switched to \(modelA) with Steps 14 (steps \(model.settings?.steps ?? -1))")
+      }
       presets.delete(own)
       check(presets.defaultPreset(for: modelA) == nil, "deleting the preset cleared the default")
 

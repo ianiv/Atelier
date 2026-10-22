@@ -285,16 +285,7 @@ enum DrawThingsJSON {
 
   static func decode(_ data: Data) -> Pasted? {
     if let preset = try? JSONDecoder().decode(Preset.self, from: data) {
-      var dump: [String: JSONValue] = [:]
-      for (id, value) in preset.values {
-        if id == "size", case .object(let size) = value {
-          dump["width"] = size["width"]
-          dump["height"] = size["height"]
-        } else {
-          dump[id] = value
-        }
-      }
-      return Pasted(dump: dump, model: preset.model, seed: nil)
+      return Pasted(preset)
     }
     guard case .object(var json)? = try? JSONDecoder().decode(JSONValue.self, from: data) else {
       return nil
@@ -343,5 +334,21 @@ enum DrawThingsJSON {
   private static func caseName<E: CaseIterable>(of _: E.Type, matching name: String) -> JSONValue? {
     E.allCases.first { String(describing: $0).caseInsensitiveCompare(name) == .orderedSame }
       .map { .string(String(describing: $0)) }
+  }
+}
+
+extension DrawThingsJSON.Pasted {
+  /// A preset's values as a dump (its size split into width and height), with its model.
+  init(_ preset: Preset) {
+    var dump: [String: JSONValue] = [:]
+    for (id, value) in preset.values {
+      if id == "size", case .object(let size) = value {
+        dump["width"] = size["width"]
+        dump["height"] = size["height"]
+      } else {
+        dump[id] = value
+      }
+    }
+    self.init(dump: dump, model: preset.model, seed: nil)
   }
 }
