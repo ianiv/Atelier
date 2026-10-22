@@ -762,6 +762,23 @@ enum Automation {
       }
       presets.delete(preset)
 
+      // A preset's Random setting applies with it; one without it leaves Random alone.
+      var randomPreset = Preset(name: "Inspector Check Random", values: [:], randomSeed: false)
+      model.apply(randomPreset, undoManager: nil)
+      check(model.seedLocked, "a preset saved with Random off turned Random off")
+      randomPreset.randomSeed = true
+      model.apply(randomPreset, undoManager: nil)
+      check(!model.seedLocked, "a preset saved with Random on turned Random on")
+      randomPreset.randomSeed = nil
+      model.rollAndLockSeed()
+      model.apply(randomPreset, undoManager: nil)
+      check(model.seedLocked, "a preset without Random left it alone")
+      if let data = try? LayoutStore.encoder.encode(Preset(name: "R", values: [:], randomSeed: false)),
+        let decoded = try? JSONDecoder().decode(Preset.self, from: data)
+      {
+        check(decoded.randomSeed == false, "Random round-trips through a preset file")
+      }
+
       // A per-model default preset: applied when switching to that model only.
       model.selectedModel = modelA
       await settle()

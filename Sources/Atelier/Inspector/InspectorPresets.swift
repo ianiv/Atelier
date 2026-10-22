@@ -136,6 +136,7 @@ struct SavePresetSheet: View {
   @State private var included: Set<String> = []
   @State private var forThisModel = true
   @State private var makeDefault = false
+  @State private var randomSeed = true
   @State private var allSettings = true
   @State private var error: String?
 
@@ -155,6 +156,8 @@ struct SavePresetSheet: View {
       Toggle("Only for \(model.selectedModelInfo?.name ?? "this model")", isOn: $forThisModel)
       Toggle("Use as this model's defaults", isOn: $makeDefault)
         .help("Applied whenever you switch to this model, and used by Reset.")
+      Toggle("Random seed", isOn: $randomSeed)
+        .help("Applying the preset turns the seed's Random checkbox on or off to match.")
       if presets.presets.contains(where: { $0.name == name }) {
         Text("Replaces the existing preset “\(name)”.").font(.caption).foregroundStyle(.secondary)
       }
@@ -191,7 +194,8 @@ struct SavePresetSheet: View {
             let preset = Preset(
               name: name.trimmingCharacters(in: .whitespaces),
               values: model.values(for: Array(included)),
-              model: forThisModel ? model.selectedModel : nil)
+              model: forThisModel ? model.selectedModel : nil,
+              randomSeed: randomSeed)
             try presets.save(preset)
             if makeDefault { model.setDefaultPreset(preset) }
             dismiss()
@@ -205,7 +209,10 @@ struct SavePresetSheet: View {
     }
     .padding(20)
     .frame(width: 420, height: 500)
-    .onAppear { included = Set(candidates.map(\.id)) }
+    .onAppear {
+      included = Set(candidates.map(\.id))
+      randomSeed = !model.seedLocked
+    }
     .onChange(of: allSettings) { included = Set(candidates.map(\.id)) }
   }
 }

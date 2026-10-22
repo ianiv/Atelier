@@ -411,7 +411,9 @@ final class CreateModel {
     guard let recommended, let settings else { return }
     registerUndo(restoring: settings, undoManager, actionName: "Reset to Model Defaults")
     self.settings = recommended
-    if let selectedModel, presets?.defaultPreset(for: selectedModel) != nil { seedLocked = false }
+    if let selectedModel, let preset = presets?.defaultPreset(for: selectedModel) {
+      seedLocked = !(preset.randomSeed ?? true)
+    }
   }
 
   /// The model's defaults with its default preset (if any) applied on top.
@@ -439,6 +441,7 @@ final class CreateModel {
   /// A preset for another downloaded model switches to that model first, then applies on top of
   /// its defaults (and its default preset) once they load.
   func apply(_ preset: Preset, undoManager: UndoManager?) {
+    if let randomSeed = preset.randomSeed { seedLocked = !randomSeed }
     if let model = preset.model, model != selectedModel, models.contains(where: { $0.file == model }) {
       pendingSettings = DrawThingsJSON.Pasted(preset).dump
       selectedModel = model
@@ -742,9 +745,10 @@ final class CreateModel {
         var settings = recommended
         if let pendingSettings {
           SettingsRegistry.apply(dump: pendingSettings, to: &settings)
-        } else if presets?.defaultPreset(for: model) != nil {
-          // A default preset always comes with Random on; pasted or reused settings keep their seed.
-          seedLocked = false
+        } else if let preset = presets?.defaultPreset(for: model) {
+          // A default preset sets Random (on unless it says otherwise); pasted or reused settings
+          // keep their seed.
+          seedLocked = !(preset.randomSeed ?? true)
         }
         self.settings = settings
       } catch {
