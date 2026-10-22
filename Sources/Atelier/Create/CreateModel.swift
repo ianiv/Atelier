@@ -28,7 +28,7 @@ final class CreateModel {
   var negativePrompt = ""
   var seed = UInt32.random(in: 0...UInt32.max)
   /// Off means "always random": every Generate rolls a new seed. Remembered across launches;
-  /// "Use settings" and typing a seed turn it on.
+  /// "Use settings", typing a seed and rolling one with the dice turn it on.
   var seedLocked = UserDefaults.standard.bool(forKey: "seedLocked") {
     didSet { UserDefaults.standard.set(seedLocked, forKey: "seedLocked") }
   }
@@ -336,6 +336,12 @@ final class CreateModel {
 
   func rollSeed() {
     seed = UInt32.random(in: 0...UInt32.max)
+  }
+
+  /// The dice and ⌘R: a new seed that every generation keeps until it changes.
+  func rollAndLockSeed() {
+    rollSeed()
+    seedLocked = true
   }
 
   func generate() {

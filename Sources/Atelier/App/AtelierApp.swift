@@ -55,7 +55,7 @@ struct AtelierApp: App {
           create.focusPromptRequest += 1
         }
         .keyboardShortcut("l", modifiers: .command)
-        Button("Roll Seed") { create.rollSeed() }
+        Button("Roll Seed") { create.rollAndLockSeed() }
           .keyboardShortcut("r", modifiers: .command)
       }
     }

@@ -206,7 +206,7 @@ struct SeedControls: View {
         // Always random rolls a new seed on every Generate, so the field only shows the last one.
         .disabled(!model.seedLocked)
         Button {
-          model.rollSeed()
+          model.rollAndLockSeed()
         } label: {
           Image(systemName: "dice")
         }
