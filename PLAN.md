@@ -112,6 +112,7 @@ Gaps to fill. These are small additions in MGK or the app, guided by `/Users/ian
 - **Known fork-only fix:** `327c0386` "Fix Qwen3 attention layout when vision embeddings are injected" (`Libraries/SwiftDiffusion/Sources/Models/Qwen3.swift`) isn't upstream. In phase 7 (image-to-image/references), test reference-image generation on models whose Qwen3 text encoder takes vision embeddings. If it's broken, point the dependency at the fork.
 - `Scripts/build.sh` runs `swift build -c release --build-system native --product Atelier`; the native build system is required for Metal 4 and i8x models.
 - `Scripts/package_app.sh` builds, then wraps the binary in `Atelier.app` (Info.plist, icon placeholder, ad-hoc codesign) at `build/Atelier.app`.
+- **Xcode:** `Scripts/generate_xcodeproj.sh [--open]` generates `Atelier.xcodeproj` (ignored by git) from `project.yml` with XcodeGen: a real app target compiling `Sources/Atelier`, same bundle id as the packaged app, TAE zips copied in by a build phase. Don't open `Package.swift` in Xcode to run the app: Xcode builds package executables with Swift Build, which stamps `sdk 14.0` and breaks i8x models; the app target links with `sdk 27.0` (check with `vtool -show-build`).
 - Keep generated build products and `build/` out of git via `.gitignore`.
 
 ## Phases (each one usable on its own)

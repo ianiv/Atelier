@@ -1,0 +1,87 @@
+# XcodeGen spec for Atelier.xcodeproj, a real macOS app target for building, running and debugging
+# in Xcode. Generate with Scripts/generate_xcodeproj.sh (it fills in the pins below from
+# Package.swift); the generated project is not checked in.
+#
+# Why not open Package.swift directly: Xcode builds a package's executable with Swift Build, which
+# links it with `sdk 14.0` (the deployment target) in LC_BUILD_VERSION. Metal then compiles shaders
+# at the old language version and the i8x models' Metal 4 kernels fail. A regular app target links
+# with the real SDK version, like `swift build --build-system native` does.
+name: Atelier
+options:
+  bundleIdPrefix: local.atelier
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+packages:
+  # The package itself, for its ProjectFormat library.
+  AtelierPackage:
+    path: .
+  DrawThings:
+    url: https://github.com/drawthingsai/draw-things-community
+    revision: ${ATELIER_DRAW_THINGS_REVISION}
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+targets:
+  Atelier:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/Atelier
+    dependencies:
+      - package: AtelierPackage
+        product: ProjectFormat
+      - package: DrawThings
+        product: _MediaGenerationKit
+    info:
+      path: build/xcode/Info.plist
+      properties:
+        CFBundleName: Atelier
+        CFBundleDisplayName: Atelier
+        CFBundleShortVersionString: "0.1"
+        CFBundleVersion: "1"
+        CFBundleIconFile: AppIcon
+        LSMinimumSystemVersion: "14.0"
+        NSHighResolutionCapable: true
+        NSPrincipalClass: NSApplication
+    settings:
+      base:
+        # Same bundle id as Scripts/package_app.sh, so both builds share settings and session.
+        PRODUCT_BUNDLE_IDENTIFIER: local.atelier.Atelier
+        PRODUCT_NAME: Atelier
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        DEVELOPMENT_TEAM: ""
+        ENABLE_HARDENED_RUNTIME: NO
+        GENERATE_INFOPLIST_FILE: NO
+        # The preview script below reads from Draw Things.app.
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+    postBuildScripts:
+      # Live previews need the engine's *_tae.zip from an installed Draw Things.app (see
+      # Scripts/package_app.sh). Without them the app still generates, just without previews.
+      - name: Copy tiny autoencoders from Draw Things.app
+        basedOnDependencyAnalysis: false
+        script: |
+          DRAWTHINGS_APP="${DRAWTHINGS_APP:-/Applications/Draw Things.app}"
+          DEST="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
+          mkdir -p "$DEST"
+          found=0
+          for zip in "$DRAWTHINGS_APP"/Contents/Resources/*_tae.zip; do
+            [ -e "$zip" ] || continue
+            [ "$zip" -nt "$DEST/$(basename "$zip")" ] && cp "$zip" "$DEST/"
+            found=1
+          done
+          [ "$found" -eq 1 ] || echo "warning: no *_tae.zip found in $DRAWTHINGS_APP; live previews will be disabled"
+          exit 0
+schemes:
+  Atelier:
+    build:
+      targets:
+        Atelier: all
+    run:
+      config: Debug
+    profile:
+      config: Release
+    archive:
+      config: Release

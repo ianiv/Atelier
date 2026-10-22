@@ -14,7 +14,9 @@ let package = Package(
   name: "Atelier",
   platforms: [.macOS(.v14)],
   products: [
-    .executable(name: "Atelier", targets: ["Atelier"])
+    .executable(name: "Atelier", targets: ["Atelier"]),
+    // For the app target in the Xcode project (project.yml), which compiles Sources/Atelier itself.
+    .library(name: "ProjectFormat", targets: ["ProjectFormat"]),
   ],
   dependencies: [
     // Official engine repo, pinned. Bump deliberately to pick up new models.
