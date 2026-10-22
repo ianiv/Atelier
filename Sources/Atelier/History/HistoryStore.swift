@@ -173,9 +173,18 @@ final class HistoryStore {
     return item
   }
 
-  /// Removes the step from the project. Later steps move down by one, so the list is reloaded.
-  func delete(_ item: HistoryItem) async throws {
-    try await project.delete(item.id)
+  /// Removes the steps from the project. Later steps move down by one, so the newest goes first
+  /// (leaving the older ones' ids valid) and the list is reloaded.
+  func delete(_ items: [HistoryItem]) async throws {
+    let ids = items.map(\.id).sorted {
+      ($0.lineage, $0.logicalTime) > ($1.lineage, $1.logicalTime)
+    }
+    do {
+      for id in ids { try await project.delete(id) }
+    } catch {
+      await reload()
+      throw error
+    }
     await reload()
   }
 
@@ -229,12 +238,31 @@ final class HistoryStore {
 
   /// The image as a file to drag out, named like an export.
   func dragExport(_ item: HistoryItem) -> PNGExport {
-    PNGExport(name: fileName(for: item)) { [self] in try await pngData(item) }
+    PNGExport(id: item.id, name: fileName(for: item)) { [self] in try await pngData(item) }
   }
 
   /// Puts the full-resolution image on the clipboard.
   func copyImage(_ item: HistoryItem) async {
     if let image = await image(for: item) { Self.copy(image) }
+  }
+
+  /// Puts several full-resolution images on the clipboard, one pasteboard item each.
+  func copyImages(_ items: [HistoryItem]) async {
+    guard items.count > 1 else {
+      if let item = items.first { await copyImage(item) }
+      return
+    }
+    var entries: [NSPasteboardItem] = []
+    for item in items {
+      guard let image = await image(for: item) else { continue }
+      let entry = NSPasteboardItem()
+      if let png = ImageTensor.png(image) { entry.setData(png, forType: .png) }
+      if let tiff = NSBitmapImageRep(cgImage: image).tiffRepresentation { entry.setData(tiff, forType: .tiff) }
+      entries.append(entry)
+    }
+    let pasteboard = NSPasteboard.general
+    pasteboard.clearContents()
+    pasteboard.writeObjects(entries)
   }
 
   /// Puts an image on the clipboard as PNG and TIFF, which other apps paste most reliably.
@@ -427,7 +455,8 @@ enum JSONValue: Codable, Hashable {
 }
 
 /// A PNG to drag into Finder (as a file) or another app (as image data), encoded on drop.
-struct PNGExport: Transferable {
+struct PNGExport: Transferable, Identifiable {
+  var id: StepID
   var name: String
   var data: @Sendable () async throws -> Data
 
@@ -440,6 +469,8 @@ struct PNGExport: Transferable {
       try await export.data().write(to: file)
       return SentTransferredFile(file)
     }
+    .suggestedFileName { $0.name }
     DataRepresentation(exportedContentType: .png) { try await $0.data() }
+      .suggestedFileName { $0.name }
   }
 }

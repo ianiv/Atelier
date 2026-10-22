@@ -7,12 +7,18 @@ struct HistoryView: View {
   @Environment(HistoryStore.self) private var history
   @Environment(CreateModel.self) private var create
   @Environment(Navigation.self) private var navigation
-  @State private var selection: HistoryItem.ID?
+  @State private var selection: Set<HistoryItem.ID> = []
+  /// The item arrows move from, ⇧-click extends from and Quick Look shows.
+  @State private var anchor: HistoryItem.ID?
   @State private var search = ""
   @State private var modelFilter: String?
-  @State private var pendingDelete: HistoryItem?
+  @State private var pendingDelete: [HistoryItem]?
   @State private var deleteError: String?
   @State private var columns = 1
+  @State private var viewportHeight: CGFloat = 0
+  /// Each cell's frame in the grid, for marquee selection.
+  @State private var frames: [HistoryItem.ID: CGRect] = [:]
+  @State private var marquee: CGRect?
   @State private var quickLookURL: URL?
   @FocusState private var gridFocused: Bool
 
@@ -24,8 +30,14 @@ struct HistoryView: View {
     }
   }
 
-  private var selected: HistoryItem? {
-    history.items.first { $0.id == selection }
+  /// The selected items, in grid order.
+  private var selectedItems: [HistoryItem] {
+    history.items.filter { selection.contains($0.id) }
+  }
+
+  /// What an action on `item` applies to: the whole selection when it includes `item`.
+  private func targets(_ item: HistoryItem) -> [HistoryItem] {
+    selection.contains(item.id) ? selectedItems : [item]
   }
 
   var body: some View {
@@ -43,11 +55,16 @@ struct HistoryView: View {
       .searchable(text: $search, placement: .toolbar, prompt: "Filter by prompt")
       .inspector(isPresented: .constant(true)) {
         Group {
-          if let selected {
+          let selected = selectedItems
+          if selected.count == 1, let item = selected.first {
             HistoryDetail(
-              item: selected, use: { use(selected, newSeed: false) },
-              rerun: { use(selected, newSeed: true) },
-              export: { export(selected) },
+              item: item, use: { use(item, newSeed: false) },
+              rerun: { use(item, newSeed: true) },
+              export: { export([item]) },
+              delete: { pendingDelete = [item] })
+          } else if selected.count > 1 {
+            HistorySelectionDetail(
+              items: selected, export: { export(selected) },
               delete: { pendingDelete = selected })
           } else {
             ContentUnavailableView(
@@ -58,23 +75,28 @@ struct HistoryView: View {
         .inspectorColumnWidth(min: 300, ideal: 340, max: 480)
       }
       .confirmationDialog(
-        "Delete this image from the project?",
+        pendingDelete?.count ?? 0 > 1
+          ? "Delete \(pendingDelete?.count ?? 0) images from the project?"
+          : "Delete this image from the project?",
         isPresented: Binding(
           get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
         presenting: pendingDelete
-      ) { item in
-        Button("Delete", role: .destructive) { delete(item) }
+      ) { items in
+        Button("Delete", role: .destructive) { delete(items) }
         Button("Cancel", role: .cancel) { pendingDelete = nil }
-      } message: { _ in
-        Text("The image and its settings are removed from “\(history.project.name)”. This can't be undone.")
+      } message: { items in
+        Text("\(items.count > 1 ? "The images and their" : "The image and its") settings are removed from “\(history.project.name)”. This can't be undone.")
       }
       .alert(
         "Something went wrong",
         isPresented: Binding(get: { deleteError != nil }, set: { if !$0 { deleteError = nil } }),
         actions: { Button("OK") { deleteError = nil } },
         message: { Text(deleteError ?? "") })
-      .onDeleteCommand { pendingDelete = selected }
-      .task(id: history.isLoaded) { if selected == nil { selection = filtered.first?.id } }
+      .onDeleteCommand {
+        let selected = selectedItems
+        if !selected.isEmpty { pendingDelete = selected }
+      }
+      .task(id: history.isLoaded) { if selection.isEmpty { selectOnly(filtered.first?.id) } }
       .safeAreaBar(edge: .bottom) {
         if let progress = history.importProgress {
           HStack {
@@ -120,37 +142,59 @@ struct HistoryView: View {
               .clipShape(.rect(cornerRadius: 6))
               .overlay {
                 RoundedRectangle(cornerRadius: 6)
-                  .strokeBorder(Color.accentColor, lineWidth: selection == item.id ? 3 : 0)
+                  .strokeBorder(Color.accentColor, lineWidth: selection.contains(item.id) ? 3 : 0)
               }
               .contentShape(.rect)
-              .onTapGesture(count: 2) { use(item, newSeed: false) }
-              .onTapGesture {
-                selection = item.id
-                gridFocused = true
-              }
+              .gesture(
+                TapGesture(count: 2).onEnded { use(item, newSeed: false) }
+                  .exclusively(before: TapGesture().modifiers(.command).onEnded { toggle(item.id) })
+                  .exclusively(before: TapGesture().modifiers(.shift).onEnded { extend(to: item.id) })
+                  .exclusively(before: TapGesture().onEnded {
+                    selectOnly(item.id)
+                    gridFocused = true
+                  }))
               .help(item.sidecar.prompt)
-              .draggable(history.dragExport(item)) { Thumbnail(item: item).frame(width: 96, height: 96) }
-              .id(item.id)
-              .contextMenu {
-                Button("Use Settings") { use(item, newSeed: false) }
-                  .disabled(!create.canUse(item))
-                Button("Rerun with New Seed") { use(item, newSeed: true) }
-                  .disabled(!create.canUse(item))
-                Button("Copy Image") { Task { await history.copyImage(item) } }
-                Button("Copy Prompt") { copy(item.sidecar.prompt) }
-                Button("Copy Seed") { copy(String(item.sidecar.seed)) }
-                Button("Export PNG…") { export(item) }
-                Divider()
-                Button("Delete", role: .destructive) { pendingDelete = item }
+              .draggable(containerItemID: item.id)
+              .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.gridSpace)) } action: {
+                frames[item.id] = $0
               }
+              .id(item.id)
+              .contextMenu { contextMenu(for: item) }
           }
         }
         .padding(12)
+        .frame(minHeight: viewportHeight, alignment: .top)
+        .coordinateSpace(.named(Self.gridSpace))
+        .background {
+          // Clicking between images clears the selection; dragging there draws a marquee.
+          Color.clear
+            .contentShape(.rect)
+            .onTapGesture {
+              selection = []
+              gridFocused = true
+            }
+            .gesture(marqueeGesture)
+        }
+        .overlay(alignment: .topLeading) {
+          if let marquee {
+            Rectangle()
+              .fill(Color.accentColor.opacity(0.15))
+              .strokeBorder(Color.accentColor.opacity(0.6))
+              .frame(width: marquee.width, height: marquee.height)
+              .offset(x: marquee.minX, y: marquee.minY)
+              .allowsHitTesting(false)
+          }
+        }
+        .dragContainer(for: PNGExport.self) { ids in
+          ids.compactMap { history.item($0).map(history.dragExport) }
+        }
+        .dragContainerSelection(selectedItems.map(\.id))
       }
-      .onGeometryChange(for: Int.self) { proxy in
+      .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
         // The adaptive grid's column count: 150 pt minimum, 10 pt spacing, 12 pt padding.
-        max(1, Int((proxy.size.width - 24 + 10) / 160))
-      } action: { columns = $0 }
+        columns = max(1, Int((size.width - 24 + 10) / 160))
+        viewportHeight = size.height
+      }
       .focusable()
       .focusEffectDisabled()
       .focused($gridFocused)
@@ -161,8 +205,13 @@ struct HistoryView: View {
         case .upArrow: -columns
         default: columns
         }
-        moveSelection(by: offset)
-        if let selection { withAnimation { scroller.scrollTo(selection) } }
+        moveSelection(by: offset, extending: press.modifiers.contains(.shift))
+        if let anchor { withAnimation { scroller.scrollTo(anchor) } }
+        return .handled
+      }
+      .onKeyPress(keys: ["a"]) { press in
+        guard press.modifiers == .command else { return .ignored }
+        selection = Set(filtered.map(\.id))
         return .handled
       }
       .onKeyPress(.space) {
@@ -175,29 +224,100 @@ struct HistoryView: View {
     }
   }
 
-  private func moveSelection(by offset: Int) {
+  private static let gridSpace = "HistoryGrid"
+
+  @ViewBuilder
+  private func contextMenu(for item: HistoryItem) -> some View {
+    let items = targets(item)
+    if items.count > 1 {
+      Button("Copy \(items.count) Images") { Task { await history.copyImages(items) } }
+      Button("Export \(items.count) PNGs…") { export(items) }
+      Divider()
+      Button("Delete \(items.count) Images", role: .destructive) { pendingDelete = items }
+    } else {
+      Button("Use Settings") { use(item, newSeed: false) }
+        .disabled(!create.canUse(item))
+      Button("Rerun with New Seed") { use(item, newSeed: true) }
+        .disabled(!create.canUse(item))
+      Button("Copy Image") { Task { await history.copyImage(item) } }
+      Button("Copy Prompt") { copy(item.sidecar.prompt) }
+      Button("Copy Seed") { copy(String(item.sidecar.seed)) }
+      Button("Export PNG…") { export([item]) }
+      Divider()
+      Button("Delete", role: .destructive) { pendingDelete = [item] }
+    }
+  }
+
+  /// Selects the images the marquee touches.
+  private var marqueeGesture: some Gesture {
+    DragGesture(minimumDistance: 4, coordinateSpace: .named(Self.gridSpace))
+      .onChanged { drag in
+        let rect = CGRect(
+          x: min(drag.startLocation.x, drag.location.x),
+          y: min(drag.startLocation.y, drag.location.y),
+          width: abs(drag.location.x - drag.startLocation.x),
+          height: abs(drag.location.y - drag.startLocation.y))
+        marquee = rect
+        let hit = filtered.filter { frames[$0.id]?.intersects(rect) == true }
+        selection = Set(hit.map(\.id))
+        anchor = hit.first?.id
+        gridFocused = true
+      }
+      .onEnded { _ in marquee = nil }
+  }
+
+  private func selectOnly(_ id: HistoryItem.ID?) {
+    selection = id.map { [$0] } ?? []
+    anchor = id
+  }
+
+  /// ⌘-click: adds or removes one image.
+  private func toggle(_ id: HistoryItem.ID) {
+    if selection.remove(id) == nil { selection.insert(id) }
+    anchor = id
+    gridFocused = true
+  }
+
+  /// ⇧-click: adds the images from the anchor to `id`.
+  private func extend(to id: HistoryItem.ID) {
+    let items = filtered
+    guard let from = items.firstIndex(where: { $0.id == anchor }),
+      let to = items.firstIndex(where: { $0.id == id })
+    else { return selectOnly(id) }
+    selection.formUnion(items[min(from, to)...max(from, to)].map(\.id))
+    gridFocused = true
+  }
+
+  private func moveSelection(by offset: Int, extending: Bool) {
     let items = filtered
     guard !items.isEmpty else { return }
-    let index = items.firstIndex { $0.id == selection } ?? 0
-    selection = items[min(max(index + offset, 0), items.count - 1)].id
+    let index = items.firstIndex { $0.id == anchor } ?? 0
+    let next = items[min(max(index + offset, 0), items.count - 1)].id
+    if extending {
+      selection.insert(next)
+      anchor = next
+    } else {
+      selectOnly(next)
+    }
     // Quick Look follows the selection while it's open.
     if quickLookURL != nil { quickLookURL = nil; toggleQuickLook() }
   }
 
-  /// Space: the selected image full size in Quick Look, or closes it.
+  /// Space: the anchor image full size in Quick Look, or closes it.
   private func toggleQuickLook() {
     if quickLookURL != nil {
       quickLookURL = nil
       return
     }
-    guard let item = selected else { return }
+    guard let item = history.items.first(where: { $0.id == anchor && selection.contains($0.id) })
+    else { return }
     Task {
       guard let data = try? await history.pngData(item) else { return }
       let url = FileManager.default.temporaryDirectory
         .appendingPathComponent("Atelier Quick Look", isDirectory: true)
       try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
       let file = url.appendingPathComponent(history.fileName(for: item)).appendingPathExtension("png")
-      guard (try? data.write(to: file)) != nil, selection == item.id else { return }
+      guard (try? data.write(to: file)) != nil, anchor == item.id else { return }
       quickLookURL = file
     }
   }
@@ -217,30 +337,89 @@ struct HistoryView: View {
     navigation.section = .create
   }
 
-  private func export(_ item: HistoryItem) {
-    let panel = NSSavePanel()
-    panel.allowedContentTypes = [.png]
-    panel.nameFieldStringValue = history.fileName(for: item) + ".png"
-    guard panel.runModal() == .OK, let url = panel.url else { return }
+  /// One image: a save panel. Several: a folder, each named like a single export.
+  private func export(_ items: [HistoryItem]) {
+    var destinations: [(HistoryItem, URL)] = []
+    if items.count == 1, let item = items.first {
+      let panel = NSSavePanel()
+      panel.allowedContentTypes = [.png]
+      panel.nameFieldStringValue = history.fileName(for: item) + ".png"
+      guard panel.runModal() == .OK, let url = panel.url else { return }
+      destinations = [(item, url)]
+    } else {
+      let panel = NSOpenPanel()
+      panel.canChooseDirectories = true
+      panel.canChooseFiles = false
+      panel.canCreateDirectories = true
+      panel.prompt = "Export"
+      panel.message = "Choose a folder for \(items.count) PNGs."
+      guard panel.runModal() == .OK, let folder = panel.url else { return }
+      destinations = items.map { item in
+        (item, Self.unusedURL(in: folder, name: history.fileName(for: item)))
+      }
+    }
     Task {
       do {
-        try await history.exportPNG(item, to: url)
+        for (item, url) in destinations { try await history.exportPNG(item, to: url) }
       } catch {
         deleteError = error.localizedDescription
       }
     }
   }
 
-  private func delete(_ item: HistoryItem) {
+  /// `name.png` in `folder`, or `name 2.png`, … when that's taken.
+  private static func unusedURL(in folder: URL, name: String) -> URL {
+    var url = folder.appendingPathComponent(name).appendingPathExtension("png")
+    var n = 2
+    while FileManager.default.fileExists(atPath: url.path) {
+      url = folder.appendingPathComponent("\(name) \(n)").appendingPathExtension("png")
+      n += 1
+    }
+    return url
+  }
+
+  private func delete(_ items: [HistoryItem]) {
     pendingDelete = nil
     Task {
       do {
-        try await history.delete(item)
-        if selection == item.id { selection = filtered.first?.id }
+        try await history.delete(items)
       } catch {
         deleteError = error.localizedDescription
       }
+      // Later steps were renumbered, so the old ids may now name other images.
+      selectOnly(filtered.first?.id)
     }
+  }
+}
+
+/// The inspector when several images are selected.
+struct HistorySelectionDetail: View {
+  @Environment(HistoryStore.self) private var history
+  var items: [HistoryItem]
+  var export: () -> Void
+  var delete: () -> Void
+
+  var body: some View {
+    Form {
+      Section {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 64), spacing: 6)], spacing: 6) {
+          ForEach(items.prefix(24)) { item in
+            Color.clear
+              .aspectRatio(1, contentMode: .fit)
+              .overlay { Thumbnail(item: item) }
+              .clipShape(.rect(cornerRadius: 4))
+          }
+        }
+        Text("\(items.count) images selected")
+          .foregroundStyle(.secondary)
+        HStack {
+          Button("Copy Images") { Task { await history.copyImages(items) } }
+          Button("Export PNGs…", action: export)
+          Button("Delete", role: .destructive, action: delete)
+        }
+      }
+    }
+    .formStyle(.grouped)
   }
 }
 
