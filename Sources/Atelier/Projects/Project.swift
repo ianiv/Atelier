@@ -42,7 +42,12 @@ final class Project: @unchecked Sendable {
   private var isClosed = false
 
   deinit {
-    if !isClosed { workspace.shutdown(flags: [], completion: nil) }
+    guard !isClosed else { return }
+    // Shutting down drains the connection pool synchronously, waiting on its default-QoS
+    // threads. The last release is often on the main thread (switching projects), so shut down
+    // from a background queue instead of blocking the UI behind lower-priority work.
+    let workspace = workspace
+    DispatchQueue.global(qos: .utility).async { workspace.shutdown(flags: [], completion: nil) }
   }
 
   /// Finishes pending writes and closes the database. The project can't be used afterwards.
