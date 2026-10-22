@@ -23,6 +23,8 @@ struct CreateView: View {
     // min/max size is nan") switching between a customizable toolbar and the other sections'
     // `.searchable` toolbars.
     .toolbar {
+      // The same project menu as History: new images save to the project picked here.
+      ToolbarItem(placement: .navigation) { ProjectMenu() }
       // Generate lives in the prompt composer only; the toolbar keeps presets and the inspector
       // toggle, each in its own glass capsule.
       ToolbarItem(placement: .primaryAction) {
