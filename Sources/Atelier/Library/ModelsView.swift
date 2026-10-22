@@ -99,7 +99,13 @@ struct ModelsView: View {
       ) { model in
         Button("Move to Trash", role: .destructive) {
           pendingDelete = nil
-          Task { await library.delete(model) }
+          Task {
+            await library.delete(model)
+            // The deleted model can drop out of the list (or the catalog); show the first one.
+            if !filtered.contains(where: { $0.file == selection }) {
+              selection = filtered.first?.file
+            }
+          }
         }
         Button("Cancel", role: .cancel) { pendingDelete = nil }
       } message: { model in

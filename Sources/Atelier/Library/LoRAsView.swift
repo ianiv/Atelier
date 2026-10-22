@@ -87,7 +87,7 @@ struct LoRAsView: View {
         Button("Move to Trash", role: .destructive) {
           pendingDelete = nil
           library.delete(lora)
-          if selection == lora.file { selection = nil }
+          if selection == lora.file { selection = filtered.first?.file }
         }
         Button("Cancel", role: .cancel) { pendingDelete = nil }
       } message: { lora in
