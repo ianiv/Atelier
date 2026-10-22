@@ -1,14 +1,15 @@
 #!/bin/bash
 # Regenerates Sources/ProjectFormat from the History schemas of the pinned engine revision.
 # Needs bazelisk (brew install bazelisk). Builds dflat's codegen tools in a temporary copy of the
-# dflat checkout, so neither .build nor the engine checkout is modified.
+# dflat checkout, so neither the package checkouts nor the engine checkout is modified.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SCHEMAS="$ROOT/.build/checkouts/draw-things-community/Libraries/History/Sources"
-DFLAT="$ROOT/.build/checkouts/dflat"
+CHECKOUTS="$ROOT/build/SourcePackages/checkouts"
+SCHEMAS="$CHECKOUTS/draw-things-community/Libraries/History/Sources"
+DFLAT="$CHECKOUTS/dflat"
 OUT="$ROOT/Sources/ProjectFormat"
-[[ -d "$SCHEMAS" && -d "$DFLAT" ]] || { echo "Run swift package resolve first." >&2; exit 1; }
+[[ -d "$SCHEMAS" && -d "$DFLAT" ]] || { echo "Run Scripts/build.sh first to check out the packages." >&2; exit 1; }
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT

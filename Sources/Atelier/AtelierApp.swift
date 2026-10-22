@@ -66,13 +66,7 @@ struct AtelierApp: App {
   }
 }
 
-/// A bare SwiftPM executable starts as a background process; make it a regular foreground app.
 final class AppDelegate: NSObject, NSApplicationDelegate {
-  func applicationDidFinishLaunching(_ notification: Notification) {
-    NSApp.setActivationPolicy(.regular)
-    NSApp.activate(ignoringOtherApps: true)
-  }
-
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
     true
   }

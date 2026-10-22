@@ -1,0 +1,736 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0113D79A95442376FD07EB82 /* clip_query_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FEF4CE7AD32E77D359D8F85 /* clip_query_generated.swift */; };
+		019DECB5A1E70541745FDF70 /* ModelLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 248FF150659188D7C4B12A12 /* ModelLibrary.swift */; };
+		02980CB68834C5E6EA77013B /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75FDC53060CFC4942FDDBF2D /* ContentView.swift */; };
+		10171A503FBA24116D0D87F6 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C8D5C8071A6037BDD1122F9 /* AppSettings.swift */; };
+		15B3CBDDD4DC0FCE7C625161 /* CreateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B147BCDA9E5FEDE9CC9B373A /* CreateView.swift */; };
+		218D8F4001F862760C09B00B /* tensor_moodboard_data_mutating_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 942FB35BF8B8698F4554E3A2 /* tensor_moodboard_data_mutating_generated.swift */; };
+		2265D3497F922448C4311F1C /* thumbnail_history_half_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EDDC888B4605901D459188A /* thumbnail_history_half_generated.swift */; };
+		27074EC072717686A06EAA81 /* thumbnail_history_half_data_model_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C75075F80A089CC22F04163 /* thumbnail_history_half_data_model_generated.swift */; };
+		40471B00219ACFE544559125 /* SessionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9895821DCBA0BD67EF40AB9D /* SessionState.swift */; };
+		44ADCE6EDF2708A792962F31 /* script_session_query_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1353E7B4836513F26BF2C88 /* script_session_query_generated.swift */; };
+		4549FF9554EB66628271351A /* AutomationProject.swift in Sources */ = {isa = PBXBuildFile; fileRef = E750BAC04D4835E5B2477EB2 /* AutomationProject.swift */; };
+		4722EB91D9FBE37E3B39FD3A /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1CCF224BCF0F5C0DAF37BC8 /* HistoryView.swift */; };
+		4862B9A4F2A7A226E9BB6C7C /* SettingsRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BEA94A3173E8DEC703922D0 /* SettingsRegistry.swift */; };
+		48A549D78DA994C67016C6D5 /* tensor_data_data_model_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0141CE30714817680C910054 /* tensor_data_data_model_generated.swift */; };
+		48A9BFCC41C4D015AFED2CD9 /* SQLiteDflat in Frameworks */ = {isa = PBXBuildFile; productRef = 17D70C6015EC22A15FD7BDC0 /* SQLiteDflat */; };
+		4F8E564BA404675C8A6A53F5 /* tensor_moodboard_data_data_model_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2986E6F53F78B9F10639ADE3 /* tensor_moodboard_data_data_model_generated.swift */; };
+		504F40DB7DD6C2E5D0DE7014 /* tensor_moodboard_data_query_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59F515F87137E071504E3001 /* tensor_moodboard_data_query_generated.swift */; };
+		5388E27993E9EF8D03383B06 /* InspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 537623BEF1DDDD55559CA8D6 /* InspectorView.swift */; };
+		5684CBB37AB771B0294C16AD /* ModelDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59AD5317B0066ECD23EDCDAF /* ModelDefaults.swift */; };
+		56D40AB5DFADFA9BA16C4C5D /* _MediaGenerationKit in Frameworks */ = {isa = PBXBuildFile; productRef = 034DEC7D58B54CB1B2C5C802 /* _MediaGenerationKit */; };
+		5D01552661131BDF7120E53F /* tensor_history_mutating_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6F6FE94CFB438E8A05AE929 /* tensor_history_mutating_generated.swift */; };
+		66C67DDE720146929A84FBB5 /* tensor_data_query_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32961C8691DC1AA238E7706C /* tensor_data_query_generated.swift */; };
+		7C3EC40E49402022055471FA /* tensor_data_mutating_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88C71F535923B55462EF1B9D /* tensor_data_mutating_generated.swift */; };
+		90D46F51CBD101C88E0BD1B0 /* CreateModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A6036FEF93D069A783B09D8 /* CreateModel.swift */; };
+		90E7DC967C78E736675BAFB2 /* clip_data_model_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADE58B9D9E217745C8A73650 /* clip_data_model_generated.swift */; };
+		90F74C5761286ED2739C234F /* FlatBuffers in Frameworks */ = {isa = PBXBuildFile; productRef = FC2A330C2B141FA7DC47EBDF /* FlatBuffers */; };
+		99CBDCD199A6A5A50AB5F97D /* ProjectFormat.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = DD43DCCB3E94379CFC8DFC0A /* ProjectFormat.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		A429617CE43FF9C04AD17C8B /* thumbnail_history_half_query_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A55A7AE0FD1E2120D521C68 /* thumbnail_history_half_query_generated.swift */; };
+		A47BD95DE0E19F73813F4AD7 /* tensor_history_query_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F5F6DE4BCCFAA808D0B952F /* tensor_history_query_generated.swift */; };
+		ACC1BA71745E0DECC4CA0C4A /* thumbnail_history_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E1AFD9107C52D1BC04226C6 /* thumbnail_history_generated.swift */; };
+		AE13925B01D7AB52393195A2 /* thumbnail_history_data_model_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E6E972BC621F63B7C5E4E0 /* thumbnail_history_data_model_generated.swift */; };
+		B650CDF8EA796083B37011C3 /* tensor_history_data_model_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F36F20BC6CFD5D7F32C3D2D /* tensor_history_data_model_generated.swift */; };
+		B7FB8865E905277764CD70D9 /* Automation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BA894EB2074F4930E321607 /* Automation.swift */; };
+		BFD85CF044154FC07421FF64 /* HistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAF3EA252F98E9035447E77C /* HistoryStore.swift */; };
+		C006DF7962BBC3EC1C04345E /* thumbnail_history_half_mutating_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = E158859E47D6677E5AF7D4AB /* thumbnail_history_half_mutating_generated.swift */; };
+		CAD7FD050009B33BA8188223 /* AtelierApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 716BE47B7D8EFA0449CAF4AF /* AtelierApp.swift */; };
+		CCC4D8401B789F28F3B5E0DA /* clip_mutating_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 799C86043C98B64CEAA68FA7 /* clip_mutating_generated.swift */; };
+		D2F45AD4C3288A8983EEBE4E /* clip_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3721E6BF065DEBAC3CB0FE9 /* clip_generated.swift */; };
+		D42B1F3B6CDD906D20BB8275 /* Project.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAAFE7D929C462B504088504 /* Project.swift */; };
+		D631985F462BA229FFB41601 /* Dflat in Frameworks */ = {isa = PBXBuildFile; productRef = C0A0F030A30D6C7C792BEC43 /* Dflat */; };
+		D9FB038D3780CD42EC8184B5 /* script_session_data_model_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6269D539CD5602A374ED06B0 /* script_session_data_model_generated.swift */; };
+		DE21FA0E98C26E5774D825E2 /* script_session_mutating_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81D09E0E7038EB1757F9D82C /* script_session_mutating_generated.swift */; };
+		E22A431DA0308444CBDE96D1 /* script_session_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 703D619A6F074D5BFFC42B4F /* script_session_generated.swift */; };
+		E3AB991AFD18E780D8F68994 /* thumbnail_history_mutating_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 206772509F6023806027971F /* thumbnail_history_mutating_generated.swift */; };
+		E5ABFC205D6903135AC06DCE /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4CBE9BE880BD55127FC9066 /* LibraryView.swift */; };
+		E6F1C502227D967EC9445327 /* ProjectFormat.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DD43DCCB3E94379CFC8DFC0A /* ProjectFormat.framework */; };
+		E8B5571167A18E376AB7677B /* InspectorLayouts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D911C73F104A10DFC689CA8 /* InspectorLayouts.swift */; };
+		E963577B874C666B52965C34 /* tensor_history_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19CEE9846E073058B4D28395 /* tensor_history_generated.swift */; };
+		ED54BBA9675D386950B31E44 /* tensor_moodboard_data_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93F2C9861172F381CCBBF6B5 /* tensor_moodboard_data_generated.swift */; };
+		F37644302DD33DAC7A1E63B0 /* SizePreset.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A3DAA7DA03971183D18CEAA /* SizePreset.swift */; };
+		F9B7B4D35D7382085C916688 /* GenerationEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CAC35AB075AAB4CDF7AD898 /* GenerationEngine.swift */; };
+		FE932A5C887AE92B9E804707 /* ProjectMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020B954C3465D02C24F95C3C /* ProjectMapping.swift */; };
+		FF243F91D335A8164439E59D /* thumbnail_history_query_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68D101B87E1B72C4F34DD0A7 /* thumbnail_history_query_generated.swift */; };
+		FFE2FD5F9913FFBEA7557E98 /* tensor_data_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0963659342F5DFDDA1ED7457 /* tensor_data_generated.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		24A87D9A33BCD5A1205D0DCF /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = FE1DD0256B29A28D96CB8ACD /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 459ECB40FB63CF44EA32F119;
+			remoteInfo = ProjectFormat;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		3C1F9027ACE508F70F1D6A69 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				99CBDCD199A6A5A50AB5F97D /* ProjectFormat.framework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		0141CE30714817680C910054 /* tensor_data_data_model_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = tensor_data_data_model_generated.swift; sourceTree = "<group>"; };
+		020B954C3465D02C24F95C3C /* ProjectMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectMapping.swift; sourceTree = "<group>"; };
+		0963659342F5DFDDA1ED7457 /* tensor_data_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = tensor_data_generated.swift; sourceTree = "<group>"; };
+		0E1AFD9107C52D1BC04226C6 /* thumbnail_history_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = thumbnail_history_generated.swift; sourceTree = "<group>"; };
+		0F36F20BC6CFD5D7F32C3D2D /* tensor_history_data_model_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = tensor_history_data_model_generated.swift; sourceTree = "<group>"; };
+		19CEE9846E073058B4D28395 /* tensor_history_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = tensor_history_generated.swift; sourceTree = "<group>"; };
+		1CAC35AB075AAB4CDF7AD898 /* GenerationEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationEngine.swift; sourceTree = "<group>"; };
+		206772509F6023806027971F /* thumbnail_history_mutating_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = thumbnail_history_mutating_generated.swift; sourceTree = "<group>"; };
+		248FF150659188D7C4B12A12 /* ModelLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelLibrary.swift; sourceTree = "<group>"; };
+		2986E6F53F78B9F10639ADE3 /* tensor_moodboard_data_data_model_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = tensor_moodboard_data_data_model_generated.swift; sourceTree = "<group>"; };
+		2C75075F80A089CC22F04163 /* thumbnail_history_half_data_model_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = thumbnail_history_half_data_model_generated.swift; sourceTree = "<group>"; };
+		2EDDC888B4605901D459188A /* thumbnail_history_half_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = thumbnail_history_half_generated.swift; sourceTree = "<group>"; };
+		32961C8691DC1AA238E7706C /* tensor_data_query_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = tensor_data_query_generated.swift; sourceTree = "<group>"; };
+		3A55A7AE0FD1E2120D521C68 /* thumbnail_history_half_query_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = thumbnail_history_half_query_generated.swift; sourceTree = "<group>"; };
+		3A6036FEF93D069A783B09D8 /* CreateModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateModel.swift; sourceTree = "<group>"; };
+		3C8D5C8071A6037BDD1122F9 /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
+		3D911C73F104A10DFC689CA8 /* InspectorLayouts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorLayouts.swift; sourceTree = "<group>"; };
+		4E09EC66614C0E61CF184F05 /* Atelier.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Atelier.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		537623BEF1DDDD55559CA8D6 /* InspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorView.swift; sourceTree = "<group>"; };
+		59AD5317B0066ECD23EDCDAF /* ModelDefaults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelDefaults.swift; sourceTree = "<group>"; };
+		59F515F87137E071504E3001 /* tensor_moodboard_data_query_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = tensor_moodboard_data_query_generated.swift; sourceTree = "<group>"; };
+		5A3DAA7DA03971183D18CEAA /* SizePreset.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SizePreset.swift; sourceTree = "<group>"; };
+		5BA894EB2074F4930E321607 /* Automation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Automation.swift; sourceTree = "<group>"; };
+		5FEF4CE7AD32E77D359D8F85 /* clip_query_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = clip_query_generated.swift; sourceTree = "<group>"; };
+		6269D539CD5602A374ED06B0 /* script_session_data_model_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = script_session_data_model_generated.swift; sourceTree = "<group>"; };
+		68D101B87E1B72C4F34DD0A7 /* thumbnail_history_query_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = thumbnail_history_query_generated.swift; sourceTree = "<group>"; };
+		6BEA94A3173E8DEC703922D0 /* SettingsRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsRegistry.swift; sourceTree = "<group>"; };
+		703D619A6F074D5BFFC42B4F /* script_session_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = script_session_generated.swift; sourceTree = "<group>"; };
+		716BE47B7D8EFA0449CAF4AF /* AtelierApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtelierApp.swift; sourceTree = "<group>"; };
+		75FDC53060CFC4942FDDBF2D /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		799C86043C98B64CEAA68FA7 /* clip_mutating_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = clip_mutating_generated.swift; sourceTree = "<group>"; };
+		81D09E0E7038EB1757F9D82C /* script_session_mutating_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = script_session_mutating_generated.swift; sourceTree = "<group>"; };
+		88C71F535923B55462EF1B9D /* tensor_data_mutating_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = tensor_data_mutating_generated.swift; sourceTree = "<group>"; };
+		8F5F6DE4BCCFAA808D0B952F /* tensor_history_query_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = tensor_history_query_generated.swift; sourceTree = "<group>"; };
+		93F2C9861172F381CCBBF6B5 /* tensor_moodboard_data_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = tensor_moodboard_data_generated.swift; sourceTree = "<group>"; };
+		942FB35BF8B8698F4554E3A2 /* tensor_moodboard_data_mutating_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = tensor_moodboard_data_mutating_generated.swift; sourceTree = "<group>"; };
+		9895821DCBA0BD67EF40AB9D /* SessionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionState.swift; sourceTree = "<group>"; };
+		A3721E6BF065DEBAC3CB0FE9 /* clip_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = clip_generated.swift; sourceTree = "<group>"; };
+		ADE58B9D9E217745C8A73650 /* clip_data_model_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = clip_data_model_generated.swift; sourceTree = "<group>"; };
+		B147BCDA9E5FEDE9CC9B373A /* CreateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateView.swift; sourceTree = "<group>"; };
+		B6F6FE94CFB438E8A05AE929 /* tensor_history_mutating_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = tensor_history_mutating_generated.swift; sourceTree = "<group>"; };
+		BAAFE7D929C462B504088504 /* Project.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Project.swift; sourceTree = "<group>"; };
+		C4CBE9BE880BD55127FC9066 /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
+		D1E6E972BC621F63B7C5E4E0 /* thumbnail_history_data_model_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = thumbnail_history_data_model_generated.swift; sourceTree = "<group>"; };
+		DD43DCCB3E94379CFC8DFC0A /* ProjectFormat.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = ProjectFormat.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		E1353E7B4836513F26BF2C88 /* script_session_query_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = script_session_query_generated.swift; sourceTree = "<group>"; };
+		E158859E47D6677E5AF7D4AB /* thumbnail_history_half_mutating_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = thumbnail_history_half_mutating_generated.swift; sourceTree = "<group>"; };
+		E750BAC04D4835E5B2477EB2 /* AutomationProject.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationProject.swift; sourceTree = "<group>"; };
+		EAF3EA252F98E9035447E77C /* HistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryStore.swift; sourceTree = "<group>"; };
+		F1CCF224BCF0F5C0DAF37BC8 /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		0725B3ED9D0649EF83C731D9 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D631985F462BA229FFB41601 /* Dflat in Frameworks */,
+				48A9BFCC41C4D015AFED2CD9 /* SQLiteDflat in Frameworks */,
+				90F74C5761286ED2739C234F /* FlatBuffers in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		0EBA40430215D0464E852C5D /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E6F1C502227D967EC9445327 /* ProjectFormat.framework in Frameworks */,
+				56D40AB5DFADFA9BA16C4C5D /* _MediaGenerationKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		0505738CD182A2FF8CD6FDC6 = {
+			isa = PBXGroup;
+			children = (
+				B5F46B62D5AC64FAA9EB8D1D /* Sources */,
+				FF2013606A3171C89933E231 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		946934439EEA51DC6E75A261 /* Atelier */ = {
+			isa = PBXGroup;
+			children = (
+				3C8D5C8071A6037BDD1122F9 /* AppSettings.swift */,
+				716BE47B7D8EFA0449CAF4AF /* AtelierApp.swift */,
+				5BA894EB2074F4930E321607 /* Automation.swift */,
+				E750BAC04D4835E5B2477EB2 /* AutomationProject.swift */,
+				75FDC53060CFC4942FDDBF2D /* ContentView.swift */,
+				3A6036FEF93D069A783B09D8 /* CreateModel.swift */,
+				B147BCDA9E5FEDE9CC9B373A /* CreateView.swift */,
+				1CAC35AB075AAB4CDF7AD898 /* GenerationEngine.swift */,
+				EAF3EA252F98E9035447E77C /* HistoryStore.swift */,
+				F1CCF224BCF0F5C0DAF37BC8 /* HistoryView.swift */,
+				3D911C73F104A10DFC689CA8 /* InspectorLayouts.swift */,
+				537623BEF1DDDD55559CA8D6 /* InspectorView.swift */,
+				C4CBE9BE880BD55127FC9066 /* LibraryView.swift */,
+				59AD5317B0066ECD23EDCDAF /* ModelDefaults.swift */,
+				248FF150659188D7C4B12A12 /* ModelLibrary.swift */,
+				BAAFE7D929C462B504088504 /* Project.swift */,
+				020B954C3465D02C24F95C3C /* ProjectMapping.swift */,
+				9895821DCBA0BD67EF40AB9D /* SessionState.swift */,
+				6BEA94A3173E8DEC703922D0 /* SettingsRegistry.swift */,
+				5A3DAA7DA03971183D18CEAA /* SizePreset.swift */,
+			);
+			path = Atelier;
+			sourceTree = "<group>";
+		};
+		B5F46B62D5AC64FAA9EB8D1D /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				946934439EEA51DC6E75A261 /* Atelier */,
+				F3E69CCDF067143716384A13 /* ProjectFormat */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		F3E69CCDF067143716384A13 /* ProjectFormat */ = {
+			isa = PBXGroup;
+			children = (
+				ADE58B9D9E217745C8A73650 /* clip_data_model_generated.swift */,
+				A3721E6BF065DEBAC3CB0FE9 /* clip_generated.swift */,
+				799C86043C98B64CEAA68FA7 /* clip_mutating_generated.swift */,
+				5FEF4CE7AD32E77D359D8F85 /* clip_query_generated.swift */,
+				6269D539CD5602A374ED06B0 /* script_session_data_model_generated.swift */,
+				703D619A6F074D5BFFC42B4F /* script_session_generated.swift */,
+				81D09E0E7038EB1757F9D82C /* script_session_mutating_generated.swift */,
+				E1353E7B4836513F26BF2C88 /* script_session_query_generated.swift */,
+				0141CE30714817680C910054 /* tensor_data_data_model_generated.swift */,
+				0963659342F5DFDDA1ED7457 /* tensor_data_generated.swift */,
+				88C71F535923B55462EF1B9D /* tensor_data_mutating_generated.swift */,
+				32961C8691DC1AA238E7706C /* tensor_data_query_generated.swift */,
+				0F36F20BC6CFD5D7F32C3D2D /* tensor_history_data_model_generated.swift */,
+				19CEE9846E073058B4D28395 /* tensor_history_generated.swift */,
+				B6F6FE94CFB438E8A05AE929 /* tensor_history_mutating_generated.swift */,
+				8F5F6DE4BCCFAA808D0B952F /* tensor_history_query_generated.swift */,
+				2986E6F53F78B9F10639ADE3 /* tensor_moodboard_data_data_model_generated.swift */,
+				93F2C9861172F381CCBBF6B5 /* tensor_moodboard_data_generated.swift */,
+				942FB35BF8B8698F4554E3A2 /* tensor_moodboard_data_mutating_generated.swift */,
+				59F515F87137E071504E3001 /* tensor_moodboard_data_query_generated.swift */,
+				D1E6E972BC621F63B7C5E4E0 /* thumbnail_history_data_model_generated.swift */,
+				0E1AFD9107C52D1BC04226C6 /* thumbnail_history_generated.swift */,
+				2C75075F80A089CC22F04163 /* thumbnail_history_half_data_model_generated.swift */,
+				2EDDC888B4605901D459188A /* thumbnail_history_half_generated.swift */,
+				E158859E47D6677E5AF7D4AB /* thumbnail_history_half_mutating_generated.swift */,
+				3A55A7AE0FD1E2120D521C68 /* thumbnail_history_half_query_generated.swift */,
+				206772509F6023806027971F /* thumbnail_history_mutating_generated.swift */,
+				68D101B87E1B72C4F34DD0A7 /* thumbnail_history_query_generated.swift */,
+			);
+			path = ProjectFormat;
+			sourceTree = "<group>";
+		};
+		FF2013606A3171C89933E231 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				4E09EC66614C0E61CF184F05 /* Atelier.app */,
+				DD43DCCB3E94379CFC8DFC0A /* ProjectFormat.framework */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		459ECB40FB63CF44EA32F119 /* ProjectFormat */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BE960A15190509DEBC311CAC /* Build configuration list for PBXNativeTarget "ProjectFormat" */;
+			buildPhases = (
+				581931FBC7CD7A3648971C59 /* Sources */,
+				0725B3ED9D0649EF83C731D9 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ProjectFormat;
+			packageProductDependencies = (
+				C0A0F030A30D6C7C792BEC43 /* Dflat */,
+				17D70C6015EC22A15FD7BDC0 /* SQLiteDflat */,
+				FC2A330C2B141FA7DC47EBDF /* FlatBuffers */,
+			);
+			productName = ProjectFormat;
+			productReference = DD43DCCB3E94379CFC8DFC0A /* ProjectFormat.framework */;
+			productType = "com.apple.product-type.framework.static";
+		};
+		6E582B3D2B682EBCEBC78454 /* Atelier */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0AE8990B1A8CAE862153CD21 /* Build configuration list for PBXNativeTarget "Atelier" */;
+			buildPhases = (
+				29B4432F7D3CAC37BE48BE65 /* Sources */,
+				0EBA40430215D0464E852C5D /* Frameworks */,
+				3C1F9027ACE508F70F1D6A69 /* Embed Frameworks */,
+				886CAAD4AAB7CC8A179150DA /* Copy tiny autoencoders from Draw Things.app */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				8E394B799F61441E3AC14752 /* PBXTargetDependency */,
+			);
+			name = Atelier;
+			packageProductDependencies = (
+				034DEC7D58B54CB1B2C5C802 /* _MediaGenerationKit */,
+			);
+			productName = Atelier;
+			productReference = 4E09EC66614C0E61CF184F05 /* Atelier.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		FE1DD0256B29A28D96CB8ACD /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					6E582B3D2B682EBCEBC78454 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Manual;
+					};
+				};
+			};
+			buildConfigurationList = EF5CBE8AF89FF3A093BF4C36 /* Build configuration list for PBXProject "Atelier" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 0505738CD182A2FF8CD6FDC6;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				A004970C0A0F715A70426089 /* XCRemoteSwiftPackageReference "dflat" */,
+				A4CE7021663F6A67DB66A52E /* XCRemoteSwiftPackageReference "draw-things-community" */,
+				FA3B96D181CC9804C2FF9474 /* XCRemoteSwiftPackageReference "flatbuffers" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = FF2013606A3171C89933E231 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				459ECB40FB63CF44EA32F119 /* ProjectFormat */,
+				6E582B3D2B682EBCEBC78454 /* Atelier */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		886CAAD4AAB7CC8A179150DA /* Copy tiny autoencoders from Draw Things.app */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Copy tiny autoencoders from Draw Things.app";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "DRAWTHINGS_APP=\"${DRAWTHINGS_APP:-/Applications/Draw Things.app}\"\nDEST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\nmkdir -p \"$DEST\"\nfound=0\nfor zip in \"$DRAWTHINGS_APP\"/Contents/Resources/*_tae.zip; do\n  [ -e \"$zip\" ] || continue\n  [ \"$zip\" -nt \"$DEST/$(basename \"$zip\")\" ] && cp \"$zip\" \"$DEST/\"\n  found=1\ndone\n[ \"$found\" -eq 1 ] || echo \"warning: no *_tae.zip found in $DRAWTHINGS_APP; live previews will be disabled\"\nexit 0\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		29B4432F7D3CAC37BE48BE65 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				10171A503FBA24116D0D87F6 /* AppSettings.swift in Sources */,
+				CAD7FD050009B33BA8188223 /* AtelierApp.swift in Sources */,
+				B7FB8865E905277764CD70D9 /* Automation.swift in Sources */,
+				4549FF9554EB66628271351A /* AutomationProject.swift in Sources */,
+				02980CB68834C5E6EA77013B /* ContentView.swift in Sources */,
+				90D46F51CBD101C88E0BD1B0 /* CreateModel.swift in Sources */,
+				15B3CBDDD4DC0FCE7C625161 /* CreateView.swift in Sources */,
+				F9B7B4D35D7382085C916688 /* GenerationEngine.swift in Sources */,
+				BFD85CF044154FC07421FF64 /* HistoryStore.swift in Sources */,
+				4722EB91D9FBE37E3B39FD3A /* HistoryView.swift in Sources */,
+				E8B5571167A18E376AB7677B /* InspectorLayouts.swift in Sources */,
+				5388E27993E9EF8D03383B06 /* InspectorView.swift in Sources */,
+				E5ABFC205D6903135AC06DCE /* LibraryView.swift in Sources */,
+				5684CBB37AB771B0294C16AD /* ModelDefaults.swift in Sources */,
+				019DECB5A1E70541745FDF70 /* ModelLibrary.swift in Sources */,
+				D42B1F3B6CDD906D20BB8275 /* Project.swift in Sources */,
+				FE932A5C887AE92B9E804707 /* ProjectMapping.swift in Sources */,
+				40471B00219ACFE544559125 /* SessionState.swift in Sources */,
+				4862B9A4F2A7A226E9BB6C7C /* SettingsRegistry.swift in Sources */,
+				F37644302DD33DAC7A1E63B0 /* SizePreset.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		581931FBC7CD7A3648971C59 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				90E7DC967C78E736675BAFB2 /* clip_data_model_generated.swift in Sources */,
+				D2F45AD4C3288A8983EEBE4E /* clip_generated.swift in Sources */,
+				CCC4D8401B789F28F3B5E0DA /* clip_mutating_generated.swift in Sources */,
+				0113D79A95442376FD07EB82 /* clip_query_generated.swift in Sources */,
+				D9FB038D3780CD42EC8184B5 /* script_session_data_model_generated.swift in Sources */,
+				E22A431DA0308444CBDE96D1 /* script_session_generated.swift in Sources */,
+				DE21FA0E98C26E5774D825E2 /* script_session_mutating_generated.swift in Sources */,
+				44ADCE6EDF2708A792962F31 /* script_session_query_generated.swift in Sources */,
+				48A549D78DA994C67016C6D5 /* tensor_data_data_model_generated.swift in Sources */,
+				FFE2FD5F9913FFBEA7557E98 /* tensor_data_generated.swift in Sources */,
+				7C3EC40E49402022055471FA /* tensor_data_mutating_generated.swift in Sources */,
+				66C67DDE720146929A84FBB5 /* tensor_data_query_generated.swift in Sources */,
+				B650CDF8EA796083B37011C3 /* tensor_history_data_model_generated.swift in Sources */,
+				E963577B874C666B52965C34 /* tensor_history_generated.swift in Sources */,
+				5D01552661131BDF7120E53F /* tensor_history_mutating_generated.swift in Sources */,
+				A47BD95DE0E19F73813F4AD7 /* tensor_history_query_generated.swift in Sources */,
+				4F8E564BA404675C8A6A53F5 /* tensor_moodboard_data_data_model_generated.swift in Sources */,
+				ED54BBA9675D386950B31E44 /* tensor_moodboard_data_generated.swift in Sources */,
+				218D8F4001F862760C09B00B /* tensor_moodboard_data_mutating_generated.swift in Sources */,
+				504F40DB7DD6C2E5D0DE7014 /* tensor_moodboard_data_query_generated.swift in Sources */,
+				AE13925B01D7AB52393195A2 /* thumbnail_history_data_model_generated.swift in Sources */,
+				ACC1BA71745E0DECC4CA0C4A /* thumbnail_history_generated.swift in Sources */,
+				27074EC072717686A06EAA81 /* thumbnail_history_half_data_model_generated.swift in Sources */,
+				2265D3497F922448C4311F1C /* thumbnail_history_half_generated.swift in Sources */,
+				C006DF7962BBC3EC1C04345E /* thumbnail_history_half_mutating_generated.swift in Sources */,
+				A429617CE43FF9C04AD17C8B /* thumbnail_history_half_query_generated.swift in Sources */,
+				E3AB991AFD18E780D8F68994 /* thumbnail_history_mutating_generated.swift in Sources */,
+				FF243F91D335A8164439E59D /* thumbnail_history_query_generated.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		8E394B799F61441E3AC14752 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 459ECB40FB63CF44EA32F119 /* ProjectFormat */;
+			targetProxy = 24A87D9A33BCD5A1205D0DCF /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		2BAF06248D4F6F688CD922F8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		55C97E61D5A66E1B9430A0BA /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Atelier;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.graphics-design";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = local.atelier.Atelier;
+				PRODUCT_NAME = Atelier;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		5662D25F50AC9B8594CCBF8A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Atelier;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.graphics-design";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = local.atelier.Atelier;
+				PRODUCT_NAME = Atelier;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		96CD8250BD50AC0E01734238 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "";
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				GENERATE_INFOPLIST_FILE = YES;
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = local.atelier.ProjectFormat;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				VERSIONING_SYSTEM = "apple-generic";
+			};
+			name = Release;
+		};
+		BCF76448CAAE0CA27A73042F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "";
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				GENERATE_INFOPLIST_FILE = YES;
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = local.atelier.ProjectFormat;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				VERSIONING_SYSTEM = "apple-generic";
+			};
+			name = Debug;
+		};
+		F91F11C414102563CCC8D630 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		0AE8990B1A8CAE862153CD21 /* Build configuration list for PBXNativeTarget "Atelier" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5662D25F50AC9B8594CCBF8A /* Debug */,
+				55C97E61D5A66E1B9430A0BA /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		BE960A15190509DEBC311CAC /* Build configuration list for PBXNativeTarget "ProjectFormat" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BCF76448CAAE0CA27A73042F /* Debug */,
+				96CD8250BD50AC0E01734238 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		EF5CBE8AF89FF3A093BF4C36 /* Build configuration list for PBXProject "Atelier" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F91F11C414102563CCC8D630 /* Debug */,
+				2BAF06248D4F6F688CD922F8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		A004970C0A0F715A70426089 /* XCRemoteSwiftPackageReference "dflat" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/liuliu/dflat.git";
+			requirement = {
+				kind = revision;
+				revision = 73925e51e4f44add842177a229f9990cb13711ff;
+			};
+		};
+		A4CE7021663F6A67DB66A52E /* XCRemoteSwiftPackageReference "draw-things-community" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/drawthingsai/draw-things-community";
+			requirement = {
+				kind = revision;
+				revision = 8dbbb5c69b83c6312eb10622611d46a943de6f88;
+			};
+		};
+		FA3B96D181CC9804C2FF9474 /* XCRemoteSwiftPackageReference "flatbuffers" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/google/flatbuffers.git";
+			requirement = {
+				kind = revision;
+				revision = c92e78a9f841a6110ec27180d68d1f7f2afda21d;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		034DEC7D58B54CB1B2C5C802 /* _MediaGenerationKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A4CE7021663F6A67DB66A52E /* XCRemoteSwiftPackageReference "draw-things-community" */;
+			productName = _MediaGenerationKit;
+		};
+		17D70C6015EC22A15FD7BDC0 /* SQLiteDflat */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A004970C0A0F715A70426089 /* XCRemoteSwiftPackageReference "dflat" */;
+			productName = SQLiteDflat;
+		};
+		C0A0F030A30D6C7C792BEC43 /* Dflat */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A004970C0A0F715A70426089 /* XCRemoteSwiftPackageReference "dflat" */;
+			productName = Dflat;
+		};
+		FC2A330C2B141FA7DC47EBDF /* FlatBuffers */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FA3B96D181CC9804C2FF9474 /* XCRemoteSwiftPackageReference "flatbuffers" */;
+			productName = FlatBuffers;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = FE1DD0256B29A28D96CB8ACD /* Project object */;
+}

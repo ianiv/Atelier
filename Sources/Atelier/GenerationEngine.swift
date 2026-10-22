@@ -74,7 +74,7 @@ actor GenerationEngine {
 
   /// Tiny-autoencoder archives the engine force-loads from Bundle.main to decode previews
   /// (`ImageConverter+CoreML.swift`). Decoding a preview without them traps, so previews are
-  /// only requested when every archive is bundled (Scripts/package_app.sh copies them).
+  /// only requested when every archive is bundled (a build phase copies them from Draw Things.app).
   private static let taeArchives = [
     "flux_1_tae", "flux_2_tae", "ltx_2.3_tae", "ltx_2_tae", "minimax_h3_tae",
     "qwen_image_2.1_tae", "qwenimage_tae", "sd3_tae", "sd_tae", "sdxl_tae", "wan_2.1_tae",
