@@ -36,6 +36,10 @@ final class CreateModel {
   var settings: PipelineConfiguration?
   /// The selected model's defaults, the baseline for changed markers, reset and presets.
   private(set) var recommended: PipelineConfiguration?
+  /// MGK's template plus the app's fallbacks, before the model's default preset.
+  private var modelDefaults: PipelineConfiguration?
+  /// Source of each model's default preset (set by the app).
+  var presets: PresetStore?
   /// Bumped to ask the prompt composer to take focus (⌘L).
   var focusPromptRequest = 0
 
@@ -196,6 +200,27 @@ final class CreateModel {
     self.settings = recommended
   }
 
+  /// The model's defaults with its default preset (if any) applied on top.
+  private func withDefaultPreset(_ base: PipelineConfiguration, for model: String)
+    -> PipelineConfiguration
+  {
+    var configuration = base
+    for (id, value) in presets?.defaultPreset(for: model)?.values ?? [:] {
+      SettingsRegistry.byID[id]?.set(&configuration, value)
+    }
+    return configuration
+  }
+
+  /// Makes `preset` (or none) the selected model's default preset. The baseline for changed
+  /// markers and reset moves with it; the current values stay as they are.
+  func setDefaultPreset(_ preset: Preset?) {
+    guard let selectedModel, let presets else { return }
+    presets.setDefault(preset, for: selectedModel)
+    if let modelDefaults, modelDefaults.model == settings?.model {
+      recommended = withDefaultPreset(modelDefaults, for: selectedModel)
+    }
+  }
+
   /// Applies a preset on top of the model's defaults; settings it doesn't name keep the defaults.
   func apply(_ preset: Preset, undoManager: UndoManager?) {
     guard var configuration = recommended, let settings else { return }
@@ -312,7 +337,9 @@ final class CreateModel {
       do {
         let configuration = try await engine.loadPipeline(for: model)
         guard !Task.isCancelled, selectedModel == model else { return }
-        let recommended = ModelDefaults.recommended(for: model, configuration: configuration)
+        let modelDefaults = ModelDefaults.recommended(for: model, configuration: configuration)
+        self.modelDefaults = modelDefaults
+        let recommended = withDefaultPreset(modelDefaults, for: model)
         self.recommended = recommended
         var settings = recommended
         if let pendingSettings { SettingsRegistry.apply(dump: pendingSettings, to: &settings) }

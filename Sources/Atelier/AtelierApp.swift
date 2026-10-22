@@ -20,6 +20,7 @@ struct AtelierApp: App {
     let layouts = LayoutStore()
     _layouts = State(initialValue: layouts)
     let presets = PresetStore()
+    create.presets = presets
     _presets = State(initialValue: presets)
     // Started here rather than from a view's .task: SwiftUI doesn't put windows up while the
     // screen is locked, and scripted checks still need to run then.

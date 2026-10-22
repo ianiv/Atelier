@@ -937,15 +937,52 @@ struct PresetMenu: View {
   @State private var saving = false
 
   var body: some View {
+    let modelName = model.selectedModelInfo?.name ?? "This Model"
+    let (own, shared) = presets.presets(for: model.selectedModel)
+    let others = presets.presets.filter { $0.model != nil && $0.model != model.selectedModel }
+    let current = model.selectedModel.flatMap(presets.defaultPreset(for:))
     Menu {
       if presets.presets.isEmpty {
         Text("No presets yet")
       }
-      ForEach(presets.presets) { preset in
-        Button(preset.name) { model.apply(preset, undoManager: undoManager) }
-          .help(preset.values.keys.sorted().joined(separator: ", "))
+      if !own.isEmpty {
+        Section(modelName) { presetButtons(own, default: current) }
+      }
+      if !shared.isEmpty {
+        Section("All Models") { presetButtons(shared, default: current) }
+      }
+      if !others.isEmpty {
+        Menu("Other Models") {
+          ForEach(others) { preset in
+            Button("\(preset.name) (\(name(of: preset.model)))") {
+              model.apply(preset, undoManager: undoManager)
+            }
+          }
+        }
       }
       Divider()
+      Menu("Default for \(modelName)") {
+        Button {
+          model.setDefaultPreset(nil)
+        } label: {
+          if current == nil { Label("Model Defaults Only", systemImage: "checkmark") } else {
+            Text("Model Defaults Only")
+          }
+        }
+        if !(own + shared).isEmpty { Divider() }
+        ForEach(own + shared) { preset in
+          Button {
+            model.setDefaultPreset(preset)
+          } label: {
+            if current?.name == preset.name {
+              Label(preset.name, systemImage: "checkmark")
+            } else {
+              Text(preset.name)
+            }
+          }
+        }
+      }
+      .disabled(model.selectedModel == nil)
       Button("Save Current Settings as Preset…") { saving = true }
         .disabled(model.settings == nil)
       Button("Import Preset…") {
@@ -978,6 +1015,19 @@ struct PresetMenu: View {
     .help("Presets: saved setting values applied on top of the model's defaults")
     .sheet(isPresented: $saving) { SavePresetSheet() }
   }
+
+  private func presetButtons(_ list: [Preset], default current: Preset?) -> some View {
+    ForEach(list) { preset in
+      Button(current?.name == preset.name ? "\(preset.name) (Default)" : preset.name) {
+        model.apply(preset, undoManager: undoManager)
+      }
+      .help(preset.values.keys.sorted().joined(separator: ", "))
+    }
+  }
+
+  private func name(of file: String?) -> String {
+    model.models.first { $0.file == file }?.name ?? file ?? ""
+  }
 }
 
 struct SavePresetSheet: View {
@@ -986,6 +1036,8 @@ struct SavePresetSheet: View {
   @Environment(\.dismiss) private var dismiss
   @State private var name = ""
   @State private var included: Set<String> = []
+  @State private var forThisModel = true
+  @State private var makeDefault = false
   @State private var error: String?
 
   var body: some View {
@@ -993,6 +1045,9 @@ struct SavePresetSheet: View {
     VStack(alignment: .leading, spacing: 12) {
       Text("Save Preset").font(.headline)
       TextField("Name", text: $name)
+      Toggle("Only for \(model.selectedModelInfo?.name ?? "this model")", isOn: $forThisModel)
+      Toggle("Use as this model's defaults", isOn: $makeDefault)
+        .help("Applied whenever you switch to this model, and used by Reset.")
       if presets.presets.contains(where: { $0.name == name }) {
         Text("Replaces the existing preset “\(name)”.").font(.caption).foregroundStyle(.secondary)
       }
@@ -1022,9 +1077,12 @@ struct SavePresetSheet: View {
           .keyboardShortcut(.cancelAction)
         Button("Save") {
           do {
-            try presets.save(
-              Preset(name: name.trimmingCharacters(in: .whitespaces),
-                values: model.values(for: Array(included))))
+            let preset = Preset(
+              name: name.trimmingCharacters(in: .whitespaces),
+              values: model.values(for: Array(included)),
+              model: forThisModel ? model.selectedModel : nil)
+            try presets.save(preset)
+            if makeDefault { model.setDefaultPreset(preset) }
             dismiss()
           } catch {
             self.error = error.localizedDescription
@@ -1035,7 +1093,7 @@ struct SavePresetSheet: View {
       }
     }
     .padding(20)
-    .frame(width: 420, height: 440)
+    .frame(width: 420, height: 500)
     .onAppear { included = Set(changed.map(\.id)) }
   }
 }

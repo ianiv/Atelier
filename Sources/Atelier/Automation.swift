@@ -368,6 +368,27 @@ enum Automation {
       }
       presets.delete(preset)
 
+      // A per-model default preset: applied when switching to that model only.
+      model.selectedModel = modelA
+      await settle()
+      model.resetToModelDefaults(undoManager: nil)
+      model.set(steps, to: .number(9), undoManager: nil)
+      let own = Preset(name: "Inspector Check Default", values: model.values(for: ["steps"]), model: modelA)
+      try? presets.save(own)
+      model.setDefaultPreset(own)
+      check(!model.changedSettings.contains { $0.id == "steps" }, "Steps 9 counts as unchanged once it's the default")
+      if let modelB {
+        model.selectedModel = modelB
+        await settle()
+        check(model.settings?.steps != 9 && presets.presets(for: modelB).own.isEmpty,
+          "\(modelB) doesn't get \(modelA)'s preset (steps \(model.settings?.steps ?? -1))")
+        model.selectedModel = modelA
+        await settle()
+      }
+      check(model.settings?.steps == 9, "switching back to \(modelA) applied its default preset (steps \(model.settings?.steps ?? -1))")
+      presets.delete(own)
+      check(presets.defaultPreset(for: modelA) == nil, "deleting the preset cleared the default")
+
       // Use settings restores every registry field.
       if let item = model.history.items.first(where: { model.canUse($0) }) {
         model.use(item)

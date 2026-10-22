@@ -205,6 +205,8 @@ struct Preset: Codable, Hashable, Identifiable {
   var name: String
   /// Registry id → value, in the same encoding as history sidecars.
   var values: [String: JSONValue]
+  /// The model file this preset belongs to; nil for presets offered with every model.
+  var model: String? = nil
 
   var id: String { name }
 }
@@ -214,6 +216,9 @@ struct Preset: Codable, Hashable, Identifiable {
 @Observable
 final class PresetStore {
   private(set) var presets: [Preset] = []
+  /// Model file → name of the preset applied as that model's defaults.
+  private(set) var defaults: [String: String] = [:]
+  private static let defaultsKey = "defaultPresets"
 
   static var directory: URL {
     FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -222,6 +227,21 @@ final class PresetStore {
 
   init() {
     presets = LayoutStore.loadAll(from: Self.directory)
+    defaults = UserDefaults.standard.dictionary(forKey: Self.defaultsKey) as? [String: String] ?? [:]
+  }
+
+  /// Presets that can be used with `model`: its own, then the ones for every model.
+  func presets(for model: String?) -> (own: [Preset], shared: [Preset]) {
+    (presets.filter { $0.model != nil && $0.model == model }, presets.filter { $0.model == nil })
+  }
+
+  func defaultPreset(for model: String) -> Preset? {
+    defaults[model].flatMap { name in presets.first { $0.name == name } }
+  }
+
+  func setDefault(_ preset: Preset?, for model: String) {
+    defaults[model] = preset?.name
+    UserDefaults.standard.set(defaults, forKey: Self.defaultsKey)
   }
 
   func save(_ preset: Preset) throws {
@@ -235,6 +255,7 @@ final class PresetStore {
   func delete(_ preset: Preset) {
     try? FileManager.default.trashItem(at: Self.url(for: preset.name), resultingItemURL: nil)
     presets.removeAll { $0.name == preset.name }
+    for (model, name) in defaults where name == preset.name { setDefault(nil, for: model) }
   }
 
   func export(_ preset: Preset, to url: URL) throws {
