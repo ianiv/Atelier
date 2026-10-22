@@ -133,3 +133,9 @@ Gaps to fill. These are small additions in MGK or the app, guided by `/Users/ian
 - Queue 5 variations, then pause, reorder and cancel one.
 - Run an LTX video at a small frame count and check that it writes and plays back.
 - A clean clone builds from scratch (no local path dependency): `rm -rf build && Scripts/build.sh`.
+
+**Performance settings (Settings ⌘,):**
+- Mirrors Draw Things' Machine Settings: JIT Weights Loading, Weights Cache Size, Metal Flash Attention, Apple Neural Engine for 8-bit S models, Merge LoRA, High Resolution Preview. Stored in UserDefaults as `performance.<key>`; Automatic (-1 or unset) leaves the engine's own default (`ModelPreloader.update…(nil)`, `DeviceCapability`).
+- The engine reads these from its workspace dictionary under DT's keys (`external_store_v2`, `total_weights_cache` in 8 GiB units, `use_mfa_v4`, `use_mfa_apple_neural_engine_v2`, `merge_lora`). MGK keeps the workspace internal, so `GenerationEngine` finds it by reflection and writes the keys before each run; Dflat calls the preloader's subscribers synchronously, so a change lands on the generation queue ahead of that run.
+- MGK only builds its engine on the first generation, and the preloader reads the keys as it subscribes. `GenerationEngine` first runs a generation that fails before loading anything (a moodboard image that doesn't decode) so the first real run gets the settings too.
+- High Resolution Preview off decodes previews straight from the latent (`ImageConverter.cgImages(canUseTAESD: false)`) and scales them to the output size; this also gives previews when the `*_tae.zip` archives aren't bundled.

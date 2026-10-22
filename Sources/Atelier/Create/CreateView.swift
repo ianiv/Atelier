@@ -554,22 +554,42 @@ struct SettingsView: View {
   @Environment(CreateModel.self) private var model
   @State private var directory = ""
 
+  @AppStorage(PerformanceSetting.highResolutionPreviewKey)
+  private var highResolutionPreview = PerformanceSetting.highResolutionPreview
+
   var body: some View {
     Form {
-      LabeledContent("Models directory") {
+      Section {
+        LabeledContent("Models directory") {
+          HStack {
+            TextField("Path", text: $directory).frame(minWidth: 320)
+            Button("Choose…") { choose() }
+          }
+        }
         HStack {
-          TextField("Path", text: $directory).frame(minWidth: 320)
-          Button("Choose…") { choose() }
+          Spacer()
+          Button("Apply") { model.setModelsDirectory(directory) }
+            .disabled(directory == model.modelsDirectory)
         }
       }
-      HStack {
-        Spacer()
-        Button("Apply") { model.setModelsDirectory(directory) }
-          .disabled(directory == model.modelsDirectory)
+      Section {
+        ForEach(PerformanceSetting.allCases) { PerformancePicker(setting: $0) }
+        Toggle(isOn: $highResolutionPreview) {
+          Text("Use High Resolution Preview When Possible")
+          Text(
+            "Decodes step previews with TAESD, on the Neural Engine when it can (typically 20–150 ms), so it rarely slows generation. Off shows the quicker low-resolution preview."
+          )
+        }
+      } header: {
+        Text("Performance")
+      } footer: {
+        Text("Automatic picks what the engine chooses for this Mac. Changes apply from the next generation.")
+          .foregroundStyle(.secondary)
       }
     }
-    .padding(20)
-    .frame(width: 560)
+    .formStyle(.grouped)
+    .frame(width: 600)
+    .fixedSize(horizontal: false, vertical: true)
     .onAppear { directory = model.modelsDirectory }
   }
 
@@ -580,6 +600,28 @@ struct SettingsView: View {
     panel.directoryURL = URL(fileURLWithPath: directory)
     if panel.runModal() == .OK, let url = panel.url {
       directory = url.path
+    }
+  }
+}
+
+/// One Performance setting: Automatic (the engine's choice, named in the label) or an override.
+private struct PerformancePicker: View {
+  let setting: PerformanceSetting
+  @AppStorage private var value: Int
+
+  init(setting: PerformanceSetting) {
+    self.setting = setting
+    _value = AppStorage(wrappedValue: PerformanceSetting.automatic, setting.defaultsKey)
+  }
+
+  var body: some View {
+    Picker(selection: $value) {
+      Text(setting.automaticLabel).tag(PerformanceSetting.automatic)
+      Divider()
+      ForEach(setting.options, id: \.value) { Text($0.label).tag($0.value) }
+    } label: {
+      Text(setting.title)
+      Text(setting.detail)
     }
   }
 }
