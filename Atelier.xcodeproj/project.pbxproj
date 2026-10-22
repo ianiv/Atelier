@@ -51,7 +51,7 @@
 		DE21FA0E98C26E5774D825E2 /* script_session_mutating_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81D09E0E7038EB1757F9D82C /* script_session_mutating_generated.swift */; };
 		E22A431DA0308444CBDE96D1 /* script_session_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 703D619A6F074D5BFFC42B4F /* script_session_generated.swift */; };
 		E3AB991AFD18E780D8F68994 /* thumbnail_history_mutating_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 206772509F6023806027971F /* thumbnail_history_mutating_generated.swift */; };
-		E5ABFC205D6903135AC06DCE /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4CBE9BE880BD55127FC9066 /* LibraryView.swift */; };
+		E5ABFC205D6903135AC06DCE /* ModelsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4CBE9BE880BD55127FC9066 /* ModelsView.swift */; };
 		E6F1C502227D967EC9445327 /* ProjectFormat.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DD43DCCB3E94379CFC8DFC0A /* ProjectFormat.framework */; };
 		E8B5571167A18E376AB7677B /* InspectorLayouts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D911C73F104A10DFC689CA8 /* InspectorLayouts.swift */; };
 		E963577B874C666B52965C34 /* tensor_history_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19CEE9846E073058B4D28395 /* tensor_history_generated.swift */; };
@@ -61,6 +61,12 @@
 		FE932A5C887AE92B9E804707 /* ProjectMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020B954C3465D02C24F95C3C /* ProjectMapping.swift */; };
 		FF243F91D335A8164439E59D /* thumbnail_history_query_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68D101B87E1B72C4F34DD0A7 /* thumbnail_history_query_generated.swift */; };
 		FFE2FD5F9913FFBEA7557E98 /* tensor_data_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0963659342F5DFDDA1ED7457 /* tensor_data_generated.swift */; };
+		16E53F5DAD3A2F11B88D6688 /* InspectorLayoutMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49496157639E36AC0F00C6CB /* InspectorLayoutMenu.swift */; };
+		0D77AE715B479EAF62D0C820 /* InspectorLoRAs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ED41B594BF826B2C41E7D0E /* InspectorLoRAs.swift */; };
+		C1A1B98D2F1D4DB733D3A91A /* InspectorPresets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1695448917E4F53AE8A6DC58 /* InspectorPresets.swift */; };
+		1A2A67114ED9030A8948E8ED /* InspectorSize.swift in Sources */ = {isa = PBXBuildFile; fileRef = 767CBEA7FD85E530CA5726C1 /* InspectorSize.swift */; };
+		FEC22431AE15251468257CA2 /* LibraryErrorAlert.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAFF310E4AA538AA8C02FC77 /* LibraryErrorAlert.swift */; };
+		600FFF1041FD67847B794622 /* LoRAsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 434F7495899302690802E139 /* LoRAsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -130,7 +136,7 @@
 		B147BCDA9E5FEDE9CC9B373A /* CreateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateView.swift; sourceTree = "<group>"; };
 		B6F6FE94CFB438E8A05AE929 /* tensor_history_mutating_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = tensor_history_mutating_generated.swift; sourceTree = "<group>"; };
 		BAAFE7D929C462B504088504 /* Project.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Project.swift; sourceTree = "<group>"; };
-		C4CBE9BE880BD55127FC9066 /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
+		C4CBE9BE880BD55127FC9066 /* ModelsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelsView.swift; sourceTree = "<group>"; };
 		D1E6E972BC621F63B7C5E4E0 /* thumbnail_history_data_model_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = thumbnail_history_data_model_generated.swift; sourceTree = "<group>"; };
 		DD43DCCB3E94379CFC8DFC0A /* ProjectFormat.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework.static; includeInIndex = 0; path = ProjectFormat.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		E1353E7B4836513F26BF2C88 /* script_session_query_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = script_session_query_generated.swift; sourceTree = "<group>"; };
@@ -138,6 +144,12 @@
 		E750BAC04D4835E5B2477EB2 /* AutomationProject.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationProject.swift; sourceTree = "<group>"; };
 		EAF3EA252F98E9035447E77C /* HistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryStore.swift; sourceTree = "<group>"; };
 		F1CCF224BCF0F5C0DAF37BC8 /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
+		49496157639E36AC0F00C6CB /* InspectorLayoutMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorLayoutMenu.swift; sourceTree = "<group>"; };
+		0ED41B594BF826B2C41E7D0E /* InspectorLoRAs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorLoRAs.swift; sourceTree = "<group>"; };
+		1695448917E4F53AE8A6DC58 /* InspectorPresets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorPresets.swift; sourceTree = "<group>"; };
+		767CBEA7FD85E530CA5726C1 /* InspectorSize.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorSize.swift; sourceTree = "<group>"; };
+		DAFF310E4AA538AA8C02FC77 /* LibraryErrorAlert.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryErrorAlert.swift; sourceTree = "<group>"; };
+		434F7495899302690802E139 /* LoRAsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoRAsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -174,28 +186,98 @@
 		946934439EEA51DC6E75A261 /* Atelier */ = {
 			isa = PBXGroup;
 			children = (
-				3C8D5C8071A6037BDD1122F9 /* AppSettings.swift */,
-				716BE47B7D8EFA0449CAF4AF /* AtelierApp.swift */,
-				5BA894EB2074F4930E321607 /* Automation.swift */,
-				E750BAC04D4835E5B2477EB2 /* AutomationProject.swift */,
-				75FDC53060CFC4942FDDBF2D /* ContentView.swift */,
-				3A6036FEF93D069A783B09D8 /* CreateModel.swift */,
-				B147BCDA9E5FEDE9CC9B373A /* CreateView.swift */,
-				1CAC35AB075AAB4CDF7AD898 /* GenerationEngine.swift */,
-				EAF3EA252F98E9035447E77C /* HistoryStore.swift */,
-				F1CCF224BCF0F5C0DAF37BC8 /* HistoryView.swift */,
-				3D911C73F104A10DFC689CA8 /* InspectorLayouts.swift */,
-				537623BEF1DDDD55559CA8D6 /* InspectorView.swift */,
-				C4CBE9BE880BD55127FC9066 /* LibraryView.swift */,
-				59AD5317B0066ECD23EDCDAF /* ModelDefaults.swift */,
-				248FF150659188D7C4B12A12 /* ModelLibrary.swift */,
-				BAAFE7D929C462B504088504 /* Project.swift */,
-				020B954C3465D02C24F95C3C /* ProjectMapping.swift */,
-				9895821DCBA0BD67EF40AB9D /* SessionState.swift */,
-				6BEA94A3173E8DEC703922D0 /* SettingsRegistry.swift */,
-				5A3DAA7DA03971183D18CEAA /* SizePreset.swift */,
+				882062C245F2B93A25F1D212 /* App */,
+				3E8C58D16B915F2CC9BB95A5 /* Automation */,
+				ADEF5850836026B0FCB26117 /* Create */,
+				48E3561D3C3C081F0E6EC772 /* Generation */,
+				0ADB0E05EADC942C1C1FCD37 /* History */,
+				4190255F978F472407BAFB59 /* Inspector */,
+				B99C8284D4164108D9166578 /* Library */,
+				52499566B8E250F1140E5815 /* Projects */,
 			);
 			path = Atelier;
+			sourceTree = "<group>";
+		};
+		882062C245F2B93A25F1D212 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				3C8D5C8071A6037BDD1122F9 /* AppSettings.swift */,
+				716BE47B7D8EFA0449CAF4AF /* AtelierApp.swift */,
+				75FDC53060CFC4942FDDBF2D /* ContentView.swift */,
+				9895821DCBA0BD67EF40AB9D /* SessionState.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		3E8C58D16B915F2CC9BB95A5 /* Automation */ = {
+			isa = PBXGroup;
+			children = (
+				5BA894EB2074F4930E321607 /* Automation.swift */,
+				E750BAC04D4835E5B2477EB2 /* AutomationProject.swift */,
+			);
+			path = Automation;
+			sourceTree = "<group>";
+		};
+		ADEF5850836026B0FCB26117 /* Create */ = {
+			isa = PBXGroup;
+			children = (
+				3A6036FEF93D069A783B09D8 /* CreateModel.swift */,
+				B147BCDA9E5FEDE9CC9B373A /* CreateView.swift */,
+				5A3DAA7DA03971183D18CEAA /* SizePreset.swift */,
+			);
+			path = Create;
+			sourceTree = "<group>";
+		};
+		48E3561D3C3C081F0E6EC772 /* Generation */ = {
+			isa = PBXGroup;
+			children = (
+				1CAC35AB075AAB4CDF7AD898 /* GenerationEngine.swift */,
+				59AD5317B0066ECD23EDCDAF /* ModelDefaults.swift */,
+			);
+			path = Generation;
+			sourceTree = "<group>";
+		};
+		0ADB0E05EADC942C1C1FCD37 /* History */ = {
+			isa = PBXGroup;
+			children = (
+				EAF3EA252F98E9035447E77C /* HistoryStore.swift */,
+				F1CCF224BCF0F5C0DAF37BC8 /* HistoryView.swift */,
+			);
+			path = History;
+			sourceTree = "<group>";
+		};
+		4190255F978F472407BAFB59 /* Inspector */ = {
+			isa = PBXGroup;
+			children = (
+				49496157639E36AC0F00C6CB /* InspectorLayoutMenu.swift */,
+				3D911C73F104A10DFC689CA8 /* InspectorLayouts.swift */,
+				0ED41B594BF826B2C41E7D0E /* InspectorLoRAs.swift */,
+				1695448917E4F53AE8A6DC58 /* InspectorPresets.swift */,
+				767CBEA7FD85E530CA5726C1 /* InspectorSize.swift */,
+				537623BEF1DDDD55559CA8D6 /* InspectorView.swift */,
+				6BEA94A3173E8DEC703922D0 /* SettingsRegistry.swift */,
+			);
+			path = Inspector;
+			sourceTree = "<group>";
+		};
+		B99C8284D4164108D9166578 /* Library */ = {
+			isa = PBXGroup;
+			children = (
+				DAFF310E4AA538AA8C02FC77 /* LibraryErrorAlert.swift */,
+				434F7495899302690802E139 /* LoRAsView.swift */,
+				248FF150659188D7C4B12A12 /* ModelLibrary.swift */,
+				C4CBE9BE880BD55127FC9066 /* ModelsView.swift */,
+			);
+			path = Library;
+			sourceTree = "<group>";
+		};
+		52499566B8E250F1140E5815 /* Projects */ = {
+			isa = PBXGroup;
+			children = (
+				BAAFE7D929C462B504088504 /* Project.swift */,
+				020B954C3465D02C24F95C3C /* ProjectMapping.swift */,
+			);
+			path = Projects;
 			sourceTree = "<group>";
 		};
 		B5F46B62D5AC64FAA9EB8D1D /* Sources */ = {
@@ -370,7 +452,7 @@
 				4722EB91D9FBE37E3B39FD3A /* HistoryView.swift in Sources */,
 				E8B5571167A18E376AB7677B /* InspectorLayouts.swift in Sources */,
 				5388E27993E9EF8D03383B06 /* InspectorView.swift in Sources */,
-				E5ABFC205D6903135AC06DCE /* LibraryView.swift in Sources */,
+				E5ABFC205D6903135AC06DCE /* ModelsView.swift in Sources */,
 				5684CBB37AB771B0294C16AD /* ModelDefaults.swift in Sources */,
 				019DECB5A1E70541745FDF70 /* ModelLibrary.swift in Sources */,
 				D42B1F3B6CDD906D20BB8275 /* Project.swift in Sources */,
@@ -378,6 +460,12 @@
 				40471B00219ACFE544559125 /* SessionState.swift in Sources */,
 				4862B9A4F2A7A226E9BB6C7C /* SettingsRegistry.swift in Sources */,
 				F37644302DD33DAC7A1E63B0 /* SizePreset.swift in Sources */,
+				16E53F5DAD3A2F11B88D6688 /* InspectorLayoutMenu.swift in Sources */,
+				0D77AE715B479EAF62D0C820 /* InspectorLoRAs.swift in Sources */,
+				C1A1B98D2F1D4DB733D3A91A /* InspectorPresets.swift in Sources */,
+				1A2A67114ED9030A8948E8ED /* InspectorSize.swift in Sources */,
+				FEC22431AE15251468257CA2 /* LibraryErrorAlert.swift in Sources */,
+				600FFF1041FD67847B794622 /* LoRAsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
