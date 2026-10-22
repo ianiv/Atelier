@@ -417,18 +417,28 @@ enum ProjectError: LocalizedError {
 
 /// Conversion between Draw Things' image tensors (`[1, H, W, 3]` in [-1, 1]) and CGImages.
 enum ImageTensor {
+  /// The RGB channels of a decoded image. Some decoders (Qwen Image 2.1) return ARGB with alpha
+  /// first; Draw Things keeps only the RGB part (`ImageConverter.imageAndMask`).
+  static func rgb(_ tensor: Tensor<FloatType>) -> Tensor<FloatType> {
+    let shape = tensor.shape
+    guard shape.count == 4, shape[3] == 4 else { return tensor }
+    return tensor[0..<shape[0], 0..<shape[1], 0..<shape[2], 1..<4].copied()
+  }
+
   static func cgImage(from tensor: Tensor<FloatType>) -> CGImage? {
     let shape = tensor.shape
     guard shape.count == 4, shape[0] >= 1, shape[3] >= 3 else { return nil }
     let height = shape[1]
     let width = shape[2]
     let channels = shape[3]
+    // ARGB tensors (see `rgb`) have the color after the alpha channel.
+    let first = channels == 4 ? 1 : 0
     var rgba = [UInt8](repeating: 255, count: width * height * 4)
     tensor.withUnsafeBytes { raw in
       let values = raw.bindMemory(to: FloatType.self)
       for pixel in 0..<(width * height) {
         for c in 0..<3 {
-          let v = (Float(values[pixel * channels + c]) + 1) * 127.5
+          let v = (Float(values[pixel * channels + first + c]) + 1) * 127.5
           rgba[pixel * 4 + c] = UInt8(clamping: Int(v.rounded()))
         }
       }

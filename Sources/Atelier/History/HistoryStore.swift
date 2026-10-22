@@ -176,7 +176,7 @@ final class HistoryStore {
       ImageTensor.tensor(from: entry.image).map { (tensor: $0, weight: entry.weight) }
     }
     let item = try await project.append(
-      tensor: result.tensor, model: request.model, prompt: request.prompt,
+      tensor: ImageTensor.rgb(result.tensor), model: request.model, prompt: request.prompt,
       negativePrompt: request.negativePrompt, seed: request.seed,
       settings: dump, createdAt: finishedAt,
       duration: finishedAt.timeIntervalSince(startedAt), moodboard: moodboard)
