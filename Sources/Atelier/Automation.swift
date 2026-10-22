@@ -293,6 +293,7 @@ enum Automation {
       if let expected = value("--expect-layout") {
         check(layouts.current.name == expected, "layout after relaunch is “\(layouts.current.name)” (expected “\(expected)”)")
         check(!layouts.current.isShown("shift"), "Shift is still hidden after relaunch")
+        check(layouts.current.sections.first == .loras, "LoRAs section is still first after relaunch")
         await shot("relaunch.png")
         return finish()
       }
@@ -332,6 +333,11 @@ enum Automation {
       check(model.settings?.steps == stepsBefore, "undo restored Steps to \(stepsBefore)")
       undoManager.redo()
       check(model.settings?.steps == stepsBefore + 7, "redo set Steps to \(stepsBefore + 7)")
+
+      // Section order: move LoRAs above Essentials.
+      layouts.moveSection(.loras, by: -1)
+      layouts.moveSection(.loras, by: -1)
+      check(layouts.current.sections.first == .loras, "moved LoRAs to the top (order: \(layouts.current.sections.prefix(3).map(\.title)))")
 
       // Export, delete, import.
       let original = layouts.current

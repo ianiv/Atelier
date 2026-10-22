@@ -10,8 +10,17 @@ struct InspectorLayout: Codable, Hashable, Identifiable {
   var shown: [String]
   /// Section ids that start expanded.
   var expanded: [String]
+  /// Section ids in display order; nil (older layout files) means the registry order.
+  var sectionOrder: [String]? = nil
 
   var id: String { name }
+
+  /// Every section in display order; sections missing from `sectionOrder` keep registry order at
+  /// the end.
+  var sections: [SettingSection] {
+    let ordered = (sectionOrder ?? []).compactMap(SettingSection.init(rawValue:))
+    return ordered + SettingSection.allCases.filter { !ordered.contains($0) }
+  }
 
   func isShown(_ id: String) -> Bool { shown.contains(id) }
 
@@ -128,6 +137,18 @@ final class LayoutStore {
     save(layout)
     current = layout
     UserDefaults.standard.set(layout.name, forKey: Self.currentKey)
+  }
+
+  /// Moves a section up (-1) or down (+1) among the sections.
+  func moveSection(_ section: SettingSection, by offset: Int) {
+    var order = current.sections
+    guard let index = order.firstIndex(of: section),
+      order.indices.contains(index + offset)
+    else { return }
+    order.swapAt(index, index + offset)
+    var layout = current
+    layout.sectionOrder = order.map(\.id)
+    update(layout)
   }
 
   func delete(_ layout: InspectorLayout) {

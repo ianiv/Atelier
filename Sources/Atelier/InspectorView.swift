@@ -61,7 +61,7 @@ struct InspectorView: View {
 
   @ViewBuilder private var sections: some View {
     let traits = model.traits
-    ForEach(SettingSection.allCases) { section in
+    ForEach(layouts.current.sections) { section in
       InspectorSection(section: section, traits: traits, showAll: showAll)
     }
     // Changed sits at the bottom, by the reset, so it growing or shrinking never moves the rows
@@ -97,7 +97,7 @@ struct InspectorView: View {
     if matchesSeed {
       InspectorGroup { Text(SettingSection.essentials.title) } content: { SeedControls() }
     }
-    ForEach(SettingSection.allCases) { section in
+    ForEach(layouts.current.sections) { section in
       let inSection = matches.filter { $0.section == section }
       if !inSection.isEmpty {
         InspectorGroup { Text(section.title) } content: {
@@ -242,6 +242,13 @@ struct InspectorSection: View {
     // The whole header (except the checkbox and reset button) expands and collapses the section.
     .contentShape(.rect)
     .onTapGesture { layouts.setExpanded(section, !expanded) }
+    .contextMenu {
+      let order = layouts.current.sections
+      Button("Move Section Up") { layouts.moveSection(section, by: -1) }
+        .disabled(order.first == section)
+      Button("Move Section Down") { layouts.moveSection(section, by: 1) }
+        .disabled(order.last == section)
+    }
   }
 
   /// On when a file is picked; turning it on restores the last file picked.
@@ -852,6 +859,7 @@ struct CustomizeInspectorSheet: View {
   @State private var name = ""
   @State private var items: [SettingSection: [Item]] = [:]
   @State private var expanded: Set<String> = []
+  @State private var sectionOrder: [SettingSection] = []
 
   var body: some View {
     VStack(spacing: 0) {
@@ -862,7 +870,13 @@ struct CustomizeInspectorSheet: View {
       }
       .padding()
       List {
-        ForEach(SettingSection.allCases) { section in
+        Section("Section Order") {
+          ForEach(sectionOrder) { section in
+            Label(section.title, systemImage: "line.3.horizontal")
+          }
+          .onMove { sectionOrder.move(fromOffsets: $0, toOffset: $1) }
+        }
+        ForEach(sectionOrder) { section in
           Section {
             ForEach(binding(section)) { $item in
               Toggle(item.title, isOn: $item.shown)
@@ -883,7 +897,7 @@ struct CustomizeInspectorSheet: View {
       }
       Divider()
       HStack {
-        Text("Drag to reorder. Unchecked settings are tucked under More.")
+        Text("Drag sections and settings to reorder. Unchecked settings are tucked under More.")
           .font(.caption).foregroundStyle(.secondary)
         Spacer()
         Button("Cancel", role: .cancel) { dismiss() }
@@ -906,6 +920,7 @@ struct CustomizeInspectorSheet: View {
     let layout = layouts.current
     name = layouts.isBuiltIn(layout) ? layouts.uniqueName("\(layout.name) Custom") : layout.name
     expanded = Set(layout.expanded)
+    sectionOrder = layout.sections
     for section in SettingSection.allCases {
       let (shown, tucked) = layout.ordered(section)
       items[section] =
@@ -915,12 +930,13 @@ struct CustomizeInspectorSheet: View {
   }
 
   private func save() {
-    let shown = SettingSection.allCases.flatMap { section in
+    let shown = sectionOrder.flatMap { section in
       (items[section] ?? []).filter(\.shown).map(\.id)
     }
     var layout = InspectorLayout(
       name: name.trimmingCharacters(in: .whitespaces), shown: shown,
-      expanded: SettingSection.allCases.map(\.id).filter(expanded.contains))
+      expanded: sectionOrder.map(\.id).filter(expanded.contains),
+      sectionOrder: sectionOrder.map(\.id))
     if layouts.isBuiltIn(layout) { layout.name = layouts.uniqueName("\(layout.name) Custom") }
     layouts.update(layout)
     layouts.select(layout)
