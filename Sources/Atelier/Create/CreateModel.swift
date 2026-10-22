@@ -350,7 +350,7 @@ final class CreateModel {
       let startedAt = Date()
       do {
         let result = try await engine.generate(request) { progress in
-          Task { @MainActor [weak self] in self?.handle(progress) }
+          Task { @MainActor in self.handle(progress) }
         }
         let item = try await history.save(
           result, request: request, startedAt: startedAt, finishedAt: Date())

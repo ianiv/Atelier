@@ -133,9 +133,9 @@ final class ModelLibrary {
           let progress = Download(
             file: name, fileIndex: index, totalFiles: total, bytesWritten: written,
             totalBytes: expected)
-          Task { @MainActor [weak self] in
-            guard self?.downloadTasks[file] != nil else { return }
-            self?.downloads[file] = progress
+          Task { @MainActor in
+            guard self.downloadTasks[file] != nil else { return }
+            self.downloads[file] = progress
           }
         }
       } catch is CancellationError {
@@ -294,7 +294,7 @@ final class ModelLibrary {
     let file = Self.availableLoRAFileName(for: stem, in: directory)
     let source = item.source
     let id = item.id
-    let progress: @Sendable (Float) -> Void = { value in
+    let progress: @Sendable (Float) -> Void = { [weak self] value in
       Task { @MainActor [weak self] in
         guard let self, let index = importing.firstIndex(where: { $0.id == id }) else { return }
         importing[index].progress = Double(value)

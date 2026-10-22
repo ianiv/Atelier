@@ -47,10 +47,11 @@ final class Project: @unchecked Sendable {
 
   /// Finishes pending writes and closes the database. The project can't be used afterwards.
   func close() async {
-    lock.lock()
-    let wasClosed = isClosed
-    isClosed = true
-    lock.unlock()
+    let wasClosed = lock.withLock {
+      let wasClosed = isClosed
+      isClosed = true
+      return wasClosed
+    }
     guard !wasClosed else { return }
     await withCheckedContinuation { continuation in
       workspace.shutdown(flags: [.truncate]) { continuation.resume() }

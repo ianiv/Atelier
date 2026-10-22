@@ -58,7 +58,7 @@ struct PresetMenu: View {
       Button("Save Current Settings as Preset…") { saving = true }
         .disabled(model.settings == nil)
       Button("Import Preset…") {
-        if let url = FilePanels.openJSON() { try? presets.importPreset(from: url) }
+        if let url = FilePanels.openJSON() { _ = try? presets.importPreset(from: url) }
       }
       if !presets.presets.isEmpty {
         Menu("Export") {

@@ -34,7 +34,7 @@ struct LayoutMenu: View {
         }
       }
       Button("Import Layout…") {
-        if let url = FilePanels.openJSON() { try? layouts.importLayout(from: url) }
+        if let url = FilePanels.openJSON() { _ = try? layouts.importLayout(from: url) }
       }
       Button("Delete “\(layouts.current.name)”") { layouts.delete(layouts.current) }
         .disabled(layouts.isBuiltIn(layouts.current))

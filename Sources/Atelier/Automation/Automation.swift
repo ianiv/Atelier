@@ -166,7 +166,7 @@ enum Automation {
         print(String(format: "[%7.2fs] ", Date().timeIntervalSince(started)) + message)
         fflush(stdout)
       }
-      func finish() { if args.contains("--quit") { NSApp.terminate(nil) } }
+      @MainActor func finish() { if args.contains("--quit") { NSApp.terminate(nil) } }
       while !model.history.isLoaded || model.models.isEmpty || model.isBusy {
         try? await Task.sleep(for: .milliseconds(100))
       }
@@ -302,7 +302,7 @@ enum Automation {
         try? await Task.sleep(for: .seconds(1))
         if let snapshotDir { snapshot(to: snapshotDir.appendingPathComponent(name)) }
       }
-      func finish() { if args.contains("--quit") { NSApp.terminate(nil) } }
+      @MainActor func finish() { if args.contains("--quit") { NSApp.terminate(nil) } }
       while model.models.isEmpty || model.settings == nil || model.isBusy {
         try? await Task.sleep(for: .milliseconds(100))
       }
@@ -474,7 +474,7 @@ enum Automation {
         try? await Task.sleep(for: .milliseconds(500))
         if let snapshotDir { snapshot(to: snapshotDir.appendingPathComponent(name)) }
       }
-      func finish() { if args.contains("--quit") { NSApp.terminate(nil) } }
+      @MainActor func finish() { if args.contains("--quit") { NSApp.terminate(nil) } }
       var waited = 0
       while model.models.isEmpty || model.settings == nil || model.isBusy || !model.history.isLoaded {
         try? await Task.sleep(for: .milliseconds(100))
