@@ -1038,10 +1038,19 @@ struct SavePresetSheet: View {
   @State private var included: Set<String> = []
   @State private var forThisModel = true
   @State private var makeDefault = false
+  @State private var allSettings = true
   @State private var error: String?
 
+  /// Every setting the current model uses (like Draw Things' saved configurations), or only the
+  /// ones changed from its defaults.
+  private var candidates: [SettingDescriptor] {
+    allSettings
+      ? SettingsRegistry.all.filter { $0.applies(model.traits) || model.isChanged($0) }
+      : model.changedSettings
+  }
+
   var body: some View {
-    let changed = model.changedSettings
+    let candidates = candidates
     VStack(alignment: .leading, spacing: 12) {
       Text("Save Preset").font(.headline)
       TextField("Name", text: $name)
@@ -1051,12 +1060,16 @@ struct SavePresetSheet: View {
       if presets.presets.contains(where: { $0.name == name }) {
         Text("Replaces the existing preset “\(name)”.").font(.caption).foregroundStyle(.secondary)
       }
-      Text("Settings to include (those changed from the model defaults):")
-        .font(.callout)
-      if changed.isEmpty {
+      Picker("Save", selection: $allSettings) {
+        Text("All Current Settings").tag(true)
+        Text("Changed Settings Only").tag(false)
+      }
+      .pickerStyle(.segmented)
+      .help("Changed Only keeps the preset small, so the model's own defaults fill in the rest.")
+      if candidates.isEmpty {
         Text("Nothing differs from the model defaults.").foregroundStyle(.secondary)
       }
-      List(changed) { descriptor in
+      List(candidates) { descriptor in
         Toggle(isOn: Binding(
           get: { included.contains(descriptor.id) },
           set: { if $0 { included.insert(descriptor.id) } else { included.remove(descriptor.id) } })
@@ -1094,7 +1107,8 @@ struct SavePresetSheet: View {
     }
     .padding(20)
     .frame(width: 420, height: 500)
-    .onAppear { included = Set(changed.map(\.id)) }
+    .onAppear { included = Set(candidates.map(\.id)) }
+    .onChange(of: allSettings) { included = Set(candidates.map(\.id)) }
   }
 }
 
