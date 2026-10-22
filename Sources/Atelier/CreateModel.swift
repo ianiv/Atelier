@@ -48,12 +48,16 @@ final class CreateModel {
   private(set) var totalSteps = 0
   private(set) var image: CGImage?
   private(set) var lastSavedURL: URL?
+  /// The file behind `image` once it's a finished image (not a step preview).
+  private var imageURL: URL?
   var errorMessage: String?
 
   private var generationTask: Task<Void, Never>?
   private var loadTask: Task<Void, Never>?
   /// A history item's configuration dump to apply once the model's defaults finish loading.
   private var pendingSettings: [String: JSONValue]?
+  /// The last launch's session, until the model list loads and its model and settings apply.
+  private var restored: SessionState?
   /// While a slider drags, its changes share the undo step registered when the drag began.
   private var coalescingEdit = false
   private var generateWhenLoaded = false
@@ -94,7 +98,35 @@ final class CreateModel {
 
   init(history: HistoryStore) {
     self.history = history
+    if let session = SessionState.load() {
+      restored = session
+      prompt = session.prompt
+      negativePrompt = session.negativePrompt
+      if let seed = session.seed { self.seed = seed }
+      if let path = session.imagePath, FileManager.default.fileExists(atPath: path) {
+        let url = URL(fileURLWithPath: path)
+        lastSavedURL = url
+        imageURL = url
+        image = NSImage(contentsOf: url)?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+      }
+    }
+    for name in [NSApplication.willTerminateNotification, NSApplication.didResignActiveNotification] {
+      NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) {
+        [weak self] _ in MainActor.assumeIsolated { self?.saveSession() }
+      }
+    }
     Task { await reloadModels() }
+  }
+
+  /// Remembers the model, prompts, seed, inspector values and canvas image for the next launch.
+  func saveSession() {
+    // Until the models load, the last session's model and settings are still waiting to apply.
+    guard restored == nil else { return }
+    SessionState(
+      model: selectedModel, prompt: prompt, negativePrompt: negativePrompt, seed: seed,
+      settings: settings.map(JSONValue.fields(of:)) ?? pendingSettings,
+      imagePath: imageURL?.path
+    ).save()
   }
 
   /// Whether `item`'s model is downloaded, so its settings can be loaded here.
@@ -119,6 +151,7 @@ final class CreateModel {
     }
     image = NSImage(contentsOf: item.imageURL)?.cgImage(
       forProposedRect: nil, context: nil, hints: nil)
+    imageURL = item.imageURL
     if selectedModel == sidecar.model, phase != .loadingModel, var settings = recommended {
       SettingsRegistry.apply(dump: sidecar.configuration, to: &settings)
       self.settings = settings
@@ -143,6 +176,13 @@ final class CreateModel {
   func reloadModels() async {
     await engine.setModelsDirectory(modelsDirectory)
     await loadModelList()
+    if let restored, let model = restored.model, models.contains(where: { $0.file == model }) {
+      self.restored = nil
+      pendingSettings = restored.settings
+      selectedModel = model
+      return
+    }
+    restored = nil
     if let selectedModel, models.contains(where: { $0.file == selectedModel }) {
       loadDefaults(for: selectedModel)
     } else {
@@ -310,7 +350,9 @@ final class CreateModel {
           result, request: request, startedAt: startedAt, finishedAt: Date()
         ).imageURL
         lastSavedURL = url
+        imageURL = url
         image = NSImage(contentsOf: url)?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        saveSession()
       } catch is CancellationError {
         // Cancelled by the user; keep the last preview on the canvas.
       } catch {

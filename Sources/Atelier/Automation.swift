@@ -15,6 +15,12 @@ import _MediaGenerationKit
 /// "Rerun with new seed"), generates, and compares the new PNG's pixels with the original.
 @MainActor
 enum Automation {
+  /// Whether this launch is a scripted run (any of the flags `runIfRequested` acts on).
+  nonisolated static var isRequested: Bool {
+    let flags = ["--show", "--resize-bench", "--inspector-check", "--library-check", "--reuse", "--generate"]
+    return CommandLine.arguments.contains { flags.contains($0) }
+  }
+
   static func runIfRequested(
     _ model: CreateModel, navigation: Navigation, layouts: LayoutStore, presets: PresetStore,
     library: ModelLibrary

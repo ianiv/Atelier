@@ -5,7 +5,19 @@ import SwiftUI
 @MainActor
 @Observable
 final class Navigation {
-  var section: ContentView.Section? = .create
+  var section: ContentView.Section? = Navigation.savedSection {
+    didSet {
+      guard SessionState.isEnabled else { return }
+      UserDefaults.standard.set(section?.rawValue, forKey: "section")
+    }
+  }
+
+  private static var savedSection: ContentView.Section {
+    guard SessionState.isEnabled, let saved = UserDefaults.standard.string(forKey: "section") else {
+      return .create
+    }
+    return ContentView.Section(rawValue: saved) ?? .create
+  }
 }
 
 struct ContentView: View {
@@ -54,5 +66,6 @@ struct ContentView: View {
           description: Text("Coming in a later phase."))
       }
     }
+    .background(WindowFrameAutosave(name: "Main"))
   }
 }
