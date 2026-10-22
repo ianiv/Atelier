@@ -1,10 +1,12 @@
 import AppKit
 import CoreGraphics
+import CoreTransferable
 import Diffusion
 import Foundation
 import ImageIO
 import NNC
 import Observation
+import UniformTypeIdentifiers
 import _MediaGenerationKit
 
 /// One generated image: a step in the current project.
@@ -206,13 +208,28 @@ final class HistoryStore {
 
   /// Writes the image as a PNG carrying its settings (an `Atelier` iTXt chunk).
   func exportPNG(_ item: HistoryItem, to url: URL) async throws {
+    try await pngData(item).write(to: url)
+  }
+
+  /// The image as PNG carrying its settings.
+  func pngData(_ item: HistoryItem) async throws -> Data {
     guard let image = await image(for: item), let png = ImageTensor.png(image) else {
       throw ProjectError.badImage
     }
     let json = try Self.encoder.encode(item.sidecar)
     let tagged = PNGText.inserting(
       keyword: "Atelier", text: String(decoding: json, as: UTF8.self), into: png)
-    try (tagged ?? png).write(to: url)
+    return tagged ?? png
+  }
+
+  /// "Project 12-1234567", the name exports and drags use.
+  func fileName(for item: HistoryItem) -> String {
+    "\(project.name) \(item.id.logicalTime)-\(item.sidecar.seed)"
+  }
+
+  /// The image as a file to drag out, named like an export.
+  func dragExport(_ item: HistoryItem) -> PNGExport {
+    PNGExport(name: fileName(for: item)) { [self] in try await pngData(item) }
   }
 
   /// Puts the full-resolution image on the clipboard.
@@ -406,5 +423,23 @@ enum JSONValue: Codable, Hashable {
     case .array(let value): try container.encode(value)
     case .object(let value): try container.encode(value)
     }
+  }
+}
+
+/// A PNG to drag into Finder (as a file) or another app (as image data), encoded on drop.
+struct PNGExport: Transferable {
+  var name: String
+  var data: @Sendable () async throws -> Data
+
+  static var transferRepresentation: some TransferRepresentation {
+    FileRepresentation(exportedContentType: .png) { export in
+      let folder = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+      try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+      let file = folder.appendingPathComponent(export.name).appendingPathExtension("png")
+      try await export.data().write(to: file)
+      return SentTransferredFile(file)
+    }
+    DataRepresentation(exportedContentType: .png) { try await $0.data() }
   }
 }

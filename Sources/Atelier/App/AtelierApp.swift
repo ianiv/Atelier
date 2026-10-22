@@ -60,6 +60,19 @@ struct AtelierApp: App {
         .keyboardShortcut("l", modifiers: .command)
         Button("Roll Seed") { create.rollAndLockSeed() }
           .keyboardShortcut("r", modifiers: .command)
+        Divider()
+        Button("Previous Prompt") {
+          navigation.section = .create
+          create.previousPrompt()
+        }
+        .keyboardShortcut(.upArrow, modifiers: .command)
+        .disabled(create.recentPrompts.isEmpty)
+        Button("Next Prompt") {
+          navigation.section = .create
+          create.nextPrompt()
+        }
+        .keyboardShortcut(.downArrow, modifiers: .command)
+        .disabled(create.recentPrompts.isEmpty)
       }
     }
     Settings {

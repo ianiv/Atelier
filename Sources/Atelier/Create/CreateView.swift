@@ -12,6 +12,8 @@ struct CreateView: View {
       // draws the bar's edge, so the composer sits on the canvas like the toolbar does.
       .safeAreaBar(edge: .bottom, spacing: 0) {
         VStack(spacing: 0) {
+          PromptSplitter()
+          RecentStrip()
           StatusBar()
           PromptComposer()
         }
@@ -118,7 +120,7 @@ struct CanvasView: View {
       }
       .contextMenu { contextMenu(canvas) }
       .overlay(alignment: .bottomTrailing) {
-        ZoomControls(canvas: canvas).padding(12)
+        ZoomControls(canvas: canvas, export: dragExport).padding(12)
       }
       .onChange(of: fit, initial: true) { canvas.fitScale = max(fit, 0.01) }
     }
@@ -128,6 +130,17 @@ struct CanvasView: View {
       isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } }),
       actions: { Button("OK") { saveError = nil } },
       message: { Text(saveError ?? "") })
+  }
+
+  /// The canvas image as a PNG to drag out; a finished one carries its settings.
+  private var dragExport: PNGExport? {
+    if let item = model.imageItem { return history.dragExport(item) }
+    guard let image = model.image else { return nil }
+    let preview = image
+    return PNGExport(name: history.project.name) {
+      guard let png = ImageTensor.png(preview) else { throw ProjectError.badImage }
+      return png
+    }
   }
 
   /// The configured output size in pixels, else the image's.
@@ -220,9 +233,18 @@ struct ZoomMenuItems: View {
 /// − / zoom level / + in a glass capsule at the canvas corner.
 private struct ZoomControls: View {
   let canvas: CanvasState
+  var export: PNGExport?
 
   var body: some View {
     HStack(spacing: 2) {
+      if let export {
+        Image(systemName: "photo")
+          .frame(width: 22, height: 22)
+          .contentShape(.rect)
+          .draggable(export)
+          .help("Drag the image into Finder or another app")
+        Divider().frame(height: 14)
+      }
       Button("Zoom Out", systemImage: "minus") { canvas.zoomOut() }
         .help("Zoom Out (⌘−)")
       Menu {
@@ -307,9 +329,13 @@ struct StatusBar: View {
             .foregroundStyle(.red)
             .lineLimit(2)
         } else if model.lastSavedStep != nil {
-          Text("Saved to \(model.history.project.name)").foregroundStyle(.secondary)
+          let took = model.imageItem.map { " in " + GenerationTime.text($0.sidecar.durationSeconds) } ?? ""
+          Text("Saved to \(model.history.project.name)\(took)").foregroundStyle(.secondary)
           Button("Show in History") { navigation.section = .history }
             .buttonStyle(.link)
+        } else if let item = model.imageItem {
+          Text("Generated in \(GenerationTime.text(item.sidecar.durationSeconds))")
+            .foregroundStyle(.secondary)
         } else {
           Text("Ready").foregroundStyle(.secondary)
         }
@@ -321,6 +347,15 @@ struct StatusBar: View {
         if model.totalSteps > 0 {
           ProgressView(value: Double(model.step), total: Double(model.totalSteps))
             .frame(maxWidth: 320)
+        }
+        if let started = model.runStartedAt {
+          TimelineView(.periodic(from: started, by: 1)) { context in
+            let elapsed = GenerationTime.clock(context.date.timeIntervalSince(started))
+            let left = model.estimatedRemaining(at: context.date).map {
+              " · about \(GenerationTime.clock($0)) left"
+            }
+            Text(elapsed + (left ?? "")).monospacedDigit().foregroundStyle(.secondary)
+          }
         }
       case .cancelling:
         ProgressView().controlSize(.small)
@@ -334,11 +369,96 @@ struct StatusBar: View {
   }
 }
 
+/// The handle between the canvas and the composer: drag it to make the prompt box taller or shorter.
+struct PromptSplitter: View {
+  static let linesKey = "promptLines"
+  static let lines = 1...30
+  @AppStorage(linesKey) private var promptLines = 3
+  @State private var startLines: Int?
+
+  var body: some View {
+    Capsule()
+      .fill(.tertiary)
+      .frame(width: 36, height: 4)
+      .frame(maxWidth: .infinity)
+      .frame(height: 10)
+      .contentShape(.rect)
+      .pointerStyle(.rowResize)
+      .gesture(
+        DragGesture(minimumDistance: 1, coordinateSpace: .global)
+          .onChanged { value in
+            let start = startLines ?? promptLines
+            startLines = start
+            // About one body-text line per 16 pt dragged; up makes the box taller.
+            let lines = start + Int((-value.translation.height / 16).rounded())
+            promptLines = min(max(lines, Self.lines.lowerBound), Self.lines.upperBound)
+          }
+          .onEnded { _ in startLines = nil }
+      )
+      .onTapGesture(count: 2) { promptLines = 3 }
+      .help("Drag to resize the prompt box. Double-click for the default size.")
+  }
+}
+
+/// The latest images in the project, newest first: click one to look at it, double-click to use
+/// its settings.
+struct RecentStrip: View {
+  @Environment(CreateModel.self) private var model
+  @Environment(HistoryStore.self) private var history
+
+  var body: some View {
+    let items = Array(history.items.prefix(24))
+    if !items.isEmpty {
+      let current = model.imageItem?.id
+      ScrollView(.horizontal) {
+        LazyHStack(spacing: 6) {
+          ForEach(items) { item in
+            Thumbnail(item: item)
+              .frame(width: 44, height: 44)
+              .clipShape(.rect(cornerRadius: 4))
+              .overlay {
+                RoundedRectangle(cornerRadius: 4)
+                  .strokeBorder(Color.accentColor, lineWidth: current == item.id ? 2 : 0)
+              }
+              .contentShape(.rect)
+              .onTapGesture(count: 2) { model.use(item) }
+              .onTapGesture { model.show(item) }
+              .draggable(history.dragExport(item))
+              .help("\(item.sidecar.prompt)\n\(GenerationTime.text(item.sidecar.durationSeconds)). Double-click to use its settings.")
+              .contextMenu {
+                Button("Use Settings") { model.use(item) }
+                  .disabled(!model.canUse(item))
+                Button("Copy Image") { Task { await history.copyImage(item) } }
+              }
+          }
+        }
+        .padding(.horizontal, 12)
+      }
+      .scrollIndicators(.never)
+      .frame(height: 48)
+    }
+  }
+}
+
+/// How generation times read in Create and History.
+enum GenerationTime {
+  /// "12.3s", "1m 4.2s".
+  static func text(_ seconds: Double) -> String {
+    Duration.seconds(seconds).formatted(.units(width: .narrow, fractionalPart: .show(length: 1)))
+  }
+
+  /// "0:12", for the running clock.
+  static func clock(_ seconds: Double) -> String {
+    Duration.seconds(seconds.rounded()).formatted(.time(pattern: .minuteSecond))
+  }
+}
+
 /// The prompt box under the canvas: grows to about six lines, with the negative prompt tucked
 /// under a disclosure and Generate beside it.
 struct PromptComposer: View {
   @Environment(CreateModel.self) private var model
   @AppStorage("showNegativePrompt") private var showNegative = false
+  @AppStorage(PromptSplitter.linesKey) private var promptLines = 3
   @FocusState private var promptFocused: Bool
 
   var body: some View {
@@ -346,7 +466,7 @@ struct PromptComposer: View {
     VStack(alignment: .leading, spacing: 6) {
       HStack(alignment: .bottom, spacing: 10) {
         TextField("Describe the image…", text: $model.prompt, axis: .vertical)
-          .lineLimit(3...6)
+          .lineLimit(promptLines, reservesSpace: true)
           .textFieldStyle(.plain)
           .font(.body)
           .focused($promptFocused)

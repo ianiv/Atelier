@@ -1,5 +1,6 @@
 import AppKit
 import Observation
+import UserNotifications
 import _MediaGenerationKit
 
 /// State behind the Create screen: the selected model, the inspector values, and the running job.
@@ -50,6 +51,11 @@ final class CreateModel {
   private(set) var totalSteps = 0
   private(set) var image: CGImage?
   private(set) var lastSavedStep: StepID?
+  /// When the running generation started.
+  private(set) var runStartedAt: Date?
+  /// The first sampling step seen and when, and when the latest one arrived, for the estimate.
+  private var samplingStart: (date: Date, step: Int)?
+  private var lastStepAt: Date?
   /// The project step behind `image` once it's a finished image (not a step preview).
   private var imageStep: (project: String, id: StepID)? {
     didSet { imageIsPreview = false }
@@ -395,8 +401,12 @@ final class CreateModel {
     phase = .running("Preparing…")
     step = 0
     totalSteps = settings.steps
+    let startedAt = Date()
+    runStartedAt = startedAt
+    samplingStart = nil
+    lastStepAt = nil
+    remember(prompt: prompt)
     generationTask = Task { [engine] in
-      let startedAt = Date()
       do {
         let result = try await engine.generate(request) { progress in
           Task { @MainActor in self.handle(progress) }
@@ -407,6 +417,7 @@ final class CreateModel {
         imageStep = (history.project.name, item.id)
         image = ImageTensor.cgImage(from: result.tensor) ?? image
         saveSession()
+        FinishedNotice.post(prompt: request.prompt, seconds: item.sidecar.durationSeconds)
       } catch is CancellationError {
         // Cancelled by the user; keep the last preview on the canvas.
       } catch {
@@ -414,6 +425,68 @@ final class CreateModel {
       }
       phase = .idle
       generationTask = nil
+      runStartedAt = nil
+    }
+  }
+
+  /// Seconds left in sampling, from the pace of the steps so far; nil until two steps are in.
+  func estimatedRemaining(at now: Date) -> TimeInterval? {
+    guard let samplingStart, let lastStepAt, step > samplingStart.step, totalSteps > step
+    else { return nil }
+    let perStep = lastStepAt.timeIntervalSince(samplingStart.date) / Double(step - samplingStart.step)
+    return max(0, perStep * Double(totalSteps - step) - now.timeIntervalSince(lastStepAt))
+  }
+
+  // MARK: - Recent prompts
+
+  /// Prompts generated with, newest first (⌘↑ and ⌘↓ step through them).
+  private(set) var recentPrompts = UserDefaults.standard.stringArray(forKey: "recentPrompts") ?? []
+  /// Where ⌘↑/⌘↓ is in `recentPrompts`; nil while editing a prompt of your own.
+  private var recentIndex: Int?
+  /// The prompt being written before ⌘↑, restored by ⌘↓ past the newest.
+  private var draftPrompt = ""
+
+  private func remember(prompt: String) {
+    let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return }
+    recentPrompts.removeAll { $0 == prompt }
+    recentPrompts.insert(prompt, at: 0)
+    recentPrompts = Array(recentPrompts.prefix(50))
+    UserDefaults.standard.set(recentPrompts, forKey: "recentPrompts")
+    recentIndex = nil
+  }
+
+  /// ⌘↑: the next older prompt.
+  func previousPrompt() {
+    if let recentIndex, recentPrompts.indices.contains(recentIndex), prompt != recentPrompts[recentIndex] {
+      self.recentIndex = nil  // Edited since recalling: start over from the newest.
+    }
+    let next = recentIndex.map { $0 + 1 } ?? (recentPrompts.first == prompt ? 1 : 0)
+    guard recentPrompts.indices.contains(next) else { return }
+    if recentIndex == nil { draftPrompt = prompt }
+    recentIndex = next
+    prompt = recentPrompts[next]
+  }
+
+  /// ⌘↓: the next newer prompt, then back to the draft.
+  func nextPrompt() {
+    guard let recentIndex else { return }
+    if recentIndex == 0 {
+      self.recentIndex = nil
+      prompt = draftPrompt
+    } else {
+      self.recentIndex = recentIndex - 1
+      prompt = recentPrompts[recentIndex - 1]
+    }
+  }
+
+  /// Shows a history image on the canvas without touching the prompt or settings.
+  func show(_ item: HistoryItem) {
+    let projectName = history.project.name
+    imageStep = (projectName, item.id)
+    Task {
+      let full = await history.image(at: item.id, in: projectName)
+      if let full, imageStep?.id == item.id { image = full }
     }
   }
 
@@ -429,15 +502,23 @@ final class CreateModel {
     case .preview(let preview, let step, let total):
       image = preview
       imageIsPreview = true
-      self.step = step
-      totalSteps = total
+      noteStep(step, of: total)
     case .state(let state):
       phase = .running(Self.describe(state))
       if case .generating(let step, let total) = state {
-        self.step = step
-        totalSteps = total
+        noteStep(step, of: total)
       }
     }
+  }
+
+  private func noteStep(_ step: Int, of total: Int) {
+    if step != self.step || lastStepAt == nil {
+      let now = Date()
+      if samplingStart == nil { samplingStart = (now, step) }
+      lastStepAt = now
+    }
+    self.step = step
+    totalSteps = total
   }
 
   private func loadDefaults(for model: String) {
@@ -480,6 +561,40 @@ final class CreateModel {
     case .cancelling: return "Cancelling…"
     case .completed: return "Saving…"
     case .cancelled: return "Cancelled"
+    }
+  }
+}
+
+/// Tells you a generation finished while Atelier was in the background: a Dock badge (cleared when
+/// you come back) and a notification, if allowed.
+@MainActor
+enum FinishedNotice {
+  private static var unseen = 0
+  private static var observing = false
+
+  static func post(prompt: String, seconds: Double) {
+    guard !NSApp.isActive else { return }
+    unseen += 1
+    NSApp.dockTile.badgeLabel = String(unseen)
+    if !observing {
+      observing = true
+      NotificationCenter.default.addObserver(
+        forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+      ) { _ in
+        MainActor.assumeIsolated {
+          unseen = 0
+          NSApp.dockTile.badgeLabel = nil
+        }
+      }
+    }
+    let center = UNUserNotificationCenter.current()
+    let content = UNMutableNotificationContent()
+    content.title = "Image ready"
+    content.body = "\(prompt.prefix(120)) (\(GenerationTime.text(seconds)))"
+    let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+    Task {
+      guard (try? await center.requestAuthorization(options: [.alert, .sound])) == true else { return }
+      try? await center.add(request)
     }
   }
 }

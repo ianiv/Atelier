@@ -782,6 +782,33 @@ enum Automation {
         check(false, "decode Draw Things sample")
       }
       (model.prompt, model.negativePrompt, model.seed, model.seedLocked, model.settings) = saved
+
+      // ⌘↑/⌘↓ walk the recent prompts and come back to the draft.
+      if model.recentPrompts.count >= 2 {
+        model.prompt = "draft"
+        model.previousPrompt()
+        let first = model.prompt
+        model.previousPrompt()
+        let second = model.prompt
+        model.nextPrompt()
+        model.nextPrompt()
+        check(
+          first == model.recentPrompts[0] && second == model.recentPrompts[1] && model.prompt == "draft",
+          "recent prompts: \(first.prefix(20)) / \(second.prefix(20)) / back to \(model.prompt)")
+        model.prompt = saved.0
+      } else {
+        log("SKIP recent prompts: fewer than two")
+      }
+      if let item = model.history.items.dropFirst().first {
+        model.show(item)
+        try? await Task.sleep(for: .milliseconds(800))
+        check(model.imageItem?.id == item.id && model.prompt == saved.0, "strip shows an image only")
+        await shot("ux-strip.png")
+        if let latest = model.history.items.first { model.show(latest) }
+      }
+      navigation.section = .history
+      await shot("ux-history.png")
+      navigation.section = .create
       if args.contains("--quit") { NSApp.terminate(nil) }
     }
   }

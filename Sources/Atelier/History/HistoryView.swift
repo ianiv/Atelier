@@ -1,4 +1,5 @@
 import ImageIO
+import QuickLook
 import UniformTypeIdentifiers
 import SwiftUI
 
@@ -11,6 +12,9 @@ struct HistoryView: View {
   @State private var modelFilter: String?
   @State private var pendingDelete: HistoryItem?
   @State private var deleteError: String?
+  @State private var columns = 1
+  @State private var quickLookURL: URL?
+  @FocusState private var gridFocused: Bool
 
   private var filtered: [HistoryItem] {
     let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -96,12 +100,23 @@ struct HistoryView: View {
     } else if filtered.isEmpty {
       ContentUnavailableView.search(text: search)
     } else {
+      ScrollViewReader { scroller in
       ScrollView {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 10)], spacing: 10) {
           ForEach(filtered) { item in
             Color.clear
               .aspectRatio(1, contentMode: .fit)
               .overlay { Thumbnail(item: item) }
+              .overlay(alignment: .bottomTrailing) {
+                Text(GenerationTime.text(item.sidecar.durationSeconds))
+                  .font(.caption2.monospacedDigit())
+                  .padding(.horizontal, 5)
+                  .padding(.vertical, 2)
+                  .background(.black.opacity(0.55), in: .capsule)
+                  .foregroundStyle(.white)
+                  .padding(5)
+                  .help("Generation time")
+              }
               .clipShape(.rect(cornerRadius: 6))
               .overlay {
                 RoundedRectangle(cornerRadius: 6)
@@ -109,14 +124,21 @@ struct HistoryView: View {
               }
               .contentShape(.rect)
               .onTapGesture(count: 2) { use(item, newSeed: false) }
-              .onTapGesture { selection = item.id }
+              .onTapGesture {
+                selection = item.id
+                gridFocused = true
+              }
               .help(item.sidecar.prompt)
+              .draggable(history.dragExport(item)) { Thumbnail(item: item).frame(width: 96, height: 96) }
+              .id(item.id)
               .contextMenu {
                 Button("Use Settings") { use(item, newSeed: false) }
                   .disabled(!create.canUse(item))
                 Button("Rerun with New Seed") { use(item, newSeed: true) }
                   .disabled(!create.canUse(item))
                 Button("Copy Image") { Task { await history.copyImage(item) } }
+                Button("Copy Prompt") { copy(item.sidecar.prompt) }
+                Button("Copy Seed") { copy(String(item.sidecar.seed)) }
                 Button("Export PNG…") { export(item) }
                 Divider()
                 Button("Delete", role: .destructive) { pendingDelete = item }
@@ -125,8 +147,64 @@ struct HistoryView: View {
         }
         .padding(12)
       }
+      .onGeometryChange(for: Int.self) { proxy in
+        // The adaptive grid's column count: 150 pt minimum, 10 pt spacing, 12 pt padding.
+        max(1, Int((proxy.size.width - 24 + 10) / 160))
+      } action: { columns = $0 }
+      .focusable()
+      .focusEffectDisabled()
+      .focused($gridFocused)
+      .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow]) { press in
+        let offset = switch press.key {
+        case .leftArrow: -1
+        case .rightArrow: 1
+        case .upArrow: -columns
+        default: columns
+        }
+        moveSelection(by: offset)
+        if let selection { withAnimation { scroller.scrollTo(selection) } }
+        return .handled
+      }
+      .onKeyPress(.space) {
+        toggleQuickLook()
+        return .handled
+      }
+      .quickLookPreview($quickLookURL)
       .background(Color(nsColor: .underPageBackgroundColor))
+      }
     }
+  }
+
+  private func moveSelection(by offset: Int) {
+    let items = filtered
+    guard !items.isEmpty else { return }
+    let index = items.firstIndex { $0.id == selection } ?? 0
+    selection = items[min(max(index + offset, 0), items.count - 1)].id
+    // Quick Look follows the selection while it's open.
+    if quickLookURL != nil { quickLookURL = nil; toggleQuickLook() }
+  }
+
+  /// Space: the selected image full size in Quick Look, or closes it.
+  private func toggleQuickLook() {
+    if quickLookURL != nil {
+      quickLookURL = nil
+      return
+    }
+    guard let item = selected else { return }
+    Task {
+      guard let data = try? await history.pngData(item) else { return }
+      let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("Atelier Quick Look", isDirectory: true)
+      try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+      let file = url.appendingPathComponent(history.fileName(for: item)).appendingPathExtension("png")
+      guard (try? data.write(to: file)) != nil, selection == item.id else { return }
+      quickLookURL = file
+    }
+  }
+
+  private func copy(_ text: String) {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(text, forType: .string)
   }
 
   private var modelNames: [String] {
@@ -142,7 +220,7 @@ struct HistoryView: View {
   private func export(_ item: HistoryItem) {
     let panel = NSSavePanel()
     panel.allowedContentTypes = [.png]
-    panel.nameFieldStringValue = "\(history.project.name) \(item.id.logicalTime)-\(item.sidecar.seed).png"
+    panel.nameFieldStringValue = history.fileName(for: item) + ".png"
     guard panel.runModal() == .OK, let url = panel.url else { return }
     Task {
       do {
