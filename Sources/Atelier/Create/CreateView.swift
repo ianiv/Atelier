@@ -7,7 +7,13 @@ struct CreateView: View {
   @AppStorage("inspectorShown") private var inspectorShown = true
 
   var body: some View {
+    @Bindable var model = model
     CanvasView()
+      .overlay(alignment: .topTrailing) {
+        if model.usesReferences || !model.moodboard.items.isEmpty {
+          MoodboardColumn().padding(12)
+        }
+      }
       // A safe-area bar rather than a stacked view: the canvas runs underneath it and the system
       // draws the bar's edge, so the composer sits on the canvas like the toolbar does.
       .safeAreaBar(edge: .bottom, spacing: 0) {
@@ -21,6 +27,23 @@ struct CreateView: View {
       .inspector(isPresented: $inspectorShown) {
       InspectorView()
         .inspectorColumnWidth(min: 300, ideal: 340, max: 460)
+    }
+    // One Open panel for the canvas and the moodboard: two file importers in one view hierarchy
+    // compete for the same presentation.
+    .fileImporter(
+      isPresented: Binding(get: { model.imageImport != nil }, set: { if !$0 { model.imageImport = nil } }),
+      allowedContentTypes: [.image],
+      allowsMultipleSelection: model.imageImport == .moodboard
+    ) { result in
+      let target = model.imageImport
+      model.imageImport = nil
+      guard case .success(let urls) = result else { return }
+      for url in urls {
+        let access = url.startAccessingSecurityScopedResource()
+        defer { if access { url.stopAccessingSecurityScopedResource() } }
+        guard let image = ImageLoader.image(at: url) else { continue }
+        if target == .moodboard { model.moodboard.add(image) } else { model.setCanvasImage(image) }
+      }
     }
     // A plain toolbar, not a customizable `.toolbar(id:)`: AppKit crashes ("NSToolbarItemViewer's
     // min/max size is nan") switching between a customizable toolbar and the other sections'
@@ -62,14 +85,16 @@ struct ModelPicker: View {
 
 /// The image canvas. Like Draw Things, the configured size stays put as an outlined frame fitted
 /// to the view, and zooming and dragging move the image under it. Whatever falls outside the frame
-/// shows dimmed and blurred: it won't be part of the next image (image to image will use this
-/// placement for its source).
+/// shows dimmed and blurred: it won't be part of the next image. In Edit mode the frame's contents
+/// are the image input (`CanvasState.render`).
 struct CanvasView: View {
   @Environment(CreateModel.self) private var model
   @Environment(HistoryStore.self) private var history
   /// The zoom and offset when the current pinch or drag began.
   @State private var gestureStart: (scale: Double, offset: CGSize)?
   @State private var saveError: String?
+  @State private var isTargeted = false
+  @Environment(\.undoManager) private var undoManager
 
   private static let margin: Double = 24
 
@@ -108,15 +133,33 @@ struct CanvasView: View {
           picture
             .mask { Rectangle().frame(width: frameRect.width, height: frameRect.height).position(x: frameRect.midX, y: frameRect.midY) }
         }
+        let isInput = model.canvasMode == .edit && model.image != nil
         Rectangle()
-          .strokeBorder(.secondary.opacity(0.6), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+          .strokeBorder(
+            isInput || isTargeted ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary.opacity(0.6)),
+            style: StrokeStyle(lineWidth: isInput || isTargeted ? 2 : 1, dash: isInput ? [] : [4, 3]))
           .frame(width: frameRect.width + 2, height: frameRect.height + 2)
           .position(x: frameRect.midX, y: frameRect.midY)
           .allowsHitTesting(false)
+        if isInput {
+          Color.clear
+            .frame(width: frameRect.width, height: frameRect.height)
+            .overlay(alignment: .topLeading) {
+              Label("Input", systemImage: "square.and.pencil")
+                .font(.caption.weight(.medium))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .glassEffect(.regular.tint(.accentColor), in: .capsule)
+                .padding(8)
+                .help("Edit mode: what's inside the frame is sent to the model. Empty areas are filled in.")
+            }
+            .position(x: frameRect.midX, y: frameRect.midY)
+            .allowsHitTesting(false)
+        }
         if model.image == nil {
           ContentUnavailableView(
             "No image yet", systemImage: "photo",
-            description: Text("Write a prompt below and press Generate (⌘↩)."))
+            description: Text("Write a prompt below and press Generate (⌘↩), or drop an image here to edit it."))
         }
       }
       .frame(width: geometry.size.width, height: geometry.size.height)
@@ -129,6 +172,11 @@ struct CanvasView: View {
         if canvas.scale == nil { canvas.zoom(to: 1) } else { canvas.zoomToFit() }
       }
       .contextMenu { contextMenu(canvas) }
+      .dropDestination(for: DroppedImage.self) { images, _ in
+        guard let image = images.first else { return false }
+        model.setCanvasImage(image.image)
+        return true
+      } isTargeted: { isTargeted = $0 }
       .onChange(of: imageFit, initial: true) { canvas.fitScale = imageFit }
     }
     .background(Color(nsColor: .underPageBackgroundColor).ignoresSafeArea())
@@ -186,6 +234,15 @@ struct CanvasView: View {
       .disabled(model.image == nil)
     Button("Save Image…") { save() }
       .disabled(model.image == nil)
+    Divider()
+    Button("Open Image…") { model.imageImport = .canvas }
+    Button("Paste Image") { model.pasteImage() }
+    Button("Add to Moodboard") { model.addCanvasToMoodboard() }
+      .disabled(model.image == nil)
+    Button("Match Size to Image") { model.matchSizeToImage(undoManager: undoManager) }
+      .disabled(model.image == nil)
+    Button("Clear Canvas") { model.clearCanvas() }
+      .disabled(model.image == nil || model.isBusy)
     Divider()
     ZoomMenuItems(canvas: canvas)
   }
@@ -315,6 +372,15 @@ struct StatusBar: View {
           Label(error, systemImage: "exclamationmark.triangle")
             .foregroundStyle(.red)
             .lineLimit(2)
+        } else if model.canvasMode == .edit, model.image != nil, !model.usesReferences,
+          (model.settings?.strength ?? 0) >= 1
+        {
+          Label(
+            "Strength is 100%, so this model will ignore the canvas. Lower Strength in the inspector.",
+            systemImage: "info.circle"
+          )
+          .foregroundStyle(.secondary)
+          .lineLimit(2)
         } else if model.lastSavedStep != nil {
           let took = model.imageItem.map { " in " + GenerationTime.text($0.sidecar.durationSeconds) } ?? ""
           Text("Saved to \(model.history.project.name)\(took)").foregroundStyle(.secondary)
@@ -416,6 +482,14 @@ struct RecentStrip: View {
               .contextMenu {
                 Button("Use Settings") { model.use(item) }
                   .disabled(!model.canUse(item))
+                Button("Use as Input") {
+                  model.show(item)
+                  model.canvasMode = .edit
+                }
+                .disabled(model.isBusy)
+                Button("Add to Moodboard") {
+                  Task { if let image = await history.image(for: item) { model.moodboard.add(image) } }
+                }
                 Button("Copy Image") { Task { await history.copyImage(item) } }
               }
           }
@@ -491,14 +565,26 @@ struct PromptComposer: View {
           .disabled(!model.canGenerate)
         }
       }
-      DisclosureGroup(isExpanded: $showNegative) {
-        TextField("What to avoid", text: $model.negativePrompt, axis: .vertical)
-          .lineLimit(1...4)
-          .textFieldStyle(.roundedBorder)
-      } label: {
-        ClickableLabel("Negative Prompt", isExpanded: $showNegative)
+      HStack(alignment: .top, spacing: 12) {
+        DisclosureGroup(isExpanded: $showNegative) {
+          TextField("What to avoid", text: $model.negativePrompt, axis: .vertical)
+            .lineLimit(1...4)
+            .textFieldStyle(.roundedBorder)
+        } label: {
+          ClickableLabel("Negative Prompt", isExpanded: $showNegative)
+        }
+        .font(.callout)
+        Picker("Mode", selection: $model.canvasMode) {
+          Text("Generate").tag(CreateModel.CanvasMode.generate)
+          Text("Edit").tag(CreateModel.CanvasMode.edit)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .controlSize(.small)
+        .fixedSize()
+        .help(
+          "Generate starts from the prompt alone. Edit also sends the canvas: what's inside the frame is the input, and empty areas are filled in.")
       }
-      .font(.callout)
     }
     .padding(12)
     .onChange(of: model.focusPromptRequest) { promptFocused = true }

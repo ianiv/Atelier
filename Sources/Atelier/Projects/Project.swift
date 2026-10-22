@@ -154,15 +154,29 @@ final class Project: @unchecked Sendable {
 
   /// The full-resolution image tensor.
   func tensor(id: Int64) -> Tensor<FloatType>? {
+    tensor(named: "tensor_history_\(id)")
+  }
+
+  private func tensor(named name: String) -> Tensor<FloatType>? {
     lock.lock()
     defer { lock.unlock() }
     var tensor: Tensor<FloatType>?
     graph.openStore(url.path, flags: [.readOnly]) {
-      tensor = $0.read("tensor_history_\(id)", codec: [.fpzip, .zip]).map {
-        Tensor<FloatType>(from: $0)
-      }
+      tensor = $0.read(name, codec: [.fpzip, .zip]).map { Tensor<FloatType>(from: $0) }
     }
     return tensor
+  }
+
+  /// A step's moodboard images and weights, in order.
+  func moodboard(at id: StepID) -> [(image: CGImage, weight: Float)] {
+    let rows = workspace.fetch(for: TensorMoodboardData.self).where(
+      TensorMoodboardData.lineage == id.lineage && TensorMoodboardData.logicalTime == id.logicalTime,
+      orderBy: [TensorMoodboardData.index.ascending])
+    return rows.compactMap { row in
+      tensor(named: "shuffle_\(row.shuffleId)").flatMap(ImageTensor.cgImage(from:)).map {
+        ($0, row.weight)
+      }
+    }
   }
 
   func image(for item: HistoryItem) -> CGImage? {
@@ -183,15 +197,23 @@ final class Project: @unchecked Sendable {
   // MARK: - Writing
 
   /// Appends a generated image as a new step at the end of the newest branch: the tensor, the
-  /// step, its canvas layer and both thumbnails.
+  /// step, its canvas layer, its moodboard and both thumbnails. `generated` false records an image
+  /// brought in from outside, as Draw Things' Imported steps.
   func append(
     tensor: Tensor<FloatType>, model: String, prompt: String, negativePrompt: String,
     seed: UInt32, settings: [String: JSONValue], createdAt: Date, duration: Double,
-    reason: ProjectFormat.Reason = .generate
+    reason: ProjectFormat.Reason = .generate, generated: Bool = true,
+    moodboard: [(tensor: Tensor<FloatType>, weight: Float)] = []
   ) async throws -> HistoryItem {
     guard let image = ImageTensor.cgImage(from: tensor) else { throw ProjectError.badImage }
     let tensorId = Int64.random(in: 100_000_000...299_999_999)
     try writeTensor(tensor, name: "tensor_history_\(tensorId)")
+    // As addImage: moodboard tensors are "shuffle_<id>" with ids in their own band.
+    let shuffleIds = moodboard.map { _ in Int64.random(in: 1_600_000_000...1_799_999_999) }
+    for (entry, shuffleId) in zip(moodboard, shuffleIds) {
+      try writeTensor(entry.tensor, name: "shuffle_\(shuffleId)")
+    }
+    let written = ["tensor_history_\(tensorId)"] + shuffleIds.map { "shuffle_\($0)" }
 
     let newest = workspace.fetch(for: TensorHistoryNode.self).all(
       limit: .limit(1),
@@ -199,28 +221,40 @@ final class Project: @unchecked Sendable {
     ).first
     let id = StepID(
       lineage: newest?.lineage ?? 0, logicalTime: newest.map { $0.logicalTime + 1 } ?? 0)
-    // As in pushHistory: the preview id is the sum of the step's layer ids.
-    let previewId = tensorId
+    // As in pushHistory: the preview id is the sum of the step's layer ids, plus each moodboard
+    // image's id times its weight in thousandths.
+    var previewId = tensorId
+    for (entry, shuffleId) in zip(moodboard, shuffleIds) {
+      previewId &+= shuffleId &* Int64((entry.weight * 1000).rounded())
+    }
     let step = ProjectMapping.Step(
       lineage: id.lineage, logicalTime: id.logicalTime, model: model, prompt: prompt,
       negativePrompt: negativePrompt, seed: seed, tensorId: tensorId, previewId: previewId,
       wallClock: Int64(createdAt.timeIntervalSince1970 * 1_000_000), generationTime: duration,
-      reason: reason)
+      reason: reason, generated: generated, moodboardCount: moodboard.count)
     let node = ProjectMapping.node(for: step, settings: settings)
     let layer = Layer(
       lineage: id.lineage, logicalTime: id.logicalTime, index: 0, x: 0, y: 0,
       width: Int32(image.width), height: Int32(image.height), scaleFactorBy120: 120,
       tensorId: tensorId)
+    let moodboardRows = zip(moodboard, shuffleIds).enumerated().map { index, pair in
+      TensorMoodboardData(
+        lineage: id.lineage, logicalTime: id.logicalTime, index: Int64(index),
+        shuffleId: pair.1, weight: pair.0.weight)
+    }
     let full = ImageTensor.jpeg(image, quality: 0.75)
     let half = ImageTensor.downsampled(image).flatMap { ImageTensor.jpeg($0, quality: 0.5) }
 
     let succeeded = await withCheckedContinuation { continuation in
       workspace.performChanges([
-        TensorHistoryNode.self, Layer.self, ThumbnailHistoryNode.self,
+        TensorHistoryNode.self, Layer.self, TensorMoodboardData.self, ThumbnailHistoryNode.self,
         ThumbnailHistoryHalfNode.self,
       ]) { transaction in
         transaction.try(submit: TensorHistoryNodeChangeRequest.upsertRequest(node))
         transaction.try(submit: ProjectFormat.TensorDataChangeRequest.upsertRequest(layer))
+        for row in moodboardRows {
+          transaction.try(submit: TensorMoodboardDataChangeRequest.upsertRequest(row))
+        }
         if let full {
           transaction.try(
             submit: ThumbnailHistoryNodeChangeRequest.upsertRequest(
@@ -234,7 +268,7 @@ final class Project: @unchecked Sendable {
       } completionHandler: { continuation.resume(returning: $0) }
     }
     guard succeeded else {
-      removeTensors(["tensor_history_\(tensorId)"])
+      removeTensors(written)
       throw ProjectError.writeFailed
     }
     return HistoryItem(
@@ -245,8 +279,11 @@ final class Project: @unchecked Sendable {
   /// lineage down by one so step numbers stay contiguous (as Draw Things' deleteHistory does for
   /// a linear history).
   func delete(_ id: StepID) async throws {
-    let (node, layers, later, laterLayers) = workspace.fetchWithinASnapshot {
-      () -> (TensorHistoryNode?, [Layer], [TensorHistoryNode], [Layer]) in
+    let (node, layers, later, laterLayers, moods, laterMoods) = workspace.fetchWithinASnapshot {
+      () -> (
+        TensorHistoryNode?, [Layer], [TensorHistoryNode], [Layer], [TensorMoodboardData],
+        [TensorMoodboardData]
+      ) in
       let node = workspace.fetch(for: TensorHistoryNode.self).where(
         TensorHistoryNode.lineage == id.lineage && TensorHistoryNode.logicalTime == id.logicalTime
       ).first
@@ -261,16 +298,25 @@ final class Project: @unchecked Sendable {
         workspace.fetch(for: Layer.self).where(
           Layer.lineage == id.lineage && Layer.logicalTime > id.logicalTime,
           orderBy: [Layer.logicalTime.ascending]))
-      return (node, layers, later, laterLayers)
+      let moods = Array(
+        workspace.fetch(for: TensorMoodboardData.self).where(
+          TensorMoodboardData.lineage == id.lineage
+            && TensorMoodboardData.logicalTime == id.logicalTime))
+      let laterMoods = Array(
+        workspace.fetch(for: TensorMoodboardData.self).where(
+          TensorMoodboardData.lineage == id.lineage
+            && TensorMoodboardData.logicalTime > id.logicalTime,
+          orderBy: [TensorMoodboardData.logicalTime.ascending]))
+      return (node, layers, later, laterLayers, moods, laterMoods)
     }
     guard let node else { return }
-    var tensorNames = layers.flatMap(Self.tensorNames(of:))
+    var tensorNames = layers.flatMap(Self.tensorNames(of:)) + moods.map { "shuffle_\($0.shuffleId)" }
     if node.tensorId > 0 { tensorNames.append("tensor_history_\(node.tensorId)") }
     let previewId = node.previewId
 
     let succeeded = await withCheckedContinuation { continuation in
       workspace.performChanges([
-        TensorHistoryNode.self, Layer.self, ThumbnailHistoryNode.self,
+        TensorHistoryNode.self, Layer.self, TensorMoodboardData.self, ThumbnailHistoryNode.self,
         ThumbnailHistoryHalfNode.self,
       ]) { transaction in
         if let request = TensorHistoryNodeChangeRequest.deletionRequest(node) {
@@ -278,6 +324,11 @@ final class Project: @unchecked Sendable {
         }
         for layer in layers {
           if let request = ProjectFormat.TensorDataChangeRequest.deletionRequest(layer) {
+            transaction.try(submit: request)
+          }
+        }
+        for mood in moods {
+          if let request = TensorMoodboardDataChangeRequest.deletionRequest(mood) {
             transaction.try(submit: request)
           }
         }
@@ -296,6 +347,14 @@ final class Project: @unchecked Sendable {
             var builder = ProjectFormat.TensorDataBuilder(from: layer)
             builder.logicalTime -= 1
             transaction.try(submit: ProjectFormat.TensorDataChangeRequest.upsertRequest(builder.build()))
+          }
+          for mood in laterMoods where mood.logicalTime == step.logicalTime {
+            if let request = TensorMoodboardDataChangeRequest.deletionRequest(mood) {
+              transaction.try(submit: request)
+            }
+            var builder = TensorMoodboardDataBuilder(from: mood)
+            builder.logicalTime -= 1
+            transaction.try(submit: TensorMoodboardDataChangeRequest.upsertRequest(builder.build()))
           }
         }
         if previewId != 0 {

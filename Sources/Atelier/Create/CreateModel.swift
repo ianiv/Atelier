@@ -1,4 +1,6 @@
 import AppKit
+import Diffusion
+import ModelZoo
 import Observation
 import UserNotifications
 import _MediaGenerationKit
@@ -12,6 +14,11 @@ final class CreateModel {
     case loadingModel
     case running(String)
     case cancelling
+  }
+
+  /// Generate starts from the prompt alone; Edit also sends the canvas to the model.
+  enum CanvasMode: String {
+    case generate, edit
   }
 
   let engine = GenerationEngine()
@@ -43,6 +50,22 @@ final class CreateModel {
   var presets: PresetStore?
   /// The canvas's zoom and position.
   let canvas = CanvasState()
+  /// Reference images, sent in both modes to models that take them.
+  let moodboard = Moodboard()
+  var canvasMode: CanvasMode = CreateModel.storedCanvasMode {
+    didSet { UserDefaults.standard.set(canvasMode.rawValue, forKey: "canvasMode") }
+  }
+  private static var storedCanvasMode: CanvasMode {
+    UserDefaults.standard.string(forKey: "canvasMode").flatMap(CanvasMode.init(rawValue:)) ?? .generate
+  }
+  /// The canvas image came from outside the project (drop, paste, Open), not yet saved as a step.
+  private var canvasIsImported = false
+  /// Where images picked in the Open panel go; set to show the panel.
+  var imageImport: ImageImportTarget?
+
+  enum ImageImportTarget {
+    case canvas, moodboard
+  }
   /// Bumped to ask the prompt composer to take focus (⌘L).
   var focusPromptRequest = 0
 
@@ -98,6 +121,75 @@ final class CreateModel {
   }
 
   var traits: ModelTraits { ModelTraits(selectedModelInfo) }
+
+  /// Whether the model (or one of its LoRAs) reads the canvas and moodboard as reference images:
+  /// edit models, the FLUX.2 family and Qwen Image 2.1. ModelZoo knows a community model once its
+  /// pipeline has loaded.
+  var usesReferences: Bool {
+    guard let file = selectedModel else { return false }
+    if ModelZoo.versionForModel(file) == .qwenImage2_1 { return true }
+    let modifiers =
+      [ModelZoo.modifierForModel(file)]
+      + (settings?.loras ?? []).compactMap(\.file).map(LoRAZoo.modifierForModel)
+    return modifiers.contains {
+      switch $0 {
+      case .kontext, .kontextKv, .qwenimageEditPlus, .qwenimageEdit2511, .fl2va, .ref2va: true
+      default: false
+      }
+    }
+  }
+
+  /// Puts an image from outside the project on the canvas, fitted to the frame, and switches to
+  /// Edit so the next run starts from it.
+  func setCanvasImage(_ newImage: CGImage) {
+    guard !isBusy else { return }
+    imageStep = nil
+    lastSavedStep = nil
+    image = newImage
+    canvasIsImported = true
+    canvas.zoomToFit()
+    canvasMode = .edit
+  }
+
+  /// Empties the canvas (Generate mode then has nothing to show it with).
+  func clearCanvas() {
+    guard !isBusy else { return }
+    imageStep = nil
+    lastSavedStep = nil
+    image = nil
+    canvasIsImported = false
+    canvas.zoomToFit()
+  }
+
+  /// Sets the output size to the canvas image's, in whole 64-pixel units.
+  func matchSizeToImage(undoManager: UndoManager?) {
+    guard let image, let descriptor = SettingsRegistry.byID["size"] else { return }
+    func units(_ value: Int) -> Int { max(Int((Double(value) / 64).rounded()), 1) * 64 }
+    set(
+      descriptor,
+      to: .object(["width": .number(Double(units(image.width))), "height": .number(Double(units(image.height)))]),
+      undoManager: undoManager)
+    canvas.zoomToFit()
+  }
+
+  func addCanvasToMoodboard() {
+    if let image { moodboard.add(image) }
+  }
+
+  func pasteImage() {
+    let pasteboard = NSPasteboard.general
+    for type in [NSPasteboard.PasteboardType.png, .tiff] {
+      if let data = pasteboard.data(forType: type), let image = ImageLoader.image(from: data) {
+        setCanvasImage(image)
+        return
+      }
+    }
+    if let url = (pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL])?.first,
+      let image = ImageLoader.image(at: url)
+    {
+      setCanvasImage(image)
+    }
+  }
 
   private(set) var modelFiles: [String] = []
 
@@ -175,14 +267,24 @@ final class CreateModel {
     }
     let projectName = history.project.name
     imageStep = (projectName, item.id)
+    canvasIsImported = false
     Task {
       let full = await history.image(at: item.id, in: projectName)
       if let full, imageStep?.id == item.id { image = full }
     }
+    let restoreMoodboard = Task {
+      let references = await history.moodboard(at: item.id, in: projectName)
+      moodboard.replace(with: references)
+    }
     if selectedModel == sidecar.model, phase != .loadingModel, var settings = recommended {
       SettingsRegistry.apply(dump: sidecar.configuration, to: &settings)
       self.settings = settings
-      if newSeed { generate() }
+      if newSeed {
+        Task {
+          await restoreMoodboard.value
+          generate()
+        }
+      }
     } else {
       pendingSettings = sidecar.configuration
       generateWhenLoaded = newSeed
@@ -394,10 +496,16 @@ final class CreateModel {
     guard canGenerate, let model = selectedModel, let settings else { return }
     if !seedLocked { rollSeed() }
     errorMessage = nil
-    // The request snapshots the settings, so inspector edits during the run apply to the next one.
-    let request = GenerationEngine.Request(
+    // The request snapshots the settings, canvas and moodboard, so edits during the run apply to
+    // the next one.
+    var request = GenerationEngine.Request(
       model: model, prompt: prompt, negativePrompt: negativePrompt, seed: seed,
       configuration: settings)
+    if canvasMode == .edit, let image {
+      request.canvas = canvas.render(image, size: CGSize(width: settings.width, height: settings.height))
+      if canvasIsImported { request.importedInput = request.canvas }
+    }
+    if usesReferences { request.moodboard = moodboard.references }
     phase = .running("Preparing…")
     step = 0
     totalSteps = settings.steps
@@ -415,6 +523,7 @@ final class CreateModel {
           result, request: request, startedAt: startedAt, finishedAt: Date())
         lastSavedStep = item.id
         imageStep = (history.project.name, item.id)
+        canvasIsImported = false
         image = ImageTensor.cgImage(from: result.tensor) ?? image
         saveSession()
         FinishedNotice.post(prompt: request.prompt, seconds: item.sidecar.durationSeconds)
@@ -484,6 +593,7 @@ final class CreateModel {
   func show(_ item: HistoryItem) {
     let projectName = history.project.name
     imageStep = (projectName, item.id)
+    canvasIsImported = false
     Task {
       let full = await history.image(at: item.id, in: projectName)
       if let full, imageStep?.id == item.id { image = full }
@@ -500,6 +610,8 @@ final class CreateModel {
     guard generationTask != nil, phase != .cancelling else { return }
     switch progress {
     case .preview(let preview, let step, let total):
+      // Previews fill the frame; the input's placement no longer applies.
+      if !imageIsPreview { canvas.zoomToFit() }
       image = preview
       imageIsPreview = true
       noteStep(step, of: total)

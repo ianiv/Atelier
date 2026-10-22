@@ -164,13 +164,31 @@ final class HistoryStore {
     var settings = request.configuration
     settings.seed = request.seed
     let project = project
+    let dump = JSONValue.fields(of: settings)
+    // An image brought in from outside goes in first as an Imported step, as Draw Things does.
+    if let input = request.importedInput, let tensor = ImageTensor.tensor(from: input) {
+      _ = try await project.append(
+        tensor: tensor, model: request.model, prompt: request.prompt,
+        negativePrompt: request.negativePrompt, seed: request.seed, settings: dump,
+        createdAt: startedAt, duration: 0, reason: .imported, generated: false)
+    }
+    let moodboard = request.moodboard.compactMap { entry in
+      ImageTensor.tensor(from: entry.image).map { (tensor: $0, weight: entry.weight) }
+    }
     let item = try await project.append(
       tensor: result.tensor, model: request.model, prompt: request.prompt,
       negativePrompt: request.negativePrompt, seed: request.seed,
-      settings: JSONValue.fields(of: settings), createdAt: finishedAt,
-      duration: finishedAt.timeIntervalSince(startedAt))
+      settings: dump, createdAt: finishedAt,
+      duration: finishedAt.timeIntervalSince(startedAt), moodboard: moodboard)
     if project === self.project { items.insert(item, at: 0) }
     return item
+  }
+
+  /// A step's moodboard images and weights (empty when it had none).
+  func moodboard(at id: StepID, in projectName: String) async -> [(image: CGImage, weight: Float)] {
+    guard projectName == project.name else { return [] }
+    let project = project
+    return await Task.detached { project.moodboard(at: id) }.value
   }
 
   /// Removes the steps from the project. Later steps move down by one, so the newest goes first

@@ -99,7 +99,50 @@ enum Automation {
       let guidanceAtStart = settings.guidanceScale
       if let height = value("--height").flatMap(Int.init) { settings.height = height }
       if let steps = value("--steps").flatMap(Int.init) { settings.steps = steps }
+      if let strength = value("--strength").flatMap(Float.init) { settings.strength = strength }
       model.settings = settings
+      // Image to image: --input FILE puts it on the canvas (Edit mode), --input-zoom and
+      // --input-offset X,Y (frame pixels) place it, --moodboard FILE[,FILE…] adds references
+      // (FILE@WEIGHT for a weight), --mode generate|edit overrides the mode.
+      if let path = value("--input") {
+        guard let image = ImageLoader.image(at: URL(fileURLWithPath: path)) else {
+          log("can't read input \(path)")
+          if args.contains("--quit") { NSApp.terminate(nil) }
+          return
+        }
+        model.setCanvasImage(image)
+        if let zoom = value("--input-zoom").flatMap(Double.init) { model.canvas.zoom(to: zoom) }
+        if let offset = value("--input-offset")?.split(separator: ",").compactMap({ Double($0) }),
+          offset.count == 2
+        {
+          model.canvas.offset = CGSize(width: offset[0], height: offset[1])
+        }
+      }
+      if let list = value("--moodboard") {
+        for entry in list.split(separator: ",") {
+          let parts = entry.split(separator: "@")
+          guard let image = ImageLoader.image(at: URL(fileURLWithPath: String(parts[0]))) else {
+            log("can't read moodboard image \(parts[0])")
+            continue
+          }
+          model.moodboard.add(image)
+          if parts.count > 1, let weight = Float(parts[1]), let id = model.moodboard.items.last?.id {
+            model.moodboard.setWeight(weight, for: id)
+          }
+        }
+      }
+      if let mode = value("--mode").flatMap(CreateModel.CanvasMode.init(rawValue:)) {
+        model.canvasMode = mode
+      }
+      log(
+        "mode \(model.canvasMode.rawValue), canvas \(model.image.map { "\($0.width)x\($0.height)" } ?? "empty"), moodboard \(model.moodboard.items.count), references \(model.usesReferences ? "used" : "not used"), strength \(settings.strength)"
+      )
+      if let snapshotDir, let image = model.image,
+        let input = model.canvas.render(image, size: CGSize(width: settings.width, height: settings.height)),
+        let png = ImageTensor.png(input)
+      {
+        try? png.write(to: snapshotDir.appendingPathComponent("input.png"))
+      }
       if let seed = value("--seed").flatMap(UInt32.init) {
         model.seed = seed
         model.seedLocked = true
@@ -147,12 +190,19 @@ enum Automation {
       if let error = model.errorMessage { log("error: \(error)") }
       if let step = model.lastSavedStep {
         log("saved step \(step.logicalTime) in \(model.history.project.url.path)")
+        let saved = await model.history.moodboard(at: step, in: model.history.project.name)
+        log("moodboard saved with the step: \(saved.count) (weights \(saved.map(\.weight)))")
         if editDuringRun, let item = model.history.item(step) {
           let saved = item.sidecar.guidanceScale
           log("\(saved == guidanceAtStart ? "PASS" : "FAIL") run used guidance \(saved) (start \(guidanceAtStart)); inspector now \(model.settings?.guidanceScale ?? -1)")
         }
       }
-      if let snapshotDir { snapshot(to: snapshotDir.appendingPathComponent("final.png")) }
+      if let snapshotDir {
+        snapshot(to: snapshotDir.appendingPathComponent("final.png"))
+        if let image = model.image, let png = ImageTensor.png(image) {
+          try? png.write(to: snapshotDir.appendingPathComponent("result.png"))
+        }
+      }
       if args.contains("--quit") { NSApp.terminate(nil) }
     }
   }

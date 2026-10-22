@@ -10,6 +10,7 @@ struct AtelierApp: App {
   @State private var presets: PresetStore
   @State private var library: ModelLibrary
   @AppStorage("inspectorShown") private var inspectorShown = true
+  @AppStorage("moodboardShown") private var moodboardShown = true
 
   init() {
     let history = HistoryStore()
@@ -48,6 +49,7 @@ struct AtelierApp: App {
       CommandGroup(after: .sidebar) {
         Button(inspectorShown ? "Hide Inspector" : "Show Inspector") { inspectorShown.toggle() }
           .keyboardShortcut("i", modifiers: [.command, .option])
+        Button(moodboardShown ? "Hide Moodboard" : "Show Moodboard") { moodboardShown.toggle() }
         Divider()
         ZoomMenuItems(canvas: create.canvas)
           .disabled(navigation.section != .create)
@@ -73,6 +75,27 @@ struct AtelierApp: App {
         }
         .keyboardShortcut(.downArrow, modifiers: .command)
         .disabled(create.recentPrompts.isEmpty)
+        Divider()
+        Button("Open Image…") {
+          navigation.section = .create
+          create.imageImport = .canvas
+        }
+        .keyboardShortcut("o", modifiers: .command)
+        .disabled(create.isBusy)
+        Button("Paste Image") {
+          navigation.section = .create
+          create.pasteImage()
+        }
+        .keyboardShortcut("v", modifiers: [.command, .shift])
+        .disabled(create.isBusy)
+        Button("Clear Canvas") { create.clearCanvas() }
+          .disabled(create.isBusy || navigation.section != .create)
+        Divider()
+        Picker("Mode", selection: Binding(get: { create.canvasMode }, set: { create.canvasMode = $0 })) {
+          Text("Generate").tag(CreateModel.CanvasMode.generate)
+          Text("Edit").tag(CreateModel.CanvasMode.edit)
+        }
+        .pickerStyle(.inline)
       }
     }
     Settings {

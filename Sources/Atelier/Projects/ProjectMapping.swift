@@ -22,6 +22,10 @@ enum ProjectMapping {
     var wallClock: Int64
     var generationTime: Double
     var reason: ProjectFormat.Reason
+    /// False for an image brought in from outside (Draw Things' Imported steps).
+    var generated = true
+    /// How many moodboard images the step has (`tensormoodboarddata` rows).
+    var moodboardCount = 0
   }
 
   /// A step for `settings`, given in the history dump format (`JSONValue.fields(of:)` of MGK's
@@ -44,7 +48,7 @@ enum ProjectMapping {
       hiresFix: d.bool("hiresFix", false), hiresFixStartWidth: units("hiresFixWidth", 0),
       hiresFixStartHeight: units("hiresFixHeight", 0),
       hiresFixStrength: d.float("hiresFixStrength", 0.7), upscaler: d.string("upscaler"),
-      scaleFactor: 1, depthMapId: 0, generated: true,
+      scaleFactor: 1, depthMapId: 0, generated: step.generated,
       imageGuidanceScale: d.float("imageGuidanceScale", 1.5),
       seedMode: d.enumeration("seedMode", DataModels.SeedMode.self).flatMap {
         ProjectFormat.SeedMode(rawValue: $0.rawValue)
@@ -67,6 +71,7 @@ enum ProjectMapping {
       refinerStart: d.float("refinerStart", 0.85),
       negativeOriginalImageHeight: u32("negativeOriginalImageHeight", 0),
       negativeOriginalImageWidth: u32("negativeOriginalImageWidth", 0),
+      shuffleDataStored: Int32(clamping: step.moodboardCount),
       fpsId: u32("fps", 5), motionBucketId: u32("motionScale", 127),
       condAug: d.float("guidingFrameNoise", 0.02),
       startFrameCfg: d.float("startFrameGuidance", 1), numFrames: u32("numFrames", 14),

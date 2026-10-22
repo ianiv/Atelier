@@ -15,6 +15,18 @@ actor GenerationEngine {
     var seed: UInt32
     /// Every setting for this run, taken from the inspector when the job started.
     var configuration: PipelineConfiguration
+    /// Edit mode: the canvas frame rendered at the output size, transparent where the image
+    /// doesn't cover it (the engine turns those pixels into the inpaint mask).
+    var canvas: CGImage?
+    /// The image brought in from outside that `canvas` was made from, saved as an Imported step.
+    var importedInput: CGImage?
+    /// Moodboard images sent as references (weight above zero only).
+    var moodboard: [Reference] = []
+  }
+
+  struct Reference: Sendable {
+    var image: CGImage
+    var weight: Float
   }
 
   enum Progress: Sendable {
@@ -66,9 +78,20 @@ actor GenerationEngine {
     pipeline.configuration.seed = request.seed
     pipeline.configuration.batchCount = 1
     pipeline.configuration.batchSize = 1
+    // MGK takes encoded images; PNG keeps the canvas's transparency.
+    var inputs: [MediaGenerationPipeline.Input] = []
+    if let canvas = request.canvas {
+      guard let png = ImageTensor.png(canvas) else { throw ProjectError.badImage }
+      inputs.append(MediaGenerationPipeline.data(png))
+    }
+    for reference in request.moodboard {
+      guard let png = ImageTensor.png(reference.image) else { throw ProjectError.badImage }
+      inputs.append(MediaGenerationPipeline.data(png).moodboard())
+    }
     let results = try await pipeline.generate(
       prompt: request.prompt,
       negativePrompt: request.negativePrompt,
+      inputs: inputs,
       stateHandler: Self.stateHandler(
         forwardingTo: progress,
         size: CGSize(width: request.configuration.width, height: request.configuration.height))
