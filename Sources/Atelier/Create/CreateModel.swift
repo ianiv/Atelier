@@ -259,9 +259,10 @@ final class CreateModel {
       && models.contains { $0.file == item.sidecar.model }
   }
 
-  /// Loads a history item's prompt, model, seed and settings into Create. With `newSeed`, rolls a
-  /// fresh seed and generates as soon as the model is ready.
-  func use(_ item: HistoryItem, newSeed: Bool = false) {
+  /// Loads a history item's prompt, model, seed and settings into Create, and with `loadImage` its
+  /// image onto the canvas. With `newSeed`, rolls a fresh seed and generates as soon as the model
+  /// is ready.
+  func use(_ item: HistoryItem, newSeed: Bool = false, loadImage: Bool = true) {
     guard canUse(item) else { return }
     let sidecar = item.sidecar
     prompt = sidecar.prompt
@@ -275,11 +276,14 @@ final class CreateModel {
     }
     statusNote = nil
     let projectName = history.project.name
-    imageStep = (projectName, item.id)
-    canvasIsImported = false
+    if loadImage {
+      imageStep = (projectName, item.id)
+      canvasIsImported = false
+    }
     // An Edit step brings back its input, fitted, in Edit mode, so rerunning reproduces it.
     // Without its input (deleted since) it shows the result, as for a Generate step.
     let restoreImage = Task {
+      guard loadImage else { return }
       if item.inputTensorId != nil {
         if let input = await history.input(of: item, in: projectName) {
           guard imageStep?.id == item.id else { return }

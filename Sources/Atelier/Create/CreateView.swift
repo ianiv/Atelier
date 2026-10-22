@@ -483,7 +483,7 @@ struct RecentStrip: View {
               .draggable(history.dragExport(item))
               .help("\(item.sidecar.prompt)\n\(GenerationTime.text(item.sidecar.durationSeconds)). Click to use its settings.")
               .contextMenu {
-                Button("Use Settings") { model.use(item) }
+                Button("Use Settings") { model.use(item, loadImage: false) }
                   .disabled(!model.canUse(item))
                 Button("Use as Input") {
                   model.show(item)

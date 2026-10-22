@@ -58,7 +58,7 @@ struct HistoryView: View {
           let selected = selectedItems
           if selected.count == 1, let item = selected.first {
             HistoryDetail(
-              item: item, use: { use(item, newSeed: false) },
+              item: item, use: { use(item, newSeed: false, loadImage: false) },
               rerun: { use(item, newSeed: true) },
               export: { export([item]) },
               delete: { pendingDelete = [item] })
@@ -235,7 +235,7 @@ struct HistoryView: View {
       Divider()
       Button("Delete \(items.count) Images", role: .destructive) { pendingDelete = items }
     } else {
-      Button("Use Settings") { use(item, newSeed: false) }
+      Button("Use Settings") { use(item, newSeed: false, loadImage: false) }
         .disabled(!create.canUse(item))
       Button("Rerun with New Seed") { use(item, newSeed: true) }
         .disabled(!create.canUse(item))
@@ -331,9 +331,9 @@ struct HistoryView: View {
     Array(Set(history.items.map(\.sidecar.model))).sorted()
   }
 
-  private func use(_ item: HistoryItem, newSeed: Bool) {
+  private func use(_ item: HistoryItem, newSeed: Bool, loadImage: Bool = true) {
     guard create.canUse(item) else { return }
-    create.use(item, newSeed: newSeed)
+    create.use(item, newSeed: newSeed, loadImage: loadImage)
     navigation.section = .create
   }
 
