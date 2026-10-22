@@ -60,6 +60,7 @@ struct SizePopover: View {
           .background(selected ? Color.accentColor.opacity(0.12) : .clear, in: .rect(cornerRadius: 6))
         }
       }
+      Text("Megapixels").font(.headline)
       Picker("Megapixels", selection: Binding(
         get: { match?.1 },
         set: { mp in
@@ -72,6 +73,7 @@ struct SizePopover: View {
         ForEach(SizePreset.megapixels, id: \.self) { Text($0.formatted()).tag(Optional($0)) }
       }
       .pickerStyle(.segmented)
+      .labelsHidden()
       HStack {
         dimension("W", value: width) { set($0, height) }
         Button {
