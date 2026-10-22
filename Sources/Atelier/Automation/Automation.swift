@@ -23,7 +23,7 @@ enum Automation {
   nonisolated static var isRequested: Bool {
     let flags = [
       "--show", "--resize-bench", "--inspector-check", "--library-check", "--project-check",
-      "--reuse", "--generate",
+      "--reuse", "--generate", "--ux-check",
     ]
     return CommandLine.arguments.contains { flags.contains($0) }
   }
@@ -49,6 +49,10 @@ enum Automation {
     }
     if args.contains("--library-check") {
       libraryCheck(model, navigation: navigation, layouts: layouts, presets: presets, library: library)
+      return
+    }
+    if args.contains("--ux-check") {
+      uxCheck(model, navigation: navigation, layouts: layouts, presets: presets)
       return
     }
     if args.contains("--project-check") {
@@ -706,6 +710,79 @@ enum Automation {
       model.resetToModelDefaults(undoManager: nil)
       log("layout for relaunch: \(layouts.current.name)")
       finish()
+    }
+  }
+
+  /// `--ux-check`: canvas zoom snapshots and the Draw Things JSON round trip, on the newest image.
+  private static func uxCheck(
+    _ model: CreateModel, navigation: Navigation, layouts: LayoutStore, presets: PresetStore
+  ) {
+    let args = CommandLine.arguments
+    let snapshotDir = args.firstIndex(of: "--snapshot-dir").flatMap {
+      $0 + 1 < args.count ? URL(fileURLWithPath: args[$0 + 1]) : nil
+    }
+    Task { @MainActor in
+      func log(_ message: String) { print(message); fflush(stdout) }
+      func check(_ ok: Bool, _ message: String) { log((ok ? "PASS " : "FAIL ") + message) }
+      @MainActor func shot(_ name: String) async {
+        try? await Task.sleep(for: .milliseconds(600))
+        if let snapshotDir { snapshot(to: snapshotDir.appendingPathComponent(name)) }
+      }
+      while model.models.isEmpty || model.settings == nil || model.isBusy || !model.history.isLoaded {
+        try? await Task.sleep(for: .milliseconds(100))
+      }
+      // Put the user's prompt and settings back afterwards.
+      let saved = (model.prompt, model.negativePrompt, model.seed, model.seedLocked, model.settings)
+      navigation.section = .create
+      ensureWindow(model, navigation: navigation, layouts: layouts, presets: presets)
+      if let latest = model.history.items.first, model.canUse(latest) { model.use(latest) }
+      while model.isBusy || model.image == nil { try? await Task.sleep(for: .milliseconds(100)) }
+      await shot("ux-fit.png")
+      model.canvas.zoomIn()
+      model.canvas.zoomIn()
+      check(model.canvas.scale != nil, "zoom in leaves fit: \(model.canvas.effectiveScale)")
+      await shot("ux-zoomed.png")
+      model.canvas.zoom(to: 1)
+      model.canvas.offset = CGSize(width: -200, height: 120)
+      await shot("ux-actual-moved.png")
+      model.canvas.zoomToFit()
+      check(model.canvas.scale == nil && model.canvas.offset == .zero, "zoom to fit resets")
+
+      // Settings JSON: Draw Things types out, the same settings back in.
+      guard let data = model.settingsJSON(),
+        case .object(let json)? = try? JSONDecoder().decode(JSONValue.self, from: data)
+      else { return check(false, "settings JSON") }
+      if case .number = json["sampler"] { check(true, "sampler is a number") } else {
+        check(false, "sampler is \(String(describing: json["sampler"]))")
+      }
+      check(json["width"] != nil && json["size"] == nil, "width/height, not size")
+      check(json["model"] == model.selectedModel.map(JSONValue.string), "model key")
+      let before = model.values(for: SettingsRegistry.all.map(\.id))
+      let steps = model.settings!.steps
+      model.resetToModelDefaults(undoManager: nil)
+      if var settings = model.settings {
+        settings.steps = steps + 7
+        model.settings = settings
+      }
+      guard let pasted = DrawThingsJSON.decode(data) else { return check(false, "decode") }
+      model.paste(pasted, undoManager: nil)
+      let after = model.values(for: SettingsRegistry.all.map(\.id))
+      let diff = before.keys.filter { before[$0] != after[$0] }.sorted()
+      check(diff.isEmpty, "paste restores every setting (differs: \(diff))")
+      let dtSample = #"{"sampler": 15, "seedMode": 2, "steps": 9, "width": 768, "height": 512, "seed": -1}"#
+      if let dt = DrawThingsJSON.decode(Data(dtSample.utf8)) {
+        model.paste(dt, undoManager: nil)
+        let s = model.settings!
+        check(
+          s.steps == 9 && s.width == 768 && s.height == 512 && s.sampler == .dPMPP2MTrailing
+            && s.seedMode == .scaleAlike,
+          "Draw Things sample: steps \(s.steps) \(s.width)x\(s.height) \(s.sampler) \(s.seedMode)")
+        await shot("ux-frame-768x512.png")
+      } else {
+        check(false, "decode Draw Things sample")
+      }
+      (model.prompt, model.negativePrompt, model.seed, model.seedLocked, model.settings) = saved
+      if args.contains("--quit") { NSApp.terminate(nil) }
     }
   }
 

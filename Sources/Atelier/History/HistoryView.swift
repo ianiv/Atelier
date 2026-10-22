@@ -116,6 +116,7 @@ struct HistoryView: View {
                   .disabled(!create.canUse(item))
                 Button("Rerun with New Seed") { use(item, newSeed: true) }
                   .disabled(!create.canUse(item))
+                Button("Copy Image") { Task { await history.copyImage(item) } }
                 Button("Export PNG…") { export(item) }
                 Divider()
                 Button("Delete", role: .destructive) { pendingDelete = item }
@@ -167,6 +168,7 @@ struct HistoryView: View {
 
 struct HistoryDetail: View {
   @Environment(CreateModel.self) private var create
+  @Environment(HistoryStore.self) private var history
   var item: HistoryItem
   var use: () -> Void
   var rerun: () -> Void
@@ -190,6 +192,7 @@ struct HistoryDetail: View {
             .font(.caption).foregroundStyle(.secondary)
         }
         HStack {
+          Button("Copy Image") { Task { await history.copyImage(item) } }
           Button("Export PNG…", action: export)
           Button("Delete", role: .destructive, action: delete)
         }

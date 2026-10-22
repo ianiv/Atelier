@@ -11,6 +11,7 @@ struct InspectorView: View {
   @Environment(\.undoManager) private var undoManager
   @State private var optionHeld = false
   @State private var flagsMonitor: Any?
+  @AppStorage("changedExpanded") private var changedExpanded = true
   private var showAll: Bool { layouts.showAll || optionHeld }
   private var query: String { layouts.searchText.trimmingCharacters(in: .whitespaces) }
 
@@ -66,12 +67,18 @@ struct InspectorView: View {
     // being edited above it.
     let changed = model.changedSettings
     if !changed.isEmpty {
-      InspectorGroup {
-        HStack {
+      InspectorGroup(isExpanded: changedExpanded) {
+        HStack(spacing: 6) {
+          Image(systemName: "chevron.right")
+            .font(.caption2.weight(.bold))
+            .rotationEffect(.degrees(changedExpanded ? 90 : 0))
+            .frame(width: 10)
           Text("Changed")
           Spacer()
           Text("\(changed.count)").monospacedDigit()
         }
+        .contentShape(.rect)
+        .onTapGesture { changedExpanded.toggle() }
       } content: {
         ForEach(changed) { descriptor in
           SettingRow(descriptor: descriptor).opacity(descriptor.applies(traits) ? 1 : 0.5)

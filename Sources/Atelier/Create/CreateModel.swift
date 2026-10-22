@@ -40,6 +40,8 @@ final class CreateModel {
   private var modelDefaults: PipelineConfiguration?
   /// Source of each model's default preset (set by the app).
   var presets: PresetStore?
+  /// The canvas's zoom and position.
+  let canvas = CanvasState()
   /// Bumped to ask the prompt composer to take focus (⌘L).
   var focusPromptRequest = 0
 
@@ -49,7 +51,11 @@ final class CreateModel {
   private(set) var image: CGImage?
   private(set) var lastSavedStep: StepID?
   /// The project step behind `image` once it's a finished image (not a step preview).
-  private var imageStep: (project: String, id: StepID)?
+  private var imageStep: (project: String, id: StepID)? {
+    didSet { imageIsPreview = false }
+  }
+  /// The canvas shows a step preview, not `imageStep`'s image.
+  private var imageIsPreview = false
   var errorMessage: String?
 
   private var generationTask: Task<Void, Never>?
@@ -61,6 +67,15 @@ final class CreateModel {
   /// While a slider drags, its changes share the undo step registered when the drag began.
   private var coalescingEdit = false
   private var generateWhenLoaded = false
+
+  /// The saved history item behind the canvas image, when it's a finished image in the current
+  /// project (not a step preview).
+  var imageItem: HistoryItem? {
+    guard !imageIsPreview, let imageStep, imageStep.project == history.project.name else {
+      return nil
+    }
+    return history.items.first { $0.id == imageStep.id }
+  }
 
   var isBusy: Bool {
     if case .idle = phase { return false }
@@ -293,6 +308,31 @@ final class CreateModel {
     self.settings = configuration
   }
 
+  /// Every setting as Draw Things configuration JSON, with the model and seed, for its Paste.
+  func settingsJSON() -> Data? {
+    guard settings != nil, let model = selectedModel else { return nil }
+    return DrawThingsJSON.encode(
+      values(for: SettingsRegistry.all.map(\.id)), model: model, seed: seed)
+  }
+
+  /// Applies pasted settings on top of the model defaults, like a preset. A pasted model that's
+  /// downloaded is switched to first; a pasted seed is kept for the following generations.
+  func paste(_ pasted: DrawThingsJSON.Pasted, undoManager: UndoManager?) {
+    if let seed = pasted.seed {
+      self.seed = seed
+      seedLocked = true
+    }
+    if let model = pasted.model, model != selectedModel, models.contains(where: { $0.file == model }) {
+      pendingSettings = pasted.dump
+      selectedModel = model
+      return
+    }
+    guard var configuration = recommended, let settings else { return }
+    SettingsRegistry.apply(dump: pasted.dump, to: &configuration)
+    registerUndo(restoring: settings, undoManager, actionName: "Paste Settings")
+    self.settings = configuration
+  }
+
   /// Current values of `ids`, for saving a preset.
   func values(for ids: [String]) -> [String: JSONValue] {
     guard let settings else { return [:] }
@@ -388,6 +428,7 @@ final class CreateModel {
     switch progress {
     case .preview(let preview, let step, let total):
       image = preview
+      imageIsPreview = true
       self.step = step
       totalSteps = total
     case .state(let state):

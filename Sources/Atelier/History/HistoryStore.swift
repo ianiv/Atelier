@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Diffusion
 import Foundation
@@ -212,6 +213,20 @@ final class HistoryStore {
     let tagged = PNGText.inserting(
       keyword: "Atelier", text: String(decoding: json, as: UTF8.self), into: png)
     try (tagged ?? png).write(to: url)
+  }
+
+  /// Puts the full-resolution image on the clipboard.
+  func copyImage(_ item: HistoryItem) async {
+    if let image = await image(for: item) { Self.copy(image) }
+  }
+
+  /// Puts an image on the clipboard as PNG and TIFF, which other apps paste most reliably.
+  static func copy(_ image: CGImage) {
+    let pasteboard = NSPasteboard.general
+    pasteboard.clearContents()
+    if let png = ImageTensor.png(image) { pasteboard.setData(png, forType: .png) }
+    let tiff = NSBitmapImageRep(cgImage: image).tiffRepresentation
+    if let tiff { pasteboard.setData(tiff, forType: .tiff) }
   }
 
   private static let thumbnails = NSCache<NSString, CGImage>()

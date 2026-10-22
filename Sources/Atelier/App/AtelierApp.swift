@@ -48,6 +48,9 @@ struct AtelierApp: App {
       CommandGroup(after: .sidebar) {
         Button(inspectorShown ? "Hide Inspector" : "Show Inspector") { inspectorShown.toggle() }
           .keyboardShortcut("i", modifiers: [.command, .option])
+        Divider()
+        ZoomMenuItems(canvas: create.canvas)
+          .disabled(navigation.section != .create)
       }
       CommandMenu("Image") {
         Button("Focus Prompt") {

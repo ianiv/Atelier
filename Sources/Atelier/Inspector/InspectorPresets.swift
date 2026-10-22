@@ -7,6 +7,7 @@ struct PresetMenu: View {
   @Environment(PresetStore.self) private var presets
   @Environment(\.undoManager) private var undoManager
   @State private var saving = false
+  @State private var pasteFailed = false
 
   var body: some View {
     let modelName = model.selectedModelInfo?.name ?? "This Model"
@@ -57,6 +58,26 @@ struct PresetMenu: View {
       .disabled(model.selectedModel == nil)
       Button("Save Current Settings as Preset…") { saving = true }
         .disabled(model.settings == nil)
+      Button("Copy Settings as JSON") {
+        if let json = model.settingsJSON() {
+          NSPasteboard.general.clearContents()
+          NSPasteboard.general.setString(String(decoding: json, as: UTF8.self), forType: .string)
+        }
+      }
+      .disabled(model.settings == nil)
+      .help("Copies every setting, the model and the seed in Draw Things' configuration format.")
+      Button("Paste Settings") {
+        guard let text = NSPasteboard.general.string(forType: .string),
+          let pasted = DrawThingsJSON.decode(Data(text.utf8))
+        else {
+          pasteFailed = true
+          return
+        }
+        model.paste(pasted, undoManager: undoManager)
+      }
+      .disabled(model.settings == nil)
+      .help("Applies settings copied from Draw Things or Atelier, on top of the model's defaults.")
+      Divider()
       Button("Import Preset…") {
         if let url = FilePanels.openJSON() { _ = try? presets.importPreset(from: url) }
       }
@@ -86,6 +107,11 @@ struct PresetMenu: View {
     }
     .help("Presets: saved setting values applied on top of the model's defaults")
     .sheet(isPresented: $saving) { SavePresetSheet() }
+    .alert("The clipboard has no settings", isPresented: $pasteFailed) {
+      Button("OK") {}
+    } message: {
+      Text("Copy a configuration in Draw Things, or settings in Atelier, then paste again.")
+    }
   }
 
   private func presetButtons(_ list: [Preset], default current: Preset?) -> some View {
@@ -212,5 +238,110 @@ struct SearchField: NSViewRepresentable {
       guard let field = notification.object as? NSSearchField else { return }
       text.wrappedValue = field.stringValue
     }
+  }
+}
+
+// MARK: - Draw Things JSON
+
+/// Settings as the flat JSON Draw Things copies and pastes (its `JSGenerationConfiguration`): the
+/// same property names Atelier uses, but sampler and seed mode as their Int8 raw values and
+/// lowercase names for the post-processing enums.
+@MainActor
+enum DrawThingsJSON {
+  /// Registry values (keyed by setting id, as in presets) as Draw Things JSON.
+  static func encode(_ values: [String: JSONValue], model: String?, seed: UInt32?) -> Data? {
+    var json: [String: JSONValue] = [:]
+    for (id, value) in values {
+      switch (id, value) {
+      case ("size", .object(let size)):
+        json["width"] = size["width"]
+        json["height"] = size["height"]
+      case ("sampler", .string(let name)):
+        json[id] = rawValue(of: SamplerType.self, named: name).map(JSONValue.number) ?? value
+      case ("seedMode", .string(let name)):
+        json[id] = rawValue(of: SeedMode.self, named: name).map(JSONValue.number) ?? value
+      case ("colorCalibration", .string(let name)):
+        json[id] = .string(name == "disabled" ? "none" : name.lowercased())
+      case ("compressionArtifacts", .string(let name)):
+        json[id] = .string(name.lowercased())
+      default:
+        json[id] = value
+      }
+    }
+    if let model { json["model"] = .string(model) }
+    if let seed { json["seed"] = .number(Double(seed)) }
+    return try? LayoutStore.encoder.encode(json)
+  }
+
+  /// Settings read from pasted JSON: Draw Things' flat configuration, one of its custom_configs.json
+  /// entries (`{name, configuration}`), or an Atelier preset file.
+  struct Pasted {
+    /// Keyed by property name with Atelier's enum names, like a history sidecar's dump.
+    var dump: [String: JSONValue]
+    var model: String?
+    /// Nil when absent or negative (Draw Things' "random").
+    var seed: UInt32?
+  }
+
+  static func decode(_ data: Data) -> Pasted? {
+    if let preset = try? JSONDecoder().decode(Preset.self, from: data) {
+      var dump: [String: JSONValue] = [:]
+      for (id, value) in preset.values {
+        if id == "size", case .object(let size) = value {
+          dump["width"] = size["width"]
+          dump["height"] = size["height"]
+        } else {
+          dump[id] = value
+        }
+      }
+      return Pasted(dump: dump, model: preset.model, seed: nil)
+    }
+    guard case .object(var json)? = try? JSONDecoder().decode(JSONValue.self, from: data) else {
+      return nil
+    }
+    if case .object(let configuration)? = json["configuration"] { json = configuration }
+    var dump: [String: JSONValue] = [:]
+    for (key, value) in json {
+      switch (key, value) {
+      case ("sampler", .number(let raw)):
+        dump[key] = name(of: SamplerType.self, raw: raw).map(JSONValue.string)
+      case ("seedMode", .number(let raw)):
+        dump[key] = name(of: SeedMode.self, raw: raw).map(JSONValue.string)
+      case ("colorCalibration", .string(let name)):
+        dump[key] = caseName(of: ColorCalibration.self, matching: name == "none" ? "disabled" : name)
+      case ("compressionArtifacts", .string(let name)):
+        dump[key] = caseName(of: CompressionMethod.self, matching: name)
+      default:
+        dump[key] = value
+      }
+    }
+    // Only settings Atelier knows, so a stray object with a "name" doesn't count as settings.
+    let known = dump.filter {
+      SettingsRegistry.byID[$0.key] != nil || $0.key == "width" || $0.key == "height"
+    }
+    guard !known.isEmpty else { return nil }
+    var seed: UInt32?
+    if let value = json["seed"]?.doubleValue, value >= 0, value <= Double(UInt32.max) {
+      seed = UInt32(value)
+    }
+    var model: String?
+    if case .string(let file)? = json["model"], !file.isEmpty { model = file }
+    return Pasted(dump: known, model: model, seed: seed)
+  }
+
+  private static func rawValue<E: CaseIterable & RawRepresentable>(of _: E.Type, named name: String)
+    -> Double? where E.RawValue == Int8
+  {
+    E.allCases.first { String(describing: $0) == name }.map { Double($0.rawValue) }
+  }
+
+  private static func name<E: CaseIterable & RawRepresentable>(of _: E.Type, raw: Double) -> String?
+  where E.RawValue == Int8 {
+    E.allCases.first { Double($0.rawValue) == raw }.map { String(describing: $0) }
+  }
+
+  private static func caseName<E: CaseIterable>(of _: E.Type, matching name: String) -> JSONValue? {
+    E.allCases.first { String(describing: $0).caseInsensitiveCompare(name) == .orderedSame }
+      .map { .string(String(describing: $0)) }
   }
 }
