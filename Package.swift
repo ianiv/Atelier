@@ -20,13 +20,31 @@ let package = Package(
     // Official engine repo, pinned. Bump deliberately to pick up new models.
     .package(
       url: "https://github.com/drawthingsai/draw-things-community",
-      revision: "8dbbb5c69b83c6312eb10622611d46a943de6f88")
+      revision: "8dbbb5c69b83c6312eb10622611d46a943de6f88"),
+    // Same revisions the engine pins, for the Draw Things project format (ProjectFormat).
+    .package(url: "https://github.com/liuliu/dflat.git", revision: "73925e51e4f44add842177a229f9990cb13711ff"),
+    .package(
+      url: "https://github.com/google/flatbuffers.git",
+      revision: "c92e78a9f841a6110ec27180d68d1f7f2afda21d"),
   ],
   targets: [
+    // dflat models for Draw Things' project tables, generated from the engine's History schemas
+    // by Scripts/generate_project_format.sh. Its own module because its enum names (SamplerType,
+    // SeedMode, …) clash with DataModels'.
+    .target(
+      name: "ProjectFormat",
+      dependencies: [
+        .product(name: "Dflat", package: "dflat"),
+        .product(name: "SQLiteDflat", package: "dflat"),
+        .product(name: "FlatBuffers", package: "flatbuffers"),
+      ],
+      path: "Sources/ProjectFormat"
+    ),
     .executableTarget(
       name: "Atelier",
       dependencies: [
-        .product(name: "_MediaGenerationKit", package: "draw-things-community")
+        "ProjectFormat",
+        .product(name: "_MediaGenerationKit", package: "draw-things-community"),
       ],
       path: "Sources/Atelier",
       swiftSettings: swiftUIPluginFlags

@@ -47,9 +47,9 @@ final class CreateModel {
   private(set) var step = 0
   private(set) var totalSteps = 0
   private(set) var image: CGImage?
-  private(set) var lastSavedURL: URL?
-  /// The file behind `image` once it's a finished image (not a step preview).
-  private var imageURL: URL?
+  private(set) var lastSavedStep: StepID?
+  /// The project step behind `image` once it's a finished image (not a step preview).
+  private var imageStep: (project: String, id: StepID)?
   var errorMessage: String?
 
   private var generationTask: Task<Void, Never>?
@@ -103,11 +103,14 @@ final class CreateModel {
       prompt = session.prompt
       negativePrompt = session.negativePrompt
       if let seed = session.seed { self.seed = seed }
-      if let path = session.imagePath, FileManager.default.fileExists(atPath: path) {
-        let url = URL(fileURLWithPath: path)
-        lastSavedURL = url
-        imageURL = url
-        image = NSImage(contentsOf: url)?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+      if let project = session.imageProject, let step = session.imageStep {
+        Task {
+          guard let restoredImage = await history.image(at: step, in: project), image == nil
+          else { return }
+          lastSavedStep = step
+          imageStep = (project, step)
+          image = restoredImage
+        }
       }
     }
     for name in [NSApplication.willTerminateNotification, NSApplication.didResignActiveNotification] {
@@ -125,7 +128,7 @@ final class CreateModel {
     SessionState(
       model: selectedModel, prompt: prompt, negativePrompt: negativePrompt, seed: seed,
       settings: settings.map(JSONValue.fields(of:)) ?? pendingSettings,
-      imagePath: imageURL?.path
+      imageProject: imageStep?.project, imageStep: imageStep?.id
     ).save()
   }
 
@@ -149,9 +152,12 @@ final class CreateModel {
       seed = sidecar.seed
       seedLocked = true
     }
-    image = NSImage(contentsOf: item.imageURL)?.cgImage(
-      forProposedRect: nil, context: nil, hints: nil)
-    imageURL = item.imageURL
+    let projectName = history.project.name
+    imageStep = (projectName, item.id)
+    Task {
+      let full = await history.image(at: item.id, in: projectName)
+      if let full, imageStep?.id == item.id { image = full }
+    }
     if selectedModel == sidecar.model, phase != .loadingModel, var settings = recommended {
       SettingsRegistry.apply(dump: sidecar.configuration, to: &settings)
       self.settings = settings
@@ -346,12 +352,11 @@ final class CreateModel {
         let result = try await engine.generate(request) { progress in
           Task { @MainActor [weak self] in self?.handle(progress) }
         }
-        let url = try history.save(
-          result, request: request, startedAt: startedAt, finishedAt: Date()
-        ).imageURL
-        lastSavedURL = url
-        imageURL = url
-        image = NSImage(contentsOf: url)?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        let item = try await history.save(
+          result, request: request, startedAt: startedAt, finishedAt: Date())
+        lastSavedStep = item.id
+        imageStep = (history.project.name, item.id)
+        image = ImageTensor.cgImage(from: result.tensor) ?? image
         saveSession()
       } catch is CancellationError {
         // Cancelled by the user; keep the last preview on the canvas.

@@ -1,24 +1,31 @@
+import CoreGraphics
+import Diffusion
 import Foundation
+import ImageIO
+import NNC
 import Observation
 import _MediaGenerationKit
 
-/// One saved output: the PNG and its decoded sidecar.
+/// One generated image: a step in the current project.
 struct HistoryItem: Identifiable, Hashable {
-  var imageURL: URL
+  var id: StepID
+  var tensorId: Int64
+  var previewId: Int64
   var sidecar: HistoryStore.Sidecar
 
-  var id: URL { imageURL }
-  var sidecarURL: URL { imageURL.deletingPathExtension().appendingPathExtension("json") }
-
-  static func == (lhs: HistoryItem, rhs: HistoryItem) -> Bool { lhs.imageURL == rhs.imageURL }
-  func hash(into hasher: inout Hasher) { hasher.combine(imageURL) }
+  static func == (lhs: HistoryItem, rhs: HistoryItem) -> Bool { lhs.id == rhs.id }
+  func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
-/// Outputs under ~/Pictures/Atelier/<date>/: a PNG plus a JSON sidecar each, indexed in memory
-/// at launch (newest first).
+/// History lives in projects: Draw Things-format `.sqlite3` files under
+/// ~/Pictures/Atelier/Projects/. One is current; Create appends to it and History lists its main
+/// line (newest first).
 @MainActor
 @Observable
 final class HistoryStore {
+  /// A history item's settings summary. Built from the project's step; also the format of the
+  /// JSON sidecars Atelier wrote before projects (imported once, see `importLegacyHistory`) and
+  /// of the iTXt chunk in exported PNGs.
   struct Sidecar: Codable {
     var app = "Atelier"
     var createdAt: Date
@@ -39,18 +46,110 @@ final class HistoryStore {
     var configuration: [String: JSONValue]
   }
 
+  private(set) var project: Project
+  /// Project names (file names without `.sqlite3`), sorted.
+  private(set) var projectNames: [String] = []
   private(set) var items: [HistoryItem] = []
   private(set) var isLoaded = false
+  /// Progress of the one-time import of the old PNG history, while it runs.
+  private(set) var importProgress: (done: Int, total: Int)?
+
+  static let defaultProjectName = "Atelier"
+  private static let currentProjectKey = "currentProject"
 
   init() {
-    Task { await reload() }
+    // Scripted runs (Automation) pass `--project NAME` to keep their images out of the user's.
+    let args = CommandLine.arguments
+    let scripted = args.firstIndex(of: "--project").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
+    let saved = SessionState.isEnabled
+      ? UserDefaults.standard.string(forKey: Self.currentProjectKey) : nil
+    project = Project(url: Self.url(for: scripted ?? saved ?? Self.defaultProjectName))
+    Task {
+      await reload()
+      await importLegacyHistory()
+    }
+  }
+
+  nonisolated static var projectsDirectory: URL {
+    AppSettings.historyDirectory.appendingPathComponent("Projects", isDirectory: true)
+  }
+
+  nonisolated static func url(for name: String) -> URL {
+    try? FileManager.default.createDirectory(at: projectsDirectory, withIntermediateDirectories: true)
+    return projectsDirectory.appendingPathComponent(name).appendingPathExtension("sqlite3")
   }
 
   func reload() async {
-    let root = AppSettings.historyDirectory
-    items = await Task.detached { Self.scan(root) }.value
+    let project = project
+    let loaded = await Task.detached { project.items() }.value
+    guard project === self.project else { return }
+    items = loaded
+    projectNames = Self.scanProjectNames()
+    if !projectNames.contains(project.name) { projectNames = (projectNames + [project.name]).sorted() }
     isLoaded = true
   }
+
+  // MARK: - Projects
+
+  /// Makes `name` the current project, creating it if needed.
+  func open(_ name: String) async {
+    guard name != project.name else { return }
+    project = Project(url: Self.url(for: name))
+    if SessionState.isEnabled { UserDefaults.standard.set(name, forKey: Self.currentProjectKey) }
+    isLoaded = false
+    items = []
+    await reload()
+  }
+
+  /// A name not taken yet: `base`, else `base 2`, `base 3`, …
+  func availableName(_ base: String = "Untitled") -> String {
+    let names = Set(Self.scanProjectNames() + [project.name])
+    var name = base
+    var n = 2
+    while names.contains(name) {
+      name = "\(base) \(n)"
+      n += 1
+    }
+    return name
+  }
+
+  static func isValidName(_ name: String) -> Bool {
+    let trimmed = name.trimmingCharacters(in: .whitespaces)
+    return !trimmed.isEmpty && !trimmed.contains("/") && !trimmed.hasPrefix(".")
+  }
+
+  /// Renames the current project's file (and its -wal/-shm).
+  func renameCurrent(to name: String) async throws {
+    let name = name.trimmingCharacters(in: .whitespaces)
+    guard Self.isValidName(name), name != project.name else { return }
+    let target = Self.url(for: name)
+    guard !FileManager.default.fileExists(atPath: target.path) else {
+      throw CocoaError(.fileWriteFileExists)
+    }
+    let old = project.url
+    // Close the workspace first so nothing writes while the files move.
+    await project.close()
+    try FileManager.default.moveItem(at: old, to: target)
+    for suffix in ["-wal", "-shm"] {
+      let side = URL(fileURLWithPath: old.path + suffix)
+      if FileManager.default.fileExists(atPath: side.path) {
+        try? FileManager.default.moveItem(at: side, to: URL(fileURLWithPath: target.path + suffix))
+      }
+    }
+    project = Project(url: target)
+    if SessionState.isEnabled { UserDefaults.standard.set(name, forKey: Self.currentProjectKey) }
+    await reload()
+  }
+
+  private nonisolated static func scanProjectNames() -> [String] {
+    let files = (try? FileManager.default.contentsOfDirectory(
+      at: projectsDirectory, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? []
+    return files.filter { $0.pathExtension == "sqlite3" }
+      .map { $0.deletingPathExtension().lastPathComponent }
+      .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+  }
+
+  // MARK: - Items
 
   @discardableResult
   func save(
@@ -58,70 +157,64 @@ final class HistoryStore {
     request: GenerationEngine.Request,
     startedAt: Date,
     finishedAt: Date
-  ) throws -> HistoryItem {
-    let day = DateFormatter()
-    day.dateFormat = "yyyy-MM-dd"
-    let time = DateFormatter()
-    time.dateFormat = "HHmmss"
-    let folder = AppSettings.historyDirectory.appendingPathComponent(
-      day.string(from: finishedAt), isDirectory: true)
-    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-
-    var base = "\(time.string(from: finishedAt))-\(request.seed)"
-    var suffix = 1
-    while FileManager.default.fileExists(
-      atPath: folder.appendingPathComponent(base + ".png").path)
-    {
-      suffix += 1
-      base = "\(time.string(from: finishedAt))-\(request.seed)-\(suffix)"
-    }
-    let pngURL = folder.appendingPathComponent(base + ".png")
-
+  ) async throws -> HistoryItem {
     var settings = request.configuration
     settings.seed = request.seed
-    let sidecar = Sidecar(
-      createdAt: finishedAt,
-      durationSeconds: finishedAt.timeIntervalSince(startedAt),
-      prompt: request.prompt,
-      negativePrompt: request.negativePrompt,
-      model: request.model,
-      seed: request.seed,
-      width: settings.width,
-      height: settings.height,
-      steps: settings.steps,
-      guidanceScale: settings.guidanceScale,
-      shift: settings.shift,
-      sampler: String(describing: settings.sampler),
-      resolutionDependentShift: settings.resolutionDependentShift,
-      hiresFix: settings.hiresFix,
-      configuration: JSONValue.fields(of: settings)
-    )
-    let json = try Self.encoder.encode(sidecar)
-    try json.write(to: folder.appendingPathComponent(base + ".json"))
-
-    // MGK writes the encoded PNG directly, so embed the sidecar afterwards as an iTXt chunk
-    // (UTF-8, unlike tEXt) to keep the file self-describing.
-    try result.write(to: pngURL, type: .png)
-    if let png = try? Data(contentsOf: pngURL),
-      let tagged = PNGText.inserting(keyword: "Atelier", text: String(decoding: json, as: UTF8.self), into: png)
-    {
-      try tagged.write(to: pngURL)
-    }
-
-    let item = HistoryItem(imageURL: pngURL, sidecar: sidecar)
-    items.insert(item, at: 0)
+    let project = project
+    let item = try await project.append(
+      tensor: result.tensor, model: request.model, prompt: request.prompt,
+      negativePrompt: request.negativePrompt, seed: request.seed,
+      settings: JSONValue.fields(of: settings), createdAt: finishedAt,
+      duration: finishedAt.timeIntervalSince(startedAt))
+    if project === self.project { items.insert(item, at: 0) }
     return item
   }
 
-  /// Moves the PNG and its sidecar to the Trash.
-  func delete(_ item: HistoryItem) throws {
-    let fileManager = FileManager.default
-    try fileManager.trashItem(at: item.imageURL, resultingItemURL: nil)
-    if fileManager.fileExists(atPath: item.sidecarURL.path) {
-      try fileManager.trashItem(at: item.sidecarURL, resultingItemURL: nil)
-    }
-    items.removeAll { $0.id == item.id }
+  /// Removes the step from the project. Later steps move down by one, so the list is reloaded.
+  func delete(_ item: HistoryItem) async throws {
+    try await project.delete(item.id)
+    await reload()
   }
+
+  func item(_ id: StepID) -> HistoryItem? {
+    items.first { $0.id == id }
+  }
+
+  /// The step's JPEG preview (`half` for grids), decoded off the main actor.
+  func thumbnail(for item: HistoryItem, half: Bool) async -> CGImage? {
+    let key = "\(project.url.path)#\(item.previewId)#\(half)" as NSString
+    if let cached = Self.thumbnails.object(forKey: key) { return cached }
+    let project = project
+    let image = await Task.detached { project.thumbnail(previewId: item.previewId, half: half) }.value
+    if let image { Self.thumbnails.setObject(image, forKey: key) }
+    return image
+  }
+
+  /// The full-resolution image, decoded from the project's tensor.
+  func image(for item: HistoryItem) async -> CGImage? {
+    let project = project
+    return await Task.detached { project.image(for: item) }.value
+  }
+
+  /// The full-resolution image of a step in `projectName` (when that's the current project).
+  func image(at id: StepID, in projectName: String) async -> CGImage? {
+    guard projectName == project.name else { return nil }
+    let project = project
+    return await Task.detached { project.image(at: id) }.value
+  }
+
+  /// Writes the image as a PNG carrying its settings (an `Atelier` iTXt chunk).
+  func exportPNG(_ item: HistoryItem, to url: URL) async throws {
+    guard let image = await image(for: item), let png = ImageTensor.png(image) else {
+      throw ProjectError.badImage
+    }
+    let json = try Self.encoder.encode(item.sidecar)
+    let tagged = PNGText.inserting(
+      keyword: "Atelier", text: String(decoding: json, as: UTF8.self), into: png)
+    try (tagged ?? png).write(to: url)
+  }
+
+  private static let thumbnails = NSCache<NSString, CGImage>()
 
   private static let encoder: JSONEncoder = {
     let encoder = JSONEncoder()
@@ -130,14 +223,53 @@ final class HistoryStore {
     return encoder
   }()
 
-  private nonisolated static func scan(_ root: URL) -> [HistoryItem] {
+  // MARK: - Old PNG history
+
+  private static let legacyImportedKey = "legacyHistoryImported"
+
+  /// Copies the PNG + JSON history from before projects (~/Pictures/Atelier/<date>/) into the
+  /// default project, oldest first, once. The old files are left where they are.
+  func importLegacyHistory() async {
+    guard SessionState.isEnabled, !UserDefaults.standard.bool(forKey: Self.legacyImportedKey)
+    else { return }
+    let legacy = await Task.detached { Self.scanLegacy(AppSettings.historyDirectory) }.value
+    guard !legacy.isEmpty else {
+      UserDefaults.standard.set(true, forKey: Self.legacyImportedKey)
+      return
+    }
+    let target = project.name == Self.defaultProjectName
+      ? project : Project(url: Self.url(for: Self.defaultProjectName))
+    importProgress = (0, legacy.count)
+    for (index, entry) in legacy.reversed().enumerated() {
+      let tensor = await Task.detached { () -> Tensor<FloatType>? in
+        guard let source = CGImageSourceCreateWithURL(entry.png as CFURL, nil),
+          let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        else { return nil }
+        return ImageTensor.tensor(from: image)
+      }.value
+      if let tensor {
+        let sidecar = entry.sidecar
+        _ = try? await target.append(
+          tensor: tensor, model: sidecar.model, prompt: sidecar.prompt,
+          negativePrompt: sidecar.negativePrompt, seed: sidecar.seed,
+          settings: sidecar.configuration, createdAt: sidecar.createdAt,
+          duration: sidecar.durationSeconds)
+      }
+      importProgress = (index + 1, legacy.count)
+    }
+    importProgress = nil
+    UserDefaults.standard.set(true, forKey: Self.legacyImportedKey)
+    if target === project { await reload() }
+  }
+
+  private nonisolated static func scanLegacy(_ root: URL) -> [(png: URL, sidecar: Sidecar)] {
     let decoder = JSONDecoder()
     decoder.dateDecodingStrategy = .iso8601
     let fileManager = FileManager.default
     let days = (try? fileManager.contentsOfDirectory(
       at: root, includingPropertiesForKeys: [.isDirectoryKey], options: .skipsHiddenFiles)) ?? []
-    var items: [HistoryItem] = []
-    for day in days {
+    var items: [(png: URL, sidecar: Sidecar)] = []
+    for day in days where day.lastPathComponent != "Projects" {
       let files = (try? fileManager.contentsOfDirectory(
         at: day, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? []
       for json in files where json.pathExtension == "json" {
@@ -146,7 +278,7 @@ final class HistoryStore {
           let data = try? Data(contentsOf: json),
           let sidecar = try? decoder.decode(Sidecar.self, from: data)
         else { continue }
-        items.append(HistoryItem(imageURL: png, sidecar: sidecar))
+        items.append((png, sidecar))
       }
     }
     return items.sorted { $0.sidecar.createdAt > $1.sidecar.createdAt }

@@ -10,8 +10,9 @@ struct SessionState: Codable {
   var seed: UInt32?
   /// Every inspector value, in the history sidecar's dump format.
   var settings: [String: JSONValue]?
-  /// The image last on the canvas (a saved history file).
-  var imagePath: String?
+  /// The image last on the canvas: a step in a project.
+  var imageProject: String?
+  var imageStep: StepID?
 
   private static let key = "sessionState"
   static var isEnabled: Bool { !Automation.isRequested }

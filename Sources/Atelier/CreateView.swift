@@ -58,6 +58,7 @@ struct ModelPicker: View {
 
 struct CanvasView: View {
   @Environment(CreateModel.self) private var model
+  @Environment(Navigation.self) private var navigation
 
   var body: some View {
     VStack(spacing: 0) {
@@ -87,9 +88,9 @@ struct CanvasView: View {
           Label(error, systemImage: "exclamationmark.triangle")
             .foregroundStyle(.red)
             .lineLimit(2)
-        } else if let url = model.lastSavedURL {
-          Text("Saved \(url.lastPathComponent)").foregroundStyle(.secondary)
-          Button("Reveal") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+        } else if model.lastSavedStep != nil {
+          Text("Saved to \(model.history.project.name)").foregroundStyle(.secondary)
+          Button("Show in History") { navigation.section = .history }
             .buttonStyle(.link)
         } else {
           Text("Ready").foregroundStyle(.secondary)

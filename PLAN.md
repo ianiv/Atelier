@@ -48,7 +48,7 @@ The CLI's generation code is almost all `private` inside `/Users/ianiv/Code/draw
 - Delete moves the PNG and sidecar to the Trash. `Automation` gained `--reuse latest|PNG [--new-seed]` (compares pixels with the original) and `--show history`.
 
 **Phase 3 notes:**
-- `SettingsRegistry` has 77 descriptors covering every public `Configuration` field except `model`, `seed` (its own row with lock and ⌘R), `batchCount`/`batchSize` (queue, phase 5) and `controls` (inputs, phase 6). Width and height are one "size" descriptor. Values travel as `JSONValue` in the sidecar dump's encoding, so presets, changed markers and "Use settings" share one format; "Use settings" now restores every registry field.
+- `SettingsRegistry` has 77 descriptors covering every public `Configuration` field except `model`, `seed` (its own row with lock and ⌘R), `batchCount`/`batchSize` (queue, phase 6) and `controls` (inputs, phase 7). Width and height are one "size" descriptor. Values travel as `JSONValue` in the sidecar dump's encoding, so presets, changed markers and "Use settings" share one format; "Use settings" now restores every registry field.
 - Applicability uses MGK's human-readable `version` string (e.g. "MOSS Image") and gates by family, taken from the per-version branches in `ImageConverter.swift`'s metadata writer and `ModelZoo.teaCacheCoefficientsForModel`. Search still shows non-applicable settings, dimmed.
 - Editing a built-in layout copies it to "<name> Custom". The Changed group lists every changed setting, shown or tucked. Inspector visibility uses `@AppStorage("inspectorShown")` with a View menu item on ⌥⌘I instead of `@SceneStorage` + `InspectorCommands`, so the menu command can reach it. Refiner and upscaler sections have no enable checkbox; their pickers have None.
 - Return in the prompt generates; ⌥↩ adds a line.
@@ -64,6 +64,17 @@ The CLI's generation code is almost all `private` inside `/Users/ianiv/Code/draw
 - Model import (.safetensors checkpoints through ModelImporter) is not done yet.
 - `--library-check` covers catalog vs picker, import + family filter + same-session generation, LoRA delete, model download/cancel/delete.
 
+**Phase 5 notes (projects in Draw Things' format):**
+- Format reference: `/mnt/project-files/draw-things-project-format-20261022T040402-17a6.md` (project files), and DTDB Browser's README (`~/Code/DTDB Browser`). In short: one SQLite file per project holding dflat tables (`tensorhistorynode` steps keyed by lineage and logical time, `tensordata` canvas layers, `thumbnailhistorynode`/`…halfnode` JPEG previews) plus an s4nnc `tensors` table with each full image as an fp16 `[1, H, W, 3]` tensor in [-1, 1], fpzip-compressed. That's MGK's `Result.tensor` as is.
+- **`ProjectFormat` target**: dflat models generated from the pinned engine's `Libraries/History/Sources/*.fbs` by `Scripts/generate_project_format.sh` (needs `bazelisk`; builds dflat's codegen in a temp copy, touches neither `.build` nor the engine). The engine only generates these through Bazel and has no SwiftPM target for them. Rerun the script after bumping the engine revision. It's a separate module because its enums (`SamplerType`, `SeedMode`, …) clash with DataModels'. `Package.swift` adds dflat and flatbuffers at the engine's own pinned revisions.
+- `Project` (Project.swift) mirrors `ImageHistoryManager.pushHistory`/`addImage`/`deleteHistory`: append writes the tensor (`tensor_history_<random id in 100M–300M>`, codec fpzip+zip, store opened with no flags so it isn't truncated), then one transaction with the node, its layer and both thumbnails (JPEG q 0.75 full size, and q 0.5 downscaled at least 2×; the engine only writes these under UIKit, so Atelier encodes them itself). `preview_id` equals the tensor id, as the engine's sum of layer ids gives for one layer. Atelier always appends to the newest branch, so its projects have one lineage; reading follows the general main-line rule. Delete removes the step, its layers, thumbnails and tensors, and renumbers later steps down by one.
+- `ProjectMapping` converts the settings dump (the same `JSONValue.fields(of: Configuration)` used by presets and Use settings) to a node and back, following the engine's `JSGenerationConfiguration` bridge: sizes and tiles in 64-px units, `fps`→`fps_id`, `motionScale`→`motion_bucket_id`, `guidingFrameNoise`→`cond_aug`, `startFrameGuidance`→`start_frame_cfg`, `stage2Guidance`→`stage_2_cfg`, causal inference enabled when above zero. Enums convert by raw value (same order in both schemas). Prompts go in `text_prompt`/`negative_text_prompt`; `texthistorynode` isn't written.
+- `HistoryStore` holds the current project (remembered in UserDefaults `currentProject`, default "Atelier"), lists its main line, serves thumbnails and full images, deletes and exports a PNG (with the `Atelier` iTXt sidecar). History's toolbar has a project menu: switch, New Project…, Rename…, Show in Finder. Reveal in Finder became Export PNG…; Move to Trash became Delete (from the project). The session remembers the canvas image as a project step.
+- `--project-check` (AutomationProject.swift) runs 17 PASS/FAIL checks on a scratch project: append, main line order, every configuration field and every registry field round-trip, exact image round trip, thumbnails, delete and renumbering, reopen. Scripted runs take `--project NAME` so test images stay out of the user's project. DTDB Browser reads the files, and their schema matches a Draw Things project's for every table Atelier writes.
+- The first normal launch imported the 18 existing PNGs into "Atelier", oldest first, with dates, seeds, models and prompts intact.
+- Known, not from this phase: `--reuse` traps on the commit before it too, when it switches Create → History ("NSToolbarItemViewer's min/max size is nan… an item's size has been changed during layout"). Launching straight into History (`--show history`) works.
+- Not done yet: clips/audio (`clip` table, phase 8), moodboard and other layers (phase 7), branching from an earlier step, and `profile_data` timing.
+
 Gaps to fill. These are small additions in MGK or the app, guided by `/Users/ianiv/Code/draw-things-community/Libraries/MediaGenerationKit/AGENTS.md`: small, value-based API, no request objects, async for long work.
 1. **Per-call LoRA metadata** for LoRAs that aren't registered yet. Port the CLI's `loraOverrideMapping` (`DrawThingsCLI.swift:1015`), or register LoRAs through `LoRAZoo.appendCustomSpecification` when importing.
 2. **Fallback defaults for models missing from the community config catalog.** MOSS today falls back to generic 20 steps / UniPC AYS. Add an app-side table that seeds the inspector from the catalog description values, for example MOSS: 50 steps, Text Guidance 3, Shift 5, `resolutionDependentShift = false`, DDIM Trailing.
@@ -73,7 +84,7 @@ Gaps to fill. These are small additions in MGK or the app, guided by `/Users/ian
 ## App architecture (`~/Code/Atelier/Sources/Atelier/`, macOS 14+)
 - **`GenerationEngine`** (actor). Owns a cached `MediaGenerationPipeline` per model and recreates it only when the model changes. Runs one job at a time and publishes progress and the preview `CGImage` to the UI on the main actor.
 - **`JobQueue`** (`@Observable`). An ordered list of `Job {prompt, negativePrompt, configuration, inputs, count}`. Supports pause, reorder, cancel and retry. "Variations" expands into N jobs (seed sweep, or a prompt list with one prompt per line).
-- **`HistoryStore`**. One folder per day under `~/Pictures/Atelier/`. Each output gets a PNG/MOV plus a `.json` sidecar holding the prompt, the full configuration, model, LoRAs, seed and duration. Loaded into an in-memory index at launch; no database for v1. The sidecar also goes into the PNG as a tEXt chunk, so files stay self-describing.
+- **`HistoryStore`**. Since Phase 5, history lives in **projects** in Draw Things' file format (one `.sqlite3` per project under `~/Pictures/Atelier/Projects/`), see Phase 5 notes. Before that it was one folder per day under `~/Pictures/Atelier/` with a PNG plus `.json` sidecar per output; those are imported once into the "Atelier" project and left in place.
 - **`ModelLibrary`**. Wraps the `MediaGenerationEnvironment` catalog and LoRAZoo. Shows downloaded vs available, download progress and disk usage, and filters LoRAs by the selected model's version.
 
 **UI layout:** a `NavigationSplitView` with sidebar sections Create, Queue, History, Models and LoRAs.
@@ -98,7 +109,7 @@ Gaps to fill. These are small additions in MGK or the app, guided by `/Users/ian
   `.package(url: "https://github.com/drawthingsai/draw-things-community", revision: "8dbbb5c69b83c6312eb10622611d46a943de6f88")` (upstream `main` as of 2026-10-21, includes MOSS Image support). Bump the revision deliberately to pick up new models.
 - The only library product upstream exports is `_MediaGenerationKit`, so the app uses **only MGK's public API**. Fill the gaps above in the app (fallback defaults, LoRA registration via `custom_lora.json`, video writing, metadata).
 - If the app truly needs an engine change or a non-exported module (e.g. `ModelZoo`/`LoRAZoo`), switch the dependency to the local fork (`.package(path: "../draw-things-community")`, or `swift package edit`), make the change there as a separate commit, and note it here.
-- **Known fork-only fix:** `327c0386` "Fix Qwen3 attention layout when vision embeddings are injected" (`Libraries/SwiftDiffusion/Sources/Models/Qwen3.swift`) isn't upstream. In phase 6 (image-to-image/references), test reference-image generation on models whose Qwen3 text encoder takes vision embeddings. If it's broken, point the dependency at the fork.
+- **Known fork-only fix:** `327c0386` "Fix Qwen3 attention layout when vision embeddings are injected" (`Libraries/SwiftDiffusion/Sources/Models/Qwen3.swift`) isn't upstream. In phase 7 (image-to-image/references), test reference-image generation on models whose Qwen3 text encoder takes vision embeddings. If it's broken, point the dependency at the fork.
 - `Scripts/build.sh` runs `swift build -c release --build-system native --product Atelier`; the native build system is required for Metal 4 and i8x models.
 - `Scripts/package_app.sh` builds, then wraps the binary in `Atelier.app` (Info.plist, icon placeholder, ad-hoc codesign) at `build/Atelier.app`.
 - Keep generated build products and `build/` out of git via `.gitignore`.
@@ -108,9 +119,10 @@ Gaps to fill. These are small additions in MGK or the app, guided by `/Users/ian
 2. History browser with "Use settings" and rerun.
 3. Settings inspector: prompt composer under the canvas, inspector conventions, settings registry covering the full `Configuration`, search and Changed group, customizable layouts, presets. Comes before the queue because the queue needs an inspector that stays editable while jobs run.
 4. Model and LoRA library: download, import, delete, filtered LoRA picker. Moved ahead of the queue (Ianiv, 2026-10-21).
-5. Queue, batch and variations.
-6. Image-to-image and reference inputs.
-7. Video: frames, output writing and an inline player.
+5. Projects in Draw Things' file format, replacing the PNG history (Ianiv, 2026-10-22). Atelier creates and keeps its own projects; they aren't shared with Draw Things.
+6. Queue, batch and variations.
+7. Image-to-image and reference inputs.
+8. Video: frames, output writing and an inline player.
 
 ## Verification
 - In `~/Code/Atelier`: `Scripts/build.sh` builds and `Scripts/package_app.sh` produces a launchable `build/Atelier.app`.
@@ -118,6 +130,7 @@ Gaps to fill. These are small additions in MGK or the app, guided by `/Users/ian
 - "Use settings" on a history item reproduces the same image for the same seed.
 - Settings inspector: the prompt is under the canvas; hiding a setting and then changing it from search puts it in the Changed group; a custom layout survives relaunch and round-trips through export/import; a preset applied to a different model keeps that model's defaults for settings the preset doesn't set; "Use settings" restores every registry field.
 - Import a `.safetensors` LoRA from ~/Downloads. It should show up only for matching models, and a generation with it should run.
+- Projects: `Atelier --project-check --quit` passes; a generated image lands in the current project, shows in History, survives relaunch, and "Use settings" on it reproduces the image; DTDB Browser opens the project file; the old PNG history appears in the "Atelier" project after the first launch.
 - Queue 5 variations, then pause, reorder and cancel one.
 - Run an LTX video at a small frame count and check that it writes and plays back.
 - A clean clone builds from scratch (no local path dependency): `rm -rf .build && Scripts/build.sh`.

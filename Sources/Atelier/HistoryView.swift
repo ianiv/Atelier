@@ -1,4 +1,5 @@
 import ImageIO
+import UniformTypeIdentifiers
 import SwiftUI
 
 struct HistoryView: View {
@@ -27,6 +28,7 @@ struct HistoryView: View {
     grid
       .searchable(text: $search, placement: .toolbar, prompt: "Filter by prompt")
       .toolbar {
+        ToolbarItem(placement: .navigation) { ProjectMenu() }
         ToolbarItem {
           Picker("Model", selection: $modelFilter) {
             Text("All models").tag(String?.none)
@@ -41,6 +43,7 @@ struct HistoryView: View {
             HistoryDetail(
               item: selected, use: { use(selected, newSeed: false) },
               rerun: { use(selected, newSeed: true) },
+              export: { export(selected) },
               delete: { pendingDelete = selected })
           } else {
             ContentUnavailableView(
@@ -51,23 +54,36 @@ struct HistoryView: View {
         .inspectorColumnWidth(min: 300, ideal: 340, max: 480)
       }
       .confirmationDialog(
-        "Move this image to the Trash?",
+        "Delete this image from the project?",
         isPresented: Binding(
           get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
         presenting: pendingDelete
       ) { item in
-        Button("Move to Trash", role: .destructive) { delete(item) }
+        Button("Delete", role: .destructive) { delete(item) }
         Button("Cancel", role: .cancel) { pendingDelete = nil }
       } message: { _ in
-        Text("The PNG and its settings file are moved to the Trash.")
+        Text("The image and its settings are removed from “\(history.project.name)”. This can't be undone.")
       }
       .alert(
-        "Couldn't delete",
+        "Something went wrong",
         isPresented: Binding(get: { deleteError != nil }, set: { if !$0 { deleteError = nil } }),
         actions: { Button("OK") { deleteError = nil } },
         message: { Text(deleteError ?? "") })
       .onDeleteCommand { pendingDelete = selected }
       .task(id: history.isLoaded) { if selected == nil { selection = filtered.first?.id } }
+      .safeAreaInset(edge: .bottom) {
+        if let progress = history.importProgress {
+          HStack {
+            ProgressView(value: Double(progress.done), total: Double(max(progress.total, 1)))
+              .frame(maxWidth: 200)
+            Text("Importing earlier images into “\(HistoryStore.defaultProjectName)”: \(progress.done) of \(progress.total)")
+              .foregroundStyle(.secondary)
+          }
+          .padding(8)
+          .frame(maxWidth: .infinity)
+          .background(.bar)
+        }
+      }
   }
 
   @ViewBuilder
@@ -76,8 +92,8 @@ struct HistoryView: View {
       ProgressView()
     } else if history.items.isEmpty {
       ContentUnavailableView(
-        "No history yet", systemImage: "clock",
-        description: Text("Images you generate in Create show up here."))
+        "No images in “\(history.project.name)”", systemImage: "clock",
+        description: Text("Images you generate in Create are saved to the current project."))
     } else if filtered.isEmpty {
       ContentUnavailableView.search(text: search)
     } else {
@@ -86,7 +102,7 @@ struct HistoryView: View {
           ForEach(filtered) { item in
             Color.clear
               .aspectRatio(1, contentMode: .fit)
-              .overlay { Thumbnail(url: item.imageURL) }
+              .overlay { Thumbnail(item: item) }
               .clipShape(.rect(cornerRadius: 6))
               .overlay {
                 RoundedRectangle(cornerRadius: 6)
@@ -101,9 +117,9 @@ struct HistoryView: View {
                   .disabled(!create.canUse(item))
                 Button("Rerun with New Seed") { use(item, newSeed: true) }
                   .disabled(!create.canUse(item))
-                Button("Reveal in Finder") { reveal(item) }
+                Button("Export PNG…") { export(item) }
                 Divider()
-                Button("Move to Trash", role: .destructive) { pendingDelete = item }
+                Button("Delete", role: .destructive) { pendingDelete = item }
               }
           }
         }
@@ -123,17 +139,29 @@ struct HistoryView: View {
     navigation.section = .create
   }
 
-  private func reveal(_ item: HistoryItem) {
-    NSWorkspace.shared.activateFileViewerSelecting([item.imageURL])
+  private func export(_ item: HistoryItem) {
+    let panel = NSSavePanel()
+    panel.allowedContentTypes = [.png]
+    panel.nameFieldStringValue = "\(history.project.name) \(item.id.logicalTime)-\(item.sidecar.seed).png"
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    Task {
+      do {
+        try await history.exportPNG(item, to: url)
+      } catch {
+        deleteError = error.localizedDescription
+      }
+    }
   }
 
   private func delete(_ item: HistoryItem) {
     pendingDelete = nil
-    do {
-      try history.delete(item)
-      if selection == item.id { selection = nil }
-    } catch {
-      deleteError = error.localizedDescription
+    Task {
+      do {
+        try await history.delete(item)
+        if selection == item.id { selection = filtered.first?.id }
+      } catch {
+        deleteError = error.localizedDescription
+      }
     }
   }
 }
@@ -143,13 +171,14 @@ struct HistoryDetail: View {
   var item: HistoryItem
   var use: () -> Void
   var rerun: () -> Void
+  var export: () -> Void
   var delete: () -> Void
 
   var body: some View {
     let sidecar = item.sidecar
     Form {
       Section {
-        Thumbnail(url: item.imageURL, maxPixel: 1024, fill: false)
+        Thumbnail(item: item, half: false, fill: false)
           .frame(maxWidth: .infinity)
           .frame(height: 260)
         HStack {
@@ -162,10 +191,8 @@ struct HistoryDetail: View {
             .font(.caption).foregroundStyle(.secondary)
         }
         HStack {
-          Button("Reveal in Finder") {
-            NSWorkspace.shared.activateFileViewerSelecting([item.imageURL])
-          }
-          Button("Move to Trash", role: .destructive, action: delete)
+          Button("Export PNG…", action: export)
+          Button("Delete", role: .destructive, action: delete)
         }
       }
       Section("Prompt") {
@@ -200,10 +227,12 @@ struct HistoryDetail: View {
   }
 }
 
-/// A downsampled image loaded off the main thread.
+/// A step's JPEG preview from the project, loaded off the main thread.
 struct Thumbnail: View {
-  var url: URL
-  var maxPixel = 440
+  @Environment(HistoryStore.self) private var history
+  var item: HistoryItem
+  /// The small grid preview, or the full-size one.
+  var half = true
   var fill = true
   @State private var image: CGImage?
 
@@ -217,28 +246,81 @@ struct Thumbnail: View {
           .aspectRatio(contentMode: fill ? .fill : .fit)
       }
     }
-    .task(id: url) {
-      let url = url
-      let maxPixel = maxPixel
-      image = await Task.detached { Self.load(url, maxPixel: maxPixel) }.value
+    .task(id: "\(item.previewId)#\(half)") {
+      image = await history.thumbnail(for: item, half: half)
     }
   }
+}
 
-  private static let cache = NSCache<NSString, CGImage>()
+/// The current project, with switching, New Project… and Rename….
+struct ProjectMenu: View {
+  @Environment(HistoryStore.self) private var history
+  @State private var naming: Naming?
+  @State private var name = ""
+  @State private var error: String?
 
-  private nonisolated static func load(_ url: URL, maxPixel: Int) -> CGImage? {
-    let key = "\(url.path)#\(maxPixel)" as NSString
-    if let cached = cache.object(forKey: key) { return cached }
-    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-      let image = CGImageSourceCreateThumbnailAtIndex(
-        source, 0,
-        [
-          kCGImageSourceCreateThumbnailFromImageAlways: true,
-          kCGImageSourceThumbnailMaxPixelSize: maxPixel,
-          kCGImageSourceCreateThumbnailWithTransform: true,
-        ] as CFDictionary)
-    else { return nil }
-    cache.setObject(image, forKey: key)
-    return image
+  enum Naming { case new, rename }
+
+  var body: some View {
+    Menu {
+      ForEach(history.projectNames, id: \.self) { project in
+        Toggle(
+          project,
+          isOn: Binding(
+            get: { project == history.project.name },
+            set: { if $0 { Task { await history.open(project) } } }))
+      }
+      Divider()
+      Button("New Project…") {
+        name = history.availableName()
+        naming = .new
+      }
+      Button("Rename “\(history.project.name)”…") {
+        name = history.project.name
+        naming = .rename
+      }
+      Button("Show in Finder") {
+        NSWorkspace.shared.activateFileViewerSelecting([history.project.url])
+      }
+    } label: {
+      Label(history.project.name, systemImage: "folder")
+        .labelStyle(.titleAndIcon)
+    }
+    .help("Project: images are saved to the current project")
+    .alert(
+      naming == .rename ? "Rename Project" : "New Project",
+      isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })
+    ) {
+      TextField("Name", text: $name)
+      Button(naming == .rename ? "Rename" : "Create") { commit() }
+        .disabled(!HistoryStore.isValidName(name))
+      Button("Cancel", role: .cancel) { naming = nil }
+    }
+    .alert(
+      "Couldn't rename the project",
+      isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } }),
+      actions: { Button("OK") { error = nil } },
+      message: { Text(error ?? "") })
+  }
+
+  private func commit() {
+    let kind = naming
+    naming = nil
+    let name = name.trimmingCharacters(in: .whitespaces)
+    guard HistoryStore.isValidName(name) else { return }
+    Task {
+      switch kind {
+      case .new:
+        await history.open(history.projectNames.contains(name) ? history.availableName(name) : name)
+      case .rename:
+        do {
+          try await history.renameCurrent(to: name)
+        } catch {
+          self.error = error.localizedDescription
+        }
+      case nil:
+        break
+      }
+    }
   }
 }

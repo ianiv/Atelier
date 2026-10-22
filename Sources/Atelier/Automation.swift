@@ -9,15 +9,22 @@ import _MediaGenerationKit
 ///   Atelier --generate --model moss_image_sft_i8x.ckpt --prompt "…" --width 1152 --height 896
 ///           [--seed N] [--steps N] [--cancel-at-step N] [--snapshot-dir DIR] [--quit]
 ///
-/// `--show history` opens that sidebar section at launch.
+/// `--show history` opens that sidebar section at launch. `--project NAME` saves to (and reads
+/// history from) that project instead of the user's current one.
 ///
-/// `--reuse latest|PNG [--new-seed]` instead loads a history item through "Use settings" (or
-/// "Rerun with new seed"), generates, and compares the new PNG's pixels with the original.
+/// `--reuse latest|STEP [--new-seed]` instead loads a history item (the newest, or a step number
+/// in the current project) through "Use settings" (or "Rerun with new seed"), generates, and
+/// compares the new image's pixels with the original.
+///
+/// `--project-check` exercises the project format on a scratch project (AutomationProject.swift).
 @MainActor
 enum Automation {
   /// Whether this launch is a scripted run (any of the flags `runIfRequested` acts on).
   nonisolated static var isRequested: Bool {
-    let flags = ["--show", "--resize-bench", "--inspector-check", "--library-check", "--reuse", "--generate"]
+    let flags = [
+      "--show", "--resize-bench", "--inspector-check", "--library-check", "--project-check",
+      "--reuse", "--generate",
+    ]
     return CommandLine.arguments.contains { flags.contains($0) }
   }
 
@@ -42,6 +49,10 @@ enum Automation {
     }
     if args.contains("--library-check") {
       libraryCheck(model, navigation: navigation, layouts: layouts, presets: presets, library: library)
+      return
+    }
+    if args.contains("--project-check") {
+      projectCheck(model)
       return
     }
     if args.contains("--reuse") {
@@ -130,9 +141,9 @@ enum Automation {
         log(String(format: "stopped %.2fs after cancel", Date().timeIntervalSince(cancelRequestedAt)))
       }
       if let error = model.errorMessage { log("error: \(error)") }
-      if let url = model.lastSavedURL {
-        log("saved \(url.path)")
-        if editDuringRun, let item = model.history.items.first(where: { $0.imageURL == url }) {
+      if let step = model.lastSavedStep {
+        log("saved step \(step.logicalTime) in \(model.history.project.url.path)")
+        if editDuringRun, let item = model.history.item(step) {
           let saved = item.sidecar.guidanceScale
           log("\(saved == guidanceAtStart ? "PASS" : "FAIL") run used guidance \(saved) (start \(guidanceAtStart)); inspector now \(model.settings?.guidanceScale ?? -1)")
         }
@@ -164,7 +175,7 @@ enum Automation {
       guard
         let item = target == "latest"
           ? model.history.items.first
-          : model.history.items.first(where: { $0.imageURL.path == target })
+          : model.history.items.first(where: { "\($0.id.logicalTime)" == target })
       else {
         log("no history item \(target)")
         return finish()
@@ -175,13 +186,13 @@ enum Automation {
 
       let newSeed = args.contains("--new-seed")
       log(
-        "\(newSeed ? "rerun" : "use settings") \(item.imageURL.lastPathComponent): \(item.sidecar.model) seed \(item.sidecar.seed) steps \(item.sidecar.steps)"
+        "\(newSeed ? "rerun" : "use settings") step \(item.id.logicalTime): \(item.sidecar.model) seed \(item.sidecar.seed) steps \(item.sidecar.steps)"
       )
       guard model.canUse(item) else {
         log("item can't be used (model not downloaded?)")
         return finish()
       }
-      let previous = model.lastSavedURL
+      let previous = model.lastSavedStep
       model.use(item, newSeed: newSeed)
       navigation.section = .create
       if !newSeed {
@@ -190,17 +201,21 @@ enum Automation {
         log("loaded: model \(model.selectedModel ?? "?") seed \(model.seed) locked \(model.seedLocked) registry fields differing from sidecar: \(mismatched)")
         model.generate()
       }
-      while !model.isBusy && model.lastSavedURL == previous && model.errorMessage == nil {
+      while !model.isBusy && model.lastSavedStep == previous && model.errorMessage == nil {
         try? await Task.sleep(for: .milliseconds(50))
       }
       while model.isBusy { try? await Task.sleep(for: .milliseconds(100)) }
       if let error = model.errorMessage { log("error: \(error)") }
-      guard let url = model.lastSavedURL, url != previous else {
+      guard let step = model.lastSavedStep, step != previous, let saved = model.history.item(step)
+      else {
         log("no new image")
         return finish()
       }
-      log("saved \(url.path) seed \(model.seed)")
-      if let difference = pixelDifference(item.imageURL, url) {
+      log("saved step \(step.logicalTime) seed \(model.seed)")
+      if let original = await model.history.image(for: item),
+        let rerun = await model.history.image(for: saved),
+        let difference = pixelDifference(original, rerun)
+      {
         log("pixels differing from original: \(difference.count) of \(difference.total), max channel delta \(difference.maxDelta)")
       }
       if let snapshotDir { snapshot(to: snapshotDir.appendingPathComponent("create.png")) }
@@ -364,15 +379,15 @@ enum Automation {
         model.seedLocked = true
         model.prompt = value("--prompt") ?? "portrait photo of a woman in a garden"
         navigation.section = .create
-        let previous = model.lastSavedURL
+        let previous = model.lastSavedStep
         log("generate with \(lora.file) weight \(weight) on \(target), \(settings.steps) steps")
         model.generate()
         while model.isBusy { try? await Task.sleep(for: .milliseconds(100)) }
         if let error = model.errorMessage { log("error: \(error)") }
-        if let url = model.lastSavedURL, url != previous {
-          let saved = model.history.items.first { $0.imageURL == url }
+        if let step = model.lastSavedStep, step != previous {
+          let saved = model.history.item(step)
           let savedLoRAs = saved?.sidecar.configuration["loras"].map { "\($0)" } ?? "none"
-          check(true, "saved \(url.path), sidecar loras \(savedLoRAs)")
+          check(true, "saved step \(step.logicalTime), project loras \(savedLoRAs)")
         } else {
           check(false, "no image saved")
         }
@@ -603,7 +618,7 @@ enum Automation {
         await settle()
         let mismatched = registryMismatches(model, dump: item.sidecar.configuration)
         check(mismatched.isEmpty,
-          "Use settings on \(item.imageURL.lastPathComponent) restored all \(SettingsRegistry.all.count) registry fields \(mismatched)")
+          "Use settings on step \(item.id.logicalTime) restored all \(SettingsRegistry.all.count) registry fields \(mismatched)")
       } else {
         log("SKIP no usable history item for Use settings")
       }
@@ -618,11 +633,8 @@ enum Automation {
     }
   }
 
-  private static func pixelDifference(_ a: URL, _ b: URL) -> (count: Int, total: Int, maxDelta: Int)? {
-    func rgba(_ url: URL) -> (Int, Int, [UInt8])? {
-      guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-        let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
-      else { return nil }
+  static func pixelDifference(_ a: CGImage, _ b: CGImage) -> (count: Int, total: Int, maxDelta: Int)? {
+    func rgba(_ image: CGImage) -> (Int, Int, [UInt8])? {
       let (width, height) = (image.width, image.height)
       var bytes = [UInt8](repeating: 0, count: width * height * 4)
       guard let context = CGContext(
