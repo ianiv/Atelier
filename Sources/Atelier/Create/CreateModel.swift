@@ -651,11 +651,18 @@ final class CreateModel {
     }
   }
 
-  /// Shows a history image on the canvas and restores its prompt and negative prompt, leaving
-  /// the model, seed and other settings alone.
-  func showWithPrompt(_ item: HistoryItem) {
-    prompt = item.sidecar.prompt
-    negativePrompt = item.sidecar.negativePrompt
+  /// Shows a history image on the canvas and restores its prompt, negative prompt and size,
+  /// leaving the model, seed and other settings alone.
+  func showWithPrompt(_ item: HistoryItem, undoManager: UndoManager?) {
+    let sidecar = item.sidecar
+    prompt = sidecar.prompt
+    negativePrompt = sidecar.negativePrompt
+    if let descriptor = SettingsRegistry.byID["size"] {
+      set(
+        descriptor,
+        to: .object(["width": .number(Double(sidecar.width)), "height": .number(Double(sidecar.height))]),
+        undoManager: undoManager)
+    }
     show(item)
   }
 

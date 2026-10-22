@@ -463,6 +463,7 @@ struct PromptSplitter: View {
 struct RecentStrip: View {
   @Environment(CreateModel.self) private var model
   @Environment(HistoryStore.self) private var history
+  @Environment(\.undoManager) private var undoManager
 
   var body: some View {
     let items = Array(history.items.prefix(24))
@@ -480,9 +481,9 @@ struct RecentStrip: View {
               }
               .contentShape(.rect)
               .onTapGesture(count: 2) { model.use(item) }
-              .onTapGesture { model.showWithPrompt(item) }
+              .onTapGesture { model.showWithPrompt(item, undoManager: undoManager) }
               .draggable(history.dragExport(item))
-              .help("\(item.sidecar.prompt)\n\(GenerationTime.text(item.sidecar.durationSeconds)). Click to view and use its prompt, double-click to use all its settings.")
+              .help("\(item.sidecar.prompt)\n\(GenerationTime.text(item.sidecar.durationSeconds)). Click to view and use its prompt and size, double-click to use all its settings.")
               .contextMenu {
                 Button("Use Settings") { model.use(item) }
                   .disabled(!model.canUse(item))
