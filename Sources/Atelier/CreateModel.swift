@@ -27,7 +27,11 @@ final class CreateModel {
   var prompt = ""
   var negativePrompt = ""
   var seed = UInt32.random(in: 0...UInt32.max)
-  var seedLocked = false
+  /// Off means "always random": every Generate rolls a new seed. Remembered across launches;
+  /// "Use settings" and typing a seed turn it on.
+  var seedLocked = UserDefaults.standard.bool(forKey: "seedLocked") {
+    didSet { UserDefaults.standard.set(seedLocked, forKey: "seedLocked") }
+  }
   /// The inspector's values: every setting the next run uses (the seed lives in `seed`).
   var settings: PipelineConfiguration?
   /// The selected model's defaults, the baseline for changed markers, reset and presets.

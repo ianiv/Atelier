@@ -185,10 +185,18 @@ struct SeedControls: View {
     @Bindable var model = model
     LabeledContent("Seed") {
       HStack(spacing: 6) {
-        TextField("Seed", value: $model.seed, format: .number.grouping(.never))
-          .labelsHidden()
-          .multilineTextAlignment(.trailing)
-          .frame(maxWidth: 120)
+        TextField(
+          "Seed",
+          value: Binding(
+            get: { model.seed },
+            set: {
+              model.seed = $0
+              model.seedLocked = true
+            }), format: .number.grouping(.never)
+        )
+        .labelsHidden()
+        .multilineTextAlignment(.trailing)
+        .frame(maxWidth: 120)
         Button {
           model.rollSeed()
         } label: {
@@ -196,15 +204,15 @@ struct SeedControls: View {
         }
         .buttonStyle(.borderless)
         .help("New random seed (⌘R)")
-        Toggle(isOn: $model.seedLocked) {
-          Image(systemName: model.seedLocked ? "lock.fill" : "lock.open")
-        }
-        .toggleStyle(.button)
-        .buttonStyle(.borderless)
-        .help(model.seedLocked ? "Seed is locked" : "A new seed is rolled for each generation")
+        Toggle("Random", isOn: Binding(get: { !model.seedLocked }, set: { model.seedLocked = !$0 }))
+          .toggleStyle(.checkbox)
+          .help(
+            model.seedLocked
+              ? "Every generation uses this seed. Check to roll a new one each time."
+              : "Always random: every generation rolls a new seed. The field shows the last one.")
       }
     }
-    .help("The random seed. Lock it to reproduce an image.")
+    .help("The random seed. Uncheck Random and set a seed to reproduce an image.")
   }
 }
 
