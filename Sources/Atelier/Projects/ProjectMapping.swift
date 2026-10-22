@@ -26,6 +26,44 @@ enum ProjectMapping {
     var generated = true
     /// How many moodboard images the step has (`tensormoodboarddata` rows).
     var moodboardCount = 0
+    /// For a step generated from the canvas (Edit), the image tensor of its input: the step
+    /// before it. Kept in `profile_data`, see `Profile`.
+    var inputTensorId: Int64?
+  }
+
+  /// `profile_data`: Draw Things' `GenerationProfile` as snake-case JSON (timings and duration),
+  /// plus Atelier's `input_tensor_id` for Edit steps. Draw Things has no field for "this step
+  /// was made from the canvas": in its model every step's input is the canvas, i.e. the step
+  /// before. Atelier's Generate mode ignores the canvas, so Edit steps carry the input's tensor
+  /// id here. Draw Things decodes the profile with Codable, which skips the extra key.
+  struct Profile: Codable {
+    var timings: [Timing] = []
+    var duration: Double
+    var inputTensorId: Int64?
+
+    struct Timing: Codable {
+      var durations: [Double]
+      var name: String
+    }
+
+    var bytes: [UInt8] {
+      let encoder = JSONEncoder()
+      encoder.keyEncodingStrategy = .convertToSnakeCase
+      return (try? encoder.encode(self)).map { [UInt8]($0) } ?? []
+    }
+
+    init(duration: Double, inputTensorId: Int64?) {
+      self.duration = duration
+      self.inputTensorId = inputTensorId
+    }
+
+    init?(_ bytes: [UInt8]) {
+      guard !bytes.isEmpty else { return nil }
+      let decoder = JSONDecoder()
+      decoder.keyDecodingStrategy = .convertFromSnakeCase
+      guard let profile = try? decoder.decode(Profile.self, from: Data(bytes)) else { return nil }
+      self = profile
+    }
   }
 
   /// A step for `settings`, given in the history dump format (`JSONValue.fields(of:)` of MGK's
@@ -96,6 +134,9 @@ enum ProjectMapping {
       speedUpWithGuidanceEmbed: d.bool("speedUpWithGuidanceEmbed", true),
       guidanceEmbed: d.float("guidanceEmbed", 3.5),
       resolutionDependentShift: d.bool("resolutionDependentShift", true),
+      profileData: step.inputTensorId.map {
+        Profile(duration: step.generationTime, inputTensorId: $0).bytes
+      },
       teaCacheStart: i32("teaCacheStart", 5), teaCacheEnd: i32("teaCacheEnd", -1),
       teaCacheThreshold: d.float("teaCacheThreshold", 0.06), teaCache: d.bool("teaCache", false),
       separateT5: d.bool("separateT5", false), t5Text: d.string("t5Text"),

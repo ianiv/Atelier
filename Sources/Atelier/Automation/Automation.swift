@@ -16,14 +16,15 @@ import _MediaGenerationKit
 /// in the current project) through "Use settings" (or "Rerun with new seed"), generates, and
 /// compares the new image's pixels with the original.
 ///
-/// `--project-check` exercises the project format on a scratch project (AutomationProject.swift).
+/// `--project-check` exercises the project format on a scratch project, and `--edit-input-check`
+/// Use Settings on Edit steps (AutomationProject.swift).
 @MainActor
 enum Automation {
   /// Whether this launch is a scripted run (any of the flags `runIfRequested` acts on).
   nonisolated static var isRequested: Bool {
     let flags = [
       "--show", "--resize-bench", "--inspector-check", "--library-check", "--project-check",
-      "--reuse", "--generate", "--ux-check",
+      "--reuse", "--generate", "--ux-check", "--edit-input-check",
     ]
     return CommandLine.arguments.contains { flags.contains($0) }
   }
@@ -53,6 +54,10 @@ enum Automation {
     }
     if args.contains("--ux-check") {
       uxCheck(model, navigation: navigation, layouts: layouts, presets: presets)
+      return
+    }
+    if args.contains("--edit-input-check") {
+      editInputCheck(model)
       return
     }
     if args.contains("--project-check") {
@@ -201,6 +206,38 @@ enum Automation {
         snapshot(to: snapshotDir.appendingPathComponent("final.png"))
         if let image = model.image, let png = ImageTensor.png(image) {
           try? png.write(to: snapshotDir.appendingPathComponent("result.png"))
+        }
+      }
+      // --then PROMPT: a second run in the same launch, in Edit mode on the first result, with
+      // --then-moodboard FILE[,FILE…] as its moodboard (iterating in place).
+      if let then = value("--then") {
+        model.prompt = then
+        model.canvasMode = .edit
+        if let list = value("--then-moodboard") {
+          for path in list.split(separator: ",") {
+            if let image = ImageLoader.image(at: URL(fileURLWithPath: String(path))) {
+              model.moodboard.add(image)
+            }
+          }
+        }
+        if let seed = value("--then-seed").flatMap(UInt32.init) { model.seed = seed }
+        if let snapshotDir, let image = model.image,
+          let input = model.canvas.render(image, size: CGSize(width: settings.width, height: settings.height)),
+          let png = ImageTensor.png(input)
+        {
+          try? png.write(to: snapshotDir.appendingPathComponent("then-input.png"))
+        }
+        log("then: edit with moodboard \(model.moodboard.items.count), seed \(model.seed)")
+        let previous = model.lastSavedStep
+        model.generate()
+        try? await Task.sleep(for: .milliseconds(200))
+        while model.isBusy { try? await Task.sleep(for: .milliseconds(100)) }
+        if let error = model.errorMessage { log("error: \(error)") }
+        if let step = model.lastSavedStep, step != previous {
+          log("saved step \(step.logicalTime)")
+        }
+        if let snapshotDir, let image = model.image, let png = ImageTensor.png(image) {
+          try? png.write(to: snapshotDir.appendingPathComponent("then-result.png"))
         }
       }
       if args.contains("--quit") { NSApp.terminate(nil) }
@@ -863,7 +900,9 @@ enum Automation {
     }
   }
 
-  static func pixelDifference(_ a: CGImage, _ b: CGImage) -> (count: Int, total: Int, maxDelta: Int)? {
+  static func pixelDifference(_ a: CGImage, _ b: CGImage)
+    -> (count: Int, total: Int, maxDelta: Int, meanDelta: Double)?
+  {
     func rgba(_ image: CGImage) -> (Int, Int, [UInt8])? {
       let (width, height) = (image.width, image.height)
       var bytes = [UInt8](repeating: 0, count: width * height * 4)
@@ -880,16 +919,18 @@ enum Automation {
     }
     var count = 0
     var maxDelta = 0
+    var sum = 0
     for pixel in 0..<(w1 * h1) {
       var differs = false
       for channel in 0..<3 {
         let delta = abs(Int(p1[pixel * 4 + channel]) - Int(p2[pixel * 4 + channel]))
         if delta > 0 { differs = true }
+        sum += delta
         maxDelta = max(maxDelta, delta)
       }
       if differs { count += 1 }
     }
-    return (count, w1 * h1, maxDelta)
+    return (count, w1 * h1, maxDelta, Double(sum) / Double(w1 * h1 * 3))
   }
 
   /// A window hosting the app's content when SwiftUI hasn't put one up (the screen is locked),

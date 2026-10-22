@@ -15,6 +15,9 @@ struct HistoryItem: Identifiable, Hashable {
   var tensorId: Int64
   var previewId: Int64
   var sidecar: HistoryStore.Sidecar
+  /// Set for a step generated from the canvas (Edit): the image tensor of its input, the step
+  /// before it.
+  var inputTensorId: Int64?
 
   static func == (lhs: HistoryItem, rhs: HistoryItem) -> Bool { lhs.id == rhs.id }
   func hash(into hasher: inout Hasher) { hasher.combine(id) }
@@ -165,12 +168,23 @@ final class HistoryStore {
     settings.seed = request.seed
     let project = project
     let dump = JSONValue.fields(of: settings)
-    // An image brought in from outside goes in first as an Imported step, as Draw Things does.
-    if let input = request.importedInput, let tensor = ImageTensor.tensor(from: input) {
-      _ = try await project.append(
-        tensor: tensor, model: request.model, prompt: request.prompt,
-        negativePrompt: request.negativePrompt, seed: request.seed, settings: dump,
-        createdAt: startedAt, duration: 0, reason: .imported, generated: false)
+    // An Edit run's input is the step before its result. When the canvas isn't exactly the
+    // newest step's image (an image from outside, an earlier step, moved, zoomed or another
+    // size), it goes in first as a step of its own: Imported for an image from outside, as Draw
+    // Things does.
+    var inputTensorId: Int64?
+    if let canvas = request.canvas {
+      let newest = await Task.detached { project.newestStep() }.value
+      if let step = request.canvasStep, step == newest?.id, let tensorId = newest?.tensorId {
+        inputTensorId = tensorId
+      } else if let tensor = ImageTensor.tensor(from: canvas) {
+        let input = try await project.append(
+          tensor: tensor, model: request.model, prompt: request.prompt,
+          negativePrompt: request.negativePrompt, seed: request.seed, settings: dump,
+          createdAt: startedAt, duration: 0,
+          reason: request.canvasIsImported ? .imported : .other, generated: false)
+        inputTensorId = input.tensorId
+      }
     }
     let moodboard = request.moodboard.compactMap { entry in
       ImageTensor.tensor(from: entry.image).map { (tensor: $0, weight: entry.weight) }
@@ -179,7 +193,8 @@ final class HistoryStore {
       tensor: ImageTensor.rgb(result.tensor), model: request.model, prompt: request.prompt,
       negativePrompt: request.negativePrompt, seed: request.seed,
       settings: dump, createdAt: finishedAt,
-      duration: finishedAt.timeIntervalSince(startedAt), moodboard: moodboard)
+      duration: finishedAt.timeIntervalSince(startedAt), moodboard: moodboard,
+      inputTensorId: inputTensorId)
     if project === self.project { items.insert(item, at: 0) }
     return item
   }
@@ -224,6 +239,13 @@ final class HistoryStore {
   func image(for item: HistoryItem) async -> CGImage? {
     let project = project
     return await Task.detached { project.image(for: item) }.value
+  }
+
+  /// An Edit step's input step and image, while that step still exists in `projectName`.
+  func input(of item: HistoryItem, in projectName: String) async -> (id: StepID, image: CGImage)? {
+    guard projectName == project.name, let tensorId = item.inputTensorId else { return nil }
+    let project = project
+    return await Task.detached { project.input(of: item.id, tensorId: tensorId) }.value
   }
 
   /// The full-resolution image of a step in `projectName` (when that's the current project).

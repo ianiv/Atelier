@@ -381,6 +381,10 @@ struct StatusBar: View {
           )
           .foregroundStyle(.secondary)
           .lineLimit(2)
+        } else if let note = model.statusNote {
+          Label(note, systemImage: "info.circle")
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
         } else if model.lastSavedStep != nil {
           let took = model.imageItem.map { " in " + GenerationTime.text($0.sidecar.durationSeconds) } ?? ""
           Text("Saved to \(model.history.project.name)\(took)").foregroundStyle(.secondary)

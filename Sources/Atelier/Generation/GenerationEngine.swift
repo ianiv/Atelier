@@ -18,8 +18,11 @@ actor GenerationEngine {
     /// Edit mode: the canvas frame rendered at the output size, transparent where the image
     /// doesn't cover it (the engine turns those pixels into the inpaint mask).
     var canvas: CGImage?
-    /// The image brought in from outside that `canvas` was made from, saved as an Imported step.
-    var importedInput: CGImage?
+    /// The project step whose image `canvas` is exactly (fitted, same size), if any. When it's
+    /// not the newest step, or not set, the canvas is saved as a step of its own before the result.
+    var canvasStep: StepID?
+    /// The canvas image came from outside the project (saved as an Imported step).
+    var canvasIsImported = false
     /// Moodboard images sent as references (weight above zero only).
     var moodboard: [Reference] = []
   }

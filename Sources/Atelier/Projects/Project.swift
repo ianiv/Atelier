@@ -74,8 +74,40 @@ final class Project: @unchecked Sendable {
       guard node.generated, let tensorId = imageTensorId(of: node) else { return nil }
       return HistoryItem(
         id: StepID(lineage: node.lineage, logicalTime: node.logicalTime), tensorId: tensorId,
-        previewId: node.previewId, sidecar: Self.sidecar(for: node))
+        previewId: node.previewId, sidecar: Self.sidecar(for: node),
+        inputTensorId: ProjectMapping.Profile(node.profileData)?.inputTensorId)
     }
+  }
+
+  /// The newest step (the one the next step follows) and its image tensor.
+  func newestStep() -> (id: StepID, tensorId: Int64?)? {
+    workspace.fetchWithinASnapshot {
+      workspace.fetch(for: TensorHistoryNode.self).all(
+        limit: .limit(1),
+        orderBy: [TensorHistoryNode.lineage.descending, TensorHistoryNode.logicalTime.descending]
+      ).first.map {
+        (StepID(lineage: $0.lineage, logicalTime: $0.logicalTime), imageTensorId(of: $0))
+      }
+    }
+  }
+
+  /// The input of an Edit step: the step before it on the main line, when its image is still the
+  /// recorded input (`tensorId`). Nil once that step was deleted (the one now before it holds
+  /// another image).
+  func input(of id: StepID, tensorId: Int64) -> (id: StepID, image: CGImage)? {
+    let parent = workspace.fetchWithinASnapshot { () -> TensorHistoryNode? in
+      let line = Self.mainLine(Array(workspace.fetch(for: TensorHistoryNode.self).all()))
+      guard
+        let index = line.firstIndex(where: {
+          $0.lineage == id.lineage && $0.logicalTime == id.logicalTime
+        }), index + 1 < line.count
+      else { return nil }
+      return line[index + 1]
+    }
+    guard let parent, imageTensorId(of: parent) == tensorId,
+      let image = self.tensor(id: tensorId).flatMap(ImageTensor.cgImage(from:))
+    else { return nil }
+    return (StepID(lineage: parent.lineage, logicalTime: parent.logicalTime), image)
   }
 
   /// The ancestry of the newest step: at each step number, the step with the greatest lineage
@@ -198,12 +230,13 @@ final class Project: @unchecked Sendable {
 
   /// Appends a generated image as a new step at the end of the newest branch: the tensor, the
   /// step, its canvas layer, its moodboard and both thumbnails. `generated` false records an image
-  /// brought in from outside, as Draw Things' Imported steps.
+  /// brought in from outside, as Draw Things' Imported steps. `inputTensorId` marks a step
+  /// generated from the canvas, whose input is the step before it.
   func append(
     tensor: Tensor<FloatType>, model: String, prompt: String, negativePrompt: String,
     seed: UInt32, settings: [String: JSONValue], createdAt: Date, duration: Double,
     reason: ProjectFormat.Reason = .generate, generated: Bool = true,
-    moodboard: [(tensor: Tensor<FloatType>, weight: Float)] = []
+    moodboard: [(tensor: Tensor<FloatType>, weight: Float)] = [], inputTensorId: Int64? = nil
   ) async throws -> HistoryItem {
     guard let image = ImageTensor.cgImage(from: tensor) else { throw ProjectError.badImage }
     let tensorId = Int64.random(in: 100_000_000...299_999_999)
@@ -231,7 +264,8 @@ final class Project: @unchecked Sendable {
       lineage: id.lineage, logicalTime: id.logicalTime, model: model, prompt: prompt,
       negativePrompt: negativePrompt, seed: seed, tensorId: tensorId, previewId: previewId,
       wallClock: Int64(createdAt.timeIntervalSince1970 * 1_000_000), generationTime: duration,
-      reason: reason, generated: generated, moodboardCount: moodboard.count)
+      reason: reason, generated: generated, moodboardCount: moodboard.count,
+      inputTensorId: inputTensorId)
     let node = ProjectMapping.node(for: step, settings: settings)
     let layer = Layer(
       lineage: id.lineage, logicalTime: id.logicalTime, index: 0, x: 0, y: 0,
@@ -272,7 +306,8 @@ final class Project: @unchecked Sendable {
       throw ProjectError.writeFailed
     }
     return HistoryItem(
-      id: id, tensorId: tensorId, previewId: previewId, sidecar: Self.sidecar(for: node))
+      id: id, tensorId: tensorId, previewId: previewId, sidecar: Self.sidecar(for: node),
+      inputTensorId: inputTensorId)
   }
 
   /// Deletes a step, its layers, thumbnails and tensors, and moves the later steps of its

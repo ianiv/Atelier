@@ -86,6 +86,8 @@ final class CreateModel {
   /// The canvas shows a step preview, not `imageStep`'s image.
   private var imageIsPreview = false
   var errorMessage: String?
+  /// A short note for the status bar, until the next run or Use Settings.
+  var statusNote: String?
 
   private var generationTask: Task<Void, Never>?
   private var loadTask: Task<Void, Never>?
@@ -265,10 +267,25 @@ final class CreateModel {
       seed = sidecar.seed
       seedLocked = true
     }
+    statusNote = nil
     let projectName = history.project.name
     imageStep = (projectName, item.id)
     canvasIsImported = false
-    Task {
+    // An Edit step brings back its input, fitted, in Edit mode, so rerunning reproduces it.
+    // Without its input (deleted since) it shows the result, as for a Generate step.
+    let restoreImage = Task {
+      if item.inputTensorId != nil {
+        if let input = await history.input(of: item, in: projectName) {
+          guard imageStep?.id == item.id else { return }
+          imageStep = (projectName, input.id)
+          image = input.image
+          canvas.zoomToFit()
+          canvasMode = .edit
+          return
+        }
+        guard imageStep?.id == item.id else { return }
+        statusNote = "The image this was made from is no longer in the project."
+      }
       let full = await history.image(at: item.id, in: projectName)
       if let full, imageStep?.id == item.id { image = full }
     }
@@ -282,6 +299,7 @@ final class CreateModel {
       if newSeed {
         Task {
           await restoreMoodboard.value
+          await restoreImage.value
           generate()
         }
       }
@@ -496,6 +514,7 @@ final class CreateModel {
     guard canGenerate, let model = selectedModel, let settings else { return }
     if !seedLocked { rollSeed() }
     errorMessage = nil
+    statusNote = nil
     // The request snapshots the settings, canvas and moodboard, so edits during the run apply to
     // the next one.
     var request = GenerationEngine.Request(
@@ -503,7 +522,14 @@ final class CreateModel {
       configuration: settings)
     if canvasMode == .edit, let image {
       request.canvas = canvas.render(image, size: CGSize(width: settings.width, height: settings.height))
-      if canvasIsImported { request.importedInput = request.canvas }
+      request.canvasIsImported = canvasIsImported
+      // The canvas is exactly its step's image when that's fitted at the output size.
+      if !canvasIsImported, !imageIsPreview, let imageStep, imageStep.project == history.project.name,
+        image.width == settings.width, image.height == settings.height,
+        canvas.scale == nil || canvas.scale == 1, canvas.offset == .zero
+      {
+        request.canvasStep = imageStep.id
+      }
     }
     if usesReferences { request.moodboard = moodboard.references }
     phase = .running("Preparing…")
@@ -591,6 +617,7 @@ final class CreateModel {
 
   /// Shows a history image on the canvas without touching the prompt or settings.
   func show(_ item: HistoryItem) {
+    statusNote = nil
     let projectName = history.project.name
     imageStep = (projectName, item.id)
     canvasIsImported = false
