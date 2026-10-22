@@ -8,6 +8,7 @@ struct AtelierApp: App {
   @State private var navigation: Navigation
   @State private var layouts: LayoutStore
   @State private var presets: PresetStore
+  @State private var library: ModelLibrary
   @AppStorage("inspectorShown") private var inspectorShown = true
 
   init() {
@@ -22,10 +23,13 @@ struct AtelierApp: App {
     let presets = PresetStore()
     create.presets = presets
     _presets = State(initialValue: presets)
+    let library = ModelLibrary(create: create)
+    _library = State(initialValue: library)
     // Started here rather than from a view's .task: SwiftUI doesn't put windows up while the
     // screen is locked, and scripted checks still need to run then.
     Task { @MainActor in
-      Automation.runIfRequested(create, navigation: navigation, layouts: layouts, presets: presets)
+      Automation.runIfRequested(
+        create, navigation: navigation, layouts: layouts, presets: presets, library: library)
     }
   }
 
@@ -37,6 +41,7 @@ struct AtelierApp: App {
         .environment(navigation)
         .environment(layouts)
         .environment(presets)
+        .environment(library)
         .frame(minWidth: 960, minHeight: 640)
     }
     .commands {

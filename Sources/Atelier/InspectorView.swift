@@ -630,27 +630,11 @@ struct SizePopover: View {
 
 // MARK: - LoRAs
 
-/// LoRAs registered in the models directory's custom_lora.json.
-enum LoRACatalog {
-  struct Entry: Decodable, Hashable {
-    var name: String
-    var file: String
-  }
-
-  static func load(_ directory: String) -> [Entry] {
-    let url = URL(fileURLWithPath: directory).appendingPathComponent("custom_lora.json")
-    guard let data = try? Data(contentsOf: url),
-      let entries = try? JSONDecoder().decode([Entry].self, from: data)
-    else { return [] }
-    return entries.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-  }
-}
-
 struct LoRAEditor: View {
   let descriptor: SettingDescriptor
   @Environment(CreateModel.self) private var model
+  @Environment(ModelLibrary.self) private var library
   @Environment(\.undoManager) private var undoManager
-  @State private var catalog: [LoRACatalog.Entry] = []
   @State private var picking = false
 
   private struct Item: Hashable {
@@ -671,6 +655,14 @@ struct LoRAEditor: View {
     }
   }
 
+  /// LoRA families the engine applies with the selected model (and refiner); it skips others.
+  private var compatibleFamilies: Set<String> {
+    let refiner = model.settings?.refinerModel.flatMap { file in
+      model.models.first { $0.file == file }?.version
+    }
+    return ModelLibrary.loraFamilies(forModel: model.selectedModelInfo?.version, refiner: refiner)
+  }
+
   private func write(_ items: [Item], undo: Bool = true) {
     let value = JSONValue.array(items.map {
       .object(["file": .string($0.file), "weight": .number($0.weight), "mode": $0.mode])
@@ -680,6 +672,7 @@ struct LoRAEditor: View {
 
   var body: some View {
     let items = items
+    let compatible = compatibleFamilies
     VStack(alignment: .leading, spacing: 6) {
       if items.isEmpty {
         Text("No LoRAs").foregroundStyle(.secondary)
@@ -689,6 +682,12 @@ struct LoRAEditor: View {
           HStack {
             Text(name(item.file)).lineLimit(1).truncationMode(.middle)
               .help(item.file)
+            if let lora = library.loras.first(where: { $0.file == item.file }),
+              !compatible.contains(lora.family)
+            {
+              Image(systemName: "exclamationmark.triangle").foregroundStyle(.yellow)
+                .help("Made for \(lora.family), so it's skipped with this model.")
+            }
             Spacer()
             Button {
               var items = items
@@ -734,54 +733,89 @@ struct LoRAEditor: View {
       Button("Add LoRA…", systemImage: "plus") { picking = true }
         .buttonStyle(.borderless)
         .popover(isPresented: $picking, arrowEdge: .leading) {
-          LoRAPicker(catalog: catalog) { entry in
-            write(items + [Item(file: entry.file, weight: 1, mode: .string("all"))])
+          LoRAPicker(
+            catalog: library.loras.filter(\.isDownloaded), compatible: compatible,
+            modelFamily: model.selectedModelInfo?.version
+          ) { lora in
+            write(items + [Item(file: lora.file, weight: 1, mode: .string("all"))])
             picking = false
           }
         }
     }
-    .onAppear { catalog = LoRACatalog.load(model.modelsDirectory) }
-    .onChange(of: model.modelsDirectory) { catalog = LoRACatalog.load(model.modelsDirectory) }
+    .onAppear { library.reloadLoRAs() }
   }
 
   private func name(_ file: String) -> String {
-    catalog.first { $0.file == file }?.name ?? file
+    library.loras.first { $0.file == file }?.name ?? file
   }
 }
 
+/// Searchable list of downloaded LoRAs made for the selected model's family.
 struct LoRAPicker: View {
-  let catalog: [LoRACatalog.Entry]
-  let pick: (LoRACatalog.Entry) -> Void
+  let catalog: [ModelLibrary.LoRA]
+  let compatible: Set<String>
+  let modelFamily: String?
+  let pick: (ModelLibrary.LoRA) -> Void
   @State private var query = ""
+  @AppStorage("loraPickerShowAll") private var showAll = false
 
   var body: some View {
-    let filtered = query.isEmpty
+    let matching = query.isEmpty
       ? catalog
       : catalog.filter {
-        $0.name.localizedCaseInsensitiveContains(query) || $0.file.localizedCaseInsensitiveContains(query)
+        $0.name.localizedCaseInsensitiveContains(query)
+          || $0.file.localizedCaseInsensitiveContains(query)
+          || $0.prefix.localizedCaseInsensitiveContains(query)
       }
+    let fitting = matching.filter { compatible.contains($0.family) }
+    let others = matching.filter { !compatible.contains($0.family) }
     VStack(spacing: 0) {
       SearchField(text: $query, prompt: "Search LoRAs").padding(8)
       Divider()
       if catalog.isEmpty {
-        Text("No LoRAs in custom_lora.json.").foregroundStyle(.secondary).padding()
+        Text("No LoRAs yet. Import them in the LoRAs section.")
+          .foregroundStyle(.secondary).padding()
+      } else if fitting.isEmpty && !showAll {
+        Text("No LoRAs for \(modelFamily ?? "this model")\(query.isEmpty ? "" : " match").")
+          .foregroundStyle(.secondary).padding()
       }
-      List(filtered, id: \.file) { entry in
-        Button {
-          pick(entry)
-        } label: {
-          VStack(alignment: .leading) {
-            Text(entry.name)
-            Text(entry.file).font(.caption).foregroundStyle(.secondary)
+      List {
+        ForEach(fitting) { lora in row(lora, enabled: true) }
+        if showAll && !others.isEmpty {
+          Section("For other models (skipped with this one)") {
+            ForEach(others) { lora in row(lora, enabled: false) }
           }
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .contentShape(.rect)
         }
-        .buttonStyle(.plain)
       }
       .listStyle(.plain)
+      Divider()
+      HStack {
+        Toggle("Show LoRAs for other models", isOn: $showAll)
+          .controlSize(.small)
+        Spacer()
+        if !showAll && !others.isEmpty {
+          Text("\(others.count) hidden").font(.caption).foregroundStyle(.secondary)
+        }
+      }
+      .padding(8)
     }
-    .frame(width: 340, height: 360)
+    .frame(width: 360, height: 400)
+  }
+
+  private func row(_ lora: ModelLibrary.LoRA, enabled: Bool) -> some View {
+    Button {
+      pick(lora)
+    } label: {
+      VStack(alignment: .leading) {
+        Text(lora.name)
+        Text(enabled ? lora.prefix.isEmpty ? lora.file : "Trigger: \(lora.prefix)" : lora.family)
+          .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .contentShape(.rect)
+    }
+    .buttonStyle(.plain)
+    .disabled(!enabled)
   }
 }
 

@@ -44,6 +44,10 @@ struct ContentView: View {
         CreateView()
       case .history:
         HistoryView()
+      case .models:
+        ModelsView()
+      case .loras:
+        LoRAsView()
       case .some(let section):
         ContentUnavailableView(
           section.rawValue, systemImage: section.symbol,

@@ -1,6 +1,7 @@
 import AppKit
 import ImageIO
 import SwiftUI
+import _MediaGenerationKit
 
 /// Launch-argument driver for scripted checks: fills the Create screen, presses Generate, logs
 /// progress to stdout and snapshots the window. Does nothing unless `--generate` is passed.
@@ -15,8 +16,10 @@ import SwiftUI
 @MainActor
 enum Automation {
   static func runIfRequested(
-    _ model: CreateModel, navigation: Navigation, layouts: LayoutStore, presets: PresetStore
+    _ model: CreateModel, navigation: Navigation, layouts: LayoutStore, presets: PresetStore,
+    library: ModelLibrary
   ) {
+    self.library = library
     let args = CommandLine.arguments
     if let index = args.firstIndex(of: "--show"), index + 1 < args.count,
       let section = ContentView.Section(rawValue: args[index + 1].capitalized)
@@ -29,6 +32,10 @@ enum Automation {
     }
     if args.contains("--inspector-check") {
       inspectorCheck(model, navigation: navigation, layouts: layouts, presets: presets)
+      return
+    }
+    if args.contains("--library-check") {
+      libraryCheck(model, navigation: navigation, layouts: layouts, presets: presets, library: library)
       return
     }
     if args.contains("--reuse") {
@@ -239,6 +246,177 @@ enum Automation {
       guard var probe = model.settings else { return nil }
       descriptor.set(&probe, expected)
       return descriptor.get(probe) == actual ? nil : "\(descriptor.id): \(actual) ≠ \(expected)"
+    }
+  }
+
+  /// Scripted checks of the Phase 4 library, logged as PASS/FAIL lines:
+  ///
+  ///   Atelier --library-check [--import-lora FILE [--lora-name NAME]]
+  ///           [--generate-with-lora MODEL [--steps N] [--seed N] [--lora-weight W]]
+  ///           [--delete-lora FILE] [--download MODEL [--cancel-after-bytes N]]
+  ///           [--delete-model MODEL]
+  ///           [--snapshot-dir DIR] [--quit]
+  ///
+  /// Loads the catalog, imports a LoRA and checks it's registered and offered only for models of
+  /// its family, generates with it in the same session, deletes a LoRA, and starts (and
+  /// optionally cancels) a model download.
+  private static func libraryCheck(
+    _ model: CreateModel, navigation: Navigation, layouts: LayoutStore, presets: PresetStore,
+    library: ModelLibrary
+  ) {
+    let args = CommandLine.arguments
+    func value(_ name: String) -> String? {
+      guard let index = args.firstIndex(of: name), index + 1 < args.count else { return nil }
+      return args[index + 1]
+    }
+    let snapshotDir = value("--snapshot-dir").map { URL(fileURLWithPath: $0) }
+    Task { @MainActor in
+      let started = Date()
+      func log(_ message: String) {
+        print(String(format: "[%7.2fs] ", Date().timeIntervalSince(started)) + message)
+        fflush(stdout)
+      }
+      func check(_ ok: Bool, _ message: String) { log((ok ? "PASS " : "FAIL ") + message) }
+      @MainActor func shot(_ name: String) async {
+        try? await Task.sleep(for: .seconds(1))
+        if let snapshotDir { snapshot(to: snapshotDir.appendingPathComponent(name)) }
+      }
+      func finish() { if args.contains("--quit") { NSApp.terminate(nil) } }
+      while model.models.isEmpty || model.settings == nil || model.isBusy {
+        try? await Task.sleep(for: .milliseconds(100))
+      }
+      ensureWindow(model, navigation: navigation, layouts: layouts, presets: presets)
+
+      await library.refresh()
+      let downloaded = library.catalog.filter(\.isDownloaded)
+      log("catalog: \(library.catalog.count) models, \(downloaded.count) downloaded (\(ModelsView.bytes(library.downloadedSize))), free \(library.freeSpace.map(ModelsView.bytes) ?? "?"), LoRAs \(library.loras.count)")
+      check(library.catalog.count > downloaded.count, "catalog lists models that aren't downloaded")
+      let pickerFiles = Set(model.models.map(\.file))
+      let libraryFiles = Set(downloaded.map(\.file))
+      check(
+        pickerFiles == libraryFiles,
+        "downloaded models match Create's model picker (only in library: \(libraryFiles.subtracting(pickerFiles).sorted()), only in picker: \(pickerFiles.subtracting(libraryFiles).sorted()))")
+      navigation.section = .models
+      await shot("models.png")
+
+      var importedFile: String?
+      if let path = value("--import-lora") {
+        let source = URL(fileURLWithPath: path)
+        let before = Set(library.loras.map(\.file))
+        library.prepareImport([source])
+        if let name = value("--lora-name"), let item = library.importing.first {
+          library.updateImport(item.id, name: name)
+        }
+        navigation.section = .loras
+        await shot("import-sheet.png")
+        let importStart = Date()
+        library.runImports(version: nil)
+        while library.isImporting { try? await Task.sleep(for: .milliseconds(100)) }
+        if let error = library.errorMessage { log("error: \(error)") }
+        let added = library.loras.filter { !before.contains($0.file) }
+        importedFile = added.first?.file
+        check(added.count == 1, String(format: "imported %@ in %.1fs: %@", source.lastPathComponent, Date().timeIntervalSince(importStart), added.map { "\($0.file) (\($0.name), \($0.family), \($0.size.map(ModelsView.bytes) ?? "missing"))" }.joined()))
+        if let lora = added.first {
+          check(lora.isDownloaded, "converted file is in the models folder")
+          for candidate in model.models {
+            let fits = ModelLibrary.loraFamilies(forModel: candidate.version).contains(lora.family)
+            if fits || candidate.file.hasPrefix("moss") || candidate.file.hasPrefix("krea") {
+              log("  offered for \(candidate.file) (\(candidate.version ?? "?")): \(fits)")
+            }
+          }
+          let offered = model.models.filter {
+            ModelLibrary.loraFamilies(forModel: $0.version).contains(lora.family)
+          }
+          check(
+            !offered.isEmpty && offered.allSatisfy { $0.version == lora.family },
+            "offered for \(offered.count) \(lora.family) model(s) and no others")
+        }
+        await shot("loras.png")
+      }
+
+      if let target = value("--generate-with-lora") {
+        let file = value("--lora-file") ?? importedFile
+        let lora = library.loras.first { $0.file == file }
+        guard let lora else {
+          log("no LoRA to generate with")
+          return finish()
+        }
+        model.selectedModel = target
+        try? await Task.sleep(for: .milliseconds(300))
+        while model.isBusy { try? await Task.sleep(for: .milliseconds(100)) }
+        guard var settings = model.settings, model.selectedModel == target else {
+          log("model \(target) didn't load")
+          return finish()
+        }
+        let weight = value("--lora-weight").flatMap(Float.init) ?? 1
+        settings.loras = [LoRA(file: lora.file, weight: weight, mode: .all)]
+        if let steps = value("--steps").flatMap(Int.init) { settings.steps = steps }
+        settings.width = 512
+        settings.height = 512
+        model.settings = settings
+        model.seed = value("--seed").flatMap(UInt32.init) ?? 42
+        model.seedLocked = true
+        model.prompt = value("--prompt") ?? "portrait photo of a woman in a garden"
+        navigation.section = .create
+        let previous = model.lastSavedURL
+        log("generate with \(lora.file) weight \(weight) on \(target), \(settings.steps) steps")
+        model.generate()
+        while model.isBusy { try? await Task.sleep(for: .milliseconds(100)) }
+        if let error = model.errorMessage { log("error: \(error)") }
+        if let url = model.lastSavedURL, url != previous {
+          let saved = model.history.items.first { $0.imageURL == url }
+          let savedLoRAs = saved?.sidecar.configuration["loras"].map { "\($0)" } ?? "none"
+          check(true, "saved \(url.path), sidecar loras \(savedLoRAs)")
+        } else {
+          check(false, "no image saved")
+        }
+        await shot("create-with-lora.png")
+      }
+
+      if let file = value("--delete-lora"), let lora = library.loras.first(where: { $0.file == file }) {
+        library.delete(lora)
+        let registry = (try? String(contentsOfFile: model.modelsDirectory + "/custom_lora.json", encoding: .utf8)) ?? ""
+        check(!library.loras.contains { $0.file == file } && !registry.contains(file), "deleted \(file) and its custom_lora.json entry")
+        check(!FileManager.default.fileExists(atPath: model.modelsDirectory + "/" + file), "file moved to the Trash")
+      }
+
+      if let file = value("--download"), let entry = library.catalog.first(where: { $0.file == file }) {
+        let cancelAfter = value("--cancel-after-bytes").flatMap(Int64.init)
+        library.download(entry)
+        var last = ""
+        var loggedTenth = -1
+        while let progress = library.downloads[file] {
+          let line = ModelStatus.describe(progress)
+          last = line
+          let tenth = Int((progress.fraction ?? 0) * 10)
+          if tenth != loggedTenth {
+            log("progress: \(line)")
+            loggedTenth = tenth
+          }
+          if let cancelAfter, progress.bytesWritten >= cancelAfter {
+            log("progress: \(line); cancelling")
+            library.cancelDownload(file)
+            break
+          }
+          try? await Task.sleep(for: .milliseconds(250))
+        }
+        while library.downloads[file] != nil { try? await Task.sleep(for: .milliseconds(100)) }
+        if let error = library.errorMessage { log("error: \(error)") }
+        let isDownloaded = library.catalog.first { $0.file == file }?.isDownloaded ?? false
+        log("last progress: \(last)")
+        check(cancelAfter == nil ? isDownloaded : !isDownloaded, "download \(cancelAfter == nil ? "finished" : "cancelled"): downloaded \(isDownloaded), in Create's picker \(model.models.contains { $0.file == file })")
+      }
+      if let file = value("--delete-model"),
+        let entry = library.catalog.first(where: { $0.file == file })
+      {
+        await library.delete(entry)
+        let isDownloaded = library.catalog.first { $0.file == file }?.isDownloaded ?? false
+        check(
+          !isDownloaded && !model.models.contains { $0.file == file }
+            && !FileManager.default.fileExists(atPath: model.modelsDirectory + "/" + file),
+          "deleted model \(file); Create now selects \(model.selectedModel ?? "nothing")")
+      }
+      finish()
     }
   }
 
@@ -469,6 +647,7 @@ enum Automation {
   /// A window hosting the app's content when SwiftUI hasn't put one up (the screen is locked),
   /// so snapshots still show the UI. Rendered off screen; it has no toolbar.
   private static var offscreenWindow: NSWindow?
+  private static var library: ModelLibrary?
 
   private static func ensureWindow(
     _ model: CreateModel, navigation: Navigation, layouts: LayoutStore, presets: PresetStore
@@ -480,6 +659,7 @@ enum Automation {
       .environment(navigation)
       .environment(layouts)
       .environment(presets)
+      .environment(library ?? ModelLibrary(create: model))
       .frame(width: 1280, height: 860)
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 1280, height: 860), styleMask: [.titled],

@@ -142,16 +142,29 @@ final class CreateModel {
 
   func reloadModels() async {
     await engine.setModelsDirectory(modelsDirectory)
-    models = await engine.downloadedModels()
-    let directory = modelsDirectory
-    modelFiles = await Task.detached {
-      ((try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? []).sorted()
-    }.value
+    await loadModelList()
     if let selectedModel, models.contains(where: { $0.file == selectedModel }) {
       loadDefaults(for: selectedModel)
     } else {
       selectedModel = models.first?.file
     }
+  }
+
+  /// Rereads the downloaded models after a download or delete, keeping the current settings
+  /// unless the selected model is gone.
+  func refreshModelList() async {
+    await loadModelList()
+    if selectedModel == nil || !models.contains(where: { $0.file == selectedModel }) {
+      selectedModel = models.first?.file
+    }
+  }
+
+  private func loadModelList() async {
+    models = await engine.downloadedModels()
+    let directory = modelsDirectory
+    modelFiles = await Task.detached {
+      ((try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? []).sorted()
+    }.value
   }
 
   // MARK: - Settings

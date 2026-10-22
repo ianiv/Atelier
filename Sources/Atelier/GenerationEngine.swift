@@ -28,11 +28,20 @@ actor GenerationEngine {
     pipeline = nil
   }
 
+  /// Points MGK at `directory` unless it already is, keeping the cached pipeline.
+  func useModelsDirectory(_ directory: String) {
+    let url = URL(fileURLWithPath: directory, isDirectory: true)
+    if MediaGenerationEnvironment.default.externalUrls != [url] {
+      setModelsDirectory(directory)
+    }
+  }
+
   /// Models from the catalog (built-in plus custom.json) whose files are in the models directory.
-  func downloadedModels() -> [MediaGenerationResolvedModel] {
-    let models =
-      (try? MediaGenerationEnvironment.default.downloadableModels(
-        includeDownloaded: true, offline: true)) ?? []
+  /// Includes the community catalog (fetched once, then cached): the offline list alone misses
+  /// downloaded community models such as Krea 2 and Ideogram 4.
+  func downloadedModels() async -> [MediaGenerationResolvedModel] {
+    let models = await MediaGenerationEnvironment.default.downloadableModels(
+      includeDownloaded: true, offline: false)
     return models.filter(\.isDownloaded).sorted {
       $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
     }
