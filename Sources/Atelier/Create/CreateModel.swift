@@ -651,6 +651,14 @@ final class CreateModel {
     }
   }
 
+  /// Shows a history image on the canvas and restores its prompt and negative prompt, leaving
+  /// the model, seed and other settings alone.
+  func showWithPrompt(_ item: HistoryItem) {
+    prompt = item.sidecar.prompt
+    negativePrompt = item.sidecar.negativePrompt
+    show(item)
+  }
+
   /// Shows a history image on the canvas without touching the prompt or settings.
   func show(_ item: HistoryItem) {
     statusNote = nil

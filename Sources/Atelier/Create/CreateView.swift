@@ -480,9 +480,9 @@ struct RecentStrip: View {
               }
               .contentShape(.rect)
               .onTapGesture(count: 2) { model.use(item) }
-              .onTapGesture { model.show(item) }
+              .onTapGesture { model.showWithPrompt(item) }
               .draggable(history.dragExport(item))
-              .help("\(item.sidecar.prompt)\n\(GenerationTime.text(item.sidecar.durationSeconds)). Double-click to use its settings.")
+              .help("\(item.sidecar.prompt)\n\(GenerationTime.text(item.sidecar.durationSeconds)). Click to view and use its prompt, double-click to use all its settings.")
               .contextMenu {
                 Button("Use Settings") { model.use(item) }
                   .disabled(!model.canUse(item))
