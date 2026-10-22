@@ -70,8 +70,22 @@ final class CreateModel {
 
   var traits: ModelTraits { ModelTraits(selectedModelInfo) }
 
+  private(set) var modelFiles: [String] = []
+
   var settingContext: SettingContext {
-    SettingContext(models: models, modelsDirectory: modelsDirectory)
+    SettingContext(models: models, files: modelFiles)
+  }
+
+  /// The file a refiner/upscaler checkbox turns on: the one last picked if still offered, else the
+  /// first offered.
+  func enableFile(for descriptor: SettingDescriptor) -> String? {
+    guard case .file(let source) = descriptor.control else { return nil }
+    let files = source(settingContext).compactMap { option -> String? in
+      if case .string(let file) = option.value { return file }
+      return nil
+    }
+    let last = UserDefaults.standard.string(forKey: "lastFile." + descriptor.id)
+    return files.first { $0 == last } ?? files.first
   }
 
   init(history: HistoryStore) {
@@ -125,6 +139,10 @@ final class CreateModel {
   func reloadModels() async {
     await engine.setModelsDirectory(modelsDirectory)
     models = await engine.downloadedModels()
+    let directory = modelsDirectory
+    modelFiles = await Task.detached {
+      ((try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? []).sorted()
+    }.value
     if let selectedModel, models.contains(where: { $0.file == selectedModel }) {
       loadDefaults(for: selectedModel)
     } else {
@@ -157,6 +175,9 @@ final class CreateModel {
     let before = settings
     descriptor.set(&settings, value)
     guard descriptor.get(settings) != descriptor.get(before) else { return }
+    if case .file = descriptor.control, case .string(let file) = value {
+      UserDefaults.standard.set(file, forKey: "lastFile." + descriptor.id)
+    }
     // Text fields keep their own typing undo.
     if !coalescingEdit, !isText(descriptor) {
       registerUndo(restoring: before, undoManager, actionName: "Change \(descriptor.title)")

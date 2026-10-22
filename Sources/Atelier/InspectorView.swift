@@ -2,7 +2,9 @@ import AppKit
 import SwiftUI
 import _MediaGenerationKit
 
-/// The settings inspector: search, the Changed group, the current layout's sections and a reset.
+/// The settings inspector: model, search, the current layout's sections, the Changed group and a
+/// reset. Built from a lazy stack rather than a grouped Form: Form re-laid out every row on each
+/// window resize frame (about 65 ms) and jumped when rows were inserted.
 struct InspectorView: View {
   @Environment(CreateModel.self) private var model
   @Environment(LayoutStore.self) private var layouts
@@ -34,10 +36,14 @@ struct InspectorView: View {
         } description: {
           Text(model.phase == .loadingModel ? "Loading model defaults…" : "Choose a model.")
         }
-      } else if !query.isEmpty {
-        searchResults
+        .frame(maxHeight: .infinity)
       } else {
-        sections
+        ScrollView {
+          LazyVStack(alignment: .leading, spacing: 14) {
+            if query.isEmpty { sections } else { searchResults }
+          }
+          .padding(10)
+        }
       }
     }
     .sheet(isPresented: $customizing) { CustomizeInspectorSheet() }
@@ -53,58 +59,97 @@ struct InspectorView: View {
     }
   }
 
-  private var sections: some View {
+  @ViewBuilder private var sections: some View {
     let traits = model.traits
+    ForEach(SettingSection.allCases) { section in
+      InspectorSection(section: section, traits: traits, showAll: showAll)
+    }
+    // Changed sits at the bottom, by the reset, so it growing or shrinking never moves the rows
+    // being edited above it.
     let changed = model.changedSettings
-    return Form {
-      if !changed.isEmpty {
-        Section {
-          ForEach(changed) { SettingRow(descriptor: $0) }
-        } header: {
-          HStack {
-            Text("Changed")
-            Spacer()
-            Text("\(changed.count)").foregroundStyle(.secondary).monospacedDigit()
-          }
+    if !changed.isEmpty {
+      InspectorGroup {
+        HStack {
+          Text("Changed")
+          Spacer()
+          Text("\(changed.count)").monospacedDigit()
         }
-      }
-      ForEach(SettingSection.allCases) { section in
-        InspectorSection(section: section, traits: traits, showAll: showAll)
-      }
-      Section {
-        Button("Reset All to Model Defaults") {
-          model.resetToModelDefaults(undoManager: undoManager)
+      } content: {
+        ForEach(changed) { descriptor in
+          SettingRow(descriptor: descriptor).opacity(descriptor.applies(traits) ? 1 : 0.5)
         }
-        .disabled(changed.isEmpty)
-        .frame(maxWidth: .infinity)
       }
     }
-    .formStyle(.grouped)
+    Button("Reset All to Model Defaults") {
+      model.resetToModelDefaults(undoManager: undoManager)
+    }
+    .disabled(changed.isEmpty)
+    .frame(maxWidth: .infinity)
   }
 
-  private var searchResults: some View {
+  @ViewBuilder private var searchResults: some View {
     let matches = SettingsRegistry.all.filter { $0.matches(query) }
     let traits = model.traits
-    return Form {
-      if matches.isEmpty && !"seed".localizedCaseInsensitiveContains(query) {
-        Text("No settings match “\(query)”.").foregroundStyle(.secondary)
-      }
-      if "seed".localizedCaseInsensitiveContains(query) {
-        Section(SettingSection.essentials.title) { SeedControls() }
-      }
-      ForEach(SettingSection.allCases) { section in
-        let inSection = matches.filter { $0.section == section }
-        if !inSection.isEmpty {
-          Section(section.title) {
-            ForEach(inSection) { descriptor in
-              SettingRow(descriptor: descriptor)
-                .opacity(descriptor.applies(traits) ? 1 : 0.5)
-            }
+    let matchesSeed = "seed".localizedCaseInsensitiveContains(query)
+    if matches.isEmpty && !matchesSeed {
+      Text("No settings match “\(query)”.").foregroundStyle(.secondary)
+    }
+    if matchesSeed {
+      InspectorGroup { Text(SettingSection.essentials.title) } content: { SeedControls() }
+    }
+    ForEach(SettingSection.allCases) { section in
+      let inSection = matches.filter { $0.section == section }
+      if !inSection.isEmpty {
+        InspectorGroup { Text(section.title) } content: {
+          ForEach(inSection) { descriptor in
+            SettingRow(descriptor: descriptor)
+              .opacity(descriptor.applies(traits) ? 1 : 0.5)
           }
         }
       }
     }
-    .formStyle(.grouped)
+  }
+}
+
+/// A titled, rounded group of rows, in the style of a grouped form section.
+struct InspectorGroup<Header: View, Content: View>: View {
+  var isExpanded = true
+  @ViewBuilder var header: Header
+  @ViewBuilder var content: Content
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      header
+        .font(.subheadline.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 4)
+      if isExpanded {
+        VStack(alignment: .leading, spacing: 0) {
+          content
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+      .padding(.vertical, 4)
+      .background(Color.primary.opacity(0.04), in: .rect(cornerRadius: 8))
+      .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.08)))
+      }
+    }
+  }
+}
+
+/// One label/control line inside a group.
+struct InspectorRow<Label: View, Control: View>: View {
+  @ViewBuilder var label: Label
+  @ViewBuilder var control: Control
+
+  var body: some View {
+    HStack(spacing: 8) {
+      label
+      Spacer(minLength: 8)
+      control
+    }
+    .frame(minHeight: 28)
+    .padding(.vertical, 2)
   }
 }
 
@@ -130,42 +175,59 @@ struct InspectorSection: View {
     }
     let toggleShown = toggle.map { showAll || layouts.current.isShown($0.id) } ?? false
     if section == .essentials || !shown.isEmpty || toggleShown {
-      Section(isExpanded: expansion) {
-        ForEach(shown) { SettingRow(descriptor: $0) }
-        if section == .essentials { SeedControls() }
-        if !tucked.isEmpty {
-          DisclosureGroup(isExpanded: $moreExpanded) {
-            ForEach(tucked) { SettingRow(descriptor: $0) }
-          } label: {
-            ClickableLabel("More: \(tucked.count)", isExpanded: $moreExpanded)
+      let expanded = layouts.isExpanded(section)
+      InspectorGroup(isExpanded: expanded) {
+        header(toggle: toggle, descriptors: shown + tucked, expanded: expanded)
+      } content: {
+        Group {
+          ForEach(shown) { SettingRow(descriptor: $0) }
+          if section == .essentials { SeedControls() }
+          if !tucked.isEmpty {
+            HStack(spacing: 4) {
+              Image(systemName: "chevron.right")
+                .font(.caption2.weight(.semibold))
+                .rotationEffect(.degrees(moreExpanded ? 90 : 0))
+              Text("More: \(tucked.count)")
+              Spacer()
+            }
+            .foregroundStyle(.secondary)
+            .frame(minHeight: 26)
+            .contentShape(.rect)
+            .onTapGesture { moreExpanded.toggle() }
+            if moreExpanded {
+              ForEach(tucked) { SettingRow(descriptor: $0) }
+            }
           }
-          .foregroundStyle(.secondary)
         }
-      } header: {
-        header(toggle: toggle, descriptors: shown + tucked)
       }
     }
   }
 
-  private var expansion: Binding<Bool> {
-    Binding(
-      get: { layouts.isExpanded(section) },
-      set: { layouts.setExpanded(section, $0) })
-  }
-
-  private func header(toggle: SettingDescriptor?, descriptors: [SettingDescriptor]) -> some View {
+  private func header(toggle: SettingDescriptor?, descriptors: [SettingDescriptor], expanded: Bool)
+    -> some View
+  {
     let all = descriptors + (toggle.map { [$0] } ?? [])
     let changed = all.filter(model.isChanged)
+    let enable = section.enableSetting.flatMap { SettingsRegistry.byID[$0] }
     return HStack(spacing: 6) {
+      Image(systemName: "chevron.right")
+        .font(.caption2.weight(.bold))
+        .rotationEffect(.degrees(expanded ? 90 : 0))
+        .frame(width: 10)
       if let toggle {
         Toggle(section.title, isOn: SettingBindings(descriptor: toggle, model: model, undoManager: undoManager).bool)
           .toggleStyle(.checkbox)
           .labelsHidden()
           .help(toggle.help)
           .contextMenu { SettingContextMenu(descriptor: toggle) }
+      } else if let enable {
+        Toggle(section.title, isOn: fileEnabled(enable))
+          .toggleStyle(.checkbox)
+          .labelsHidden()
+          .disabled(model.enableFile(for: enable) == nil)
+          .help("Use the \(section.title.lowercased()). Remembers the model you last picked.")
       }
-      // The whole header (except the checkbox and reset button) expands and collapses the section.
-      ClickableLabel(section.title, isExpanded: expansion)
+      Text(section.title)
       Spacer()
       if !changed.isEmpty {
         Button {
@@ -177,8 +239,19 @@ struct InspectorSection: View {
         .help("Reset \(section.title) to the model defaults")
       }
     }
+    // The whole header (except the checkbox and reset button) expands and collapses the section.
     .contentShape(.rect)
-    .onTapGesture { expansion.wrappedValue.toggle() }
+    .onTapGesture { layouts.setExpanded(section, !expanded) }
+  }
+
+  /// On when a file is picked; turning it on restores the last file picked.
+  private func fileEnabled(_ descriptor: SettingDescriptor) -> Binding<Bool> {
+    Binding(
+      get: { model.value(descriptor).map { $0 != .null } ?? false },
+      set: { on in
+        let file = on ? model.enableFile(for: descriptor).map(JSONValue.string) : nil
+        model.set(descriptor, to: file ?? .null, undoManager: undoManager)
+      })
   }
 }
 
@@ -264,7 +337,7 @@ struct SettingRow: View {
 
   private var label: some View {
     HStack(spacing: 4) {
-      Text(descriptor.title)
+      Text(descriptor.title).lineLimit(1)
       if model.isChanged(descriptor) {
         Button {
           model.reset(descriptor, undoManager: undoManager)
@@ -281,6 +354,12 @@ struct SettingRow: View {
     }
   }
 
+  private func snapped(_ binding: Binding<Double>, to step: Double) -> Binding<Double> {
+    Binding(
+      get: { binding.wrappedValue },
+      set: { binding.wrappedValue = ($0 / step).rounded() * step })
+  }
+
   /// Files offered for a file setting, plus the current value if it isn't among them.
   private func fileOptions(_ source: (SettingContext) -> [SettingOption]) -> [SettingOption] {
     var options = source(model.settingContext)
@@ -295,9 +374,18 @@ struct SettingRow: View {
   @ViewBuilder private var control: some View {
     switch descriptor.control {
     case .toggle:
-      Toggle(isOn: bindings.bool) { label }
+      InspectorRow {
+        label
+      } control: {
+        Toggle(descriptor.title, isOn: bindings.bool)
+          .labelsHidden()
+          .toggleStyle(.switch)
+          .controlSize(.mini)
+      }
     case .integer(let range, let step):
-      LabeledContent {
+      InspectorRow {
+        label
+      } control: {
         HStack(spacing: 4) {
           TextField("", value: bindings.int, format: .number.grouping(.never))
             .labelsHidden()
@@ -305,20 +393,22 @@ struct SettingRow: View {
             .frame(width: 64)
           Stepper("", value: bindings.int, in: range, step: step).labelsHidden()
         }
-      } label: {
-        label
       }
     case .slider(let range, let step, let digits):
-      LabeledContent {
+      InspectorRow {
+        label
+      } control: {
         HStack(spacing: 6) {
-          Slider(value: bindings.double, in: range, step: step) { editing in
+          // No `step:` here: macOS draws tick marks for stepped sliders. Values snap in the binding.
+          Slider(value: snapped(bindings.double, to: step), in: range) { editing in
             if editing {
               model.beginCoalescedEdit(descriptor, undoManager: undoManager)
             } else {
               model.endCoalescedEdit()
             }
           }
-          .frame(minWidth: 90)
+          .controlSize(.small)
+          .frame(minWidth: 80, maxWidth: 150)
           TextField(
             "", value: bindings.double, format: .number.precision(.fractionLength(0...digits))
           )
@@ -326,34 +416,51 @@ struct SettingRow: View {
           .multilineTextAlignment(.trailing)
           .frame(width: 52)
         }
-      } label: {
-        label
       }
     case .choice(let options):
-      Picker(selection: bindings.json) {
-        ForEach(options, id: \.self) { Text($0.title).tag($0.value) }
-      } label: {
+      InspectorRow {
         label
+      } control: {
+        Picker(descriptor.title, selection: bindings.json) {
+          ForEach(options, id: \.self) { Text($0.title).tag($0.value) }
+        }
+        .labelsHidden()
+        .fixedSize()
       }
     case .file(let source):
       let options = fileOptions(source)
-      Picker(selection: bindings.json) {
-        Text("None").tag(JSONValue.null)
-        ForEach(options, id: \.self) { Text($0.title).tag($0.value) }
-      } label: {
+      // Sections with an enable checkbox (refiner, upscaler) show "Off" instead of a None choice.
+      let hasEnable = descriptor.section.enableSetting == descriptor.id
+      InspectorRow {
         label
+      } control: {
+        Picker(descriptor.title, selection: bindings.json) {
+          if !hasEnable || model.value(descriptor) == .null {
+            Text(hasEnable ? "Off" : "None").tag(JSONValue.null)
+          }
+          ForEach(options, id: \.self) { Text($0.title).tag($0.value) }
+        }
+        .labelsHidden()
+        .frame(maxWidth: 190)
       }
     case .text:
-      TextField(text: bindings.text, prompt: Text("Same as prompt"), axis: .vertical) { label }
-        .lineLimit(1...4)
-    case .size:
-      LabeledContent {
-        SizeButton(descriptor: descriptor)
-      } label: {
+      VStack(alignment: .leading, spacing: 4) {
         label
+        TextField(descriptor.title, text: bindings.text, prompt: Text("Same as prompt"), axis: .vertical)
+          .labelsHidden()
+          .lineLimit(1...4)
+          .textFieldStyle(.roundedBorder)
+      }
+      .padding(.vertical, 4)
+    case .size:
+      InspectorRow {
+        label
+      } control: {
+        SizeButton(descriptor: descriptor)
       }
     case .loras:
       LoRAEditor(descriptor: descriptor)
+        .padding(.vertical, 4)
     }
   }
 }

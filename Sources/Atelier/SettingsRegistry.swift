@@ -74,6 +74,15 @@ enum SettingSection: String, CaseIterable, Identifiable, Codable {
     default: nil
     }
   }
+
+  /// The file setting whose None/picked state the header checkbox stands for (no Bool exists).
+  var enableSetting: String? {
+    switch self {
+    case .refiner: "refinerModel"
+    case .upscaler: "upscaler"
+    default: nil
+    }
+  }
 }
 
 struct SettingOption: Hashable {
@@ -84,7 +93,8 @@ struct SettingOption: Hashable {
 /// What the inspector needs to build option lists that depend on the machine.
 struct SettingContext {
   var models: [MediaGenerationResolvedModel]
-  var modelsDirectory: String
+  /// File names in the models directory, listed once per reload (it may be a slow external disk).
+  var files: [String]
 }
 
 enum SettingControl {
@@ -241,9 +251,7 @@ enum SettingsRegistry {
   /// Model-directory files whose names contain any of `fragments`.
   private static func files(matching fragments: [String]) -> @Sendable (SettingContext) -> [SettingOption] {
     { context in
-      let names =
-        (try? FileManager.default.contentsOfDirectory(atPath: context.modelsDirectory)) ?? []
-      return names.filter { name in
+      context.files.filter { name in
         name.hasSuffix(".ckpt") && fragments.contains { name.localizedCaseInsensitiveContains($0) }
       }.sorted().map { SettingOption(value: .string($0), title: $0) }
     }

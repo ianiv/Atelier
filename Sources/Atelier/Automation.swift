@@ -23,6 +23,10 @@ enum Automation {
     {
       navigation.section = section
     }
+    if args.contains("--resize-bench") {
+      resizeBench(model)
+      return
+    }
     if args.contains("--inspector-check") {
       inspectorCheck(model, navigation: navigation, layouts: layouts, presets: presets)
       return
@@ -188,6 +192,40 @@ enum Automation {
       }
       if let snapshotDir { snapshot(to: snapshotDir.appendingPathComponent("create.png")) }
       finish()
+    }
+  }
+
+  /// Resizes the main window back and forth and logs the average time per frame.
+  ///
+  ///   Atelier --resize-bench [--frames N] [--quit]
+  private static func resizeBench(_ model: CreateModel) {
+    let args = CommandLine.arguments
+    let frames = args.firstIndex(of: "--frames").flatMap { Int(args[$0 + 1]) } ?? 120
+    Task { @MainActor in
+      while model.models.isEmpty || model.settings == nil || model.isBusy {
+        try? await Task.sleep(for: .milliseconds(100))
+      }
+      try? await Task.sleep(for: .seconds(2))
+      guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else {
+        print("resize bench: no visible window (screen locked?)")
+        if args.contains("--quit") { NSApp.terminate(nil) }
+        return
+      }
+      let origin = window.frame.origin
+      let start = Date()
+      var worst = 0.0
+      for frame in 0..<frames {
+        let t = Date()
+        let width = 1100 + 500 * abs(sin(Double(frame) / 15))
+        window.setFrame(NSRect(x: origin.x, y: origin.y, width: width, height: 860), display: true)
+        window.contentView?.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        worst = max(worst, Date().timeIntervalSince(t))
+      }
+      let average = Date().timeIntervalSince(start) / Double(frames)
+      print(String(format: "resize bench: %d frames, %.1f ms average, %.1f ms worst", frames, average * 1000, worst * 1000))
+      fflush(stdout)
+      if args.contains("--quit") { NSApp.terminate(nil) }
     }
   }
 
