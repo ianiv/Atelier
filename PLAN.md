@@ -48,7 +48,7 @@ The CLI's generation code is almost all `private` inside `/Users/ianiv/Code/draw
 - Delete moves the PNG and sidecar to the Trash. `Automation` gained `--reuse latest|PNG [--new-seed]` (compares pixels with the original) and `--show history`.
 
 **Phase 3 notes:**
-- `SettingsRegistry` has 77 descriptors covering every public `Configuration` field except `model`, `seed` (its own row with lock and ⌘R), `batchCount`/`batchSize` (queue, phase 4) and `controls` (inputs, phase 6). Width and height are one "size" descriptor. Values travel as `JSONValue` in the sidecar dump's encoding, so presets, changed markers and "Use settings" share one format; "Use settings" now restores every registry field.
+- `SettingsRegistry` has 77 descriptors covering every public `Configuration` field except `model`, `seed` (its own row with lock and ⌘R), `batchCount`/`batchSize` (queue, phase 5) and `controls` (inputs, phase 6). Width and height are one "size" descriptor. Values travel as `JSONValue` in the sidecar dump's encoding, so presets, changed markers and "Use settings" share one format; "Use settings" now restores every registry field.
 - Applicability uses MGK's human-readable `version` string (e.g. "MOSS Image") and gates by family, taken from the per-version branches in `ImageConverter.swift`'s metadata writer and `ModelZoo.teaCacheCoefficientsForModel`. Search still shows non-applicable settings, dimmed.
 - Editing a built-in layout copies it to "<name> Custom". The Changed group lists every changed setting, shown or tucked. Inspector visibility uses `@AppStorage("inspectorShown")` with a View menu item on ⌥⌘I instead of `@SceneStorage` + `InspectorCommands`, so the menu command can reach it. Refiner and upscaler sections have no enable checkbox; their pickers have None.
 - Return in the prompt generates; ⌥↩ adds a line.
@@ -98,8 +98,8 @@ Gaps to fill. These are small additions in MGK or the app, guided by `/Users/ian
 1. Skeleton: model picker, prompt, Essentials, generate with live preview and cancel, save to history folder.
 2. History browser with "Use settings" and rerun.
 3. Settings inspector: prompt composer under the canvas, inspector conventions, settings registry covering the full `Configuration`, search and Changed group, customizable layouts, presets. Comes before the queue because the queue needs an inspector that stays editable while jobs run.
-4. Queue, batch and variations.
-5. Model and LoRA library: download, import, delete, filtered LoRA picker.
+4. Model and LoRA library: download, import, delete, filtered LoRA picker. Moved ahead of the queue (Ianiv, 2026-10-21).
+5. Queue, batch and variations.
 6. Image-to-image and reference inputs.
 7. Video: frames, output writing and an inline player.
 
@@ -108,7 +108,7 @@ Gaps to fill. These are small additions in MGK or the app, guided by `/Users/ian
 - Generate with `moss_image_sft_i8x.ckpt` at 1152×896. Check that live previews advance through 50 steps with no second pass, cancel stops within a step, and the PNG plus sidecar appear and reload in History.
 - "Use settings" on a history item reproduces the same image for the same seed.
 - Settings inspector: the prompt is under the canvas; hiding a setting and then changing it from search puts it in the Changed group; a custom layout survives relaunch and round-trips through export/import; a preset applied to a different model keeps that model's defaults for settings the preset doesn't set; "Use settings" restores every registry field.
-- Queue 5 variations, then pause, reorder and cancel one.
 - Import a `.safetensors` LoRA from ~/Downloads. It should show up only for matching models, and a generation with it should run.
+- Queue 5 variations, then pause, reorder and cancel one.
 - Run an LTX video at a small frame count and check that it writes and plays back.
 - A clean clone builds from scratch (no local path dependency): `rm -rf .build && Scripts/build.sh`.
