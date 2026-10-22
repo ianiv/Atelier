@@ -35,6 +35,9 @@ actor GenerationEngine {
   }
 
   private var pipeline: MediaGenerationPipeline?
+  /// The model and image inputs (canvas, then moodboard sizes) of the last run, see
+  /// `dropCachedModelsIfInputsChanged`.
+  private var lastImageInputs: (model: String, canvas: Bool, sizes: [[Int]])?
 
   /// Points MGK's default environment at `directory` and drops any cached pipeline.
   func setModelsDirectory(_ directory: String) {
@@ -74,6 +77,7 @@ actor GenerationEngine {
   ) async throws -> MediaGenerationPipeline.Result {
     var pipeline = try await pipeline(for: request.model)
     await applyPerformanceSettings(using: pipeline)
+    dropCachedModelsIfInputsChanged(request)
     pipeline.configuration = request.configuration
     pipeline.configuration.seed = request.seed
     pipeline.configuration.batchCount = 1
@@ -120,6 +124,33 @@ actor GenerationEngine {
     // Setting an unchanged value is a no-op in Dflat, so this only acts on changes.
     for setting in PerformanceSetting.allCases {
       dictionary[setting.rawValue, Int.self] = setting.value
+    }
+  }
+
+  /// Engine workaround: some models build different layers depending on the images sent.
+  /// Flux.3 adds its reference layers (embedder, refiner block, modulations) only when a run has
+  /// references, but the weights cache keeps the model's weights under the model file either way.
+  /// After a run without references, the next run with them finds the cache, skips reading the
+  /// file and leaves the reference layers unloaded: the canvas is ignored or the result is a
+  /// patchwork of tiles. The model preloader likewise reuses a model compiled for other inputs
+  /// (`ModelPreloader.retrieveUNet` doesn't compare them). So when the images sent change, empty
+  /// both: set the weights cache and "keep model in memory" to 0 and back.
+  private func dropCachedModelsIfInputsChanged(_ request: Request) {
+    let images = [request.canvas].compactMap { $0 } + request.moodboard.map(\.image)
+    let inputs = (
+      model: request.model, canvas: request.canvas != nil,
+      sizes: images.map { [$0.width, $0.height] }
+    )
+    defer { lastImageInputs = inputs }
+    guard let last = lastImageInputs, last.model == inputs.model,
+      last.canvas != inputs.canvas || last.sizes != inputs.sizes,
+      var dictionary = Self.engineWorkspace()?.dictionary
+    else { return }
+    // The preloader applies each change in order on the generation queue, ahead of this run.
+    for key in ["total_weights_cache", "keep_model_in_memory"] {
+      let value = dictionary[key, Int.self]
+      dictionary[key, Int.self] = 0
+      dictionary[key, Int.self] = value
     }
   }
 
