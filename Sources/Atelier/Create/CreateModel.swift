@@ -401,6 +401,7 @@ final class CreateModel {
     guard let recommended, let settings else { return }
     registerUndo(restoring: settings, undoManager, actionName: "Reset to Model Defaults")
     self.settings = recommended
+    if let selectedModel, presets?.defaultPreset(for: selectedModel) != nil { seedLocked = false }
   }
 
   /// The model's defaults with its default preset (if any) applied on top.
@@ -672,7 +673,12 @@ final class CreateModel {
         let recommended = withDefaultPreset(modelDefaults, for: model)
         self.recommended = recommended
         var settings = recommended
-        if let pendingSettings { SettingsRegistry.apply(dump: pendingSettings, to: &settings) }
+        if let pendingSettings {
+          SettingsRegistry.apply(dump: pendingSettings, to: &settings)
+        } else if presets?.defaultPreset(for: model) != nil {
+          // A default preset always comes with Random on; pasted or reused settings keep their seed.
+          seedLocked = false
+        }
         self.settings = settings
       } catch {
         errorMessage = error.localizedDescription

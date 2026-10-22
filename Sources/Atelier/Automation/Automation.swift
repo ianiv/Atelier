@@ -780,6 +780,10 @@ enum Automation {
         await settle()
       }
       check(model.settings?.steps == 9, "switching back to \(modelA) applied its default preset (steps \(model.settings?.steps ?? -1))")
+      check(!model.seedLocked, "applying \(modelA)'s default preset turned Random on")
+      model.rollAndLockSeed()
+      model.resetToModelDefaults(undoManager: nil)
+      check(!model.seedLocked, "Reset with a default preset turned Random on")
       presets.delete(own)
       check(presets.defaultPreset(for: modelA) == nil, "deleting the preset cleared the default")
 
