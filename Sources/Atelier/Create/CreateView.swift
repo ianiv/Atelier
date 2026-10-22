@@ -74,8 +74,6 @@ struct CanvasView: View {
           description: Text("Write a prompt below and press Generate (⌘↩)."))
       }
     }
-    // Continues the canvas softly under the floating sidebar and inspector.
-    .backgroundExtensionEffect()
   }
 }
 
