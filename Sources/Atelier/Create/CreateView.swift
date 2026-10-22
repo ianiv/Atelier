@@ -60,9 +60,10 @@ struct ModelPicker: View {
   }
 }
 
-/// The image canvas. Like Draw Things, it outlines the configured size and lets you zoom and move
-/// the view; the image sits centered on that frame at its own pixel size, so a size change shows
-/// against the last image (where image to image will place its source).
+/// The image canvas. Like Draw Things, the configured size stays put as an outlined frame fitted
+/// to the view, and zooming and dragging move the image under it. Whatever falls outside the frame
+/// shows dimmed and blurred: it won't be part of the next image (image to image will use this
+/// placement for its source).
 struct CanvasView: View {
   @Environment(CreateModel.self) private var model
   @Environment(HistoryStore.self) private var history
@@ -76,35 +77,41 @@ struct CanvasView: View {
     let canvas = model.canvas
     GeometryReader { geometry in
       let frame = frameSize
-      let fit = min(
-        (geometry.size.width - 2 * Self.margin) / frame.width,
-        (geometry.size.height - 2 * Self.margin) / frame.height)
-      let scale = canvas.scale ?? max(fit, 0.01)
+      // Points per frame pixel: the frame always fits the view.
+      let points = max(
+        min(
+          (geometry.size.width - 2 * Self.margin) / frame.width,
+          (geometry.size.height - 2 * Self.margin) / frame.height), 0.01)
+      let frameRect = CGRect(
+        x: (geometry.size.width - frame.width * points) / 2,
+        y: (geometry.size.height - frame.height * points) / 2,
+        width: frame.width * points, height: frame.height * points)
+      let imageFit = model.image.map {
+        min(frame.width / Double($0.width), frame.height / Double($0.height))
+      } ?? 1
+      let zoom = canvas.scale ?? imageFit
       let center = CGPoint(
-        x: geometry.size.width / 2 + canvas.offset.width,
-        y: geometry.size.height / 2 + canvas.offset.height)
+        x: frameRect.midX + canvas.offset.width * points,
+        y: frameRect.midY + canvas.offset.height * points)
       ZStack {
         if let image = model.image {
-          Image(decorative: image, scale: 1)
+          let size = CGSize(
+            width: Double(image.width) * zoom * points, height: Double(image.height) * zoom * points)
+          let picture = Image(decorative: image, scale: 1)
             .resizable()
-            .interpolation(scale > 2 ? .none : .high)
-            .frame(width: Double(image.width) * scale, height: Double(image.height) * scale)
+            .interpolation(zoom * points > 2 ? .none : .high)
+            .frame(width: size.width, height: size.height)
             .position(center)
+          picture
+            .blur(radius: 6)
+            .opacity(0.45)
+          picture
+            .mask { Rectangle().frame(width: frameRect.width, height: frameRect.height).position(x: frameRect.midX, y: frameRect.midY) }
         }
-        // Dims whatever lies outside the frame, which won't be in the next image.
-        let frameRect = CGRect(
-          x: center.x - frame.width * scale / 2, y: center.y - frame.height * scale / 2,
-          width: frame.width * scale, height: frame.height * scale)
-        Path { path in
-          path.addRect(CGRect(origin: .zero, size: geometry.size).insetBy(dx: -4000, dy: -4000))
-          path.addRect(frameRect)
-        }
-        .fill(Color.black.opacity(0.45), style: FillStyle(eoFill: true))
-        .allowsHitTesting(false)
         Rectangle()
           .strokeBorder(.secondary.opacity(0.6), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
-          .frame(width: frame.width * scale + 2, height: frame.height * scale + 2)
-          .position(center)
+          .frame(width: frameRect.width + 2, height: frameRect.height + 2)
+          .position(x: frameRect.midX, y: frameRect.midY)
           .allowsHitTesting(false)
         if model.image == nil {
           ContentUnavailableView(
@@ -113,34 +120,25 @@ struct CanvasView: View {
         }
       }
       .frame(width: geometry.size.width, height: geometry.size.height)
+      .clipped()
       .contentShape(.rect)
-      .gesture(panGesture(canvas).simultaneously(with: zoomGesture(canvas, in: geometry.size)))
+      .gesture(
+        panGesture(canvas, points: points)
+          .simultaneously(with: zoomGesture(canvas, frame: frameRect, points: points, in: geometry.size)))
       .onTapGesture(count: 2) {
         if canvas.scale == nil { canvas.zoom(to: 1) } else { canvas.zoomToFit() }
       }
       .contextMenu { contextMenu(canvas) }
-      .overlay(alignment: .bottomTrailing) {
-        ZoomControls(canvas: canvas, export: dragExport).padding(12)
-      }
-      .onChange(of: fit, initial: true) { canvas.fitScale = max(fit, 0.01) }
+      .onChange(of: imageFit, initial: true) { canvas.fitScale = imageFit }
     }
     .background(Color(nsColor: .underPageBackgroundColor).ignoresSafeArea())
+    // A new image starts fitted to the frame.
+    .onChange(of: model.imageItem?.id) { canvas.zoomToFit() }
     .alert(
       "Couldn't save the image",
       isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } }),
       actions: { Button("OK") { saveError = nil } },
       message: { Text(saveError ?? "") })
-  }
-
-  /// The canvas image as a PNG to drag out; a finished one carries its settings.
-  private var dragExport: PNGExport? {
-    if let item = model.imageItem { return history.dragExport(item) }
-    guard let image = model.image else { return nil }
-    let preview = image
-    return PNGExport(name: history.project.name) {
-      guard let png = ImageTensor.png(preview) else { throw ProjectError.badImage }
-      return png
-    }
   }
 
   /// The configured output size in pixels, else the image's.
@@ -152,27 +150,30 @@ struct CanvasView: View {
     return CGSize(width: 1024, height: 1024)
   }
 
-  private func panGesture(_ canvas: CanvasState) -> some Gesture {
+  private func panGesture(_ canvas: CanvasState, points: Double) -> some Gesture {
     DragGesture(minimumDistance: 2)
       .onChanged { value in
         let start = gestureStart ?? (canvas.effectiveScale, canvas.offset)
         gestureStart = start
+        canvas.scale = start.scale
         canvas.offset = CGSize(
-          width: start.offset.width + value.translation.width,
-          height: start.offset.height + value.translation.height)
+          width: start.offset.width + value.translation.width / points,
+          height: start.offset.height + value.translation.height / points)
       }
       .onEnded { _ in gestureStart = nil }
   }
 
-  /// Pinch zoom, keeping the point under the fingers in place.
-  private func zoomGesture(_ canvas: CanvasState, in size: CGSize) -> some Gesture {
+  /// Pinch zoom, keeping the image point under the fingers in place.
+  private func zoomGesture(_ canvas: CanvasState, frame: CGRect, points: Double, in size: CGSize)
+    -> some Gesture
+  {
     MagnifyGesture()
       .onChanged { value in
         let start = gestureStart ?? (canvas.effectiveScale, canvas.offset)
         gestureStart = start
         let anchor = CGPoint(
-          x: value.startAnchor.x * size.width - size.width / 2,
-          y: value.startAnchor.y * size.height - size.height / 2)
+          x: (value.startAnchor.x * size.width - frame.midX) / points,
+          y: (value.startAnchor.y * size.height - frame.midY) / points)
         canvas.offset = start.offset
         canvas.scale = start.scale
         canvas.zoom(to: start.scale * value.magnification, around: anchor)
@@ -195,9 +196,7 @@ struct CanvasView: View {
     let item = model.imageItem
     let panel = NSSavePanel()
     panel.allowedContentTypes = [.png]
-    panel.nameFieldStringValue =
-      item.map { "\(history.project.name) \($0.id.logicalTime)-\($0.sidecar.seed).png" }
-      ?? "\(history.project.name).png"
+    panel.nameFieldStringValue = (item.map(history.fileName(for:)) ?? history.project.name) + ".png"
     guard panel.runModal() == .OK, let url = panel.url else { return }
     Task {
       do {
@@ -230,21 +229,12 @@ struct ZoomMenuItems: View {
   }
 }
 
-/// − / zoom level / + in a glass capsule at the canvas corner.
+/// − / zoom level / +, at the end of the status bar.
 private struct ZoomControls: View {
   let canvas: CanvasState
-  var export: PNGExport?
 
   var body: some View {
     HStack(spacing: 2) {
-      if let export {
-        Image(systemName: "photo")
-          .frame(width: 22, height: 22)
-          .contentShape(.rect)
-          .draggable(export)
-          .help("Drag the image into Finder or another app")
-        Divider().frame(height: 14)
-      }
       Button("Zoom Out", systemImage: "minus") { canvas.zoomOut() }
         .help("Zoom Out (⌘−)")
       Menu {
@@ -266,9 +256,6 @@ private struct ZoomControls: View {
     }
     .labelStyle(.iconOnly)
     .buttonStyle(.borderless)
-    .padding(.horizontal, 8)
-    .padding(.vertical, 4)
-    .glassEffect()
   }
 }
 
@@ -276,11 +263,11 @@ private struct ZoomControls: View {
 @MainActor
 @Observable
 final class CanvasState {
-  /// Points per image pixel; nil fits the frame to the view.
+  /// Frame pixels per image pixel (1 is actual size); nil fits the image to the frame.
   var scale: Double?
-  /// The frame's center relative to the view's center, in points.
+  /// The image's center relative to the frame's, in frame pixels.
   var offset: CGSize = .zero
-  /// The scale that fits the frame, kept current by the canvas.
+  /// The scale that fits the image to the frame, kept current by the canvas.
   var fitScale: Double = 1
 
   var effectiveScale: Double { scale ?? fitScale }
@@ -303,7 +290,7 @@ final class CanvasState {
     offset = .zero
   }
 
-  /// Zooms keeping `anchor` (relative to the view's center, in points) in place.
+  /// Zooms keeping `anchor` (relative to the frame's center, in frame pixels) in place.
   func zoom(to newScale: Double, around anchor: CGPoint = .zero) {
     let old = effectiveScale
     let new = min(max(newScale, Self.range.lowerBound), Self.range.upperBound)
@@ -362,6 +349,7 @@ struct StatusBar: View {
         Text("Cancelling…")
       }
       Spacer()
+      ZoomControls(canvas: model.canvas)
     }
     .font(.callout)
     .padding(.horizontal, 12)
