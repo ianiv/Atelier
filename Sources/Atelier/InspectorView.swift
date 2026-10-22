@@ -110,6 +110,7 @@ struct InspectorSection: View {
   let section: SettingSection
   let traits: ModelTraits
   let showAll: Bool
+  @State private var moreExpanded = false
   @Environment(CreateModel.self) private var model
   @Environment(LayoutStore.self) private var layouts
   @Environment(\.undoManager) private var undoManager
@@ -129,8 +130,10 @@ struct InspectorSection: View {
         ForEach(shown) { SettingRow(descriptor: $0) }
         if section == .essentials { SeedControls() }
         if !tucked.isEmpty {
-          DisclosureGroup("More: \(tucked.count)") {
+          DisclosureGroup(isExpanded: $moreExpanded) {
             ForEach(tucked) { SettingRow(descriptor: $0) }
+          } label: {
+            ClickableLabel("More: \(tucked.count)", isExpanded: $moreExpanded)
           }
           .foregroundStyle(.secondary)
         }
@@ -153,11 +156,12 @@ struct InspectorSection: View {
       if let toggle {
         Toggle(section.title, isOn: SettingBindings(descriptor: toggle, model: model, undoManager: undoManager).bool)
           .toggleStyle(.checkbox)
+          .labelsHidden()
           .help(toggle.help)
           .contextMenu { SettingContextMenu(descriptor: toggle) }
-      } else {
-        Text(section.title)
       }
+      // The whole header (except the checkbox and reset button) expands and collapses the section.
+      ClickableLabel(section.title, isExpanded: expansion)
       Spacer()
       if !changed.isEmpty {
         Button {
@@ -169,6 +173,26 @@ struct InspectorSection: View {
         .help("Reset \(section.title) to the model defaults")
       }
     }
+    .contentShape(.rect)
+    .onTapGesture { expansion.wrappedValue.toggle() }
+  }
+}
+
+/// A disclosure label that toggles its disclosure when clicked, not only via the chevron.
+struct ClickableLabel: View {
+  let title: String
+  @Binding var isExpanded: Bool
+
+  init(_ title: String, isExpanded: Binding<Bool>) {
+    self.title = title
+    _isExpanded = isExpanded
+  }
+
+  var body: some View {
+    Text(title)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .contentShape(.rect)
+      .onTapGesture { withAnimation { isExpanded.toggle() } }
   }
 }
 

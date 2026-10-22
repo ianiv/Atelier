@@ -165,10 +165,12 @@ struct PromptComposer: View {
           .disabled(!model.canGenerate)
         }
       }
-      DisclosureGroup("Negative Prompt", isExpanded: $showNegative) {
+      DisclosureGroup(isExpanded: $showNegative) {
         TextField("What to avoid", text: $model.negativePrompt, axis: .vertical)
           .lineLimit(1...4)
           .textFieldStyle(.roundedBorder)
+      } label: {
+        ClickableLabel("Negative Prompt", isExpanded: $showNegative)
       }
       .font(.callout)
     }
