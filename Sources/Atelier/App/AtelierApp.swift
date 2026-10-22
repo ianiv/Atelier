@@ -93,11 +93,12 @@ struct AtelierApp: App {
         Button("Clear Canvas") { create.clearCanvas() }
           .disabled(create.isBusy || navigation.section != .create)
         Divider()
-        Picker("Mode", selection: Binding(get: { create.canvasMode }, set: { create.canvasMode = $0 })) {
+        Picker("Mode", selection: Binding(get: { create.effectiveCanvasMode }, set: { create.canvasMode = $0 })) {
           Text("Generate").tag(CreateModel.CanvasMode.generate)
           Text("Edit").tag(CreateModel.CanvasMode.edit)
         }
         .pickerStyle(.inline)
+        .disabled(!create.canEdit)
       }
     }
     Settings {

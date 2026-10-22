@@ -141,6 +141,12 @@ final class CreateModel {
     }
   }
 
+  /// Whether Edit means anything: the model reads the canvas as a reference, or Strength is below
+  /// 100% so any model starts from it.
+  var canEdit: Bool { usesReferences || (settings?.strength ?? 1) < 1 }
+  /// The mode runs use: Generate while Edit means nothing, keeping the chosen mode for when it does.
+  var effectiveCanvasMode: CanvasMode { canEdit ? canvasMode : .generate }
+
   /// Puts an image from outside the project on the canvas, fitted to the frame, and switches to
   /// Edit so the next run starts from it.
   func setCanvasImage(_ newImage: CGImage) {
@@ -528,7 +534,7 @@ final class CreateModel {
     var request = GenerationEngine.Request(
       model: model, prompt: prompt, negativePrompt: negativePrompt, seed: seed,
       configuration: settings)
-    if canvasMode == .edit, let image {
+    if effectiveCanvasMode == .edit, let image {
       request.canvas = canvas.render(image, size: CGSize(width: settings.width, height: settings.height))
       request.canvasIsImported = canvasIsImported
       // The canvas is exactly its step's image when that's fitted at the output size.

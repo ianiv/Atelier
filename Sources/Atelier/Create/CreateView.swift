@@ -133,7 +133,7 @@ struct CanvasView: View {
           picture
             .mask { Rectangle().frame(width: frameRect.width, height: frameRect.height).position(x: frameRect.midX, y: frameRect.midY) }
         }
-        let isInput = model.canvasMode == .edit && model.image != nil
+        let isInput = model.effectiveCanvasMode == .edit && model.image != nil
         Rectangle()
           .strokeBorder(
             isInput || isTargeted ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary.opacity(0.6)),
@@ -372,15 +372,6 @@ struct StatusBar: View {
           Label(error, systemImage: "exclamationmark.triangle")
             .foregroundStyle(.red)
             .lineLimit(2)
-        } else if model.canvasMode == .edit, model.image != nil, !model.usesReferences,
-          (model.settings?.strength ?? 0) >= 1
-        {
-          Label(
-            "Strength is 100%, so this model will ignore the canvas. Lower Strength in the inspector.",
-            systemImage: "info.circle"
-          )
-          .foregroundStyle(.secondary)
-          .lineLimit(2)
         } else if let note = model.statusNote {
           Label(note, systemImage: "info.circle")
             .foregroundStyle(.secondary)
@@ -586,7 +577,9 @@ struct PromptComposer: View {
           ClickableLabel("Negative Prompt", isExpanded: $showNegative)
         }
         .font(.callout)
-        Picker("Mode", selection: $model.canvasMode) {
+        Picker(
+          "Mode", selection: Binding(get: { model.effectiveCanvasMode }, set: { model.canvasMode = $0 })
+        ) {
           Text("Generate").tag(CreateModel.CanvasMode.generate)
           Text("Edit").tag(CreateModel.CanvasMode.edit)
         }
@@ -594,8 +587,11 @@ struct PromptComposer: View {
         .labelsHidden()
         .controlSize(.small)
         .fixedSize()
+        .disabled(!model.canEdit)
         .help(
-          "Generate starts from the prompt alone. Edit also sends the canvas: what's inside the frame is the input, and empty areas are filled in.")
+          model.canEdit
+            ? "Generate starts from the prompt alone. Edit also sends the canvas: what's inside the frame is the input, and empty areas are filled in."
+            : "This model doesn't take image inputs, so it always generates from the prompt. Lower Strength below 100% in the inspector to edit from the canvas.")
       }
     }
     .padding(12)

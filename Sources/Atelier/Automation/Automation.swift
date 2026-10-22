@@ -144,7 +144,7 @@ enum Automation {
         model.canvasMode = mode
       }
       log(
-        "mode \(model.canvasMode.rawValue), canvas \(model.image.map { "\($0.width)x\($0.height)" } ?? "empty"), moodboard \(model.moodboard.items.count), references \(model.usesReferences ? "used" : "not used"), strength \(settings.strength)"
+        "mode \(model.canvasMode.rawValue)\(model.canEdit ? "" : " (runs as generate)"), canvas \(model.image.map { "\($0.width)x\($0.height)" } ?? "empty"), moodboard \(model.moodboard.items.count), references \(model.usesReferences ? "used" : "not used"), strength \(settings.strength)"
       )
       if let snapshotDir, let image = model.image,
         let input = model.canvas.render(image, size: CGSize(width: settings.width, height: settings.height)),
@@ -198,7 +198,7 @@ enum Automation {
       }
       if let error = model.errorMessage { log("error: \(error)") }
       if let step = model.lastSavedStep {
-        log("saved step \(step.logicalTime) in \(model.history.project.url.path)")
+        log("saved step \(step.logicalTime) in \(model.history.project.url.path), input \(model.history.item(step)?.inputTensorId != nil ? "recorded" : "none")")
         let saved = await model.history.moodboard(at: step, in: model.history.project.name)
         log("moodboard saved with the step: \(saved.count) (weights \(saved.map(\.weight)))")
         if editDuringRun, let item = model.history.item(step) {
