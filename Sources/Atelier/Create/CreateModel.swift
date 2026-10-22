@@ -206,11 +206,14 @@ final class CreateModel {
   }
 
   private func loadModelList() async {
-    models = await engine.downloadedModels()
+    let models = await engine.downloadedModels()
     let directory = modelsDirectory
-    modelFiles = await Task.detached {
+    let modelFiles = await Task.detached {
       ((try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? []).sorted()
     }.value
+    // Assigned after the last await, so callers pick a selection before the model picker redraws.
+    self.models = models
+    self.modelFiles = modelFiles
   }
 
   // MARK: - Settings
