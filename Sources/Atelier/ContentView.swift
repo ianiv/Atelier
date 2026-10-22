@@ -69,36 +69,3 @@ struct ContentView: View {
     .background(WindowFrameAutosave(name: "Main"))
   }
 }
-
-/// A search field for a section's toolbar, used instead of `.searchable(placement: .toolbar)`.
-/// Switching from Create's customizable toolbar to one with a `.searchable` item crashes AppKit
-/// ("NSToolbarItemViewer's min/max size is nan"), so the sections own a plain toolbar item.
-struct ToolbarSearchField: NSViewRepresentable {
-  let prompt: String
-  @Binding var text: String
-
-  func makeNSView(context: Context) -> NSSearchField {
-    let field = NSSearchField()
-    field.placeholderString = prompt
-    field.sendsSearchStringImmediately = true
-    field.target = context.coordinator
-    field.action = #selector(Coordinator.changed(_:))
-    field.widthAnchor.constraint(equalToConstant: 200).isActive = true
-    return field
-  }
-
-  func updateNSView(_ field: NSSearchField, context: Context) {
-    context.coordinator.text = $text
-    if field.stringValue != text { field.stringValue = text }
-  }
-
-  func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
-
-  /// Sent on every keystroke (`sendsSearchStringImmediately`) and when the clear button is pressed.
-  final class Coordinator: NSObject {
-    var text: Binding<String>
-    init(text: Binding<String>) { self.text = text }
-
-    @objc func changed(_ field: NSSearchField) { text.wrappedValue = field.stringValue }
-  }
-}

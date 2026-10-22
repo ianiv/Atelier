@@ -35,8 +35,8 @@ struct HistoryView: View {
           }
           .frame(minWidth: 180)
         }
-        ToolbarItem { ToolbarSearchField(prompt: "Filter by prompt", text: $search) }
       }
+      .searchable(text: $search, placement: .toolbar, prompt: "Filter by prompt")
       .inspector(isPresented: .constant(true)) {
         Group {
           if let selected {

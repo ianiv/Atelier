@@ -15,11 +15,14 @@ struct CreateView: View {
       InspectorView()
         .inspectorColumnWidth(min: 300, ideal: 340, max: 460)
     }
-    .toolbar(id: "create") {
-      ToolbarItem(id: "presets", placement: .primaryAction) {
+    // A plain toolbar, not a customizable `.toolbar(id:)`: AppKit crashes ("NSToolbarItemViewer's
+    // min/max size is nan") switching between a customizable toolbar and the other sections'
+    // `.searchable` toolbars.
+    .toolbar {
+      ToolbarItem(placement: .primaryAction) {
         PresetMenu()
       }
-      ToolbarItem(id: "generate", placement: .primaryAction) {
+      ToolbarItem(placement: .primaryAction) {
         if model.isBusy, model.phase != .loadingModel {
           Button("Cancel", systemImage: "stop.fill") { model.cancel() }
             .disabled(model.phase == .cancelling)
@@ -30,7 +33,7 @@ struct CreateView: View {
             .help("Generate (⌘↩)")
         }
       }
-      ToolbarItem(id: "inspector", placement: .primaryAction) {
+      ToolbarItem(placement: .primaryAction) {
         Button("Inspector", systemImage: "sidebar.trailing") { inspectorShown.toggle() }
           .help(inspectorShown ? "Hide Inspector (⌥⌘I)" : "Show Inspector (⌥⌘I)")
       }

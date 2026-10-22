@@ -55,8 +55,8 @@ struct ModelsView: View {
           .disabled(library.isLoadingCatalog)
           .help("Reload the model catalog and the models folder")
         }
-        ToolbarItem { ToolbarSearchField(prompt: "Filter models", text: $search) }
       }
+      .searchable(text: $search, placement: .toolbar, prompt: "Filter models")
       .safeAreaInset(edge: .bottom, spacing: 0) { footer }
       .inspector(isPresented: .constant(true)) {
         Group {
@@ -315,8 +315,8 @@ struct LoRAsView: View {
           Button("Import…", systemImage: "plus") { chooseFiles() }
             .help("Import .safetensors LoRA files (or drop them here)")
         }
-        ToolbarItem { ToolbarSearchField(prompt: "Filter LoRAs", text: $search) }
       }
+      .searchable(text: $search, placement: .toolbar, prompt: "Filter LoRAs")
       .inspector(isPresented: .constant(true)) {
         Group {
           if let selected {
