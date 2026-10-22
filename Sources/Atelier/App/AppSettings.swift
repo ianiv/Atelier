@@ -2,10 +2,10 @@ import Foundation
 
 /// User-facing settings persisted in UserDefaults.
 enum AppSettings {
-  static let defaultModelsDirectory = "/Volumes/External 2TB/DrawThings/Models"
   private static let modelsDirectoryKey = "modelsDirectory"
 
-  /// Models directory: the saved setting, else `DRAWTHINGS_MODELS_DIR`, else the default volume.
+  /// Models directory: the saved setting, else `DRAWTHINGS_MODELS_DIR`, else ~/Documents/Models
+  /// (MGK's own default).
   static var modelsDirectory: String {
     get {
       if let saved = UserDefaults.standard.string(forKey: modelsDirectoryKey), !saved.isEmpty {
@@ -14,7 +14,8 @@ enum AppSettings {
       if let env = ProcessInfo.processInfo.environment["DRAWTHINGS_MODELS_DIR"], !env.isEmpty {
         return env
       }
-      return defaultModelsDirectory
+      return FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("Models", isDirectory: true).path
     }
     set {
       UserDefaults.standard.set(newValue, forKey: modelsDirectoryKey)

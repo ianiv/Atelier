@@ -101,7 +101,7 @@ Gaps to fill. These are small additions in MGK or the app, guided by `/Users/ian
 - **Layouts** (which controls are shown, their order, which sections start expanded). Edit with right-click Hide/Show or a Customize Inspector… sheet (grouped checklist, drag to reorder). Stored as JSON in `~/Library/Application Support/Atelier/Layouts/`, exportable and importable. Built-ins: Simple, Standard, Everything. Switched by hand from the inspector header menu.
 - **Presets** (saved values). Toolbar menu with "Save Current Settings as Preset…"; a preset applies on top of the model's defaults. Stored as JSON next to layouts and exportable. Presets don't change the layout, and layouts don't change values.
 
-**Settings:** models directory (default `/Volumes/External 2TB/DrawThings/Models`, or the `DRAWTHINGS_MODELS_DIR` resolution) and weights cache size.
+**Settings:** models directory (saved in UserDefaults; unset, it follows MGK: `DRAWTHINGS_MODELS_DIR`, else `~/Documents/Models`; no machine-specific path in code, Ianiv 2026-10-22) and weights cache size.
 
 ## Repo, build and packaging
 - Git repo at `~/Code/Atelier` with a checked-in `Atelier.xcodeproj` (macOS 27 deployment target, so Liquid Glass APIs need no availability checks): an app target `Atelier` (`Sources/Atelier/`) and a static framework `ProjectFormat` (`Sources/ProjectFormat/`, its own module because its enum names clash with DataModels').
