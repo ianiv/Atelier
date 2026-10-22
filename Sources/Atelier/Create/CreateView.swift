@@ -480,10 +480,17 @@ struct RecentStrip: View {
                   .strokeBorder(Color.accentColor, lineWidth: current == item.id ? 2 : 0)
               }
               .contentShape(.rect)
-              .onTapGesture(count: 2) { model.use(item) }
-              .onTapGesture { model.showWithPrompt(item, undoManager: undoManager) }
+              // Picks up where this image left off. While a run is going, or without its model,
+              // only the prompt and size come back.
+              .onTapGesture {
+                if model.canUse(item) {
+                  model.use(item)
+                } else {
+                  model.showWithPrompt(item, undoManager: undoManager)
+                }
+              }
               .draggable(history.dragExport(item))
-              .help("\(item.sidecar.prompt)\n\(GenerationTime.text(item.sidecar.durationSeconds)). Click to view and use its prompt and size, double-click to use all its settings.")
+              .help("\(item.sidecar.prompt)\n\(GenerationTime.text(item.sidecar.durationSeconds)). Click to use its settings.")
               .contextMenu {
                 Button("Use Settings") { model.use(item) }
                   .disabled(!model.canUse(item))
