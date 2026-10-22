@@ -16,9 +16,6 @@ struct CreateView: View {
         .inspectorColumnWidth(min: 300, ideal: 340, max: 460)
     }
     .toolbar(id: "create") {
-      ToolbarItem(id: "model", placement: .navigation) {
-        ModelPicker()
-      }
       ToolbarItem(id: "presets", placement: .primaryAction) {
         PresetMenu()
       }
@@ -55,7 +52,6 @@ struct ModelPicker: View {
       }
     }
     .pickerStyle(.menu)
-    .frame(minWidth: 180, idealWidth: 240, maxWidth: 300)
     .help(model.selectedModelInfo.map { "\($0.name) (\($0.version ?? "unknown family"))" } ?? "Model")
   }
 }
