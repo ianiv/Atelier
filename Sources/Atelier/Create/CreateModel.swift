@@ -533,18 +533,50 @@ final class CreateModel {
       }
     }
     if usesReferences { request.moodboard = moodboard.references }
+    remember(prompt: prompt)
+    start(request)
+  }
+
+  /// Runs an agent's request (AgentTools) like Generate: progress, previews and the result show
+  /// on the canvas and in the status bar, and Cancel stops it. The prompt, inspector and moodboard
+  /// are left alone. Waits for a run already in progress; cancelling the caller cancels the run.
+  func generate(
+    forAgent request: GenerationEngine.Request,
+    progress: @escaping (GenerationEngine.Progress) -> Void
+  ) async throws -> HistoryItem {
+    while isBusy {
+      try await Task.sleep(for: .milliseconds(200))
+    }
+    errorMessage = nil
+    statusNote = nil
+    return try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { continuation in
+        start(request, progress: progress) { continuation.resume(with: $0) }
+      }
+    } onCancel: {
+      Task { @MainActor in self.cancel() }
+    }
+  }
+
+  private func start(
+    _ request: GenerationEngine.Request,
+    progress forward: ((GenerationEngine.Progress) -> Void)? = nil,
+    completion: ((Result<HistoryItem, Error>) -> Void)? = nil
+  ) {
     phase = .running("Preparing…")
     step = 0
-    totalSteps = settings.steps
+    totalSteps = request.configuration.steps
     let startedAt = Date()
     runStartedAt = startedAt
     samplingStart = nil
     lastStepAt = nil
-    remember(prompt: prompt)
     generationTask = Task { [engine] in
       do {
         let result = try await engine.generate(request) { progress in
-          Task { @MainActor in self.handle(progress) }
+          Task { @MainActor in
+            self.handle(progress)
+            forward?(progress)
+          }
         }
         let item = try await history.save(
           result, request: request, startedAt: startedAt, finishedAt: Date())
@@ -554,10 +586,13 @@ final class CreateModel {
         image = ImageTensor.cgImage(from: result.tensor) ?? image
         saveSession()
         FinishedNotice.post(prompt: request.prompt, seconds: item.sidecar.durationSeconds)
+        completion?(.success(item))
       } catch is CancellationError {
         // Cancelled by the user; keep the last preview on the canvas.
+        completion?(.failure(CancellationError()))
       } catch {
         errorMessage = error.localizedDescription
+        completion?(.failure(error))
       }
       phase = .idle
       generationTask = nil

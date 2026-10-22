@@ -5,9 +5,9 @@ import ModelZoo
 import Observation
 import _MediaGenerationKit
 
-/// The tools Atelier offers agents over MCP. Generation goes through the app's own engine (one
-/// run at a time, shared with Create) and saves into the current project like a run from Create;
-/// the Create screen's prompt, settings and canvas are left alone.
+/// The tools Atelier offers agents over MCP. Generation runs through Create like a press of
+/// Generate (progress and previews on the canvas, saved to the current project, one run at a
+/// time); the Create screen's prompt, inspector and moodboard are left alone.
 @MainActor
 @Observable
 final class AgentTools {
@@ -260,30 +260,20 @@ final class AgentTools {
 
     let summary = String(prompt.prefix(60))
     activity = "Waiting: “\(summary)”"
-    progress(Progress(step: 0, total: nil, message: "Waiting for the engine"))
+    progress(Progress(step: 0, total: nil, message: "Waiting for the current run to finish"))
     defer { activity = nil }
-    let startedAt = Date()
-    let result = try await create.engine.generate(request) { [weak self] update in
-      let message: String
+    let item = try await create.generate(forAgent: request) { [weak self] update in
+      guard case .state(let state) = update else { return }
+      let message = Self.describe(state)
       var step = 0
       var total: Int?
-      switch update {
-      case .state(let state):
-        message = Self.describe(state)
-        if case .generating(let current, let all) = state {
-          step = current
-          total = all
-        }
-      case .preview:
-        return
+      if case .generating(let current, let all) = state {
+        step = current
+        total = all
       }
-      Task { @MainActor in
-        self?.activity = "\(message): “\(summary)”"
-        progress(Progress(step: step, total: total, message: message))
-      }
+      self?.activity = "\(message): “\(summary)”"
+      progress(Progress(step: step, total: total, message: message))
     }
-    let item = try await create.history.save(
-      result, request: request, startedAt: startedAt, finishedAt: Date())
     let png = try await create.history.pngData(item)
     let url = try Self.outputURL(arguments["save_to"] as? String, name: create.history.fileName(for: item))
     try png.write(to: url)

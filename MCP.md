@@ -1,6 +1,6 @@
 # Atelier for agents (MCP)
 
-Atelier runs an MCP server inside the app, so agents such as Claude Code can generate images with your local models. Agents use the app's own engine: their runs take turns with yours (one image at a time) instead of loading a second copy of a model onto the GPU. Every image is saved to the current project, so it shows up in History like any other run.
+Atelier runs an MCP server inside the app, so agents such as Claude Code can generate images with your local models. Agents use the app's own engine: their runs take turns with yours (one image at a time) instead of loading a second copy of a model onto the GPU. An agent's run shows on the Create screen like one of yours (progress, previews, the result on the canvas, Cancel stops it) without changing your prompt or settings, and is saved to the current project.
 
 ## Turn it on
 
