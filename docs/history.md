@@ -4,10 +4,11 @@ Every image you generate is saved to the **current project**. Click **History** 
 
 ## Browsing
 
-- The grid shows the current project's images, newest first.
+- The grid shows the current project's images, every branch, newest first.
+- **Grid / Graph** in the toolbar switches to a graph: one row per image with its prompt, model and time, and a column of lines showing which image each one follows, so you can see where the history branches. The current image has a ring around its dot.
 - **Filter by prompt**: type in the search field in the toolbar.
 - **Model**: show only images made with one model.
-- Click an image to see its prompt, negative prompt and settings (model, size, seed, steps, guidance, shift, sampler, hires fix and more) in the panel on the right. Prompts and seeds can be selected and copied.
+- Click an image to make it the **current image** (see Branches below) and see its prompt, negative prompt and settings (model, size, seed, steps, guidance, shift, sampler, hires fix and more) in the panel on the right. Prompts and seeds can be selected and copied.
 - Select several images with ⌘-click or ⇧-click to copy, export or delete them together.
 
 ## Reusing an image
@@ -28,9 +29,20 @@ Right-click an image (or use the buttons in the detail panel):
 
 With several images selected, the same menu offers **Copy Images**, **Export PNGs…** and **Delete**.
 
+## Branches
+
+Like Draw Things, a project keeps a branching history. The **current image** is the one you last clicked (in History or the recent strip under the canvas) or generated. The next image you make, in Generate or Edit mode, follows it:
+
+- If the current image is the newest one, the new image simply comes after it.
+- Otherwise the new image starts a new branch from it. Nothing is lost: the images that already followed it stay where they are, on their own branch.
+
+Clicking an image changes nothing in the project except which image is current, and the project remembers that for the next time it's opened. Use Settings on an image made with Edit makes its input the current image, so generating again makes a sibling of the original.
+
+Deleting an image keeps its branch together: the images that followed it now follow the image before it. If you delete the current image, the one before it becomes current.
+
 ## Projects
 
-A project is one file holding a sequence of images and their settings. Use the project menu at the left of History's toolbar to:
+A project is one file holding the images, their branches and their settings. Use the project menu at the left of History's toolbar to:
 
 - Switch to another project.
 - **New Project…**

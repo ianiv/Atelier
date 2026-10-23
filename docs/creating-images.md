@@ -87,7 +87,9 @@ Open the **Presets** menu in the toolbar:
 
 ### Recent images
 
-The strip under the canvas shows your latest images from the current project. Click one to bring back its settings and show it on the canvas. Right-click for **Use Settings**, **Use as Input**, **Add to Moodboard** and **Copy Image**. You can also drag an image from the strip into another app.
+The strip under the canvas shows your latest images from the current project. Click one to bring back its settings and show it on the canvas; it becomes the current image, and the next image you make follows it, starting a new branch if it isn't the newest (see [History](history.md#branches)).
+
+The two buttons at the strip's left switch what it shows: **Chronological** (clock) shows the newest images on every branch; **Current Lineage** (branch) shows the current image's line: the images it came from, and the newest images made after it. An image that more than one image follows has a small branch badge with their count. Right-click for **Use Settings**, **Use as Input**, **Add to Moodboard** and **Copy Image**. You can also drag an image from the strip into another app.
 
 ## Image to image
 
