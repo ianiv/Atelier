@@ -76,6 +76,57 @@ enum MOSSImporter {
     }
   }
 
+  /// Draw Things' two 8-bit formats for MOSS.
+  enum EightBit: CaseIterable {
+    /// Palettized ("8-bit", `_q8p.ckpt`): slow to write (k-means per tensor).
+    case palettized
+    /// Row-wise integer ("8-bit S", `_i8x.ckpt`): quick to write.
+    case rowwise
+
+    var fileSuffix: String { self == .palettized ? "q8p.ckpt" : "i8x.ckpt" }
+    var title: String { self == .palettized ? "8-bit" : "8-bit S" }
+  }
+
+  /// Writes an 8-bit copy of the MOSS weights at `path` to `output`, matching Draw Things' own
+  /// files: `palettized` as draw-things' ModelQuantizer makes `moss_image_sft_q8p.ckpt`, `rowwise`
+  /// as `moss_image_sft_i8x.ckpt` stores its tensors (row-wise 8-bit matrices, the modulation
+  /// matrices palettized). Both keep the embedders and final linear layer in FP16, FP32 tensors
+  /// as they are, and compress vectors (ezm7). An interrupted copy resumes: tensors already in
+  /// `output` are kept (each write is its own transaction).
+  static func quantize(
+    _ path: String, to output: String, format: EightBit, progress: (Float) -> Void
+  ) {
+    let graph = DynamicGraph()
+    graph.openStore(
+      path, flags: .readOnly, externalStore: TensorData.externalStore(filePath: path)
+    ) { store in
+      let keys = store.keys
+      graph.openStore(output) { out in
+        let written = Set(out.keys)
+        for (index, key) in keys.enumerated() {
+          defer { progress(Float(index + 1) / Float(keys.count)) }
+          guard !written.contains(key) else { continue }
+          guard let tensor = store.read(key, codec: [.q8p, .i8x, .ezm7, .externalData]) else {
+            continue
+          }
+          if tensor.dataType == .Float32 {
+            out.write(key, tensor: tensor)
+            continue
+          }
+          let fp16 = Tensor<Float16>(from: tensor)
+          if key.contains("embedder") || key.contains("final_linear") {
+            out.write(key, tensor: fp16)
+          } else if fp16.shape.filter({ $0 > 1 }).count > 1 {
+            let rowwise = format == .rowwise && !key.contains("ada_ln")
+            out.write(key, tensor: fp16, codec: rowwise ? [.i8x, .ezm7] : [.q8p, .ezm7])
+          } else {
+            out.write(key, tensor: fp16, codec: .ezm7)
+          }
+        }
+      }
+    }
+  }
+
   /// Source tensor → store names. `fusedQKV`: the image blocks pack q, k and v in one
   /// `proj.qkv` (as some exports do) instead of the separate `proj.q/k/v` the engine maps.
   static func mapping(layers: Int, fusedQKV: Bool) -> [String: ModelWeightElement] {

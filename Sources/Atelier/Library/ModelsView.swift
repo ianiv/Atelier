@@ -288,6 +288,23 @@ struct ModelDetail: View {
             Button("Move to Trash", role: .destructive, action: delete)
               .disabled(!library.canDelete(model))
           }
+          ForEach(MOSSImporter.EightBit.allCases, id: \.self) { format in
+            let output = ModelLibrary.eightBitFile(for: model.file, format)
+            if let progress = library.quantizing[output] {
+              VStack(alignment: .leading) {
+                ProgressView(value: progress)
+                Text("Writing an \(format.title) copy…").font(.caption)
+                  .foregroundStyle(.secondary)
+              }
+            } else if library.canMake8BitCopy(model, format) {
+              Button("Make \(format.title) Copy") { library.make8BitCopy(model, format) }
+                .help(
+                  format == .palettized
+                    ? "Writes an 8-bit version, about half the size, like Draw Things' \"8-bit\" models. Slow to write."
+                    : "Writes an 8-bit S version, about half the size, like Draw Things' \"8-bit S\" models."
+                )
+            }
+          }
         } else if library.isCustom(model) {
           Text("This imported model's file isn't in the models folder.")
             .font(.caption).foregroundStyle(.secondary)

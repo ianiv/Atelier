@@ -372,7 +372,7 @@ enum Automation {
   ///           [--generate-with-lora MODEL [--steps N] [--seed N] [--lora-weight W]]
   ///           [--delete-lora FILE] [--download MODEL [--cancel-after-bytes N]]
   ///           [--import-model FILE [--model-name NAME]] [--generate-model [MODEL] [--steps N]]
-  ///           [--compare-weights REFERENCE [--compare-model MODEL]]
+  ///           [--make-8bit MODEL [--8bit-s]] [--compare-weights REFERENCE [--compare-model MODEL]]
   ///           [--delete-model MODEL]
   ///           [--snapshot-dir DIR] [--quit]
   ///
@@ -568,6 +568,19 @@ enum Automation {
           await shot("models-imported.png")
           importedModel = entry.file
         }
+      }
+
+      if let file = value("--make-8bit"), let entry = library.catalog.first(where: { $0.file == file }) {
+        let format: MOSSImporter.EightBit = args.contains("--8bit-s") ? .rowwise : .palettized
+        let started = Date()
+        let copy = ModelLibrary.eightBitFile(for: file, format)
+        library.make8BitCopy(entry, format)
+        while library.quantizing[copy] != nil { try? await Task.sleep(for: .milliseconds(250)) }
+        if let error = library.errorMessage { log("error: \(error)") }
+        let made = library.catalog.first { $0.file == copy }
+        check(
+          made?.isDownloaded == true && library.isCustom(made!) && model.models.contains { $0.file == copy },
+          String(format: "%@ copy %@ (%@, %@) in %.0fs", format.title, copy, made?.name ?? "missing", library.sizes[copy].map(ModelsView.bytes) ?? "?", Date().timeIntervalSince(started)))
       }
 
       if let reference = value("--compare-weights"),

@@ -80,6 +80,8 @@ final class ModelLibrary {
   private(set) var downloads: [String: Download] = [:]
   private(set) var importing: [LoRAImport] = []
   private(set) var importingModels: [ModelImport] = []
+  /// 8-bit copies being written, by output file, with their progress.
+  private(set) var quantizing: [String: Double] = [:]
   private(set) var freeSpace: Int64?
   var errorMessage: String?
 
@@ -375,6 +377,59 @@ final class ModelLibrary {
     ModelZoo.appendCustomSpecification(specification)
     ModelZoo.isExternalUrlsPreferred = preferred
     return specification.file
+  }
+
+  /// Whether `model` can get an 8-bit copy in `format`: an imported full-precision MOSS model
+  /// without that copy yet. A copy whose file exists but isn't registered was interrupted, and
+  /// making it again resumes it.
+  func canMake8BitCopy(_ model: MediaGenerationResolvedModel, _ format: MOSSImporter.EightBit)
+    -> Bool
+  {
+    let output = Self.eightBitFile(for: model.file, format)
+    return isCustom(model) && model.isDownloaded && model.file.hasSuffix("_f16.ckpt")
+      && ModelZoo.specificationForModel(model.file)?.version == .mossImage
+      && quantizing[output] == nil && ModelZoo.specificationForModel(output) == nil
+  }
+
+  static func eightBitFile(for file: String, _ format: MOSSImporter.EightBit) -> String {
+    String(file.dropLast("f16.ckpt".count)) + format.fileSuffix
+  }
+
+  /// Writes `<name>_q8p.ckpt` or `<name>_i8x.ckpt` next to the model, about half its size, and
+  /// registers it as "<name> (8-bit)" or "(8-bit S)" with the same specification.
+  func make8BitCopy(_ model: MediaGenerationResolvedModel, _ format: MOSSImporter.EightBit) {
+    guard canMake8BitCopy(model, format),
+      var specification = ModelZoo.specificationForModel(model.file)
+    else { return }
+    errorMessage = nil
+    let output = Self.eightBitFile(for: model.file, format)
+    let source = directory.appendingPathComponent(model.file).path
+    let destination = directory.appendingPathComponent(output).path
+    quantizing[output] = 0
+    let progress: @Sendable (Float) -> Void = { [weak self] value in
+      Task { @MainActor [weak self] in
+        guard self?.quantizing[output] != nil else { return }
+        self?.quantizing[output] = Double(value)
+      }
+    }
+    Task {
+      await Task.detached {
+        MOSSImporter.quantize(source, to: destination, format: format, progress: progress)
+      }.value
+      if FileManager.default.fileExists(atPath: destination) {
+        specification.file = output
+        specification.name = "\(model.name) (\(format.title))"
+        backUpModelRegistryOnce()
+        let preferred = ModelZoo.isExternalUrlsPreferred
+        ModelZoo.isExternalUrlsPreferred = true
+        ModelZoo.appendCustomSpecification(specification)
+        ModelZoo.isExternalUrlsPreferred = preferred
+      } else {
+        errorMessage = "Couldn't write an \(format.title) copy of \(model.name)."
+      }
+      await afterChange()
+      quantizing[output] = nil
+    }
   }
 
   enum ImportError: LocalizedError {
