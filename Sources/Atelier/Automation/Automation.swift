@@ -95,6 +95,7 @@ enum Automation {
         model.selectedModel = file
         try? await Task.sleep(for: .milliseconds(200))
         while model.isBusy { try? await Task.sleep(for: .milliseconds(100)) }
+        model.resetToModelDefaults(undoManager: nil)
       }
       guard var settings = model.settings else { return }
       log(
@@ -463,6 +464,7 @@ enum Automation {
         model.selectedModel = target
         try? await Task.sleep(for: .milliseconds(300))
         while model.isBusy { try? await Task.sleep(for: .milliseconds(100)) }
+        model.resetToModelDefaults(undoManager: nil)
         guard var settings = model.settings, model.selectedModel == target else {
           log("model \(target) didn't load")
           return finish()
@@ -600,6 +602,7 @@ enum Automation {
           model.selectedModel = file
           try? await Task.sleep(for: .milliseconds(300))
           while model.isBusy { try? await Task.sleep(for: .milliseconds(100)) }
+          model.resetToModelDefaults(undoManager: nil)
           if var settings = model.settings, model.selectedModel == file {
             if let steps = value("--steps").flatMap(Int.init) { settings.steps = steps }
             settings.width = 512
@@ -868,7 +871,7 @@ enum Automation {
         check(model.seedLocked == !random, "a preset left Random \(random ? "on" : "off")")
       }
 
-      // A per-model default preset: applied when switching to that model only.
+      // A per-model default preset: that model's baseline for Reset and changed markers.
       model.selectedModel = modelA
       await settle()
       model.resetToModelDefaults(undoManager: nil)
@@ -877,15 +880,20 @@ enum Automation {
       try? presets.save(own)
       model.setDefaultPreset(own)
       check(!model.changedSettings.contains { $0.id == "steps" }, "Steps 9 counts as unchanged once it's the default")
+      // Switching models keeps the current settings.
       if let modelB {
         model.selectedModel = modelB
         await settle()
-        check(model.settings?.steps != 9 && presets.presets(for: modelB).own.isEmpty,
-          "\(modelB) doesn't get \(modelA)'s preset (steps \(model.settings?.steps ?? -1))")
+        check(model.settings?.steps == 9, "switching to \(modelB) kept Steps 9 (steps \(model.settings?.steps ?? -1))")
+        check(model.defaultValue(steps)?.doubleValue != 9 && presets.presets(for: modelB).own.isEmpty,
+          "\(modelB) doesn't get \(modelA)'s preset as its default")
+        model.set(steps, to: .number(5), undoManager: nil)
         model.selectedModel = modelA
         await settle()
+        check(model.settings?.steps == 5, "switching back to \(modelA) kept Steps 5 (steps \(model.settings?.steps ?? -1))")
       }
-      check(model.settings?.steps == 9, "switching back to \(modelA) applied its default preset (steps \(model.settings?.steps ?? -1))")
+      model.resetToModelDefaults(undoManager: nil)
+      check(model.settings?.steps == 9, "Reset on \(modelA) applied its default preset (steps \(model.settings?.steps ?? -1))")
       check(model.seedLocked, "applying \(modelA)'s default preset left Random off")
       model.seedLocked = false
       model.resetToModelDefaults(undoManager: nil)

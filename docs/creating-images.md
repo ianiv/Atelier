@@ -14,7 +14,7 @@ While an image generates, the canvas shows a preview at each step. Click **Stop*
 
 ## Model
 
-Pick a model from the **Model** menu in the toolbar. Only downloaded models are listed (see [Models and LoRAs](models-and-loras.md)). Switching models loads that model's recommended settings, then its default preset if it has one.
+Pick a model from the **Model** menu in the toolbar. Only downloaded models are listed (see [Models and LoRAs](models-and-loras.md)). Switching models keeps your current settings. To start from the new model's recommended settings (and its default preset, if it has one), use **Reset All to Model Defaults** at the bottom of the inspector.
 
 ## Seed
 
@@ -73,10 +73,10 @@ Open the **Presets** menu in the toolbar:
 
 - **Save Current Settings as Preset…**: name it, then choose:
   - **Only for [model]**: the preset is listed for this model only. Uncheck it to offer the preset for every model.
-  - **Use as this model's defaults**: applied whenever you switch to this model, and used by Reset.
+  - **Use as this model's defaults**: used by Reset, and as the baseline for the Changed group.
   - **All Current Settings** or **Changed Settings Only**. Changed Settings Only keeps the preset small and lets the model's defaults fill in the rest.
-- Pick a preset from the list to apply it. Presets for other models are under **Other Models**.
-- **Default for [model]**: choose which preset (or **Model Defaults Only**) a model starts with.
+- Pick a preset from the list to apply it. Presets for other models are under **Other Models**; picking one switches to its model. To use those settings on another model, switch back to it afterwards: your settings carry over.
+- **Default for [model]**: choose which preset (or **Model Defaults Only**) Reset uses for a model.
 - **Copy Settings as JSON** copies every setting, the model and the seed in Draw Things' configuration format. **Paste Settings** applies settings copied from Draw Things or Atelier.
 - **Import Preset…**, **Export**, **Delete** and **Show Presets Folder** manage presets as files.
 

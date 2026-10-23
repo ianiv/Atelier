@@ -249,6 +249,7 @@ extension Automation {
       if let file = value("--model") {
         model.selectedModel = file
         await idle()
+        model.resetToModelDefaults(undoManager: nil)
       }
       guard var settings = model.settings else { return finish() }
       settings.steps = value("--steps").flatMap(Int.init) ?? 4

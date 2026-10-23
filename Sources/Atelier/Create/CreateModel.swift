@@ -771,6 +771,9 @@ final class CreateModel {
         var settings = recommended
         if let pendingSettings {
           SettingsRegistry.apply(dump: pendingSettings, to: &settings)
+        } else if let current = self.settings {
+          // Switching models keeps the current values; Reset brings back this model's defaults.
+          for descriptor in SettingsRegistry.all { descriptor.set(&settings, descriptor.get(current)) }
         }
         self.settings = settings
       } catch {
