@@ -1,9 +1,11 @@
 import AppKit
+import SwiftUI
 import _MediaGenerationKit
 
 extension Automation {
   /// Checks the Draw Things project format end to end on a scratch project, as PASS/FAIL lines:
-  /// append, list, settings round trip, image round trip, thumbnails, delete and renumbering.
+  /// append, list, settings round trip, image round trip, thumbnails, delete and renumbering, and
+  /// branches (see `branchChecks`).
   ///
   ///   Atelier --project-check [--keep DIR] [--quit]
   ///
@@ -72,7 +74,7 @@ extension Automation {
       check(appended.map(\.id.logicalTime) == [0, 1, 2], "appended steps 0, 1, 2 on lineage 0")
 
       let items = project.items()
-      check(items.map(\.id.logicalTime) == [2, 1, 0], "items lists the main line newest first")
+      check(items.map(\.id.logicalTime) == [2, 1, 0], "items lists the steps newest first")
       for (index, settings) in variants.enumerated() {
         guard let item = items.first(where: { $0.id.logicalTime == Int64(index) }) else { continue }
         var expected = JSONValue.fields(of: settings)
@@ -172,10 +174,14 @@ extension Automation {
       let reopened = Project(url: url)
       check(reopened.items().count == 4, "a reopened project lists the same steps")
       await reopened.close()
+
+      await branchChecks(
+        url: directory.appendingPathComponent("Branches.sqlite3"), model: modelFile,
+        settings: JSONValue.fields(of: base), check: check)
       if keep == nil {
         try? FileManager.default.removeItem(at: directory)
       } else {
-        print("kept \(url.path)")
+        print("kept \(url.path) and Branches.sqlite3")
       }
       print(failures == 0 ? "project check: all passed" : "project check: \(failures) failed")
       fflush(stdout)
@@ -186,7 +192,9 @@ extension Automation {
   /// Use Settings on Edit steps, end to end with real runs (use a scratch `--project`):
   /// an Edit run from `--input`, then one iterating on its result; Use Settings on the second
   /// must put the first result back on the canvas in Edit mode and rerunning must reproduce the
-  /// second; after deleting the first result, Use Settings falls back to the result with a note.
+  /// second, as a branch from the first; after deleting the first result, Use Settings falls back
+  /// to the result with a note. Then text-to-image runs after showing an earlier image branch
+  /// from it.
   ///
   ///   Atelier --edit-input-check --project NAME --input FILE [--model M] [--steps N]
   ///           [--width W --height H] [--strength S] [--seed N] [--quit]
@@ -211,6 +219,16 @@ extension Automation {
       @MainActor func idle() async {
         try? await Task.sleep(for: .milliseconds(200))
         while model.isBusy { try? await Task.sleep(for: .milliseconds(100)) }
+      }
+      /// The canvas comparison once Use Settings has restored the image (up to 5 s).
+      @MainActor func settled(
+        _ difference: () -> (count: Int, total: Int, maxDelta: Int, meanDelta: Double)?
+      ) async -> (count: Int, total: Int, maxDelta: Int, meanDelta: Double)? {
+        for _ in 0..<50 {
+          if difference()?.maxDelta == 0 { break }
+          try? await Task.sleep(for: .milliseconds(100))
+        }
+        return difference()
       }
       @MainActor func run() async -> HistoryItem? {
         let previous = model.lastSavedStep
@@ -267,8 +285,7 @@ extension Automation {
       model.prompt = ""
       model.use(second)
       await idle()
-      try? await Task.sleep(for: .milliseconds(500))
-      let restored = model.image.flatMap { pixelDifference($0, firstImage) }
+      let restored = await settled { model.image.flatMap { pixelDifference($0, firstImage) } }
       check(
         restored?.maxDelta == 0 && model.canvasMode == .edit && model.canvas.scale == nil,
         "Use Settings on the second step puts the first result on the canvas, fitted, in Edit mode")
@@ -277,8 +294,11 @@ extension Automation {
         let difference = pixelDifference(rerunImage, secondImage)
       {
         check(
-          rerun.inputTensorId != nil && rerun.inputTensorId != first.tensorId,
-          "the rerun records a copy of its input as a step of its own")
+          rerun.inputTensorId == first.tensorId
+            && model.history.parent(of: rerun)?.tensorId == first.tensorId
+            && Set(model.history.children(of: first).map(\.tensorId))
+              == [second.tensorId, rerun.tensorId],
+          "the rerun branches from the first result, beside the second, with no extra step")
         check(
           difference.meanDelta < 2,
           "rerunning reproduces the second step (mean channel delta \(difference.meanDelta.formatted(.number.precision(.fractionLength(2)))), max \(difference.maxDelta))")
@@ -298,24 +318,218 @@ extension Automation {
       model.canvasMode = .generate
       model.use(moved)
       await idle()
-      try? await Task.sleep(for: .milliseconds(500))
-      let fallback = model.image.flatMap { pixelDifference($0, secondImage) }
+      let fallback = await settled { model.image.flatMap { pixelDifference($0, secondImage) } }
       check(
         fallback?.maxDelta == 0 && model.statusNote != nil && model.canvasMode == .generate,
         "with its input deleted, Use Settings shows the result and a note (\(model.statusNote ?? "no note"))")
+
+      // Text-to-image runs follow the current step too: showing an earlier image and generating
+      // branches from it, and generating again continues that branch.
+      model.show(moved)
+      check(
+        model.history.currentItem?.tensorId == second.tensorId, "showing an image makes it the current step")
+      model.prompt = "a lighthouse at dusk"
+      guard let branch = await run() else {
+        check(false, "the text-to-image run saved nothing")
+        return finish()
+      }
+      check(
+        model.history.parent(of: branch)?.tensorId == second.tensorId && branch.inputTensorId == nil,
+        "a text-to-image run after showing an earlier image branches from it")
+      check(
+        model.history.currentItem?.tensorId == branch.tensorId
+          && model.history.currentLineage.map(\.tensorId).starts(with: [branch.tensorId, second.tensorId]),
+        "the new image is current, and its lineage runs through the one shown")
+      if let next = await run() {
+        check(
+          model.history.parent(of: next)?.tensorId == branch.tensorId
+            && next.id == StepID(lineage: branch.id.lineage, logicalTime: branch.id.logicalTime + 1),
+          "generating again appends to the same branch")
+      } else {
+        check(false, "the second text-to-image run saved nothing")
+      }
+      if let shown = model.history.item(tensorId: branch.tensorId) {
+        model.show(shown)
+        if let sibling = await run() {
+          check(
+            model.history.parent(of: sibling)?.tensorId == branch.tensorId
+              && model.history.children(of: shown).count == 2,
+            "generating after an image that already has a follower forks it in two")
+        }
+      }
+      let graph = HistoryGraph(items: model.history.items, parent: model.history.parent(of:))
+      check(graph.lanes >= 2, "the graph gives the branches lanes of their own (\(graph.lanes))")
+      if let directory = value("--snapshot-dir") {
+        // The graph's lanes, drawn off screen (thumbnails load asynchronously and stay blank).
+        let current = model.history.currentItem?.tensorId
+        let rows = VStack(spacing: 0) {
+          ForEach(Array(zip(model.history.items, graph.rows)), id: \.0.tensorId) { item, row in
+            HistoryGraphRow(
+              item: item, row: row, lanes: graph.lanes, isCurrent: item.tensorId == current,
+              isSelected: false)
+          }
+        }
+        .frame(width: 600)
+        .background(.white)
+        .environment(model)
+        .environment(model.history)
+        let renderer = ImageRenderer(content: rows)
+        renderer.scale = 2
+        if let image = renderer.nsImage, let tiff = image.tiffRepresentation,
+          let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])
+        {
+          let url = URL(fileURLWithPath: directory).appendingPathComponent("graph.png")
+          try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+          try? png.write(to: url)
+        }
+      }
       finish()
     }
   }
 
-  /// A test image with distinct values in every channel.
-  private static func gradient(width: Int, height: Int) -> CGImage? {
+  /// Forks and deletes on a scratch project, checking after each one (and after a reopen) every
+  /// step's parent, the main line, Draw Things' sacred line (the greatest lineage at each step
+  /// number), and that every step keeps its image and thumbnails.
+  ///
+  ///   A0 → A1 → A2 → A3 (parents not recorded, as before branching), then B after A1 (fork
+  ///   from the middle), C after A2 (A2's lineage isn't
+  ///   the greatest at its number any more, so it's renumbered), D after B (a fork of a fork,
+  ///   renumbered again) and E after D (a plain append); then delete A3 (a branch's tip), D (on a
+  ///   branch, E moves down) and A1 (a fork point, its children follow A0).
+  private static func branchChecks(
+    url: URL, model: String, settings: [String: JSONValue], check: (Bool, String) -> Void
+  ) async {
+    for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: url.path + suffix) }
+    var project = Project(url: url)
+    var names: [Int64: String] = [:]
+    var images: [String: CGImage] = [:]
+    var tensors: [String: Int64] = [:]
+    func add(_ name: String, after parent: String?) async -> StepID? {
+      guard let image = gradient(width: 192, height: 128, seed: names.count + 1),
+        let tensor = ImageTensor.tensor(from: image)
+      else { return nil }
+      do {
+        let item = try await project.append(
+          tensor: tensor, model: model, prompt: name, negativePrompt: "", seed: 0,
+          settings: settings, createdAt: Date(), duration: 1,
+          after: parent.flatMap { tensors[$0] })
+        names[item.tensorId] = name
+        tensors[name] = item.tensorId
+        images[name] = image
+        return item.id
+      } catch {
+        check(false, "append \(name): \(error.localizedDescription)")
+        return nil
+      }
+    }
+    func key(_ id: StepID?) -> String { id.map { "(\($0.lineage),\($0.logicalTime))" } ?? "-" }
+    /// The steps as "name(lineage,time)<parent", sorted by name.
+    func shape(_ tree: ProjectTree) -> String {
+      tree.steps.values.sorted { (names[$0.tensorId ?? 0] ?? "") < (names[$1.tensorId ?? 0] ?? "") }
+        .map { step in
+          let parent = step.parent.flatMap { tree.steps[$0]?.tensorId }.flatMap { names[$0] } ?? "-"
+          return "\(names[step.tensorId ?? 0] ?? "?")\(key(step.id))<\(parent)"
+        }
+        .joined(separator: " ")
+    }
+    func line(_ ids: [StepID], _ tree: ProjectTree) -> String {
+      ids.compactMap { tree.steps[$0]?.tensorId }.map { names[$0] ?? "?" }.joined(separator: " ")
+    }
+    func verify(_ label: String, shape expected: String, main: String, sacred: String) {
+      let tree = project.tree()
+      check(shape(tree) == expected, "\(label): steps and parents \(shape(tree))")
+      check(line(tree.mainLine, tree) == main, "\(label): main line \(line(tree.mainLine, tree))")
+      check(line(tree.sacredLine, tree) == sacred, "\(label): sacred line \(line(tree.sacredLine, tree))")
+      let items = project.items()
+      let intact = items.allSatisfy { item in
+        guard let name = names[item.tensorId], let expected = images[name],
+          let image = project.image(at: item.id),
+          let difference = pixelDifference(expected, image)
+        else { return false }
+        return difference.maxDelta == 0
+          && project.thumbnail(previewId: item.previewId, half: false) != nil
+          && project.thumbnail(previewId: item.previewId, half: true) != nil
+      }
+      check(intact && items.count == tree.steps.count, "\(label): every step keeps its image and thumbnails")
+    }
+
+    _ = await add("A0", after: nil)
+    _ = await add("A1", after: "A0")
+    _ = await add("A2", after: "A1")
+    _ = await add("A3", after: "A2")
+    // As a project written before branching: the first fork records the parents first.
+    await project.forgetParentLinks()
+    check(
+      project.tree().steps.values.allSatisfy { !$0.recordsParent },
+      "steps written before branching have no recorded parent")
+    let b = await add("B", after: "A1")
+    check(
+      project.tree().steps.values.allSatisfy { $0.recordsParent || $0.id.logicalTime == 0 },
+      "the first fork records every step's parent")
+    check(key(b) == "(1,2)", "fork from the middle starts lineage 1 at step 2 \(key(b))")
+    verify(
+      "fork from the middle", shape: "A0(0,0)<- A1(0,1)<A0 A2(0,2)<A1 A3(0,3)<A2 B(1,2)<A1",
+      main: "B A1 A0", sacred: "A0 A1 B A3")
+    let c = await add("C", after: "A2")
+    check(key(c) == "(3,3)", "fork from a step that isn't the greatest lineage at its number \(key(c))")
+    verify(
+      "fork from a non-sacred branch",
+      shape: "A0(3,0)<- A1(3,1)<A0 A2(2,2)<A1 A3(2,3)<A2 B(1,2)<A1 C(3,3)<A2",
+      main: "C A2 A1 A0", sacred: "A0 A1 A2 C")
+    let d = await add("D", after: "B")
+    let e = await add("E", after: "D")
+    check(key(d) == "(5,3)" && key(e) == "(5,4)", "a fork of a fork \(key(d)), then a plain append \(key(e))")
+    verify(
+      "fork of a fork",
+      shape: "A0(3,0)<- A1(3,1)<A0 A2(2,2)<A1 A3(2,3)<A2 B(4,2)<A1 C(3,3)<A2 D(5,3)<B E(5,4)<D",
+      main: "E D B A1 A0", sacred: "A0 A1 B D E")
+
+    do {
+      try await project.delete(tensorId: tensors["A3"] ?? 0)
+      check(
+        project.tensor(id: tensors["A3"] ?? 0) == nil, "deleting a branch's tip removes its tensor")
+      verify(
+        "delete a branch's tip",
+        shape: "A0(3,0)<- A1(3,1)<A0 A2(2,2)<A1 B(4,2)<A1 C(3,3)<A2 D(5,3)<B E(5,4)<D",
+        main: "E D B A1 A0", sacred: "A0 A1 B D E")
+      let parent = try await project.delete(tensorId: tensors["D"] ?? 0)
+      check(parent == tensors["B"], "deleting a step returns its parent")
+      verify(
+        "delete on a branch",
+        shape: "A0(3,0)<- A1(3,1)<A0 A2(2,2)<A1 B(4,2)<A1 C(3,3)<A2 E(5,3)<B",
+        main: "E B A1 A0", sacred: "A0 A1 B E")
+      try await project.delete(tensorId: tensors["A1"] ?? 0)
+      verify(
+        "delete a fork point",
+        shape: "A0(3,0)<- A2(2,2)<A0 B(4,1)<A0 C(3,2)<A2 E(5,2)<B",
+        main: "E B A0", sacred: "A0 B E")
+    } catch {
+      check(false, "branch deletes: \(error.localizedDescription)")
+    }
+
+    if let c = project.tree().step(tensorId: tensors["C"] ?? 0) { project.setCurrentStep(c) }
+    await project.close()
+    project = Project(url: url)
+    verify(
+      "after reopening", shape: "A0(3,0)<- A2(2,2)<A0 B(4,1)<A0 C(3,2)<A2 E(5,2)<B",
+      main: "E B A0", sacred: "A0 B E")
+    let tree = project.tree()
+    check(
+      project.storedCurrentStep(in: tree).flatMap { tree.steps[$0]?.tensorId } == tensors["C"],
+      "the current step survives a reopen")
+    await project.close()
+  }
+
+  /// A test image with distinct values in every channel; `seed` varies the blue channel.
+  private static func gradient(width: Int, height: Int, seed: Int = 0) -> CGImage? {
     var bytes = [UInt8](repeating: 255, count: width * height * 4)
     for y in 0..<height {
       for x in 0..<width {
         let i = (y * width + x) * 4
         bytes[i] = UInt8(x * 255 / (width - 1))
         bytes[i + 1] = UInt8(y * 255 / (height - 1))
-        bytes[i + 2] = UInt8((x * 7 + y * 13) % 256)
+        bytes[i + 2] = UInt8((x * 7 + y * 13 + seed * 37) % 256)
       }
     }
     guard let provider = CGDataProvider(data: Data(bytes) as CFData) else { return nil }

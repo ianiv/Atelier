@@ -7,9 +7,10 @@ struct HistoryView: View {
   @Environment(HistoryStore.self) private var history
   @Environment(CreateModel.self) private var create
   @Environment(Navigation.self) private var navigation
-  @State private var selection: Set<HistoryItem.ID> = []
+  /// Selected images by image tensor, which stays the same when a fork or delete renumbers steps.
+  @State private var selection: Set<Int64> = []
   /// The item arrows move from, ⇧-click extends from and Quick Look shows.
-  @State private var anchor: HistoryItem.ID?
+  @State private var anchor: Int64?
   @State private var search = ""
   @State private var modelFilter: String?
   @State private var pendingDelete: [HistoryItem]?
@@ -17,10 +18,15 @@ struct HistoryView: View {
   @State private var columns = 1
   @State private var viewportHeight: CGFloat = 0
   /// Each cell's frame in the grid, for marquee selection.
-  @State private var frames: [HistoryItem.ID: CGRect] = [:]
+  @State private var frames: [Int64: CGRect] = [:]
   @State private var marquee: CGRect?
   @State private var quickLookURL: URL?
   @FocusState private var gridFocused: Bool
+  @AppStorage("historyLayout") private var layout = Layout.grid
+
+  enum Layout: String {
+    case grid, graph
+  }
 
   private var filtered: [HistoryItem] {
     let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -32,18 +38,26 @@ struct HistoryView: View {
 
   /// The selected items, in grid order.
   private var selectedItems: [HistoryItem] {
-    history.items.filter { selection.contains($0.id) }
+    history.items.filter { selection.contains($0.tensorId) }
   }
 
   /// What an action on `item` applies to: the whole selection when it includes `item`.
   private func targets(_ item: HistoryItem) -> [HistoryItem] {
-    selection.contains(item.id) ? selectedItems : [item]
+    selection.contains(item.tensorId) ? selectedItems : [item]
   }
 
   var body: some View {
     grid
       .toolbar {
         ToolbarItem(placement: .navigation) { ProjectMenu() }
+        ToolbarItem {
+          Picker("Layout", selection: $layout) {
+            Label("Grid", systemImage: "square.grid.2x2").tag(Layout.grid)
+            Label("Graph", systemImage: "arrow.triangle.branch").tag(Layout.graph)
+          }
+          .pickerStyle(.segmented)
+          .help("Show the images as a grid, or as a graph of their branches")
+        }
         ToolbarItem {
           Picker("Model", selection: $modelFilter) {
             Text("All models").tag(String?.none)
@@ -96,7 +110,9 @@ struct HistoryView: View {
         let selected = selectedItems
         if !selected.isEmpty { pendingDelete = selected }
       }
-      .task(id: history.isLoaded) { if selection.isEmpty { selectOnly(filtered.first?.id) } }
+      .task(id: history.isLoaded) {
+        if selection.isEmpty { selectOnly(history.currentItem?.tensorId ?? filtered.first?.tensorId) }
+      }
       .safeAreaBar(edge: .bottom) {
         if let progress = history.importProgress {
           HStack {
@@ -124,71 +140,13 @@ struct HistoryView: View {
     } else {
       ScrollViewReader { scroller in
       ScrollView {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 10)], spacing: 10) {
-          ForEach(filtered) { item in
-            Color.clear
-              .aspectRatio(1, contentMode: .fit)
-              .overlay { Thumbnail(item: item) }
-              .overlay(alignment: .bottomTrailing) {
-                Text(GenerationTime.text(item.sidecar.durationSeconds))
-                  .font(.caption2.monospacedDigit())
-                  .padding(.horizontal, 5)
-                  .padding(.vertical, 2)
-                  .background(.black.opacity(0.55), in: .capsule)
-                  .foregroundStyle(.white)
-                  .padding(5)
-                  .help("Generation time")
-              }
-              .clipShape(.rect(cornerRadius: 6))
-              .overlay {
-                RoundedRectangle(cornerRadius: 6)
-                  .strokeBorder(Color.accentColor, lineWidth: selection.contains(item.id) ? 3 : 0)
-              }
-              .contentShape(.rect)
-              .gesture(
-                TapGesture(count: 2).onEnded { use(item, newSeed: false) }
-                  .exclusively(before: TapGesture().modifiers(.command).onEnded { toggle(item.id) })
-                  .exclusively(before: TapGesture().modifiers(.shift).onEnded { extend(to: item.id) })
-                  .exclusively(before: TapGesture().onEnded {
-                    selectOnly(item.id)
-                    gridFocused = true
-                  }))
-              .help(item.sidecar.prompt)
-              .draggable(containerItemID: item.id)
-              .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.gridSpace)) } action: {
-                frames[item.id] = $0
-              }
-              .id(item.id)
-              .contextMenu { contextMenu(for: item) }
-          }
-        }
-        .padding(12)
-        .frame(minHeight: viewportHeight, alignment: .top)
-        .coordinateSpace(.named(Self.gridSpace))
-        .background {
-          // Clicking between images clears the selection; dragging there draws a marquee.
-          Color.clear
-            .contentShape(.rect)
-            .onTapGesture {
-              selection = []
-              gridFocused = true
-            }
-            .gesture(marqueeGesture)
-        }
-        .overlay(alignment: .topLeading) {
-          if let marquee {
-            Rectangle()
-              .fill(Color.accentColor.opacity(0.15))
-              .strokeBorder(Color.accentColor.opacity(0.6))
-              .frame(width: marquee.width, height: marquee.height)
-              .offset(x: marquee.minX, y: marquee.minY)
-              .allowsHitTesting(false)
-          }
+        Group {
+          if layout == .graph { graph } else { gridCells }
         }
         .dragContainer(for: PNGExport.self) { ids in
-          ids.compactMap { history.item($0).map(history.dragExport) }
+          ids.compactMap { history.item(tensorId: $0).map(history.dragExport) }
         }
-        .dragContainerSelection(selectedItems.map(\.id))
+        .dragContainerSelection(selectedItems.map(\.tensorId))
       }
       .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
         // The adaptive grid's column count: 150 pt minimum, 10 pt spacing, 12 pt padding.
@@ -199,11 +157,12 @@ struct HistoryView: View {
       .focusEffectDisabled()
       .focused($gridFocused)
       .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow]) { press in
+        let rows = layout == .graph ? 1 : columns
         let offset = switch press.key {
         case .leftArrow: -1
         case .rightArrow: 1
-        case .upArrow: -columns
-        default: columns
+        case .upArrow: -rows
+        default: rows
         }
         moveSelection(by: offset, extending: press.modifiers.contains(.shift))
         if let anchor { withAnimation { scroller.scrollTo(anchor) } }
@@ -211,7 +170,7 @@ struct HistoryView: View {
       }
       .onKeyPress(keys: ["a"]) { press in
         guard press.modifiers == .command else { return .ignored }
-        selection = Set(filtered.map(\.id))
+        selection = Set(filtered.map(\.tensorId))
         return .handled
       }
       .onKeyPress(.space) {
@@ -225,6 +184,115 @@ struct HistoryView: View {
   }
 
   private static let gridSpace = "HistoryGrid"
+
+  private var gridCells: some View {
+    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 10)], spacing: 10) {
+      ForEach(filtered, id: \.tensorId) { item in
+        cell(
+          Color.clear
+            .aspectRatio(1, contentMode: .fit)
+            .overlay { Thumbnail(item: item) }
+            .overlay(alignment: .bottomTrailing) {
+              Text(GenerationTime.text(item.sidecar.durationSeconds))
+                .font(.caption2.monospacedDigit())
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(.black.opacity(0.55), in: .capsule)
+                .foregroundStyle(.white)
+                .padding(5)
+                .help("Generation time")
+            }
+            .clipShape(.rect(cornerRadius: 6))
+            .overlay {
+              RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(Color.accentColor, lineWidth: selection.contains(item.tensorId) ? 3 : 0)
+            },
+          item: item)
+      }
+    }
+    .padding(12)
+    .frame(minHeight: viewportHeight, alignment: .top)
+    .coordinateSpace(.named(Self.gridSpace))
+    .background {
+      // Clicking between images clears the selection; dragging there draws a marquee.
+      Color.clear
+        .contentShape(.rect)
+        .onTapGesture {
+          selection = []
+          gridFocused = true
+        }
+        .gesture(marqueeGesture)
+    }
+    .overlay(alignment: .topLeading) {
+      if let marquee {
+        Rectangle()
+          .fill(Color.accentColor.opacity(0.15))
+          .strokeBorder(Color.accentColor.opacity(0.6))
+          .frame(width: marquee.width, height: marquee.height)
+          .offset(x: marquee.minX, y: marquee.minY)
+          .allowsHitTesting(false)
+      }
+    }
+  }
+
+  /// One row per image, newest first, with the branches drawn in a lane column as `git log
+  /// --graph` does: each image's line runs down to the image it follows.
+  private var graph: some View {
+    let items = filtered
+    let layout = HistoryGraph(items: items, parent: { visibleParent(of: $0, in: items) })
+    let current = history.currentItem?.tensorId
+    return LazyVStack(spacing: 0) {
+      ForEach(Array(zip(items, layout.rows)), id: \.0.tensorId) { item, row in
+        cell(
+          HistoryGraphRow(
+            item: item, row: row, lanes: layout.lanes, isCurrent: item.tensorId == current,
+            isSelected: selection.contains(item.tensorId)),
+          item: item)
+      }
+    }
+    .padding(.vertical, 8)
+    .frame(minHeight: viewportHeight, alignment: .top)
+    .background {
+      Color.clear
+        .contentShape(.rect)
+        .onTapGesture {
+          selection = []
+          gridFocused = true
+        }
+    }
+  }
+
+  /// The nearest image `item` follows among those listed (a filter can hide the ones between).
+  private func visibleParent(of item: HistoryItem, in items: [HistoryItem]) -> HistoryItem? {
+    var next = history.parent(of: item)
+    var seen: Set<Int64> = []
+    while let parent = next, seen.insert(parent.tensorId).inserted {
+      if items.contains(parent) { return parent }
+      next = history.parent(of: parent)
+    }
+    return nil
+  }
+
+  /// Selection, use, drag and the context menu, shared by grid cells and graph rows.
+  private func cell(_ content: some View, item: HistoryItem) -> some View {
+    content
+      .contentShape(.rect)
+      .gesture(
+        TapGesture(count: 2).onEnded { use(item, newSeed: false) }
+          .exclusively(before: TapGesture().modifiers(.command).onEnded { toggle(item.tensorId) })
+          .exclusively(before: TapGesture().modifiers(.shift).onEnded { extend(to: item.tensorId) })
+          .exclusively(before: TapGesture().onEnded {
+            pick(item)
+            gridFocused = true
+          }))
+      .help(item.sidecar.prompt)
+      .draggable(containerItemID: item.tensorId)
+      .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.gridSpace)) } action: {
+        frames[item.tensorId] = $0
+      }
+      .id(item.tensorId)
+      .contextMenu { contextMenu(for: item) }
+  }
 
   @ViewBuilder
   private func contextMenu(for item: HistoryItem) -> some View {
@@ -258,46 +326,53 @@ struct HistoryView: View {
           width: abs(drag.location.x - drag.startLocation.x),
           height: abs(drag.location.y - drag.startLocation.y))
         marquee = rect
-        let hit = filtered.filter { frames[$0.id]?.intersects(rect) == true }
-        selection = Set(hit.map(\.id))
-        anchor = hit.first?.id
+        let hit = filtered.filter { frames[$0.tensorId]?.intersects(rect) == true }
+        selection = Set(hit.map(\.tensorId))
+        anchor = hit.first?.tensorId
         gridFocused = true
       }
       .onEnded { _ in marquee = nil }
   }
 
-  private func selectOnly(_ id: HistoryItem.ID?) {
+  private func selectOnly(_ id: Int64?) {
     selection = id.map { [$0] } ?? []
     anchor = id
   }
 
+  /// A click (or arrow) on one image: selects it and makes it the current step, on the canvas, so
+  /// the next run follows it.
+  private func pick(_ item: HistoryItem) {
+    selectOnly(item.tensorId)
+    create.show(item)
+  }
+
   /// ⌘-click: adds or removes one image.
-  private func toggle(_ id: HistoryItem.ID) {
+  private func toggle(_ id: Int64) {
     if selection.remove(id) == nil { selection.insert(id) }
     anchor = id
     gridFocused = true
   }
 
   /// ⇧-click: adds the images from the anchor to `id`.
-  private func extend(to id: HistoryItem.ID) {
+  private func extend(to id: Int64) {
     let items = filtered
-    guard let from = items.firstIndex(where: { $0.id == anchor }),
-      let to = items.firstIndex(where: { $0.id == id })
+    guard let from = items.firstIndex(where: { $0.tensorId == anchor }),
+      let to = items.firstIndex(where: { $0.tensorId == id })
     else { return selectOnly(id) }
-    selection.formUnion(items[min(from, to)...max(from, to)].map(\.id))
+    selection.formUnion(items[min(from, to)...max(from, to)].map(\.tensorId))
     gridFocused = true
   }
 
   private func moveSelection(by offset: Int, extending: Bool) {
     let items = filtered
     guard !items.isEmpty else { return }
-    let index = items.firstIndex { $0.id == anchor } ?? 0
-    let next = items[min(max(index + offset, 0), items.count - 1)].id
+    let index = items.firstIndex { $0.tensorId == anchor } ?? 0
+    let next = items[min(max(index + offset, 0), items.count - 1)]
     if extending {
-      selection.insert(next)
-      anchor = next
+      selection.insert(next.tensorId)
+      anchor = next.tensorId
     } else {
-      selectOnly(next)
+      pick(next)
     }
     // Quick Look follows the selection while it's open.
     if quickLookURL != nil { quickLookURL = nil; toggleQuickLook() }
@@ -309,7 +384,7 @@ struct HistoryView: View {
       quickLookURL = nil
       return
     }
-    guard let item = history.items.first(where: { $0.id == anchor && selection.contains($0.id) })
+    guard let item = history.items.first(where: { $0.tensorId == anchor && selection.contains($0.tensorId) })
     else { return }
     Task {
       guard let data = try? await history.pngData(item) else { return }
@@ -317,7 +392,7 @@ struct HistoryView: View {
         .appendingPathComponent("Atelier Quick Look", isDirectory: true)
       try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
       let file = url.appendingPathComponent(history.fileName(for: item)).appendingPathExtension("png")
-      guard (try? data.write(to: file)) != nil, anchor == item.id else { return }
+      guard (try? data.write(to: file)) != nil, anchor == item.tensorId else { return }
       quickLookURL = file
     }
   }
@@ -386,8 +461,7 @@ struct HistoryView: View {
       } catch {
         deleteError = error.localizedDescription
       }
-      // Later steps were renumbered, so the old ids may now name other images.
-      selectOnly(filtered.first?.id)
+      selectOnly(history.currentItem?.tensorId ?? filtered.first?.tensorId)
     }
   }
 }
@@ -621,5 +695,122 @@ private struct ProjectNameSheet: View {
     guard HistoryStore.isValidName(name) else { return }
     dismiss()
     commit(name)
+  }
+}
+
+/// History's graph lanes, laid out as `git log --graph` does: rows newest first, each image in a
+/// lane whose line runs down to the image it follows, where the lines of the images following
+/// the same one meet.
+struct HistoryGraph {
+  struct Row {
+    var column: Int
+    /// Lanes whose line ends at this image: the images following it, above.
+    var incoming: [Int]
+    /// Lanes passing by.
+    var through: [Int]
+    /// Whether a line leaves this image downward, to the one it follows.
+    var continues: Bool
+  }
+
+  private(set) var rows: [Row] = []
+  private(set) var lanes = 1
+
+  init(items: [HistoryItem], parent: (HistoryItem) -> HistoryItem?) {
+    // The image each lane is waiting for, by tensor; nil while the lane is free.
+    var open: [Int64?] = []
+    for item in items {
+      let incoming = open.indices.filter { open[$0] == item.tensorId }
+      let column = incoming.first ?? open.firstIndex { $0 == nil } ?? open.count
+      if column == open.count { open.append(nil) }
+      let through = open.indices.filter { open[$0] != nil && !incoming.contains($0) }
+      for lane in incoming { open[lane] = nil }
+      let next = parent(item)?.tensorId
+      open[column] = next
+      while let last = open.last, last == nil { open.removeLast() }
+      rows.append(Row(column: column, incoming: incoming, through: through, continues: next != nil))
+      lanes = max(lanes, column + 1, (through.max() ?? 0) + 1, (incoming.max() ?? 0) + 1)
+    }
+  }
+}
+
+/// A row of History's graph: the lanes, then the thumbnail, prompt, model and time.
+struct HistoryGraphRow: View {
+  @Environment(CreateModel.self) private var create
+  var item: HistoryItem
+  var row: HistoryGraph.Row
+  var lanes: Int
+  var isCurrent: Bool
+  var isSelected: Bool
+
+  private static let height: CGFloat = 60
+  private static let laneWidth: CGFloat = 14
+  private static let colors: [Color] = [.blue, .orange, .green, .pink, .purple, .teal, .yellow, .red]
+
+  var body: some View {
+    let sidecar = item.sidecar
+    HStack(spacing: 10) {
+      Canvas { context, size in draw(in: &context, size: size) }
+        .frame(width: CGFloat(min(lanes, 16)) * Self.laneWidth, height: Self.height)
+      Thumbnail(item: item)
+        .frame(width: 48, height: 48)
+        .clipShape(.rect(cornerRadius: 4))
+      VStack(alignment: .leading, spacing: 2) {
+        Text(sidecar.prompt.isEmpty ? "No prompt" : sidecar.prompt)
+          .lineLimit(2)
+        Text("\(modelName(sidecar.model)) · \(sidecar.createdAt.formatted(date: .abbreviated, time: .shortened))")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+      }
+      Spacer(minLength: 0)
+      if isCurrent {
+        Text("Current")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .help("The next image follows this one")
+      }
+    }
+    .padding(.horizontal, 12)
+    .frame(height: Self.height)
+    .background(isSelected ? Color.accentColor.opacity(0.18) : .clear)
+  }
+
+  private func draw(in context: inout GraphicsContext, size: CGSize) {
+    let middle = size.height / 2
+    func x(_ lane: Int) -> CGFloat { Self.laneWidth * (CGFloat(lane) + 0.5) }
+    func color(_ lane: Int) -> Color { Self.colors[lane % Self.colors.count] }
+    func stroke(_ path: Path, _ lane: Int) {
+      context.stroke(path, with: .color(color(lane)), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+    }
+    for lane in row.through {
+      stroke(Path { $0.move(to: CGPoint(x: x(lane), y: 0)); $0.addLine(to: CGPoint(x: x(lane), y: size.height)) }, lane)
+    }
+    let dot = CGPoint(x: x(row.column), y: middle)
+    for lane in row.incoming {
+      stroke(
+        Path {
+          $0.move(to: CGPoint(x: x(lane), y: 0))
+          $0.addCurve(
+            to: dot, control1: CGPoint(x: x(lane), y: middle * 0.8),
+            control2: CGPoint(x: dot.x, y: middle * 0.4))
+        }, lane)
+    }
+    if row.continues {
+      stroke(Path { $0.move(to: dot); $0.addLine(to: CGPoint(x: dot.x, y: size.height)) }, row.column)
+    }
+    let radius: CGFloat = 4.5
+    context.fill(
+      Path(ellipseIn: CGRect(x: dot.x - radius, y: dot.y - radius, width: radius * 2, height: radius * 2)),
+      with: .color(color(row.column)))
+    if isCurrent {
+      let ring = radius + 2.5
+      context.stroke(
+        Path(ellipseIn: CGRect(x: dot.x - ring, y: dot.y - ring, width: ring * 2, height: ring * 2)),
+        with: .color(.primary), lineWidth: 1.5)
+    }
+  }
+
+  private func modelName(_ file: String) -> String {
+    create.models.first { $0.file == file }?.name ?? file
   }
 }

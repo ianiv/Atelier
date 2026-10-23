@@ -19,13 +19,18 @@ struct HistoryItem: Identifiable, Hashable {
   /// before it.
   var inputTensorId: Int64?
 
-  static func == (lhs: HistoryItem, rhs: HistoryItem) -> Bool { lhs.id == rhs.id }
-  func hash(into hasher: inout Hasher) { hasher.combine(id) }
+  // Step ids change when a fork or a delete renumbers steps; the image tensor doesn't.
+  static func == (lhs: HistoryItem, rhs: HistoryItem) -> Bool { lhs.tensorId == rhs.tensorId }
+  func hash(into hasher: inout Hasher) { hasher.combine(tensorId) }
 }
 
 /// History lives in projects: Draw Things-format `.sqlite3` files under
-/// ~/Pictures/Atelier/Projects/. One is current; Create appends to it and History lists its main
-/// line (newest first).
+/// ~/Pictures/Atelier/Projects/. One is current; Create appends to it and History lists every
+/// branch (newest first).
+///
+/// The project has a current step, as Draw Things does: the image last clicked or generated. The
+/// next run follows it, which forks a branch when it isn't the newest step. Fork and delete
+/// renumber steps, so it and everything else here are held by image tensor, which doesn't change.
 @MainActor
 @Observable
 final class HistoryStore {
@@ -55,7 +60,17 @@ final class HistoryStore {
   private(set) var project: Project
   /// Project names (file names without `.sqlite3`), sorted.
   private(set) var projectNames: [String] = []
+  /// Every generated step on every branch, newest first.
   private(set) var items: [HistoryItem] = []
+  /// The current project's steps and how they connect.
+  private(set) var tree = ProjectTree()
+  /// The current step's image; nil until the project loads (then the recorded or newest step).
+  private(set) var currentTensorId: Int64?
+  /// Each generated step's nearest generated ancestor, and the reverse (newest first). Steps
+  /// that aren't generated (Imported and Other inputs) aren't listed, so they collapse.
+  private var visibleParents: [StepID: StepID] = [:]
+  private var visibleChildren: [StepID: [StepID]] = [:]
+  private var byTensor: [Int64: HistoryItem] = [:]
   private(set) var isLoaded = false
   /// Progress of the one-time import of the old PNG history, while it runs.
   private(set) var importProgress: (done: Int, total: Int)?
@@ -87,9 +102,25 @@ final class HistoryStore {
 
   func reload() async {
     let project = project
-    let loaded = await Task.detached { project.items() }.value
+    let (tree, stored) = await Task.detached { () -> (ProjectTree, StepID?) in
+      let tree = project.tree()
+      return (tree, project.storedCurrentStep(in: tree))
+    }.value
     guard project === self.project else { return }
-    items = loaded
+    self.tree = tree
+    items = tree.itemsNewestFirst
+    byTensor = Dictionary(items.map { ($0.tensorId, $0) }, uniquingKeysWith: { a, _ in a })
+    visibleParents = [:]
+    visibleChildren = [:]
+    for item in items {
+      guard let parent = tree.steps[item.id]?.parent.flatMap(tree.visibleAncestor(of:)) else { continue }
+      visibleParents[item.id] = parent
+      visibleChildren[parent, default: []].append(item.id)
+    }
+    for (id, children) in visibleChildren { visibleChildren[id] = children.sorted(by: tree.isNewer) }
+    if currentTensorId.flatMap(tree.step(tensorId:)) == nil {
+      currentTensorId = (stored ?? tree.newest).flatMap { tree.steps[$0]?.tensorId }
+    }
     projectNames = Self.scanProjectNames()
     if !projectNames.contains(project.name) { projectNames = (projectNames + [project.name]).sorted() }
     isLoaded = true
@@ -104,6 +135,8 @@ final class HistoryStore {
     if SessionState.isEnabled { UserDefaults.standard.set(name, forKey: Self.currentProjectKey) }
     isLoaded = false
     items = []
+    tree = ProjectTree()
+    currentTensorId = nil
     await reload()
   }
 
@@ -168,23 +201,26 @@ final class HistoryStore {
     settings.seed = request.seed
     let project = project
     let dump = JSONValue.fields(of: settings)
-    // An Edit run's input is the step before its result. When the canvas isn't exactly the
-    // newest step's image (an image from outside, an earlier step, moved, zoomed or another
-    // size), it goes in first as a step of its own: Imported for an image from outside, as Draw
-    // Things does.
+    // The run follows the step that was current when it started, or with the canvas, the
+    // canvas's step: an Edit run's input is its result's parent. When the canvas isn't exactly
+    // a step's image (an image from outside, moved, zoomed or another size), it goes in first as
+    // a step of its own after the current one: Imported for an image from outside, as Draw Things
+    // does.
+    var parentTensorId = request.parentTensorId
     var inputTensorId: Int64?
     if let canvas = request.canvas {
-      let newest = await Task.detached { project.newestStep() }.value
-      if let step = request.canvasStep, step == newest?.id, let tensorId = newest?.tensorId {
+      if let tensorId = request.canvasTensorId, await step(tensorId: tensorId, in: project) != nil {
         inputTensorId = tensorId
       } else if let tensor = ImageTensor.tensor(from: canvas) {
         let input = try await project.append(
           tensor: tensor, model: request.model, prompt: request.prompt,
           negativePrompt: request.negativePrompt, seed: request.seed, settings: dump,
           createdAt: startedAt, duration: 0,
-          reason: request.canvasIsImported ? .imported : .other, generated: false)
+          reason: request.canvasIsImported ? .imported : .other, generated: false,
+          after: parentTensorId)
         inputTensorId = input.tensorId
       }
+      parentTensorId = inputTensorId ?? parentTensorId
     }
     let moodboard = request.moodboard.compactMap { entry in
       ImageTensor.tensor(from: entry.image).map { (tensor: $0, weight: entry.weight) }
@@ -194,9 +230,19 @@ final class HistoryStore {
       negativePrompt: request.negativePrompt, seed: request.seed,
       settings: dump, createdAt: finishedAt,
       duration: finishedAt.timeIntervalSince(startedAt), moodboard: moodboard,
-      inputTensorId: inputTensorId)
-    if project === self.project { items.insert(item, at: 0) }
-    return item
+      inputTensorId: inputTensorId, after: parentTensorId)
+    if project === self.project {
+      // A fork may have renumbered other steps.
+      currentTensorId = item.tensorId
+      await reload()
+    }
+    return self.item(tensorId: item.tensorId) ?? item
+  }
+
+  /// The step holding the image, in `project` (read fresh when it isn't the one loaded).
+  private func step(tensorId: Int64, in project: Project) async -> StepID? {
+    if project === self.project { return tree.step(tensorId: tensorId) }
+    return await Task.detached { project.tree(items: false).step(tensorId: tensorId) }.value
   }
 
   /// A step's moodboard images and weights (empty when it had none).
@@ -206,23 +252,87 @@ final class HistoryStore {
     return await Task.detached { project.moodboard(at: id) }.value
   }
 
-  /// Removes the steps from the project. Later steps move down by one, so the newest goes first
-  /// (leaving the older ones' ids valid) and the list is reloaded.
+  /// Removes the steps from the project. Later steps may be renumbered, so each is found by its
+  /// image. A deleted current step hands over to its parent, else the newest step.
   func delete(_ items: [HistoryItem]) async throws {
-    let ids = items.map(\.id).sorted {
-      ($0.lineage, $0.logicalTime) > ($1.lineage, $1.logicalTime)
-    }
+    let project = project
     do {
-      for id in ids { try await project.delete(id) }
+      for item in items {
+        let parent = try await project.delete(tensorId: item.tensorId)
+        if item.tensorId == currentTensorId { currentTensorId = parent }
+      }
     } catch {
+      project.setCurrentStep(nil)
       await reload()
+      recordCurrent()
       throw error
     }
+    // The step numbers it was recorded under may have moved: forget them while reloading.
+    project.setCurrentStep(nil)
     await reload()
+    recordCurrent()
   }
 
   func item(_ id: StepID) -> HistoryItem? {
-    items.first { $0.id == id }
+    tree.items[id]
+  }
+
+  func item(tensorId: Int64) -> HistoryItem? {
+    byTensor[tensorId]
+  }
+
+  // MARK: - Branches
+
+  /// The current step (possibly one that isn't generated, such as an Edit run's input).
+  var currentStep: StepID? {
+    currentTensorId.flatMap(tree.step(tensorId:))
+  }
+
+  /// The generated step standing for the current one in the views.
+  var currentItem: HistoryItem? {
+    currentStep.flatMap(tree.representative(of:)).flatMap { tree.items[$0] }
+  }
+
+  /// Makes the step holding `tensorId` current, so the next run follows it. Recorded in the
+  /// project as Draw Things records its position (`image_seek_to`).
+  func setCurrent(tensorId: Int64) {
+    guard tree.step(tensorId: tensorId) != nil, tensorId != currentTensorId else { return }
+    currentTensorId = tensorId
+    recordCurrent()
+  }
+
+  private func recordCurrent() {
+    let step = currentStep
+    project.setCurrentStep(step == tree.newest ? nil : step)
+  }
+
+  /// The generated step a generated step follows, skipping inputs that aren't listed.
+  func parent(of item: HistoryItem) -> HistoryItem? {
+    visibleParents[item.id].flatMap { tree.items[$0] }
+  }
+
+  /// The generated steps that follow one, newest first.
+  func children(of item: HistoryItem) -> [HistoryItem] {
+    (visibleChildren[item.id] ?? []).compactMap { tree.items[$0] }
+  }
+
+  /// The current step's line, newest first: the newest steps beyond it (taking the newest child
+  /// wherever it branches), it, and its ancestors.
+  var currentLineage: [HistoryItem] {
+    guard let current = currentItem else { return [] }
+    var below: [HistoryItem] = []
+    var next = children(of: current).first
+    while let item = next {
+      below.append(item)
+      next = children(of: item).first
+    }
+    var line = Array(below.reversed())
+    var up: HistoryItem? = current
+    while let item = up {
+      line.append(item)
+      up = parent(of: item)
+    }
+    return line
   }
 
   /// The step's JPEG preview (`half` for grids), decoded off the main actor.
@@ -255,6 +365,20 @@ final class HistoryStore {
     return await Task.detached { project.image(at: id) }.value
   }
 
+  /// A step's image tensor in `projectName` (when that's the current project).
+  func tensorId(at id: StepID, in projectName: String) async -> Int64? {
+    guard projectName == project.name else { return nil }
+    let project = project
+    return await Task.detached { project.imageTensorId(at: id) }.value
+  }
+
+  /// The full-resolution image `tensorId` in `projectName` (when that's the current project).
+  func image(tensorId: Int64, in projectName: String) async -> CGImage? {
+    guard projectName == project.name else { return nil }
+    let project = project
+    return await Task.detached { project.image(tensorId: tensorId) }.value
+  }
+
   /// Writes the image as a PNG carrying its settings (an `Atelier` iTXt chunk).
   func exportPNG(_ item: HistoryItem, to url: URL) async throws {
     try await pngData(item).write(to: url)
@@ -278,7 +402,7 @@ final class HistoryStore {
 
   /// The image as a file to drag out, named like an export.
   func dragExport(_ item: HistoryItem) -> PNGExport {
-    PNGExport(id: item.id, name: fileName(for: item)) { [self] in try await pngData(item) }
+    PNGExport(id: item.tensorId, name: fileName(for: item)) { [self] in try await pngData(item) }
   }
 
   /// Puts the full-resolution image on the clipboard.
@@ -496,7 +620,8 @@ enum JSONValue: Codable, Hashable {
 
 /// A PNG to drag into Finder (as a file) or another app (as image data), encoded on drop.
 struct PNGExport: Transferable, Identifiable {
-  var id: StepID
+  /// The image tensor.
+  var id: Int64
   var name: String
   var data: @Sendable () async throws -> Data
 

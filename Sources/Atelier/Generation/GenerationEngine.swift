@@ -18,9 +18,12 @@ actor GenerationEngine {
     /// Edit mode: the canvas frame rendered at the output size, transparent where the image
     /// doesn't cover it (the engine turns those pixels into the inpaint mask).
     var canvas: CGImage?
-    /// The project step whose image `canvas` is exactly (fitted, same size), if any. When it's
-    /// not the newest step, or not set, the canvas is saved as a step of its own before the result.
-    var canvasStep: StepID?
+    /// The image of the project step that `canvas` is exactly (fitted, same size), if any: the
+    /// result follows that step. When not set, the canvas is saved as a step of its own first.
+    var canvasTensorId: Int64?
+    /// The image of the project step the result follows (the current step when the run
+    /// started); nil follows the newest step.
+    var parentTensorId: Int64?
     /// The canvas image came from outside the project (saved as an Imported step).
     var canvasIsImported = false
     /// Moodboard images sent as references (weight above zero only).

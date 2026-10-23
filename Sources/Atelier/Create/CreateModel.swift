@@ -78,14 +78,20 @@ final class CreateModel {
   private(set) var step = 0
   private(set) var totalSteps = 0
   private(set) var image: CGImage?
-  private(set) var lastSavedStep: StepID?
+  /// The image of the step the last run saved.
+  private var lastSavedTensorId: Int64?
+  /// The step the last run saved (its number may change when a fork or delete renumbers steps).
+  var lastSavedStep: StepID? {
+    lastSavedTensorId.flatMap { history.item(tensorId: $0)?.id }
+  }
   /// When the running generation started.
   private(set) var runStartedAt: Date?
   /// The first sampling step seen and when, and when the latest one arrived, for the estimate.
   private var samplingStart: (date: Date, step: Int)?
   private var lastStepAt: Date?
-  /// The project step behind `image` once it's a finished image (not a step preview).
-  private var imageStep: (project: String, id: StepID)? {
+  /// The project step behind `image` once it's a finished image (not a step preview), by its
+  /// image tensor, which stays the same when steps are renumbered.
+  private var imageStep: (project: String, tensorId: Int64)? {
     didSet { imageIsPreview = false }
   }
   /// The canvas shows a step preview, not `imageStep`'s image.
@@ -110,7 +116,7 @@ final class CreateModel {
     guard !imageIsPreview, let imageStep, imageStep.project == history.project.name else {
       return nil
     }
-    return history.items.first { $0.id == imageStep.id }
+    return history.item(tensorId: imageStep.tensorId)
   }
 
   var isBusy: Bool {
@@ -157,7 +163,7 @@ final class CreateModel {
   func setCanvasImage(_ newImage: CGImage) {
     guard !isBusy else { return }
     imageStep = nil
-    lastSavedStep = nil
+    lastSavedTensorId = nil
     image = newImage
     canvasIsImported = true
     canvas.zoomToFit()
@@ -168,7 +174,7 @@ final class CreateModel {
   func clearCanvas() {
     guard !isBusy else { return }
     imageStep = nil
-    lastSavedStep = nil
+    lastSavedTensorId = nil
     image = nil
     canvasIsImported = false
     canvas.zoomToFit()
@@ -229,12 +235,19 @@ final class CreateModel {
       prompt = session.prompt
       negativePrompt = session.negativePrompt
       if let seed = session.seed { self.seed = seed }
-      if let project = session.imageProject, let step = session.imageStep {
+      if let project = session.imageProject,
+        session.imageTensorId != nil || session.imageStep != nil
+      {
         Task {
-          guard let restoredImage = await history.image(at: step, in: project), image == nil
+          var tensorId = session.imageTensorId
+          if tensorId == nil, let step = session.imageStep {
+            tensorId = await history.tensorId(at: step, in: project)
+          }
+          guard let tensorId, let restoredImage = await history.image(tensorId: tensorId, in: project),
+            image == nil
           else { return }
-          lastSavedStep = step
-          imageStep = (project, step)
+          lastSavedTensorId = tensorId
+          imageStep = (project, tensorId)
           image = restoredImage
         }
       }
@@ -254,7 +267,9 @@ final class CreateModel {
     SessionState(
       model: selectedModel, prompt: prompt, negativePrompt: negativePrompt, seed: seed,
       settings: settings.map(JSONValue.fields(of:)) ?? pendingSettings,
-      imageProject: imageStep?.project, imageStep: imageStep?.id
+      imageProject: imageStep?.project,
+      imageStep: imageStep.flatMap { history.tree.step(tensorId: $0.tensorId) },
+      imageTensorId: imageStep?.tensorId
     ).save()
   }
 
@@ -283,7 +298,8 @@ final class CreateModel {
     statusNote = nil
     let projectName = history.project.name
     if loadImage {
-      imageStep = (projectName, item.id)
+      imageStep = (projectName, item.tensorId)
+      history.setCurrent(tensorId: item.tensorId)
       canvasIsImported = false
     }
     // An Edit step brings back its input, fitted, in Edit mode, so rerunning reproduces it.
@@ -291,19 +307,23 @@ final class CreateModel {
     let restoreImage = Task {
       guard loadImage else { return }
       if restoreInput, item.inputTensorId != nil {
-        if let input = await history.input(of: item, in: projectName) {
-          guard imageStep?.id == item.id else { return }
-          imageStep = (projectName, input.id)
+        if let input = await history.input(of: item, in: projectName),
+          let inputTensorId = item.inputTensorId
+        {
+          guard imageStep?.tensorId == item.tensorId else { return }
+          // The input becomes the current step, so a rerun branches beside this one.
+          imageStep = (projectName, inputTensorId)
+          history.setCurrent(tensorId: inputTensorId)
           image = input.image
           canvas.zoomToFit()
           canvasMode = .edit
           return
         }
-        guard imageStep?.id == item.id else { return }
+        guard imageStep?.tensorId == item.tensorId else { return }
         statusNote = "The image this was made from is no longer in the project."
       }
       let full = await history.image(at: item.id, in: projectName)
-      if let full, imageStep?.id == item.id { image = full }
+      if let full, imageStep?.tensorId == item.tensorId { image = full }
     }
     let restoreMoodboard = Task {
       let references = await history.moodboard(at: item.id, in: projectName)
@@ -542,7 +562,7 @@ final class CreateModel {
         image.width == settings.width, image.height == settings.height,
         canvas.scale == nil || canvas.scale == 1, canvas.offset == .zero
       {
-        request.canvasStep = imageStep.id
+        request.canvasTensorId = imageStep.tensorId
       }
     }
     if usesReferences { request.moodboard = moodboard.references }
@@ -576,6 +596,10 @@ final class CreateModel {
     progress forward: ((GenerationEngine.Progress) -> Void)? = nil,
     completion: ((Result<HistoryItem, Error>) -> Void)? = nil
   ) {
+    // The result follows the step current now, whatever is clicked while it runs.
+    var following = request
+    if following.parentTensorId == nil { following.parentTensorId = history.currentTensorId }
+    let request = following
     phase = .running("Preparing…")
     step = 0
     totalSteps = request.configuration.steps
@@ -593,8 +617,8 @@ final class CreateModel {
         }
         let item = try await history.save(
           result, request: request, startedAt: startedAt, finishedAt: Date())
-        lastSavedStep = item.id
-        imageStep = (history.project.name, item.id)
+        lastSavedTensorId = item.tensorId
+        imageStep = (history.project.name, item.tensorId)
         canvasIsImported = false
         image = ImageTensor.cgImage(from: result.tensor) ?? image
         saveSession()
@@ -686,15 +710,17 @@ final class CreateModel {
     show(item)
   }
 
-  /// Shows a history image on the canvas without touching the prompt or settings.
+  /// Shows a history image on the canvas without touching the prompt or settings, and makes it
+  /// the current step.
   func show(_ item: HistoryItem) {
     statusNote = nil
     let projectName = history.project.name
-    imageStep = (projectName, item.id)
+    imageStep = (projectName, item.tensorId)
+    history.setCurrent(tensorId: item.tensorId)
     canvasIsImported = false
     Task {
       let full = await history.image(at: item.id, in: projectName)
-      if let full, imageStep?.id == item.id { image = full }
+      if let full, imageStep?.tensorId == item.tensorId { image = full }
     }
   }
 

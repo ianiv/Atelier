@@ -29,17 +29,25 @@ enum ProjectMapping {
     /// For a step generated from the canvas (Edit), the image tensor of its input: the step
     /// before it. Kept in `profile_data`, see `Profile`.
     var inputTensorId: Int64?
+    /// The image tensor of the step this one follows (its parent), nil for the first step. Kept
+    /// in `profile_data`, see `Profile`.
+    var parentTensorId: Int64?
   }
 
   /// `profile_data`: Draw Things' `GenerationProfile` as snake-case JSON (timings and duration),
-  /// plus Atelier's `input_tensor_id` for Edit steps. Draw Things has no field for "this step
-  /// was made from the canvas": in its model every step's input is the canvas, i.e. the step
-  /// before. Atelier's Generate mode ignores the canvas, so Edit steps carry the input's tensor
-  /// id here. Draw Things decodes the profile with Codable, which skips the extra key.
+  /// plus Atelier's `input_tensor_id` for Edit steps and `parent_tensor_id` for every step. Draw
+  /// Things has no field for "this step was made from the canvas": in its model every step's
+  /// input is the canvas, i.e. the step before. Atelier's Generate mode ignores the canvas, so
+  /// Edit steps carry the input's tensor id here. The parent link keeps branches intact where
+  /// Draw Things' own rule (the step one earlier with the greatest lineage not above this one's)
+  /// stops holding after a fork renumbers a branch (see `Project.append`). Draw Things decodes the
+  /// profile with Codable, which skips the extra keys.
   struct Profile: Codable {
     var timings: [Timing] = []
     var duration: Double
     var inputTensorId: Int64?
+    /// The parent step's image tensor; 0 records a step with no parent.
+    var parentTensorId: Int64?
 
     struct Timing: Codable {
       var durations: [Double]
@@ -52,9 +60,10 @@ enum ProjectMapping {
       return (try? encoder.encode(self)).map { [UInt8]($0) } ?? []
     }
 
-    init(duration: Double, inputTensorId: Int64?) {
+    init(duration: Double, inputTensorId: Int64?, parentTensorId: Int64?) {
       self.duration = duration
       self.inputTensorId = inputTensorId
+      self.parentTensorId = parentTensorId
     }
 
     init?(_ bytes: [UInt8]) {
@@ -134,9 +143,10 @@ enum ProjectMapping {
       speedUpWithGuidanceEmbed: d.bool("speedUpWithGuidanceEmbed", true),
       guidanceEmbed: d.float("guidanceEmbed", 3.5),
       resolutionDependentShift: d.bool("resolutionDependentShift", true),
-      profileData: step.inputTensorId.map {
-        Profile(duration: step.generationTime, inputTensorId: $0).bytes
-      },
+      profileData: Profile(
+        duration: step.generationTime, inputTensorId: step.inputTensorId,
+        parentTensorId: step.parentTensorId ?? 0
+      ).bytes,
       teaCacheStart: i32("teaCacheStart", 5), teaCacheEnd: i32("teaCacheEnd", -1),
       teaCacheThreshold: d.float("teaCacheThreshold", 0.06), teaCache: d.bool("teaCache", false),
       separateT5: d.bool("separateT5", false), t5Text: d.string("t5Text"),

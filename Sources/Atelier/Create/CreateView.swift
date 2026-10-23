@@ -181,7 +181,7 @@ struct CanvasView: View {
     }
     .background(Color(nsColor: .underPageBackgroundColor).ignoresSafeArea())
     // A new image starts fitted to the frame.
-    .onChange(of: model.imageItem?.id) { canvas.zoomToFit() }
+    .onChange(of: model.imageItem?.tensorId) { canvas.zoomToFit() }
     .alert(
       "Couldn't save the image",
       isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } }),
@@ -449,59 +449,105 @@ struct PromptSplitter: View {
   }
 }
 
-/// The latest images in the project, newest first: click one to look at it, double-click to use
-/// its settings.
+/// The latest images in the project, newest first. Clicking one makes it the current step (the
+/// next run follows it, branching when it isn't the newest) and uses its settings. Chronological
+/// lists the newest images of every branch; Current Lineage lists the current step's line: its
+/// ancestors, it, and the newest images beyond it.
 struct RecentStrip: View {
   @Environment(CreateModel.self) private var model
   @Environment(HistoryStore.self) private var history
   @Environment(\.undoManager) private var undoManager
+  @AppStorage("recentStripMode") private var mode = Mode.chronological
+
+  enum Mode: String {
+    case chronological, lineage
+  }
 
   var body: some View {
-    let items = Array(history.items.prefix(24))
-    if !items.isEmpty {
-      let current = model.imageItem?.id
-      ScrollView(.horizontal) {
-        LazyHStack(spacing: 6) {
-          ForEach(items) { item in
-            Thumbnail(item: item)
-              .frame(width: 44, height: 44)
-              .clipShape(.rect(cornerRadius: 4))
-              .overlay {
-                RoundedRectangle(cornerRadius: 4)
-                  .strokeBorder(Color.accentColor, lineWidth: current == item.id ? 2 : 0)
-              }
-              .contentShape(.rect)
-              // Picks up from this image, itself on the canvas (not an Edit step's input). While a
-              // run is going, or without its model, only the prompt and size come back.
-              .onTapGesture {
-                if model.canUse(item) {
-                  model.use(item, restoreInput: false)
-                } else {
-                  model.showWithPrompt(item, undoManager: undoManager)
-                }
-              }
-              .draggable(history.dragExport(item))
-              .help("\(item.sidecar.prompt)\n\(GenerationTime.text(item.sidecar.durationSeconds)). Click to use its settings.")
-              .contextMenu {
-                Button("Use Settings") { model.use(item, loadImage: false) }
-                  .disabled(!model.canUse(item))
-                Button("Use as Input") {
-                  model.show(item)
-                  model.canvasMode = .edit
-                }
-                .disabled(model.isBusy)
-                Button("Add to Moodboard") {
-                  Task { if let image = await history.image(for: item) { model.moodboard.add(image) } }
-                }
-                Button("Copy Image") { Task { await history.copyImage(item) } }
-              }
-          }
+    if !history.items.isEmpty {
+      let items = mode == .lineage ? history.currentLineage : Array(history.items.prefix(24))
+      let current = history.currentItem?.tensorId
+      HStack(spacing: 8) {
+        Picker("Recent Images", selection: $mode) {
+          Label("Chronological", systemImage: "clock").tag(Mode.chronological)
+          Label("Current Lineage", systemImage: "arrow.triangle.branch").tag(Mode.lineage)
         }
-        .padding(.horizontal, 12)
+        .pickerStyle(.segmented)
+        .labelStyle(.iconOnly)
+        .labelsHidden()
+        .controlSize(.small)
+        .fixedSize()
+        .help(mode == .lineage
+          ? "Current lineage: the current image's ancestors and the newest images after it"
+          : "Chronological: the newest images on every branch")
+        .padding(.leading, 12)
+        ScrollViewReader { scroller in
+          ScrollView(.horizontal) {
+            LazyHStack(spacing: 6) {
+              ForEach(items, id: \.tensorId) { item in
+                thumbnail(item, isCurrent: current == item.tensorId)
+                  .id(item.tensorId)
+              }
+            }
+            .padding(.trailing, 12)
+          }
+          .scrollIndicators(.never)
+          .onChange(of: current) { if let current { withAnimation { scroller.scrollTo(current) } } }
+        }
       }
-      .scrollIndicators(.never)
       .frame(height: 48)
     }
+  }
+
+  private func thumbnail(_ item: HistoryItem, isCurrent: Bool) -> some View {
+    Thumbnail(item: item)
+      .frame(width: 44, height: 44)
+      .clipShape(.rect(cornerRadius: 4))
+      .overlay(alignment: .bottomTrailing) {
+        let branches = history.children(of: item).count
+        if branches > 1 {
+          HStack(spacing: 1) {
+            Image(systemName: "arrow.triangle.branch")
+            Text("\(branches)")
+          }
+          .font(.system(size: 8, weight: .semibold))
+          .padding(.horizontal, 3)
+          .padding(.vertical, 1)
+          .background(.black.opacity(0.6), in: .capsule)
+          .foregroundStyle(.white)
+          .padding(2)
+          .help("\(branches) branches follow this image")
+        }
+      }
+      .overlay {
+        RoundedRectangle(cornerRadius: 4)
+          .strokeBorder(Color.accentColor, lineWidth: isCurrent ? 2 : 0)
+      }
+      .contentShape(.rect)
+      // Picks up from this image, itself on the canvas (not an Edit step's input). While a
+      // run is going, or without its model, only the prompt and size come back.
+      .onTapGesture {
+        if model.canUse(item) {
+          model.use(item, restoreInput: false)
+        } else {
+          model.showWithPrompt(item, undoManager: undoManager)
+        }
+      }
+      .draggable(history.dragExport(item))
+      .help("\(item.sidecar.prompt)\n\(GenerationTime.text(item.sidecar.durationSeconds)). Click to use its settings; the next image follows it.")
+      .contextMenu {
+        Button("Use Settings") { model.use(item, loadImage: false) }
+          .disabled(!model.canUse(item))
+        Button("Use as Input") {
+          model.show(item)
+          model.canvasMode = .edit
+        }
+        .disabled(model.isBusy)
+        Button("Add to Moodboard") {
+          Task { if let image = await history.image(for: item) { model.moodboard.add(image) } }
+        }
+        Button("Copy Image") { Task { await history.copyImage(item) } }
+      }
   }
 }
 
