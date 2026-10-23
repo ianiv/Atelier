@@ -77,6 +77,8 @@ struct AtelierApp: App {
         }
         .keyboardShortcut(.downArrow, modifiers: .command)
         .disabled(create.recentPrompts.isEmpty)
+        Button("Clear Prompt History…") { create.confirmClearRecentPrompts = true }
+          .disabled(create.recentPrompts.isEmpty)
         Divider()
         Button("Open Image…") {
           navigation.section = .create

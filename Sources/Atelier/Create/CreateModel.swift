@@ -68,6 +68,8 @@ final class CreateModel {
   }
   /// Bumped to ask the prompt composer to take focus (⌘L).
   var focusPromptRequest = 0
+  /// Set to ask before forgetting the recent prompts (Image ▸ Clear Prompt History…).
+  var confirmClearRecentPrompts = false
 
   private(set) var phase: Phase = .idle
   private(set) var step = 0
@@ -659,6 +661,13 @@ final class CreateModel {
     if recentIndex == nil { draftPrompt = prompt }
     recentIndex = next
     prompt = recentPrompts[next]
+  }
+
+  /// Forgets the recent prompts; the prompt being written stays.
+  func clearRecentPrompts() {
+    recentPrompts = []
+    UserDefaults.standard.removeObject(forKey: "recentPrompts")
+    recentIndex = nil
   }
 
   /// ⌘↓: the next newer prompt, then back to the draft.

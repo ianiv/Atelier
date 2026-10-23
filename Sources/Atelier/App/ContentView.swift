@@ -42,9 +42,11 @@ struct ContentView: View {
   }
 
   @Environment(Navigation.self) private var navigation
+  @Environment(CreateModel.self) private var create
 
   var body: some View {
     @Bindable var navigation = navigation
+    @Bindable var create = create
     NavigationSplitView {
       List(Section.allCases, selection: $navigation.section) { section in
         Label(section.rawValue, systemImage: section.symbol).tag(section)
@@ -67,5 +69,13 @@ struct ContentView: View {
       }
     }
     .background(WindowFrameAutosave(name: "Main"))
+    .confirmationDialog(
+      "Clear prompt history?", isPresented: $create.confirmClearRecentPrompts
+    ) {
+      Button("Clear", role: .destructive) { create.clearRecentPrompts() }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("Forgets the \(create.recentPrompts.count) recent prompts that ⌘↑ and ⌘↓ step through. Images in History keep their prompts. This can't be undone.")
+    }
   }
 }
