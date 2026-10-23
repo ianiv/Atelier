@@ -97,14 +97,15 @@ final class ModelLibrary {
 
   // MARK: - Models
 
-  /// Reloads the catalog (fetching the community list unless `offline`), LoRAs and disk usage.
-  func refresh(offline: Bool = false) async {
+  /// Reloads the catalog, LoRAs and disk usage. The community list is fetched once per process
+  /// and cached by MGK; an offline listing would leave out every community model.
+  func refresh() async {
     isLoadingCatalog = true
     defer { isLoadingCatalog = false }
     // The engine points MGK at the models directory; wait until it has.
     await create.engine.useModelsDirectory(create.modelsDirectory)
     let models = await MediaGenerationEnvironment.default.downloadableModels(
-      includeDownloaded: true, offline: offline)
+      includeDownloaded: true, offline: false)
     catalog = models.sorted {
       $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
     }
@@ -209,7 +210,7 @@ final class ModelLibrary {
   }
 
   private func afterChange() async {
-    await refresh(offline: true)
+    await refresh()
     await create.refreshModelList()
   }
 
@@ -218,7 +219,7 @@ final class ModelLibrary {
   static let checkpointExtensions: Set<String> = ["safetensors", "ckpt", "pt", "pth"]
 
   /// Families ModelImporter detects but can't convert: it traps on them (`fatalError`) instead
-  /// of throwing, so they're turned away after inspection.
+  /// of throwing, so they're turned away after inspection. MOSS goes through MOSSImporter.
   private nonisolated static let unconvertibleVersions: Set<ModelVersion> = [
     .mossImage, .minimaxH3, .hiDreamO1, .qwenImage2_1, .ltx2, .ltx2_3, .seedvr2_3b, .seedvr2_7b,
     .kandinsky21, .wurstchenStageB, .longcatVideoAvatar1_5,
@@ -245,7 +246,9 @@ final class ModelLibrary {
   private func inspect(_ id: UUID, source: URL) async {
     let result: Result<ModelVersion, Error> = await Task.detached {
       Result {
-        try ModelImporter(
+        // ModelImporter doesn't know MOSS; MOSSImporter converts it.
+        if MOSSImporter.isMOSS(source) { return .mossImage }
+        return try ModelImporter(
           filePath: source.path, modelName: "", isTextEncoderCustomized: false,
           autoencoderFilePath: nil, textEncoderFilePath: nil, textEncoder2FilePath: nil
         ).inspect().version
@@ -256,7 +259,7 @@ final class ModelLibrary {
     switch result {
     case .success(let version):
       importingModels[index].version = version.rawValue
-      if Self.unconvertibleVersions.contains(version) {
+      if version != .mossImage, Self.unconvertibleVersions.contains(version) {
         importingModels[index].problem =
           "\(ModelZoo.humanReadableNameForVersion(version)) checkpoints can't be converted yet."
       }
@@ -330,7 +333,16 @@ final class ModelLibrary {
     }
     // ModelImporter writes `<modelName>_f16.ckpt` to ModelZoo.filePathForModelDownloaded, which
     // resolves against the models directory the engine set (as LoRA import does).
+    let output = directory.appendingPathComponent(modelName + "_f16.ckpt").path
     let specification = try await Task.detached {
+      if MOSSImporter.isMOSS(source) {
+        try MOSSImporter.convert(source, to: output, progress: progress)
+        guard
+          let specification = MOSSImporter.specification(
+            file: modelName + "_f16.ckpt", name: displayName)
+        else { throw ImportError.unconvertible("MOSS Image") }
+        return specification
+      }
       let importer = ModelImporter(
         filePath: source.path, modelName: modelName, isTextEncoderCustomized: false,
         autoencoderFilePath: nil, textEncoderFilePath: nil, textEncoder2FilePath: nil)

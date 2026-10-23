@@ -1,5 +1,6 @@
 import AppKit
 import ImageIO
+import NNC
 import SwiftUI
 import _MediaGenerationKit
 
@@ -371,6 +372,7 @@ enum Automation {
   ///           [--generate-with-lora MODEL [--steps N] [--seed N] [--lora-weight W]]
   ///           [--delete-lora FILE] [--download MODEL [--cancel-after-bytes N]]
   ///           [--import-model FILE [--model-name NAME]] [--generate-model [MODEL] [--steps N]]
+  ///           [--compare-weights REFERENCE [--compare-model MODEL]]
   ///           [--delete-model MODEL]
   ///           [--snapshot-dir DIR] [--quit]
   ///
@@ -520,7 +522,7 @@ enum Automation {
         while library.downloads[file] != nil { try? await Task.sleep(for: .milliseconds(100)) }
         if let error = library.errorMessage { log("error: \(error)") }
         let isDownloaded = library.catalog.first { $0.file == file }?.isDownloaded ?? false
-        log("last progress: \(last)")
+        log("last progress: \(last); catalog now \(library.catalog.count) models, \(library.downloadedCount) downloaded")
         check(cancelAfter == nil ? isDownloaded : !isDownloaded, "download \(cancelAfter == nil ? "finished" : "cancelled"): downloaded \(isDownloaded), in Create's picker \(model.models.contains { $0.file == file })")
       }
       var importedModel: String?
@@ -568,6 +570,17 @@ enum Automation {
         }
       }
 
+      if let reference = value("--compare-weights"),
+        let file = value("--compare-model") ?? importedModel
+      {
+        let directory = model.modelsDirectory
+        let result = await Task.detached {
+          compareWeights(directory + "/" + file, reference: directory + "/" + reference)
+        }.value
+        log("weights vs \(reference): \(result.summary)")
+        check(result.ok, "\(file) has the reference's tensors with matching shapes and values")
+      }
+
       if args.contains("--generate-model") {
         let named = value("--generate-model").flatMap { $0.hasPrefix("--") ? nil : $0 }
         if let file = named ?? importedModel {
@@ -589,6 +602,14 @@ enum Automation {
             while model.isBusy { try? await Task.sleep(for: .milliseconds(100)) }
             if let error = model.errorMessage { log("error: \(error)") }
             check(model.lastSavedStep != nil && model.lastSavedStep != previous, "generated with \(file)")
+            if let snapshotDir, let image = model.image,
+              let destination = CGImageDestinationCreateWithURL(
+                snapshotDir.appendingPathComponent("generated.png") as CFURL, "public.png" as CFString,
+                1, nil)
+            {
+              CGImageDestinationAddImage(destination, image, nil)
+              CGImageDestinationFinalize(destination)
+            }
             await shot("create-model.png")
           } else {
             check(false, "model \(file) didn't load")
@@ -610,6 +631,70 @@ enum Automation {
       }
       finish()
     }
+  }
+
+  /// Compares two weight stores tensor by tensor: same keys, same shapes, and cosine similarity
+  /// of the values (on a prefix of each tensor). A converted fine-tune should sit close to its
+  /// base model everywhere; a wrong mapping or row order shows up as a low similarity.
+  nonisolated static func compareWeights(_ path: String, reference: String) -> (
+    ok: Bool, summary: String
+  ) {
+    let graph = DynamicGraph()
+    let codec: DynamicGraph.Store.Codec = [.q8p, .q6p, .q4p, .i8x, .ezm7, .jit, .externalData]
+    var keys = Set<String>()
+    var referenceKeys = Set<String>()
+    var mismatchedShapes = [String]()
+    var similarities = [(String, Double)]()
+    graph.openStore(path, flags: .readOnly) { store in
+      graph.openStore(reference, flags: .readOnly) { referenceStore in
+        keys = Set(store.keys)
+        referenceKeys = Set(referenceStore.keys)
+        for key in keys.intersection(referenceKeys).sorted() {
+          guard let a = store.read(key, codec: codec), let b = referenceStore.read(key, codec: codec)
+          else { continue }
+          // Vectors may be stored as [n] or [1, n]; only the element count has to agree.
+          guard a.shape.reduce(1, *) == b.shape.reduce(1, *) else {
+            mismatchedShapes.append(key)
+            continue
+          }
+          // Quantized tensors only decode into a graph variable (on the GPU).
+          func decoded(_ store: DynamicGraph.Store, _ shape: TensorShape) -> Tensor<Float> {
+            let variable = graph.variable(.GPU(0), format: .NCHW, shape: shape, of: Float.self)
+            store.read(key, variable: variable, codec: codec)
+            return variable.rawValue.toCPU()
+          }
+          let x = decoded(store, a.shape)
+          let y = decoded(referenceStore, b.shape)
+          let count = min(x.shape.reduce(1, *), 1 << 18)
+          let similarity = x.withUnsafeBytes { xb in
+            y.withUnsafeBytes { yb in
+              let xp = xb.bindMemory(to: Float.self)
+              let yp = yb.bindMemory(to: Float.self)
+              var dot = 0.0
+              var xx = 0.0
+              var yy = 0.0
+              for i in 0..<count {
+                dot += Double(xp[i]) * Double(yp[i])
+                xx += Double(xp[i]) * Double(xp[i])
+                yy += Double(yp[i]) * Double(yp[i])
+              }
+              return xx > 0 && yy > 0 ? dot / (xx.squareRoot() * yy.squareRoot()) : 1
+            }
+          }
+          similarities.append((key, similarity))
+        }
+      }
+    }
+    let worst = similarities.sorted { $0.1 < $1.1 }.prefix(5)
+      .map { String(format: "%@ %.3f", $0.0, $0.1) }
+    let onlyHere = keys.subtracting(referenceKeys).sorted()
+    let onlyThere = referenceKeys.subtracting(keys).sorted()
+    let summary =
+      "\(keys.count) tensors vs \(referenceKeys.count); only here \(onlyHere.prefix(5)), only in reference \(onlyThere.prefix(5)), shape mismatches \(mismatchedShapes.prefix(5)); lowest similarity \(worst)"
+    let ok =
+      !keys.isEmpty && onlyHere.isEmpty && onlyThere.isEmpty && mismatchedShapes.isEmpty
+      && similarities.allSatisfy { $0.1 > 0.5 }
+    return (ok, summary)
   }
 
   /// Scripted checks of the Phase 3 inspector, logged as PASS/FAIL lines:
