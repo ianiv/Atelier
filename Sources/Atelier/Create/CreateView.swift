@@ -471,11 +471,11 @@ struct RecentStrip: View {
                   .strokeBorder(Color.accentColor, lineWidth: current == item.id ? 2 : 0)
               }
               .contentShape(.rect)
-              // Picks up where this image left off. While a run is going, or without its model,
-              // only the prompt and size come back.
+              // Picks up from this image, itself on the canvas (not an Edit step's input). While a
+              // run is going, or without its model, only the prompt and size come back.
               .onTapGesture {
                 if model.canUse(item) {
-                  model.use(item)
+                  model.use(item, restoreInput: false)
                 } else {
                   model.showWithPrompt(item, undoManager: undoManager)
                 }

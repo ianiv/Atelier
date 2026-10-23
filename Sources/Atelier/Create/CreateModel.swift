@@ -260,9 +260,11 @@ final class CreateModel {
   }
 
   /// Loads a history item's prompt, model, seed and settings into Create, and with `loadImage` its
-  /// image onto the canvas. With `newSeed`, rolls a fresh seed and generates as soon as the model
-  /// is ready.
-  func use(_ item: HistoryItem, newSeed: Bool = false, loadImage: Bool = true) {
+  /// image onto the canvas (an Edit step's input instead, with `restoreInput`). With `newSeed`,
+  /// rolls a fresh seed and generates as soon as the model is ready.
+  func use(
+    _ item: HistoryItem, newSeed: Bool = false, loadImage: Bool = true, restoreInput: Bool = true
+  ) {
     guard canUse(item) else { return }
     let sidecar = item.sidecar
     prompt = sidecar.prompt
@@ -284,7 +286,7 @@ final class CreateModel {
     // Without its input (deleted since) it shows the result, as for a Generate step.
     let restoreImage = Task {
       guard loadImage else { return }
-      if item.inputTensorId != nil {
+      if restoreInput, item.inputTensorId != nil {
         if let input = await history.input(of: item, in: projectName) {
           guard imageStep?.id == item.id else { return }
           imageStep = (projectName, input.id)
