@@ -847,21 +847,12 @@ enum Automation {
       }
       presets.delete(preset)
 
-      // A preset's Random setting applies with it; one without it leaves Random alone.
-      var randomPreset = Preset(name: "Inspector Check Random", values: [:], randomSeed: false)
-      model.apply(randomPreset, undoManager: nil)
-      check(model.seedLocked, "a preset saved with Random off turned Random off")
-      randomPreset.randomSeed = true
-      model.apply(randomPreset, undoManager: nil)
-      check(!model.seedLocked, "a preset saved with Random on turned Random on")
-      randomPreset.randomSeed = nil
-      model.rollAndLockSeed()
-      model.apply(randomPreset, undoManager: nil)
-      check(model.seedLocked, "a preset without Random left it alone")
-      if let data = try? LayoutStore.encoder.encode(Preset(name: "R", values: [:], randomSeed: false)),
-        let decoded = try? JSONDecoder().decode(Preset.self, from: data)
-      {
-        check(decoded.randomSeed == false, "Random round-trips through a preset file")
+      // Only the Random checkbox changes Random: presets leave it as it is.
+      let randomPreset = Preset(name: "Inspector Check Random", values: [:])
+      for random in [true, false] {
+        model.seedLocked = !random
+        model.apply(randomPreset, undoManager: nil)
+        check(model.seedLocked == !random, "a preset left Random \(random ? "on" : "off")")
       }
 
       // A per-model default preset: applied when switching to that model only.
@@ -882,10 +873,10 @@ enum Automation {
         await settle()
       }
       check(model.settings?.steps == 9, "switching back to \(modelA) applied its default preset (steps \(model.settings?.steps ?? -1))")
-      check(!model.seedLocked, "applying \(modelA)'s default preset turned Random on")
-      model.rollAndLockSeed()
+      check(model.seedLocked, "applying \(modelA)'s default preset left Random off")
+      model.seedLocked = false
       model.resetToModelDefaults(undoManager: nil)
-      check(!model.seedLocked, "Reset with a default preset turned Random on")
+      check(!model.seedLocked, "Reset with a default preset left Random on")
       // Picking another model's preset switches to that model; its default preset doesn't win.
       if let modelB {
         model.selectedModel = modelB
@@ -901,8 +892,10 @@ enum Automation {
 
       // Use settings restores every registry field.
       if let item = model.history.items.first(where: { model.canUse($0) }) {
+        model.seedLocked = false
         model.use(item)
         await settle()
+        check(!model.seedLocked && model.seed == item.sidecar.seed, "Use settings brought back the seed and left Random on")
         let mismatched = registryMismatches(model, dump: item.sidecar.configuration)
         check(mismatched.isEmpty,
           "Use settings on step \(item.id.logicalTime) restored all \(SettingsRegistry.all.count) registry fields \(mismatched)")

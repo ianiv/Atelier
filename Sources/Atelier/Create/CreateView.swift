@@ -615,10 +615,7 @@ struct SeedControls: View {
           "Seed",
           value: Binding(
             get: { model.seed },
-            set: {
-              model.seed = $0
-              model.seedLocked = true
-            }), format: .number.grouping(.never)
+            set: { model.seed = $0 }), format: .number.grouping(.never)
         )
         .labelsHidden()
         .multilineTextAlignment(.trailing)
@@ -626,11 +623,12 @@ struct SeedControls: View {
         // Always random rolls a new seed on every Generate, so the field only shows the last one.
         .disabled(!model.seedLocked)
         Button {
-          model.rollAndLockSeed()
+          model.rollSeed()
         } label: {
           Image(systemName: "dice")
         }
         .buttonStyle(.borderless)
+        .disabled(!model.seedLocked)
         .help("New random seed (⌘R)")
         Toggle("Random", isOn: Binding(get: { !model.seedLocked }, set: { model.seedLocked = !$0 }))
           .toggleStyle(.checkbox)

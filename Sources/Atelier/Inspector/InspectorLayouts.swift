@@ -229,9 +229,6 @@ struct Preset: Codable, Hashable, Identifiable {
   var values: [String: JSONValue]
   /// The model file this preset belongs to; nil for presets offered with every model.
   var model: String? = nil
-  /// The seed's Random checkbox. Nil (saved before presets stored it) leaves it alone, except that
-  /// a model's default preset turns it on.
-  var randomSeed: Bool? = nil
 
   var id: String { name }
 }

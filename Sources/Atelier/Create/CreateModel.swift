@@ -35,10 +35,13 @@ final class CreateModel {
   var prompt = ""
   var negativePrompt = ""
   var seed = UInt32.random(in: 0...UInt32.max)
-  /// Off means "always random": every Generate rolls a new seed. Remembered across launches;
-  /// "Use settings", typing a seed and rolling one with the dice turn it on.
+  /// Off means "always random": every Generate rolls a new seed. Only the Random checkbox changes
+  /// it; reusing an image, presets and pasted settings bring back a seed but leave this alone.
+  /// Remembered across launches, except for what scripted runs set.
   var seedLocked = UserDefaults.standard.bool(forKey: "seedLocked") {
-    didSet { UserDefaults.standard.set(seedLocked, forKey: "seedLocked") }
+    didSet {
+      if !Automation.isRequested { UserDefaults.standard.set(seedLocked, forKey: "seedLocked") }
+    }
   }
   /// The inspector's values: every setting the next run uses (the seed lives in `seed`).
   var settings: PipelineConfiguration?
@@ -273,10 +276,9 @@ final class CreateModel {
     negativePrompt = sidecar.negativePrompt
     errorMessage = nil
     if newSeed {
-      seedLocked = false
+      rollSeed()
     } else {
       seed = sidecar.seed
-      seedLocked = true
     }
     statusNote = nil
     let projectName = history.project.name
@@ -415,9 +417,6 @@ final class CreateModel {
     guard let recommended, let settings else { return }
     registerUndo(restoring: settings, undoManager, actionName: "Reset to Model Defaults")
     self.settings = recommended
-    if let selectedModel, let preset = presets?.defaultPreset(for: selectedModel) {
-      seedLocked = !(preset.randomSeed ?? true)
-    }
   }
 
   /// The model's defaults with its default preset (if any) applied on top.
@@ -445,7 +444,6 @@ final class CreateModel {
   /// A preset for another downloaded model switches to that model first, then applies on top of
   /// its defaults (and its default preset) once they load.
   func apply(_ preset: Preset, undoManager: UndoManager?) {
-    if let randomSeed = preset.randomSeed { seedLocked = !randomSeed }
     if let model = preset.model, model != selectedModel, models.contains(where: { $0.file == model }) {
       pendingSettings = DrawThingsJSON.Pasted(preset).dump
       selectedModel = model
@@ -469,10 +467,7 @@ final class CreateModel {
   /// Applies pasted settings on top of the model defaults, like a preset. A pasted model that's
   /// downloaded is switched to first; a pasted seed is kept for the following generations.
   func paste(_ pasted: DrawThingsJSON.Pasted, undoManager: UndoManager?) {
-    if let seed = pasted.seed {
-      self.seed = seed
-      seedLocked = true
-    }
+    if let seed = pasted.seed { self.seed = seed }
     if let model = pasted.model, model != selectedModel, models.contains(where: { $0.file == model }) {
       pendingSettings = pasted.dump
       selectedModel = model
@@ -527,12 +522,6 @@ final class CreateModel {
 
   func rollSeed() {
     seed = UInt32.random(in: 0...UInt32.max)
-  }
-
-  /// The dice and ⌘R: a new seed that every generation keeps until it changes.
-  func rollAndLockSeed() {
-    rollSeed()
-    seedLocked = true
   }
 
   func generate() {
@@ -756,10 +745,6 @@ final class CreateModel {
         var settings = recommended
         if let pendingSettings {
           SettingsRegistry.apply(dump: pendingSettings, to: &settings)
-        } else if let preset = presets?.defaultPreset(for: model) {
-          // A default preset sets Random (on unless it says otherwise); pasted or reused settings
-          // keep their seed.
-          seedLocked = !(preset.randomSeed ?? true)
         }
         self.settings = settings
       } catch {
