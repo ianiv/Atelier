@@ -1,6 +1,6 @@
 # Atelier for agents (MCP)
 
-Atelier runs an MCP server inside the app, so agents such as Claude Code can generate images with your local models. Agents use the app's own engine: their runs join your queue (one image at a time) instead of loading a second copy of a model onto the GPU. An agent's run shows in the Queue and on the Create screen like one of yours (progress, previews, the result on the canvas, Stop or Cancel in the Queue stops it) without changing your prompt or settings, and is saved to the current project. While the queue is paused, an agent's request waits.
+Atelier runs an MCP server inside the app, so agents such as Claude Code and Codex can generate images with your local models. Agents use the app's own engine: their runs join your queue (one image at a time) instead of loading a second copy of a model onto the GPU. An agent's run shows in the Queue and on the Create screen like one of yours (progress, previews, the result on the canvas, Stop or Cancel in the Queue stops it) without changing your prompt or settings, and is saved to the current project. While the queue is paused, an agent's request waits.
 
 ## Turn it on
 
@@ -9,9 +9,11 @@ Atelier runs an MCP server inside the app, so agents such as Claude Code can gen
 
 The server listens only on this Mac (127.0.0.1 and ::1) and refuses requests from web pages. Atelier must be open while an agent uses it.
 
-## Connect Claude Code
+## Connect an agent
 
-Run once (the Agents tab has a Copy Command button):
+The Agents tab shows the setup for each agent below, for the port you've chosen, with a Copy button. Each needs doing once.
+
+### Claude Code
 
 ```bash
 claude mcp add --transport http atelier http://127.0.0.1:7862/mcp
@@ -19,9 +21,47 @@ claude mcp add --transport http atelier http://127.0.0.1:7862/mcp
 
 Add `--scope user` to make it available in every project, not just the current folder. Check it with `claude mcp list`, or `/mcp` inside Claude Code.
 
-Then ask for an image, for example: "Use Atelier to make a 1024×1024 watercolor of a lighthouse at dusk with FLUX.2 klein, then save it to ~/Desktop."
+### Codex
+
+```bash
+codex mcp add atelier --url http://127.0.0.1:7862/mcp
+```
+
+This adds it to `~/.codex/config.toml`, which the Codex CLI and app share. Check it with `codex mcp list`, or `/mcp` inside Codex.
+
+### Gemini CLI
+
+```bash
+gemini mcp add --transport http atelier http://127.0.0.1:7862/mcp
+```
+
+This adds it for the current folder; add `-s user` to make it available everywhere.
+
+### Cursor
+
+Add Atelier to `~/.cursor/mcp.json` (or `.cursor/mcp.json` in a project), next to any servers already there:
+
+```json
+{
+  "mcpServers": {
+    "atelier": { "url": "http://127.0.0.1:7862/mcp" }
+  }
+}
+```
+
+### VS Code
+
+```bash
+code --add-mcp '{"name":"atelier","type":"http","url":"http://127.0.0.1:7862/mcp"}'
+```
+
+Copilot's agent mode can then use Atelier's tools.
+
+### Others
 
 Other clients that speak Streamable HTTP can use the same address. Clients that only launch stdio servers can go through a bridge such as `npx mcp-remote http://127.0.0.1:7862/mcp`.
+
+Then ask for an image, for example: "Use Atelier to make a 1024×1024 watercolor of a lighthouse at dusk with FLUX.2 klein, then save it to ~/Desktop."
 
 ## Tools
 

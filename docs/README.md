@@ -5,7 +5,7 @@
 3. [The queue](queue.md): queuing images while one runs, making several at once, pausing, reordering and cancelling.
 4. [History and projects](history.md): browsing what you made, reusing settings, exporting and deleting, and switching projects.
 5. [Models and LoRAs](models-and-loras.md): downloading models, importing checkpoints and LoRAs, and making 8-bit copies of MOSS models.
-6. [Settings](settings.md): the models folder and the performance options.
+6. [Settings](settings.md): the models folder, the output folder and the performance options.
 7. [Atelier for agents (MCP)](../MCP.md): letting Claude Code and other agents generate images with your models.
 
 ## Keyboard shortcuts

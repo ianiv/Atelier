@@ -110,9 +110,15 @@ struct AtelierApp: App {
     }
     Settings {
       TabView {
-        Tab("General", systemImage: "gearshape") {
-          SettingsView()
+        Tab("Models", systemImage: "shippingbox") {
+          ModelsSettingsView()
             .environment(create)
+        }
+        Tab("Images", systemImage: "photo.on.rectangle") {
+          ImagesSettingsView()
+        }
+        Tab("Performance", systemImage: "gauge.with.dots.needle.67percent") {
+          PerformanceSettingsView()
         }
         Tab("Agents", systemImage: "sparkles") {
           AgentSettingsView()

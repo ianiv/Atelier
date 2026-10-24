@@ -733,6 +733,9 @@ final class CreateModel {
         imageStep = (history.project.name, item.tensorId)
         canvasIsImported = false
         image = ImageTensor.cgImage(from: result.tensor) ?? image
+        if let image, let failure = await history.writeToOutputFolder(item, image: image) {
+          errorMessage = failure
+        }
         saveSession()
         FinishedNotice.post(prompt: request.prompt, seconds: item.sidecar.durationSeconds)
         status = .finished(tensorId: item.tensorId)

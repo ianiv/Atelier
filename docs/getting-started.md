@@ -42,7 +42,7 @@ Atelier uses the same model files as Draw Things. By default it looks in `~/Docu
 
 To use another folder, for example one on an external drive or the folder Draw Things already uses:
 
-1. Open **Atelier ▸ Settings** (⌘,) and stay on the **General** tab.
+1. Open **Atelier ▸ Settings** (⌘,) and click the **Models** tab.
 2. Next to **Models directory**, click **Choose…** and pick the folder, or type its path.
 3. Click **Apply**.
 

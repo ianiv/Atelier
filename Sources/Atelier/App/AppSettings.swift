@@ -29,6 +29,25 @@ enum AppSettings {
     UserDefaults.standard.object(forKey: embedsSettingsKey) as? Bool ?? true
   }
 
+  /// Whether each generated image is also written to the output folder (off by default, as in
+  /// Draw Things). A project can override it (`ProjectOutput`).
+  static let savesToOutputFolderKey = "saveToOutputFolder"
+  static var savesToOutputFolder: Bool {
+    UserDefaults.standard.object(forKey: savesToOutputFolderKey) as? Bool ?? false
+  }
+
+  /// The default output folder; a project can name its own (`ProjectOutput`).
+  static let outputFolderKey = "outputFolder"
+  static var outputFolder: String {
+    if let saved = UserDefaults.standard.string(forKey: outputFolderKey), !saved.isEmpty {
+      return saved
+    }
+    return defaultOutputFolder
+  }
+  static var defaultOutputFolder: String {
+    historyDirectory.appendingPathComponent("Output", isDirectory: true).path
+  }
+
   /// Root of the history folder: one subfolder per day.
   static var historyDirectory: URL {
     FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask)[0]

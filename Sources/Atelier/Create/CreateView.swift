@@ -741,20 +741,21 @@ struct SeedControls: View {
   }
 }
 
-struct SettingsView: View {
+/// Settings ▸ Models: where models and LoRAs live.
+struct ModelsSettingsView: View {
   @Environment(CreateModel.self) private var model
   @State private var directory = ""
-
-  @AppStorage(AppSettings.embedsSettingsKey) private var embedsSettings = true
-  @AppStorage(PerformanceSetting.highResolutionPreviewKey)
-  private var highResolutionPreview = PerformanceSetting.highResolutionPreview
+  @FocusState private var directoryFocused: Bool
 
   var body: some View {
     Form {
       Section {
         LabeledContent("Models directory") {
           HStack {
-            TextField("Path", text: $directory).frame(minWidth: 320)
+            TextField("Path", text: $directory)
+              .labelsHidden()
+              .focused($directoryFocused)
+              .frame(minWidth: 320)
             Button("Choose…") { choose() }
           }
         }
@@ -764,33 +765,13 @@ struct SettingsView: View {
             .disabled(directory == model.modelsDirectory)
         }
       }
-      Section {
-        Toggle(isOn: $embedsSettings) {
-          Text("Include Generation Settings in Saved Images")
-          Text(
-            "Exported, saved and dragged images carry their prompt, model, seed and settings, in the format Draw Things reads."
-          )
-        }
-      }
-      Section {
-        ForEach(PerformanceSetting.allCases) { PerformancePicker(setting: $0) }
-        Toggle(isOn: $highResolutionPreview) {
-          Text("Use High Resolution Preview When Possible")
-          Text(
-            "Decodes step previews with TAESD, on the Neural Engine when it can (typically 20–150 ms), so it rarely slows generation. Off shows the quicker low-resolution preview."
-          )
-        }
-      } header: {
-        Text("Performance")
-      } footer: {
-        Text("Automatic picks what the engine chooses for this Mac. Changes apply from the next generation.")
-          .foregroundStyle(.secondary)
-      }
     }
-    .formStyle(.grouped)
-    .frame(width: 600)
-    .fixedSize(horizontal: false, vertical: true)
-    .onAppear { directory = model.modelsDirectory }
+    .settingsForm()
+    .onAppear {
+      directory = model.modelsDirectory
+      // The window focuses the first field, which selects the whole path; start unfocused.
+      Task { directoryFocused = false }
+    }
   }
 
   private func choose() {
@@ -801,6 +782,84 @@ struct SettingsView: View {
     if panel.runModal() == .OK, let url = panel.url {
       directory = url.path
     }
+  }
+}
+
+/// Settings ▸ Images: what saved images carry, and the output folder.
+struct ImagesSettingsView: View {
+  @AppStorage(AppSettings.embedsSettingsKey) private var embedsSettings = true
+  @AppStorage(AppSettings.savesToOutputFolderKey) private var savesToOutputFolder = false
+  @AppStorage(AppSettings.outputFolderKey) private var outputFolder = AppSettings.defaultOutputFolder
+  @State private var choosingOutputFolder = false
+
+  var body: some View {
+    Form {
+      Section {
+        Toggle(isOn: $embedsSettings) {
+          Text("Include Generation Settings in Saved Images")
+          Text(
+            "Exported, saved and dragged images carry their prompt, model, seed and settings, in the format Draw Things reads."
+          )
+        }
+      }
+      Section {
+        Toggle(isOn: $savesToOutputFolder) {
+          Text("Save Generated Images to Output Folder")
+          Text(
+            "Each new image is also written to this folder as a PNG, named like an export. A project can use its own folder, or turn saving on or off for itself, from the project menu."
+          )
+        }
+        LabeledContent("Output folder") {
+          HStack {
+            TextField("Path", text: $outputFolder, prompt: Text(AppSettings.defaultOutputFolder))
+              .labelsHidden()
+              .frame(minWidth: 320)
+            Button("Choose…") { choosingOutputFolder = true }
+          }
+        }
+      } header: {
+        Text("Output Folder")
+      }
+      .fileImporter(isPresented: $choosingOutputFolder, allowedContentTypes: [.folder]) { result in
+        if case .success(let url) = result { outputFolder = url.path }
+      }
+    }
+    .settingsForm()
+  }
+}
+
+/// Settings ▸ Performance: Draw Things' Machine Settings.
+struct PerformanceSettingsView: View {
+  @AppStorage(PerformanceSetting.highResolutionPreviewKey)
+  private var highResolutionPreview = PerformanceSetting.highResolutionPreview
+
+  var body: some View {
+    Form {
+      Section {
+        ForEach(PerformanceSetting.allCases) { PerformancePicker(setting: $0) }
+        Toggle(isOn: $highResolutionPreview) {
+          Text("Use High Resolution Preview When Possible")
+          Text(
+            "Decodes step previews with TAESD, on the Neural Engine when it can (typically 20–150 ms), so it rarely slows generation. Off shows the quicker low-resolution preview."
+          )
+        }
+      } footer: {
+        Text("Automatic picks what the engine chooses for this Mac. Changes apply from the next generation.")
+          .foregroundStyle(.secondary)
+      }
+    }
+    // Wider than the other tabs so the longest choice, Automatic (Yes, Prefer Quantized
+    // Attention), isn't cut off.
+    .settingsForm(width: 720)
+  }
+}
+
+extension View {
+  /// The grouped form, width and sizing every Settings tab shares.
+  func settingsForm(width: CGFloat = 600) -> some View {
+    formStyle(.grouped)
+      .frame(width: width)
+      .fixedSize(horizontal: false, vertical: true)
   }
 }
 

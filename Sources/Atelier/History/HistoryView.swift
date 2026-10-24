@@ -590,6 +590,7 @@ struct ProjectMenu: View {
   @Environment(HistoryStore.self) private var history
   @State private var naming: Naming?
   @State private var error: String?
+  @State private var editingOutput = false
 
   enum Naming: Identifiable {
     case new(suggested: String), rename(current: String)
@@ -617,6 +618,7 @@ struct ProjectMenu: View {
       Divider()
       Button("New Project…") { naming = .new(suggested: history.availableName()) }
       Button("Rename “\(history.project.name)”…") { naming = .rename(current: history.project.name) }
+      Button("Output Folder…") { editingOutput = true }
       Button("Show in Finder") {
         NSWorkspace.shared.activateFileViewerSelecting([history.project.url])
       }
@@ -629,6 +631,11 @@ struct ProjectMenu: View {
     // keyboard focus on Cancel.
     .sheet(item: $naming) { naming in
       ProjectNameSheet(naming: naming) { commit(naming, name: $0) }
+    }
+    .sheet(isPresented: $editingOutput) {
+      ProjectOutputSheet(projectName: history.project.name, output: history.output) {
+        history.setOutput($0)
+      }
     }
     .alert(
       "Couldn't rename the project",
@@ -652,6 +659,69 @@ struct ProjectMenu: View {
         }
       }
     }
+  }
+}
+
+/// The current project's output folder: whether its new images are saved there, and where. Each
+/// follows Settings until the project sets its own.
+private struct ProjectOutputSheet: View {
+  let projectName: String
+  let output: ProjectOutput
+  let commit: (ProjectOutput) -> Void
+  @Environment(\.dismiss) private var dismiss
+  @State private var saves: Bool?
+  @State private var hasFolder = false
+  @State private var folder = ""
+  @State private var choosing = false
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Text("Output Folder for “\(projectName)”").font(.headline)
+      Form {
+        Picker("Save generated images", selection: $saves) {
+          Text("As in Settings (\(AppSettings.savesToOutputFolder ? "On" : "Off"))").tag(Bool?.none)
+          Divider()
+          Text("On").tag(Bool?.some(true))
+          Text("Off").tag(Bool?.some(false))
+        }
+        Toggle("Use a different folder for this project", isOn: $hasFolder)
+        LabeledContent("Folder") {
+          HStack {
+            TextField("Path", text: $folder, prompt: Text(AppSettings.outputFolder))
+              .labelsHidden()
+              .disabled(!hasFolder)
+            Button("Choose…") { choosing = true }
+              .disabled(!hasFolder)
+          }
+        }
+      }
+      .formStyle(.grouped)
+      .fileImporter(isPresented: $choosing, allowedContentTypes: [.folder]) { result in
+        if case .success(let url) = result { folder = url.path }
+      }
+      HStack {
+        Spacer()
+        Button("Cancel", role: .cancel) { dismiss() }
+          .keyboardShortcut(.cancelAction)
+        Button("Save", action: confirm)
+          .keyboardShortcut(.defaultAction)
+          .disabled(hasFolder && trimmedFolder.isEmpty)
+      }
+    }
+    .padding(20)
+    .frame(width: 520)
+    .onAppear {
+      saves = output.saves
+      hasFolder = output.folder != nil
+      folder = output.folder ?? ""
+    }
+  }
+
+  private var trimmedFolder: String { folder.trimmingCharacters(in: .whitespaces) }
+
+  private func confirm() {
+    dismiss()
+    commit(ProjectOutput(saves: saves, folder: hasFolder ? trimmedFolder : nil))
   }
 }
 

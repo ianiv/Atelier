@@ -47,6 +47,7 @@ A project is one file holding the images, their branches and their settings. Use
 - Switch to another project.
 - **New Project…**
 - **Rename** the current project.
+- **Output Folder…**: choose whether the project's new images are also saved to an output folder, and which one. **Save generated images** is **As in Settings** until you pick **On** or **Off**, and **Use a different folder for this project** sends them somewhere other than the folder in Settings. These choices are kept in the project file, so they stay with it when you rename it. See [Output folder](settings.md#output-folder).
 - **Show in Finder**.
 
 Projects are stored in `~/Pictures/Atelier/Projects/`, one `.sqlite3` file each, in the same format Draw Things uses for its projects. The first project is called "Atelier".

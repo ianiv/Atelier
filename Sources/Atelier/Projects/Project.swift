@@ -19,6 +19,15 @@ struct StepID: Hashable, Codable, Sendable {
   var logicalTime: Int64
 }
 
+/// A project's overrides of the output folder settings; nil follows Settings.
+struct ProjectOutput: Equatable, Sendable {
+  var saves: Bool?
+  var folder: String?
+
+  var effectiveSaves: Bool { saves ?? AppSettings.savesToOutputFolder }
+  var effectiveFolder: String { folder ?? AppSettings.outputFolder }
+}
+
 /// One project file in Draw Things' format: a SQLite database holding dflat tables (history
 /// steps, canvas layers, thumbnails) and an s4nnc tensor store (the full-resolution images).
 /// Writes follow `ImageHistoryManager.pushHistory`/`addImage` in the engine's History library.
@@ -104,6 +113,20 @@ final class Project: @unchecked Sendable {
   func setCurrentStep(_ id: StepID?) {
     workspace.dictionary["image_seek_to", Int.self] = id.map { Int($0.logicalTime) }
     workspace.dictionary["image_seek_to_lineage", Int.self] = id.map { Int($0.lineage) }
+  }
+
+  /// The project's own output folder settings, kept in the project file so they follow a rename.
+  var output: ProjectOutput {
+    get {
+      ProjectOutput(
+        saves: workspace.dictionary["atelier_output_save", Bool.self],
+        folder: workspace.dictionary["atelier_output_folder", String.self])
+    }
+    set {
+      workspace.dictionary["atelier_output_save", Bool.self] = newValue.saves
+      workspace.dictionary["atelier_output_folder", String.self] =
+        newValue.folder.flatMap { $0.isEmpty ? nil : $0 }
+    }
   }
 
   /// The image layer's tensor: from the canvas layers when stored (the top one with a tensor), else

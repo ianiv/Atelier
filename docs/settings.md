@@ -2,17 +2,27 @@
 
 Open **Atelier ▸ Settings** (⌘,).
 
-## General
+## Models
 
 ### Models directory
 
 The folder Atelier reads models and LoRAs from, and downloads and imports into. Click **Choose…** or type a path, then **Apply**. When it's never been set, Atelier uses `~/Documents/Models`, or the folder in the `DRAWTHINGS_MODELS_DIR` environment variable. You can point it at Draw Things' models folder to share models between the two apps.
 
+## Images
+
 ### Saved images
 
 **Include Generation Settings in Saved Images** (on by default) embeds the prompt, negative prompt, model, seed and settings in images you export, save from the canvas or drag out of Atelier. They're written the way Draw Things writes them, so either app can load them back (in Atelier, with **Load Settings from Image**). Turn it off to save plain images.
 
-### Performance
+### Output folder
+
+**Save Generated Images to Output Folder** (off by default) also writes every new image to a folder of your choice as a PNG, as Draw Things' output folder setting does. Each file is named like an export ("Project 12-1234567.png": the project, the image's step and its seed), and a number is added rather than replacing a file that's already there. With **Include Generation Settings in Saved Images** on, the files carry their settings too.
+
+**Output folder** is the folder used. Type a path or click **Choose…**. When it's never been set, it's `~/Pictures/Atelier/Output/`. It can be on an external drive; if the folder can't be written (the drive isn't connected, say), the image is still saved in the project and the status bar says it didn't reach the folder.
+
+Each project can turn saving on or off for itself and use its own folder, from **Output Folder…** in the project menu (see [Projects](history.md#projects)). Projects follow these settings until you change that.
+
+## Performance
 
 These match Draw Things' Machine Settings. **Automatic** uses what the engine picks for your Mac, shown in brackets. Changes apply from the next generation.
 
@@ -27,7 +37,7 @@ These match Draw Things' Machine Settings. **Automatic** uses what the engine pi
 
 ## Agents
 
-Lets Claude Code and other MCP clients on this Mac generate images with your models. See [Atelier for agents (MCP)](../MCP.md).
+Lets Claude Code, Codex, Gemini CLI, Cursor, VS Code and other MCP clients on this Mac generate images with your models. Pick your agent to see how to connect it. See [Atelier for agents (MCP)](../MCP.md).
 
 ## Where Atelier keeps things
 
@@ -36,4 +46,5 @@ Lets Claude Code and other MCP clients on this Mac generate images with your mod
 | Projects (your images and their settings) | `~/Pictures/Atelier/Projects/` |
 | Models, LoRAs, `custom.json`, `custom_lora.json` | Your models directory |
 | Presets and inspector layouts | `~/Library/Application Support/Atelier/` (the Presets and inspector menus have Show Folder items) |
+| Images saved to the output folder | `~/Pictures/Atelier/Output/`, or the folder you set (in Settings or for a project) |
 | Moodboard images | `~/Library/Application Support/Atelier/Moodboard/` |

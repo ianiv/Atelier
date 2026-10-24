@@ -72,6 +72,8 @@ final class HistoryStore {
   private var visibleChildren: [StepID: [StepID]] = [:]
   private var byTensor: [Int64: HistoryItem] = [:]
   private(set) var isLoaded = false
+  /// The current project's output folder overrides.
+  private(set) var output = ProjectOutput()
   /// Progress of the one-time import of the old PNG history, while it runs.
   private(set) var importProgress: (done: Int, total: Int)?
 
@@ -102,11 +104,12 @@ final class HistoryStore {
 
   func reload() async {
     let project = project
-    let (tree, stored) = await Task.detached { () -> (ProjectTree, StepID?) in
+    let (tree, stored, output) = await Task.detached { () -> (ProjectTree, StepID?, ProjectOutput) in
       let tree = project.tree()
-      return (tree, project.storedCurrentStep(in: tree))
+      return (tree, project.storedCurrentStep(in: tree), project.output)
     }.value
     guard project === self.project else { return }
+    self.output = output
     self.tree = tree
     items = tree.itemsNewestFirst
     byTensor = Dictionary(items.map { ($0.tensorId, $0) }, uniquingKeysWith: { a, _ in a })
@@ -137,7 +140,14 @@ final class HistoryStore {
     items = []
     tree = ProjectTree()
     currentTensorId = nil
+    output = ProjectOutput()
     await reload()
+  }
+
+  /// Sets the current project's output folder overrides.
+  func setOutput(_ output: ProjectOutput) {
+    self.output = output
+    project.output = output
   }
 
   /// A name not taken yet: `base`, else `base 2`, `base 3`, …
@@ -379,6 +389,31 @@ final class HistoryStore {
     return await Task.detached { project.image(tensorId: tensorId) }.value
   }
 
+  /// Writes a newly generated image to the output folder when Settings or the project turns that
+  /// on, named like an export. Returns why it couldn't be written, if it couldn't.
+  func writeToOutputFolder(_ item: HistoryItem, image: CGImage) async -> String? {
+    guard output.effectiveSaves else { return nil }
+    let folder = URL(fileURLWithPath: output.effectiveFolder, isDirectory: true)
+    let name = fileName(for: item)
+    do {
+      let data = try Self.pngData(image, sidecar: item.sidecar)
+      try await Task.detached {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        // Steps can be renumbered when the history branches, so never overwrite a file.
+        var url = folder.appendingPathComponent(name).appendingPathExtension("png")
+        var n = 2
+        while FileManager.default.fileExists(atPath: url.path) {
+          url = folder.appendingPathComponent("\(name) \(n)").appendingPathExtension("png")
+          n += 1
+        }
+        try data.write(to: url, options: .withoutOverwriting)
+      }.value
+      return nil
+    } catch {
+      return "Saved to the project, but not to the output folder: \(error.localizedDescription)"
+    }
+  }
+
   /// Writes the image as a PNG carrying its settings (see `pngData`).
   func exportPNG(_ item: HistoryItem, to url: URL) async throws {
     try await pngData(item).write(to: url)
@@ -388,13 +423,17 @@ final class HistoryStore {
   /// metadata (`ImageMetadata`) and Atelier's sidecar in an `Atelier` iTXt chunk.
   func pngData(_ item: HistoryItem) async throws -> Data {
     guard let image = await image(for: item) else { throw ProjectError.badImage }
+    return try Self.pngData(image, sidecar: item.sidecar)
+  }
+
+  static func pngData(_ image: CGImage, sidecar: Sidecar) throws -> Data {
     guard AppSettings.embedsSettings else {
       guard let png = ImageTensor.png(image) else { throw ProjectError.badImage }
       return png
     }
-    guard let png = ImageTensor.png(image, properties: ImageMetadata.properties(for: item.sidecar))
+    guard let png = ImageTensor.png(image, properties: ImageMetadata.properties(for: sidecar))
     else { throw ProjectError.badImage }
-    let json = try Self.encoder.encode(item.sidecar)
+    let json = try encoder.encode(sidecar)
     let tagged = PNGText.inserting(
       keyword: "Atelier", text: String(decoding: json, as: UTF8.self), into: png)
     return tagged ?? png

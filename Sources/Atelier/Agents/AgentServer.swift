@@ -47,7 +47,6 @@ final class AgentServer {
 
   private var activePort: Int { forcedPort ?? port }
   var endpoint: String { "http://127.0.0.1:\(activePort)/mcp" }
-  var claudeCodeCommand: String { "claude mcp add --transport http atelier \(endpoint)" }
 
   private static let protocolVersions = ["2025-11-25", "2025-06-18", "2025-03-26"]
   private static let instructions = """
@@ -239,10 +238,54 @@ final class AgentServer {
   }
 }
 
-/// Settings → Agents: turn the MCP server on, and how to connect Claude Code to it.
+/// An MCP client Settings → Agents shows setup for.
+enum AgentClient: String, CaseIterable, Identifiable {
+  case claudeCode, codex, gemini, cursor, vsCode
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .claudeCode: "Claude Code"
+    case .codex: "Codex"
+    case .gemini: "Gemini CLI"
+    case .cursor: "Cursor"
+    case .vsCode: "VS Code"
+    }
+  }
+
+  /// A Terminal command, or for Cursor the entry for its mcp.json.
+  func setup(_ endpoint: String) -> String {
+    switch self {
+    case .claudeCode: "claude mcp add --transport http atelier \(endpoint)"
+    case .codex: "codex mcp add atelier --url \(endpoint)"
+    case .gemini: "gemini mcp add --transport http atelier \(endpoint)"
+    case .cursor: "{\n  \"mcpServers\": {\n    \"atelier\": { \"url\": \"\(endpoint)\" }\n  }\n}"
+    case .vsCode: "code --add-mcp '{\"name\":\"atelier\",\"type\":\"http\",\"url\":\"\(endpoint)\"}'"
+    }
+  }
+
+  var instructions: String {
+    switch self {
+    case .claudeCode:
+      "Run this in Terminal once. Add --scope user to use it in every folder, not just the current one."
+    case .codex:
+      "Run this in Terminal once. It's added to ~/.codex/config.toml, for the Codex CLI and app."
+    case .gemini:
+      "Run this in Terminal once, in your project's folder. Add -s user to use it in every folder."
+    case .cursor:
+      "Add this to ~/.cursor/mcp.json (or .cursor/mcp.json in a project), merging it with any servers already there."
+    case .vsCode:
+      "Run this in Terminal once. Copilot's agent mode can then use Atelier's tools."
+    }
+  }
+}
+
+/// Settings → Agents: turn the MCP server on, and how to connect an agent to it.
 struct AgentSettingsView: View {
   @Environment(AgentServer.self) private var server
   @State private var portText = ""
+  @AppStorage("agentClient") private var client = AgentClient.claudeCode
 
   var body: some View {
     @Bindable var server = server
@@ -254,6 +297,7 @@ struct AgentSettingsView: View {
         }
         LabeledContent("Port") {
           TextField("Port", text: $portText)
+            .labelsHidden()
             .frame(width: 80)
             .onSubmit { applyPort() }
         }
@@ -277,20 +321,26 @@ struct AgentSettingsView: View {
         Text("MCP Server")
       }
       Section {
-        Text(server.claudeCodeCommand)
+        Picker("Agent", selection: $client) {
+          ForEach(AgentClient.allCases) { Text($0.title).tag($0) }
+        }
+        Text(client.instructions)
+          .foregroundStyle(.secondary)
+        Text(client.setup(server.endpoint))
           .font(.system(.body, design: .monospaced))
           .textSelection(.enabled)
+          .frame(maxWidth: .infinity, alignment: .leading)
         HStack {
           Spacer()
-          Button("Copy Command") {
+          Button("Copy") {
             NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(server.claudeCodeCommand, forType: .string)
+            NSPasteboard.general.setString(client.setup(server.endpoint), forType: .string)
           }
         }
       } header: {
-        Text("Connect Claude Code")
+        Text("Connect an Agent")
       } footer: {
-        Text("Run this in Terminal once. Atelier must be open with the server on while the agent works. Other MCP clients that speak Streamable HTTP can use the same address.")
+        Text("Atelier must be open with the server on while the agent works. Other MCP clients that speak Streamable HTTP can use the same address.")
           .foregroundStyle(.secondary)
       }
     }

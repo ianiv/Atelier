@@ -37,7 +37,7 @@ Start with the [user guide](docs/README.md).
 - [Creating images](docs/creating-images.md): the prompt, size and seed, the inspector, presets, image to image and the moodboard.
 - [History and projects](docs/history.md)
 - [Models and LoRAs](docs/models-and-loras.md): downloading, importing, Make 8-bit Copy.
-- [Settings](docs/settings.md): models folder and performance.
+- [Settings](docs/settings.md): models folder, output folder and performance.
 - [Atelier for agents (MCP)](MCP.md)
 
 ## License
