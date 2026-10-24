@@ -42,7 +42,11 @@ struct CreateView: View {
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
         guard let image = ImageLoader.image(at: url) else { continue }
-        if target == .moodboard { model.moodboard.add(image) } else { model.setCanvasImage(image) }
+        if target == .moodboard {
+          model.moodboard.add(image)
+        } else {
+          model.setCanvasImage(image, metadata: ImageMetadata.embedded(at: url))
+        }
       }
     }
     // A plain toolbar, not a customizable `.toolbar(id:)`: AppKit crashes ("NSToolbarItemViewer's
@@ -174,7 +178,7 @@ struct CanvasView: View {
       .contextMenu { contextMenu(canvas) }
       .dropDestination(for: DroppedImage.self) { images, _ in
         guard let image = images.first else { return false }
-        model.setCanvasImage(image.image)
+        model.setCanvasImage(image.image, metadata: image.metadata)
         return true
       } isTargeted: { isTargeted = $0 }
       .onChange(of: imageFit, initial: true) { canvas.fitScale = imageFit }
@@ -237,6 +241,8 @@ struct CanvasView: View {
     Divider()
     Button("Open Image…") { model.imageImport = .canvas }
     Button("Paste Image") { model.pasteImage() }
+    Button("Load Settings from Image") { model.loadCanvasImageSettings(undoManager: undoManager) }
+      .disabled(model.canvasImageSettings == nil)
     Button("Add to Moodboard") { model.addCanvasToMoodboard() }
       .disabled(model.image == nil)
     Button("Match Size to Image") { model.matchSizeToImage(undoManager: undoManager) }
@@ -738,6 +744,7 @@ struct SettingsView: View {
   @Environment(CreateModel.self) private var model
   @State private var directory = ""
 
+  @AppStorage(AppSettings.embedsSettingsKey) private var embedsSettings = true
   @AppStorage(PerformanceSetting.highResolutionPreviewKey)
   private var highResolutionPreview = PerformanceSetting.highResolutionPreview
 
@@ -754,6 +761,14 @@ struct SettingsView: View {
           Spacer()
           Button("Apply") { model.setModelsDirectory(directory) }
             .disabled(directory == model.modelsDirectory)
+        }
+      }
+      Section {
+        Toggle(isOn: $embedsSettings) {
+          Text("Include Generation Settings in Saved Images")
+          Text(
+            "Exported, saved and dragged images carry their prompt, model, seed and settings, in the format Draw Things reads."
+          )
         }
       }
       Section {

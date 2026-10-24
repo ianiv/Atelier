@@ -24,7 +24,7 @@ You can also drag images from History onto the canvas or the moodboard in Create
 Right-click an image (or use the buttons in the detail panel):
 
 - **Copy Image**, **Copy Prompt**, **Copy Seed**.
-- **Export PNG…** saves a PNG with its settings embedded, so Atelier can read them back later.
+- **Export PNG…** saves a PNG with its prompt, model, seed and settings embedded, in the format Draw Things uses, so Atelier and Draw Things can read them back. Images saved from the canvas or dragged out of Atelier carry them too. You can turn this off in [Settings](settings.md#saved-images).
 - **Delete** removes the image and its settings from the project. This can't be undone.
 
 With several images selected, the same menu offers **Copy Images**, **Export PNGs…** and **Delete**.

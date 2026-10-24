@@ -83,7 +83,7 @@ Open the **Presets** menu in the toolbar:
 ## The canvas
 
 - Pinch, or use ⌘+ and ⌘−, to zoom. Drag to move. Double-click to switch between fit and actual size. The zoom controls are also under **View**.
-- Right-click the canvas for **Copy Image**, **Save Image…**, **Open Image…**, **Paste Image**, **Add to Moodboard**, **Match Size to Image** and **Clear Canvas**.
+- Right-click the canvas for **Copy Image**, **Save Image…**, **Open Image…**, **Paste Image**, **Load Settings from Image**, **Add to Moodboard**, **Match Size to Image** and **Clear Canvas**.
 
 ### Recent images
 
@@ -103,6 +103,10 @@ Bringing in an image switches to Edit for you. Ways to bring one in:
 - Drop an image file on the canvas.
 - **Image ▸ Open Image…** (⌘O) or **Paste Image** (⇧⌘V).
 - Right-click a recent image and choose **Use as Input**.
+
+### Settings from an image
+
+Images made by Draw Things carry their prompt, model, seed and settings, and so do images Atelier saves. When an image you bring in has them, the status bar says so. Choose **Load Settings from Image** (canvas right-click menu, or the **Image** menu) to load the prompt, negative prompt, model, seed and every setting, on top of the model's defaults like **Paste Settings**. If the image's model isn't downloaded, the settings apply to the current model. The **Random** seed checkbox stays as it is, so with Random on the next image still gets a new seed.
 
 After an Edit run, the result replaces the canvas and the mode stays on Edit, so you can keep refining with one click.
 

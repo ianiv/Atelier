@@ -23,6 +23,12 @@ enum AppSettings {
     }
   }
 
+  /// Whether exported, saved and dragged images carry their generation settings (on by default).
+  static let embedsSettingsKey = "embedSettingsInImages"
+  static var embedsSettings: Bool {
+    UserDefaults.standard.object(forKey: embedsSettingsKey) as? Bool ?? true
+  }
+
   /// Root of the history folder: one subfolder per day.
   static var historyDirectory: URL {
     FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask)[0]

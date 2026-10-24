@@ -379,16 +379,21 @@ final class HistoryStore {
     return await Task.detached { project.image(tensorId: tensorId) }.value
   }
 
-  /// Writes the image as a PNG carrying its settings (an `Atelier` iTXt chunk).
+  /// Writes the image as a PNG carrying its settings (see `pngData`).
   func exportPNG(_ item: HistoryItem, to url: URL) async throws {
     try await pngData(item).write(to: url)
   }
 
-  /// The image as PNG carrying its settings.
+  /// The image as PNG carrying its settings, unless Settings turns that off: Draw Things'
+  /// metadata (`ImageMetadata`) and Atelier's sidecar in an `Atelier` iTXt chunk.
   func pngData(_ item: HistoryItem) async throws -> Data {
-    guard let image = await image(for: item), let png = ImageTensor.png(image) else {
-      throw ProjectError.badImage
+    guard let image = await image(for: item) else { throw ProjectError.badImage }
+    guard AppSettings.embedsSettings else {
+      guard let png = ImageTensor.png(image) else { throw ProjectError.badImage }
+      return png
     }
+    guard let png = ImageTensor.png(image, properties: ImageMetadata.properties(for: item.sidecar))
+    else { throw ProjectError.badImage }
     let json = try Self.encoder.encode(item.sidecar)
     let tagged = PNGText.inserting(
       keyword: "Atelier", text: String(decoding: json, as: UTF8.self), into: png)
@@ -509,8 +514,9 @@ final class HistoryStore {
   }
 }
 
-/// Inserts a PNG iTXt chunk right after IHDR.
+/// Inserts and reads PNG iTXt chunks.
 enum PNGText {
+  /// Inserts an iTXt chunk right after IHDR.
   static func inserting(keyword: String, text: String, into png: Data) -> Data? {
     let bytes = [UInt8](png)
     // 8-byte signature, then IHDR: length(4) type(4) data(13) crc(4).
@@ -524,6 +530,32 @@ enum PNGText {
     chunk += body
     chunk += withUnsafeBytes(of: crc32(body).bigEndian, Array.init)
     return Data(bytes[..<33] + chunk + bytes[33...])
+  }
+
+  /// The text of the first uncompressed iTXt chunk named `keyword`.
+  static func text(keyword: String, in png: Data) -> String? {
+    let bytes = [UInt8](png)
+    guard bytes.count > 8, bytes[1..<4].elementsEqual("PNG".utf8) else { return nil }
+    // keyword, NUL, uncompressed, compression method 0
+    let prefix = Array(keyword.utf8) + [0, 0, 0]
+    var offset = 8
+    while offset + 12 <= bytes.count {
+      let length = bytes[offset..<offset + 4].reduce(0) { $0 << 8 | Int($1) }
+      let type = bytes[offset + 4..<offset + 8]
+      let start = offset + 8
+      guard start + length + 4 <= bytes.count, !type.elementsEqual("IEND".utf8) else { return nil }
+      let body = bytes[start..<start + length]
+      if type.elementsEqual("iTXt".utf8), body.starts(with: prefix) {
+        // Then the language tag and translated keyword, each NUL-terminated.
+        let rest = body.dropFirst(prefix.count)
+        guard let language = rest.firstIndex(of: 0),
+          let translated = rest[(language + 1)...].firstIndex(of: 0)
+        else { return nil }
+        return String(decoding: rest[(translated + 1)...], as: UTF8.self)
+      }
+      offset = start + length + 4
+    }
+    return nil
   }
 
   private static let table: [UInt32] = (0..<256).map { n in

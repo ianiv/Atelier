@@ -8,6 +8,10 @@ Open **Atelier ▸ Settings** (⌘,).
 
 The folder Atelier reads models and LoRAs from, and downloads and imports into. Click **Choose…** or type a path, then **Apply**. When it's never been set, Atelier uses `~/Documents/Models`, or the folder in the `DRAWTHINGS_MODELS_DIR` environment variable. You can point it at Draw Things' models folder to share models between the two apps.
 
+### Saved images
+
+**Include Generation Settings in Saved Images** (on by default) embeds the prompt, negative prompt, model, seed and settings in images you export, save from the canvas or drag out of Atelier. They're written the way Draw Things writes them, so either app can load them back (in Atelier, with **Load Settings from Image**). Turn it off to save plain images.
+
 ### Performance
 
 These match Draw Things' Machine Settings. **Automatic** uses what the engine picks for your Mac, shown in brackets. Changes apply from the next generation.

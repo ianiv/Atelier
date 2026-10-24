@@ -143,15 +143,17 @@ enum ImageLoader {
 /// An image dropped from Finder, another app, or Atelier's own thumbnails (which export PNG).
 struct DroppedImage: Transferable {
   var image: CGImage
+  /// Generation settings the file carries.
+  var metadata: ImageMetadata.Embedded?
 
   static var transferRepresentation: some TransferRepresentation {
     FileRepresentation(importedContentType: .image) { received in
       guard let image = ImageLoader.image(at: received.file) else { throw ProjectError.badImage }
-      return DroppedImage(image: image)
+      return DroppedImage(image: image, metadata: ImageMetadata.embedded(at: received.file))
     }
     DataRepresentation(importedContentType: .image) { data in
       guard let image = ImageLoader.image(from: data) else { throw ProjectError.badImage }
-      return DroppedImage(image: image)
+      return DroppedImage(image: image, metadata: ImageMetadata.embedded(in: data))
     }
   }
 }

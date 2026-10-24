@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import SwiftUI
 import _MediaGenerationKit
 
@@ -353,4 +354,172 @@ extension DrawThingsJSON.Pasted {
     }
     self.init(dump: dump, model: preset.model, seed: nil)
   }
+}
+
+// MARK: - Settings in image files
+
+/// Generation settings carried in an image file. Draw Things writes a JSON object to the EXIF
+/// UserComment (ImageIO also writes it to PNGs as XMP `exif:UserComment`): the prompt (`c`), the
+/// negative prompt (`uc`), a few summary fields and the whole configuration (`v2`, the flat JSON
+/// of Copy Settings), with a readable summary as the image description. Older builds put the same
+/// JSON in the PNG Comment. Atelier's exports carry the same plus their sidecar in an `Atelier`
+/// iTXt chunk.
+enum ImageMetadata {
+  /// What an image file embeds, read off the main actor; `settings(from:)` interprets it.
+  struct Embedded: Sendable {
+    /// EXIF UserComment and PNG Comment, in that order.
+    var comments: [String]
+    /// The `Atelier` iTXt chunk: a history sidecar.
+    var atelier: String?
+  }
+
+  struct Settings {
+    var prompt: String
+    var negativePrompt: String
+    var pasted: DrawThingsJSON.Pasted
+  }
+
+  static func embedded(at url: URL) -> Embedded? {
+    (try? Data(contentsOf: url, options: .mappedIfSafe)).flatMap(embedded(in:))
+  }
+
+  static func embedded(in data: Data) -> Embedded? {
+    var comments: [String] = []
+    if let source = CGImageSourceCreateWithData(data as CFData, nil),
+      let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+    {
+      let exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any]
+      let png = properties[kCGImagePropertyPNGDictionary] as? [CFString: Any]
+      comments = [exif?[kCGImagePropertyExifUserComment], png?[kCGImagePropertyPNGComment]]
+        .compactMap { $0 as? String }
+    }
+    let atelier = PNGText.text(keyword: "Atelier", in: data)
+    guard !comments.isEmpty || atelier != nil else { return nil }
+    return Embedded(comments: comments, atelier: atelier)
+  }
+
+  /// The prompts, model, seed and settings an image carries: Atelier's sidecar when there is one
+  /// (exact), else Draw Things' JSON.
+  @MainActor static func settings(from embedded: Embedded) -> Settings? {
+    if let atelier = embedded.atelier,
+      let sidecar = try? sidecarDecoder.decode(HistoryStore.Sidecar.self, from: Data(atelier.utf8))
+    {
+      return Settings(
+        prompt: sidecar.prompt, negativePrompt: sidecar.negativePrompt,
+        pasted: DrawThingsJSON.Pasted(
+          dump: sidecar.configuration, model: sidecar.model, seed: sidecar.seed))
+    }
+    for comment in embedded.comments {
+      if let settings = drawThings(comment) { return settings }
+    }
+    return nil
+  }
+
+  @MainActor private static func drawThings(_ comment: String) -> Settings? {
+    guard case .object(let json)? = try? JSONDecoder().decode(JSONValue.self, from: Data(comment.utf8))
+    else { return nil }
+    var flat = legacy(json)
+    if case .object(let v2)? = json["v2"] { flat = v2 }
+    guard let data = try? JSONEncoder().encode(JSONValue.object(flat)),
+      let pasted = DrawThingsJSON.decode(data)
+    else { return nil }
+    func text(_ key: String) -> String {
+      if case .string(let value)? = json[key] { return value }
+      return ""
+    }
+    return Settings(prompt: text("c"), negativePrompt: text("uc"), pasted: pasted)
+  }
+
+  /// The summary fields of an image without `v2`, under its configuration's names.
+  @MainActor private static func legacy(_ json: [String: JSONValue]) -> [String: JSONValue] {
+    var flat: [String: JSONValue] = [:]
+    for (key, name) in [
+      ("steps", "steps"), ("scale", "guidanceScale"), ("seed", "seed"), ("model", "model"),
+      ("strength", "strength"), ("shift", "shift"),
+    ] {
+      flat[name] = json[key]
+    }
+    if case .string(let size)? = json["size"] {
+      let sides = size.split(separator: "x").compactMap { Double($0) }
+      if sides.count == 2 {
+        flat["width"] = .number(sides[0])
+        flat["height"] = .number(sides[1])
+      }
+    }
+    if case .string(let title)? = json["sampler"],
+      let sampler = SettingsRegistry.samplerTitles.first(where: { $0.value == title })?.key
+    {
+      flat["sampler"] = .number(Double(sampler.rawValue))
+    }
+    if case .string(let title)? = json["seed_mode"],
+      let mode = seedModeTitles.first(where: { $0.value == title })?.key
+    {
+      flat["seedMode"] = .number(Double(mode.rawValue))
+    }
+    return flat
+  }
+
+  /// ImageIO properties that embed a history item's settings as Draw Things does.
+  @MainActor static func properties(for sidecar: HistoryStore.Sidecar) -> [CFString: Any] {
+    let dump = sidecar.configuration
+    var values: [String: JSONValue] = [:]
+    for descriptor in SettingsRegistry.all {
+      if let value = descriptor.read(dump) { values[descriptor.id] = value }
+    }
+    let prompt = sidecar.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    let negativePrompt = sidecar.negativePrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    let sampler =
+      SamplerType.allCases.first { String(describing: $0) == sidecar.sampler }
+      .flatMap { SettingsRegistry.samplerTitles[$0] } ?? sidecar.sampler
+    var seedMode = ""
+    if case .string(let name)? = dump["seedMode"],
+      let mode = SeedMode.allCases.first(where: { String(describing: $0) == name })
+    {
+      seedMode = seedModeTitles[mode] ?? name
+    }
+    let strength = dump["strength"]?.doubleValue ?? 1
+    let size = "\(sidecar.width)x\(sidecar.height)"
+
+    var json: [String: Any] = [
+      "c": prompt, "uc": negativePrompt, "steps": sidecar.steps, "sampler": sampler,
+      "scale": Double(sidecar.guidanceScale), "seed": sidecar.seed, "size": size,
+      "model": sidecar.model, "strength": strength, "seed_mode": seedMode,
+    ]
+    var description = prompt + "\n"
+    if !negativePrompt.isEmpty { description += "-\(negativePrompt)\n" }
+    description +=
+      "Steps: \(sidecar.steps), Sampler: \(sampler), Guidance Scale: \(sidecar.guidanceScale), Seed: \(sidecar.seed), Size: \(size), Model: \(sidecar.model), Strength: \(strength), Seed Mode: \(seedMode)"
+    if sidecar.shift != 1 {
+      json["shift"] = Double(sidecar.shift)
+      description += ", Shift: \(sidecar.shift)"
+    }
+    if let data = DrawThingsJSON.encode(values, model: sidecar.model, seed: sidecar.seed),
+      let v2 = try? JSONSerialization.jsonObject(with: data)
+    {
+      json["v2"] = v2
+    }
+    var properties: [CFString: Any] = [
+      kCGImagePropertyTIFFDictionary: [
+        kCGImagePropertyTIFFImageDescription: description, kCGImagePropertyTIFFSoftware: "Atelier",
+      ]
+    ]
+    if let data = try? JSONSerialization.data(withJSONObject: json, options: .sortedKeys) {
+      properties[kCGImagePropertyExifDictionary] = [
+        kCGImagePropertyExifUserComment: String(decoding: data, as: UTF8.self)
+      ]
+    }
+    return properties
+  }
+
+  /// Draw Things' names for the seed modes, as in its image descriptions.
+  private static let seedModeTitles: [SeedMode: String] = [
+    .legacy: "Legacy", .torchCpuCompatible: "Torch CPU Compatible", .scaleAlike: "Scale Alike",
+    .nvidiaGpuCompatible: "NVIDIA GPU Compatible",
+  ]
+
+  private static let sidecarDecoder: JSONDecoder = {
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    return decoder
+  }()
 }

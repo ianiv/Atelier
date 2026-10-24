@@ -67,6 +67,8 @@ final class CreateModel {
   }
   /// The canvas image came from outside the project (drop, paste, Open), not yet saved as a step.
   private var canvasIsImported = false
+  /// The generation settings an imported canvas image carries, with that image.
+  private var importedSettings: (image: CGImage, settings: ImageMetadata.Settings)?
   /// Where images picked in the Open panel go; set to show the panel.
   var imageImport: ImageImportTarget?
 
@@ -173,13 +175,17 @@ final class CreateModel {
   var effectiveCanvasMode: CanvasMode { canEdit ? canvasMode : .generate }
 
   /// Puts an image from outside the project on the canvas, fitted to the frame, and switches to
-  /// Edit so the next run starts from it.
-  func setCanvasImage(_ newImage: CGImage) {
+  /// Edit so the next run starts from it. Settings it carries (`metadata`) can then be loaded.
+  func setCanvasImage(_ newImage: CGImage, metadata: ImageMetadata.Embedded? = nil) {
     guard !isBusy else { return }
     imageStep = nil
     lastSavedTensorId = nil
     image = newImage
     canvasIsImported = true
+    importedSettings = metadata.flatMap(ImageMetadata.settings(from:)).map { (newImage, $0) }
+    if importedSettings != nil {
+      statusNote = "This image carries its generation settings: Load Settings from Image applies them."
+    }
     canvas.zoomToFit()
     canvasMode = .edit
   }
@@ -213,14 +219,35 @@ final class CreateModel {
     let pasteboard = NSPasteboard.general
     for type in [NSPasteboard.PasteboardType.png, .tiff] {
       if let data = pasteboard.data(forType: type), let image = ImageLoader.image(from: data) {
-        setCanvasImage(image)
+        setCanvasImage(image, metadata: ImageMetadata.embedded(in: data))
         return
       }
     }
     if let url = (pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL])?.first,
       let image = ImageLoader.image(at: url)
     {
-      setCanvasImage(image)
+      setCanvasImage(image, metadata: ImageMetadata.embedded(at: url))
+    }
+  }
+
+  /// The generation settings the canvas image carries, while it's the imported image they came
+  /// with.
+  var canvasImageSettings: ImageMetadata.Settings? {
+    guard let importedSettings, importedSettings.image === image else { return nil }
+    return importedSettings.settings
+  }
+
+  /// Loads the prompts, model, seed and settings the canvas image carries, like Paste Settings
+  /// plus the prompts. The Random checkbox stays as it is.
+  func loadCanvasImageSettings(undoManager: UndoManager?) {
+    guard let loaded = canvasImageSettings else { return }
+    prompt = loaded.prompt
+    negativePrompt = loaded.negativePrompt
+    errorMessage = nil
+    statusNote = nil
+    paste(loaded.pasted, undoManager: undoManager)
+    if let file = loaded.pasted.model, !models.contains(where: { $0.file == file }) {
+      statusNote = "\(file) isn't downloaded, so its settings apply to the current model."
     }
   }
 

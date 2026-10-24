@@ -785,8 +785,9 @@ enum ImageTensor {
     encode(image, type: .jpeg, properties: [kCGImageDestinationLossyCompressionQuality: quality])
   }
 
-  static func png(_ image: CGImage) -> Data? {
-    encode(image, type: .png, properties: [:]).map { Data($0) }
+  /// With `properties` (ImageIO's metadata dictionaries) written into the file.
+  static func png(_ image: CGImage, properties: [CFString: Any] = [:]) -> Data? {
+    encode(image, type: .png, properties: properties).map { Data($0) }
   }
 
   private static func encode(_ image: CGImage, type: UTType, properties: [CFString: Any])

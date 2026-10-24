@@ -92,6 +92,11 @@ struct AtelierApp: App {
         }
         .keyboardShortcut("v", modifiers: [.command, .shift])
         .disabled(create.isBusy)
+        Button("Load Settings from Image") {
+          navigation.section = .create
+          create.loadCanvasImageSettings(undoManager: NSApp.keyWindow?.undoManager)
+        }
+        .disabled(create.canvasImageSettings == nil)
         Button("Clear Canvas") { create.clearCanvas() }
           .disabled(create.isBusy || navigation.section != .create)
         Divider()
