@@ -23,7 +23,7 @@ Atelier uses Draw Things' engine and project format, so your models and projects
 - **Branches you can see.** History shows every branch as a graph, and the recent strip switches between everything by time and just the current lineage.
 - **Click to reuse.** Clicking a recent image brings back its prompt, size and settings. History supports selecting several images at once.
 - **Presets as files.** Presets are kept apart from layouts, remember their model, and export and import as JSON.
-- **A native Mac app.** Built in SwiftUI with Liquid Glass, with a Dock badge when an image finishes while you're in another app.
+- **A native Mac app.** Built in SwiftUI with Liquid Glass, it works the way you'd expect a Mac app to: menus and keyboard shortcuts, drag and drop, copy and paste, multiple selection and a Settings window (⌘,).
 
 ## Documentation
 
