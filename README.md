@@ -1,5 +1,7 @@
 # Atelier
 
+https://github.com/user-attachments/assets/d063933f-9fdb-4bfd-97ab-bfc6a12920b0
+
 Atelier is a native macOS app for generating images with local models. It runs the same engine as Draw Things ([draw-things-community](https://github.com/drawthingsai/draw-things-community)) inside the app, so there is no server to start: live previews, progress and Cancel all work in-process.
 
 What it does today:
