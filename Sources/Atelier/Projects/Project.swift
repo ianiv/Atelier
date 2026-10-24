@@ -106,12 +106,13 @@ final class Project: @unchecked Sendable {
     workspace.dictionary["image_seek_to_lineage", Int.self] = id.map { Int($0.lineage) }
   }
 
-  /// The image layer's tensor: from the canvas layers when stored, else the node's own field.
+  /// The image layer's tensor: from the canvas layers when stored (the top one with a tensor), else
+  /// the node's own field.
   private func imageTensorId(of node: TensorHistoryNode) -> Int64? {
     if node.dataStored > 0 {
       let layers = workspace.fetch(for: Layer.self).where(
         Layer.lineage == node.lineage && Layer.logicalTime == node.logicalTime,
-        orderBy: [Layer.index.ascending])
+        orderBy: [Layer.index.descending])
       return layers.first(where: { $0.tensorId > 0 })?.tensorId
     }
     return node.tensorId > 0 ? node.tensorId : nil
@@ -565,6 +566,10 @@ final class Project: @unchecked Sendable {
 /// A project's steps and how they connect. A step's parent is the step whose image it recorded
 /// as `parent_tensor_id`, when there is one; otherwise Draw Things' rule: the step one number
 /// earlier with the greatest lineage not above its own.
+///
+/// A step's image is its top canvas layer. Draw Things places a generation over part of a larger
+/// canvas as a new layer, so the layers below repeat the earlier image on every step that builds
+/// on it.
 struct ProjectTree: @unchecked Sendable {
   struct Step {
     var id: StepID
@@ -592,11 +597,13 @@ struct ProjectTree: @unchecked Sendable {
 
   /// `items` false leaves out History's items (their settings take longest to read).
   init(nodes: [TensorHistoryNode], layers: [ProjectFormat.TensorData], items withItems: Bool = true) {
-    // The image layer: the first layer with a tensor, else the node's own field.
+    // The image layer: the top layer with a tensor, else the node's own field.
     var layerTensors: [StepID: (index: Int64, tensorId: Int64)] = [:]
+    var allLayerTensors: [StepID: Set<Int64>] = [:]
     for layer in layers where layer.tensorId > 0 {
       let id = StepID(lineage: layer.lineage, logicalTime: layer.logicalTime)
-      if layerTensors[id].map({ layer.index < $0.index }) ?? true {
+      allLayerTensors[id, default: []].insert(layer.tensorId)
+      if layerTensors[id].map({ layer.index > $0.index }) ?? true {
         layerTensors[id] = (layer.index, layer.tensorId)
       }
     }
@@ -624,14 +631,23 @@ struct ProjectTree: @unchecked Sendable {
       }
     }
     for id in Array(steps.keys) {
+      let ruleParent = byTime[id.logicalTime - 1]?.filter { $0.lineage <= id.lineage }
+        .max { $0.lineage < $1.lineage }
       let parent: StepID?
-      if let recorded = profiles[id]?.parentTensorId,
-        recorded == 0 || byTensor[recorded]?.contains(where: { $0 != id }) == true
+      if let recorded = profiles[id]?.parentTensorId, recorded == 0 {
+        parent = nil
+      } else if let recorded = profiles[id]?.parentTensorId, let ruleParent,
+        allLayerTensors[ruleParent]?.contains(recorded) == true
       {
-        parent = recorded == 0 ? nil : candidate(for: recorded, child: id)
+        // Earlier builds recorded a canvas's bottom layer, which every step drawn over that
+        // canvas shares; Draw Things' rule picks the right one of them.
+        parent = ruleParent
+      } else if let recorded = profiles[id]?.parentTensorId,
+        byTensor[recorded]?.contains(where: { $0 != id }) == true
+      {
+        parent = candidate(for: recorded, child: id)
       } else {
-        parent = byTime[id.logicalTime - 1]?.filter { $0.lineage <= id.lineage }
-          .max { $0.lineage < $1.lineage }
+        parent = ruleParent
       }
       steps[id]?.parent = parent
       if let parent { children[parent, default: []].append(id) }
