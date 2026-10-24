@@ -177,10 +177,11 @@ final class ModelLibrary {
   }
 
   /// Whether `model` can be deleted now: downloaded (or imported, whose entry can go even when
-  /// its file is missing), and not the model Create is running.
+  /// its file is missing), and not a model a queued or running job uses.
   func canDelete(_ model: MediaGenerationResolvedModel) -> Bool {
     (model.isDownloaded || isCustom(model)) && downloads[model.file] == nil
-      && !(create.isBusy && create.selectedModel == model.file)
+      && !create.queue.uses(model.file)
+      && !(create.isLoadingModel && create.selectedModel == model.file)
   }
 
   /// Moves the model's own files to the Trash. Shared files (text encoders, VAEs) stay. An

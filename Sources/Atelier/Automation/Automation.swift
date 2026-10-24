@@ -18,14 +18,15 @@ import _MediaGenerationKit
 /// compares the new image's pixels with the original.
 ///
 /// `--project-check` exercises the project format on a scratch project, and `--edit-input-check`
-/// Use Settings on Edit steps (AutomationProject.swift).
+/// Use Settings on Edit steps (AutomationProject.swift). `--queue-check` runs the queue
+/// (AutomationQueue.swift).
 @MainActor
 enum Automation {
   /// Whether this launch is a scripted run (any of the flags `runIfRequested` acts on).
   nonisolated static var isRequested: Bool {
     let flags = [
       "--show", "--resize-bench", "--inspector-check", "--library-check", "--project-check",
-      "--reuse", "--generate", "--ux-check", "--edit-input-check",
+      "--reuse", "--generate", "--ux-check", "--edit-input-check", "--queue-check",
     ]
     return CommandLine.arguments.contains { flags.contains($0) }
   }
@@ -59,6 +60,10 @@ enum Automation {
     }
     if args.contains("--edit-input-check") {
       editInputCheck(model)
+      return
+    }
+    if args.contains("--queue-check") {
+      queueCheck(model)
       return
     }
     if args.contains("--project-check") {
@@ -171,8 +176,7 @@ enum Automation {
         switch model.phase {
         case .running(let message): status = message
         case .cancelling: status = "Cancelling…"
-        case .loadingModel: status = "Loading model…"
-        case .idle: status = "Idle"
+        case .idle: status = model.isLoadingModel ? "Loading model…" : "Idle"
         }
         if status != lastStatus {
           log(status + (model.image != nil ? " (preview)" : ""))
@@ -752,7 +756,7 @@ enum Automation {
         try? await Task.sleep(for: .milliseconds(100))
         waited += 1
         if waited % 50 == 0 {
-          log("waiting: models \(model.models.count) settings \(model.settings != nil) phase \(model.phase) history \(model.history.isLoaded) error \(model.errorMessage ?? "-")")
+          log("waiting: models \(model.models.count) settings \(model.settings != nil) phase \(model.phase) loading \(model.isLoadingModel) history \(model.history.isLoaded) error \(model.errorMessage ?? "-")")
         }
       }
       try? await Task.sleep(for: .seconds(2))

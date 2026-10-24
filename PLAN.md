@@ -97,9 +97,18 @@ Gaps to fill. These are small additions in MGK or the app, guided by `/Users/ian
 3. **Video output.** `Result` is a tensor per frame. Extract the CLI's AVFoundation `writeVideo` (`DrawThingsCLI.swift:2385`) into a small shared helper, or reimplement it in the app. Audio track: check what MGK exposes when we reach the video phase.
 4. **Metadata.** Neither MGK nor the CLI records settings. The app stores the full `Configuration` with every output (see History).
 
+**Phase 7 notes (queue, decisions Ianiv 2026-10-23):**
+- Generate always queues. Idle, the job runs at once; during a run it waits. Each job snapshots prompt, settings, seed, canvas render (Edit) and moodboard when queued. An Edit job queued during a run uses the canvas as it was before that run's previews covered it (`canvasBeforePreview`).
+- ×N under Generate (`CreateModel.count`, not saved): Random on rolls a seed per image; Random off counts up from the Seed field (`seed &+ i`). The Seed field and Random are untouched. No prompt variations (Ianiv).
+- Lineage: jobs queued while the current step is the one the queue left (`expectedCurrent`) share a line; each job takes the line's latest result as parent when it starts, so reordering and cancelling still give one line. Picking another step before queuing starts a new line. Edit jobs follow their input as before. Repeated Edit jobs from an imported/moved canvas reuse the input step the first one saved (`canvasKey`).
+- Stop cancels only the running job; the queue moves on. Pause (Queue toolbar only, Ianiv) holds the waiting jobs once the running one finishes or is stopped.
+- Agents' `generate` calls are queue jobs (shown with a network icon); cancelling the MCP call removes or stops the job.
+- Waiting and running jobs (not agents') are written at quit to `~/Library/Application Support/Atelier/Queue/` (index.json, PNGs) and restored paused; settings go back on the model's defaults (`savedRequests`). Not for scripted runs.
+- `CreateModel.isLoadingModel` is now separate from the run phase, so switching models while a job runs doesn't touch its progress. `isBusy` is still "running or loading" for Automation.
+
 ## App architecture (`~/Code/Atelier/Sources/Atelier/`, macOS 27)
 - **`GenerationEngine`** (actor). Owns a cached `MediaGenerationPipeline` per model and recreates it only when the model changes. Runs one job at a time and publishes progress and the preview `CGImage` to the UI on the main actor.
-- **`JobQueue`** (`@Observable`). An ordered list of `Job {prompt, negativePrompt, configuration, inputs, count}`. Supports pause, reorder, cancel and retry. "Variations" expands into N jobs (seed sweep, or a prompt list with one prompt per line).
+- **`JobQueue`** (`@Observable`, `Sources/Atelier/Queue/`). Waiting jobs, the running one and recent ones; each job is a `GenerationEngine.Request` snapshot. Supports pause, reorder, cancel and retry. See Phase 7 notes.
 - **`HistoryStore`**. Since Phase 5, history lives in **projects** in Draw Things' file format (one `.sqlite3` per project under `~/Pictures/Atelier/Projects/`), see Phase 5 notes. Before that it was one folder per day under `~/Pictures/Atelier/` with a PNG plus `.json` sidecar per output; those are imported once into the "Atelier" project and left in place.
 - **`ModelLibrary`**. Wraps the `MediaGenerationEnvironment` catalog and LoRAZoo. Shows downloaded vs available, download progress and disk usage, and filters LoRAs by the selected model's version.
 
@@ -136,7 +145,7 @@ Gaps to fill. These are small additions in MGK or the app, guided by `/Users/ian
 4. Model and LoRA library: download, import, delete, filtered LoRA picker. Moved ahead of the queue (Ianiv, 2026-10-21).
 5. Projects in Draw Things' file format, replacing the PNG history (Ianiv, 2026-10-22). Atelier creates and keeps its own projects; they aren't shared with Draw Things.
 6. Image-to-image and reference inputs (moved ahead of the queue, Ianiv 2026-10-22). See Phase 6 design.
-7. Queue, batch and variations.
+7. Queue and batch count (prompt variations dropped, Ianiv 2026-10-23). See Phase 7 notes.
 8. Video: frames, output writing and an inline player.
 
 ## Verification
@@ -146,7 +155,7 @@ Gaps to fill. These are small additions in MGK or the app, guided by `/Users/ian
 - Settings inspector: the prompt is under the canvas; hiding a setting and then changing it from search puts it in the Changed group; a custom layout survives relaunch and round-trips through export/import; a preset applied to a different model keeps that model's defaults for settings the preset doesn't set; "Use settings" restores every registry field.
 - Import a `.safetensors` LoRA from ~/Downloads. It should show up only for matching models, and a generation with it should run.
 - Projects: `Atelier --project-check --quit` passes; a generated image lands in the current project, shows in History, survives relaunch, and "Use settings" on it reproduces the image; DTDB Browser opens the project file; the old PNG history appears in the "Atelier" project after the first launch.
-- Queue 5 variations, then pause, reorder and cancel one.
+- Queue: `Atelier --queue-check --project NAME --model M --steps 2 --quit` (count, pause, reorder, cancel, lineage, Stop, save/restore).
 - Run an LTX video at a small frame count and check that it writes and plays back.
 - A clean clone builds from scratch (no local path dependency): `rm -rf build && Scripts/build.sh`.
 

@@ -31,9 +31,9 @@ struct InspectorView: View {
       Divider()
       if model.settings == nil {
         ContentUnavailableView {
-          if model.phase == .loadingModel { ProgressView() } else { Text("No model") }
+          if model.isLoadingModel { ProgressView() } else { Text("No model") }
         } description: {
-          Text(model.phase == .loadingModel ? "Loading model defaults…" : "Choose a model.")
+          Text(model.isLoadingModel ? "Loading model defaults…" : "Choose a model.")
         }
         .frame(maxHeight: .infinity)
       } else {

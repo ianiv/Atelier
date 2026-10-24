@@ -26,6 +26,9 @@ actor GenerationEngine {
     var parentTensorId: Int64?
     /// The canvas image came from outside the project (saved as an Imported step).
     var canvasIsImported = false
+    /// Identifies the canvas `canvas` was rendered from (image, placement and size), so queued
+    /// runs from the same canvas save it as a step only once.
+    var canvasKey: String?
     /// Moodboard images sent as references (weight above zero only).
     var moodboard: [Reference] = []
   }

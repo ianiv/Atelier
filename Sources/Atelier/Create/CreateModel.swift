@@ -9,9 +9,9 @@ import _MediaGenerationKit
 @MainActor
 @Observable
 final class CreateModel {
+  /// The running job's progress.
   enum Phase: Equatable {
     case idle
-    case loadingModel
     case running(String)
     case cancelling
   }
@@ -23,6 +23,10 @@ final class CreateModel {
 
   let engine = GenerationEngine()
   let history: HistoryStore
+  /// Generate adds to it; jobs run one at a time, in order.
+  let queue = JobQueue()
+  /// How many images each Generate makes (the ×N beside Generate).
+  var count = 1
 
   var models: [MediaGenerationResolvedModel] = []
   var selectedModel: String? {
@@ -75,6 +79,8 @@ final class CreateModel {
   var confirmClearRecentPrompts = false
 
   private(set) var phase: Phase = .idle
+  /// The selected model's defaults are loading (a job may be running meanwhile).
+  private(set) var isLoadingModel = false
   private(set) var step = 0
   private(set) var totalSteps = 0
   private(set) var image: CGImage?
@@ -101,6 +107,13 @@ final class CreateModel {
   var statusNote: String?
 
   private var generationTask: Task<Void, Never>?
+  /// An agent's progress and result callbacks, by its job.
+  private var agentCallbacks:
+    [UUID: (progress: (GenerationEngine.Progress) -> Void, completion: (Result<HistoryItem, Error>) -> Void)] = [:]
+  /// What the canvas held when the running job's first preview covered it, with its placement:
+  /// Edit jobs queued meanwhile start from it, not from a preview.
+  private var canvasBeforePreview: CanvasSnapshot?
+  private var previewCoversCanvas = false
   private var loadTask: Task<Void, Never>?
   /// A history item's configuration dump to apply once the model's defaults finish loading.
   private var pendingSettings: [String: JSONValue]?
@@ -119,13 +132,14 @@ final class CreateModel {
     return history.item(tensorId: imageStep.tensorId)
   }
 
-  var isBusy: Bool {
-    if case .idle = phase { return false }
-    return true
-  }
+  /// A job is running or the model's defaults are loading.
+  var isBusy: Bool { isRunning || isLoadingModel }
 
+  var isRunning: Bool { phase != .idle }
+
+  /// Generate works while a job runs: it queues the next one.
   var canGenerate: Bool {
-    !isBusy && selectedModel != nil && settings != nil
+    !isLoadingModel && selectedModel != nil && settings != nil
       && !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
 
@@ -257,7 +271,45 @@ final class CreateModel {
         [weak self] _ in MainActor.assumeIsolated { self?.saveSession() }
       }
     }
-    Task { await reloadModels() }
+    NotificationCenter.default.addObserver(
+      forName: NSApplication.willTerminateNotification, object: nil, queue: .main
+    ) { [weak self] _ in MainActor.assumeIsolated { self?.saveQueue() } }
+    Task {
+      await reloadModels()
+      await restoreQueue()
+    }
+  }
+
+  /// Keeps the running and waiting jobs for the next launch (not for scripted runs).
+  private func saveQueue() {
+    guard SessionState.isEnabled else { return }
+    SavedQueue.save((queue.running.map { [$0] } ?? []) + queue.waiting, project: history.project.name)
+  }
+
+  /// Brings back the jobs kept at the last quit, paused. Jobs for models no longer downloaded
+  /// are dropped.
+  private func restoreQueue() async {
+    guard SessionState.isEnabled else { return }
+    while !history.isLoaded { try? await Task.sleep(for: .milliseconds(100)) }
+    let requests = await savedRequests(SavedQueue.load(project: history.project.name))
+    guard !requests.isEmpty else { return }
+    queue.isPaused = true
+    queue.append(requests, currentTensorId: history.currentTensorId)
+  }
+
+  /// Saved jobs' requests, their settings put back on their models' defaults.
+  func savedRequests(_ saved: [SavedQueue.Job]) async -> [GenerationEngine.Request] {
+    var defaults: [String: PipelineConfiguration] = [:]
+    var requests: [GenerationEngine.Request] = []
+    for job in saved where models.contains(where: { $0.file == job.model }) {
+      if defaults[job.model] == nil, let configuration = try? await engine.loadPipeline(for: job.model) {
+        defaults[job.model] = ModelDefaults.recommended(for: job.model, configuration: configuration)
+      }
+      guard var configuration = defaults[job.model] else { continue }
+      SettingsRegistry.apply(dump: job.settings, to: &configuration)
+      requests.append(job.request(configuration: configuration))
+    }
+    return requests
   }
 
   /// Remembers the model, prompts, seed, inspector values and canvas image for the next launch.
@@ -329,7 +381,7 @@ final class CreateModel {
       let references = await history.moodboard(at: item.id, in: projectName)
       moodboard.replace(with: references)
     }
-    if selectedModel == sidecar.model, phase != .loadingModel, var settings = recommended {
+    if selectedModel == sidecar.model, !isLoadingModel, var settings = recommended {
       SettingsRegistry.apply(dump: sidecar.configuration, to: &settings)
       self.settings = settings
       if newSeed {
@@ -544,62 +596,93 @@ final class CreateModel {
     seed = UInt32.random(in: 0...UInt32.max)
   }
 
+  /// Queues `count` images of the prompt; runs right away when nothing else is.
   func generate() {
     guard canGenerate, let model = selectedModel, let settings else { return }
-    if !seedLocked { rollSeed() }
-    errorMessage = nil
     statusNote = nil
-    // The request snapshots the settings, canvas and moodboard, so edits during the run apply to
-    // the next one.
-    var request = GenerationEngine.Request(
+    // Each job snapshots the settings, canvas and moodboard, so edits made after queuing it apply
+    // to the next one.
+    var base = GenerationEngine.Request(
       model: model, prompt: prompt, negativePrompt: negativePrompt, seed: seed,
       configuration: settings)
-    if effectiveCanvasMode == .edit, let image {
-      request.canvas = canvas.render(image, size: CGSize(width: settings.width, height: settings.height))
-      request.canvasIsImported = canvasIsImported
+    if effectiveCanvasMode == .edit, let source = canvasSource {
+      let size = CGSize(width: settings.width, height: settings.height)
+      let placement = CanvasState()
+      placement.scale = source.scale
+      placement.offset = source.offset
+      base.canvas = placement.render(source.image, size: size)
+      base.canvasIsImported = source.isImported
+      base.canvasKey =
+        "\(ObjectIdentifier(source.image)) \(source.scale ?? 0) \(source.offset) \(settings.width)x\(settings.height)"
       // The canvas is exactly its step's image when that's fitted at the output size.
-      if !canvasIsImported, !imageIsPreview, let imageStep, imageStep.project == history.project.name,
-        image.width == settings.width, image.height == settings.height,
-        canvas.scale == nil || canvas.scale == 1, canvas.offset == .zero
+      if !source.isImported, !source.isPreview, let step = source.step, step.project == history.project.name,
+        source.image.width == settings.width, source.image.height == settings.height,
+        source.scale == nil || source.scale == 1, source.offset == .zero
       {
-        request.canvasTensorId = imageStep.tensorId
+        base.canvasTensorId = step.tensorId
       }
     }
-    if usesReferences { request.moodboard = moodboard.references }
+    if usesReferences { base.moodboard = moodboard.references }
     remember(prompt: prompt)
-    start(request)
+    // Always random rolls a seed per image; a set seed counts up from itself, as in Draw Things.
+    let firstSeed = seed
+    let requests = (0..<max(count, 1)).map { index in
+      if !seedLocked { rollSeed() }
+      var request = base
+      request.seed = seedLocked ? firstSeed &+ UInt32(index) : seed
+      return request
+    }
+    queue.append(requests, currentTensorId: history.currentTensorId)
+    runNext()
   }
 
-  /// Runs an agent's request (AgentTools) like Generate: progress, previews and the result show
-  /// on the canvas and in the status bar, and Cancel stops it. The prompt, inspector and moodboard
-  /// are left alone. Waits for a run already in progress; cancelling the caller cancels the run.
+  /// The canvas as a run would take it.
+  private struct CanvasSnapshot {
+    var image: CGImage
+    var step: (project: String, tensorId: Int64)?
+    var isImported: Bool
+    var isPreview: Bool
+    var scale: Double?
+    var offset: CGSize
+  }
+
+  /// The canvas Edit runs start from: while a preview covers it, what it held before.
+  private var canvasSource: CanvasSnapshot? {
+    if previewCoversCanvas { return canvasBeforePreview }
+    return image.map {
+      CanvasSnapshot(
+        image: $0, step: imageStep, isImported: canvasIsImported, isPreview: imageIsPreview,
+        scale: canvas.scale, offset: canvas.offset)
+    }
+  }
+
+  /// Queues an agent's request (AgentTools) like Generate: progress, previews and the result show
+  /// on the canvas and in the status bar, and Stop or the Queue cancel it. The prompt, inspector
+  /// and moodboard are left alone. Cancelling the caller cancels the job.
   func generate(
     forAgent request: GenerationEngine.Request,
     progress: @escaping (GenerationEngine.Progress) -> Void
   ) async throws -> HistoryItem {
-    while isBusy {
-      try await Task.sleep(for: .milliseconds(200))
-    }
-    errorMessage = nil
-    statusNote = nil
+    let id = queue.append([request], currentTensorId: history.currentTensorId, fromAgent: true)[0]
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
-        start(request, progress: progress) { continuation.resume(with: $0) }
+        agentCallbacks[id] = (progress, { continuation.resume(with: $0) })
+        runNext()
       }
     } onCancel: {
-      Task { @MainActor in self.cancel() }
+      Task { @MainActor in self.cancel(id) }
     }
   }
 
-  private func start(
-    _ request: GenerationEngine.Request,
-    progress forward: ((GenerationEngine.Progress) -> Void)? = nil,
-    completion: ((Result<HistoryItem, Error>) -> Void)? = nil
-  ) {
-    // The result follows the step current now, whatever is clicked while it runs.
-    var following = request
-    if following.parentTensorId == nil { following.parentTensorId = history.currentTensorId }
-    let request = following
+  /// Starts the next waiting job when none is running.
+  private func runNext() {
+    guard generationTask == nil, let job = queue.startNext() else { return }
+    run(job)
+  }
+
+  private func run(_ job: JobQueue.Job) {
+    let request = job.request
+    errorMessage = nil
     phase = .running("Preparing…")
     step = 0
     totalSteps = request.configuration.steps
@@ -608,11 +691,13 @@ final class CreateModel {
     samplingStart = nil
     lastStepAt = nil
     generationTask = Task { [engine] in
+      var status = JobQueue.Job.Status.cancelled
+      var inputTensorId: Int64?
       do {
         let result = try await engine.generate(request) { progress in
           Task { @MainActor in
             self.handle(progress)
-            forward?(progress)
+            self.agentCallbacks[job.id]?.progress(progress)
           }
         }
         let item = try await history.save(
@@ -623,17 +708,24 @@ final class CreateModel {
         image = ImageTensor.cgImage(from: result.tensor) ?? image
         saveSession()
         FinishedNotice.post(prompt: request.prompt, seconds: item.sidecar.durationSeconds)
-        completion?(.success(item))
+        status = .finished(tensorId: item.tensorId)
+        inputTensorId = item.inputTensorId
+        agentCallbacks.removeValue(forKey: job.id)?.completion(.success(item))
       } catch is CancellationError {
-        // Cancelled by the user; keep the last preview on the canvas.
-        completion?(.failure(CancellationError()))
+        // Stopped; keep the last preview on the canvas.
+        agentCallbacks.removeValue(forKey: job.id)?.completion(.failure(CancellationError()))
       } catch {
         errorMessage = error.localizedDescription
-        completion?(.failure(error))
+        status = .failed(error.localizedDescription)
+        agentCallbacks.removeValue(forKey: job.id)?.completion(.failure(error))
       }
+      queue.finishRunning(status, inputTensorId: inputTensorId)
       phase = .idle
       generationTask = nil
       runStartedAt = nil
+      canvasBeforePreview = nil
+      previewCoversCanvas = false
+      runNext()
     }
   }
 
@@ -724,18 +816,52 @@ final class CreateModel {
     }
   }
 
+  /// Stops the running job; the queue goes on with the next.
   func cancel() {
     guard let generationTask else { return }
     phase = .cancelling
     generationTask.cancel()
   }
 
+  /// Stops a job if it's running, or takes it out of the queue.
+  func cancel(_ id: UUID) {
+    if queue.running?.id == id {
+      cancel()
+    } else if queue.removeWaiting(id) != nil {
+      agentCallbacks.removeValue(forKey: id)?.completion(.failure(CancellationError()))
+    }
+  }
+
+  /// Empties the queue and stops the running job.
+  func cancelAll() {
+    for id in queue.removeAllWaiting() {
+      agentCallbacks.removeValue(forKey: id)?.completion(.failure(CancellationError()))
+    }
+    cancel()
+  }
+
+  /// Pausing holds the waiting jobs; the running one finishes.
+  func setQueuePaused(_ paused: Bool) {
+    queue.isPaused = paused
+    runNext()
+  }
+
+  /// Queues a finished, failed or cancelled job again, same settings and seed.
+  func retry(_ id: UUID) {
+    queue.retry(id)
+    runNext()
+  }
+
   private func handle(_ progress: GenerationEngine.Progress) {
     guard generationTask != nil, phase != .cancelling else { return }
     switch progress {
     case .preview(let preview, let step, let total):
-      // Previews fill the frame; the input's placement no longer applies.
-      if !imageIsPreview { canvas.zoomToFit() }
+      if !previewCoversCanvas {
+        canvasBeforePreview = canvasSource
+        previewCoversCanvas = true
+        // Previews fill the frame; the input's placement no longer applies.
+        if !imageIsPreview { canvas.zoomToFit() }
+      }
       image = preview
       imageIsPreview = true
       noteStep(step, of: total)
@@ -759,7 +885,7 @@ final class CreateModel {
 
   private func loadDefaults(for model: String) {
     loadTask?.cancel()
-    phase = .loadingModel
+    isLoadingModel = true
     loadTask = Task { [engine] in
       do {
         let configuration = try await engine.loadPipeline(for: model)
@@ -783,7 +909,7 @@ final class CreateModel {
       let shouldGenerate = generateWhenLoaded && pendingSettings != nil && errorMessage == nil
       pendingSettings = nil
       generateWhenLoaded = false
-      phase = .idle
+      isLoadingModel = false
       if shouldGenerate { generate() }
     }
   }

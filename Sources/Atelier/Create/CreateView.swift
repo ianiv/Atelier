@@ -367,6 +367,9 @@ struct StatusBar: View {
   var body: some View {
     HStack(spacing: 12) {
       switch model.phase {
+      case .idle where model.isLoadingModel:
+        ProgressView().controlSize(.small)
+        Text("Loading model…").foregroundStyle(.secondary)
       case .idle:
         if let error = model.errorMessage {
           Label(error, systemImage: "exclamationmark.triangle")
@@ -387,9 +390,6 @@ struct StatusBar: View {
         } else {
           Text("Ready").foregroundStyle(.secondary)
         }
-      case .loadingModel:
-        ProgressView().controlSize(.small)
-        Text("Loading model…").foregroundStyle(.secondary)
       case .running(let message):
         Text(message).monospacedDigit()
         if model.totalSteps > 0 {
@@ -410,6 +410,7 @@ struct StatusBar: View {
         Text("Cancelling…")
       }
       Spacer()
+      QueueStatus()
       ZoomControls(canvas: model.canvas)
     }
     .font(.callout)
@@ -589,7 +590,7 @@ struct PromptComposer: View {
               .stroke(promptFocused ? Color.accentColor : Color(nsColor: .separatorColor))
           )
           .help("Prompt. Return generates; ⌥↩ adds a line. ⌘L focuses this field.")
-        if model.isBusy, model.phase != .loadingModel {
+        if model.isRunning {
           Button {
             model.cancel()
           } label: {
@@ -597,21 +598,23 @@ struct PromptComposer: View {
           }
           .labelStyle(.iconOnly)
           .controlSize(.large)
-          .help("Stop (Esc)")
+          .help("Stop this image; the queue goes on (Esc)")
           .keyboardShortcut(.escape, modifiers: [])
           .disabled(model.phase == .cancelling)
-        } else {
+        }
+        VStack(spacing: 4) {
           Button {
             model.generate()
           } label: {
-            Label("Generate", systemImage: "sparkles")
+            Label("Generate", systemImage: model.isRunning ? "text.badge.plus" : "sparkles")
           }
           .labelStyle(.iconOnly)
           .controlSize(.large)
-          .help("Generate (⌘↩)")
+          .help(model.isRunning ? "Add to Queue (⌘↩)" : "Generate (⌘↩)")
           .buttonStyle(.glassProminent)
           .keyboardShortcut(.return, modifiers: .command)
           .disabled(!model.canGenerate)
+          CountControl()
         }
       }
       HStack(alignment: .top, spacing: 12) {
@@ -646,6 +649,49 @@ struct PromptComposer: View {
 
   /// Follows the window's corners, never tighter than a text field's.
   private static let fieldShape = ConcentricRectangle(corners: .concentric(minimum: .fixed(8)), isUniform: true)
+}
+
+/// How many images Generate makes, under the Generate button.
+struct CountControl: View {
+  @Environment(CreateModel.self) private var model
+
+  var body: some View {
+    @Bindable var model = model
+    Menu("×\(model.count)") {
+      Picker("Images", selection: $model.count) {
+        ForEach([1, 2, 3, 4, 6, 8, 12, 16], id: \.self) { Text("\($0)").tag($0) }
+      }
+      .pickerStyle(.inline)
+    }
+    .menuIndicator(.hidden)
+    .menuStyle(.button)
+    .buttonStyle(.borderless)
+    .font(.callout.monospacedDigit())
+    .fixedSize()
+    .help(
+      model.seedLocked
+        ? "Images per Generate. With a set seed they count up from it."
+        : "Images per Generate, each with its own random seed.")
+  }
+}
+
+/// Waiting jobs, beside the zoom controls: a link to the Queue.
+struct QueueStatus: View {
+  @Environment(CreateModel.self) private var model
+  @Environment(Navigation.self) private var navigation
+
+  var body: some View {
+    let queue = model.queue
+    let waiting = queue.waiting.count
+    if waiting > 0 || queue.isPaused {
+      Button(queue.isPaused ? "Paused · \(waiting) waiting" : "\(waiting) waiting") {
+        navigation.section = .queue
+      }
+      .buttonStyle(.link)
+      .monospacedDigit()
+      .help("Show the Queue")
+    }
+  }
 }
 
 struct SeedControls: View {

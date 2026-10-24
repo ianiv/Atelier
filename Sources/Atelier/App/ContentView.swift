@@ -44,28 +44,47 @@ struct ContentView: View {
   @Environment(Navigation.self) private var navigation
   @Environment(CreateModel.self) private var create
 
+  /// Images running or waiting in the queue.
+  private var queueCount: Int {
+    create.queue.waiting.count + (create.queue.running == nil ? 0 : 1)
+  }
+
   var body: some View {
     @Bindable var navigation = navigation
     @Bindable var create = create
     NavigationSplitView {
       List(Section.allCases, selection: $navigation.section) { section in
-        Label(section.rawValue, systemImage: section.symbol).tag(section)
+        HStack {
+          Label(section.rawValue, systemImage: section.symbol)
+          Spacer()
+          if section == .queue, queueCount > 0 {
+            // A pill rather than `.badge`, which the sidebar draws small and faint. Inverted on
+            // the selected row, whose highlight is the accent colour.
+            let selected = navigation.section == .queue
+            Text("\(queueCount)")
+              .font(.callout.bold().monospacedDigit())
+              .foregroundStyle(selected ? AnyShapeStyle(.tint) : AnyShapeStyle(.white))
+              .padding(.horizontal, 7)
+              .padding(.vertical, 1)
+              .background(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.tint), in: .capsule)
+              .help("\(queueCount) running or waiting")
+          }
+        }
+        .tag(section)
       }
       .navigationSplitViewColumnWidth(min: 160, ideal: 180)
     } detail: {
       switch navigation.section {
       case .create, nil:
         CreateView()
+      case .queue:
+        QueueView()
       case .history:
         HistoryView()
       case .models:
         ModelsView()
       case .loras:
         LoRAsView()
-      case .some(let section):
-        ContentUnavailableView(
-          section.rawValue, systemImage: section.symbol,
-          description: Text("Coming in a later phase."))
       }
     }
     .background(WindowFrameAutosave(name: "Main"))
