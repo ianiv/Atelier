@@ -11,6 +11,18 @@ What it does today:
 - A model and LoRA library: download from the community catalog, import `.safetensors` checkpoints and LoRAs, and make 8-bit copies of MOSS models.
 - An MCP server so agents such as Claude Code can generate images with your models.
 
+## How it differs from Draw Things
+
+Atelier uses Draw Things' engine and project format, so your models and projects work in both. What it adds:
+
+- **An inspector you shape yourself.** Search every setting, see what you've changed from the model's defaults in the Changed group, hide or show any setting, and keep named layouts you can export and share.
+- **A queue.** Press Generate while an image is running to queue the next one, make ×N at once, reorder, pause and retry. Waiting images are kept when you quit.
+- **Agents can make images.** A built-in MCP server lets agents such as Claude Code generate with your models, and their requests join the same queue.
+- **Branches you can see.** History shows every branch as a graph, and the recent strip switches between everything by time and just the current lineage.
+- **Click to reuse.** Clicking a recent image brings back its prompt, size and settings. History supports selecting several images at once.
+- **Presets as files.** Presets are kept apart from layouts, remember their model, and export and import as JSON.
+- **A native Mac app.** Built in SwiftUI with Liquid Glass, with a Dock badge when an image finishes while you're in another app.
+
 ## Documentation
 
 Start with the [user guide](docs/README.md).
