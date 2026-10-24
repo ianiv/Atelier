@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 /// What the Create screen was showing at quit, so a relaunch comes back the same.
@@ -27,33 +26,5 @@ struct SessionState: Codable {
   func save() {
     guard Self.isEnabled, let data = try? JSONEncoder().encode(self) else { return }
     UserDefaults.standard.set(data, forKey: Self.key)
-  }
-}
-
-/// Gives the hosting window a stable frame autosave name. SwiftUI's own name is built from the
-/// view's modifier types, so it changes whenever a modifier is added and the frame is forgotten.
-struct WindowFrameAutosave: NSViewRepresentable {
-  let name: String
-
-  func makeNSView(context: Context) -> NSView { AutosaveView(name: name) }
-  func updateNSView(_ nsView: NSView, context: Context) {}
-
-  private final class AutosaveView: NSView {
-    let name: String
-    init(name: String) {
-      self.name = name
-      super.init(frame: .zero)
-    }
-    required init?(coder: NSCoder) { fatalError() }
-
-    override func viewDidMoveToWindow() {
-      super.viewDidMoveToWindow()
-      guard let window, window.frameAutosaveName != name, SessionState.isEnabled else { return }
-      // Set after SwiftUI sizes the window, or its default size wins over the saved frame.
-      DispatchQueue.main.async { [name] in
-        window.setFrameUsingName(name)
-        window.setFrameAutosaveName(name)
-      }
-    }
   }
 }

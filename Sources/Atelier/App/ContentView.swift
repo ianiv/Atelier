@@ -87,7 +87,6 @@ struct ContentView: View {
         LoRAsView()
       }
     }
-    .background(WindowFrameAutosave(name: "Main"))
     .confirmationDialog(
       "Clear prompt history?", isPresented: $create.confirmClearRecentPrompts
     ) {

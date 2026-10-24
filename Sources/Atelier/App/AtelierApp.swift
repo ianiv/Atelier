@@ -37,7 +37,9 @@ struct AtelierApp: App {
   }
 
   var body: some Scene {
-    WindowGroup("Atelier") {
+    // A fixed id keeps the window's saved frame under a stable name; without one SwiftUI names it
+    // after the view's modifier types, so the frame is forgotten whenever a modifier changes.
+    WindowGroup("Atelier", id: "main") {
       ContentView()
         .environment(create)
         .environment(history)
