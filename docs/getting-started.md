@@ -3,9 +3,16 @@
 ## What you need
 
 - A Mac with Apple silicon running macOS 27 or later. Image models are large, so more memory lets you run bigger models and keep them loaded between runs.
-- Xcode, to build the app. There is no prebuilt download yet.
+- Xcode, only if you build the app yourself.
 - Disk space for models. A single model is typically 5 to 20 GB, so many people keep them on an external drive.
 - Optional: Draw Things installed in `/Applications`. The build copies its small preview decoders from it to show sharp step-by-step previews. Without it Atelier still works and shows lower-resolution previews.
+
+## Download and install
+
+1. Download the latest `Atelier-<version>.zip` from [Releases](https://github.com/ianiv/Atelier/releases/latest).
+2. Open the zip and drag Atelier to your Applications folder. If an older Atelier is there, replace it.
+
+Release builds don't include Draw Things' preview decoders, so step-by-step previews are lower resolution than in a build made on a Mac with Draw Things installed.
 
 ## Build and install
 

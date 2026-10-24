@@ -13,6 +13,10 @@ What it does today:
 - A model and LoRA library: download from the community catalog, import `.safetensors` checkpoints and LoRAs, and make 8-bit copies of MOSS models.
 - An MCP server so agents such as Claude Code can generate images with your models.
 
+## Download
+
+Get the latest signed and notarized Atelier from [Releases](https://github.com/ianiv/Atelier/releases/latest): download the zip, open it and drag Atelier to Applications. It needs a Mac with Apple silicon running macOS 27 or later. To build it yourself instead, see [Getting started](docs/getting-started.md).
+
 ## How it differs from Draw Things
 
 Atelier uses Draw Things' engine and project format, so your models and projects work in both. What it adds:
