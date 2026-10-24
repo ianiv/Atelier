@@ -68,19 +68,20 @@ actor GenerationEngine {
     }
   }
 
-  /// Points MGK's default environment at `directory` and drops any cached pipeline.
-  func setModelsDirectory(_ directory: String) {
-    MediaGenerationEnvironment.default.externalUrls = [
-      URL(fileURLWithPath: directory, isDirectory: true)
-    ]
+  /// Points MGK's default environment at `directory`, loads its custom.json, and drops any
+  /// cached pipeline.
+  func setModelsDirectory(_ directory: String) async {
+    let url = URL(fileURLWithPath: directory, isDirectory: true)
+    MediaGenerationEnvironment.default.externalUrls = [url]
     pipeline = nil
+    await ModelLibrary.loadCustomModels(in: url)
   }
 
   /// Points MGK at `directory` unless it already is, keeping the cached pipeline.
-  func useModelsDirectory(_ directory: String) {
+  func useModelsDirectory(_ directory: String) async {
     let url = URL(fileURLWithPath: directory, isDirectory: true)
     if MediaGenerationEnvironment.default.externalUrls != [url] {
-      setModelsDirectory(directory)
+      await setModelsDirectory(directory)
     }
   }
 

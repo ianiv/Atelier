@@ -746,6 +746,21 @@ final class ModelLibrary {
     return entries.compactMap(\.value?.file)
   }
 
+  /// Rebuilds the engine's model list from the built-in models and `directory`'s custom.json, as
+  /// ModelZoo does at first use. ModelZoo reads custom.json only once, from wherever it pointed
+  /// then, so models imported in Draw Things stayed missing after the models folder changed.
+  static func loadCustomModels(in directory: URL) {
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    let custom =
+      (try? Data(contentsOf: directory.appendingPathComponent("custom.json")))
+      .flatMap { try? decoder.decode([Lenient<ModelZoo.Specification>].self, from: $0) }?
+      .compactMap(\.value) ?? []
+    let files = Set(custom.map(\.file))
+    ModelZoo.availableSpecifications =
+      ModelZoo.builtinSpecifications.filter { !files.contains($0.file) } + custom
+  }
+
   private static func readLoRASpecifications(in directory: URL) -> [LoRAZoo.Specification] {
     let decoder = JSONDecoder()
     decoder.keyDecodingStrategy = .convertFromSnakeCase
