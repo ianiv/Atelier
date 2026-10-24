@@ -596,31 +596,32 @@ struct PromptComposer: View {
               .stroke(promptFocused ? Color.accentColor : Color(nsColor: .separatorColor))
           )
           .help("Prompt. Return generates; ⌥↩ adds a line. ⌘L focuses this field.")
-        if model.isRunning {
-          Button {
-            model.cancel()
-          } label: {
-            Label("Stop", systemImage: "stop.fill")
+        GlassEffectContainer(spacing: 8) {
+          HStack(spacing: 8) {
+            // Always shown so the row never shifts; disabled while idle.
+            Button {
+              model.cancel()
+            } label: {
+              Label("Stop", systemImage: "stop.fill")
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.glass)
+            .help("Stop this image; the queue goes on (Esc)")
+            .keyboardShortcut(.escape, modifiers: [])
+            .disabled(!model.isRunning || model.phase == .cancelling)
+            CountControl()
+            Button {
+              model.generate()
+            } label: {
+              Label("Generate", systemImage: model.isRunning ? "text.badge.plus" : "sparkles")
+            }
+            .labelStyle(.iconOnly)
+            .help(model.isRunning ? "Add to Queue (⌘↩)" : "Generate (⌘↩)")
+            .buttonStyle(.glassProminent)
+            .keyboardShortcut(.return, modifiers: .command)
+            .disabled(!model.canGenerate)
           }
-          .labelStyle(.iconOnly)
           .controlSize(.large)
-          .help("Stop this image; the queue goes on (Esc)")
-          .keyboardShortcut(.escape, modifiers: [])
-          .disabled(model.phase == .cancelling)
-        }
-        VStack(spacing: 4) {
-          Button {
-            model.generate()
-          } label: {
-            Label("Generate", systemImage: model.isRunning ? "text.badge.plus" : "sparkles")
-          }
-          .labelStyle(.iconOnly)
-          .controlSize(.large)
-          .help(model.isRunning ? "Add to Queue (⌘↩)" : "Generate (⌘↩)")
-          .buttonStyle(.glassProminent)
-          .keyboardShortcut(.return, modifiers: .command)
-          .disabled(!model.canGenerate)
-          CountControl()
         }
       }
       HStack(alignment: .top, spacing: 12) {
@@ -657,7 +658,7 @@ struct PromptComposer: View {
   private static let fieldShape = ConcentricRectangle(corners: .concentric(minimum: .fixed(8)), isUniform: true)
 }
 
-/// How many images Generate makes, under the Generate button.
+/// How many images Generate makes, beside the Generate button.
 struct CountControl: View {
   @Environment(CreateModel.self) private var model
 
@@ -671,8 +672,8 @@ struct CountControl: View {
     }
     .menuIndicator(.hidden)
     .menuStyle(.button)
-    .buttonStyle(.borderless)
-    .font(.callout.monospacedDigit())
+    .buttonStyle(.glass)
+    .monospacedDigit()
     .fixedSize()
     .help(
       model.seedLocked
