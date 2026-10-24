@@ -1,0 +1,12 @@
+// Signing for the Atelier app target.
+//
+// By default the app is signed to run locally, so it builds without an Apple developer account.
+// To sign with your own team, create Config/Local.xcconfig (it is not committed) containing:
+//
+//   CODE_SIGN_IDENTITY = Apple Development
+//   DEVELOPMENT_TEAM = <your team ID>
+
+CODE_SIGN_IDENTITY = -
+DEVELOPMENT_TEAM =
+
+#include? "Local.xcconfig"

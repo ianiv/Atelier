@@ -170,6 +170,7 @@
 		DAFF310E4AA538AA8C02FC77 /* LibraryErrorAlert.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryErrorAlert.swift; sourceTree = "<group>"; };
 		434F7495899302690802E139 /* LoRAsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoRAsView.swift; sourceTree = "<group>"; };
 		A7E11C0A1C0A7E11C0A7E101 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = AppIcon.icon; sourceTree = "<group>"; };
+		A1E4C0DE5167A7E1C0F1A001 /* Atelier.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Atelier.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -198,6 +199,7 @@
 		0505738CD182A2FF8CD6FDC6 = {
 			isa = PBXGroup;
 			children = (
+				A1E4C0DE5167A7E1C0F1A001 /* Atelier.xcconfig */,
 				B5F46B62D5AC64FAA9EB8D1D /* Sources */,
 				FF2013606A3171C89933E231 /* Products */,
 			);
@@ -643,14 +645,13 @@
 		};
 		55C97E61D5A66E1B9430A0BA /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A1E4C0DE5167A7E1C0F1A001 /* Atelier.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = 7EN8DG9MKN;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -672,14 +673,13 @@
 		};
 		5662D25F50AC9B8594CCBF8A /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A1E4C0DE5167A7E1C0F1A001 /* Atelier.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = 7EN8DG9MKN;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;

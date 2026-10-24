@@ -16,6 +16,19 @@
 
 You can also open `Atelier.xcodeproj` in Xcode and run the Atelier scheme.
 
+### Code signing
+
+You don't need an Apple developer account to build Atelier. By default the app is signed to run locally on your Mac (the settings are in `Config/Atelier.xcconfig`).
+
+Because a locally signed app looks like a new app to macOS after each build, macOS may ask again for permissions, such as access to an external drive. To sign with your own developer team instead, create `Config/Local.xcconfig` with these two lines:
+
+```
+CODE_SIGN_IDENTITY = Apple Development
+DEVELOPMENT_TEAM = YOURTEAMID
+```
+
+Replace `YOURTEAMID` with your team ID, which is shown in Xcode under **Settings ▸ Accounts** and on the Membership page of your Apple Developer account. `Config/Local.xcconfig` is ignored by git, so your team ID stays out of the repository. Use this file rather than the Signing & Capabilities tab in Xcode, which writes the team into the project file.
+
 ## Choose your models folder
 
 Atelier uses the same model files as Draw Things. By default it looks in `~/Documents/Models` (or the folder in the `DRAWTHINGS_MODELS_DIR` environment variable, if set).
