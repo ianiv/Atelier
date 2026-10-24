@@ -1,6 +1,7 @@
 #!/bin/bash
 # Build a Developer ID-signed, notarized and stapled Atelier.app for download, zipped for a GitHub Release.
-# Output: build/release/Atelier-<version>.zip. Usage: release.sh
+# Output: build/release/Atelier-<version>.zip. Usage: release.sh [version] (default: MARKETING_VERSION in the
+# project). The build number is the commit count, so every release from a newer commit has a higher one.
 #
 # One-time setup on the Mac that signs:
 # - A "Developer ID Application" certificate for your team in the login keychain.
@@ -17,6 +18,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 NOTARY_PROFILE="${NOTARY_PROFILE:-atelier-notary}"
+VERSION_SETTINGS=(CURRENT_PROJECT_VERSION="$(git rev-list --count HEAD)")
+[ -n "$1" ] && VERSION_SETTINGS+=(MARKETING_VERSION="$1")
 
 if [ -z "$DEVELOPER_DIR" ] && ! xcodebuild -version >/dev/null 2>&1; then
   export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
@@ -48,7 +51,7 @@ xcodebuild -project Atelier.xcodeproj -scheme Atelier -configuration Release \
   DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" CODE_SIGN_STYLE=Manual \
   CODE_SIGN_IDENTITY="Developer ID Application" PROVISIONING_PROFILE_SPECIFIER="" \
   OTHER_CODE_SIGN_FLAGS="--timestamp" CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
-  DRAWTHINGS_APP="$EMPTY_DIR"
+  DRAWTHINGS_APP="$EMPTY_DIR" "${VERSION_SETTINGS[@]}"
 
 APP="$OUT/Atelier.app"
 ditto build/DerivedData/Build/Products/Release/Atelier.app "$APP"
