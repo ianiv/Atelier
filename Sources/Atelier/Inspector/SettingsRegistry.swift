@@ -7,9 +7,12 @@ typealias PipelineConfiguration = MediaGenerationPipeline.Configuration
 struct ModelTraits: Equatable {
   /// MGK's human-readable version name, e.g. "MOSS Image" or "Stable Diffusion XL Base".
   var version: String
+  /// The selected sampler, for settings only some samplers read.
+  var sampler: SamplerType?
 
-  init(_ model: MediaGenerationResolvedModel?) {
+  init(_ model: MediaGenerationResolvedModel?, sampler: SamplerType? = nil) {
     version = model?.version ?? ""
+    self.sampler = sampler
   }
 
   private static let unet: Set<String> = [
@@ -34,6 +37,8 @@ struct ModelTraits: Equatable {
   var hasTeaCache: Bool {
     ["FLUX.1", "Hunyuan Video", "HiDream I1", "MiniMax H3"].contains(version) || isWan
   }
+  /// TCD and TCD Trailing are the only samplers that read Strategic Stochastic Sampling.
+  var usesTCD: Bool { sampler == .TCD || sampler == .tCDTrailing }
 }
 
 enum SettingSection: String, CaseIterable, Identifiable, Codable {
@@ -352,7 +357,7 @@ enum SettingsRegistry {
       float(
         "stochasticSamplingGamma", \.stochasticSamplingGamma, "Strategic Stochastic Sampling",
         .sampling, "Noise injected per step by the TCD samplers.", range: 0...1, step: 0.01,
-        digits: 2, keywords: ["tcd", "gamma"]),
+        digits: 2, keywords: ["tcd", "gamma", "sss"], applies: { $0.usesTCD }),
       toggle(
         "speedUpWithGuidanceEmbed", \.speedUpWithGuidanceEmbed, "Speed Up With Guidance Embed",
         .sampling, "Use the distilled guidance embedding instead of a second CFG pass.",

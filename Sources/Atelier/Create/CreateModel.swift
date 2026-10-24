@@ -133,7 +133,7 @@ final class CreateModel {
     models.first { $0.file == selectedModel }
   }
 
-  var traits: ModelTraits { ModelTraits(selectedModelInfo) }
+  var traits: ModelTraits { ModelTraits(selectedModelInfo, sampler: settings?.sampler) }
 
   /// Whether the model (or one of its LoRAs) reads the canvas and moodboard as reference images:
   /// edit models, the FLUX.2 family and Qwen Image 2.1. ModelZoo knows a community model once its

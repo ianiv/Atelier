@@ -41,7 +41,7 @@ The inspector lists the model's settings in sections: Essentials, Sampling, LoRA
 - **Search**: type in the search field at the top to find any setting, including hidden ones.
 - **Changed**: when any setting differs from the model's defaults, a Changed group at the top lists them all, so nothing you changed is out of sight.
 - **More: N**: less common settings in a section are tucked under this disclosure.
-- **Settings that don't apply** to the selected model are hidden automatically (search still shows them, dimmed).
+- **Settings that don't apply** to the selected model are hidden automatically (search still shows them, dimmed). Some depend on other settings too: Strategic Stochastic Sampling (SSS), the noise the TCD samplers add each step, shows only when the sampler is TCD or TCD Trailing.
 - **Right-click any setting** for Reset to Default, Copy Value, and Hide from / Show in Inspector.
 - **Reset All to Model Defaults** at the bottom puts everything back to the model's recommended values (and its default preset).
 - Hover over any setting to see what it does.
