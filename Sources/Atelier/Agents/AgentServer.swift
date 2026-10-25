@@ -333,8 +333,7 @@ struct AgentSettingsView: View {
         HStack {
           Spacer()
           Button("Copy") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(client.setup(server.endpoint), forType: .string)
+            Clipboard.copy(client.setup(server.endpoint))
           }
         }
       } header: {

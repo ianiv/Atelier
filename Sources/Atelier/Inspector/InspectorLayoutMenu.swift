@@ -1,10 +1,11 @@
-import AppKit
 import SwiftUI
 import _MediaGenerationKit
 
 struct LayoutMenu: View {
   @Binding var customizing: Bool
   @Environment(LayoutStore.self) private var layouts
+  @Environment(FileDialogs.self) private var fileDialogs
+  @Environment(\.openURL) private var openURL
 
   var body: some View {
     @Bindable var layouts = layouts
@@ -29,19 +30,25 @@ struct LayoutMenu: View {
       Button("Customize Inspector…") { customizing = true }
       Divider()
       Button("Export Layout…") {
-        if let url = FilePanels.saveJSON(named: layouts.current.name) {
-          try? layouts.export(layouts.current, to: url)
-        }
+        let layout = layouts.current
+        fileDialogs.save = FileDialogs.Save(
+          file: ExportedFile(type: .json) { try layouts.exportData(layout) },
+          name: LayoutStore.fileName(layout.name) + ".json")
       }
       Button("Import Layout…") {
-        if let url = FilePanels.openJSON() { _ = try? layouts.importLayout(from: url) }
+        fileDialogs.open = FileDialogs.Open(types: [.json]) { urls in
+          guard let url = urls.first else { return }
+          let access = url.startAccessingSecurityScopedResource()
+          defer { if access { url.stopAccessingSecurityScopedResource() } }
+          _ = try? layouts.importLayout(from: url)
+        }
       }
       Button("Delete “\(layouts.current.name)”") { layouts.delete(layouts.current) }
         .disabled(layouts.isBuiltIn(layouts.current))
       Button("Show Layouts Folder") {
         try? FileManager.default.createDirectory(
           at: LayoutStore.directory, withIntermediateDirectories: true)
-        NSWorkspace.shared.open(LayoutStore.directory)
+        openURL(LayoutStore.directory)
       }
     } label: {
       Text(layouts.current.name)
@@ -54,6 +61,8 @@ struct LayoutMenu: View {
 
 struct CustomizeInspectorSheet: View {
   @Environment(LayoutStore.self) private var layouts
+  @Environment(FileDialogs.self) private var fileDialogs
+  @Environment(\.openURL) private var openURL
   @Environment(\.dismiss) private var dismiss
 
   private struct Item: Identifiable, Hashable {

@@ -11,6 +11,7 @@ struct ModelsView: View {
   }
 
   @Environment(ModelLibrary.self) private var library
+  @Environment(FileDialogs.self) private var fileDialogs
   @State private var search = ""
   @AppStorage("modelsFilter") private var filter = Filter.downloaded
   @State private var selection: String?
@@ -198,17 +199,13 @@ struct ModelsView: View {
   }
 
   private func chooseFiles() {
-    let panel = NSOpenPanel()
-    panel.allowsMultipleSelection = true
-    panel.canChooseDirectories = false
-    panel.allowedContentTypes = ModelLibrary.checkpointExtensions.compactMap {
-      UTType(filenameExtension: $0)
-    }
-    panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)
-      .first
-    panel.message = "Choose model checkpoints to import"
-    if panel.runModal() == .OK {
-      library.prepareModelImport(panel.urls)
+    fileDialogs.open = FileDialogs.Open(
+      types: ModelLibrary.checkpointExtensions.compactMap { UTType(filenameExtension: $0) },
+      multiple: true,
+      directory: FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first,
+      message: "Choose model checkpoints to import"
+    ) { urls in
+      library.prepareModelImport(urls)
     }
   }
 
@@ -266,6 +263,7 @@ struct ModelDetail: View {
   let model: MediaGenerationResolvedModel
   let delete: () -> Void
   @Environment(ModelLibrary.self) private var library
+  @Environment(FileDialogs.self) private var fileDialogs
 
   var body: some View {
     Form {
@@ -331,6 +329,7 @@ struct ModelDetail: View {
 
 struct ModelImportSheet: View {
   @Environment(ModelLibrary.self) private var library
+  @Environment(FileDialogs.self) private var fileDialogs
 
   private var importable: Int { library.importingModels.count(where: \.canImport) }
 

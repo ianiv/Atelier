@@ -829,6 +829,10 @@ enum ImageTensor {
     encode(image, type: .png, properties: properties).map { Data($0) }
   }
 
+  static func tiff(_ image: CGImage) -> Data? {
+    encode(image, type: .tiff, properties: [:]).map { Data($0) }
+  }
+
   private static func encode(_ image: CGImage, type: UTType, properties: [CFString: Any])
     -> [UInt8]?
   {

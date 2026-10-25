@@ -28,27 +28,6 @@ struct CreateView: View {
       InspectorView()
         .inspectorColumnWidth(min: 300, ideal: 340, max: 460)
     }
-    // One Open panel for the canvas and the moodboard: two file importers in one view hierarchy
-    // compete for the same presentation.
-    .fileImporter(
-      isPresented: Binding(get: { model.imageImport != nil }, set: { if !$0 { model.imageImport = nil } }),
-      allowedContentTypes: [.image],
-      allowsMultipleSelection: model.imageImport == .moodboard
-    ) { result in
-      let target = model.imageImport
-      model.imageImport = nil
-      guard case .success(let urls) = result else { return }
-      for url in urls {
-        let access = url.startAccessingSecurityScopedResource()
-        defer { if access { url.stopAccessingSecurityScopedResource() } }
-        guard let image = ImageLoader.image(at: url) else { continue }
-        if target == .moodboard {
-          model.moodboard.add(image)
-        } else {
-          model.setCanvasImage(image, metadata: ImageMetadata.embedded(at: url))
-        }
-      }
-    }
     // A plain toolbar, not a customizable `.toolbar(id:)`: AppKit crashes ("NSToolbarItemViewer's
     // min/max size is nan") switching between a customizable toolbar and the other sections'
     // `.searchable` toolbars.
@@ -96,6 +75,7 @@ struct CanvasView: View {
   @Environment(HistoryStore.self) private var history
   /// The zoom and offset when the current pinch or drag began.
   @State private var gestureStart: (scale: Double, offset: CGSize)?
+  @Environment(FileDialogs.self) private var fileDialogs
   @State private var saveError: String?
   @State private var isTargeted = false
   @Environment(\.undoManager) private var undoManager
@@ -257,21 +237,16 @@ struct CanvasView: View {
   private func save() {
     guard let image = model.image else { return }
     let item = model.imageItem
-    let panel = NSSavePanel()
-    panel.allowedContentTypes = [.png]
-    panel.nameFieldStringValue = (item.map(history.fileName(for:)) ?? history.project.name) + ".png"
-    guard panel.runModal() == .OK, let url = panel.url else { return }
-    Task {
-      do {
-        if let item {
-          try await history.exportPNG(item, to: url)
-        } else {
-          guard let png = ImageTensor.png(image) else { throw ProjectError.badImage }
-          try png.write(to: url)
-        }
-      } catch {
-        saveError = error.localizedDescription
-      }
+    let history = history
+    fileDialogs.save = FileDialogs.Save(
+      file: ExportedFile(type: .png) {
+        if let item { return try await history.pngData(item) }
+        guard let png = ImageTensor.png(image) else { throw ProjectError.badImage }
+        return png
+      },
+      name: (item.map(history.fileName(for:)) ?? history.project.name) + ".png"
+    ) { result in
+      if case .failure(let error) = result { saveError = error.localizedDescription }
     }
   }
 }
@@ -745,6 +720,7 @@ struct SeedControls: View {
 struct ModelsSettingsView: View {
   @Environment(CreateModel.self) private var model
   @State private var directory = ""
+  @State private var choosing = false
   @FocusState private var directoryFocused: Bool
 
   var body: some View {
@@ -756,7 +732,7 @@ struct ModelsSettingsView: View {
               .labelsHidden()
               .focused($directoryFocused)
               .frame(minWidth: 320)
-            Button("Choose…") { choose() }
+            Button("Choose…") { choosing = true }
           }
         }
         HStack {
@@ -767,20 +743,14 @@ struct ModelsSettingsView: View {
       }
     }
     .settingsForm()
+    .fileImporter(isPresented: $choosing, allowedContentTypes: [.folder]) { result in
+      if case .success(let url) = result { directory = url.path }
+    }
+    .fileDialogDefaultDirectory(URL(fileURLWithPath: directory))
     .onAppear {
       directory = model.modelsDirectory
       // The window focuses the first field, which selects the whole path; start unfocused.
       Task { directoryFocused = false }
-    }
-  }
-
-  private func choose() {
-    let panel = NSOpenPanel()
-    panel.canChooseDirectories = true
-    panel.canChooseFiles = false
-    panel.directoryURL = URL(fileURLWithPath: directory)
-    if panel.runModal() == .OK, let url = panel.url {
-      directory = url.path
     }
   }
 }

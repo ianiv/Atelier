@@ -1,4 +1,3 @@
-import AppKit
 import CoreGraphics
 import CoreTransferable
 import Diffusion
@@ -460,26 +459,17 @@ final class HistoryStore {
       if let item = items.first { await copyImage(item) }
       return
     }
-    var entries: [NSPasteboardItem] = []
+    var images: [(png: Data?, tiff: Data?)] = []
     for item in items {
       guard let image = await image(for: item) else { continue }
-      let entry = NSPasteboardItem()
-      if let png = ImageTensor.png(image) { entry.setData(png, forType: .png) }
-      if let tiff = NSBitmapImageRep(cgImage: image).tiffRepresentation { entry.setData(tiff, forType: .tiff) }
-      entries.append(entry)
+      images.append((ImageTensor.png(image), ImageTensor.tiff(image)))
     }
-    let pasteboard = NSPasteboard.general
-    pasteboard.clearContents()
-    pasteboard.writeObjects(entries)
+    Clipboard.copyImages(images)
   }
 
   /// Puts an image on the clipboard as PNG and TIFF, which other apps paste most reliably.
   static func copy(_ image: CGImage) {
-    let pasteboard = NSPasteboard.general
-    pasteboard.clearContents()
-    if let png = ImageTensor.png(image) { pasteboard.setData(png, forType: .png) }
-    let tiff = NSBitmapImageRep(cgImage: image).tiffRepresentation
-    if let tiff { pasteboard.setData(tiff, forType: .tiff) }
+    Clipboard.copyImage(png: ImageTensor.png(image), tiff: ImageTensor.tiff(image))
   }
 
   private static let thumbnails = NSCache<NSString, CGImage>()

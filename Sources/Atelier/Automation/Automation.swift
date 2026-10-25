@@ -1,4 +1,3 @@
-import AppKit
 import ImageIO
 import NNC
 import SwiftUI
@@ -94,7 +93,7 @@ enum Automation {
       if let file = value("--model") {
         guard model.models.contains(where: { $0.file == file }) else {
           log("model \(file) not in downloaded list")
-          if args.contains("--quit") { NSApp.terminate(nil) }
+          if args.contains("--quit") { AppLifecycle.quit() }
           return
         }
         model.selectedModel = file
@@ -123,7 +122,7 @@ enum Automation {
       if let path = value("--input") {
         guard let image = ImageLoader.image(at: URL(fileURLWithPath: path)) else {
           log("can't read input \(path)")
-          if args.contains("--quit") { NSApp.terminate(nil) }
+          if args.contains("--quit") { AppLifecycle.quit() }
           return
         }
         model.setCanvasImage(image)
@@ -250,7 +249,7 @@ enum Automation {
           try? png.write(to: snapshotDir.appendingPathComponent("then-result.png"))
         }
       }
-      if args.contains("--quit") { NSApp.terminate(nil) }
+      if args.contains("--quit") { AppLifecycle.quit() }
     }
   }
 
@@ -267,7 +266,7 @@ enum Automation {
         print(String(format: "[%7.2fs] ", Date().timeIntervalSince(started)) + message)
         fflush(stdout)
       }
-      @MainActor func finish() { if args.contains("--quit") { NSApp.terminate(nil) } }
+      @MainActor func finish() { if args.contains("--quit") { AppLifecycle.quit() } }
       while !model.history.isLoaded || model.models.isEmpty || model.isBusy {
         try? await Task.sleep(for: .milliseconds(100))
       }
@@ -335,26 +334,14 @@ enum Automation {
         try? await Task.sleep(for: .milliseconds(100))
       }
       try? await Task.sleep(for: .seconds(2))
-      guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else {
+      guard let (average, worst) = AutomationWindows.resizeBench(frames: frames) else {
         print("resize bench: no visible window (screen locked?)")
-        if args.contains("--quit") { NSApp.terminate(nil) }
+        if args.contains("--quit") { AppLifecycle.quit() }
         return
       }
-      let origin = window.frame.origin
-      let start = Date()
-      var worst = 0.0
-      for frame in 0..<frames {
-        let t = Date()
-        let width = 1100 + 500 * abs(sin(Double(frame) / 15))
-        window.setFrame(NSRect(x: origin.x, y: origin.y, width: width, height: 860), display: true)
-        window.contentView?.layoutSubtreeIfNeeded()
-        window.displayIfNeeded()
-        worst = max(worst, Date().timeIntervalSince(t))
-      }
-      let average = Date().timeIntervalSince(start) / Double(frames)
       print(String(format: "resize bench: %d frames, %.1f ms average, %.1f ms worst", frames, average * 1000, worst * 1000))
       fflush(stdout)
-      if args.contains("--quit") { NSApp.terminate(nil) }
+      if args.contains("--quit") { AppLifecycle.quit() }
     }
   }
 
@@ -405,7 +392,7 @@ enum Automation {
         try? await Task.sleep(for: .seconds(1))
         if let snapshotDir { snapshot(to: snapshotDir.appendingPathComponent(name)) }
       }
-      @MainActor func finish() { if args.contains("--quit") { NSApp.terminate(nil) } }
+      @MainActor func finish() { if args.contains("--quit") { AppLifecycle.quit() } }
       while model.models.isEmpty || model.settings == nil || model.isBusy {
         try? await Task.sleep(for: .milliseconds(100))
       }
@@ -750,7 +737,7 @@ enum Automation {
         try? await Task.sleep(for: .milliseconds(500))
         if let snapshotDir { snapshot(to: snapshotDir.appendingPathComponent(name)) }
       }
-      @MainActor func finish() { if args.contains("--quit") { NSApp.terminate(nil) } }
+      @MainActor func finish() { if args.contains("--quit") { AppLifecycle.quit() } }
       var waited = 0
       while model.models.isEmpty || model.settings == nil || model.isBusy || !model.history.isLoaded {
         try? await Task.sleep(for: .milliseconds(100))
@@ -768,13 +755,9 @@ enum Automation {
       if args.contains("--show-customize") {
         layouts.customizing = true
         try? await Task.sleep(for: .seconds(2))
-        if let sheet = NSApp.windows.first(where: { $0.isSheet && $0.isVisible }),
-          let view = sheet.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds),
-          let snapshotDir
+        if let snapshotDir,
+          AutomationWindows.snapshotSheet(to: snapshotDir.appendingPathComponent("customize.png"))
         {
-          view.cacheDisplay(in: view.bounds, to: rep)
-          try? rep.representation(using: .png, properties: [:])?.write(
-            to: snapshotDir.appendingPathComponent("customize.png"))
           log("customize sheet snapshotted")
         } else {
           log("no customize sheet window")
@@ -1034,7 +1017,7 @@ enum Automation {
       navigation.section = .history
       await shot("ux-history.png")
       navigation.section = .create
-      if args.contains("--quit") { NSApp.terminate(nil) }
+      if args.contains("--quit") { AppLifecycle.quit() }
     }
   }
 
@@ -1071,40 +1054,28 @@ enum Automation {
     return (count, w1 * h1, maxDelta, Double(sum) / Double(w1 * h1 * 3))
   }
 
-  /// A window hosting the app's content when SwiftUI hasn't put one up (the screen is locked),
-  /// so snapshots still show the UI. Rendered off screen; it has no toolbar.
-  private static var offscreenWindow: NSWindow?
   private static var library: ModelLibrary?
 
   private static func ensureWindow(
     _ model: CreateModel, navigation: Navigation, layouts: LayoutStore, presets: PresetStore
   ) {
-    guard !NSApp.windows.contains(where: { $0.isVisible }), offscreenWindow == nil else { return }
-    let content = ContentView()
-      .environment(model)
-      .environment(model.history)
-      .environment(navigation)
-      .environment(layouts)
-      .environment(presets)
-      .environment(library ?? ModelLibrary(create: model))
-      .frame(width: 1280, height: 860)
-    let window = NSWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 1280, height: 860), styleMask: [.titled],
-      backing: .buffered, defer: false)
-    window.contentView = NSHostingView(rootView: content)
-    offscreenWindow = window
+    // A window hosting the app's content when SwiftUI hasn't put one up (the screen is locked),
+    // so snapshots still show the UI.
+    AutomationWindows.ensureWindow({
+      ContentView()
+        .environment(model)
+        .environment(model.history)
+        .environment(navigation)
+        .environment(layouts)
+        .environment(presets)
+        .environment(library ?? ModelLibrary(create: model))
+        .environment(FileDialogs())
+        .frame(width: 1280, height: 860)
+    }, size: CGSize(width: 1280, height: 860))
   }
 
   /// Renders the main window into a PNG; needs no screen-recording permission.
   private static func snapshot(to url: URL) {
-    guard
-      let view = (NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil })
-        ?? offscreenWindow)?.contentView?.superview,
-      let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)
-    else { return }
-    view.cacheDisplay(in: view.bounds, to: rep)
-    try? FileManager.default.createDirectory(
-      at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-    try? rep.representation(using: .png, properties: [:])?.write(to: url)
+    AutomationWindows.snapshot(to: url)
   }
 }

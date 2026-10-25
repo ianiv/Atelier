@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 import _MediaGenerationKit
 
@@ -10,7 +9,6 @@ struct InspectorView: View {
   @Environment(LayoutStore.self) private var layouts
   @Environment(\.undoManager) private var undoManager
   @State private var optionHeld = false
-  @State private var flagsMonitor: Any?
   @AppStorage("changedExpanded") private var changedExpanded = true
   private var showAll: Bool { layouts.showAll || optionHeld }
   private var query: String { layouts.searchText.trimmingCharacters(in: .whitespaces) }
@@ -46,15 +44,8 @@ struct InspectorView: View {
       }
     }
     .sheet(isPresented: $layouts.customizing) { CustomizeInspectorSheet() }
-    .onAppear {
-      flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
-        optionHeld = event.modifierFlags.contains(.option)
-        return event
-      }
-    }
-    .onDisappear {
-      if let flagsMonitor { NSEvent.removeMonitor(flagsMonitor) }
-      flagsMonitor = nil
+    .onModifierKeysChanged(mask: .option) { _, keys in
+      optionHeld = keys.contains(.option)
     }
   }
 
@@ -481,9 +472,7 @@ struct SettingContextMenu: View {
     Button("Reset to Default") { model.reset(descriptor, undoManager: undoManager) }
       .disabled(!model.isChanged(descriptor))
     Button("Copy Value") {
-      NSPasteboard.general.clearContents()
-      NSPasteboard.general.setString(
-        SettingFormat.display(model.value(descriptor), for: descriptor), forType: .string)
+      Clipboard.copy(SettingFormat.display(model.value(descriptor), for: descriptor))
     }
     Divider()
     if layouts.current.isShown(descriptor.id) {

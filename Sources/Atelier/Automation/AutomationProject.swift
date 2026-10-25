@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 import _MediaGenerationKit
 
@@ -185,7 +184,7 @@ extension Automation {
       }
       print(failures == 0 ? "project check: all passed" : "project check: \(failures) failed")
       fflush(stdout)
-      if args.contains("--quit") { NSApp.terminate(nil) }
+      if args.contains("--quit") { AppLifecycle.quit() }
     }
   }
 
@@ -214,7 +213,7 @@ extension Automation {
       @MainActor func finish() {
         print(failures == 0 ? "edit input check: all passed" : "edit input check: \(failures) failed")
         fflush(stdout)
-        if args.contains("--quit") { NSApp.terminate(nil) }
+        if args.contains("--quit") { AppLifecycle.quit() }
       }
       @MainActor func idle() async {
         try? await Task.sleep(for: .milliseconds(200))
@@ -376,9 +375,7 @@ extension Automation {
         .environment(model.history)
         let renderer = ImageRenderer(content: rows)
         renderer.scale = 2
-        if let image = renderer.nsImage, let tiff = image.tiffRepresentation,
-          let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])
-        {
+        if let image = renderer.cgImage, let png = ImageTensor.png(image) {
           let url = URL(fileURLWithPath: directory).appendingPathComponent("graph.png")
           try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)

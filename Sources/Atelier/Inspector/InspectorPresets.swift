@@ -1,4 +1,3 @@
-import AppKit
 import ImageIO
 import SwiftUI
 import _MediaGenerationKit
@@ -7,6 +6,8 @@ struct PresetMenu: View {
   @Environment(CreateModel.self) private var model
   @Environment(PresetStore.self) private var presets
   @Environment(\.undoManager) private var undoManager
+  @Environment(FileDialogs.self) private var fileDialogs
+  @Environment(\.openURL) private var openURL
   @State private var saving = false
   @State private var pasteFailed = false
 
@@ -60,15 +61,12 @@ struct PresetMenu: View {
       Button("Save Current Settings as Preset…") { saving = true }
         .disabled(model.settings == nil)
       Button("Copy Settings as JSON") {
-        if let json = model.settingsJSON() {
-          NSPasteboard.general.clearContents()
-          NSPasteboard.general.setString(String(decoding: json, as: UTF8.self), forType: .string)
-        }
+        if let json = model.settingsJSON() { Clipboard.copy(String(decoding: json, as: UTF8.self)) }
       }
       .disabled(model.settings == nil)
       .help("Copies every setting, the model and the seed in Draw Things' configuration format.")
       Button("Paste Settings") {
-        guard let text = NSPasteboard.general.string(forType: .string),
+        guard let text = Clipboard.string,
           let pasted = DrawThingsJSON.decode(Data(text.utf8))
         else {
           pasteFailed = true
@@ -80,15 +78,20 @@ struct PresetMenu: View {
       .help("Applies settings copied from Draw Things or Atelier, on top of the model's defaults.")
       Divider()
       Button("Import Preset…") {
-        if let url = FilePanels.openJSON() { _ = try? presets.importPreset(from: url) }
+        fileDialogs.open = FileDialogs.Open(types: [.json]) { urls in
+          guard let url = urls.first else { return }
+          let access = url.startAccessingSecurityScopedResource()
+          defer { if access { url.stopAccessingSecurityScopedResource() } }
+          _ = try? presets.importPreset(from: url)
+        }
       }
       if !presets.presets.isEmpty {
         Menu("Export") {
           ForEach(presets.presets) { preset in
             Button(preset.name) {
-              if let url = FilePanels.saveJSON(named: preset.name) {
-                try? presets.export(preset, to: url)
-              }
+              fileDialogs.save = FileDialogs.Save(
+                file: ExportedFile(type: .json) { try presets.exportData(preset) },
+                name: LayoutStore.fileName(preset.name) + ".json")
             }
           }
         }
@@ -101,7 +104,7 @@ struct PresetMenu: View {
       Button("Show Presets Folder") {
         try? FileManager.default.createDirectory(
           at: PresetStore.directory, withIntermediateDirectories: true)
-        NSWorkspace.shared.open(PresetStore.directory)
+        openURL(PresetStore.directory)
       }
     } label: {
       Label("Presets", systemImage: "square.stack.3d.up")
@@ -215,31 +218,38 @@ struct SavePresetSheet: View {
 
 // MARK: - Search field
 
-struct SearchField: NSViewRepresentable {
+/// A search field: a magnifying glass, the text and a clear button. Not `.searchable`, which puts
+/// the field in the toolbar, and crashes alongside the customizable toolbar there.
+struct SearchField: View {
   @Binding var text: String
   var prompt: String
 
-  func makeNSView(context: Context) -> NSSearchField {
-    let field = NSSearchField()
-    field.placeholderString = prompt
-    field.delegate = context.coordinator
-    field.controlSize = .regular
-    return field
-  }
-
-  func updateNSView(_ field: NSSearchField, context: Context) {
-    if field.stringValue != text { field.stringValue = text }
-  }
-
-  func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
-
-  final class Coordinator: NSObject, NSSearchFieldDelegate {
-    var text: Binding<String>
-    init(text: Binding<String>) { self.text = text }
-
-    func controlTextDidChange(_ notification: Notification) {
-      guard let field = notification.object as? NSSearchField else { return }
-      text.wrappedValue = field.stringValue
+  var body: some View {
+    HStack(spacing: 4) {
+      Image(systemName: "magnifyingglass")
+        .foregroundStyle(.secondary)
+      TextField(prompt, text: $text)
+        .textFieldStyle(.plain)
+      // Hidden rather than removed while empty, so the text doesn't shift.
+      Button {
+        text = ""
+      } label: {
+        Image(systemName: "xmark.circle.fill")
+      }
+      .buttonStyle(.plain)
+      .foregroundStyle(.secondary)
+      .opacity(text.isEmpty ? 0 : 1)
+      .disabled(text.isEmpty)
+      .accessibilityLabel("Clear")
+    }
+    .padding(.horizontal, 7)
+    .frame(minHeight: 24)
+    .background(.fill.quinary, in: .capsule)
+    .overlay(Capsule().strokeBorder(.separator))
+    .onKeyPress(.escape) {
+      guard !text.isEmpty else { return .ignored }
+      text = ""
+      return .handled
     }
   }
 }

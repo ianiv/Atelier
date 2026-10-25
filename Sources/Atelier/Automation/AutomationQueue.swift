@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 extension Automation {
@@ -24,7 +23,7 @@ extension Automation {
       @MainActor func finish() {
         print(failures == 0 ? "queue check: all passed" : "queue check: \(failures) failed")
         fflush(stdout)
-        if args.contains("--quit") { NSApp.terminate(nil) }
+        if args.contains("--quit") { AppLifecycle.quit() }
       }
       @MainActor func wait(until condition: () -> Bool, seconds: Double = 600) async -> Bool {
         let deadline = Date().addingTimeInterval(seconds)

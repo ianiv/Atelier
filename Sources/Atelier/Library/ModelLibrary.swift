@@ -1,4 +1,3 @@
-import AppKit
 import Diffusion
 import Foundation
 import ModelOp
@@ -205,11 +204,7 @@ final class ModelLibrary {
 
   func reveal(_ file: String) {
     let urls = Self.files(of: file, in: directory)
-    if urls.isEmpty {
-      NSWorkspace.shared.activateFileViewerSelecting([directory])
-    } else {
-      NSWorkspace.shared.activateFileViewerSelecting(urls)
-    }
+    Finder.reveal(urls.isEmpty ? [directory] : urls)
   }
 
   private func afterChange() async {

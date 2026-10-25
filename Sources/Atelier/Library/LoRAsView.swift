@@ -4,6 +4,7 @@ import _MediaGenerationKit
 
 struct LoRAsView: View {
   @Environment(ModelLibrary.self) private var library
+  @Environment(FileDialogs.self) private var fileDialogs
   @State private var search = ""
   @State private var family: String?
   @State private var selection: String?
@@ -148,17 +149,13 @@ struct LoRAsView: View {
   }
 
   private func chooseFiles() {
-    let panel = NSOpenPanel()
-    panel.allowsMultipleSelection = true
-    panel.canChooseDirectories = false
-    panel.allowedContentTypes = ModelLibrary.loraExtensions.compactMap {
-      UTType(filenameExtension: $0)
-    }
-    panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)
-      .first
-    panel.message = "Choose LoRA files to import"
-    if panel.runModal() == .OK {
-      library.prepareImport(panel.urls)
+    fileDialogs.open = FileDialogs.Open(
+      types: ModelLibrary.loraExtensions.compactMap { UTType(filenameExtension: $0) },
+      multiple: true,
+      directory: FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first,
+      message: "Choose LoRA files to import"
+    ) { urls in
+      library.prepareImport(urls)
     }
   }
 }
@@ -167,6 +164,7 @@ struct LoRADetail: View {
   let lora: ModelLibrary.LoRA
   let delete: () -> Void
   @Environment(ModelLibrary.self) private var library
+  @Environment(FileDialogs.self) private var fileDialogs
   @State private var name = ""
   @State private var prefix = ""
 
@@ -220,6 +218,7 @@ struct LoRADetail: View {
 
 struct LoRAImportSheet: View {
   @Environment(ModelLibrary.self) private var library
+  @Environment(FileDialogs.self) private var fileDialogs
   @State private var version: String?
 
   var body: some View {

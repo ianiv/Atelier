@@ -43,6 +43,8 @@ struct ContentView: View {
 
   @Environment(Navigation.self) private var navigation
   @Environment(CreateModel.self) private var create
+  @Environment(FileDialogs.self) private var fileDialogs
+  @Environment(\.undoManager) private var undoManager
 
   /// Images running or waiting in the queue.
   private var queueCount: Int {
@@ -95,5 +97,20 @@ struct ContentView: View {
     } message: {
       Text("Forgets the \(create.recentPrompts.count) recent prompts that ⌘↑ and ⌘↓ step through. Images in History keep their prompts. This can't be undone.")
     }
+    // Open Image… and Add Images…, from the menus, the canvas and the moodboard.
+    .onChange(of: create.imageImport, initial: true) {
+      guard let target = create.imageImport else { return }
+      create.imageImport = nil
+      fileDialogs.open = FileDialogs.Open(types: [.image], multiple: target == .moodboard) { urls in
+        create.importImages(urls, into: target)
+      }
+    }
+    .fileDialogs(fileDialogs)
+    // For menu commands, which act on the key window's undo stack.
+    .focusedSceneValue(\.windowUndoManager, undoManager)
   }
+}
+
+extension FocusedValues {
+  @Entry var windowUndoManager: UndoManager?
 }

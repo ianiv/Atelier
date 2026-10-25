@@ -7,6 +7,7 @@ struct HistoryView: View {
   @Environment(HistoryStore.self) private var history
   @Environment(CreateModel.self) private var create
   @Environment(Navigation.self) private var navigation
+  @Environment(FileDialogs.self) private var fileDialogs
   /// Selected images by image tensor, which stays the same when a fork or delete renumbers steps.
   @State private var selection: Set<Int64> = []
   /// The item arrows move from, ⇧-click extends from and Quick Look shows.
@@ -398,8 +399,7 @@ struct HistoryView: View {
   }
 
   private func copy(_ text: String) {
-    NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString(text, forType: .string)
+    Clipboard.copy(text)
   }
 
   private var modelNames: [String] {
@@ -414,30 +414,31 @@ struct HistoryView: View {
 
   /// One image: a save panel. Several: a folder, each named like a single export.
   private func export(_ items: [HistoryItem]) {
-    var destinations: [(HistoryItem, URL)] = []
     if items.count == 1, let item = items.first {
-      let panel = NSSavePanel()
-      panel.allowedContentTypes = [.png]
-      panel.nameFieldStringValue = history.fileName(for: item) + ".png"
-      guard panel.runModal() == .OK, let url = panel.url else { return }
-      destinations = [(item, url)]
-    } else {
-      let panel = NSOpenPanel()
-      panel.canChooseDirectories = true
-      panel.canChooseFiles = false
-      panel.canCreateDirectories = true
-      panel.prompt = "Export"
-      panel.message = "Choose a folder for \(items.count) PNGs."
-      guard panel.runModal() == .OK, let folder = panel.url else { return }
-      destinations = items.map { item in
-        (item, Self.unusedURL(in: folder, name: history.fileName(for: item)))
+      let history = history
+      fileDialogs.save = FileDialogs.Save(
+        file: ExportedFile(type: .png) { try await history.pngData(item) },
+        name: history.fileName(for: item) + ".png"
+      ) { result in
+        if case .failure(let error) = result { deleteError = error.localizedDescription }
       }
-    }
-    Task {
-      do {
-        for (item, url) in destinations { try await history.exportPNG(item, to: url) }
-      } catch {
-        deleteError = error.localizedDescription
+    } else {
+      fileDialogs.open = FileDialogs.Open(
+        types: [.folder], confirmation: "Export", message: "Choose a folder for \(items.count) PNGs."
+      ) { urls in
+        guard let folder = urls.first else { return }
+        let destinations = items.map { item in
+          (item, Self.unusedURL(in: folder, name: history.fileName(for: item)))
+        }
+        Task {
+          let access = folder.startAccessingSecurityScopedResource()
+          defer { if access { folder.stopAccessingSecurityScopedResource() } }
+          do {
+            for (item, url) in destinations { try await history.exportPNG(item, to: url) }
+          } catch {
+            deleteError = error.localizedDescription
+          }
+        }
       }
     }
   }
@@ -620,7 +621,7 @@ struct ProjectMenu: View {
       Button("Rename “\(history.project.name)”…") { naming = .rename(current: history.project.name) }
       Button("Output Folder…") { editingOutput = true }
       Button("Show in Finder") {
-        NSWorkspace.shared.activateFileViewerSelecting([history.project.url])
+        Finder.reveal([history.project.url])
       }
     } label: {
       Label(history.project.name, systemImage: "folder")

@@ -1,4 +1,3 @@
-import AppKit
 import Observation
 import UniformTypeIdentifiers
 
@@ -160,7 +159,11 @@ final class LayoutStore {
   }
 
   func export(_ layout: InspectorLayout, to url: URL) throws {
-    try Self.encoder.encode(layout).write(to: url)
+    try exportData(layout).write(to: url)
+  }
+
+  func exportData(_ layout: InspectorLayout) throws -> Data {
+    try Self.encoder.encode(layout)
   }
 
   /// Imports a layout file, renaming it if the name is taken, and selects it.
@@ -280,8 +283,8 @@ final class PresetStore {
     for (model, name) in defaults where name == preset.name { setDefault(nil, for: model) }
   }
 
-  func export(_ preset: Preset, to url: URL) throws {
-    try LayoutStore.encoder.encode(preset).write(to: url)
+  func exportData(_ preset: Preset) throws -> Data {
+    try LayoutStore.encoder.encode(preset)
   }
 
   @discardableResult
@@ -301,23 +304,5 @@ final class PresetStore {
 
   static func url(for name: String) -> URL {
     directory.appendingPathComponent(LayoutStore.fileName(name)).appendingPathExtension("json")
-  }
-}
-
-/// Save and open panels for layout and preset files.
-@MainActor
-enum FilePanels {
-  static func saveJSON(named name: String) -> URL? {
-    let panel = NSSavePanel()
-    panel.allowedContentTypes = [.json]
-    panel.nameFieldStringValue = LayoutStore.fileName(name) + ".json"
-    return panel.runModal() == .OK ? panel.url : nil
-  }
-
-  static func openJSON() -> URL? {
-    let panel = NSOpenPanel()
-    panel.allowedContentTypes = [.json]
-    panel.canChooseDirectories = false
-    return panel.runModal() == .OK ? panel.url : nil
   }
 }

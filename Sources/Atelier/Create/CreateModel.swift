@@ -1,4 +1,5 @@
-import AppKit
+import CoreGraphics
+import Foundation
 import Diffusion
 import ModelZoo
 import Observation
@@ -216,17 +217,24 @@ final class CreateModel {
   }
 
   func pasteImage() {
-    let pasteboard = NSPasteboard.general
-    for type in [NSPasteboard.PasteboardType.png, .tiff] {
-      if let data = pasteboard.data(forType: type), let image = ImageLoader.image(from: data) {
-        setCanvasImage(image, metadata: ImageMetadata.embedded(in: data))
-        return
-      }
-    }
-    if let url = (pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL])?.first,
-      let image = ImageLoader.image(at: url)
-    {
+    if let data = Clipboard.imageData, let image = ImageLoader.image(from: data) {
+      setCanvasImage(image, metadata: ImageMetadata.embedded(in: data))
+    } else if let url = Clipboard.fileURL, let image = ImageLoader.image(at: url) {
       setCanvasImage(image, metadata: ImageMetadata.embedded(at: url))
+    }
+  }
+
+  /// Images chosen in the Open panel: one for the canvas, any number for the moodboard.
+  func importImages(_ urls: [URL], into target: ImageImportTarget) {
+    for url in urls {
+      let access = url.startAccessingSecurityScopedResource()
+      defer { if access { url.stopAccessingSecurityScopedResource() } }
+      guard let image = ImageLoader.image(at: url) else { continue }
+      if target == .moodboard {
+        moodboard.add(image)
+      } else {
+        setCanvasImage(image, metadata: ImageMetadata.embedded(at: url))
+      }
     }
   }
 
@@ -293,14 +301,9 @@ final class CreateModel {
         }
       }
     }
-    for name in [NSApplication.willTerminateNotification, NSApplication.didResignActiveNotification] {
-      NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) {
-        [weak self] _ in MainActor.assumeIsolated { self?.saveSession() }
-      }
-    }
-    NotificationCenter.default.addObserver(
-      forName: NSApplication.willTerminateNotification, object: nil, queue: .main
-    ) { [weak self] _ in MainActor.assumeIsolated { self?.saveQueue() } }
+    AppLifecycle.onWillTerminate { [weak self] in self?.saveSession() }
+    AppLifecycle.onResignActive { [weak self] in self?.saveSession() }
+    AppLifecycle.onWillTerminate { [weak self] in self?.saveQueue() }
     Task {
       await reloadModels()
       await restoreQueue()
@@ -970,18 +973,14 @@ enum FinishedNotice {
   private static var observing = false
 
   static func post(prompt: String, seconds: Double) {
-    guard !NSApp.isActive else { return }
+    guard !AppLifecycle.isActive else { return }
     unseen += 1
-    NSApp.dockTile.badgeLabel = String(unseen)
+    DockBadge.set(String(unseen))
     if !observing {
       observing = true
-      NotificationCenter.default.addObserver(
-        forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
-      ) { _ in
-        MainActor.assumeIsolated {
-          unseen = 0
-          NSApp.dockTile.badgeLabel = nil
-        }
+      AppLifecycle.onBecomeActive {
+        unseen = 0
+        DockBadge.set(nil)
       }
     }
     let center = UNUserNotificationCenter.current()

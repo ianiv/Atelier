@@ -2,7 +2,10 @@ import SwiftUI
 
 @main
 struct AtelierApp: App {
-  @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
+  #if os(macOS)
+    @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var appDelegate
+  #endif
+  @FocusedValue(\.windowUndoManager) private var undoManager
   @State private var history: HistoryStore
   @State private var create: CreateModel
   @State private var navigation: Navigation
@@ -10,6 +13,7 @@ struct AtelierApp: App {
   @State private var presets: PresetStore
   @State private var library: ModelLibrary
   @State private var agents: AgentServer
+  @State private var fileDialogs = FileDialogs()
   @AppStorage("inspectorShown") private var inspectorShown = true
   @AppStorage("moodboardShown") private var moodboardShown = true
 
@@ -47,6 +51,7 @@ struct AtelierApp: App {
         .environment(layouts)
         .environment(presets)
         .environment(library)
+        .environment(fileDialogs)
         .frame(minWidth: 960, minHeight: 640)
     }
     .commands {
@@ -96,7 +101,7 @@ struct AtelierApp: App {
         .disabled(create.isBusy)
         Button("Load Settings from Image") {
           navigation.section = .create
-          create.loadCanvasImageSettings(undoManager: NSApp.keyWindow?.undoManager)
+          create.loadCanvasImageSettings(undoManager: undoManager)
         }
         .disabled(create.canvasImageSettings == nil)
         Button("Clear Canvas") { create.clearCanvas() }
@@ -128,11 +133,5 @@ struct AtelierApp: App {
         }
       }
     }
-  }
-}
-
-final class AppDelegate: NSObject, NSApplicationDelegate {
-  func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-    true
   }
 }

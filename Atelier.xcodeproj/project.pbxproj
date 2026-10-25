@@ -20,6 +20,8 @@
 		2265D3497F922448C4311F1C /* thumbnail_history_half_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EDDC888B4605901D459188A /* thumbnail_history_half_generated.swift */; };
 		27074EC072717686A06EAA81 /* thumbnail_history_half_data_model_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C75075F80A089CC22F04163 /* thumbnail_history_half_data_model_generated.swift */; };
 		40471B00219ACFE544559125 /* SessionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9895821DCBA0BD67EF40AB9D /* SessionState.swift */; };
+		A1B2C3D4E5F6A7B8C9D0E1F3 /* FileDialogs.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F4 /* FileDialogs.swift */; };
+		A1B2C3D4E5F6A7B8C9D0E1F1 /* MacPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F2 /* MacPlatform.swift */; };
 		44ADCE6EDF2708A792962F31 /* script_session_query_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1353E7B4836513F26BF2C88 /* script_session_query_generated.swift */; };
 		E03AA58CB9A74D68677591AB /* AutomationQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = C65576F212CC11B301A189AF /* AutomationQueue.swift */; };
 		4549FF9554EB66628271351A /* AutomationProject.swift in Sources */ = {isa = PBXBuildFile; fileRef = E750BAC04D4835E5B2477EB2 /* AutomationProject.swift */; };
@@ -149,6 +151,8 @@
 		93F2C9861172F381CCBBF6B5 /* tensor_moodboard_data_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = tensor_moodboard_data_generated.swift; sourceTree = "<group>"; };
 		942FB35BF8B8698F4554E3A2 /* tensor_moodboard_data_mutating_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = tensor_moodboard_data_mutating_generated.swift; sourceTree = "<group>"; };
 		9895821DCBA0BD67EF40AB9D /* SessionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionState.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E1F4 /* FileDialogs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDialogs.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E1F2 /* MacPlatform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPlatform.swift; sourceTree = "<group>"; };
 		A3721E6BF065DEBAC3CB0FE9 /* clip_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = clip_generated.swift; sourceTree = "<group>"; };
 		ADE58B9D9E217745C8A73650 /* clip_data_model_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = clip_data_model_generated.swift; sourceTree = "<group>"; };
 		B147BCDA9E5FEDE9CC9B373A /* CreateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateView.swift; sourceTree = "<group>"; };
@@ -240,6 +244,8 @@
 				716BE47B7D8EFA0449CAF4AF /* AtelierApp.swift */,
 				75FDC53060CFC4942FDDBF2D /* ContentView.swift */,
 				9895821DCBA0BD67EF40AB9D /* SessionState.swift */,
+				A1B2C3D4E5F6A7B8C9D0E1F4 /* FileDialogs.swift */,
+				A1B2C3D4E5F6A7B8C9D0E1F2 /* MacPlatform.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -526,6 +532,8 @@
 				D42B1F3B6CDD906D20BB8275 /* Project.swift in Sources */,
 				FE932A5C887AE92B9E804707 /* ProjectMapping.swift in Sources */,
 				40471B00219ACFE544559125 /* SessionState.swift in Sources */,
+				A1B2C3D4E5F6A7B8C9D0E1F3 /* FileDialogs.swift in Sources */,
+				A1B2C3D4E5F6A7B8C9D0E1F1 /* MacPlatform.swift in Sources */,
 				4862B9A4F2A7A226E9BB6C7C /* SettingsRegistry.swift in Sources */,
 				A1D7E0C1B2F34A5D6E7F8091 /* Moodboard.swift in Sources */,
 				F37644302DD33DAC7A1E63B0 /* SizePreset.swift in Sources */,
