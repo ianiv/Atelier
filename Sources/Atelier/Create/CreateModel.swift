@@ -965,8 +965,8 @@ final class CreateModel {
   }
 }
 
-/// Tells you a generation finished while Atelier was in the background: a Dock badge (cleared when
-/// you come back) and a notification, if allowed.
+/// Tells you a generation finished while Atelier was in the background: a badge on the app icon
+/// (cleared when you come back) and a notification, if allowed.
 @MainActor
 enum FinishedNotice {
   private static var unseen = 0
@@ -974,21 +974,25 @@ enum FinishedNotice {
 
   static func post(prompt: String, seconds: Double) {
     guard !AppLifecycle.isActive else { return }
+    let center = UNUserNotificationCenter.current()
     unseen += 1
-    DockBadge.set(String(unseen))
+    let count = unseen
     if !observing {
       observing = true
       AppLifecycle.onBecomeActive {
         unseen = 0
-        DockBadge.set(nil)
+        Task { try? await center.setBadgeCount(0) }
       }
     }
-    let center = UNUserNotificationCenter.current()
     let content = UNMutableNotificationContent()
     content.title = "Image ready"
     content.body = "\(prompt.prefix(120)) (\(GenerationTime.text(seconds)))"
     let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
     Task {
+      // Asked the first time there's a badge to show; skipped if not allowed.
+      if (try? await center.requestAuthorization(options: [.badge])) == true {
+        try? await center.setBadgeCount(count)
+      }
       guard (try? await center.requestAuthorization(options: [.alert, .sound])) == true else { return }
       try? await center.add(request)
     }

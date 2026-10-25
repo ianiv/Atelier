@@ -93,15 +93,6 @@ enum AppLifecycle {
   }
 }
 
-/// The Dock icon's badge. `UNUserNotificationCenter.setBadgeCount` needs notification permission
-/// for badges, which the Dock tile doesn't.
-@MainActor
-enum DockBadge {
-  static func set(_ label: String?) {
-    NSApp.dockTile.badgeLabel = label
-  }
-}
-
 /// Finder. SwiftUI's `openURL` opens a folder but can't select files in it.
 @MainActor
 enum Finder {
