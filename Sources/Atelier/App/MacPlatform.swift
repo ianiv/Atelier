@@ -6,6 +6,14 @@ import SwiftUI
 // that keeps the Mac app working as it does. Everything else is SwiftUI or a cross-platform
 // framework.
 
+/// AppKit's system colors that SwiftUI has no name for.
+extension Color {
+  static let underPageBackground = Color(nsColor: .underPageBackgroundColor)
+  static let textBackground = Color(nsColor: .textBackgroundColor)
+  static let quaternaryLabel = Color(nsColor: .quaternaryLabelColor)
+  static let separator = Color(nsColor: .separatorColor)
+}
+
 /// Quits when the last window closes. A single `Window` scene would do that in SwiftUI, but it
 /// drops File ▸ New Window, which the `WindowGroup` offers.
 final class MacAppDelegate: NSObject, NSApplicationDelegate {

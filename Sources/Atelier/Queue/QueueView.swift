@@ -147,7 +147,7 @@ struct QueueRow: View {
   @ViewBuilder
   private var preview: some View {
     ZStack {
-      Color(nsColor: .quaternaryLabelColor)
+      Color.quaternaryLabel
       if case .finished(let tensorId) = job.status, let item = create.history.item(tensorId: tensorId) {
         Thumbnail(item: item)
       } else if job.status == .running, let image = create.image {

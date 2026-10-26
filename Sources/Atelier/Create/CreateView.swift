@@ -163,7 +163,7 @@ struct CanvasView: View {
       } isTargeted: { isTargeted = $0 }
       .onChange(of: imageFit, initial: true) { canvas.fitScale = imageFit }
     }
-    .background(Color(nsColor: .underPageBackgroundColor).ignoresSafeArea())
+    .background(Color.underPageBackground.ignoresSafeArea())
     // A new image starts fitted to the frame.
     .onChange(of: model.imageItem?.tensorId) { canvas.zoomToFit() }
     .alert(
@@ -565,10 +565,10 @@ struct PromptComposer: View {
           .focused($promptFocused)
           .onSubmit { model.generate() }
           .padding(8)
-          .background(Color(nsColor: .textBackgroundColor), in: Self.fieldShape)
+          .background(Color.textBackground, in: Self.fieldShape)
           .overlay(
             Self.fieldShape
-              .stroke(promptFocused ? Color.accentColor : Color(nsColor: .separatorColor))
+              .stroke(promptFocused ? Color.accentColor : Color.separator)
           )
           .help("Prompt. Return generates; ⌥↩ adds a line. ⌘L focuses this field.")
         GlassEffectContainer(spacing: 8) {

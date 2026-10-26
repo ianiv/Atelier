@@ -179,7 +179,7 @@ struct HistoryView: View {
         return .handled
       }
       .quickLookPreview($quickLookURL)
-      .background(Color(nsColor: .underPageBackgroundColor))
+      .background(Color.underPageBackground)
       }
     }
   }
@@ -572,7 +572,7 @@ struct Thumbnail: View {
 
   var body: some View {
     ZStack {
-      if fill { Color(nsColor: .quaternaryLabelColor) }
+      if fill { Color.quaternaryLabel }
       if let image {
         Image(decorative: image, scale: 1)
           .resizable()
