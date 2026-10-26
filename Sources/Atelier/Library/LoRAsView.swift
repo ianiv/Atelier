@@ -59,7 +59,7 @@ struct LoRAsView: View {
         }
       }
       .searchable(text: $search, placement: .toolbar, prompt: "Filter LoRAs")
-      .inspector(isPresented: .constant(true)) {
+      .detailInspector(selection: selection, isEmpty: selected == nil, clearSelection: { selection = nil }) {
         Group {
           if let selected {
             LoRADetail(lora: selected, delete: { pendingDelete = selected })
@@ -189,13 +189,14 @@ struct LoRADetail: View {
           Button("Save", action: save)
             .keyboardShortcut(.defaultAction)
         }
+        .formRowButtons()
         .disabled(!edited || name.trimmingCharacters(in: .whitespaces).isEmpty)
       }
       Section {
         LabeledContent("For", value: lora.family)
         LabeledContent("File") { Text(lora.file).textSelection(.enabled) }
         if let size = lora.size { LabeledContent("Size", value: ModelsView.bytes(size)) }
-        HStack {
+        ButtonRow {
           Button(Finder.revealTitle) { library.reveal(lora.file) }
             .disabled(!lora.isDownloaded)
           Button("Move to Trash", role: .destructive, action: delete)

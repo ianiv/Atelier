@@ -46,6 +46,7 @@ struct ContentView: View {
   @Environment(FileDialogs.self) private var fileDialogs
   @Environment(\.undoManager) private var undoManager
   @State private var showingSettings = false
+  @State private var columns = NavigationSplitViewVisibility.automatic
 
   /// Images running or waiting in the queue.
   private var queueCount: Int {
@@ -55,7 +56,7 @@ struct ContentView: View {
   var body: some View {
     @Bindable var navigation = navigation
     @Bindable var create = create
-    NavigationSplitView {
+    NavigationSplitView(columnVisibility: $columns) {
       List(Section.allCases, selection: $navigation.section) { section in
         HStack {
           Label(section.rawValue, systemImage: section.symbol)
@@ -107,6 +108,14 @@ struct ContentView: View {
     } message: {
       Text("Forgets the \(create.recentPrompts.count) recent prompts that ⌘↑ and ⌘↓ step through. Images in History keep their prompts. This can't be undone.")
     }
+    #if os(iOS)
+      // A window too narrow for the sidebar, the screen and its inspector side by side hides the
+      // sidebar (the toolbar button shows it over the screen), so the inspector stays a column
+      // rather than covering the screen. Recomputed only when the window crosses the width.
+      .onGeometryChange(for: Bool.self) { $0.size.width >= Self.sidebarMinimumWidth } action: { wide in
+        columns = wide ? .all : .detailOnly
+      }
+    #endif
     // Open Image… and Add Images…, from the menus, the canvas and the moodboard.
     .onChange(of: create.imageImport, initial: true) {
       guard let target = create.imageImport else { return }
@@ -120,6 +129,10 @@ struct ContentView: View {
       .onChange(of: create.isRunning, initial: true) {
         AppLifecycle.keepScreenAwake(create.isRunning)
       }
+      #if DEBUG
+        // For layout checks (Scripts/ipad-layout-shots.sh): -AtelierShowSettings YES.
+        .onAppear { if UserDefaults.standard.bool(forKey: "AtelierShowSettings") { showingSettings = true } }
+      #endif
       .sheet(isPresented: $showingSettings) {
         NavigationStack {
           SettingsTabs()
@@ -137,6 +150,13 @@ struct ContentView: View {
     .focusedSceneValue(\.windowUndoManager, undoManager)
   }
 }
+
+#if os(iOS)
+  extension ContentView {
+    /// The narrowest window that keeps the sidebar beside a screen and its inspector.
+    static let sidebarMinimumWidth: CGFloat = 1000
+  }
+#endif
 
 extension FocusedValues {
   @Entry var windowUndoManager: UndoManager?

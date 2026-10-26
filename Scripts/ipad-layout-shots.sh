@@ -36,15 +36,22 @@ window-900x700 900 700
 window-600x800 600 800
 window-400x600 400 600
 smallest 360 480"
-SECTIONS="${SECTIONS:-Create Queue History Models LoRAs}"
+# Settings is the Settings sheet, opened over Create.
+SECTIONS="${SECTIONS:-Create Queue History Models LoRAs Settings}"
 
 while read -r name width height; do
   for section in $SECTIONS; do
     xcrun simctl terminate "$DEVICE" "$BUNDLE" 2>/dev/null || true
-    xcrun simctl spawn "$DEVICE" defaults write "$BUNDLE" section "$section"
+    screen="$section" settings=NO
+    [ "$section" = Settings ] && screen=Create settings=YES
+    xcrun simctl spawn "$DEVICE" defaults write "$BUNDLE" section "$screen"
+    # Start each shot with the inspector's default (shown), from the app's own preferences.
+    prefs="$(xcrun simctl get_app_container "$DEVICE" "$BUNDLE" data)/Library/Preferences/$BUNDLE.plist"
+    [ -f "$prefs" ] && plutil -remove inspectorShown "$prefs" >/dev/null 2>&1 || true
     # Sample images in a project of their own (SampleData.swift) and every model in Models.
     xcrun simctl launch "$DEVICE" "$BUNDLE" -AtelierWindowSize "${width}x${height}" \
-      --project "Layout Sample" -AtelierSampleData YES -modelsFilter All $EXTRA_ARGS >/dev/null
+      --project "Layout Sample" -AtelierSampleData YES -modelsFilter All \
+      -AtelierShowSettings "$settings" $EXTRA_ARGS >/dev/null
     sleep "${WAIT:-5}"
     file="$OUT/$section-$name.png"
     xcrun simctl io "$DEVICE" screenshot "$file" >/dev/null 2>&1

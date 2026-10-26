@@ -10,6 +10,13 @@ struct HistoryView: View {
   @Environment(FileDialogs.self) private var fileDialogs
   /// Selected images by image tensor, which stays the same when a fork or delete renumbers steps.
   @State private var selection: Set<Int64> = []
+  /// Counts selections made by hand, not the one the screen starts with, so a narrow window opens
+  /// the detail pane only for those.
+  @State private var picks = 0
+  #if os(iOS)
+    /// Select mode: taps add and remove images, as ⌘-click does on the Mac.
+    @State private var selecting = false
+  #endif
   /// The item arrows move from, ⇧-click extends from and Quick Look shows.
   @State private var anchor: Int64?
   @State private var search = ""
@@ -66,9 +73,15 @@ struct HistoryView: View {
           }
           .frame(minWidth: 180)
         }
+        #if os(iOS)
+          ToolbarItem {
+            Button(selecting ? "Done" : "Select") { selecting.toggle() }
+              .help("Select several images to copy, export, save or delete together")
+          }
+        #endif
       }
       .searchable(text: $search, placement: .toolbar, prompt: "Filter by prompt")
-      .inspector(isPresented: .constant(true)) {
+      .detailInspector(selection: picks, isEmpty: selection.isEmpty, clearSelection: { selection = [] }) {
         Group {
           let selected = selectedItems
           if selected.count == 1, let item = selected.first {
@@ -76,11 +89,12 @@ struct HistoryView: View {
               item: item, use: { use(item, newSeed: false, loadImage: false) },
               rerun: { use(item, newSeed: true) },
               export: { export([item]) },
-              delete: { pendingDelete = [item] })
+              delete: { pendingDelete = [item] }, saveToPhotos: photosAction([item]))
           } else if selected.count > 1 {
             HistorySelectionDetail(
               items: selected, export: { export(selected) },
-              delete: { pendingDelete = selected })
+              delete: { pendingDelete = selected }, saveToPhotos: photosAction(selected))
+
           } else {
             ContentUnavailableView(
               "No selection", systemImage: "photo.on.rectangle",
@@ -275,20 +289,25 @@ struct HistoryView: View {
   }
 
   /// Double-click uses the image; a click picks it, ⌘-click toggles it, ⇧-click extends to it. On
-  /// iPad, a tap picks and a double tap uses (tap gestures there take no modifier keys).
+  /// iPad, a tap picks and a double tap uses (tap gestures there take no modifier keys); in Select
+  /// mode a tap toggles.
   private func tapGesture(_ item: HistoryItem) -> some Gesture {
-    let pickItem = TapGesture().onEnded {
-      pick(item)
-      gridFocused = true
-    }
     #if os(macOS)
+      let pickItem = TapGesture().onEnded {
+        pick(item)
+        gridFocused = true
+      }
       return TapGesture(count: 2).onEnded { use(item, newSeed: false) }
         .exclusively(before: TapGesture().modifiers(.command).onEnded { toggle(item.tensorId) })
         .exclusively(before: TapGesture().modifiers(.shift).onEnded { extend(to: item.tensorId) })
         .exclusively(before: pickItem)
     #else
-      return TapGesture(count: 2).onEnded { use(item, newSeed: false) }
-        .exclusively(before: pickItem)
+      return TapGesture(count: 2).onEnded { if !selecting { use(item, newSeed: false) } }
+        .exclusively(
+          before: TapGesture().onEnded {
+            if selecting { toggle(item.tensorId) } else { pick(item) }
+            gridFocused = true
+          })
     #endif
   }
 
@@ -361,6 +380,7 @@ struct HistoryView: View {
   /// the next run follows it.
   private func pick(_ item: HistoryItem) {
     selectOnly(item.tensorId)
+    picks += 1
     create.show(item)
   }
 
@@ -368,6 +388,7 @@ struct HistoryView: View {
   private func toggle(_ id: Int64) {
     if selection.remove(id) == nil { selection.insert(id) }
     anchor = id
+    picks += 1
     gridFocused = true
   }
 
@@ -378,6 +399,7 @@ struct HistoryView: View {
       let to = items.firstIndex(where: { $0.tensorId == id })
     else { return selectOnly(id) }
     selection.formUnion(items[min(from, to)...max(from, to)].map(\.tensorId))
+    picks += 1
     gridFocused = true
   }
 
@@ -444,6 +466,15 @@ struct HistoryView: View {
     }
   #endif
 
+  /// Save to Photos for the detail panes' buttons, which only iPad shows.
+  private func photosAction(_ items: [HistoryItem]) -> () -> Void {
+    #if os(iOS)
+      { saveToPhotos(items) }
+    #else
+      {}
+    #endif
+  }
+
   /// One image: a save panel. Several: a folder, each named like a single export.
   private func export(_ items: [HistoryItem]) {
     if items.count == 1, let item = items.first {
@@ -505,6 +536,8 @@ struct HistorySelectionDetail: View {
   var items: [HistoryItem]
   var export: () -> Void
   var delete: () -> Void
+  /// iPad only.
+  var saveToPhotos: () -> Void = {}
 
   var body: some View {
     Form {
@@ -519,9 +552,12 @@ struct HistorySelectionDetail: View {
         }
         Text("\(items.count) images selected")
           .foregroundStyle(.secondary)
-        HStack {
+        ButtonRow {
           Button("Copy Images") { Task { await history.copyImages(items) } }
           Button("Export PNGs…", action: export)
+          #if os(iOS)
+            Button("Save to Photos", action: saveToPhotos)
+          #endif
           Button("Delete", role: .destructive, action: delete)
         }
       }
@@ -538,6 +574,8 @@ struct HistoryDetail: View {
   var rerun: () -> Void
   var export: () -> Void
   var delete: () -> Void
+  /// iPad only.
+  var saveToPhotos: () -> Void = {}
 
   var body: some View {
     let sidecar = item.sidecar
@@ -546,7 +584,7 @@ struct HistoryDetail: View {
         Thumbnail(item: item, half: false, fill: false)
           .frame(maxWidth: .infinity)
           .frame(height: 260)
-        HStack {
+        ButtonRow {
           Button("Use Settings", action: use)
           Button("Rerun with New Seed", action: rerun)
         }
@@ -555,9 +593,12 @@ struct HistoryDetail: View {
           Label("\(sidecar.model) isn't downloaded.", systemImage: "exclamationmark.triangle")
             .font(.caption).foregroundStyle(.secondary)
         }
-        HStack {
+        ButtonRow {
           Button("Copy Image") { Task { await history.copyImage(item) } }
           Button("Export PNG…", action: export)
+          #if os(iOS)
+            Button("Save to Photos", action: saveToPhotos)
+          #endif
           Button("Delete", role: .destructive, action: delete)
         }
       }

@@ -5,6 +5,27 @@ import _MediaGenerationKit
 struct CreateView: View {
   @Environment(CreateModel.self) private var model
   @AppStorage("inspectorShown") private var inspectorShown = true
+  #if os(iOS)
+    /// The window is too narrow for the canvas beside the inspector.
+    @State private var narrow = false
+    @State private var shownWhileNarrow = false
+    @State private var measured = false
+  #endif
+
+  /// Whether the inspector shows: the saved choice, or in a narrow iPad window, only once opened.
+  private var inspectorPresented: Binding<Bool> {
+    #if os(iOS)
+      // Read here, in the body, rather than in the getter, so a change redraws the view.
+      // Closed until the width is known: an inspector opened over the canvas in the first layout
+      // pass stays open even when the binding turns false right after.
+      let presented = measured && (narrow ? shownWhileNarrow : inspectorShown)
+      return Binding(
+        get: { presented },
+        set: { if narrow { shownWhileNarrow = $0 } else { inspectorShown = $0 } })
+    #else
+      $inspectorShown
+    #endif
+  }
 
   var body: some View {
     @Bindable var model = model
@@ -24,10 +45,21 @@ struct CreateView: View {
           PromptComposer()
         }
       }
-      .inspector(isPresented: $inspectorShown) {
+      .inspector(isPresented: inspectorPresented) {
       InspectorView()
         .inspectorColumnWidth(min: 300, ideal: 340, max: 460)
     }
+    #if os(iOS)
+      // In a window too narrow for the canvas beside the inspector, the inspector would cover the
+      // canvas: it starts hidden there (the toolbar button still opens it), and the window's
+      // saved choice applies again once it's wider.
+      .onGeometryChange(for: Bool.self) { $0.size.width < iPadInspectorMinimumWidth } action: {
+        narrow = $0
+        shownWhileNarrow = false
+        measured = true
+      }
+      .onChange(of: inspectorShown) { if narrow { shownWhileNarrow = inspectorShown } }
+    #endif
     // A plain toolbar, not a customizable `.toolbar(id:)`: AppKit crashes ("NSToolbarItemViewer's
     // min/max size is nan") switching between a customizable toolbar and the other sections'
     // `.searchable` toolbars.
@@ -41,8 +73,8 @@ struct CreateView: View {
       }
       ToolbarSpacer(.fixed, placement: .primaryAction)
       ToolbarItem(placement: .primaryAction) {
-        Button("Inspector", systemImage: "sidebar.trailing") { inspectorShown.toggle() }
-          .help(inspectorShown ? "Hide Inspector (⌥⌘I)" : "Show Inspector (⌥⌘I)")
+        Button("Inspector", systemImage: "sidebar.trailing") { inspectorPresented.wrappedValue.toggle() }
+          .help(inspectorPresented.wrappedValue ? "Hide Inspector (⌥⌘I)" : "Show Inspector (⌥⌘I)")
       }
     }
   }
@@ -579,11 +611,16 @@ struct PromptComposer: View {
   @AppStorage("showNegativePrompt") private var showNegative = false
   @AppStorage(PromptSplitter.linesKey) private var promptLines = 3
   @FocusState private var promptFocused: Bool
+  /// Too narrow for the buttons beside the prompt (a narrow iPad window): they go under it.
+  @State private var narrow = false
 
   var body: some View {
     @Bindable var model = model
+    let row = narrow
+      ? AnyLayout(VStackLayout(alignment: .trailing, spacing: 8))
+      : AnyLayout(HStackLayout(alignment: .bottom, spacing: 10))
     VStack(alignment: .leading, spacing: 6) {
-      HStack(alignment: .bottom, spacing: 10) {
+      row {
         TextField("Describe the image…", text: $model.prompt, axis: .vertical)
           .lineLimit(promptLines, reservesSpace: true)
           .textFieldStyle(.plain)
@@ -653,6 +690,9 @@ struct PromptComposer: View {
     }
     .padding(12)
     .onChange(of: model.focusPromptRequest) { promptFocused = true }
+    #if os(iOS)
+      .onGeometryChange(for: Bool.self) { $0.size.width < 480 } action: { narrow = $0 }
+    #endif
   }
 
   /// Follows the window's corners, never tighter than a text field's.
@@ -757,7 +797,7 @@ struct ModelsSettingsView: View {
             TextField("Path", text: $directory)
               .labelsHidden()
               .focused($directoryFocused)
-              .frame(minWidth: 320)
+              .settingsFieldWidth()
             Button("Choose…") { choosing = true }
           }
         }
@@ -812,7 +852,7 @@ struct ImagesSettingsView: View {
           HStack {
             TextField("Path", text: $outputFolder, prompt: Text(AppSettings.defaultOutputFolder))
               .labelsHidden()
-              .frame(minWidth: 320)
+              .settingsFieldWidth()
             Button("Choose…") { choosingOutputFolder = true }
           }
         }

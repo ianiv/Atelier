@@ -73,7 +73,7 @@ struct ModelsView: View {
       }
       .searchable(text: $search, placement: .toolbar, prompt: "Filter models")
       .safeAreaBar(edge: .bottom, spacing: 0) { footer }
-      .inspector(isPresented: .constant(true)) {
+      .detailInspector(selection: selection, isEmpty: selected == nil, clearSelection: { selection = nil }) {
         Group {
           if let selected {
             ModelDetail(model: selected, delete: { pendingDelete = selected })
@@ -281,7 +281,7 @@ struct ModelDetail: View {
           }
           Button("Cancel Download") { library.cancelDownload(model.file) }
         } else if model.isDownloaded {
-          HStack {
+          ButtonRow {
             Button(Finder.revealTitle) { library.reveal(model.file) }
             Button("Move to Trash", role: .destructive, action: delete)
               .disabled(!library.canDelete(model))
