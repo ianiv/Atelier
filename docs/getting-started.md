@@ -42,7 +42,7 @@ An iPad version is in development on the `ipad` branch. It needs an iPad with an
 
 There's no download yet; build and install it from Xcode:
 
-1. Set your team in `Config/Local.xcconfig` (see [Code signing](#code-signing)). An iPad build has to be signed to install.
+1. Set your team in `Config/Local.xcconfig` (see [Code signing](#code-signing)) and sign in to your Apple account in Xcode under **Settings ▸ Accounts**. An iPad build has to be signed to install, and the first build from Xcode registers the app with the extra-memory capabilities it uses (Increased Memory Limit and Extended Virtual Addressing).
 2. Connect the iPad, open `Atelier.xcodeproj`, choose your iPad as the run destination and run the Atelier scheme. From Terminal, `Scripts/build.sh Debug ipad` builds it and `Scripts/build.sh Debug ipad-sim` builds it for the iPad simulator.
 3. Copy models in with the Files app: Atelier's folder under **On My iPad** has a **Models** folder. Copy the model files there from your Mac's models folder, or download models in **Models**.
 
@@ -51,6 +51,8 @@ On iPad:
 - Images are saved in **On My iPad ▸ Atelier ▸ Atelier**, and models are in **On My iPad ▸ Atelier ▸ Models**.
 - Settings is the gear button at the top of the sidebar.
 - **Save to Photos** sits next to **Save Image…** on the canvas and **Export** in History.
+- If a model is larger than the memory iPadOS leaves Atelier, the status bar says so when you pick it. You can still try it.
+- The queue pauses when you switch away from Atelier, because iPadOS doesn't let apps use the GPU in the background, and picks up again when you come back. The screen stays awake while an image is being made.
 - Agents (the MCP server) and scripted runs are Mac only.
 
 ## Choose your models folder
