@@ -481,7 +481,7 @@ struct LiveThumbnail: View {
       model.followRun()
     } label: {
       ZStack {
-        Color(nsColor: .quaternaryLabelColor)
+        Color.quaternaryLabel
         if let image = model.livePreview {
           Image(decorative: image, scale: 1).resizable().aspectRatio(contentMode: .fill)
         } else {
@@ -492,6 +492,7 @@ struct LiveThumbnail: View {
       .frame(width: 24, height: 24)
       .clipShape(.rect(cornerRadius: 3))
       .contentShape(.rect)
+      .touchTarget()
     }
     .buttonStyle(.plain)
     .help("The image being generated. Click to show it on the canvas.")
