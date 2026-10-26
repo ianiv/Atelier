@@ -108,20 +108,18 @@ struct AtelierApp: App {
           create.imageImport = .canvas
         }
         .keyboardShortcut("o", modifiers: .command)
-        .disabled(create.isBusy)
         Button("Paste Image") {
           navigation.section = .create
           create.pasteImage()
         }
         .keyboardShortcut("v", modifiers: [.command, .shift])
-        .disabled(create.isBusy)
         Button("Load Settings from Image") {
           navigation.section = .create
           create.loadCanvasImageSettings(undoManager: undoManager)
         }
         .disabled(create.canvasImageSettings == nil)
         Button("Clear Canvas") { create.clearCanvas() }
-          .disabled(create.isBusy || navigation.section != .create)
+          .disabled(navigation.section != .create)
         Divider()
         Picker("Mode", selection: Binding(get: { create.effectiveCanvasMode }, set: { create.canvasMode = $0 })) {
           Text("Generate").tag(CreateModel.CanvasMode.generate)

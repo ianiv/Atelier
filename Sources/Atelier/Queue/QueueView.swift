@@ -150,7 +150,7 @@ struct QueueRow: View {
       Color.quaternaryLabel
       if case .finished(let tensorId) = job.status, let item = create.history.item(tensorId: tensorId) {
         Thumbnail(item: item)
-      } else if job.status == .running, let image = create.image {
+      } else if job.status == .running, let image = create.livePreview {
         Image(decorative: image, scale: 1).resizable().aspectRatio(contentMode: .fill)
       } else if let canvas = job.request.canvas {
         Image(decorative: canvas, scale: 1).resizable().aspectRatio(contentMode: .fill)
