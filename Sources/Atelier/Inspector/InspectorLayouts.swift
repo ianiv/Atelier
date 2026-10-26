@@ -47,11 +47,30 @@ struct InspectorLayout: Codable, Hashable, Identifiable {
     expanded: [SettingSection.essentials.id, SettingSection.loras.id, SettingSection.sampling.id,
       SettingSection.video.id])
 
+  /// For video models: length first, then what changes a video most (LTX's two-stage hires fix,
+  /// Wan 2.2's low-noise expert as the refiner, Stable Video Diffusion's motion), what speeds it
+  /// up (TeaCache) and what keeps long, large videos in memory (tiled decoding). Settings a model
+  /// doesn't use hide themselves, so one layout serves every family.
+  static let video = InspectorLayout(
+    name: "Video",
+    shown: [
+      "size", "steps", "guidanceScale", "sampler", "numFrames", "fps", "motionScale", "loras",
+      "shift", "seedMode", "hiresFix", "hiresFixWidth", "hiresFixHeight", "hiresFixStrength",
+      "stage2Steps", "refinerModel", "refinerStart", "strength", "teaCache", "teaCacheThreshold",
+      "tiledDecoding",
+    ],
+    expanded: [SettingSection.essentials.id, SettingSection.video.id, SettingSection.loras.id],
+    sectionOrder: [
+      SettingSection.essentials.id, SettingSection.video.id, SettingSection.loras.id,
+      SettingSection.sampling.id, SettingSection.hiresFix.id, SettingSection.refiner.id,
+      SettingSection.imageToImage.id, SettingSection.teaCache.id, SettingSection.tiledDecoding.id,
+    ])
+
   static let everything = InspectorLayout(
     name: "Everything", shown: SettingsRegistry.all.map(\.id),
     expanded: SettingSection.allCases.map(\.id))
 
-  static let builtIns = [simple, standard, everything]
+  static let builtIns = [simple, standard, video, everything]
 }
 
 /// Built-in and custom inspector layouts; custom ones are JSON files in Application Support.

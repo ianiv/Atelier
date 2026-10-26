@@ -17,6 +17,9 @@ Download them from **Models** like any other model. They're large, and a video t
 
 ## Length
 
+The inspector's **Video** layout (from the menu at the top of the inspector) shows what most videos need: length, the second pass, the refiner, TeaCache and tiled decoding, with the rest one search away.
+
+
 The inspector's **Video** section starts with **Length**: the number of frames, with how many seconds that plays for beside it. Each model only takes some frame counts (LTX one more than a multiple of 8, Wan one more than a multiple of 4, MiniMax H3 5 plus a multiple of 17), so the length snaps to the nearest one, and the stepper moves between them. Videos play at the rate the model was trained at (25 frames a second for LTX, 24 for MiniMax H3, 16 for Wan 2.1).
 
 Longer and larger videos take much longer and need much more memory. Try a short, small one first.

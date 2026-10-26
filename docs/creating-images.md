@@ -55,6 +55,7 @@ A layout decides which settings are shown, their order, and which sections start
 
 - **Simple**: size, steps, guidance and sampler.
 - **Standard**: adds LoRAs, shift, hires fix, refiner, upscaler, strength and other common settings.
+- **Video**: for video models: size, steps, guidance, sampler and length first, then LoRAs, shift, the second pass (LTX), the refiner (Wan 2.2's two experts), strength, TeaCache and tiled decoding. Settings a model doesn't use stay hidden.
 - **Everything**: every setting.
 
 From the same menu:
