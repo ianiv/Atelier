@@ -205,7 +205,8 @@ final class HistoryStore {
     _ result: MediaGenerationPipeline.Result,
     request: GenerationEngine.Request,
     startedAt: Date,
-    finishedAt: Date
+    finishedAt: Date,
+    makeCurrent: () -> Bool = { true }
   ) async throws -> HistoryItem {
     var settings = request.configuration
     settings.seed = request.seed
@@ -243,8 +244,11 @@ final class HistoryStore {
       inputTensorId: inputTensorId, after: parentTensorId)
     if project === self.project {
       // A fork may have renumbered other steps.
-      currentTensorId = item.tensorId
+      let keepCurrent = !makeCurrent()
+      if !keepCurrent { currentTensorId = item.tensorId }
       await reload()
+      // The new step is likely the newest now, which the project records as no position.
+      if keepCurrent { recordCurrent() }
     }
     return self.item(tensorId: item.tensorId) ?? item
   }

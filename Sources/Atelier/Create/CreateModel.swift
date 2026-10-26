@@ -735,7 +735,8 @@ final class CreateModel {
           }
         }
         let item = try await history.save(
-          result, request: request, startedAt: startedAt, finishedAt: Date())
+          result, request: request, startedAt: startedAt, finishedAt: Date(),
+          makeCurrent: { self.canvasFollowsRun })
         lastSavedTensorId = item.tensorId
         let finished = ImageTensor.cgImage(from: result.tensor) ?? livePreview
         if canvasFollowsRun {
