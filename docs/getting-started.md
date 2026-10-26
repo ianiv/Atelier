@@ -51,7 +51,6 @@ On iPad:
 - Images are saved in **On My iPad ▸ Atelier ▸ Atelier**, and models are in **On My iPad ▸ Atelier ▸ Models**.
 - Settings is the gear button at the top of the sidebar.
 - **Save to Photos** sits next to **Save Image…** on the canvas and **Export** in History.
-- If a model is larger than the memory iPadOS leaves Atelier, the status bar says so when you pick it. You can still try it.
 - The queue pauses when you switch away from Atelier, because iPadOS doesn't let apps use the GPU in the background, and picks up again when you come back. The screen stays awake while an image is being made.
 - Agents (the MCP server) and scripted runs are Mac only.
 

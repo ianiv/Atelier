@@ -32,12 +32,7 @@ final class CreateModel {
   var models: [MediaGenerationResolvedModel] = []
   var selectedModel: String? {
     didSet {
-      if selectedModel != oldValue, let selectedModel {
-        loadDefaults(for: selectedModel)
-        #if os(iOS)
-          warnIfTooLarge(selectedModel)
-        #endif
-      }
+      if selectedModel != oldValue, let selectedModel { loadDefaults(for: selectedModel) }
     }
   }
   var modelsDirectory = AppSettings.modelsDirectory
@@ -987,26 +982,6 @@ final class CreateModel {
     }
   }
 }
-
-#if os(iOS)
-  extension CreateModel {
-    /// Notes, without stopping anything, when a model's weights are larger than the memory this
-    /// iPad leaves Atelier: it may fail to load or run slowly.
-    fileprivate func warnIfTooLarge(_ file: String) {
-      let directory = URL(fileURLWithPath: modelsDirectory, isDirectory: true)
-      let size = [file, file + "-tensordata"].reduce(Int64(0)) { total, name in
-        let url = directory.appendingPathComponent(name)
-        let bytes = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
-        return total + Int64(bytes)
-      }
-      let available = AppLifecycle.availableMemory
-      guard size > 0, available > 0, size > available * 9 / 10 else { return }
-      let gigabytes = { (bytes: Int64) in bytes.formatted(.byteCount(style: .memory)) }
-      statusNote =
-        "This model is \(gigabytes(size)) and this iPad has about \(gigabytes(available)) free for Atelier, so it may not load or may be slow."
-    }
-  }
-#endif
 
 /// Tells you a generation finished while Atelier was in the background: a badge on the app icon
 /// (cleared when you come back) and a notification, if allowed.
