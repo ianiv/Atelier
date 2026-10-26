@@ -770,7 +770,10 @@ struct ModelsSettingsView: View {
     }
     .settingsForm()
     .fileImporter(isPresented: $choosing, allowedContentTypes: [.folder]) { result in
-      if case .success(let url) = result { directory = url.path }
+      if case .success(let url) = result {
+        FolderBookmarks.remember(url)
+        directory = url.path
+      }
     }
     .fileDialogDefaultDirectory(URL(fileURLWithPath: directory))
     .onAppear {
@@ -856,9 +859,14 @@ struct PerformanceSettingsView: View {
 extension View {
   /// The grouped form, width and sizing every Settings tab shares.
   func settingsForm(width: CGFloat = 600) -> some View {
-    formStyle(.grouped)
-      .frame(width: width)
-      .fixedSize(horizontal: false, vertical: true)
+    #if os(macOS)
+      formStyle(.grouped)
+        .frame(width: width)
+        .fixedSize(horizontal: false, vertical: true)
+    #else
+      // A sheet on iPad: the form fills it.
+      formStyle(.grouped)
+    #endif
   }
 }
 

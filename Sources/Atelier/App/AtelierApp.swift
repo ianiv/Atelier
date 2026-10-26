@@ -25,6 +25,8 @@ struct AtelierApp: App {
       for folder in [URL(fileURLWithPath: AppSettings.modelsDirectory), AppSettings.historyDirectory] {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
       }
+      // A models folder picked outside the app stays readable while Atelier runs.
+      FolderBookmarks.keepOpen(AppSettings.modelsDirectory)
     #endif
     let history = HistoryStore()
     _history = State(initialValue: history)
@@ -127,23 +129,37 @@ struct AtelierApp: App {
     }
     #if os(macOS)
     Settings {
-      TabView {
-        Tab("Models", systemImage: "shippingbox") {
-          ModelsSettingsView()
-            .environment(create)
-        }
-        Tab("Images", systemImage: "photo.on.rectangle") {
-          ImagesSettingsView()
-        }
-        Tab("Performance", systemImage: "gauge.with.dots.needle.67percent") {
-          PerformanceSettingsView()
-        }
+      SettingsTabs(agents: agents)
+        .environment(create)
+    }
+    #endif
+  }
+}
+
+/// Settings' tabs: the Settings window on the Mac, a sheet on iPad (without Agents, which is Mac
+/// only).
+struct SettingsTabs: View {
+  #if os(macOS)
+    let agents: AgentServer
+  #endif
+
+  var body: some View {
+    TabView {
+      Tab("Models", systemImage: "shippingbox") {
+        ModelsSettingsView()
+      }
+      Tab("Images", systemImage: "photo.on.rectangle") {
+        ImagesSettingsView()
+      }
+      Tab("Performance", systemImage: "gauge.with.dots.needle.67percent") {
+        PerformanceSettingsView()
+      }
+      #if os(macOS)
         Tab("Agents", systemImage: "sparkles") {
           AgentSettingsView()
             .environment(agents)
         }
-      }
+      #endif
     }
-    #endif
   }
 }

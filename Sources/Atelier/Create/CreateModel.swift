@@ -435,6 +435,7 @@ final class CreateModel {
   func setModelsDirectory(_ directory: String) {
     AppSettings.modelsDirectory = directory
     modelsDirectory = directory
+    FolderBookmarks.keepOpen(directory)
     Task { await reloadModels() }
   }
 

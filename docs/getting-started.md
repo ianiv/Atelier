@@ -36,6 +36,23 @@ DEVELOPMENT_TEAM = YOURTEAMID
 
 Replace `YOURTEAMID` with your team ID, which is shown in Xcode under **Settings ▸ Accounts** and on the Membership page of your Apple Developer account. `Config/Local.xcconfig` is ignored by git, so your team ID stays out of the repository. Use this file rather than the Signing & Capabilities tab in Xcode, which writes the team into the project file.
 
+## Atelier on iPad
+
+An iPad version is in development on the `ipad` branch. It needs an iPad with an M1 chip or newer running iPadOS 27; how fast it generates depends on the chip and its memory.
+
+There's no download yet; build and install it from Xcode:
+
+1. Set your team in `Config/Local.xcconfig` (see [Code signing](#code-signing)). An iPad build has to be signed to install.
+2. Connect the iPad, open `Atelier.xcodeproj`, choose your iPad as the run destination and run the Atelier scheme. From Terminal, `Scripts/build.sh Debug ipad` builds it and `Scripts/build.sh Debug ipad-sim` builds it for the iPad simulator.
+3. Copy models in with the Files app: Atelier's folder under **On My iPad** has a **Models** folder. Copy the model files there from your Mac's models folder, or download models in **Models**.
+
+On iPad:
+
+- Images are saved in **On My iPad ▸ Atelier ▸ Atelier**, and models are in **On My iPad ▸ Atelier ▸ Models**.
+- Settings is the gear button at the top of the sidebar.
+- **Save to Photos** sits next to **Save Image…** on the canvas and **Export** in History.
+- Agents (the MCP server) and scripted runs are Mac only.
+
 ## Choose your models folder
 
 Atelier uses the same model files as Draw Things. By default it looks in `~/Documents/Models` (or the folder in the `DRAWTHINGS_MODELS_DIR` environment variable, if set).

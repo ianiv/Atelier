@@ -34,6 +34,14 @@ enum FolderBookmarks {
     #endif
   }
 
+  private static var held: [String: ScopedAccess] = [:]
+
+  /// Keeps the folder at `path` open until another is kept open in its place, for the models
+  /// folder the engine reads from.
+  @MainActor static func keepOpen(_ path: String) {
+    held = ["models": open(path)]
+  }
+
   /// Opens the folder at `path`, through its bookmark when there is one.
   static func open(_ path: String) -> ScopedAccess {
     let url = URL(fileURLWithPath: path, isDirectory: true)

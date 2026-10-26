@@ -45,6 +45,7 @@ struct ContentView: View {
   @Environment(CreateModel.self) private var create
   @Environment(FileDialogs.self) private var fileDialogs
   @Environment(\.undoManager) private var undoManager
+  @State private var showingSettings = false
 
   /// Images running or waiting in the queue.
   private var queueCount: Int {
@@ -75,6 +76,15 @@ struct ContentView: View {
         .tag(section)
       }
       .navigationSplitViewColumnWidth(min: 160, ideal: 180)
+      #if os(iOS)
+        // iPad has no Settings window: Settings is a sheet from the sidebar.
+        .toolbar {
+          ToolbarItem {
+            Button("Settings", systemImage: "gear") { showingSettings = true }
+              .keyboardShortcut(",", modifiers: .command)
+          }
+        }
+      #endif
     } detail: {
       switch navigation.section {
       case .create, nil:
@@ -106,6 +116,20 @@ struct ContentView: View {
       }
     }
     .fileDialogs(fileDialogs)
+    #if os(iOS)
+      .sheet(isPresented: $showingSettings) {
+        NavigationStack {
+          SettingsTabs()
+            .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+              ToolbarItem(placement: .confirmationAction) {
+                Button("Done") { showingSettings = false }
+              }
+            }
+        }
+      }
+    #endif
     // For menu commands, which act on the key window's undo stack.
     .focusedSceneValue(\.windowUndoManager, undoManager)
   }
