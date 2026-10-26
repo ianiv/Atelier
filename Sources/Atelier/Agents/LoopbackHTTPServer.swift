@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Network
 
@@ -226,3 +227,4 @@ final class LoopbackHTTPServer: @unchecked Sendable {
     }
   }
 }
+#endif

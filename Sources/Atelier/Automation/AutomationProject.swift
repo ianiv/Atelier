@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 import _MediaGenerationKit
 
@@ -538,3 +539,4 @@ extension Automation {
       provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
   }
 }
+#endif

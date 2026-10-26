@@ -107,7 +107,7 @@ struct HistoryView: View {
         isPresented: Binding(get: { deleteError != nil }, set: { if !$0 { deleteError = nil } }),
         actions: { Button("OK") { deleteError = nil } },
         message: { Text(deleteError ?? "") })
-      .onDeleteCommand {
+      .deleteCommand {
         let selected = selectedItems
         if !selected.isEmpty { pendingDelete = selected }
       }
@@ -179,7 +179,7 @@ struct HistoryView: View {
         return .handled
       }
       .quickLookPreview($quickLookURL)
-      .background(Color(nsColor: .underPageBackgroundColor))
+      .background(Color.underPageBackground)
       }
     }
   }
@@ -274,18 +274,29 @@ struct HistoryView: View {
     return nil
   }
 
+  /// Double-click uses the image; a click picks it, ⌘-click toggles it, ⇧-click extends to it. On
+  /// iPad, a tap picks and a double tap uses (tap gestures there take no modifier keys).
+  private func tapGesture(_ item: HistoryItem) -> some Gesture {
+    let pickItem = TapGesture().onEnded {
+      pick(item)
+      gridFocused = true
+    }
+    #if os(macOS)
+      return TapGesture(count: 2).onEnded { use(item, newSeed: false) }
+        .exclusively(before: TapGesture().modifiers(.command).onEnded { toggle(item.tensorId) })
+        .exclusively(before: TapGesture().modifiers(.shift).onEnded { extend(to: item.tensorId) })
+        .exclusively(before: pickItem)
+    #else
+      return TapGesture(count: 2).onEnded { use(item, newSeed: false) }
+        .exclusively(before: pickItem)
+    #endif
+  }
+
   /// Selection, use, drag and the context menu, shared by grid cells and graph rows.
   private func cell(_ content: some View, item: HistoryItem) -> some View {
     content
       .contentShape(.rect)
-      .gesture(
-        TapGesture(count: 2).onEnded { use(item, newSeed: false) }
-          .exclusively(before: TapGesture().modifiers(.command).onEnded { toggle(item.tensorId) })
-          .exclusively(before: TapGesture().modifiers(.shift).onEnded { extend(to: item.tensorId) })
-          .exclusively(before: TapGesture().onEnded {
-            pick(item)
-            gridFocused = true
-          }))
+      .gesture(tapGesture(item))
       .help(item.sidecar.prompt)
       .draggable(containerItemID: item.tensorId)
       .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.gridSpace)) } action: {
@@ -572,7 +583,7 @@ struct Thumbnail: View {
 
   var body: some View {
     ZStack {
-      if fill { Color(nsColor: .quaternaryLabelColor) }
+      if fill { Color.quaternaryLabel }
       if let image {
         Image(decorative: image, scale: 1)
           .resizable()
@@ -620,7 +631,7 @@ struct ProjectMenu: View {
       Button("New Project…") { naming = .new(suggested: history.availableName()) }
       Button("Rename “\(history.project.name)”…") { naming = .rename(current: history.project.name) }
       Button("Output Folder…") { editingOutput = true }
-      Button("Show in Finder") {
+      Button(Finder.showTitle) {
         Finder.reveal([history.project.url])
       }
     } label: {

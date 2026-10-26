@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 
 extension Automation {
@@ -151,3 +152,4 @@ extension Automation {
     }
   }
 }
+#endif

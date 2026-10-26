@@ -53,7 +53,7 @@ struct LayoutMenu: View {
     } label: {
       Text(layouts.current.name)
     }
-    .menuStyle(.borderlessButton)
+    .borderlessMenuStyle()
     .fixedSize()
     .help("Inspector layout. Hold ⌥ to show every setting.")
   }
@@ -108,7 +108,7 @@ struct CustomizeInspectorSheet: View {
             Toggle("Starts expanded", isOn: Binding(
               get: { expanded.contains(section.id) },
               set: { if $0 { expanded.insert(section.id) } else { expanded.remove(section.id) } }))
-            .toggleStyle(.checkbox)
+            .checkboxToggleStyle()
             .padding(10)
             List {
               ForEach(binding(section)) { $item in

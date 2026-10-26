@@ -44,9 +44,7 @@ struct InspectorView: View {
       }
     }
     .sheet(isPresented: $layouts.customizing) { CustomizeInspectorSheet() }
-    .onModifierKeysChanged(mask: .option) { _, keys in
-      optionHeld = keys.contains(.option)
-    }
+    .onOptionKeyChanged { optionHeld = $0 }
   }
 
   @ViewBuilder private var sections: some View {
@@ -213,13 +211,13 @@ struct InspectorSection: View {
         .frame(width: 10)
       if let toggle {
         Toggle(section.title, isOn: SettingBindings(descriptor: toggle, model: model, undoManager: undoManager).bool)
-          .toggleStyle(.checkbox)
+          .checkboxToggleStyle()
           .labelsHidden()
           .help(toggle.help)
           .contextMenu { SettingContextMenu(descriptor: toggle) }
       } else if let enable {
         Toggle(section.title, isOn: fileEnabled(enable))
-          .toggleStyle(.checkbox)
+          .checkboxToggleStyle()
           .labelsHidden()
           .disabled(model.enableFile(for: enable) == nil)
           .help("Use the \(section.title.lowercased()). Remembers the model you last picked.")

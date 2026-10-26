@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Observation
 import SwiftUI
@@ -357,3 +358,4 @@ struct AgentSettingsView: View {
     }
   }
 }
+#endif

@@ -6,6 +6,14 @@ import SwiftUI
 // that keeps the Mac app working as it does. Everything else is SwiftUI or a cross-platform
 // framework.
 
+/// AppKit's system colors that SwiftUI has no name for.
+extension Color {
+  static let underPageBackground = Color(nsColor: .underPageBackgroundColor)
+  static let textBackground = Color(nsColor: .textBackgroundColor)
+  static let quaternaryLabel = Color(nsColor: .quaternaryLabelColor)
+  static let separator = Color(nsColor: .separatorColor)
+}
+
 /// Quits when the last window closes. A single `Window` scene would do that in SwiftUI, but it
 /// drops File ▸ New Window, which the `WindowGroup` offers.
 final class MacAppDelegate: NSObject, NSApplicationDelegate {
@@ -96,6 +104,9 @@ enum AppLifecycle {
 /// Finder. SwiftUI's `openURL` opens a folder but can't select files in it.
 @MainActor
 enum Finder {
+  static let revealTitle = "Reveal in Finder"
+  static let showTitle = "Show in Finder"
+
   /// Opens Finder windows with these files selected.
   static func reveal(_ urls: [URL]) {
     NSWorkspace.shared.activateFileViewerSelecting(urls)

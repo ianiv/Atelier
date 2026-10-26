@@ -1,3 +1,4 @@
+#if os(macOS)
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -457,3 +458,4 @@ final class AgentTools {
     return ["content": [["type": "text", "text": String(decoding: data, as: UTF8.self)]]]
   }
 }
+#endif

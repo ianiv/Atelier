@@ -163,7 +163,7 @@ struct CanvasView: View {
       } isTargeted: { isTargeted = $0 }
       .onChange(of: imageFit, initial: true) { canvas.fitScale = imageFit }
     }
-    .background(Color(nsColor: .underPageBackgroundColor).ignoresSafeArea())
+    .background(Color.underPageBackground.ignoresSafeArea())
     // A new image starts fitted to the frame.
     .onChange(of: model.imageItem?.tensorId) { canvas.zoomToFit() }
     .alert(
@@ -364,7 +364,7 @@ struct StatusBar: View {
           let took = model.imageItem.map { " in " + GenerationTime.text($0.sidecar.durationSeconds) } ?? ""
           Text("Saved to \(model.history.project.name)\(took)").foregroundStyle(.secondary)
           Button("Show in History") { navigation.section = .history }
-            .buttonStyle(.link)
+            .linkButtonStyle()
         } else if let item = model.imageItem {
           Text("Generated in \(GenerationTime.text(item.sidecar.durationSeconds))")
             .foregroundStyle(.secondary)
@@ -414,7 +414,7 @@ struct PromptSplitter: View {
       .frame(maxWidth: .infinity)
       .frame(height: 10)
       .contentShape(.rect)
-      .pointerStyle(.rowResize)
+      .rowResizePointer()
       .gesture(
         DragGesture(minimumDistance: 1, coordinateSpace: .global)
           .onChanged { value in
@@ -565,10 +565,10 @@ struct PromptComposer: View {
           .focused($promptFocused)
           .onSubmit { model.generate() }
           .padding(8)
-          .background(Color(nsColor: .textBackgroundColor), in: Self.fieldShape)
+          .background(Color.textBackground, in: Self.fieldShape)
           .overlay(
             Self.fieldShape
-              .stroke(promptFocused ? Color.accentColor : Color(nsColor: .separatorColor))
+              .stroke(promptFocused ? Color.accentColor : Color.separator)
           )
           .help("Prompt. Return generates; ⌥↩ adds a line. ⌘L focuses this field.")
         GlassEffectContainer(spacing: 8) {
@@ -669,7 +669,7 @@ struct QueueStatus: View {
       Button(queue.isPaused ? "Paused · \(waiting) waiting" : "\(waiting) waiting") {
         navigation.section = .queue
       }
-      .buttonStyle(.link)
+      .linkButtonStyle()
       .monospacedDigit()
       .help("Show the Queue")
     }
@@ -705,7 +705,7 @@ struct SeedControls: View {
         .disabled(!model.seedLocked)
         .help("New random seed (⌘R)")
         Toggle("Random", isOn: Binding(get: { !model.seedLocked }, set: { model.seedLocked = !$0 }))
-          .toggleStyle(.checkbox)
+          .checkboxToggleStyle()
           .help(
             model.seedLocked
               ? "Every generation uses this seed. Check to roll a new one each time."

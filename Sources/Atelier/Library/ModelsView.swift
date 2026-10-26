@@ -117,7 +117,7 @@ struct ModelsView: View {
         )
       }
       .libraryErrorAlert()
-      .onDeleteCommand {
+      .deleteCommand {
         if let selected, library.canDelete(selected) { pendingDelete = selected }
       }
       .task {
@@ -168,7 +168,7 @@ struct ModelsView: View {
       .contextMenu(forSelectionType: String.self) { files in
         if let file = files.first, let model = library.catalog.first(where: { $0.file == file }) {
           if model.isDownloaded {
-            Button("Reveal in Finder") { library.reveal(model.file) }
+            Button(Finder.revealTitle) { library.reveal(model.file) }
             Divider()
             Button("Move to Trash", role: .destructive) { pendingDelete = model }
               .disabled(!library.canDelete(model))
@@ -282,7 +282,7 @@ struct ModelDetail: View {
           Button("Cancel Download") { library.cancelDownload(model.file) }
         } else if model.isDownloaded {
           HStack {
-            Button("Reveal in Finder") { library.reveal(model.file) }
+            Button(Finder.revealTitle) { library.reveal(model.file) }
             Button("Move to Trash", role: .destructive, action: delete)
               .disabled(!library.canDelete(model))
           }

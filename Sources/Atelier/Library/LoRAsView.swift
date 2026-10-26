@@ -95,7 +95,7 @@ struct LoRAsView: View {
         Text("\(lora.file) is moved to the Trash and removed from custom_lora.json.")
       }
       .libraryErrorAlert()
-      .onDeleteCommand { pendingDelete = selected }
+      .deleteCommand { pendingDelete = selected }
       .onAppear { library.reloadLoRAs() }
   }
 
@@ -139,7 +139,7 @@ struct LoRAsView: View {
       }
       .contextMenu(forSelectionType: String.self) { files in
         if let file = files.first, let lora = library.loras.first(where: { $0.file == file }) {
-          Button("Reveal in Finder") { library.reveal(lora.file) }
+          Button(Finder.revealTitle) { library.reveal(lora.file) }
             .disabled(!lora.isDownloaded)
           Divider()
           Button("Move to Trash", role: .destructive) { pendingDelete = lora }
@@ -196,7 +196,7 @@ struct LoRADetail: View {
         LabeledContent("File") { Text(lora.file).textSelection(.enabled) }
         if let size = lora.size { LabeledContent("Size", value: ModelsView.bytes(size)) }
         HStack {
-          Button("Reveal in Finder") { library.reveal(lora.file) }
+          Button(Finder.revealTitle) { library.reveal(lora.file) }
             .disabled(!lora.isDownloaded)
           Button("Move to Trash", role: .destructive, action: delete)
         }

@@ -1,3 +1,4 @@
+#if os(macOS)
 import ImageIO
 import NNC
 import SwiftUI
@@ -1079,3 +1080,9 @@ enum Automation {
     AutomationWindows.snapshot(to: url)
   }
 }
+#else
+/// Scripted runs are Mac only.
+enum Automation {
+  nonisolated static var isRequested: Bool { false }
+}
+#endif
