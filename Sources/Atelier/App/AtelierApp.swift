@@ -56,15 +56,19 @@ struct AtelierApp: App {
     // A fixed id keeps the window's saved frame under a stable name; without one SwiftUI names it
     // after the view's modifier types, so the frame is forgotten whenever a modifier changes.
     WindowGroup("Atelier", id: "main") {
-      ContentView()
-        .environment(create)
-        .environment(history)
-        .environment(navigation)
-        .environment(layouts)
-        .environment(presets)
-        .environment(library)
-        .environment(fileDialogs)
+      LayoutCheckFrame {
+        ContentView()
+          .environment(create)
+          .environment(history)
+          .environment(navigation)
+          .environment(layouts)
+          .environment(presets)
+          .environment(library)
+          .environment(fileDialogs)
+      }
+      #if os(macOS)
         .frame(minWidth: 960, minHeight: 640)
+      #endif
     }
     .commands {
       CommandGroup(after: .sidebar) {

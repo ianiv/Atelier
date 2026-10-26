@@ -57,3 +57,13 @@ extension View {
     #endif
   }
 }
+
+#if !(os(iOS) && DEBUG)
+  /// The window's content as it is; iPad debug builds can draw it at a set size instead
+  /// (iPadPlatform.swift).
+  struct LayoutCheckFrame<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View { content }
+  }
+#endif

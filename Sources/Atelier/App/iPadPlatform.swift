@@ -119,4 +119,102 @@ enum Finder {
     if let files = components.url { UIApplication.shared.open(files) }
   }
 }
+#if DEBUG
+  /// For checking layouts at window sizes the simulator can't be dragged to (it has no way to
+  /// resize an app's window from a script). Launched with `-AtelierWindowSize 600x800`, the app
+  /// draws in a window of its own that size at the top left of the screen, scaled down to fit when
+  /// it's larger, with the horizontal size class iPadOS gives a window that wide. Sheets and
+  /// popovers present inside it, as in a real window that size.
+  struct LayoutCheckFrame<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    static var size: CGSize? {
+      guard let text = UserDefaults.standard.string(forKey: "AtelierWindowSize") else { return nil }
+      let sides = text.split(separator: "x").compactMap { Double($0) }
+      return sides.count == 2 ? CGSize(width: sides[0], height: sides[1]) : nil
+    }
+
+    var body: some View {
+      if let size = Self.size {
+        Color.gray.ignoresSafeArea()
+          .background(SizedWindow(size: size, content: content))
+      } else {
+        content
+      }
+    }
+  }
+
+  /// Puts the content in a second window of the scene, sized and placed by hand.
+  private struct SizedWindow<Content: View>: UIViewRepresentable {
+    let size: CGSize
+    let content: Content
+
+    func makeUIView(context: Context) -> Anchor { Anchor(size: size, content: content) }
+    func updateUIView(_ view: Anchor, context: Context) {}
+
+    final class Anchor: UIView {
+      let size: CGSize
+      let content: Content
+      private var sized: UIWindow?
+
+      init(size: CGSize, content: Content) {
+        self.size = size
+        self.content = content
+        super.init(frame: .zero)
+      }
+
+      required init?(coder: NSCoder) { fatalError() }
+
+      override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard sized == nil, let scene = window?.windowScene else { return }
+        let screen = scene.screen.bounds.size
+        let scale = min(1, screen.width / size.width, screen.height / size.height)
+        let sized = UIWindow(windowScene: scene)
+        // iPadOS makes a window compact below roughly half a 13-inch screen's width.
+        sized.traitOverrides.horizontalSizeClass = size.width < 640 ? .compact : .regular
+        sized.rootViewController = FixedSizeController(size: size, content: content)
+        sized.makeKeyAndVisible()
+        self.sized = sized
+        // Placed once the window is up: making it key sizes it to the scene.
+        place(sized, scale: scale)
+        DispatchQueue.main.async { self.place(sized, scale: scale) }
+      }
+
+      private func place(_ sized: UIWindow, scale: CGFloat) {
+        sized.transform = .identity
+        sized.frame = CGRect(origin: .zero, size: size)
+        sized.transform = CGAffineTransform(scaleX: scale, y: scale)
+        sized.center = CGPoint(x: size.width * scale / 2, y: size.height * scale / 2)
+      }
+    }
+  }
+
+  /// Keeps the hosted content at a fixed size whatever size UIKit gives the root view.
+  private final class FixedSizeController<Content: View>: UIViewController {
+    let size: CGSize
+    let host: UIHostingController<Content>
+
+    init(size: CGSize, content: Content) {
+      self.size = size
+      host = UIHostingController(rootView: content)
+      super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func viewDidLoad() {
+      super.viewDidLoad()
+      view.backgroundColor = .gray
+      addChild(host)
+      view.addSubview(host.view)
+      host.didMove(toParent: self)
+    }
+
+    override func viewDidLayoutSubviews() {
+      super.viewDidLayoutSubviews()
+      host.view.frame = CGRect(origin: .zero, size: size)
+    }
+  }
+#endif
 #endif

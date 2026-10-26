@@ -22,6 +22,7 @@
 		40471B00219ACFE544559125 /* SessionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9895821DCBA0BD67EF40AB9D /* SessionState.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E1F3 /* FileDialogs.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F4 /* FileDialogs.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E1F1 /* MacPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F2 /* MacPlatform.swift */; };
+		A1B2C3D4E5F6A7B8C9D0E1FB /* SampleData.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1FC /* SampleData.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E1F9 /* FolderAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1FA /* FolderAccess.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E1F7 /* PlatformViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F8 /* PlatformViews.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E1F5 /* iPadPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F6 /* iPadPlatform.swift */; };
@@ -156,6 +157,7 @@
 		9895821DCBA0BD67EF40AB9D /* SessionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionState.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E1F4 /* FileDialogs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDialogs.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E1F2 /* MacPlatform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPlatform.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E1FC /* SampleData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleData.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E1FA /* FolderAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderAccess.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E1F8 /* PlatformViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformViews.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E1F6 /* iPadPlatform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iPadPlatform.swift; sourceTree = "<group>"; };
@@ -252,6 +254,7 @@
 				9895821DCBA0BD67EF40AB9D /* SessionState.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1F4 /* FileDialogs.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1F2 /* MacPlatform.swift */,
+				A1B2C3D4E5F6A7B8C9D0E1FC /* SampleData.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1FA /* FolderAccess.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1F8 /* PlatformViews.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1F6 /* iPadPlatform.swift */,
@@ -543,6 +546,7 @@
 				40471B00219ACFE544559125 /* SessionState.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1F3 /* FileDialogs.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1F1 /* MacPlatform.swift in Sources */,
+				A1B2C3D4E5F6A7B8C9D0E1FB /* SampleData.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1F9 /* FolderAccess.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1F7 /* PlatformViews.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1F5 /* iPadPlatform.swift in Sources */,

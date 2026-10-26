@@ -88,6 +88,9 @@ final class HistoryStore {
     project = Project(url: Self.url(for: scripted ?? saved ?? Self.defaultProjectName))
     Task {
       await reload()
+      #if DEBUG
+        await addSampleImagesIfAsked()
+      #endif
       await importLegacyHistory()
     }
   }
