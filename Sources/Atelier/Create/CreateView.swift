@@ -440,6 +440,9 @@ struct LiveThumbnail: View {
         Color(nsColor: .quaternaryLabelColor)
         if let image = model.livePreview {
           Image(decorative: image, scale: 1).resizable().aspectRatio(contentMode: .fill)
+        } else {
+          // Before the first step's preview arrives.
+          Image(systemName: "sparkles").font(.system(size: 11)).foregroundStyle(.secondary)
         }
       }
       .frame(width: 24, height: 24)
