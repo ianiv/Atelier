@@ -1,6 +1,7 @@
 #if os(iOS)
 import SwiftUI
 import UIKit
+import os
 import UniformTypeIdentifiers
 
 // The iPad side of MacPlatform.swift: every UIKit use in Atelier lives in this file, with the same
@@ -72,6 +73,25 @@ enum AppLifecycle {
 
   static func onBecomeActive(_ action: @escaping @MainActor () -> Void) {
     observe(UIApplication.didBecomeActiveNotification, action)
+  }
+
+  static func onEnterBackground(_ action: @escaping @MainActor () -> Void) {
+    observe(UIApplication.didEnterBackgroundNotification, action)
+  }
+
+  static func onEnterForeground(_ action: @escaping @MainActor () -> Void) {
+    observe(UIApplication.willEnterForegroundNotification, action)
+  }
+
+  /// Keeps the screen from dimming and locking, for while an image is being made.
+  static func keepScreenAwake(_ awake: Bool) {
+    UIApplication.shared.isIdleTimerDisabled = awake
+  }
+
+  /// Bytes Atelier can still allocate before iPadOS ends it (raised by the increased memory
+  /// limit entitlement).
+  static var availableMemory: Int64 {
+    Int64(os_proc_available_memory())
   }
 
   private static func observe(_ name: Notification.Name, _ action: @escaping @MainActor () -> Void) {

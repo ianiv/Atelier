@@ -117,6 +117,9 @@ struct ContentView: View {
     }
     .fileDialogs(fileDialogs)
     #if os(iOS)
+      .onChange(of: create.isRunning, initial: true) {
+        AppLifecycle.keepScreenAwake(create.isRunning)
+      }
       .sheet(isPresented: $showingSettings) {
         NavigationStack {
           SettingsTabs()

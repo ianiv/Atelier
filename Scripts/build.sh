@@ -36,6 +36,9 @@ case "$PLATFORM" in
     if ! grep -qE '^[[:space:]]*DEVELOPMENT_TEAM[[:space:]]*=[[:space:]]*[A-Z0-9]+' Config/Local.xcconfig 2>/dev/null; then
       echo "warning: no DEVELOPMENT_TEAM in Config/Local.xcconfig; building unsigned"
       SIGNING=(CODE_SIGNING_ALLOWED=NO)
+    else
+      # Lets Xcode make the development profile, with the iPad's memory entitlements.
+      SIGNING=(-allowProvisioningUpdates)
     fi
     ;;
   ipad-sim)
@@ -52,7 +55,7 @@ esac
 
 xcodebuild -project Atelier.xcodeproj -scheme Atelier -configuration "$CONFIGURATION" \
   -derivedDataPath "$DERIVED" -clonedSourcePackagesDirPath build/SourcePackages \
-  -destination "$DESTINATION" -quiet build "${SIGNING[@]}"
+  -destination "$DESTINATION" -quiet "${SIGNING[@]}" build
 
 rm -rf "$OUTPUT"
 cp -R "$DERIVED/Build/Products/$PRODUCTS/Atelier.app" "$OUTPUT"

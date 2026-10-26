@@ -678,6 +678,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Atelier;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.graphics-design";
 				"INFOPLIST_KEY_NSPrincipalClass[sdk=macosx*]" = NSApplication;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = "Config/Atelier-iPad.entitlements";
 				"INFOPLIST_FILE[sdk=iphone*]" = "Config/Atelier-iPad-Info.plist";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphone*]" = YES;
 				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphone*]" = YES;
@@ -721,6 +722,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Atelier;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.graphics-design";
 				"INFOPLIST_KEY_NSPrincipalClass[sdk=macosx*]" = NSApplication;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = "Config/Atelier-iPad.entitlements";
 				"INFOPLIST_FILE[sdk=iphone*]" = "Config/Atelier-iPad-Info.plist";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphone*]" = YES;
 				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphone*]" = YES;
