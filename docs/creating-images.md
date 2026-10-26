@@ -10,7 +10,7 @@ Type what you want in **Describe the image…** and press Return, or click **Gen
 - **Recent prompts**: ⌘↑ and ⌘↓ step through prompts you used before. **Image ▸ Clear Prompt History…** forgets them; images in History keep their prompts.
 - Drag the handle above the prompt box to make it taller. Double-click the handle to go back to the default height.
 
-While an image generates, the canvas shows a preview at each step. Click **Stop** or press Esc to cancel it. You can keep editing settings during a run; changes apply to the next one. Pressing Generate during a run queues the next image, and **×N** under Generate makes several at once (see [The queue](queue.md)).
+While an image generates, the canvas shows a preview at each step. Click **Stop** or press Esc to cancel it. You can look at other images, open or paste one, or clear the canvas while it runs: the canvas then stays on what you picked, and a small live thumbnail in the status bar shows the running image. Click the thumbnail to put the canvas back on it. Finished images still save to the project and the recent strip either way. You can keep editing settings during a run; changes apply to the next one. Pressing Generate during a run queues the next image, and **×N** under Generate makes several at once (see [The queue](queue.md)).
 
 ## Model
 

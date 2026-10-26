@@ -248,7 +248,7 @@ struct CanvasView: View {
     Button("Match Size to Image") { model.matchSizeToImage(undoManager: undoManager) }
       .disabled(model.image == nil)
     Button("Clear Canvas") { model.clearCanvas() }
-      .disabled(model.image == nil || model.isBusy)
+      .disabled(model.image == nil)
     Divider()
     ZoomMenuItems(canvas: canvas)
   }
@@ -397,6 +397,8 @@ struct StatusBar: View {
           Text("Ready").foregroundStyle(.secondary)
         }
       case .running(let message):
+        // Only while the canvas shows something else: the way back to the running image.
+        if !model.canvasFollowsRun { LiveThumbnail() }
         Text(message).monospacedDigit()
         if model.totalSteps > 0 {
           ProgressView(value: Double(model.step), total: Double(model.totalSteps))
@@ -422,6 +424,30 @@ struct StatusBar: View {
     .font(.callout)
     .padding(.horizontal, 12)
     .frame(height: 32)
+  }
+}
+
+/// The running image's latest preview, in the status bar while the canvas shows something else.
+/// Clicking it puts the canvas back on the run.
+struct LiveThumbnail: View {
+  @Environment(CreateModel.self) private var model
+
+  var body: some View {
+    Button {
+      model.followRun()
+    } label: {
+      ZStack {
+        Color(nsColor: .quaternaryLabelColor)
+        if let image = model.livePreview {
+          Image(decorative: image, scale: 1).resizable().aspectRatio(contentMode: .fill)
+        }
+      }
+      .frame(width: 24, height: 24)
+      .clipShape(.rect(cornerRadius: 3))
+      .contentShape(.rect)
+    }
+    .buttonStyle(.plain)
+    .help("The image being generated. Click to show it on the canvas.")
   }
 }
 
@@ -549,7 +575,6 @@ struct RecentStrip: View {
           model.show(item)
           model.canvasMode = .edit
         }
-        .disabled(model.isBusy)
         Button("Add to Moodboard") {
           Task { if let image = await history.image(for: item) { model.moodboard.add(image) } }
         }

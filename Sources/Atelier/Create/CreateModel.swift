@@ -116,6 +116,12 @@ final class CreateModel {
   /// Edit jobs queued meanwhile start from it, not from a preview.
   private var canvasBeforePreview: CanvasSnapshot?
   private var previewCoversCanvas = false
+  /// The canvas shows the running job's previews and result. Looking at something else while it
+  /// runs (a history image, an imported image, Clear Canvas) stops that until `followRun()` or the
+  /// queue empties.
+  private(set) var canvasFollowsRun = true
+  /// The running job's latest step preview, whether or not the canvas shows it.
+  private(set) var livePreview: CGImage?
   private var loadTask: Task<Void, Never>?
   /// A history item's configuration dump to apply once the model's defaults finish loading.
   private var pendingSettings: [String: JSONValue]?
@@ -177,7 +183,7 @@ final class CreateModel {
   /// Puts an image from outside the project on the canvas, fitted to the frame, and switches to
   /// Edit so the next run starts from it. Settings it carries (`metadata`) can then be loaded.
   func setCanvasImage(_ newImage: CGImage, metadata: ImageMetadata.Embedded? = nil) {
-    guard !isBusy else { return }
+    stopFollowingRun()
     imageStep = nil
     lastSavedTensorId = nil
     image = newImage
@@ -192,7 +198,7 @@ final class CreateModel {
 
   /// Empties the canvas (Generate mode then has nothing to show it with).
   func clearCanvas() {
-    guard !isBusy else { return }
+    stopFollowingRun()
     imageStep = nil
     lastSavedTensorId = nil
     image = nil
@@ -377,6 +383,7 @@ final class CreateModel {
     statusNote = nil
     let projectName = history.project.name
     if loadImage {
+      stopFollowingRun()
       imageStep = (projectName, item.tensorId)
       history.setCurrent(tensorId: item.tensorId)
       canvasIsImported = false
@@ -730,10 +737,13 @@ final class CreateModel {
         let item = try await history.save(
           result, request: request, startedAt: startedAt, finishedAt: Date())
         lastSavedTensorId = item.tensorId
-        imageStep = (history.project.name, item.tensorId)
-        canvasIsImported = false
-        image = ImageTensor.cgImage(from: result.tensor) ?? image
-        if let image, let failure = await history.writeToOutputFolder(item, image: image) {
+        let finished = ImageTensor.cgImage(from: result.tensor) ?? livePreview
+        if canvasFollowsRun {
+          imageStep = (history.project.name, item.tensorId)
+          canvasIsImported = false
+          if let finished { image = finished }
+        }
+        if let finished, let failure = await history.writeToOutputFolder(item, image: finished) {
           errorMessage = failure
         }
         saveSession()
@@ -742,7 +752,7 @@ final class CreateModel {
         inputTensorId = item.inputTensorId
         agentCallbacks.removeValue(forKey: job.id)?.completion(.success(item))
       } catch is CancellationError {
-        // Stopped; keep the last preview on the canvas.
+        // Stopped; keep the last preview on the canvas (when it's showing the run).
         agentCallbacks.removeValue(forKey: job.id)?.completion(.failure(CancellationError()))
       } catch {
         errorMessage = error.localizedDescription
@@ -755,7 +765,10 @@ final class CreateModel {
       runStartedAt = nil
       canvasBeforePreview = nil
       previewCoversCanvas = false
+      livePreview = nil
       runNext()
+      // Once the queue is empty, the next run shows on the canvas again.
+      if generationTask == nil { canvasFollowsRun = true }
     }
   }
 
@@ -836,14 +849,43 @@ final class CreateModel {
   /// the current step.
   func show(_ item: HistoryItem) {
     statusNote = nil
+    stopFollowingRun()
     let projectName = history.project.name
     imageStep = (projectName, item.tensorId)
     history.setCurrent(tensorId: item.tensorId)
     canvasIsImported = false
     Task {
       let full = await history.image(at: item.id, in: projectName)
-      if let full, imageStep?.tensorId == item.tensorId { image = full }
+      if let full, imageStep?.tensorId == item.tensorId, !imageIsPreview { image = full }
     }
+  }
+
+  /// The canvas is about to show something else: the running job's previews and result stop
+  /// landing on it.
+  private func stopFollowingRun() {
+    guard isRunning else { return }
+    canvasFollowsRun = false
+    canvasBeforePreview = nil
+    previewCoversCanvas = false
+  }
+
+  /// Puts the running job back on the canvas (clicking the live thumbnail); its previews and
+  /// result show there again.
+  func followRun() {
+    guard isRunning, !canvasFollowsRun else { return }
+    canvasFollowsRun = true
+    if let livePreview { coverCanvas(with: livePreview) }
+  }
+
+  private func coverCanvas(with preview: CGImage) {
+    if !previewCoversCanvas {
+      canvasBeforePreview = canvasSource
+      previewCoversCanvas = true
+      // Previews fill the frame; the input's placement no longer applies.
+      if !imageIsPreview { canvas.zoomToFit() }
+    }
+    image = preview
+    imageIsPreview = true
   }
 
   /// Stops the running job; the queue goes on with the next.
@@ -886,14 +928,8 @@ final class CreateModel {
     guard generationTask != nil, phase != .cancelling else { return }
     switch progress {
     case .preview(let preview, let step, let total):
-      if !previewCoversCanvas {
-        canvasBeforePreview = canvasSource
-        previewCoversCanvas = true
-        // Previews fill the frame; the input's placement no longer applies.
-        if !imageIsPreview { canvas.zoomToFit() }
-      }
-      image = preview
-      imageIsPreview = true
+      livePreview = preview
+      if canvasFollowsRun { coverCanvas(with: preview) }
       noteStep(step, of: total)
     case .state(let state):
       phase = .running(Self.describe(state))
