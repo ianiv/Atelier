@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Mac builds only: Sparkle's update feed, written by Scripts/release.sh and attached to each
+	     GitHub Release, and the public half of the key that signs updates. -->
+	<key>SUFeedURL</key>
+	<string>https://github.com/ianiv/Atelier/releases/latest/download/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>ezs3okxIgkPwyf+GLRNCaOaessELrI8UCduF6yp43wo=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+</dict>
+</plist>

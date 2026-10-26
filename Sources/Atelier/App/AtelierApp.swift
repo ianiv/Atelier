@@ -14,6 +14,7 @@ struct AtelierApp: App {
   @State private var library: ModelLibrary
   #if os(macOS)
     @State private var agents: AgentServer
+    @State private var updater = Updater()
   #endif
   @State private var fileDialogs = FileDialogs()
   @AppStorage("inspectorShown") private var inspectorShown = true
@@ -128,6 +129,9 @@ struct AtelierApp: App {
         .pickerStyle(.inline)
         .disabled(!create.canEdit)
       }
+      #if os(macOS)
+        UpdateCommands(updater: updater)
+      #endif
     }
     #if os(macOS)
     Settings {

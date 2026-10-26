@@ -15,7 +15,7 @@ What it does today:
 
 ## Download
 
-Get the latest signed and notarized Atelier from [Releases](https://github.com/ianiv/Atelier/releases/latest): download the zip, open it and drag Atelier to Applications. It needs a Mac with Apple silicon running macOS 27 or later. To build it yourself instead, see [Getting started](docs/getting-started.md), which also covers the iPad version (an iPad with M1 or later, iPadOS 27; built from the `ipad` branch, no download yet).
+Get the latest signed and notarized Atelier from [Releases](https://github.com/ianiv/Atelier/releases/latest): download the zip, open it and drag Atelier to Applications. From 0.3 on, it updates itself. It needs a Mac with Apple silicon running macOS 27 or later. To build it yourself instead, see [Getting started](docs/getting-started.md), which also covers the iPad version (an iPad with M1 or later, iPadOS 27; built from the `ipad` branch, no download yet).
 
 ## How it differs from Draw Things
 

@@ -21,6 +21,7 @@
 		27074EC072717686A06EAA81 /* thumbnail_history_half_data_model_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C75075F80A089CC22F04163 /* thumbnail_history_half_data_model_generated.swift */; };
 		40471B00219ACFE544559125 /* SessionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9895821DCBA0BD67EF40AB9D /* SessionState.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E1F3 /* FileDialogs.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F4 /* FileDialogs.swift */; };
+		5A9C1E0B2D7F4A6E8B3C1D05 /* Updater.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A9C1E0B2D7F4A6E8B3C1D06 /* Updater.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E1F1 /* MacPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F2 /* MacPlatform.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E1FB /* SampleData.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1FC /* SampleData.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E1F9 /* FolderAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1FA /* FolderAccess.swift */; };
@@ -37,6 +38,7 @@
 		504F40DB7DD6C2E5D0DE7014 /* tensor_moodboard_data_query_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59F515F87137E071504E3001 /* tensor_moodboard_data_query_generated.swift */; };
 		5388E27993E9EF8D03383B06 /* InspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 537623BEF1DDDD55559CA8D6 /* InspectorView.swift */; };
 		5684CBB37AB771B0294C16AD /* ModelDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59AD5317B0066ECD23EDCDAF /* ModelDefaults.swift */; };
+		5A9C1E0B2D7F4A6E8B3C1D04 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; platformFilters = (macos, ); productRef = 5A9C1E0B2D7F4A6E8B3C1D03 /* Sparkle */; };
 		56D40AB5DFADFA9BA16C4C5D /* _MediaGenerationKit in Frameworks */ = {isa = PBXBuildFile; productRef = 034DEC7D58B54CB1B2C5C802 /* _MediaGenerationKit */; };
 		5D01552661131BDF7120E53F /* tensor_history_mutating_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6F6FE94CFB438E8A05AE929 /* tensor_history_mutating_generated.swift */; };
 		66C67DDE720146929A84FBB5 /* tensor_data_query_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32961C8691DC1AA238E7706C /* tensor_data_query_generated.swift */; };
@@ -156,6 +158,7 @@
 		942FB35BF8B8698F4554E3A2 /* tensor_moodboard_data_mutating_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = tensor_moodboard_data_mutating_generated.swift; sourceTree = "<group>"; };
 		9895821DCBA0BD67EF40AB9D /* SessionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionState.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E1F4 /* FileDialogs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDialogs.swift; sourceTree = "<group>"; };
+		5A9C1E0B2D7F4A6E8B3C1D06 /* Updater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Updater.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E1F2 /* MacPlatform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPlatform.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E1FC /* SampleData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleData.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E1FA /* FolderAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderAccess.swift; sourceTree = "<group>"; };
@@ -202,6 +205,7 @@
 			files = (
 				E6F1C502227D967EC9445327 /* ProjectFormat.framework in Frameworks */,
 				56D40AB5DFADFA9BA16C4C5D /* _MediaGenerationKit in Frameworks */,
+				5A9C1E0B2D7F4A6E8B3C1D04 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -254,6 +258,7 @@
 				9895821DCBA0BD67EF40AB9D /* SessionState.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1F4 /* FileDialogs.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1F2 /* MacPlatform.swift */,
+				5A9C1E0B2D7F4A6E8B3C1D06 /* Updater.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1FC /* SampleData.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1FA /* FolderAccess.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1F8 /* PlatformViews.swift */,
@@ -441,6 +446,7 @@
 			name = Atelier;
 			packageProductDependencies = (
 				034DEC7D58B54CB1B2C5C802 /* _MediaGenerationKit */,
+				5A9C1E0B2D7F4A6E8B3C1D03 /* Sparkle */,
 			);
 			productName = Atelier;
 			productReference = 4E09EC66614C0E61CF184F05 /* Atelier.app */;
@@ -468,6 +474,7 @@
 				A004970C0A0F715A70426089 /* XCRemoteSwiftPackageReference "dflat" */,
 				A4CE7021663F6A67DB66A52E /* XCRemoteSwiftPackageReference "draw-things-community" */,
 				FA3B96D181CC9804C2FF9474 /* XCRemoteSwiftPackageReference "flatbuffers" */,
+				5A9C1E0B2D7F4A6E8B3C1D02 /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = FF2013606A3171C89933E231 /* Products */;
@@ -546,6 +553,7 @@
 				40471B00219ACFE544559125 /* SessionState.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1F3 /* FileDialogs.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1F1 /* MacPlatform.swift in Sources */,
+				5A9C1E0B2D7F4A6E8B3C1D05 /* Updater.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1FB /* SampleData.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1F9 /* FolderAccess.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1F7 /* PlatformViews.swift in Sources */,
@@ -684,6 +692,7 @@
 				"INFOPLIST_KEY_NSPrincipalClass[sdk=macosx*]" = NSApplication;
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = "Config/Atelier-iPad.entitlements";
 				"INFOPLIST_FILE[sdk=iphone*]" = "Config/Atelier-iPad-Info.plist";
+				"INFOPLIST_FILE[sdk=macosx*]" = "Config/Atelier-Mac-Info.plist";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphone*]" = YES;
 				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphone*]" = YES;
 				"INFOPLIST_KEY_UIRequiredDeviceCapabilities[sdk=iphone*]" = "arm64 metal ipad-minimum-performance-m1";
@@ -728,6 +737,7 @@
 				"INFOPLIST_KEY_NSPrincipalClass[sdk=macosx*]" = NSApplication;
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = "Config/Atelier-iPad.entitlements";
 				"INFOPLIST_FILE[sdk=iphone*]" = "Config/Atelier-iPad-Info.plist";
+				"INFOPLIST_FILE[sdk=macosx*]" = "Config/Atelier-Mac-Info.plist";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphone*]" = YES;
 				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphone*]" = YES;
 				"INFOPLIST_KEY_UIRequiredDeviceCapabilities[sdk=iphone*]" = "arm64 metal ipad-minimum-performance-m1";
@@ -944,6 +954,14 @@
 				revision = c92e78a9f841a6110ec27180d68d1f7f2afda21d;
 			};
 		};
+		5A9C1E0B2D7F4A6E8B3C1D02 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = exactVersion;
+				version = 2.10.1;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -966,6 +984,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = FA3B96D181CC9804C2FF9474 /* XCRemoteSwiftPackageReference "flatbuffers" */;
 			productName = FlatBuffers;
+		};
+		5A9C1E0B2D7F4A6E8B3C1D03 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5A9C1E0B2D7F4A6E8B3C1D02 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

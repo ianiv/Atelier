@@ -12,6 +12,8 @@
 1. Download the latest `Atelier-<version>.zip` from [Releases](https://github.com/ianiv/Atelier/releases/latest).
 2. Open the zip and drag Atelier to your Applications folder. If an older Atelier is there, replace it.
 
+From version 0.3 on, Atelier keeps itself up to date: it checks for a new version once a day and asks before installing it. To check now, choose Atelier ▸ Check for Updates….
+
 Release builds don't include Draw Things' preview decoders, so step-by-step previews are lower resolution than in a build made on a Mac with Draw Things installed.
 
 ## Build and install

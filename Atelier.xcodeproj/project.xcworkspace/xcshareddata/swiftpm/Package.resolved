@@ -1,5 +1,5 @@
 {
-  "originHash" : "0da07b7abe3f8bc9d226d8f1a6b0b6e8bb6dcea6e60263c151420f100be14bc8",
+  "originHash" : "0c50ae6ce9fd10ed9362e4a07bdfd15fe84bf4c608f9864ec6fa4a899c784e56",
   "pins" : [
     {
       "identity" : "ccv",
@@ -48,6 +48,15 @@
       "location" : "https://github.com/liuliu/s4nnc.git",
       "state" : {
         "revision" : "b5476a77e7f67f12729872e4b9f1a649b3cd3df0"
+      }
+    },
+    {
+      "identity" : "sparkle",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/sparkle-project/Sparkle",
+      "state" : {
+        "revision" : "ab7d71291238df6e0492143b120c9b696a35f603",
+        "version" : "2.10.1"
       }
     },
     {
