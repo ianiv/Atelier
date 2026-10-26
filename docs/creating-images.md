@@ -14,7 +14,7 @@ While an image generates, the canvas shows a preview at each step. Click **Stop*
 
 ## Model
 
-Pick a model from the **Model** menu in the toolbar. Only downloaded models are listed (see [Models and LoRAs](models-and-loras.md)). Switching models keeps your current settings. To start from the new model's recommended settings (and its default preset, if it has one), use **Reset All to Model Defaults** at the bottom of the inspector.
+Pick a model from the **Model** menu in the toolbar. Only downloaded models are listed (see [Models and LoRAs](models-and-loras.md)). Switching models keeps your current settings. To start from the new model's recommended settings (and its default preset, if it has one), use **Reset All to Model Defaults** at the bottom of the inspector. Picking a video model makes videos on the same screen; see [Making videos](video.md).
 
 ## Seed
 

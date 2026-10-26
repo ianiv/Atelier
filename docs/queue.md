@@ -18,7 +18,7 @@ Results are saved to the project that's open when they finish.
 
 ## The Queue screen
 
-The list has three parts: the image being made, the waiting images and recent ones (finished, failed or cancelled). Each row shows the prompt, model, size, seed and steps, with the result's thumbnail once it's done.
+The list has three parts: the image being made, the waiting images and recent ones (finished, failed or cancelled). Each row shows the prompt, model, size, seed and steps, with the result's thumbnail once it's done. Videos show their length and a film icon.
 
 - **Pause Queue** (toolbar) lets the current image finish, or be stopped, and then holds the rest. Click it again (**Resume Queue**) to carry on. While paused, Generate still adds to the queue; the status bar says "Paused".
 - **Drag** waiting images to reorder them, or right-click one and choose **Run Next**.

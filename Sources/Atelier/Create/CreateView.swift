@@ -31,7 +31,7 @@ struct CreateView: View {
     @Bindable var model = model
     CanvasView()
       .overlay(alignment: .topTrailing) {
-        if model.usesReferences || !model.moodboard.items.isEmpty {
+        if model.usesReferences || !model.moodboard.items.isEmpty || model.videoModel?.takesAudio == true {
           MoodboardColumn().padding(12)
         }
       }
@@ -145,21 +145,34 @@ struct CanvasView: View {
         x: frameRect.midX + canvas.offset.width * points,
         y: frameRect.midY + canvas.offset.height * points)
       ZStack {
-        if let image = model.image {
+        if let clip = model.canvasClip {
+          // A finished video plays in the frame.
+          ClipPlayer(item: clip)
+            .frame(width: frameRect.width, height: frameRect.height)
+            .position(x: frameRect.midX, y: frameRect.midY)
+        } else if let image = model.image {
           let size = CGSize(
             width: Double(image.width) * zoom * points, height: Double(image.height) * zoom * points)
-          let picture = Image(decorative: image, scale: 1)
-            .resizable()
-            .interpolation(zoom * points > 2 ? .none : .high)
-            .frame(width: size.width, height: size.height)
-            .position(center)
+          let frames = model.canvasPreviewFrames
+          let picture = Group {
+            // A video run's preview plays its frames.
+            if frames.count > 1 {
+              FlipBook(frames: frames, framesPerSecond: model.videoModel?.framesPerSecond ?? 12)
+            } else {
+              Image(decorative: image, scale: 1)
+                .resizable()
+                .interpolation(zoom * points > 2 ? .none : .high)
+            }
+          }
+          .frame(width: size.width, height: size.height)
+          .position(center)
           picture
             .blur(radius: 6)
             .opacity(0.45)
           picture
             .mask { Rectangle().frame(width: frameRect.width, height: frameRect.height).position(x: frameRect.midX, y: frameRect.midY) }
         }
-        let isInput = model.effectiveCanvasMode == .edit && model.image != nil
+        let isInput = model.effectiveCanvasMode == .edit && model.image != nil && model.canvasClip == nil
         Rectangle()
           .strokeBorder(
             isInput || isTargeted ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary.opacity(0.6)),
@@ -584,6 +597,17 @@ struct RecentStrip: View {
     Thumbnail(item: item)
       .frame(width: 44, height: 44)
       .clipShape(.rect(cornerRadius: 4))
+      .overlay(alignment: .topLeading) {
+        if item.isVideo {
+          Image(systemName: "film")
+            .font(.system(size: 8, weight: .semibold))
+            .padding(2)
+            .background(.black.opacity(0.6), in: .rect(cornerRadius: 2))
+            .foregroundStyle(.white)
+            .padding(2)
+            .help("Video")
+        }
+      }
       .overlay(alignment: .bottomTrailing) {
         let branches = history.children(of: item).count
         if branches > 1 {
@@ -947,9 +971,10 @@ struct ModelsSettingsView: View {
   }
 #endif
 
-/// Settings ▸ Images: what saved images carry, and the output folder.
+/// Settings ▸ Images: what saved images carry, how videos are written, and the output folder.
 struct ImagesSettingsView: View {
   @AppStorage(AppSettings.embedsSettingsKey) private var embedsSettings = true
+  @AppStorage(VideoCodec.key) private var videoCodec = VideoCodec.h264
   @AppStorage(AppSettings.savesToOutputFolderKey) private var savesToOutputFolder = false
   @AppStorage(AppSettings.outputFolderKey) private var outputFolder = AppSettings.defaultOutputFolder
   @State private var choosingOutputFolder = false
@@ -960,15 +985,21 @@ struct ImagesSettingsView: View {
         Toggle(isOn: $embedsSettings) {
           Text("Include Generation Settings in Saved Images")
           Text(
-            "Exported, saved and dragged images carry their prompt, model, seed and settings, in the format Draw Things reads."
+            "Exported, saved and dragged images carry their prompt, model, seed and settings, in the format Draw Things reads. Videos carry them too."
           )
+        }
+        Picker(selection: $videoCodec) {
+          ForEach(VideoCodec.allCases) { Text($0.title).tag($0) }
+        } label: {
+          Text("Video Format")
+          Text("Videos are saved as MP4. H.264 plays everywhere; HEVC makes smaller files.")
         }
       }
       Section {
         Toggle(isOn: $savesToOutputFolder) {
           Text("Save Generated Images to Output Folder")
           Text(
-            "Each new image is also written to this folder as a PNG, named like an export. A project can use its own folder, or turn saving on or off for itself, from the project menu."
+            "Each new image is also written to this folder as a PNG, and each video as an MP4, named like an export. A project can use its own folder, or turn saving on or off for itself, from the project menu."
           )
         }
         #if os(macOS)

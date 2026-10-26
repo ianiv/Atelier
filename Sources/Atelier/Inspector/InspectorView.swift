@@ -457,6 +457,44 @@ struct SettingRow: View {
     case .loras:
       LoRAEditor(descriptor: descriptor)
         .padding(.vertical, 4)
+    case .frames:
+      InspectorRow {
+        label
+      } control: {
+        FramesControl(frames: bindings.int, video: model.videoModel)
+      }
+    }
+  }
+}
+
+/// A video's length: the frame count, snapped to the counts the model takes, and how many
+/// seconds that plays for. The stepper moves between those counts.
+struct FramesControl: View {
+  @Binding var frames: Int
+  let video: VideoModel?
+
+  var body: some View {
+    let snapped = video?.snapped(frames) ?? frames
+    HStack(spacing: 4) {
+      if let video {
+        Text(video.seconds(snapped).formatted(.number.precision(.fractionLength(1))) + " s")
+          .monospacedDigit()
+          .foregroundStyle(.secondary)
+      }
+      TextField(
+        "", value: Binding(get: { snapped }, set: { frames = video?.snapped($0) ?? $0 }),
+        format: .number.grouping(.never)
+      )
+      .labelsHidden()
+      .multilineTextAlignment(.trailing)
+      .frame(width: 52)
+      Text("frames").foregroundStyle(.secondary)
+      Stepper(
+        "",
+        onIncrement: { frames = video?.stepped(snapped, by: 1) ?? snapped + 1 },
+        onDecrement: { frames = video?.stepped(snapped, by: -1) ?? max(snapped - 1, 1) }
+      )
+      .labelsHidden()
     }
   }
 }

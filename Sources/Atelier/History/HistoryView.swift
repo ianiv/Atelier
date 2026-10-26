@@ -21,6 +21,7 @@ struct HistoryView: View {
   @State private var anchor: Int64?
   @State private var search = ""
   @State private var modelFilter: String?
+  @State private var kindFilter = Kind.all
   @State private var pendingDelete: [HistoryItem]?
   @State private var deleteError: String?
   @State private var columns = 1
@@ -36,10 +37,15 @@ struct HistoryView: View {
     case grid, graph
   }
 
+  enum Kind {
+    case all, images, videos
+  }
+
   private var filtered: [HistoryItem] {
     let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
     return history.items.filter { item in
       (modelFilter == nil || item.sidecar.model == modelFilter)
+        && (kindFilter == .all || item.isVideo == (kindFilter == .videos))
         && (query.isEmpty || item.sidecar.prompt.localizedCaseInsensitiveContains(query))
     }
   }
@@ -65,6 +71,16 @@ struct HistoryView: View {
           }
           .pickerStyle(.segmented)
           .help("Show the images as a grid, or as a graph of their branches")
+        }
+        if history.items.contains(where: \.isVideo) {
+          ToolbarItem {
+            Picker("Kind", selection: $kindFilter) {
+              Text("Images and Videos").tag(Kind.all)
+              Text("Images").tag(Kind.images)
+              Text("Videos").tag(Kind.videos)
+            }
+            .help("Show images, videos or both")
+          }
         }
         ToolbarItem {
           Picker("Model", selection: $modelFilter) {
@@ -105,8 +121,9 @@ struct HistoryView: View {
       }
       .confirmationDialog(
         pendingDelete?.count ?? 0 > 1
-          ? "Delete \(pendingDelete?.count ?? 0) images from the project?"
-          : "Delete this image from the project?",
+          ? "Delete \(pendingDelete?.count ?? 0) items from the project?"
+          : pendingDelete?.first?.isVideo == true
+            ? "Delete this video from the project?" : "Delete this image from the project?",
         isPresented: Binding(
           get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
         presenting: pendingDelete
@@ -114,7 +131,7 @@ struct HistoryView: View {
         Button("Delete", role: .destructive) { delete(items) }
         Button("Cancel", role: .cancel) { pendingDelete = nil }
       } message: { items in
-        Text("\(items.count > 1 ? "The images and their" : "The image and its") settings are removed from “\(history.project.name)”. This can't be undone.")
+        Text("\(items.count > 1 ? "They and their" : items.first?.isVideo == true ? "The video and its" : "The image and its") settings are removed from “\(history.project.name)”. This can't be undone.")
       }
       .alert(
         "Something went wrong",
@@ -206,7 +223,12 @@ struct HistoryView: View {
         cell(
           Color.clear
             .aspectRatio(1, contentMode: .fit)
-            .overlay { Thumbnail(item: item) }
+            .overlay {
+              if item.isVideo { ClipThumbnail(item: item) } else { Thumbnail(item: item) }
+            }
+            .overlay(alignment: .bottomLeading) {
+              if let clip = item.clip { ClipBadge(clip: clip).padding(5) }
+            }
             .overlay(alignment: .bottomTrailing) {
               Text(GenerationTime.text(item.sidecar.durationSeconds))
                 .font(.caption2.monospacedDigit())
@@ -330,7 +352,7 @@ struct HistoryView: View {
     let items = targets(item)
     if items.count > 1 {
       Button("Copy \(items.count) Images") { Task { await history.copyImages(items) } }
-      Button("Export \(items.count) PNGs…") { export(items) }
+      Button("Export \(items.count) Files…") { export(items) }
       #if os(iOS)
         Button("Save \(items.count) Images to Photos") { saveToPhotos(items) }
       #endif
@@ -341,10 +363,10 @@ struct HistoryView: View {
         .disabled(!create.canUse(item))
       Button("Rerun with New Seed") { use(item, newSeed: true) }
         .disabled(!create.canUse(item))
-      Button("Copy Image") { Task { await history.copyImage(item) } }
+      Button(item.isVideo ? "Copy First Frame" : "Copy Image") { Task { await history.copyImage(item) } }
       Button("Copy Prompt") { copy(item.sidecar.prompt) }
       Button("Copy Seed") { copy(String(item.sidecar.seed)) }
-      Button("Export PNG…") { export([item]) }
+      Button(item.isVideo ? "Export Video…" : "Export PNG…") { export([item]) }
       #if os(iOS)
         Button("Save to Photos") { saveToPhotos([item]) }
       #endif
@@ -427,12 +449,18 @@ struct HistoryView: View {
     guard let item = history.items.first(where: { $0.tensorId == anchor && selection.contains($0.tensorId) })
     else { return }
     Task {
-      guard let data = try? await history.pngData(item) else { return }
       let url = FileManager.default.temporaryDirectory
         .appendingPathComponent("Atelier Quick Look", isDirectory: true)
       try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-      let file = url.appendingPathComponent(history.fileName(for: item)).appendingPathExtension("png")
-      guard (try? data.write(to: file)) != nil, anchor == item.tensorId else { return }
+      let file = url.appendingPathComponent(history.fileName(for: item))
+        .appendingPathExtension(item.isVideo ? "mp4" : "png")
+      if item.isVideo {
+        guard (try? await history.exportVideo(item, to: file)) != nil else { return }
+      } else {
+        guard let data = try? await history.pngData(item), (try? data.write(to: file)) != nil
+        else { return }
+      }
+      guard anchor == item.tensorId else { return }
       quickLookURL = file
     }
   }
@@ -457,8 +485,15 @@ struct HistoryView: View {
       Task {
         do {
           var pngs: [Data] = []
-          for item in items { pngs.append(try await history.pngData(item)) }
-          try await PhotoLibrary.save(pngs)
+          var videos: [URL] = []
+          for item in items {
+            if item.isVideo {
+              videos.append(try await history.videoFile(for: item))
+            } else {
+              pngs.append(try await history.pngData(item))
+            }
+          }
+          try await PhotoLibrary.save(pngs, videos: videos)
         } catch {
           deleteError = error.localizedDescription
         }
@@ -475,9 +510,11 @@ struct HistoryView: View {
     #endif
   }
 
-  /// One image: a save panel. Several: a folder, each named like a single export.
+  /// One image or clip: a save panel. Several: a folder, each named like a single export.
   private func export(_ items: [HistoryItem]) {
-    if items.count == 1, let item = items.first {
+    if items.count == 1, let item = items.first, item.isVideo {
+      ClipActions.save(item, history: history, dialogs: fileDialogs)
+    } else if items.count == 1, let item = items.first {
       let history = history
       fileDialogs.save = FileDialogs.Save(
         file: ExportedFile(type: .png) { try await history.pngData(item) },
@@ -487,17 +524,28 @@ struct HistoryView: View {
       }
     } else {
       fileDialogs.open = FileDialogs.Open(
-        types: [.folder], confirmation: "Export", message: "Choose a folder for \(items.count) PNGs."
+        types: [.folder], confirmation: "Export",
+        message: "Choose a folder for \(items.count) files: images as PNG, videos as MP4."
       ) { urls in
         guard let folder = urls.first else { return }
         let destinations = items.map { item in
-          (item, Self.unusedURL(in: folder, name: history.fileName(for: item)))
+          (
+            item,
+            Self.unusedURL(
+              in: folder, name: history.fileName(for: item), extension: item.isVideo ? "mp4" : "png")
+          )
         }
         Task {
           let access = folder.startAccessingSecurityScopedResource()
           defer { if access { folder.stopAccessingSecurityScopedResource() } }
           do {
-            for (item, url) in destinations { try await history.exportPNG(item, to: url) }
+            for (item, url) in destinations {
+              if item.isVideo {
+                try await history.exportVideo(item, to: url)
+              } else {
+                try await history.exportPNG(item, to: url)
+              }
+            }
           } catch {
             deleteError = error.localizedDescription
           }
@@ -507,11 +555,11 @@ struct HistoryView: View {
   }
 
   /// `name.png` in `folder`, or `name 2.png`, … when that's taken.
-  private static func unusedURL(in folder: URL, name: String) -> URL {
-    var url = folder.appendingPathComponent(name).appendingPathExtension("png")
+  private static func unusedURL(in folder: URL, name: String, extension ext: String) -> URL {
+    var url = folder.appendingPathComponent(name).appendingPathExtension(ext)
     var n = 2
     while FileManager.default.fileExists(atPath: url.path) {
-      url = folder.appendingPathComponent("\(name) \(n)").appendingPathExtension("png")
+      url = folder.appendingPathComponent("\(name) \(n)").appendingPathExtension(ext)
       n += 1
     }
     return url
@@ -550,11 +598,11 @@ struct HistorySelectionDetail: View {
               .clipShape(.rect(cornerRadius: 4))
           }
         }
-        Text("\(items.count) images selected")
+        Text("\(items.count) selected")
           .foregroundStyle(.secondary)
         ButtonRow {
           Button("Copy Images") { Task { await history.copyImages(items) } }
-          Button("Export PNGs…", action: export)
+          Button("Export…", action: export)
           #if os(iOS)
             Button("Save to Photos", action: saveToPhotos)
           #endif
@@ -581,9 +629,15 @@ struct HistoryDetail: View {
     let sidecar = item.sidecar
     Form {
       Section {
-        Thumbnail(item: item, half: false, fill: false)
-          .frame(maxWidth: .infinity)
-          .frame(height: 260)
+        if item.isVideo {
+          ClipPlayer(item: item, autoplay: false)
+            .frame(maxWidth: .infinity)
+            .frame(height: 260)
+        } else {
+          Thumbnail(item: item, half: false, fill: false)
+            .frame(maxWidth: .infinity)
+            .frame(height: 260)
+        }
         ButtonRow {
           Button("Use Settings", action: use)
           Button("Rerun with New Seed", action: rerun)
@@ -594,8 +648,8 @@ struct HistoryDetail: View {
             .font(.caption).foregroundStyle(.secondary)
         }
         ButtonRow {
-          Button("Copy Image") { Task { await history.copyImage(item) } }
-          Button("Export PNG…", action: export)
+          Button(item.isVideo ? "Copy Frame" : "Copy Image") { Task { await history.copyImage(item) } }
+          Button(item.isVideo ? "Export Video…" : "Export PNG…", action: export)
           #if os(iOS)
             Button("Save to Photos", action: saveToPhotos)
           #endif
@@ -611,6 +665,9 @@ struct HistoryDetail: View {
       Section("Settings") {
         LabeledContent("Model", value: modelName(sidecar.model))
         LabeledContent("Size", value: "\(sidecar.width) × \(sidecar.height)")
+        if let clip = item.clip {
+          LabeledContent("Length", value: ClipBadge.length(clip))
+        }
         LabeledContent("Seed") { Text(String(sidecar.seed)).textSelection(.enabled) }
         LabeledContent("Steps", value: "\(sidecar.steps)")
         LabeledContent("Guidance", value: sidecar.guidanceScale.formatted())
@@ -632,6 +689,61 @@ struct HistoryDetail: View {
   private func modelName(_ file: String) -> String {
     create.models.first { $0.file == file }?.name ?? file
   }
+}
+
+/// A clip's mark in grids: a film icon and how long it plays (a speaker when it has sound).
+struct ClipBadge: View {
+  let clip: ClipInfo
+
+  var body: some View {
+    HStack(spacing: 3) {
+      Image(systemName: "film")
+      Text(clip.duration.formatted(.number.precision(.fractionLength(1))) + "s")
+      if clip.audioId != nil { Image(systemName: "speaker.wave.2.fill") }
+    }
+    .font(.caption2.monospacedDigit())
+    .padding(.horizontal, 5)
+    .padding(.vertical, 2)
+    .background(.black.opacity(0.55), in: .capsule)
+    .foregroundStyle(.white)
+    .help(Self.length(clip))
+  }
+
+  /// "5.0 seconds, 121 frames at 24 fps, with sound".
+  static func length(_ clip: ClipInfo) -> String {
+    let seconds = clip.duration.formatted(.number.precision(.fractionLength(1)))
+    let fps = clip.framesPerSecond.formatted(.number.precision(.fractionLength(0...2)))
+    return "\(seconds) seconds, \(clip.frames.count) frames at \(fps) fps"
+      + (clip.audioId != nil ? ", with sound" : "")
+  }
+}
+
+/// A clip in grids: its first frame; on the Mac, moving the pointer across it scrubs through the
+/// frames.
+struct ClipThumbnail: View {
+  let item: HistoryItem
+  @State private var shown: Int?
+
+  var body: some View {
+    var frame = item
+    if let clip = item.clip, let shown, clip.frames.indices.contains(shown) {
+      frame.previewId = clip.previewId(shown)
+    }
+    return Thumbnail(item: frame)
+      .onContinuousHover { phase in
+        guard let count = item.clip?.frames.count, count > 1 else { return }
+        switch phase {
+        case .active(let location):
+          // The width maps onto the frames, through the thumbnail's own coordinates.
+          shown = min(max(Int(location.x / max(width, 1) * Double(count)), 0), count - 1)
+        case .ended:
+          shown = nil
+        }
+      }
+      .onGeometryChange(for: Double.self) { $0.size.width } action: { width = $0 }
+  }
+
+  @State private var width: Double = 1
 }
 
 /// A step's JPEG preview from the project, loaded off the main thread.
@@ -908,7 +1020,12 @@ struct HistoryGraphRow: View {
       VStack(alignment: .leading, spacing: 2) {
         Text(sidecar.prompt.isEmpty ? "No prompt" : sidecar.prompt)
           .lineLimit(2)
-        Text("\(modelName(sidecar.model)) · \(sidecar.createdAt.formatted(date: .abbreviated, time: .shortened))")
+        Text(
+          [
+            modelName(sidecar.model),
+            item.clip.map { "Video, " + $0.duration.formatted(.number.precision(.fractionLength(1))) + " s" },
+            sidecar.createdAt.formatted(date: .abbreviated, time: .shortened),
+          ].compactMap { $0 }.joined(separator: " · "))
           .font(.caption)
           .foregroundStyle(.secondary)
           .lineLimit(1)

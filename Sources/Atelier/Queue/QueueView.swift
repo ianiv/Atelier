@@ -105,6 +105,7 @@ struct QueueRow: View {
   var body: some View {
     let request = job.request
     let configuration = request.configuration
+    let video = configuration.videoModel
     HStack(spacing: 10) {
       preview
         .frame(width: 48, height: 48)
@@ -115,8 +116,9 @@ struct QueueRow: View {
         Text(
           [
             modelName(request.model), "\(configuration.width)×\(configuration.height)",
-            "seed \(request.seed)", "\(configuration.steps) steps",
-          ].joined(separator: " · ")
+            video.map { length($0, configuration) }, "seed \(request.seed)",
+            "\(configuration.steps) steps",
+          ].compactMap { $0 }.joined(separator: " · ")
         )
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -129,6 +131,11 @@ struct QueueRow: View {
         }
       }
       Spacer(minLength: 0)
+      if video != nil {
+        Image(systemName: "film")
+          .foregroundStyle(.secondary)
+          .help(request.audio != nil ? "Video, with an audio file" : "Video")
+      }
       if request.canvas != nil {
         Image(systemName: "photo")
           .foregroundStyle(.secondary)
@@ -181,6 +188,12 @@ struct QueueRow: View {
 
   private func modelName(_ file: String) -> String {
     create.models.first { $0.file == file }?.name ?? file
+  }
+
+  /// "5.0 s, 121 frames".
+  private func length(_ video: VideoModel, _ configuration: PipelineConfiguration) -> String {
+    let frames = video.snapped(configuration.numFrames)
+    return video.seconds(frames).formatted(.number.precision(.fractionLength(1))) + " s, \(frames) frames"
   }
 }
 

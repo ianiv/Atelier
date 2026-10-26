@@ -1,4 +1,5 @@
 #if os(macOS)
+import AVFoundation
 import ImageIO
 import NNC
 import SwiftUI
@@ -8,7 +9,9 @@ import _MediaGenerationKit
 /// progress to stdout and snapshots the window. Does nothing unless `--generate` is passed.
 ///
 ///   Atelier --generate --model moss_image_sft_i8x.ckpt --prompt "…" --width 1152 --height 896
-///           [--seed N] [--steps N] [--cancel-at-step N] [--snapshot-dir DIR] [--quit]
+///           [--seed N] [--steps N] [--num-frames N] [--hires-fix true|false] [--audio FILE]
+///           [--cancel-at-step N]
+///           [--snapshot-dir DIR] [--quit]
 ///
 /// `--show history` opens that sidebar section at launch. `--project NAME` saves to (and reads
 /// history from) that project instead of the user's current one.
@@ -111,6 +114,8 @@ enum Automation {
       let guidanceAtStart = settings.guidanceScale
       if let height = value("--height").flatMap(Int.init) { settings.height = height }
       if let steps = value("--steps").flatMap(Int.init) { settings.steps = steps }
+      if let frames = value("--num-frames").flatMap(Int.init) { settings.numFrames = frames }
+      if let hiresFix = value("--hires-fix") { settings.hiresFix = hiresFix == "true" }
       if let strength = value("--strength").flatMap(Float.init) { settings.strength = strength }
       if let blur = value("--mask-blur").flatMap(Float.init) { settings.maskBlur = blur }
       if let outset = value("--mask-blur-outset").flatMap(Int.init) { settings.maskBlurOutset = outset }
@@ -145,6 +150,14 @@ enum Automation {
           if parts.count > 1, let weight = Float(parts[1]), let id = model.moodboard.items.last?.id {
             model.moodboard.setWeight(weight, for: id)
           }
+        }
+      }
+      if let path = value("--audio") {
+        do {
+          try model.audio.set(URL(fileURLWithPath: path))
+          log("audio \(model.audio.name), \(model.audio.duration) s")
+        } catch {
+          log("can't read audio \(path): \(error.localizedDescription)")
         }
       }
       if let mode = value("--mode").flatMap(CreateModel.CanvasMode.init(rawValue:)) {
@@ -207,6 +220,21 @@ enum Automation {
         log("saved step \(step.logicalTime) in \(model.history.project.url.path), input \(model.history.item(step)?.inputTensorId != nil ? "recorded" : "none")")
         let saved = await model.history.moodboard(at: step, in: model.history.project.name)
         log("moodboard saved with the step: \(saved.count) (weights \(saved.map(\.weight)))")
+        if let item = model.history.item(step), let clip = item.clip {
+          log("clip \(clip.clipId): \(clip.frames.count) frames at \(clip.framesPerSecond) fps, audio \(clip.audioId != nil ? "yes" : "no")")
+          do {
+            let url = try await model.history.videoFile(for: item)
+            let settings = await ClipVideo.settings(at: url)
+            log("video \(url.path), settings \(settings != nil ? "embedded" : "missing")")
+            if args.contains("--check-video") { await checkVideo(item, file: url, model: model, log: log) }
+            if let snapshotDir {
+              try? FileManager.default.removeItem(at: snapshotDir.appendingPathComponent("result.mp4"))
+              try? FileManager.default.copyItem(at: url, to: snapshotDir.appendingPathComponent("result.mp4"))
+            }
+          } catch {
+            log("video: \(error.localizedDescription)")
+          }
+        }
         if editDuringRun, let item = model.history.item(step) {
           let saved = item.sidecar.guidanceScale
           log("\(saved == guidanceAtStart ? "PASS" : "FAIL") run used guidance \(saved) (start \(guidanceAtStart)); inspector now \(model.settings?.guidanceScale ?? -1)")
@@ -251,6 +279,37 @@ enum Automation {
         }
       }
       if args.contains("--quit") { AppLifecycle.quit() }
+    }
+  }
+
+  /// `--check-video`, after a video run: the MP4 has every frame and the soundtrack, Use Frame
+  /// as Input makes that frame current, and deleting the clip removes its frames, clip row and
+  /// sound.
+  private static func checkVideo(
+    _ item: HistoryItem, file: URL, model: CreateModel, log: (String) -> Void
+  ) async {
+    guard let clip = item.clip else { return }
+    func check(_ ok: Bool, _ what: String) { log("\(ok ? "PASS" : "FAIL") \(what)") }
+    let asset = AVURLAsset(url: file)
+    let videoTracks = (try? await asset.loadTracks(withMediaType: .video)) ?? []
+    let audioTracks = (try? await asset.loadTracks(withMediaType: .audio)) ?? []
+    let frames = (try? await videoTracks.first?.load(.timeRange))
+      .map { Int(($0.duration.seconds * clip.framesPerSecond).rounded()) } ?? 0
+    check(frames == clip.frames.count, "MP4 has \(frames) of \(clip.frames.count) frames")
+    check(audioTracks.isEmpty == (clip.audioId == nil), "MP4 sound matches the clip (\(audioTracks.count) audio tracks)")
+    model.useFrame(clip.frames.count - 1, of: item)
+    try? await Task.sleep(for: .milliseconds(500))
+    check(model.history.currentTensorId == clip.frames.last, "Use Last Frame makes the last frame current")
+    check(model.canvasClip == nil && model.image != nil, "the canvas shows the frame, not the clip")
+    let project = model.history.project
+    do {
+      try await model.history.delete([item])
+      let tree = project.tree()
+      check(!clip.frames.contains { tree.step(tensorId: $0) != nil }, "deleting removes every frame")
+      check(clip.audioId.map { project.audio(id: $0) == nil } ?? true, "deleting removes the sound")
+      check(model.history.item(tensorId: item.tensorId) == nil, "History no longer lists it")
+    } catch {
+      log("FAIL delete: \(error.localizedDescription)")
     }
   }
 

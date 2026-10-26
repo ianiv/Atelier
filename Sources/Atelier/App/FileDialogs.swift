@@ -40,7 +40,7 @@ final class FileDialogs {
   @ObservationIgnored fileprivate var presentedSave: Save?
 }
 
-/// A file a Save panel writes: PNG or JSON, made when the panel confirms.
+/// A file a Save panel writes: PNG, JSON or an MP4 video, made when the panel confirms.
 struct ExportedFile: Transferable {
   let type: UTType
   let data: () async throws -> Data
@@ -48,6 +48,7 @@ struct ExportedFile: Transferable {
   static var transferRepresentation: some TransferRepresentation {
     DataRepresentation(exportedContentType: .png) { try await $0.data() }
     DataRepresentation(exportedContentType: .json) { try await $0.data() }
+    DataRepresentation(exportedContentType: .mpeg4Movie) { try await $0.data() }
   }
 }
 

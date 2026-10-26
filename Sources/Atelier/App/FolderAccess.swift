@@ -79,8 +79,9 @@ import Photos
 
 /// The iPad's photo library, for Save to Photos.
 enum PhotoLibrary {
-  /// Adds PNGs to the library, asking for permission to add the first time.
-  static func save(_ pngs: [Data]) async throws {
+  /// Adds PNGs (and videos, from their files) to the library, asking for permission to add the
+  /// first time.
+  static func save(_ pngs: [Data], videos: [URL] = []) async throws {
     guard await PHPhotoLibrary.requestAuthorization(for: .addOnly) == .authorized else {
       throw CocoaError(.fileWriteNoPermission, userInfo: [
         NSLocalizedDescriptionKey:
@@ -90,6 +91,9 @@ enum PhotoLibrary {
     try await PHPhotoLibrary.shared().performChanges {
       for png in pngs {
         PHAssetCreationRequest.forAsset().addResource(with: .photo, data: png, options: nil)
+      }
+      for video in videos {
+        PHAssetCreationRequest.forAsset().addResource(with: .video, fileURL: video, options: nil)
       }
     }
   }

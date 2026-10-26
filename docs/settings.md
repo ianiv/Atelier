@@ -16,11 +16,13 @@ The folder Atelier reads models and LoRAs from, and downloads and imports into. 
 
 ### Saved images
 
-**Include Generation Settings in Saved Images** (on by default) embeds the prompt, negative prompt, model, seed and settings in images you export, save from the canvas or drag out of Atelier. They're written the way Draw Things writes them, so either app can load them back (in Atelier, with **Load Settings from Image**). Turn it off to save plain images.
+**Include Generation Settings in Saved Images** (on by default) embeds the prompt, negative prompt, model, seed and settings in images you export, save from the canvas or drag out of Atelier. They're written the way Draw Things writes them, so either app can load them back (in Atelier, with **Load Settings from Image**). Videos carry them too, in the MP4's description and comment. Turn it off to save plain images and videos.
+
+**Video Format** is the codec videos are saved with, always as MP4: **H.264** (the default) plays everywhere; **HEVC** makes smaller files.
 
 ### Output folder
 
-**Save Generated Images to Output Folder** (off by default) also writes every new image to a folder of your choice as a PNG, as Draw Things' output folder setting does. Each file is named like an export ("Project 12-1234567.png": the project, the image's step and its seed), and a number is added rather than replacing a file that's already there. With **Include Generation Settings in Saved Images** on, the files carry their settings too.
+**Save Generated Images to Output Folder** (off by default) also writes every new image to a folder of your choice as a PNG (and every video as an MP4), as Draw Things' output folder setting does. Each file is named like an export ("Project 12-1234567.png": the project, the image's step and its seed), and a number is added rather than replacing a file that's already there. With **Include Generation Settings in Saved Images** on, the files carry their settings too.
 
 **Output folder** is the folder used. Type a path or click **Choose…**. When it's never been set, it's `~/Pictures/Atelier/Output/`. It can be on an external drive; if the folder can't be written (the drive isn't connected, say), the image is still saved in the project and the status bar says it didn't reach the folder.
 
@@ -54,9 +56,11 @@ Lets Claude Code, Codex, Gemini CLI, Cursor, VS Code and other MCP clients on th
 | Presets and inspector layouts | `~/Library/Application Support/Atelier/` (the Presets and inspector menus have Show Folder items) |
 | Images saved to the output folder | `~/Pictures/Atelier/Output/`, or the folder you set (in Settings or for a project) |
 | Moodboard images | `~/Library/Application Support/Atelier/Moodboard/` |
+| The audio file for video models | `~/Library/Application Support/Atelier/Audio/` |
+| Videos written for playing and exporting | `~/Library/Caches/Atelier/Clips/` (made again from the project when needed) |
 
 On iPad, projects and the default output folder are in **On My iPad ▸ Atelier ▸ Atelier** and models are in **On My iPad ▸ Atelier ▸ Models**, both visible in the Files app. Presets, layouts and the moodboard are kept inside the app.
 
 ## Notifications
 
-When an image finishes while Atelier is in the background, it posts a notification and puts a count on the app's icon, cleared when you come back. The first time, macOS (or iPadOS) asks whether Atelier may show notifications and badges; you can change either later in System Settings ▸ Notifications (on iPad, Settings ▸ Notifications).
+When an image or video finishes while Atelier is in the background, it posts a notification and puts a count on the app's icon, cleared when you come back. The first time, macOS (or iPadOS) asks whether Atelier may show notifications and badges; you can change either later in System Settings ▸ Notifications (on iPad, Settings ▸ Notifications).

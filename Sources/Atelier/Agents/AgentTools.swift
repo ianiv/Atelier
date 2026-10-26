@@ -41,7 +41,7 @@ final class AgentTools {
       "name": "list_models",
       "title": "List models",
       "description":
-        "Lists the image models downloaded in Atelier (file, name, family), which one is selected in the app, and whether each takes reference images (edit models, FLUX.2, Qwen Image 2.1).",
+        "Lists the models downloaded in Atelier (file, name, family), which one is selected in the app, and whether each takes reference images (edit models, FLUX.2, Qwen Image 2.1). Video models say so, with their frame rate, the inputs they take (first_frame: input_image; last_frame: the first reference image; references; audio) and whether they make sound.",
       "inputSchema": ["type": "object", "properties": [String: Any]()],
       "annotations": ["readOnlyHint": true],
     ],
@@ -74,13 +74,15 @@ final class AgentTools {
     ],
     [
       "name": "generate",
-      "title": "Generate image",
+      "title": "Generate image or video",
       "description": """
-        Generates one image with Atelier's local engine and saves it to the current Atelier project \
-        (it shows in the app's History). Returns the image, and writes a PNG with its settings \
-        embedded. Runs wait for any generation already running in the app. Settings start from \
-        the model's recommended settings and default preset, then `preset`, then `settings`, then \
-        the explicit fields. With `input_image` the run edits that image (image to image); \
+        Generates one image, or with a video model one video, with Atelier's local engine and \
+        saves it to the current Atelier project (it shows in the app's History). Returns the image \
+        (a video's first frame), and writes a PNG, or an MP4 with its sound, with its settings \
+        embedded. Runs wait for any generation already running in the app; videos take minutes. \
+        Settings start from the model's recommended settings and default preset, then `preset`, \
+        then `settings`, then the explicit fields. With `input_image` the run edits that image \
+        (image to image), or for video models starts from it as the first frame; \
         `reference_images` go to models that take references (see list_models).
         """,
       "inputSchema": [
@@ -113,7 +115,10 @@ final class AgentTools {
               ]
             ],
           ],
-          "save_to": ["type": "string", "description": "Where to write the PNG: a file path, or a folder. Defaults to a temporary folder."],
+          "num_frames": ["type": "integer", "description": "Video models: how many frames, snapped to the counts the model takes."],
+          "seconds": ["type": "number", "description": "Video models: how long, instead of num_frames."],
+          "audio": ["type": "string", "description": "Video models that take audio (see list_models): path to an audio file."],
+          "save_to": ["type": "string", "description": "Where to write the PNG or MP4: a file path, or a folder. Defaults to a temporary folder."],
           "include_image": ["type": "boolean", "description": "Return the image inline (scaled to 1024 px on the long side). Default true."],
         ],
       ],
@@ -136,12 +141,21 @@ final class AgentTools {
 
   private func listModels() async -> [[String: Any]] {
     if create.models.isEmpty { await create.refreshModelList() }
-    return imageModels.map {
-      [
-        "file": $0.file, "name": $0.name, "version": $0.version ?? NSNull(),
-        "selected_in_app": $0.file == create.selectedModel,
-        "takes_reference_images": takesReferences(model: $0.file, loras: []),
+    return create.models.map { model in
+      var entry: [String: Any] = [
+        "file": model.file, "name": model.name, "version": model.version ?? NSNull(),
+        "selected_in_app": model.file == create.selectedModel,
+        "takes_reference_images": takesReferences(model: model.file, loras: []),
+        "video": ModelTraits(model).isVideo,
       ]
+      if let video = VideoModel(model: model.file) {
+        entry["frames_per_second"] = video.framesPerSecond
+        entry["makes_audio"] = video.makesAudio
+        entry["video_inputs"] =
+          (video.takesLastFrame ? ["first_frame", "last_frame"] : ["first_frame"])
+          + (video.takesReferences ? ["references"] : []) + (video.takesAudio ? ["audio"] : [])
+      }
+      return entry
     }
   }
 
@@ -210,6 +224,16 @@ final class AgentTools {
     if let steps = Self.int(arguments["steps"]) { configuration.steps = max(steps, 1) }
     if let guidance = Self.double(arguments["guidance_scale"]) { configuration.guidanceScale = Float(guidance) }
     if let strength = Self.double(arguments["strength"]) { configuration.strength = Float(min(max(strength, 0), 1)) }
+    let video = VideoModel(model: model, loras: configuration.loras.compactMap(\.file))
+    if let video {
+      if let frames = Self.int(arguments["num_frames"]) {
+        configuration.numFrames = video.snapped(frames)
+      } else if let seconds = Self.double(arguments["seconds"]) {
+        configuration.numFrames = video.snapped(Int((seconds * video.framesPerSecond).rounded()) + 1)
+      } else {
+        configuration.numFrames = video.snapped(configuration.numFrames)
+      }
+    }
 
     let seed: UInt32
     if let value = Self.int(arguments["seed"]) {
@@ -258,6 +282,16 @@ final class AgentTools {
     if !request.moodboard.isEmpty, !takesReferences {
       notes.append("\(model) doesn't take reference images; they were sent anyway and likely ignored.")
     }
+    if let path = arguments["audio"] as? String {
+      guard let video, video.takesAudio else {
+        throw ToolError("\(model) doesn't take an audio file. See list_models.")
+      }
+      let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+      guard FileManager.default.fileExists(atPath: url.path) else {
+        throw ToolError("No audio file at \(url.path).")
+      }
+      request.audio = url
+    }
 
     let summary = String(prompt.prefix(60))
     activity = "Waiting: “\(summary)”"
@@ -276,8 +310,14 @@ final class AgentTools {
       progress(Progress(step: step, total: total, message: message))
     }
     let png = try await create.history.pngData(item)
-    let url = try Self.outputURL(arguments["save_to"] as? String, name: create.history.fileName(for: item))
-    try png.write(to: url)
+    let url = try Self.outputURL(
+      arguments["save_to"] as? String, name: create.history.fileName(for: item),
+      extension: item.isVideo ? "mp4" : "png")
+    if item.isVideo {
+      try await create.history.exportVideo(item, to: url)
+    } else {
+      try png.write(to: url)
+    }
 
     let project = create.history.project.name
     let seconds = item.sidecar.durationSeconds
@@ -286,6 +326,9 @@ final class AgentTools {
       "Saved to Atelier project “\(project)” (step \(item.id.logicalTime)) and \(url.path).\n"
       + "Model \(model), \(configuration.width)×\(configuration.height), \(configuration.steps) steps, "
       + "guidance \(configuration.guidanceScale), seed \(seed), \(GenerationTime.text(seconds))."
+    if let clip = item.clip {
+      text += "\nVideo: " + ClipBadge.length(clip) + ". The image below is its first frame."
+    }
     if !notes.isEmpty { text += "\n" + notes.joined(separator: "\n") }
     var content: [[String: Any]] = [["type": "text", "text": text]]
     if arguments["include_image"] as? Bool != false, let image = ImageLoader.image(from: png, maxSide: 1024),
@@ -293,14 +336,17 @@ final class AgentTools {
     {
       content.append(["type": "image", "data": preview.base64EncodedString(), "mimeType": "image/jpeg"])
     }
-    return [
-      "content": content,
-      "structuredContent": [
-        "path": url.path, "project": project, "history_step": item.id.logicalTime, "model": model,
-        "seed": Int(seed), "width": configuration.width, "height": configuration.height,
-        "steps": configuration.steps, "duration_seconds": seconds,
-      ],
+    var structured: [String: Any] = [
+      "path": url.path, "project": project, "history_step": item.id.logicalTime, "model": model,
+      "seed": Int(seed), "width": configuration.width, "height": configuration.height,
+      "steps": configuration.steps, "duration_seconds": seconds,
     ]
+    if let clip = item.clip {
+      structured["frames"] = clip.frames.count
+      structured["frames_per_second"] = clip.framesPerSecond
+      structured["has_audio"] = clip.audioId != nil
+    }
+    return ["content": content, "structuredContent": structured]
   }
 
   // MARK: - Helpers
@@ -335,20 +381,12 @@ final class AgentTools {
       guard let selected = create.selectedModel else { throw ToolError("No model is downloaded.") }
       return try resolveModel(selected)
     }
-    if let model = imageModels.first(where: { $0.file == name })
-      ?? imageModels.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame })
+    if let model = create.models.first(where: { $0.file == name })
+      ?? create.models.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame })
     {
       return model.file
     }
-    if create.models.contains(where: { $0.file == name || $0.name == name }) {
-      throw ToolError("“\(name)” is a video model; agents can only make still images for now.")
-    }
     throw ToolError("“\(name)” isn't a downloaded model. See list_models.")
-  }
-
-  /// Downloaded models that make still images (video models aren't offered to agents yet).
-  private var imageModels: [MediaGenerationResolvedModel] {
-    create.models.filter { !ModelTraits($0).isVideo }
   }
 
   /// Mirrors `CreateModel.usesReferences`. ModelZoo only knows a community model's version once
@@ -383,7 +421,7 @@ final class AgentTools {
     return image
   }
 
-  private static func outputURL(_ saveTo: String?, name: String) throws -> URL {
+  private static func outputURL(_ saveTo: String?, name: String, extension ext: String) throws -> URL {
     let fileManager = FileManager.default
     var folder = fileManager.temporaryDirectory.appending(path: "Atelier", directoryHint: .isDirectory)
     if let saveTo, !saveTo.isEmpty {
@@ -393,12 +431,12 @@ final class AgentTools {
       if !(exists && isDirectory.boolValue) && !saveTo.hasSuffix("/") {
         try fileManager.createDirectory(
           at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        return url.pathExtension.isEmpty ? url.appendingPathExtension("png") : url
+        return url.pathExtension.isEmpty ? url.appendingPathExtension(ext) : url
       }
       folder = url
     }
     try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
-    return folder.appending(path: name).appendingPathExtension("png")
+    return folder.appending(path: name).appendingPathExtension(ext)
   }
 
   private nonisolated static func describe(_ state: MediaGenerationPipeline.State) -> String {

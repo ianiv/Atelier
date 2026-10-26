@@ -32,6 +32,13 @@ enum ProjectMapping {
     /// The image tensor of the step this one follows (its parent), nil for the first step. Kept
     /// in `profile_data`, see `Profile`.
     var parentTensorId: Int64?
+    /// A video frame: its clip (a `clip` row) and its place in it.
+    var clipId: Int64?
+    var indexInAClip = 0
+    /// The clip has a soundtrack.
+    var hasAudio = false
+    /// The audio file a video run took, stored as an `audio_<id>` tensor. Kept in `profile_data`.
+    var inputAudioId: Int64?
   }
 
   /// `profile_data`: Draw Things' `GenerationProfile` as snake-case JSON (timings and duration),
@@ -40,14 +47,16 @@ enum ProjectMapping {
   /// input is the canvas, i.e. the step before. Atelier's Generate mode ignores the canvas, so
   /// Edit steps carry the input's tensor id here. The parent link keeps branches intact where
   /// Draw Things' own rule (the step one earlier with the greatest lineage not above this one's)
-  /// stops holding after a fork renumbers a branch (see `Project.append`). Draw Things decodes the
-  /// profile with Codable, which skips the extra keys.
+  /// stops holding after a fork renumbers a branch (see `Project.append`). Video frames add
+  /// `input_audio_id`: the audio file the run took (H3 Ref2VA, LongCat), which Draw Things doesn't
+  /// keep. Draw Things decodes the profile with Codable, which skips the extra keys.
   struct Profile: Codable {
     var timings: [Timing] = []
     var duration: Double
     var inputTensorId: Int64?
     /// The parent step's image tensor; 0 records a step with no parent.
     var parentTensorId: Int64?
+    var inputAudioId: Int64?
 
     struct Timing: Codable {
       var durations: [Double]
@@ -60,10 +69,11 @@ enum ProjectMapping {
       return (try? encoder.encode(self)).map { [UInt8]($0) } ?? []
     }
 
-    init(duration: Double, inputTensorId: Int64?, parentTensorId: Int64?) {
+    init(duration: Double, inputTensorId: Int64?, parentTensorId: Int64?, inputAudioId: Int64? = nil) {
       self.duration = duration
       self.inputTensorId = inputTensorId
       self.parentTensorId = parentTensorId
+      self.inputAudioId = inputAudioId
     }
 
     init?(_ bytes: [UInt8]) {
@@ -145,13 +155,14 @@ enum ProjectMapping {
       resolutionDependentShift: d.bool("resolutionDependentShift", true),
       profileData: Profile(
         duration: step.generationTime, inputTensorId: step.inputTensorId,
-        parentTensorId: step.parentTensorId ?? 0
+        parentTensorId: step.parentTensorId ?? 0, inputAudioId: step.inputAudioId
       ).bytes,
       teaCacheStart: i32("teaCacheStart", 5), teaCacheEnd: i32("teaCacheEnd", -1),
       teaCacheThreshold: d.float("teaCacheThreshold", 0.06), teaCache: d.bool("teaCache", false),
       separateT5: d.bool("separateT5", false), t5Text: d.string("t5Text"),
       teaCacheMaxSkipSteps: i32("teaCacheMaxSkipSteps", 3),
       textPrompt: step.prompt, negativeTextPrompt: step.negativePrompt,
+      clipId: step.clipId ?? -1, indexInAClip: Int32(clamping: step.indexInAClip),
       causalInferenceEnabled: causalInference > 0,
       causalInference: Int32(clamping: causalInference),
       causalInferencePad: i32("causalInferencePad", 0),
@@ -160,6 +171,7 @@ enum ProjectMapping {
       compressionArtifacts: d.enumeration("compressionArtifacts", DataModels.CompressionMethod.self)
         .flatMap { ProjectFormat.CompressionMethod(rawValue: $0.rawValue) },
       compressionArtifactsQuality: min(max(d.float("compressionArtifactsQuality", 43.1), 0), 100),
+      audio: step.hasAudio,
       colorCalibration: d.enumeration("colorCalibration", DataModels.ColorCalibration.self)
         .flatMap { ProjectFormat.ColorCalibration(rawValue: $0.rawValue) },
       expandPromptToJson: d.bool("expandPromptToJson", false)

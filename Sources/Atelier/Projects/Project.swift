@@ -84,7 +84,8 @@ final class Project: @unchecked Sendable {
     workspace.fetchWithinASnapshot {
       ProjectTree(
         nodes: Array(workspace.fetch(for: TensorHistoryNode.self).all()),
-        layers: Array(workspace.fetch(for: Layer.self).all()), items: items)
+        layers: Array(workspace.fetch(for: Layer.self).all()),
+        clips: items ? Array(workspace.fetch(for: Clip.self).all()) : [], items: items)
     }
   }
 
@@ -226,6 +227,18 @@ final class Project: @unchecked Sendable {
     ).first.flatMap(imageTensorId(of:))
   }
 
+  /// A clip's soundtrack, or the audio file a run took: an `audio_<id>` tensor, PCM in
+  /// [channels, samples] order.
+  func audio(id: Int64) -> Tensor<Float>? {
+    lock.lock()
+    defer { lock.unlock() }
+    var audio: Tensor<Float>?
+    graph.openStore(url.path, flags: [.readOnly]) {
+      audio = $0.read("audio_\(id)", codec: [.fpzip, .zip]).map { Tensor<Float>(from: $0) }
+    }
+    return audio
+  }
+
   // MARK: - Writing
 
   /// Appends an image as a new step after the step whose image is `parentTensorId` (the newest
@@ -248,26 +261,97 @@ final class Project: @unchecked Sendable {
     moodboard: [(tensor: Tensor<FloatType>, weight: Float)] = [], inputTensorId: Int64? = nil,
     after parentTensorId: Int64? = nil
   ) async throws -> HistoryItem {
-    guard let image = ImageTensor.cgImage(from: tensor) else { throw ProjectError.badImage }
-    let tensorId = Int64.random(in: 100_000_000...299_999_999)
-    try writeTensor(tensor, name: "tensor_history_\(tensorId)")
-    // As addImage: moodboard tensors are "shuffle_<id>" with ids in their own band.
-    let shuffleIds = moodboard.map { _ in Int64.random(in: 1_600_000_000...1_799_999_999) }
-    for (entry, shuffleId) in zip(moodboard, shuffleIds) {
-      try writeTensor(entry.tensor, name: "shuffle_\(shuffleId)")
+    try await append(
+      frames: [tensor], clip: nil, model: model, prompt: prompt, negativePrompt: negativePrompt,
+      seed: seed, settings: settings, createdAt: createdAt, duration: duration, reason: reason,
+      generated: generated, moodboard: moodboard, inputTensorId: inputTensorId,
+      after: parentTensorId)
+  }
+
+  /// A video run's clip, beyond its frames.
+  struct ClipContent {
+    var framesPerSecond: Double
+    /// The soundtrack, PCM in [channels, samples] order.
+    var audio: Tensor<Float>?
+    /// The audio file the run took, kept so Use Settings can bring it back.
+    var audioInput: Tensor<Float>?
+  }
+
+  /// Appends a video as Draw Things' `pushHistory(asClip:)` does: one step per frame, in order on
+  /// one lineage after `parentTensorId` (forking there like `append`), each with its image layer
+  /// and thumbnails, all sharing a new `clip` row that holds the frame rate, size and soundtrack
+  /// (an `audio_<id>` tensor). Returns the first frame's step, which stands for the clip.
+  func appendClip(
+    frames: [Tensor<FloatType>], clip: ClipContent, model: String, prompt: String,
+    negativePrompt: String, seed: UInt32, settings: [String: JSONValue], createdAt: Date,
+    duration: Double, moodboard: [(tensor: Tensor<FloatType>, weight: Float)] = [],
+    inputTensorId: Int64? = nil, after parentTensorId: Int64? = nil
+  ) async throws -> HistoryItem {
+    try await append(
+      frames: frames, clip: clip, model: model, prompt: prompt, negativePrompt: negativePrompt,
+      seed: seed, settings: settings, createdAt: createdAt, duration: duration, reason: .generate,
+      generated: true, moodboard: moodboard, inputTensorId: inputTensorId, after: parentTensorId)
+  }
+
+  private func append(
+    frames tensors: [Tensor<FloatType>], clip: ClipContent?, model: String, prompt: String,
+    negativePrompt: String, seed: UInt32, settings: [String: JSONValue], createdAt: Date,
+    duration: Double, reason: ProjectFormat.Reason, generated: Bool,
+    moodboard: [(tensor: Tensor<FloatType>, weight: Float)], inputTensorId: Int64?,
+    after parentTensorId: Int64?
+  ) async throws -> HistoryItem {
+    // Each frame's thumbnails, one frame decoded at a time (a clip's frames together are large).
+    var size: (width: Int32, height: Int32)?
+    var thumbnails: [(full: [UInt8]?, half: [UInt8]?)] = []
+    for tensor in tensors {
+      guard let image = ImageTensor.cgImage(from: tensor) else { throw ProjectError.badImage }
+      if size == nil { size = (Int32(image.width), Int32(image.height)) }
+      thumbnails.append(
+        (
+          ImageTensor.jpeg(image, quality: 0.75),
+          ImageTensor.downsampled(image).flatMap { ImageTensor.jpeg($0, quality: 0.5) }
+        ))
     }
-    let written = ["tensor_history_\(tensorId)"] + shuffleIds.map { "shuffle_\($0)" }
+    guard let size else { throw ProjectError.badImage }
+    var tensorIds: [Int64] = []
+    while tensorIds.count < tensors.count {
+      let id = Int64.random(in: 100_000_000...299_999_999)
+      if !tensorIds.contains(id) { tensorIds.append(id) }
+    }
+    // As addImage: moodboard tensors are "shuffle_<id>" with ids in their own band. A clip's
+    // frames share them.
+    let shuffleIds = moodboard.map { _ in Int64.random(in: 1_600_000_000...1_799_999_999) }
+    // As addAudio: "audio_<id>" in the band above.
+    let audioId = clip?.audio.map { _ in Int64.random(in: 1_800_000_000...2_199_999_999) }
+    let inputAudioId = clip?.audioInput.map { _ in Int64.random(in: 1_800_000_000...2_199_999_999) }
+    var written: [String] = []
+    do {
+      try writeTensors(
+        zip(tensors, tensorIds).map { ("tensor_history_\($1)", $0) }
+          + zip(moodboard, shuffleIds).map { ("shuffle_\($1)", $0.tensor) })
+      written = tensorIds.map { "tensor_history_\($0)" } + shuffleIds.map { "shuffle_\($0)" }
+      if let audioId, let audio = clip?.audio {
+        try writeTensor(audio, name: "audio_\(audioId)")
+        written.append("audio_\(audioId)")
+      }
+      if let inputAudioId, let audio = clip?.audioInput {
+        try writeTensor(audio, name: "audio_\(inputAudioId)")
+        written.append("audio_\(inputAudioId)")
+      }
+    } catch {
+      removeTensors(written)
+      throw error
+    }
 
     // As in pushHistory: the preview id is the sum of the step's layer ids, plus each moodboard
     // image's id times its weight in thousandths.
-    var previewId = tensorId
+    var moodboardPreview: Int64 = 0
     for (entry, shuffleId) in zip(moodboard, shuffleIds) {
-      previewId &+= shuffleId &* Int64((entry.weight * 1000).rounded())
+      moodboardPreview &+= shuffleId &* Int64((entry.weight * 1000).rounded())
     }
-    let full = ImageTensor.jpeg(image, quality: 0.75)
-    let half = ImageTensor.downsampled(image).flatMap { ImageTensor.jpeg($0, quality: 0.5) }
-    let width = Int32(image.width)
-    let height = Int32(image.height)
+    let previewIds = tensorIds.map { $0 &+ moodboardPreview }
+    let (width, height) = size
+    let wallClock = Int64(createdAt.timeIntervalSince1970 * 1_000_000)
 
     let workspace = workspace
     // Read and written inside the transaction, so nothing else changes the tree in between.
@@ -275,53 +359,72 @@ final class Project: @unchecked Sendable {
     let succeeded = await withCheckedContinuation { continuation in
       workspace.performChanges([
         TensorHistoryNode.self, Layer.self, TensorMoodboardData.self, ThumbnailHistoryNode.self,
-        ThumbnailHistoryHalfNode.self,
+        ThumbnailHistoryHalfNode.self, Clip.self,
       ]) { transaction in
         let rows = Rows(workspace)
         let tree = ProjectTree(nodes: rows.nodes, layers: rows.layers, items: false)
         let parent = parentTensorId.flatMap(tree.step(tensorId:)) ?? tree.newest
         var changes = Changes()
-        let id: StepID
+        let first: StepID
         if let parent, let newest = tree.newest, parent != newest {
           changes.recordParents(tree, rows)
-          id = changes.fork(from: parent, newest: newest, rows)
+          first = changes.fork(from: parent, newest: newest, rows)
         } else {
-          id = parent.map { StepID(lineage: $0.lineage, logicalTime: $0.logicalTime + 1) }
+          first = parent.map { StepID(lineage: $0.lineage, logicalTime: $0.logicalTime + 1) }
             ?? StepID(lineage: 0, logicalTime: 0)
         }
         changes.submit(rows, to: transaction)
 
-        let step = ProjectMapping.Step(
-          lineage: id.lineage, logicalTime: id.logicalTime, model: model, prompt: prompt,
-          negativePrompt: negativePrompt, seed: seed, tensorId: tensorId, previewId: previewId,
-          wallClock: Int64(createdAt.timeIntervalSince1970 * 1_000_000), generationTime: duration,
-          reason: reason, generated: generated, moodboardCount: moodboard.count,
-          inputTensorId: inputTensorId,
-          parentTensorId: parent.flatMap { tree.steps[$0]?.tensorId })
-        let node = ProjectMapping.node(for: step, settings: settings)
-        appended = node
-        transaction.try(submit: TensorHistoryNodeChangeRequest.upsertRequest(node))
-        transaction.try(
-          submit: ProjectFormat.TensorDataChangeRequest.upsertRequest(
-            Layer(
-              lineage: id.lineage, logicalTime: id.logicalTime, index: 0, x: 0, y: 0,
-              width: width, height: height, scaleFactorBy120: 120, tensorId: tensorId)))
-        for (index, (entry, shuffleId)) in zip(moodboard, shuffleIds).enumerated() {
-          transaction.try(
-            submit: TensorMoodboardDataChangeRequest.upsertRequest(
-              TensorMoodboardData(
-                lineage: id.lineage, logicalTime: id.logicalTime, index: Int64(index),
-                shuffleId: shuffleId, weight: entry.weight)))
+        // As pushHistory: a new clip takes the next id.
+        let clipId = clip.map { _ in
+          (workspace.fetch(for: Clip.self).all(limit: .limit(1), orderBy: [Clip.clipId.descending])
+            .first?.clipId ?? 0) + 1
         }
-        if let full {
+        for index in tensorIds.indices {
+          let id = StepID(lineage: first.lineage, logicalTime: first.logicalTime + Int64(index))
+          let step = ProjectMapping.Step(
+            lineage: id.lineage, logicalTime: id.logicalTime, model: model, prompt: prompt,
+            negativePrompt: negativePrompt, seed: seed, tensorId: tensorIds[index],
+            previewId: previewIds[index], wallClock: wallClock + Int64(index),
+            generationTime: duration, reason: reason, generated: generated,
+            moodboardCount: moodboard.count,
+            inputTensorId: index == 0 ? inputTensorId : nil,
+            parentTensorId: index == 0
+              ? parent.flatMap { tree.steps[$0]?.tensorId } : tensorIds[index - 1],
+            clipId: clipId, indexInAClip: index, hasAudio: audioId != nil,
+            inputAudioId: inputAudioId)
+          let node = ProjectMapping.node(for: step, settings: settings)
+          if index == 0 { appended = node }
+          transaction.try(submit: TensorHistoryNodeChangeRequest.upsertRequest(node))
           transaction.try(
-            submit: ThumbnailHistoryNodeChangeRequest.upsertRequest(
-              ThumbnailHistoryNode(id: previewId, data: full)))
+            submit: ProjectFormat.TensorDataChangeRequest.upsertRequest(
+              Layer(
+                lineage: id.lineage, logicalTime: id.logicalTime, index: 0, x: 0, y: 0,
+                width: width, height: height, scaleFactorBy120: 120, tensorId: tensorIds[index])))
+          for (moodIndex, (entry, shuffleId)) in zip(moodboard, shuffleIds).enumerated() {
+            transaction.try(
+              submit: TensorMoodboardDataChangeRequest.upsertRequest(
+                TensorMoodboardData(
+                  lineage: id.lineage, logicalTime: id.logicalTime, index: Int64(moodIndex),
+                  shuffleId: shuffleId, weight: entry.weight)))
+          }
+          if let full = thumbnails[index].full {
+            transaction.try(
+              submit: ThumbnailHistoryNodeChangeRequest.upsertRequest(
+                ThumbnailHistoryNode(id: previewIds[index], data: full)))
+          }
+          if let half = thumbnails[index].half {
+            transaction.try(
+              submit: ThumbnailHistoryHalfNodeChangeRequest.upsertRequest(
+                ThumbnailHistoryHalfNode(id: previewIds[index], data: half)))
+          }
         }
-        if let half {
+        if let clip, let clipId {
           transaction.try(
-            submit: ThumbnailHistoryHalfNodeChangeRequest.upsertRequest(
-              ThumbnailHistoryHalfNode(id: previewId, data: half)))
+            submit: ClipChangeRequest.upsertRequest(
+              Clip(
+                clipId: clipId, count: Int32(tensorIds.count), framesPerSecond: clip.framesPerSecond,
+                width: width, height: height, audioId: audioId ?? 0)))
         }
       } completionHandler: { continuation.resume(returning: $0) }
     }
@@ -332,14 +435,29 @@ final class Project: @unchecked Sendable {
     // As pushHistory: the new step is the newest, which is where an open starts by default.
     setCurrentStep(nil)
     return HistoryItem(
-      id: StepID(lineage: node.lineage, logicalTime: node.logicalTime), tensorId: tensorId,
-      previewId: previewId, sidecar: Self.sidecar(for: node), inputTensorId: inputTensorId)
+      id: StepID(lineage: node.lineage, logicalTime: node.logicalTime), tensorId: tensorIds[0],
+      previewId: previewIds[0], sidecar: Self.sidecar(for: node), inputTensorId: inputTensorId,
+      clip: node.clipId >= 0
+        ? ClipInfo(
+          clipId: node.clipId, frames: tensorIds, framesPerSecond: clip?.framesPerSecond ?? 0,
+          audioId: audioId, inputAudioId: inputAudioId, previewOffset: moodboardPreview) : nil)
   }
 
   /// Deletes a step, its layers, thumbnails and tensors. Returns its parent's image tensor.
   @discardableResult
   func delete(_ id: StepID) async throws -> Int64? {
     try await delete { _ in id }
+  }
+
+  /// Deletes every frame of a clip, last first, as Draw Things deletes them one by one; the last
+  /// one takes the clip row and its soundtrack. Returns the first frame's parent's image tensor.
+  @discardableResult
+  func deleteClip(frames: [Int64]) async throws -> Int64? {
+    var parent: Int64?
+    for tensorId in frames.reversed() {
+      parent = try await delete(tensorId: tensorId)
+    }
+    return parent
   }
 
   /// Deletes the step whose image is `tensorId`. Returns its parent's image tensor.
@@ -358,7 +476,7 @@ final class Project: @unchecked Sendable {
     let succeeded = await withCheckedContinuation { continuation in
       workspace.performChanges([
         TensorHistoryNode.self, Layer.self, TensorMoodboardData.self, ThumbnailHistoryNode.self,
-        ThumbnailHistoryHalfNode.self,
+        ThumbnailHistoryHalfNode.self, Clip.self,
       ]) { transaction in
         let rows = Rows(workspace)
         let tree = ProjectTree(nodes: rows.nodes, layers: rows.layers, items: false)
@@ -410,6 +528,21 @@ final class Project: @unchecked Sendable {
               .map { "shuffle_\($0.shuffleId)" })
         var names = layers.flatMap(Self.tensorNames(of:)) + moods.map { "shuffle_\($0.shuffleId)" }
         if node.tensorId > 0 { names.append("tensor_history_\(node.tensorId)") }
+        // As deleteHistory: the clip row and its soundtrack go with the clip's last frame.
+        if node.clipId >= 0, !others.contains(where: { $0.clipId == node.clipId }),
+          let clip = workspace.fetch(for: Clip.self).where(Clip.clipId == node.clipId).first
+        {
+          if let request = ClipChangeRequest.deletionRequest(clip) { transaction.try(submit: request) }
+          let otherClips = workspace.fetch(for: Clip.self).all().filter { $0.clipId != node.clipId }
+          if clip.audioId > 0, !otherClips.contains(where: { $0.audioId == clip.audioId }) {
+            names.append("audio_\(clip.audioId)")
+          }
+        }
+        if let inputAudioId = ProjectMapping.Profile(node.profileData)?.inputAudioId,
+          !others.contains(where: { ProjectMapping.Profile($0.profileData)?.inputAudioId == inputAudioId })
+        {
+          names.append("audio_\(inputAudioId)")
+        }
         outcome = (names.filter { !used.contains($0) }, parentTensorId)
       } completionHandler: { continuation.resume(returning: $0) }
     }
@@ -566,12 +699,19 @@ final class Project: @unchecked Sendable {
     ].compactMap { $0.1 > 0 ? "\($0.0)_\($0.1)" : nil }
   }
 
-  private func writeTensor(_ tensor: Tensor<FloatType>, name: String) throws {
+  private func writeTensor<Element: TensorNumeric>(_ tensor: Tensor<Element>, name: String) throws {
+    try writeTensors([(name, tensor)])
+  }
+
+  /// Writes the tensors in one opening of the store.
+  private func writeTensors<Element: TensorNumeric>(_ tensors: [(name: String, tensor: Tensor<Element>)])
+    throws
+  {
     lock.lock()
     defer { lock.unlock() }
     // Default flags would truncate the file on close; Draw Things opens it with none.
-    let result = graph.openStore(url.path, flags: []) {
-      $0.write(name, tensor: tensor, codec: [.fpzip, .zip])
+    let result = graph.openStore(url.path, flags: []) { store in
+      for (name, tensor) in tensors { store.write(name, tensor: tensor, codec: [.fpzip, .zip]) }
     }
     if case .failure = result { throw ProjectError.writeFailed }
   }
@@ -619,7 +759,10 @@ struct ProjectTree: @unchecked Sendable {
   init() {}
 
   /// `items` false leaves out History's items (their settings take longest to read).
-  init(nodes: [TensorHistoryNode], layers: [ProjectFormat.TensorData], items withItems: Bool = true) {
+  init(
+    nodes: [TensorHistoryNode], layers: [ProjectFormat.TensorData], clips: [Clip] = [],
+    items withItems: Bool = true
+  ) {
     // The image layer: the top layer with a tensor, else the node's own field.
     var layerTensors: [StepID: (index: Int64, tensorId: Int64)] = [:]
     var allLayerTensors: [StepID: Set<Int64>] = [:]
@@ -632,6 +775,8 @@ struct ProjectTree: @unchecked Sendable {
     }
     var byTime: [Int64: [StepID]] = [:]
     var profiles: [StepID: ProjectMapping.Profile] = [:]
+    var clipFrames: [Int64: [(index: Int32, tensorId: Int64)]] = [:]
+    var clipItems: [Int64: (id: StepID, inputAudioId: Int64?)] = [:]
     for node in nodes {
       let id = StepID(lineage: node.lineage, logicalTime: node.logicalTime)
       let tensorId =
@@ -647,11 +792,28 @@ struct ProjectTree: @unchecked Sendable {
       if newest.map({ (id.lineage, id.logicalTime) > ($0.lineage, $0.logicalTime) }) ?? true {
         newest = id
       }
-      if withItems, node.generated, let tensorId {
+      if node.clipId >= 0, let tensorId {
+        clipFrames[node.clipId, default: []].append((node.indexInAClip, tensorId))
+      }
+      // A clip is listed once, by its first frame.
+      if withItems, node.generated, let tensorId, node.clipId < 0 || node.indexInAClip == 0 {
         items[id] = HistoryItem(
           id: id, tensorId: tensorId, previewId: node.previewId, sidecar: Project.sidecar(for: node),
           inputTensorId: profile?.inputTensorId)
+        if node.clipId >= 0 {
+          clipItems[node.clipId] = (id, profile?.inputAudioId)
+        }
       }
+    }
+    let clipRows = Dictionary(clips.map { ($0.clipId, $0) }, uniquingKeysWith: { a, _ in a })
+    for (clipId, item) in clipItems {
+      let frames = (clipFrames[clipId] ?? []).sorted { $0.index < $1.index }.map(\.tensorId)
+      let row = clipRows[clipId]
+      let first = items[item.id]
+      items[item.id]?.clip = ClipInfo(
+        clipId: clipId, frames: frames, framesPerSecond: row?.framesPerSecond ?? 0,
+        audioId: row.flatMap { $0.audioId > 0 ? $0.audioId : nil }, inputAudioId: item.inputAudioId,
+        previewOffset: (first?.previewId ?? 0) &- (first?.tensorId ?? 0))
     }
     for id in Array(steps.keys) {
       let ruleParent = byTime[id.logicalTime - 1]?.filter { $0.lineage <= id.lineage }
@@ -747,6 +909,26 @@ struct ProjectTree: @unchecked Sendable {
     }
     return visibleAncestor(of: id)
   }
+}
+
+/// A clip's frames and sound, as Draw Things records them: a step per frame and a `clip` row.
+struct ClipInfo: Hashable, Sendable {
+  var clipId: Int64
+  /// Each frame's image tensor, in order.
+  var frames: [Int64]
+  var framesPerSecond: Double
+  /// The soundtrack's `audio_<id>` tensor.
+  var audioId: Int64?
+  /// The audio file the run took (H3 Ref2VA, LongCat), as an `audio_<id>` tensor.
+  var inputAudioId: Int64?
+  /// What every frame's preview id adds to its tensor id (the moodboard's part, `pushHistory`).
+  var previewOffset: Int64 = 0
+
+  /// Frame `index`'s thumbnail id.
+  func previewId(_ index: Int) -> Int64 { frames[index] &+ previewOffset }
+
+  /// Seconds.
+  var duration: Double { framesPerSecond > 0 ? Double(frames.count) / framesPerSecond : 0 }
 }
 
 enum ProjectError: LocalizedError {

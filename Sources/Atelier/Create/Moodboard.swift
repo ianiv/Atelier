@@ -193,12 +193,22 @@ struct MoodboardColumn: View {
 
   private static let thumbnail: CGFloat = 72
 
+  /// What the column holds for the selected model: H3 FL2VA takes the last frame from it, H3
+  /// Ref2VA numbered pictures.
+  private var title: String {
+    let video = model.videoModel
+    if video?.takesLastFrame == true { return "Last Frame" }
+    if video?.takesReferences == true { return "References" }
+    return "Moodboard"
+  }
+
   var body: some View {
     let moodboard = model.moodboard
+    let video = model.videoModel
     VStack(spacing: 8) {
       HStack(spacing: 4) {
         if shown {
-          Text("Moodboard").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+          Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
           Spacer(minLength: 0)
           Button("Add Images…", systemImage: "plus") { model.imageImport = .moodboard }
             .help("Add reference images")
@@ -211,8 +221,12 @@ struct MoodboardColumn: View {
       .labelStyle(.iconOnly)
       .buttonStyle(.borderless)
       if shown {
+        if video?.takesAudio == true {
+          AudioClipChip(width: Self.thumbnail)
+          Divider()
+        }
         if moodboard.items.isEmpty {
-          Text("Drop reference images here")
+          Text(video?.takesLastFrame == true ? "Drop the last frame here" : "Drop reference images here")
             .font(.caption)
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
@@ -224,7 +238,7 @@ struct MoodboardColumn: View {
           ScrollView {
             VStack(spacing: 10) {
               ForEach(moodboard.items) { item in
-                MoodboardThumbnail(item: item, size: Self.thumbnail)
+                MoodboardThumbnail(item: item, size: Self.thumbnail, role: role(of: item))
               }
             }
           }
@@ -254,12 +268,28 @@ struct MoodboardColumn: View {
       return !images.isEmpty
     } isTargeted: { isTargeted = $0 }
   }
+
+  /// How the selected video model reads an image: H3 FL2VA's last frame is the first image it
+  /// gets, H3 Ref2VA calls the canvas (in Edit) Picture 1 and the moodboard images the ones after.
+  private func role(of item: MoodboardItem) -> String? {
+    guard let video = model.videoModel else { return nil }
+    let sent = model.moodboard.items.filter { $0.weight > 0 }
+    guard let index = sent.firstIndex(where: { $0.id == item.id }) else { return nil }
+    if video.takesLastFrame { return index == 0 ? "Last frame" : "Not used" }
+    if video.takesReferences {
+      let canvas = model.effectiveCanvasMode == .edit && model.image != nil && model.canvasClip == nil
+      return "Picture \(index + (canvas ? 2 : 1))"
+    }
+    return nil
+  }
 }
 
 private struct MoodboardThumbnail: View {
   @Environment(CreateModel.self) private var model
   let item: MoodboardItem
   let size: CGFloat
+  /// What the selected video model makes of it, e.g. "Picture 2".
+  var role: String?
   @State private var hovering = false
   @State private var editing = false
 
@@ -286,7 +316,10 @@ private struct MoodboardThumbnail: View {
         .contentShape(.rect)
         .onTapGesture { editing = true }
         .onHover { hovering = $0 }
-      Text(Double(item.weight).formatted(.percent.precision(.fractionLength(0))))
+      Text(
+        [role, Double(item.weight).formatted(.percent.precision(.fractionLength(0)))]
+          .compactMap { $0 }.joined(separator: " · ")
+      )
         .font(.caption2)
         .monospacedDigit()
         .foregroundStyle(.secondary)

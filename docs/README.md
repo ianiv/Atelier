@@ -2,11 +2,12 @@
 
 1. [Getting started](getting-started.md): what you need, building and installing the app, pointing it at your models, and making your first image.
 2. [Creating images](creating-images.md): the Create screen, the prompt, size and seed, the settings inspector, presets, image to image and the moodboard.
-3. [The queue](queue.md): queuing images while one runs, making several at once, pausing, reordering and cancelling.
-4. [History and projects](history.md): browsing what you made, reusing settings, exporting and deleting, and switching projects.
-5. [Models and LoRAs](models-and-loras.md): downloading models, importing checkpoints and LoRAs, and making 8-bit copies of MOSS models.
-6. [Settings](settings.md): the models folder, the output folder and the performance options.
-7. [Atelier for agents (MCP)](../MCP.md): letting Claude Code and other agents generate images with your models (Mac only).
+3. [Making videos](video.md): video models, length, starting from an image, audio, and watching and reusing videos.
+4. [The queue](queue.md): queuing images while one runs, making several at once, pausing, reordering and cancelling.
+5. [History and projects](history.md): browsing what you made, reusing settings, exporting and deleting, and switching projects.
+6. [Models and LoRAs](models-and-loras.md): downloading models, importing checkpoints and LoRAs, and making 8-bit copies of MOSS models.
+7. [Settings](settings.md): the models folder, the output folder and the performance options.
+8. [Atelier for agents (MCP)](../MCP.md): letting Claude Code and other agents generate images and videos with your models (Mac only).
 
 The iPad version works the same way, with a few differences noted under "On iPad" in each page; see [Atelier on iPad](getting-started.md#atelier-on-ipad) to build and install it.
 

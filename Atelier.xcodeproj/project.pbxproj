@@ -85,6 +85,11 @@
 		FEC22431AE15251468257CA2 /* LibraryErrorAlert.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAFF310E4AA538AA8C02FC77 /* LibraryErrorAlert.swift */; };
 		600FFF1041FD67847B794622 /* LoRAsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 434F7495899302690802E139 /* LoRAsView.swift */; };
 		A7E11C0A1C0A7E11C0A7E102 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = A7E11C0A1C0A7E11C0A7E101 /* AppIcon.icon */; };
+		DE71CE4BC9D3833FBA7F38B6 /* VideoModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E18897D6E8A7C0EFA40806FC /* VideoModel.swift */; };
+		07ED1A855EFB26A6036EA256 /* EngineConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = F39D61C6D37D8CE30146AA63 /* EngineConfiguration.swift */; };
+		D9478AB0A5F467A78FBF0F6F /* ClipVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFEFDFCC1580AA7B96B192D4 /* ClipVideo.swift */; };
+		ABC9C966086FCD6CDDFBF814 /* ClipPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BEBA3D6C6994515FE6F7A28 /* ClipPlayer.swift */; };
+		FA666B187E2913EFB28CCC13 /* AudioClip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EA2F5D417DF60CE076D9B6C /* AudioClip.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -186,6 +191,11 @@
 		434F7495899302690802E139 /* LoRAsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoRAsView.swift; sourceTree = "<group>"; };
 		A7E11C0A1C0A7E11C0A7E101 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = AppIcon.icon; sourceTree = "<group>"; };
 		A1E4C0DE5167A7E1C0F1A001 /* Atelier.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Atelier.xcconfig; sourceTree = "<group>"; };
+		E18897D6E8A7C0EFA40806FC /* VideoModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoModel.swift; sourceTree = "<group>"; };
+		F39D61C6D37D8CE30146AA63 /* EngineConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineConfiguration.swift; sourceTree = "<group>"; };
+		FFEFDFCC1580AA7B96B192D4 /* ClipVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipVideo.swift; sourceTree = "<group>"; };
+		3BEBA3D6C6994515FE6F7A28 /* ClipPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipPlayer.swift; sourceTree = "<group>"; };
+		2EA2F5D417DF60CE076D9B6C /* AudioClip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioClip.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -280,6 +290,7 @@
 		ADEF5850836026B0FCB26117 /* Create */ = {
 			isa = PBXGroup;
 			children = (
+				2EA2F5D417DF60CE076D9B6C /* AudioClip.swift */,
 				3A6036FEF93D069A783B09D8 /* CreateModel.swift */,
 				B147BCDA9E5FEDE9CC9B373A /* CreateView.swift */,
 				B2E8F1D2C3A45B6E7F809102 /* Moodboard.swift */,
@@ -301,6 +312,8 @@
 		48E3561D3C3C081F0E6EC772 /* Generation */ = {
 			isa = PBXGroup;
 			children = (
+				F39D61C6D37D8CE30146AA63 /* EngineConfiguration.swift */,
+				E18897D6E8A7C0EFA40806FC /* VideoModel.swift */,
 				1CAC35AB075AAB4CDF7AD898 /* GenerationEngine.swift */,
 				59AD5317B0066ECD23EDCDAF /* ModelDefaults.swift */,
 			);
@@ -310,6 +323,8 @@
 		0ADB0E05EADC942C1C1FCD37 /* History */ = {
 			isa = PBXGroup;
 			children = (
+				3BEBA3D6C6994515FE6F7A28 /* ClipPlayer.swift */,
+				FFEFDFCC1580AA7B96B192D4 /* ClipVideo.swift */,
 				EAF3EA252F98E9035447E77C /* HistoryStore.swift */,
 				F1CCF224BCF0F5C0DAF37BC8 /* HistoryView.swift */,
 			);
@@ -536,6 +551,11 @@
 				02980CB68834C5E6EA77013B /* ContentView.swift in Sources */,
 				90D46F51CBD101C88E0BD1B0 /* CreateModel.swift in Sources */,
 				15B3CBDDD4DC0FCE7C625161 /* CreateView.swift in Sources */,
+				DE71CE4BC9D3833FBA7F38B6 /* VideoModel.swift in Sources */,
+				07ED1A855EFB26A6036EA256 /* EngineConfiguration.swift in Sources */,
+				D9478AB0A5F467A78FBF0F6F /* ClipVideo.swift in Sources */,
+				ABC9C966086FCD6CDDFBF814 /* ClipPlayer.swift in Sources */,
+				FA666B187E2913EFB28CCC13 /* AudioClip.swift in Sources */,
 				F9B7B4D35D7382085C916688 /* GenerationEngine.swift in Sources */,
 				63C2BBE1CC163EBF41BCA5B2 /* JobQueue.swift in Sources */,
 				59D4CC0F01D0DEA897EE5065 /* QueueView.swift in Sources */,

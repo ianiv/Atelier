@@ -3,6 +3,7 @@ import CoreTransferable
 import Diffusion
 import Foundation
 import ImageIO
+import ModelZoo
 import NNC
 import Observation
 import UniformTypeIdentifiers
@@ -17,6 +18,10 @@ struct HistoryItem: Identifiable, Hashable {
   /// Set for a step generated from the canvas (Edit): the image tensor of its input, the step
   /// before it.
   var inputTensorId: Int64?
+  /// Set for a video: the item is its first frame and stands for the whole clip.
+  var clip: ClipInfo?
+
+  var isVideo: Bool { clip != nil }
 
   // Step ids change when a fork or a delete renumbers steps; the image tensor doesn't.
   static func == (lhs: HistoryItem, rhs: HistoryItem) -> Bool { lhs.tensorId == rhs.tensorId }
@@ -204,7 +209,7 @@ final class HistoryStore {
 
   @discardableResult
   func save(
-    _ result: MediaGenerationPipeline.Result,
+    _ output: GenerationEngine.Output,
     request: GenerationEngine.Request,
     startedAt: Date,
     finishedAt: Date,
@@ -212,6 +217,7 @@ final class HistoryStore {
   ) async throws -> HistoryItem {
     var settings = request.configuration
     settings.seed = request.seed
+    if output.isVideo { settings.numFrames = output.frames.count }
     let project = project
     let dump = JSONValue.fields(of: settings)
     // The run follows the step that was current when it started, or with the canvas, the
@@ -238,21 +244,38 @@ final class HistoryStore {
     let moodboard = request.moodboard.compactMap { entry in
       ImageTensor.tensor(from: entry.image).map { (tensor: $0, weight: entry.weight) }
     }
-    let item = try await project.append(
-      tensor: ImageTensor.rgb(result.tensor), model: request.model, prompt: request.prompt,
-      negativePrompt: request.negativePrompt, seed: request.seed,
-      settings: dump, createdAt: finishedAt,
-      duration: finishedAt.timeIntervalSince(startedAt), moodboard: moodboard,
-      inputTensorId: inputTensorId, after: parentTensorId)
+    let item: HistoryItem
+    if let framesPerSecond = output.framesPerSecond {
+      item = try await project.appendClip(
+        frames: output.frames.map(ImageTensor.rgb),
+        clip: Project.ClipContent(
+          framesPerSecond: framesPerSecond, audio: output.audio, audioInput: output.audioInput),
+        model: request.model, prompt: request.prompt, negativePrompt: request.negativePrompt,
+        seed: request.seed, settings: dump, createdAt: finishedAt,
+        duration: finishedAt.timeIntervalSince(startedAt), moodboard: moodboard,
+        inputTensorId: inputTensorId, after: parentTensorId)
+    } else {
+      item = try await project.append(
+        tensor: ImageTensor.rgb(output.frames[0]), model: request.model, prompt: request.prompt,
+        negativePrompt: request.negativePrompt, seed: request.seed,
+        settings: dump, createdAt: finishedAt,
+        duration: finishedAt.timeIntervalSince(startedAt), moodboard: moodboard,
+        inputTensorId: inputTensorId, after: parentTensorId)
+    }
     if project === self.project {
       // A fork may have renumbered other steps.
       let keepCurrent = !makeCurrent()
-      if !keepCurrent { currentTensorId = item.tensorId }
+      if !keepCurrent { currentTensorId = Self.tip(of: item) }
       await reload()
       // The new step is likely the newest now, which the project records as no position.
       if keepCurrent { recordCurrent() }
     }
     return self.item(tensorId: item.tensorId) ?? item
+  }
+
+  /// The step a run after `item` follows: its own, or a clip's last frame.
+  static func tip(of item: HistoryItem) -> Int64 {
+    item.clip?.frames.last ?? item.tensorId
   }
 
   /// The step holding the image, in `project` (read fresh when it isn't the one loaded).
@@ -274,8 +297,13 @@ final class HistoryStore {
     let project = project
     do {
       for item in items {
-        let parent = try await project.delete(tensorId: item.tensorId)
-        if item.tensorId == currentTensorId { currentTensorId = parent }
+        if let clip = item.clip {
+          let parent = try await project.deleteClip(frames: clip.frames)
+          if let current = currentTensorId, clip.frames.contains(current) { currentTensorId = parent }
+        } else {
+          let parent = try await project.delete(tensorId: item.tensorId)
+          if item.tensorId == currentTensorId { currentTensorId = parent }
+        }
       }
     } catch {
       project.setCurrentStep(nil)
@@ -311,7 +339,12 @@ final class HistoryStore {
 
   /// Makes the step holding `tensorId` current, so the next run follows it. Recorded in the
   /// project as Draw Things records its position (`image_seek_to`).
-  func setCurrent(tensorId: Int64) {
+  ///
+  /// A clip is current at its last frame, so the next run follows the whole clip; `exact` makes
+  /// the step holding `tensorId` current even when it's a clip's first frame (a run from it then
+  /// branches there).
+  func setCurrent(tensorId: Int64, exact: Bool = false) {
+    let tensorId = exact ? tensorId : byTensor[tensorId].map(Self.tip(of:)) ?? tensorId
     guard tree.step(tensorId: tensorId) != nil, tensorId != currentTensorId else { return }
     currentTensorId = tensorId
     recordCurrent()
@@ -395,31 +428,128 @@ final class HistoryStore {
     return await Task.detached { project.image(tensorId: tensorId) }.value
   }
 
-  /// Writes a newly generated image to the output folder when Settings or the project turns that
-  /// on, named like an export. Returns why it couldn't be written, if it couldn't.
-  func writeToOutputFolder(_ item: HistoryItem, image: CGImage) async -> String? {
+  /// Writes a newly generated image or clip to the output folder when Settings or the project
+  /// turns that on, named like an export. Returns why it couldn't be written, if it couldn't.
+  func writeToOutputFolder(_ item: HistoryItem, image: CGImage?) async -> String? {
     guard output.effectiveSaves else { return nil }
     let access = FolderBookmarks.open(output.effectiveFolder)
     let folder = access.url
     let name = fileName(for: item)
     do {
       defer { withExtendedLifetime(access) {} }
-      let data = try Self.pngData(image, sidecar: item.sidecar)
+      let file: (data: Data?, video: URL?, extension: String)
+      if item.isVideo {
+        file = (nil, try await videoFile(for: item), "mp4")
+      } else {
+        guard let image else { throw ProjectError.badImage }
+        file = (try Self.pngData(image, sidecar: item.sidecar), nil, "png")
+      }
       try await Task.detached {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         // Steps can be renumbered when the history branches, so never overwrite a file.
-        var url = folder.appendingPathComponent(name).appendingPathExtension("png")
+        var url = folder.appendingPathComponent(name).appendingPathExtension(file.extension)
         var n = 2
         while FileManager.default.fileExists(atPath: url.path) {
-          url = folder.appendingPathComponent("\(name) \(n)").appendingPathExtension("png")
+          url = folder.appendingPathComponent("\(name) \(n)").appendingPathExtension(file.extension)
           n += 1
         }
-        try data.write(to: url, options: .withoutOverwriting)
+        if let video = file.video {
+          try FileManager.default.copyItem(at: video, to: url)
+        } else {
+          try file.data?.write(to: url, options: .withoutOverwriting)
+        }
       }.value
       return nil
     } catch {
       return "Saved to the project, but not to the output folder: \(error.localizedDescription)"
     }
+  }
+
+  // MARK: - Clips
+
+  /// A clip's frames, decoded from the project's tensors.
+  func frames(of item: HistoryItem) async -> [CGImage] {
+    guard let clip = item.clip else { return [] }
+    let project = project
+    return await Task.detached {
+      clip.frames.compactMap { project.image(tensorId: $0) }
+    }.value
+  }
+
+  /// One frame of a clip, full size.
+  func frame(_ index: Int, of item: HistoryItem) async -> CGImage? {
+    guard let frames = item.clip?.frames, frames.indices.contains(index) else { return nil }
+    return await image(tensorId: frames[index], in: project.name)
+  }
+
+  /// A clip's soundtrack and its sample rate (the model's).
+  func audio(of item: HistoryItem) async -> (samples: Tensor<Float>, sampleRate: Int)? {
+    guard let audioId = item.clip?.audioId else { return nil }
+    let project = project
+    let samples = await Task.detached { project.audio(id: audioId) }.value
+    return samples.map { ($0, ModelZoo.audioSampleRateForModel(item.sidecar.model)) }
+  }
+
+  /// The audio file a video run took, as it was resampled for the model.
+  func audioInput(of item: HistoryItem) async -> Tensor<Float>? {
+    guard let audioId = item.clip?.inputAudioId else { return nil }
+    let project = project
+    return await Task.detached { project.audio(id: audioId) }.value
+  }
+
+  /// The clip as an MP4 with its soundtrack and settings, written once into the caches folder
+  /// and reused by the player, exports, drags and the output folder.
+  func videoFile(for item: HistoryItem) async throws -> URL {
+    guard let clip = item.clip else { throw ClipVideoError.noFrames }
+    let codec = VideoCodec.current
+    let url = Self.clipCache.appendingPathComponent(
+      "\(project.name)-\(clip.clipId)-\(item.tensorId)-\(codec.rawValue).mp4")
+    if FileManager.default.fileExists(atPath: url.path) { return url }
+    if let pending = videoFiles[url] { return try await pending.value }
+    let project = project
+    let audio = await audio(of: item)
+    let metadata = videoMetadata(item)
+    let task = Task.detached {
+      try FileManager.default.createDirectory(at: Self.clipCache, withIntermediateDirectories: true)
+      // Written beside its final name, so a half-written file is never taken as done.
+      let partial = url.deletingPathExtension().appendingPathExtension("partial.mp4")
+      try await ClipVideo.write(
+        to: partial, count: clip.frames.count,
+        frame: { project.image(tensorId: clip.frames[$0]) },
+        framesPerSecond: clip.framesPerSecond, audio: audio?.samples,
+        audioSampleRate: audio?.sampleRate ?? 0, codec: codec, metadata: metadata)
+      try? FileManager.default.removeItem(at: url)
+      try FileManager.default.moveItem(at: partial, to: url)
+      return url
+    }
+    videoFiles[url] = task
+    defer { videoFiles[url] = nil }
+    return try await task.value
+  }
+
+  /// Videos being written, so the player and an export asking at once share one.
+  private var videoFiles: [URL: Task<URL, Error>] = [:]
+
+  private nonisolated static var clipCache: URL {
+    URL.cachesDirectory.appending(path: "Atelier/Clips", directoryHint: .isDirectory)
+  }
+
+  /// What an exported video says about itself: Draw Things' summary as its description, the
+  /// sidecar as its comment (unless Settings turns embedding off).
+  private func videoMetadata(_ item: HistoryItem) -> ClipVideo.Metadata? {
+    guard AppSettings.embedsSettings else { return nil }
+    let properties = ImageMetadata.properties(for: item.sidecar)
+    let tiff = properties[kCGImagePropertyTIFFDictionary] as? [CFString: Any]
+    let description = tiff?[kCGImagePropertyTIFFImageDescription] as? String ?? item.sidecar.prompt
+    let json = (try? Self.encoder.encode(item.sidecar)).map { String(decoding: $0, as: UTF8.self) }
+    return ClipVideo.Metadata(description: description, settings: json)
+  }
+
+  /// Writes the clip as an MP4 at `url`.
+  func exportVideo(_ item: HistoryItem, to url: URL) async throws {
+    let file = try await videoFile(for: item)
+    try? FileManager.default.removeItem(at: url)
+    try FileManager.default.copyItem(at: file, to: url)
   }
 
   /// Writes the image as a PNG carrying its settings (see `pngData`).
@@ -452,9 +582,15 @@ final class HistoryStore {
     "\(project.name) \(item.id.logicalTime)-\(item.sidecar.seed)"
   }
 
-  /// The image as a file to drag out, named like an export.
+  /// The image (or clip, as a video) as a file to drag out, named like an export.
   func dragExport(_ item: HistoryItem) -> PNGExport {
-    PNGExport(id: item.tensorId, name: fileName(for: item)) { [self] in try await pngData(item) }
+    var export = PNGExport(id: item.tensorId, name: fileName(for: item)) { [self] in
+      try await pngData(item)
+    }
+    if item.isVideo {
+      export.video = { [self] in try await videoFile(for: item) }
+    }
+    return export
   }
 
   /// Puts the full-resolution image on the clipboard.
@@ -688,14 +824,28 @@ enum JSONValue: Codable, Hashable {
   }
 }
 
-/// A PNG to drag into Finder (as a file) or another app (as image data), encoded on drop.
+/// A PNG to drag into Finder (as a file) or another app (as image data), encoded on drop; a
+/// clip drags as its MP4.
 struct PNGExport: Transferable, Identifiable {
   /// The image tensor.
   var id: Int64
   var name: String
   var data: @Sendable () async throws -> Data
+  /// Set for a clip: its video file.
+  var video: (@Sendable () async throws -> URL)? = nil
 
   static var transferRepresentation: some TransferRepresentation {
+    FileRepresentation(exportedContentType: .mpeg4Movie) { export in
+      let folder = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+      try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+      let file = folder.appendingPathComponent(export.name).appendingPathExtension("mp4")
+      guard let video = export.video else { throw ClipVideoError.noFrames }
+      try FileManager.default.copyItem(at: try await video(), to: file)
+      return SentTransferredFile(file)
+    }
+    .exportingCondition { $0.video != nil }
+    .suggestedFileName { $0.name + ".mp4" }
     FileRepresentation(exportedContentType: .png) { export in
       let folder = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -704,8 +854,10 @@ struct PNGExport: Transferable, Identifiable {
       try await export.data().write(to: file)
       return SentTransferredFile(file)
     }
+    .exportingCondition { $0.video == nil }
     .suggestedFileName { $0.name }
     DataRepresentation(exportedContentType: .png) { try await $0.data() }
+      .exportingCondition { $0.video == nil }
       .suggestedFileName { $0.name }
   }
 }

@@ -89,16 +89,18 @@ final class JobQueue {
   }
 
   /// Ends the running job. A finished one's result is its line's latest step (and the input step
-  /// it saved is reused by later jobs from the same canvas).
-  func finishRunning(_ status: Job.Status, inputTensorId: Int64? = nil) {
+  /// it saved is reused by later jobs from the same canvas). A clip's latest step is its last
+  /// frame (`tipTensorId`), which the next run follows.
+  func finishRunning(_ status: Job.Status, inputTensorId: Int64? = nil, tipTensorId: Int64? = nil) {
     guard var job = running else { return }
     running = nil
     job.status = status
     job.finishedAt = Date()
     if case .finished(let tensorId) = status {
       // Saving a result makes it the current step.
-      expectedCurrent = tensorId
-      if let line = job.line { lineTips[line] = tensorId }
+      let tip = tipTensorId ?? tensorId
+      expectedCurrent = tip
+      if let line = job.line { lineTips[line] = tip }
     }
     if let inputTensorId, job.request.canvasTensorId == nil, let key = job.request.canvasKey {
       savedInputs[key] = inputTensorId

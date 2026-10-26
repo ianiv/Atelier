@@ -8,10 +8,11 @@ What it does today:
 
 - Text to image with sensible per-model defaults, and every advanced setting one search away.
 - Image to image: edit an image on the canvas, outpaint by moving it in the frame, and give edit models reference images on a moodboard.
+- Video with LTX-2, MiniMax H3, Wan and the other video models the engine runs: text or an image to video, first and last frames, references, and sound (LTX and H3 make a soundtrack; H3 and LongCat take an audio file). Clips play inline and save as MP4.
 - Presets and inspector layouts.
 - History kept in projects, in Draw Things' project file format, with one-click "Use Settings".
 - A model and LoRA library: download from the community catalog, import `.safetensors` checkpoints and LoRAs, and make 8-bit copies of MOSS models.
-- An MCP server so agents such as Claude Code can generate images with your models.
+- An MCP server so agents such as Claude Code can generate images and videos with your models.
 
 ## Download
 
@@ -35,6 +36,7 @@ Start with the [user guide](docs/README.md).
 
 - [Getting started](docs/getting-started.md): requirements, building and installing, choosing your models folder, your first image.
 - [Creating images](docs/creating-images.md): the prompt, size and seed, the inspector, presets, image to image and the moodboard.
+- [Making videos](docs/video.md): video models, length, first and last frames, audio, and playing and exporting videos.
 - [History and projects](docs/history.md)
 - [Models and LoRAs](docs/models-and-loras.md): downloading, importing, Make 8-bit Copy.
 - [Settings](docs/settings.md): models folder, output folder and performance.

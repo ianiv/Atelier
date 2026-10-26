@@ -64,6 +64,8 @@ final class CreateModel {
   let canvas = CanvasState()
   /// Reference images, sent in both modes to models that take them.
   let moodboard = Moodboard()
+  /// The audio file for video models that take one.
+  let audio = AudioClip()
   var canvasMode: CanvasMode = CreateModel.storedCanvasMode {
     didSet { UserDefaults.standard.set(canvasMode.rawValue, forKey: "canvasMode") }
   }
@@ -105,8 +107,13 @@ final class CreateModel {
   /// The project step behind `image` once it's a finished image (not a step preview), by its
   /// image tensor, which stays the same when steps are renumbered.
   private var imageStep: (project: String, tensorId: Int64)? {
-    didSet { imageIsPreview = false }
+    didSet {
+      imageIsPreview = false
+      showsFrame = false
+    }
   }
+  /// The canvas shows one frame of a clip (`useFrame`), not the clip playing.
+  private var showsFrame = false
   /// The canvas shows a step preview, not `imageStep`'s image.
   private var imageIsPreview = false
   var errorMessage: String?
@@ -127,6 +134,12 @@ final class CreateModel {
   private(set) var canvasFollowsRun = true
   /// The running job's latest step preview, whether or not the canvas shows it.
   private(set) var livePreview: CGImage?
+  /// A video run's latest preview, one image per latent frame (`livePreview` is the first).
+  private(set) var livePreviewFrames: [CGImage] = []
+  /// The frames the canvas plays while it shows a video run's preview.
+  var canvasPreviewFrames: [CGImage] {
+    imageIsPreview && canvasFollowsRun ? livePreviewFrames : []
+  }
   private var loadTask: Task<Void, Never>?
   /// A history item's configuration dump to apply once the model's defaults finish loading.
   private var pendingSettings: [String: JSONValue]?
@@ -143,6 +156,39 @@ final class CreateModel {
       return nil
     }
     return history.item(tensorId: imageStep.tensorId)
+  }
+
+  /// The clip behind the canvas, when it shows a finished video: the canvas plays it.
+  var canvasClip: HistoryItem? {
+    showsFrame ? nil : imageItem.flatMap { $0.isVideo ? $0 : nil }
+  }
+
+  /// The selected model, when it makes video.
+  var videoModel: VideoModel? {
+    guard let selectedModel else { return nil }
+    return VideoModel(model: selectedModel, loras: (settings?.loras ?? []).compactMap(\.file))
+  }
+
+  /// Puts one frame of a clip on the canvas as the input of the next run, in Edit mode: the
+  /// frame is a step of its own, so the run follows it (from the last frame, it extends the
+  /// clip; from any other, it branches there).
+  func useFrame(_ index: Int, of item: HistoryItem) {
+    guard let frames = item.clip?.frames, frames.indices.contains(index) else { return }
+    let tensorId = frames[index]
+    let projectName = history.project.name
+    statusNote = nil
+    stopFollowingRun()
+    history.setCurrent(tensorId: tensorId, exact: true)
+    canvasIsImported = false
+    Task {
+      guard let frame = await history.image(tensorId: tensorId, in: projectName) else { return }
+      imageStep = (projectName, tensorId)
+      showsFrame = true
+      lastSavedTensorId = nil
+      image = frame
+      canvas.zoomToFit()
+      canvasMode = .edit
+    }
   }
 
   /// A job is running or the model's defaults are loading.
@@ -345,6 +391,7 @@ final class CreateModel {
     guard SessionState.isEnabled else { return }
     while !history.isLoaded { try? await Task.sleep(for: .milliseconds(100)) }
     let requests = await savedRequests(SavedQueue.load(project: history.project.name))
+    AudioClip.removeSnapshots(keeping: requests.compactMap(\.audio))
     guard !requests.isEmpty else { return }
     queue.isPaused = true
     queue.append(requests, currentTensorId: history.currentTensorId)
@@ -434,6 +481,12 @@ final class CreateModel {
     let restoreMoodboard = Task {
       let references = await history.moodboard(at: item.id, in: projectName)
       moodboard.replace(with: references)
+      // A video run's audio file comes back too.
+      if let samples = await history.audioInput(of: item),
+        let rate = VideoModel(model: item.sidecar.model)?.audioSampleRate
+      {
+        try? audio.set(samples: samples, sampleRate: rate, name: "Audio from \(history.fileName(for: item)).wav")
+      }
     }
     if selectedModel == sidecar.model, !isLoadingModel, var settings = recommended {
       SettingsRegistry.apply(dump: sidecar.configuration, to: &settings)
@@ -671,7 +724,8 @@ final class CreateModel {
     var base = GenerationEngine.Request(
       model: model, prompt: prompt, negativePrompt: negativePrompt, seed: seed,
       configuration: settings)
-    if effectiveCanvasMode == .edit, let source = canvasSource {
+    // A clip playing on the canvas isn't an input: Use Last Frame as Input picks a frame.
+    if effectiveCanvasMode == .edit, canvasClip == nil, let source = canvasSource {
       let size = CGSize(width: settings.width, height: settings.height)
       let placement = CanvasState()
       placement.scale = source.scale
@@ -689,6 +743,7 @@ final class CreateModel {
       }
     }
     if usesReferences { base.moodboard = moodboard.references }
+    let takesAudio = videoModel?.takesAudio == true && audio.url != nil
     remember(prompt: prompt)
     // Always random rolls a seed per image; a set seed counts up from itself, as in Draw Things.
     let firstSeed = seed
@@ -696,6 +751,7 @@ final class CreateModel {
       if !seedLocked { rollSeed() }
       var request = base
       request.seed = seedLocked ? firstSeed &+ UInt32(index) : seed
+      if takesAudio { request.audio = audio.snapshot() }
       return request
     }
     queue.append(requests, currentTensorId: history.currentTensorId)
@@ -759,30 +815,34 @@ final class CreateModel {
     generationTask = Task { [engine] in
       var status = JobQueue.Job.Status.cancelled
       var inputTensorId: Int64?
+      var tipTensorId: Int64?
       do {
-        let result = try await engine.generate(request) { progress in
+        let output = try await engine.generate(request) { progress in
           Task { @MainActor in
             self.handle(progress)
             self.agentCallbacks[job.id]?.progress(progress)
           }
         }
+        if output.isVideo { phase = .running("Saving \(output.frames.count) frames…") }
         let item = try await history.save(
-          result, request: request, startedAt: startedAt, finishedAt: Date(),
+          output, request: request, startedAt: startedAt, finishedAt: Date(),
           makeCurrent: { self.canvasFollowsRun })
         lastSavedTensorId = item.tensorId
-        let finished = ImageTensor.cgImage(from: result.tensor) ?? livePreview
+        let finished = output.frames.first.flatMap(ImageTensor.cgImage(from:)) ?? livePreview
         if canvasFollowsRun {
           imageStep = (history.project.name, item.tensorId)
           canvasIsImported = false
           if let finished { image = finished }
         }
-        if let finished, let failure = await history.writeToOutputFolder(item, image: finished) {
+        if let failure = await history.writeToOutputFolder(item, image: finished) {
           errorMessage = failure
         }
         saveSession()
-        FinishedNotice.post(prompt: request.prompt, seconds: item.sidecar.durationSeconds)
+        FinishedNotice.post(
+          prompt: request.prompt, seconds: item.sidecar.durationSeconds, isVideo: item.isVideo)
         status = .finished(tensorId: item.tensorId)
         inputTensorId = item.inputTensorId
+        tipTensorId = item.clip?.frames.last
         agentCallbacks.removeValue(forKey: job.id)?.completion(.success(item))
       } catch is CancellationError {
         // Stopped; keep the last preview on the canvas (when it's showing the run).
@@ -792,13 +852,14 @@ final class CreateModel {
         status = .failed(error.localizedDescription)
         agentCallbacks.removeValue(forKey: job.id)?.completion(.failure(error))
       }
-      queue.finishRunning(status, inputTensorId: inputTensorId)
+      queue.finishRunning(status, inputTensorId: inputTensorId, tipTensorId: tipTensorId)
       phase = .idle
       generationTask = nil
       runStartedAt = nil
       canvasBeforePreview = nil
       previewCoversCanvas = false
       livePreview = nil
+      livePreviewFrames = []
       runNext()
       // Once the queue is empty, the next run shows on the canvas again.
       if generationTask == nil { canvasFollowsRun = true }
@@ -964,6 +1025,12 @@ final class CreateModel {
       livePreview = preview
       if canvasFollowsRun { coverCanvas(with: preview) }
       noteStep(step, of: total)
+    case .previewFrames(let frames, let step, let total):
+      guard let first = frames.first else { return }
+      livePreview = first
+      livePreviewFrames = frames
+      if canvasFollowsRun { coverCanvas(with: first) }
+      noteStep(step, of: total)
     case .state(let state):
       phase = .running(Self.describe(state))
       if case .generating(let step, let total) = state {
@@ -1038,7 +1105,7 @@ enum FinishedNotice {
   private static var unseen = 0
   private static var observing = false
 
-  static func post(prompt: String, seconds: Double) {
+  static func post(prompt: String, seconds: Double, isVideo: Bool = false) {
     guard !AppLifecycle.isActive else { return }
     let center = UNUserNotificationCenter.current()
     unseen += 1
@@ -1051,7 +1118,7 @@ enum FinishedNotice {
       }
     }
     let content = UNMutableNotificationContent()
-    content.title = "Image ready"
+    content.title = isVideo ? "Video ready" : "Image ready"
     content.body = "\(prompt.prefix(120)) (\(GenerationTime.text(seconds)))"
     let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
     Task {

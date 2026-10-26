@@ -9,4 +9,7 @@
 CODE_SIGN_IDENTITY = -
 DEVELOPMENT_TEAM =
 
+// SwiftUI's VideoPlayer (the clip player) needs AVKit itself, which Swift doesn't link for it.
+OTHER_LDFLAGS = $(inherited) -framework AVKit
+
 #include? "Local.xcconfig"

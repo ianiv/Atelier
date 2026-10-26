@@ -112,6 +112,8 @@ enum SettingControl {
   case text
   case size
   case loras
+  /// A video's length: frame counts the model takes, shown with their duration.
+  case frames
 }
 
 /// One inspector setting: how to show it and how to read and write it on a configuration.
@@ -414,10 +416,18 @@ enum SettingsRegistry {
         options: files(matching: ["restoreformer", "gfpgan"])),
 
       // Video
+      {
+        var length = integer(
+          "numFrames", \.numFrames, "Length", .video,
+          "How long the video is, in frames. Each model takes some frame counts only; the length snaps to them.",
+          range: 1...1000, keywords: ["frames", "duration", "seconds"], applies: video)
+        length.control = .frames
+        return length
+      }(),
       integer(
-        "numFrames", \.numFrames, "Frames", .video, "Number of frames to generate.",
-        range: 1...1000, applies: video),
-      integer("fps", \.fps, "FPS", .video, "Frames per second of the output.", range: 1...60, applies: video),
+        "fps", \.fps, "FPS", .video,
+        "Frames per second Stable Video Diffusion is told the video plays at; the clip plays at it too.",
+        range: 1...60, applies: svd),
       integer(
         "motionScale", \.motionScale, "Motion Scale", .video, "Amount of motion (SVD motion bucket).",
         range: 0...255, applies: svd),

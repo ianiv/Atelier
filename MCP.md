@@ -1,6 +1,6 @@
 # Atelier for agents (MCP)
 
-Atelier runs an MCP server inside the app, so agents such as Claude Code and Codex can generate images with your local models. Agents use the app's own engine: their runs join your queue (one image at a time) instead of loading a second copy of a model onto the GPU. An agent's run shows in the Queue and on the Create screen like one of yours (progress, previews, the result on the canvas, Stop or Cancel in the Queue stops it) without changing your prompt or settings, and is saved to the current project. While the queue is paused, an agent's request waits.
+Atelier runs an MCP server inside the app, so agents such as Claude Code and Codex can generate images and videos with your local models. Agents use the app's own engine: their runs join your queue (one image at a time) instead of loading a second copy of a model onto the GPU. An agent's run shows in the Queue and on the Create screen like one of yours (progress, previews, the result on the canvas, Stop or Cancel in the Queue stops it) without changing your prompt or settings, and is saved to the current project. While the queue is paused, an agent's request waits.
 
 ## Turn it on
 
@@ -67,14 +67,14 @@ Then ask for an image, for example: "Use Atelier to make a 1024×1024 watercolor
 
 | Tool | What it does |
 | --- | --- |
-| `list_models` | Downloaded models: file, name, family, which one is selected in the app, and whether it takes reference images. |
+| `list_models` | Downloaded models: file, name, family, which one is selected in the app, and whether it takes reference images. Video models say so, with their frame rate, the inputs they take and whether they make sound. |
 | `list_presets` | Saved presets, the model each belongs to, which are model defaults, and their settings. |
 | `get_settings` | The full settings `generate` would start from for a model (and preset), as Draw Things configuration JSON. |
-| `generate` | One image. Returns it inline (1024 px on the long side), writes the full PNG (settings embedded) and saves it to the current project. |
+| `generate` | One image, or with a video model one video. Returns the image (a video's first frame) inline (1024 px on the long side), writes the full PNG, or the MP4 with its sound (settings embedded), and saves it to the current project. |
 
-`generate` arguments: `prompt` (required), `negative_prompt`, `model` (file or name; default is the app's selected model), `preset`, `use_app_settings` (start from the inspector's current values), `settings` (any Draw Things configuration keys, e.g. `{"sampler": 1, "shift": 3}`), `width`, `height`, `steps`, `guidance_scale`, `seed`, `input_image` (a path or `data:` URL to edit), `strength`, `reference_images` (paths, or `{"image", "weight"}`), `save_to` (a file or folder; default is a temporary folder) and `include_image`.
+`generate` arguments: `prompt` (required), `negative_prompt`, `model` (file or name; default is the app's selected model), `preset`, `use_app_settings` (start from the inspector's current values), `settings` (any Draw Things configuration keys, e.g. `{"sampler": 1, "shift": 3}`), `width`, `height`, `steps`, `guidance_scale`, `seed`, `input_image` (a path or `data:` URL to edit), `strength`, `reference_images` (paths, or `{"image", "weight"}`), `num_frames` or `seconds` and `audio` (a path) for video models, `save_to` (a file or folder; default is a temporary folder) and `include_image`.
 
-Settings are layered like Create's: the model's recommended settings and its default preset, then `preset`, then `settings`, then the explicit fields. An `input_image` without a size gives the output that image's aspect ratio at the model's usual pixel count.
+Settings are layered like Create's: the model's recommended settings and its default preset, then `preset`, then `settings`, then the explicit fields. An `input_image` without a size gives the output that image's aspect ratio at the model's usual pixel count. For a video model, `input_image` is the first frame and, for MiniMax H3 FL2VA, the first reference image is the last; the length snaps to the frame counts the model takes. Videos take minutes, so give the agent a generous timeout.
 
 Long runs stream progress (`notifications/progress`) to clients that send a progress token, and cancelling the call in the client stops the generation.
 

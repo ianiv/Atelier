@@ -8,6 +8,7 @@ Every image you generate is saved to the **current project**. Click **History** 
 - **Grid / Graph** in the toolbar switches to a graph: one row per image with its prompt, model and time, and a column of lines showing which image each one follows, so you can see where the history branches. The current image has a ring around its dot.
 - **Filter by prompt**: type in the search field in the toolbar.
 - **Model**: show only images made with one model.
+- Videos show as one tile each, with a film badge. **Images / Videos** in the toolbar shows only one kind. See [Making videos](video.md#in-history).
 - Click an image to make it the **current image** (see Branches below) and see its prompt, negative prompt and settings (model, size, seed, steps, guidance, shift, sampler, hires fix and more) in the panel on the right. Prompts and seeds can be selected and copied.
 - Select several images with ⌘-click or ⇧-click to copy, export or delete them together. On iPad, tap **Select** in the toolbar, then tap images to add or remove them; tap **Done** when you're finished.
 - On iPad, a tap shows an image's details and a double tap uses its settings. In a narrow window the details open over the grid and close when you're done.
