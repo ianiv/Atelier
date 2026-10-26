@@ -14,6 +14,8 @@ Click **Models** in the sidebar.
 
 Select a model and click **Download**. Atelier also downloads the text encoders and other files the model needs. Progress shows in the list; **Cancel Download** stops it, and downloading again later resumes where it stopped.
 
+**On iPad**, tap **Download** in the list, or touch and hold a model. Keep Atelier open until a large download finishes: in the background iPadOS may pause it. Models are saved in your models folder, by default **On My iPad ▸ Atelier ▸ Models**. You can also copy model files there from a Mac with the Files app. Large models can run on an iPad with less memory than their size: the engine loads weights as it needs them, so it may just be slower.
+
 ### Deleting
 
 **Move to Trash** moves the model's file to the Trash. Text encoders and other files that other models share are kept. For an imported model, its entry is removed from the library too. If an imported model's file has gone missing from the folder, it says "File missing" and **Remove from Library** cleans up the entry.
@@ -25,6 +27,8 @@ To use a model that isn't in the catalog, such as a fine-tune you downloaded:
 1. Click **Import…** in the Models toolbar and choose one or more `.safetensors` or `.ckpt` files, or drop them on the Models list.
 2. Atelier inspects each file and shows the model family it detected. Give it a name if you like, or remove a file you don't want to import.
 3. Start the import. Converting a checkpoint takes a few minutes and a lot of memory; a 10 GB file can take 10 to 30 minutes.
+
+On iPad, Import… opens the Files picker. Importing a checkpoint and Make 8-bit Copy work there too but haven't been tried on an iPad yet; converting needs a lot of memory, so a Mac is the safer place for large checkpoints.
 
 The converted model is saved in the models folder as `<name>_f16.ckpt`, marked **Imported**, and any text encoders or VAE it needs are downloaded. It then appears in Create's model menu.
 
@@ -53,7 +57,7 @@ Click **LoRAs** in the sidebar. **Family** filters the list by the model family 
 
 ### Managing LoRAs
 
-Select a LoRA to rename it or change its trigger words, then click **Save** (or **Revert**). **Reveal in Finder** shows its file, and **Move to Trash** deletes the file and removes it from `custom_lora.json`.
+Select a LoRA to rename it or change its trigger words, then click **Save** (or **Revert**). **Reveal in Finder** (on iPad, **Show in Files**, which opens its folder) shows its file, and **Move to Trash** deletes the file and removes it from `custom_lora.json`.
 
 To use a LoRA, add it in the inspector's LoRAs section in Create; see [Creating images](creating-images.md#loras).
 

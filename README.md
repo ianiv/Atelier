@@ -2,7 +2,7 @@
 
 https://github.com/user-attachments/assets/d063933f-9fdb-4bfd-97ab-bfc6a12920b0
 
-Atelier is a native macOS app for generating images with local models. It runs the same engine as Draw Things ([draw-things-community](https://github.com/drawthingsai/draw-things-community)) inside the app, so there is no server to start: live previews, progress and Cancel all work in-process.
+Atelier is a native macOS app for generating images with local models, with an iPad version in development. It runs the same engine as Draw Things ([draw-things-community](https://github.com/drawthingsai/draw-things-community)) inside the app, so there is no server to start: live previews, progress and Cancel all work in-process.
 
 What it does today:
 
@@ -15,7 +15,7 @@ What it does today:
 
 ## Download
 
-Get the latest signed and notarized Atelier from [Releases](https://github.com/ianiv/Atelier/releases/latest): download the zip, open it and drag Atelier to Applications. It needs a Mac with Apple silicon running macOS 27 or later. To build it yourself instead, see [Getting started](docs/getting-started.md).
+Get the latest signed and notarized Atelier from [Releases](https://github.com/ianiv/Atelier/releases/latest): download the zip, open it and drag Atelier to Applications. It needs a Mac with Apple silicon running macOS 27 or later. To build it yourself instead, see [Getting started](docs/getting-started.md), which also covers the iPad version (an iPad with M1 or later, iPadOS 27; built from the `ipad` branch, no download yet).
 
 ## How it differs from Draw Things
 

@@ -7,7 +7,7 @@ Atelier runs an MCP server inside the app, so agents such as Claude Code and Cod
 1. Open Atelier → Settings (⌘,) → **Agents**.
 2. Turn on **Let agents generate images**. The status line shows the address, `http://127.0.0.1:7862/mcp` unless you change the port.
 
-The server listens only on this Mac (127.0.0.1 and ::1) and refuses requests from web pages. Atelier must be open while an agent uses it.
+The server listens only on this Mac (127.0.0.1 and ::1) and refuses requests from web pages. Atelier must be open while an agent uses it. The MCP server is in the Mac app only; the iPad version doesn't have it.
 
 ## Connect an agent
 

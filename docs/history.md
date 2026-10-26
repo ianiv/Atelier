@@ -9,7 +9,8 @@ Every image you generate is saved to the **current project**. Click **History** 
 - **Filter by prompt**: type in the search field in the toolbar.
 - **Model**: show only images made with one model.
 - Click an image to make it the **current image** (see Branches below) and see its prompt, negative prompt and settings (model, size, seed, steps, guidance, shift, sampler, hires fix and more) in the panel on the right. Prompts and seeds can be selected and copied.
-- Select several images with ⌘-click or ⇧-click to copy, export or delete them together.
+- Select several images with ⌘-click or ⇧-click to copy, export or delete them together. On iPad, tap **Select** in the toolbar, then tap images to add or remove them; tap **Done** when you're finished.
+- On iPad, a tap shows an image's details and a double tap uses its settings. In a narrow window the details open over the grid and close when you're done.
 
 ## Reusing an image
 
@@ -21,13 +22,14 @@ You can also drag images from History onto the canvas or the moodboard in Create
 
 ## Copying, exporting and deleting
 
-Right-click an image (or use the buttons in the detail panel):
+Right-click an image (on iPad, touch and hold), or use the buttons in the detail panel:
 
 - **Copy Image**, **Copy Prompt**, **Copy Seed**.
 - **Export PNG…** saves a PNG with its prompt, model, seed and settings embedded, in the format Draw Things uses, so Atelier and Draw Things can read them back. Images saved from the canvas or dragged out of Atelier carry them too. You can turn this off in [Settings](settings.md#saved-images).
+- **Save to Photos** (iPad only) adds the image to your photo library, with its settings embedded like an export. The first time, iPadOS asks whether Atelier may add photos.
 - **Delete** removes the image and its settings from the project. This can't be undone.
 
-With several images selected, the same menu offers **Copy Images**, **Export PNGs…** and **Delete**.
+With several images selected, the same menu offers **Copy Images**, **Export PNGs…** (choose a folder), **Save to Photos** on iPad, and **Delete**.
 
 ## Branches
 
@@ -48,8 +50,8 @@ A project is one file holding the images, their branches and their settings. Use
 - **New Project…**
 - **Rename** the current project.
 - **Output Folder…**: choose whether the project's new images are also saved to an output folder, and which one. **Save generated images** is **As in Settings** until you pick **On** or **Off**, and **Use a different folder for this project** sends them somewhere other than the folder in Settings. These choices are kept in the project file, so they stay with it when you rename it. See [Output folder](settings.md#output-folder).
-- **Show in Finder**.
+- **Show in Finder** (on iPad, **Show in Files**).
 
-Projects are stored in `~/Pictures/Atelier/Projects/`, one `.sqlite3` file each, in the same format Draw Things uses for its projects. The first project is called "Atelier".
+Projects are stored in `~/Pictures/Atelier/Projects/` (on iPad, **On My iPad ▸ Atelier ▸ Atelier ▸ Projects**), one `.sqlite3` file each, in the same format Draw Things uses for its projects. The first project is called "Atelier".
 
 When you bring an image in from outside to edit it, Atelier also saves that image in the project (History doesn't list it) so the edited result can always find its input again.

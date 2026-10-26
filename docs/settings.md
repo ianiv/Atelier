@@ -2,11 +2,15 @@
 
 Open **Atelier ▸ Settings** (⌘,).
 
+**On iPad**, Settings is the gear button at the top of the sidebar (or ⌘, with a keyboard), and opens as a sheet. It has the Models, Images and Performance tabs; Agents is Mac only.
+
 ## Models
 
 ### Models directory
 
 The folder Atelier reads models and LoRAs from, and downloads and imports into. Click **Choose…** or type a path, then **Apply**. When it's never been set, Atelier uses `~/Documents/Models`, or the folder in the `DRAWTHINGS_MODELS_DIR` environment variable. You can point it at Draw Things' models folder to share models between the two apps.
+
+**On iPad** there's no path to type. Settings shows the folder as the Files app names it, such as **On My iPad ▸ Atelier ▸ Models (Default)**. **Choose…** picks any folder Files can reach (iCloud Drive, another app's folder, an external drive), and **Use Default** goes back to the Models folder in Atelier's own folder. If a chosen folder can't be reached, for example on a disconnected drive, Settings says so.
 
 ## Images
 
@@ -19,6 +23,8 @@ The folder Atelier reads models and LoRAs from, and downloads and imports into. 
 **Save Generated Images to Output Folder** (off by default) also writes every new image to a folder of your choice as a PNG, as Draw Things' output folder setting does. Each file is named like an export ("Project 12-1234567.png": the project, the image's step and its seed), and a number is added rather than replacing a file that's already there. With **Include Generation Settings in Saved Images** on, the files carry their settings too.
 
 **Output folder** is the folder used. Type a path or click **Choose…**. When it's never been set, it's `~/Pictures/Atelier/Output/`. It can be on an external drive; if the folder can't be written (the drive isn't connected, say), the image is still saved in the project and the status bar says it didn't reach the folder.
+
+**On iPad**, the output folder works like the models folder above: **Choose…** and **Use Default**, and the default is **On My iPad ▸ Atelier ▸ Atelier ▸ Output**.
 
 Each project can turn saving on or off for itself and use its own folder, from **Output Folder…** in the project menu (see [Projects](history.md#projects)). Projects follow these settings until you change that.
 
@@ -48,3 +54,9 @@ Lets Claude Code, Codex, Gemini CLI, Cursor, VS Code and other MCP clients on th
 | Presets and inspector layouts | `~/Library/Application Support/Atelier/` (the Presets and inspector menus have Show Folder items) |
 | Images saved to the output folder | `~/Pictures/Atelier/Output/`, or the folder you set (in Settings or for a project) |
 | Moodboard images | `~/Library/Application Support/Atelier/Moodboard/` |
+
+On iPad, projects and the default output folder are in **On My iPad ▸ Atelier ▸ Atelier** and models are in **On My iPad ▸ Atelier ▸ Models**, both visible in the Files app. Presets, layouts and the moodboard are kept inside the app.
+
+## Notifications
+
+When an image finishes while Atelier is in the background, it posts a notification and puts a count on the app's icon, cleared when you come back. The first time, macOS (or iPadOS) asks whether Atelier may show notifications and badges; you can change either later in System Settings ▸ Notifications (on iPad, Settings ▸ Notifications).

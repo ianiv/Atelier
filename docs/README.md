@@ -6,7 +6,9 @@
 4. [History and projects](history.md): browsing what you made, reusing settings, exporting and deleting, and switching projects.
 5. [Models and LoRAs](models-and-loras.md): downloading models, importing checkpoints and LoRAs, and making 8-bit copies of MOSS models.
 6. [Settings](settings.md): the models folder, the output folder and the performance options.
-7. [Atelier for agents (MCP)](../MCP.md): letting Claude Code and other agents generate images with your models.
+7. [Atelier for agents (MCP)](../MCP.md): letting Claude Code and other agents generate images with your models (Mac only).
+
+The iPad version works the same way, with a few differences noted under "On iPad" in each page; see [Atelier on iPad](getting-started.md#atelier-on-ipad) to build and install it.
 
 ## Keyboard shortcuts
 
@@ -25,3 +27,5 @@
 | ⌘0 | Actual size |
 | ⌥⌘I | Show or hide the inspector |
 | ⌘, | Settings |
+
+On iPad, the same shortcuts work with a hardware keyboard.

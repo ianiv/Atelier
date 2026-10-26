@@ -35,6 +35,10 @@ The list has three parts: the image being made, the waiting images and recent on
 
 Waiting images, and the one being made, are kept when you quit and come back paused at the next launch. Press Resume Queue to run them. Images for a model you've since deleted are dropped.
 
+## On iPad
+
+The queue pauses when you switch away from Atelier, because iPadOS doesn't let apps use the GPU in the background, and resumes when you come back (unless you paused it yourself). An image that was being made when you switched away may fail; Retry runs it again. The screen stays awake while an image is being made.
+
 ## Agents
 
 Images an agent asks for over MCP join the same queue and show a network icon. Cancelling one in the Queue cancels the agent's request. Agents' images aren't kept across a quit.

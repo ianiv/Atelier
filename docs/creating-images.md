@@ -38,11 +38,13 @@ Click the size row in the inspector to open the size popover:
 
 The inspector lists the model's settings in sections: Essentials, Sampling, LoRAs, Hires Fix, Refiner, Upscaler, Image to Image and more. Show or hide it with the toolbar button or ⌥⌘I.
 
+**On iPad**, in a window too narrow for the canvas beside the inspector, the inspector starts hidden; the toolbar button opens it over the canvas (or as a sheet in a very narrow window). In a narrow window the buttons under the prompt move below it, and the sidebar hides (its toolbar button shows it).
+
 - **Search**: type in the search field at the top to find any setting, including hidden ones.
 - **Changed**: when any setting differs from the model's defaults, a Changed group at the top lists them all, so nothing you changed is out of sight.
 - **More: N**: less common settings in a section are tucked under this disclosure.
 - **Settings that don't apply** to the selected model are hidden automatically (search still shows them, dimmed). Some depend on other settings too: Strategic Stochastic Sampling (SSS), the noise the TCD samplers add each step, shows only when the sampler is TCD or TCD Trailing.
-- **Right-click any setting** for Reset to Default, Copy Value, and Hide from / Show in Inspector.
+- **Right-click any setting** (on iPad, touch and hold) for Reset to Default, Copy Value, and Hide from / Show in Inspector.
 - **Reset All to Model Defaults** at the bottom puts everything back to the model's recommended values (and its default preset).
 - Hover over any setting to see what it does.
 - Setting changes can be undone with ⌘Z.
@@ -57,7 +59,7 @@ A layout decides which settings are shown, their order, and which sections start
 
 From the same menu:
 
-- **Show All Settings** shows everything temporarily. Holding ⌥ does the same.
+- **Show All Settings** shows everything temporarily. On a Mac, holding ⌥ does the same.
 - **Customize Inspector…** opens a checklist of every setting by section. Uncheck settings to tuck them under More, drag to reorder, and choose which sections start expanded. Editing a built-in layout saves it as a copy named "… Custom".
 - **Export Layout…**, **Import Layout…**, **Delete** and **Show Layouts Folder** manage your layouts as files.
 
