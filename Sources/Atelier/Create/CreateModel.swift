@@ -449,6 +449,17 @@ final class CreateModel {
     }
   }
 
+  #if os(iOS)
+    /// Back to the models folder in the app's Documents, forgetting a picked one.
+    func useDefaultModelsDirectory() {
+      FolderBookmarks.forget(modelsDirectory)
+      AppSettings.useDefaultModelsDirectory()
+      modelsDirectory = AppSettings.modelsDirectory
+      FolderBookmarks.keepOpen(modelsDirectory)
+      Task { await reloadModels() }
+    }
+  #endif
+
   func setModelsDirectory(_ directory: String) {
     AppSettings.modelsDirectory = directory
     modelsDirectory = directory

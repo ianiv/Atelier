@@ -12,15 +12,26 @@ enum AppSettings {
       if let saved = UserDefaults.standard.string(forKey: modelsDirectoryKey), !saved.isEmpty {
         return saved
       }
-      if let env = ProcessInfo.processInfo.environment["DRAWTHINGS_MODELS_DIR"], !env.isEmpty {
-        return env
-      }
-      return FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("Models", isDirectory: true).path
+      return defaultModelsDirectory
     }
     set {
       UserDefaults.standard.set(newValue, forKey: modelsDirectoryKey)
     }
+  }
+
+  /// The models directory without a saved setting.
+  static var defaultModelsDirectory: String {
+    if let env = ProcessInfo.processInfo.environment["DRAWTHINGS_MODELS_DIR"], !env.isEmpty {
+      return env
+    }
+    return FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+      .appendingPathComponent("Models", isDirectory: true).path
+  }
+
+  /// Forgets the saved models directory, back to the default. The default isn't saved: on iPad
+  /// it's inside the app's container, whose path can change when the app is updated.
+  static func useDefaultModelsDirectory() {
+    UserDefaults.standard.removeObject(forKey: modelsDirectoryKey)
   }
 
   /// Whether exported, saved and dragged images carry their generation settings (on by default).

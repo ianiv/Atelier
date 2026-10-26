@@ -49,7 +49,7 @@ There's no download yet; build and install it from Xcode:
 On iPad:
 
 - Images are saved in **On My iPad ▸ Atelier ▸ Atelier**, and models are in **On My iPad ▸ Atelier ▸ Models**.
-- Settings is the gear button at the top of the sidebar.
+- Settings is the gear button at the top of the sidebar. In **Models** and **Images**, **Choose…** picks a models or output folder anywhere Files can reach (another app's folder, iCloud Drive, an external drive), and **Use Default** goes back to Atelier's own folder. Settings shows where the folder is, and warns when a chosen folder can't be reached, for example on a disconnected drive.
 - **Save to Photos** sits next to **Save Image…** on the canvas and **Export** in History.
 - The queue pauses when you switch away from Atelier, because iPadOS doesn't let apps use the GPU in the background, and picks up again when you come back. The screen stays awake while an image is being made.
 - Agents (the MCP server) and scripted runs are Mac only.

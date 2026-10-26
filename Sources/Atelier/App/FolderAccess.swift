@@ -42,6 +42,22 @@ enum FolderBookmarks {
     held = ["models": open(path)]
   }
 
+  /// Forgets a folder's bookmark once a setting stops using it.
+  static func forget(_ path: String) {
+    var bookmarks = UserDefaults.standard.dictionary(forKey: key) as? [String: Data] ?? [:]
+    bookmarks[path] = nil
+    UserDefaults.standard.set(bookmarks, forKey: key)
+  }
+
+  /// Whether the folder at `path` can be reached now (a picked folder on a drive that's been
+  /// disconnected, or one that's been deleted, can't).
+  static func isReachable(_ path: String) -> Bool {
+    let access = open(path)
+    var isFolder: ObjCBool = false
+    return FileManager.default.fileExists(atPath: access.url.path, isDirectory: &isFolder)
+      && isFolder.boolValue
+  }
+
   /// Opens the folder at `path`, through its bookmark when there is one.
   static func open(_ path: String) -> ScopedAccess {
     let url = URL(fileURLWithPath: path, isDirectory: true)

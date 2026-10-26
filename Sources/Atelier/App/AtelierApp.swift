@@ -147,19 +147,28 @@ struct SettingsTabs: View {
     let agents: AgentServer
   #endif
 
+  /// The first tab, or in Debug builds the one `-AtelierSettingsTab NAME` names (layout checks).
+  @State private var tab: String = {
+    #if DEBUG
+      UserDefaults.standard.string(forKey: "AtelierSettingsTab") ?? "Models"
+    #else
+      "Models"
+    #endif
+  }()
+
   var body: some View {
-    TabView {
-      Tab("Models", systemImage: "shippingbox") {
+    TabView(selection: $tab) {
+      Tab("Models", systemImage: "shippingbox", value: "Models") {
         ModelsSettingsView()
       }
-      Tab("Images", systemImage: "photo.on.rectangle") {
+      Tab("Images", systemImage: "photo.on.rectangle", value: "Images") {
         ImagesSettingsView()
       }
-      Tab("Performance", systemImage: "gauge.with.dots.needle.67percent") {
+      Tab("Performance", systemImage: "gauge.with.dots.needle.67percent", value: "Performance") {
         PerformanceSettingsView()
       }
       #if os(macOS)
-        Tab("Agents", systemImage: "sparkles") {
+        Tab("Agents", systemImage: "sparkles", value: "Agents") {
           AgentSettingsView()
             .environment(agents)
         }

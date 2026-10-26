@@ -801,6 +801,31 @@ struct ModelsSettingsView: View {
   @FocusState private var directoryFocused: Bool
 
   var body: some View {
+    #if os(macOS)
+      macBody
+    #else
+      Form {
+        Section {
+          FolderSetting(
+            title: "Models folder", path: model.modelsDirectory,
+            defaultPath: AppSettings.defaultModelsDirectory,
+            choose: { url in
+              FolderBookmarks.remember(url)
+              if model.modelsDirectory != AppSettings.defaultModelsDirectory {
+                FolderBookmarks.forget(model.modelsDirectory)
+              }
+              model.setModelsDirectory(url.path)
+            },
+            useDefault: { model.useDefaultModelsDirectory() })
+        } footer: {
+          Text("Models you download are saved here. The default is in Atelier's folder in Files.")
+        }
+      }
+      .settingsForm()
+    #endif
+  }
+
+  private var macBody: some View {
     Form {
       Section {
         LabeledContent("Models directory") {
@@ -835,6 +860,64 @@ struct ModelsSettingsView: View {
   }
 }
 
+#if os(iOS)
+  /// A folder setting on iPad, where a typed path means nothing outside the app's own folders:
+  /// where it is, as Files shows it, Choose… for any folder Files can reach, and Use Default for
+  /// the folder in Atelier's Documents. Both buttons are always there; Use Default is disabled
+  /// while the default is in use.
+  struct FolderSetting: View {
+    let title: String
+    let path: String
+    let defaultPath: String
+    let choose: (URL) -> Void
+    let useDefault: () -> Void
+    @State private var choosing = false
+
+    private var isDefault: Bool { path == defaultPath }
+
+    var body: some View {
+      // One Form row: the location, then the buttons under it.
+      VStack(alignment: .leading, spacing: 10) {
+        LabeledContent(title) {
+          VStack(alignment: .trailing, spacing: 2) {
+            Text(Self.location(of: path) + (isDefault ? " (Default)" : ""))
+              .lineLimit(2)
+              .truncationMode(.middle)
+              .multilineTextAlignment(.trailing)
+            // The default is made when it's first used; a picked folder can go missing.
+            if !isDefault, !FolderBookmarks.isReachable(path) {
+              Label("Not available. Choose it again.", systemImage: "exclamationmark.triangle")
+                .font(.caption)
+                .foregroundStyle(.orange)
+            }
+          }
+        }
+        ButtonRow {
+          Button("Choose…") { choosing = true }
+          Button("Use Default", action: useDefault)
+            .disabled(isDefault)
+        }
+      }
+      .fileImporter(isPresented: $choosing, allowedContentTypes: [.folder]) { result in
+        if case .success(let url) = result { choose(url) }
+      }
+    }
+
+    /// The folder as Files names it: "On My iPad ▸ Atelier ▸ …" inside the app's Documents, else
+    /// the picked folder's last two names.
+    static func location(of path: String) -> String {
+      let documents = URL.documentsDirectory.standardizedFileURL.pathComponents
+      let components = URL(fileURLWithPath: path).standardizedFileURL.pathComponents
+      if components.starts(with: documents) {
+        return (["On My iPad", "Atelier"] + components.dropFirst(documents.count)).joined(separator: " ▸ ")
+      }
+      let url = FolderBookmarks.open(path).url
+      return url.pathComponents.suffix(2).map { FileManager.default.displayName(atPath: $0) }
+        .joined(separator: " ▸ ")
+    }
+  }
+#endif
+
 /// Settings ▸ Images: what saved images carry, and the output folder.
 struct ImagesSettingsView: View {
   @AppStorage(AppSettings.embedsSettingsKey) private var embedsSettings = true
@@ -859,23 +942,40 @@ struct ImagesSettingsView: View {
             "Each new image is also written to this folder as a PNG, named like an export. A project can use its own folder, or turn saving on or off for itself, from the project menu."
           )
         }
-        LabeledContent("Output folder") {
-          HStack {
-            TextField("Path", text: $outputFolder, prompt: Text(AppSettings.defaultOutputFolder))
-              .labelsHidden()
-              .settingsFieldWidth()
-            Button("Choose…") { choosingOutputFolder = true }
+        #if os(macOS)
+          LabeledContent("Output folder") {
+            HStack {
+              TextField("Path", text: $outputFolder, prompt: Text(AppSettings.defaultOutputFolder))
+                .labelsHidden()
+                .settingsFieldWidth()
+              Button("Choose…") { choosingOutputFolder = true }
+            }
           }
-        }
+        #else
+          FolderSetting(
+            title: "Output folder", path: outputFolder, defaultPath: AppSettings.defaultOutputFolder,
+            choose: { url in
+              FolderBookmarks.remember(url)
+              if outputFolder != AppSettings.defaultOutputFolder { FolderBookmarks.forget(outputFolder) }
+              outputFolder = url.path
+            },
+            useDefault: {
+              FolderBookmarks.forget(outputFolder)
+              // Unsaved rather than saved as the default's path, which can change on iPad.
+              UserDefaults.standard.removeObject(forKey: AppSettings.outputFolderKey)
+            })
+        #endif
       } header: {
         Text("Output Folder")
       }
-      .fileImporter(isPresented: $choosingOutputFolder, allowedContentTypes: [.folder]) { result in
-        if case .success(let url) = result {
-          FolderBookmarks.remember(url)
-          outputFolder = url.path
+      #if os(macOS)
+        .fileImporter(isPresented: $choosingOutputFolder, allowedContentTypes: [.folder]) { result in
+          if case .success(let url) = result {
+            FolderBookmarks.remember(url)
+            outputFolder = url.path
+          }
         }
-      }
+      #endif
     }
     .settingsForm()
   }
