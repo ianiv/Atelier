@@ -706,6 +706,10 @@ struct ProjectMenu: View {
     .sheet(item: $naming) { naming in
       ProjectNameSheet(naming: naming) { commit(naming, name: $0) }
     }
+    .debugPresents(
+      "newProject",
+      Binding(get: { naming != nil }, set: { if $0 { naming = .new(suggested: history.availableName()) } }))
+    .debugPresents("projectOutput", $editingOutput)
     .sheet(isPresented: $editingOutput) {
       ProjectOutputSheet(projectName: history.project.name, output: history.output) {
         history.setOutput($0)
@@ -786,7 +790,7 @@ private struct ProjectOutputSheet: View {
       }
     }
     .padding(20)
-    .frame(width: 520)
+    .sheetFrame(width: 520)
     .onAppear {
       saves = output.saves
       hasFolder = output.folder != nil
@@ -831,7 +835,7 @@ private struct ProjectNameSheet: View {
       }
     }
     .padding(20)
-    .frame(width: 320)
+    .sheetFrame(width: 320)
     .onAppear {
       name = naming.initialName
       nameFocused = true

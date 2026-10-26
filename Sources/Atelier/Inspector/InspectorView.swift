@@ -44,6 +44,7 @@ struct InspectorView: View {
       }
     }
     .sheet(isPresented: $layouts.customizing) { CustomizeInspectorSheet() }
+    .debugPresents("customizeInspector", $layouts.customizing)
     .onOptionKeyChanged { optionHeld = $0 }
   }
 

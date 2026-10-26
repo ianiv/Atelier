@@ -92,6 +92,9 @@ struct ModelsView: View {
       ) {
         ModelImportSheet()
       }
+      .debugPresents("modelImport", .constant(false)) {
+        library.prepareModelImport([URL(fileURLWithPath: "/tmp/Example Checkpoint.safetensors")])
+      }
       .confirmationDialog(
         "Move \(pendingDelete?.name ?? "this model") to the Trash?",
         isPresented: Binding(
@@ -367,7 +370,7 @@ struct ModelImportSheet: View {
       }
     }
     .padding(20)
-    .frame(width: 520)
+    .sheetFrame(width: 520)
   }
 
   private func row(_ item: ModelLibrary.ModelImport) -> some View {

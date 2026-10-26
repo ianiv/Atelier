@@ -79,6 +79,9 @@ struct LoRAsView: View {
       ) {
         LoRAImportSheet()
       }
+      .debugPresents("loraImport", .constant(false)) {
+        library.prepareImport([URL(fileURLWithPath: "/tmp/Example LoRA.safetensors")])
+      }
       .confirmationDialog(
         "Move \(pendingDelete?.name ?? "this LoRA") to the Trash?",
         isPresented: Binding(
@@ -261,7 +264,7 @@ struct LoRAImportSheet: View {
       }
     }
     .padding(20)
-    .frame(width: 520)
+    .sheetFrame(width: 520)
   }
 
   private func row(_ item: ModelLibrary.LoRAImport) -> some View {

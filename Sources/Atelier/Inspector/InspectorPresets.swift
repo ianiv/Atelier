@@ -111,6 +111,7 @@ struct PresetMenu: View {
     }
     .help("Presets: saved setting values applied on top of the model's defaults")
     .sheet(isPresented: $saving) { SavePresetSheet() }
+    .debugPresents("savePreset", $saving)
     .alert("The clipboard has no settings", isPresented: $pasteFailed) {
       Button("OK") {}
     } message: {
@@ -208,7 +209,7 @@ struct SavePresetSheet: View {
       }
     }
     .padding(20)
-    .frame(width: 420, height: 500)
+    .sheetFrame(width: 420, height: 500)
     .onAppear {
       included = Set(candidates.map(\.id))
     }

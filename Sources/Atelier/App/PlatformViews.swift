@@ -12,12 +12,12 @@ extension View {
     #endif
   }
 
-  /// A checkbox on the Mac, a switch on iPad.
+  /// A checkbox on the Mac, a switch on iPad, kept at its own size so its label doesn't wrap.
   func checkboxToggleStyle() -> some View {
     #if os(macOS)
       toggleStyle(.checkbox)
     #else
-      self
+      fixedSize()
     #endif
   }
 
@@ -46,6 +46,36 @@ extension View {
       self
     #else
       buttonStyle(.borderless)
+    #endif
+  }
+
+  /// On iPad, a hit area of at least 44 points around a small control, without making it look
+  /// bigger; the Mac's pointer needs no more than the control.
+  func touchTarget() -> some View {
+    #if os(macOS)
+      self
+    #else
+      frame(minWidth: 28, minHeight: 28).contentShape(.rect.inset(by: -8))
+    #endif
+  }
+
+  /// A small segmented control on the Mac; on iPad the large size, which a finger can hit.
+  func compactPickerSize() -> some View {
+    #if os(macOS)
+      controlSize(.small)
+    #else
+      controlSize(.large)
+    #endif
+  }
+
+  /// A sheet's size: fixed on the Mac. On iPad it's the size the sheet asks for, fitted to the
+  /// content, and a narrow window can make it smaller.
+  func sheetFrame(width: CGFloat, height: CGFloat? = nil) -> some View {
+    #if os(macOS)
+      frame(width: width, height: height)
+    #else
+      frame(idealWidth: width, maxWidth: .infinity, idealHeight: height)
+        .presentationSizing(.fitted)
     #endif
   }
 
@@ -145,6 +175,16 @@ struct ButtonRow<Content: View>: View {
     #endif
   }
 }
+
+/// Which side an inspector popover opens toward: away from the Mac's inspector, on its leading
+/// side; on iPad, wherever iPadOS finds room.
+let inspectorPopoverEdge: Edge? = {
+  #if os(macOS)
+    .leading
+  #else
+    nil
+  #endif
+}()
 
 #if os(iOS)
   /// The narrowest iPad window area that fits a screen beside its inspector; narrower, the

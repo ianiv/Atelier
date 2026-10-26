@@ -49,6 +49,16 @@ struct CreateView: View {
       InspectorView()
         .inspectorColumnWidth(min: 300, ideal: 340, max: 460)
     }
+    #if DEBUG
+      // The moodboard weight popover's layout check needs an image on the moodboard.
+      .debugPresents("moodboardWeight", .constant(false)) {
+        if model.moodboard.items.isEmpty,
+          let image = HistoryStore.sampleImage(width: 512, height: 512, seed: 3)
+        {
+          model.moodboard.add(image)
+        }
+      }
+    #endif
     #if os(iOS)
       // In a window too narrow for the canvas beside the inspector, the inspector would cover the
       // canvas: it starts hidden there (the toolbar button still opens it), and the window's
@@ -331,7 +341,7 @@ private struct ZoomControls: View {
 
   var body: some View {
     HStack(spacing: 2) {
-      Button("Zoom Out", systemImage: "minus") { canvas.zoomOut() }
+      Button { canvas.zoomOut() } label: { Label("Zoom Out", systemImage: "minus").touchTarget() }
         .help("Zoom Out (⌘−)")
       Menu {
         Button("Zoom to Fit") { canvas.zoomToFit() }
@@ -343,11 +353,12 @@ private struct ZoomControls: View {
         Text(canvas.scale == nil ? "Fit" : canvas.effectiveScale.formatted(.percent.precision(.fractionLength(0))))
           .monospacedDigit()
           .frame(minWidth: 44)
+          .touchTarget()
       }
       .menuIndicator(.hidden)
       .fixedSize()
       .help("Zoom level. Pinch or use ⌘+ and ⌘− to zoom, drag to move, double-click to fit.")
-      Button("Zoom In", systemImage: "plus") { canvas.zoomIn() }
+      Button { canvas.zoomIn() } label: { Label("Zoom In", systemImage: "plus").touchTarget() }
         .help("Zoom In (⌘+)")
     }
     .labelStyle(.iconOnly)
@@ -515,7 +526,7 @@ struct RecentStrip: View {
         .pickerStyle(.segmented)
         .labelStyle(.iconOnly)
         .labelsHidden()
-        .controlSize(.small)
+        .compactPickerSize()
         .fixedSize()
         .help(mode == .lineage
           ? "Current lineage: the current image's ancestors and the newest images after it"
@@ -679,7 +690,7 @@ struct PromptComposer: View {
         }
         .pickerStyle(.segmented)
         .labelsHidden()
-        .controlSize(.small)
+        .compactPickerSize()
         .fixedSize()
         .disabled(!model.canEdit)
         .help(

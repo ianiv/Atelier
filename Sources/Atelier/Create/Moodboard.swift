@@ -295,6 +295,7 @@ private struct MoodboardThumbnail: View {
     .popover(isPresented: $editing, arrowEdge: .leading) {
       MoodboardWeightEditor(item: item)
     }
+    .debugPresents(item.id == moodboard.items.first?.id ? "moodboardWeight" : "", $editing)
     .contextMenu {
       Button("Show on Canvas") { model.setCanvasImage(item.image) }
       Button("Remove") { moodboard.remove(item.id) }

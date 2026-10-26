@@ -134,7 +134,7 @@ struct CustomizeInspectorSheet: View {
       }
       .padding()
     }
-    .frame(width: 620, height: 560)
+    .sheetFrame(width: 620, height: 560)
     .onAppear(perform: load)
   }
 

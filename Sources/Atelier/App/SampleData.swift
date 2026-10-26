@@ -1,3 +1,5 @@
+import SwiftUI
+
 #if DEBUG
   import CoreGraphics
   import Foundation
@@ -44,7 +46,7 @@
     }
 
     /// A soft two-colour gradient with a few circles, different for each seed.
-    private static func sampleImage(width: Int, height: Int, seed: Int) -> CGImage? {
+    static func sampleImage(width: Int, height: Int, seed: Int) -> CGImage? {
       guard
         let context = CGContext(
           data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
@@ -83,4 +85,35 @@
       return context.makeImage()
     }
   }
+
+  /// Opens a sheet or popover at launch for layout checks: `-AtelierShow NAME` presents the one
+  /// registered under NAME, once the screen has settled.
+  struct DebugPresent: ViewModifier {
+    let name: String
+    @Binding var isPresented: Bool
+    var prepare: () -> Void = {}
+
+    func body(content: Content) -> some View {
+      content.task {
+        guard UserDefaults.standard.string(forKey: "AtelierShow") == name else { return }
+        prepare()
+        try? await Task.sleep(for: .seconds(1.5))
+        isPresented = true
+      }
+    }
+  }
 #endif
+
+extension View {
+  /// In Debug builds, `-AtelierShow NAME` opens this sheet or popover at launch (SampleData.swift);
+  /// `prepare` sets up what it shows first.
+  func debugPresents(_ name: String, _ isPresented: Binding<Bool>, prepare: @escaping () -> Void = {})
+    -> some View
+  {
+    #if DEBUG
+      modifier(DebugPresent(name: name, isPresented: isPresented, prepare: prepare))
+    #else
+      self
+    #endif
+  }
+}

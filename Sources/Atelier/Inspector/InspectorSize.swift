@@ -17,7 +17,8 @@ struct SizeButton: View {
         Image(systemName: "chevron.down").font(.caption2)
       }
     }
-    .popover(isPresented: $showing, arrowEdge: .leading) {
+    .debugPresents("sizePopover", $showing)
+    .popover(isPresented: $showing, arrowEdge: inspectorPopoverEdge) {
       SizePopover(width: size.0, height: size.1) { width, height in
         model.set(
           descriptor,
@@ -74,22 +75,36 @@ struct SizePopover: View {
       }
       .pickerStyle(.segmented)
       .labelsHidden()
-      HStack {
-        dimension("W", value: width) { set($0, height) }
-        Button {
-          set(height, width)
-        } label: {
-          Image(systemName: "arrow.left.arrow.right")
+      // One row on the Mac; iPad's wider steppers need a line each.
+      ViewThatFits(in: .horizontal) {
+        HStack {
+          dimension("W", value: width) { set($0, height) }
+          swapButton
+          dimension("H", value: height) { set(width, $0) }
         }
-        .buttonStyle(.borderless)
-        .help("Swap width and height")
-        dimension("H", value: height) { set(width, $0) }
+        HStack {
+          VStack(alignment: .trailing) {
+            dimension("W", value: width) { set($0, height) }
+            dimension("H", value: height) { set(width, $0) }
+          }
+          swapButton
+        }
       }
       Text("\((Double(width * height) / 1_048_576).formatted(.number.precision(.fractionLength(2)))) megapixels; sizes snap to 64 px.")
         .font(.caption).foregroundStyle(.secondary)
     }
     .padding(16)
     .frame(width: 320)
+  }
+
+  private var swapButton: some View {
+    Button {
+      set(height, width)
+    } label: {
+      Image(systemName: "arrow.left.arrow.right")
+    }
+    .buttonStyle(.borderless)
+    .help("Swap width and height")
   }
 
   private func dimension(_ title: String, value: Int, set: @escaping (Int) -> Void) -> some View {

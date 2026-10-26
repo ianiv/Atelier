@@ -103,7 +103,8 @@ struct LoRAEditor: View {
       }
       Button("Add LoRA…", systemImage: "plus") { picking = true }
         .buttonStyle(.borderless)
-        .popover(isPresented: $picking, arrowEdge: .leading) {
+        .debugPresents("loraPicker", $picking)
+        .popover(isPresented: $picking, arrowEdge: inspectorPopoverEdge) {
           LoRAPicker(
             catalog: library.loras.filter(\.isDownloaded), compatible: compatible,
             modelFamily: model.selectedModelInfo?.version

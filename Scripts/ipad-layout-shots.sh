@@ -36,14 +36,24 @@ window-900x700 900 700
 window-600x800 600 800
 window-400x600 400 600
 smallest 360 480"
-# Settings is the Settings sheet, opened over Create.
-SECTIONS="${SECTIONS:-Create Queue History Models LoRAs Settings}"
+# The screens, then sheets and popovers opened over them with -AtelierShow (Debug only). The
+# inspector's own sheets and popovers need a model in the simulator's Documents/Models, and the
+# inspector open (wide enough windows).
+SECTIONS="${SECTIONS:-Create Queue History Models LoRAs Settings customizeInspector savePreset \
+  sizePopover loraPicker moodboardWeight modelImport loraImport newProject projectOutput}"
 
 while read -r name width height; do
   for section in $SECTIONS; do
     xcrun simctl terminate "$DEVICE" "$BUNDLE" 2>/dev/null || true
-    screen="$section" settings=NO
-    [ "$section" = Settings ] && screen=Create settings=YES
+    screen="$section" settings=NO show=none
+    case "$section" in
+      Settings) screen=Create settings=YES ;;
+      customizeInspector | savePreset | sizePopover | loraPicker | moodboardWeight)
+        screen=Create show="$section" ;;
+      modelImport) screen=Models show="$section" ;;
+      loraImport) screen=LoRAs show="$section" ;;
+      newProject | projectOutput) screen=History show="$section" ;;
+    esac
     xcrun simctl spawn "$DEVICE" defaults write "$BUNDLE" section "$screen"
     # Start each shot with the inspector's default (shown), from the app's own preferences.
     prefs="$(xcrun simctl get_app_container "$DEVICE" "$BUNDLE" data)/Library/Preferences/$BUNDLE.plist"
@@ -51,8 +61,8 @@ while read -r name width height; do
     # Sample images in a project of their own (SampleData.swift) and every model in Models.
     xcrun simctl launch "$DEVICE" "$BUNDLE" -AtelierWindowSize "${width}x${height}" \
       --project "Layout Sample" -AtelierSampleData YES -modelsFilter All \
-      -AtelierShowSettings "$settings" $EXTRA_ARGS >/dev/null
-    sleep "${WAIT:-5}"
+      -AtelierShowSettings "$settings" -AtelierShow "$show" $EXTRA_ARGS >/dev/null
+    sleep "${WAIT:-6}"
     file="$OUT/$section-$name.png"
     xcrun simctl io "$DEVICE" screenshot "$file" >/dev/null 2>&1
   done
