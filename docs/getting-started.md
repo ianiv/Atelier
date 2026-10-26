@@ -40,7 +40,7 @@ Replace `YOURTEAMID` with your team ID, which is shown in Xcode under **Settings
 
 ## Atelier on iPad
 
-An iPad version is in development on the `ipad` branch. It needs an iPad with an M1 chip or newer running iPadOS 27; how fast it generates depends on the chip and its memory.
+An iPad version is in development, built from the same code as the Mac app; there's no download yet, so you build and install it from Xcode. It needs an iPad with an M1 chip or newer running iPadOS 27; how fast it generates depends on the chip and its memory.
 
 There's no download yet; build and install it from Xcode:
 
