@@ -312,6 +312,9 @@ struct HistoryView: View {
     if items.count > 1 {
       Button("Copy \(items.count) Images") { Task { await history.copyImages(items) } }
       Button("Export \(items.count) PNGs…") { export(items) }
+      #if os(iOS)
+        Button("Save \(items.count) Images to Photos") { saveToPhotos(items) }
+      #endif
       Divider()
       Button("Delete \(items.count) Images", role: .destructive) { pendingDelete = items }
     } else {
@@ -323,6 +326,9 @@ struct HistoryView: View {
       Button("Copy Prompt") { copy(item.sidecar.prompt) }
       Button("Copy Seed") { copy(String(item.sidecar.seed)) }
       Button("Export PNG…") { export([item]) }
+      #if os(iOS)
+        Button("Save to Photos") { saveToPhotos([item]) }
+      #endif
       Divider()
       Button("Delete", role: .destructive) { pendingDelete = [item] }
     }
@@ -422,6 +428,21 @@ struct HistoryView: View {
     create.use(item, newSeed: newSeed, loadImage: loadImage)
     navigation.section = .create
   }
+
+  #if os(iOS)
+    /// Adds the images to Photos as PNGs carrying their settings, like Export.
+    private func saveToPhotos(_ items: [HistoryItem]) {
+      Task {
+        do {
+          var pngs: [Data] = []
+          for item in items { pngs.append(try await history.pngData(item)) }
+          try await PhotoLibrary.save(pngs)
+        } catch {
+          deleteError = error.localizedDescription
+        }
+      }
+    }
+  #endif
 
   /// One image: a save panel. Several: a folder, each named like a single export.
   private func export(_ items: [HistoryItem]) {
@@ -709,7 +730,10 @@ private struct ProjectOutputSheet: View {
       }
       .formStyle(.grouped)
       .fileImporter(isPresented: $choosing, allowedContentTypes: [.folder]) { result in
-        if case .success(let url) = result { folder = url.path }
+        if case .success(let url) = result {
+          FolderBookmarks.remember(url)
+          folder = url.path
+        }
       }
       HStack {
         Spacer()

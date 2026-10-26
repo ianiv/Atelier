@@ -218,6 +218,10 @@ struct CanvasView: View {
       .disabled(model.image == nil)
     Button("Save Image…") { save() }
       .disabled(model.image == nil)
+    #if os(iOS)
+      Button("Save to Photos") { saveToPhotos() }
+        .disabled(model.image == nil)
+    #endif
     Divider()
     Button("Open Image…") { model.imageImport = .canvas }
     Button("Paste Image") { model.pasteImage() }
@@ -232,6 +236,28 @@ struct CanvasView: View {
     Divider()
     ZoomMenuItems(canvas: canvas)
   }
+
+  #if os(iOS)
+    /// Adds the image to Photos as a PNG carrying its settings, like Save Image.
+    private func saveToPhotos() {
+      guard let image = model.image else { return }
+      let item = model.imageItem
+      Task {
+        do {
+          let png: Data
+          if let item {
+            png = try await history.pngData(item)
+          } else {
+            guard let data = ImageTensor.png(image) else { throw ProjectError.badImage }
+            png = data
+          }
+          try await PhotoLibrary.save([png])
+        } catch {
+          saveError = error.localizedDescription
+        }
+      }
+    }
+  #endif
 
   /// Saves as PNG; a finished image carries its settings like History's Export.
   private func save() {
@@ -791,7 +817,10 @@ struct ImagesSettingsView: View {
         Text("Output Folder")
       }
       .fileImporter(isPresented: $choosingOutputFolder, allowedContentTypes: [.folder]) { result in
-        if case .success(let url) = result { outputFolder = url.path }
+        if case .success(let url) = result {
+          FolderBookmarks.remember(url)
+          outputFolder = url.path
+        }
       }
     }
     .settingsForm()

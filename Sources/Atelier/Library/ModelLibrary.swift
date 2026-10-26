@@ -48,12 +48,21 @@ final class ModelLibrary {
     var name = ""
     var prefix = ""
     var progress: Double?
+    /// Holds a picked file open until it's imported or removed (iPad).
+    private let access: ScopedAccess
+
+    init(source: URL) {
+      self.source = source
+      access = ScopedAccess(source)
+    }
   }
 
   /// A model checkpoint waiting to be imported or being imported.
   struct ModelImport: Identifiable {
     let id = UUID()
     var source: URL
+    /// Holds a picked file open until it's imported or removed (iPad).
+    private let access: ScopedAccess
     var name = ""
     /// `ModelVersion` raw value the importer detected, once the file has been inspected.
     var version: String?
@@ -64,6 +73,11 @@ final class ModelLibrary {
 
     var canImport: Bool { !isInspecting && problem == nil }
     var family: String? { version.map(ModelLibrary.familyName) }
+
+    init(source: URL) {
+      self.source = source
+      access = ScopedAccess(source)
+    }
   }
 
   let create: CreateModel

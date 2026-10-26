@@ -392,9 +392,11 @@ final class HistoryStore {
   /// on, named like an export. Returns why it couldn't be written, if it couldn't.
   func writeToOutputFolder(_ item: HistoryItem, image: CGImage) async -> String? {
     guard output.effectiveSaves else { return nil }
-    let folder = URL(fileURLWithPath: output.effectiveFolder, isDirectory: true)
+    let access = FolderBookmarks.open(output.effectiveFolder)
+    let folder = access.url
     let name = fileName(for: item)
     do {
+      defer { withExtendedLifetime(access) {} }
       let data = try Self.pngData(image, sidecar: item.sidecar)
       try await Task.detached {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

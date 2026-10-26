@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Keys for the iPad build, merged into the generated Info.plist. Files shows the app's
+	     Documents (Models and Atelier) so models can be copied in. -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save to Photos adds your generated images to your photo library.</string>
+</dict>
+</plist>

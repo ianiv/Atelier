@@ -20,6 +20,12 @@ struct AtelierApp: App {
   @AppStorage("moodboardShown") private var moodboardShown = true
 
   init() {
+    #if os(iOS)
+      // Made up front so Files shows them, ready for models copied in.
+      for folder in [URL(fileURLWithPath: AppSettings.modelsDirectory), AppSettings.historyDirectory] {
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+      }
+    #endif
     let history = HistoryStore()
     _history = State(initialValue: history)
     let create = CreateModel(history: history)

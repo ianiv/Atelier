@@ -22,6 +22,7 @@
 		40471B00219ACFE544559125 /* SessionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9895821DCBA0BD67EF40AB9D /* SessionState.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E1F3 /* FileDialogs.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F4 /* FileDialogs.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E1F1 /* MacPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F2 /* MacPlatform.swift */; };
+		A1B2C3D4E5F6A7B8C9D0E1F9 /* FolderAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1FA /* FolderAccess.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E1F7 /* PlatformViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F8 /* PlatformViews.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E1F5 /* iPadPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F6 /* iPadPlatform.swift */; };
 		44ADCE6EDF2708A792962F31 /* script_session_query_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1353E7B4836513F26BF2C88 /* script_session_query_generated.swift */; };
@@ -155,6 +156,7 @@
 		9895821DCBA0BD67EF40AB9D /* SessionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionState.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E1F4 /* FileDialogs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDialogs.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E1F2 /* MacPlatform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPlatform.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E1FA /* FolderAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderAccess.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E1F8 /* PlatformViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformViews.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E1F6 /* iPadPlatform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iPadPlatform.swift; sourceTree = "<group>"; };
 		A3721E6BF065DEBAC3CB0FE9 /* clip_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = clip_generated.swift; sourceTree = "<group>"; };
@@ -250,6 +252,7 @@
 				9895821DCBA0BD67EF40AB9D /* SessionState.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1F4 /* FileDialogs.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1F2 /* MacPlatform.swift */,
+				A1B2C3D4E5F6A7B8C9D0E1FA /* FolderAccess.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1F8 /* PlatformViews.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1F6 /* iPadPlatform.swift */,
 			);
@@ -540,6 +543,7 @@
 				40471B00219ACFE544559125 /* SessionState.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1F3 /* FileDialogs.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1F1 /* MacPlatform.swift in Sources */,
+				A1B2C3D4E5F6A7B8C9D0E1F9 /* FolderAccess.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1F7 /* PlatformViews.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1F5 /* iPadPlatform.swift in Sources */,
 				4862B9A4F2A7A226E9BB6C7C /* SettingsRegistry.swift in Sources */,
@@ -674,6 +678,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Atelier;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.graphics-design";
 				"INFOPLIST_KEY_NSPrincipalClass[sdk=macosx*]" = NSApplication;
+				"INFOPLIST_FILE[sdk=iphone*]" = "Config/Atelier-iPad-Info.plist";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphone*]" = YES;
 				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphone*]" = YES;
 				"INFOPLIST_KEY_UIRequiredDeviceCapabilities[sdk=iphone*]" = "arm64 metal ipad-minimum-performance-m1";
@@ -716,6 +721,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Atelier;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.graphics-design";
 				"INFOPLIST_KEY_NSPrincipalClass[sdk=macosx*]" = NSApplication;
+				"INFOPLIST_FILE[sdk=iphone*]" = "Config/Atelier-iPad-Info.plist";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphone*]" = YES;
 				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphone*]" = YES;
 				"INFOPLIST_KEY_UIRequiredDeviceCapabilities[sdk=iphone*]" = "arm64 metal ipad-minimum-performance-m1";

@@ -48,10 +48,15 @@ enum AppSettings {
     historyDirectory.appendingPathComponent("Output", isDirectory: true).path
   }
 
-  /// Root of the history folder: one subfolder per day.
+  /// Root of the history folder: ~/Pictures/Atelier on the Mac; on iPad, Atelier in the app's
+  /// Documents, which Files shows.
   static var historyDirectory: URL {
-    FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask)[0]
-      .appendingPathComponent("Atelier", isDirectory: true)
+    #if os(macOS)
+      let parent = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask)[0]
+    #else
+      let parent = URL.documentsDirectory
+    #endif
+    return parent.appendingPathComponent("Atelier", isDirectory: true)
   }
 }
 
