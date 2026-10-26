@@ -39,26 +39,15 @@ struct SizePopover: View {
     let megapixels = match?.1 ?? closestMegapixels
     VStack(alignment: .leading, spacing: 12) {
       Text("Aspect Ratio").font(.headline)
-      LazyVGrid(columns: Array(repeating: GridItem(.fixed(64), spacing: 8), count: 4), spacing: 8) {
-        ForEach(SizePreset.aspectRatios) { aspect in
-          let selected = match?.0 == aspect
-          Button {
-            let size = SizePreset.size(aspect: aspect, megapixels: megapixels)
-            set(size.width, size.height)
-          } label: {
-            VStack(spacing: 4) {
-              let scale = 28 / Double(max(aspect.width, aspect.height))
-              RoundedRectangle(cornerRadius: 2)
-                .strokeBorder(selected ? Color.accentColor : .secondary, lineWidth: selected ? 2 : 1)
-                .frame(width: Double(aspect.width) * scale, height: Double(aspect.height) * scale)
-                .frame(height: 30)
-              Text(aspect.label).font(.caption).monospacedDigit()
+      // An eager Grid, not a LazyVGrid: the popover takes its size from the first layout, and a
+      // lazy grid could report it before all its rows existed, leaving the popover the wrong size.
+      Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+        ForEach(Array(stride(from: 0, to: SizePreset.aspectRatios.count, by: 4)), id: \.self) { start in
+          GridRow {
+            ForEach(SizePreset.aspectRatios[start..<min(start + 4, SizePreset.aspectRatios.count)]) { aspect in
+              aspectButton(aspect, selected: match?.0 == aspect, megapixels: megapixels)
             }
-            .frame(width: 64, height: 52)
-            .contentShape(.rect)
           }
-          .buttonStyle(.plain)
-          .background(selected ? Color.accentColor.opacity(0.12) : .clear, in: .rect(cornerRadius: 6))
         }
       }
       Text("Megapixels").font(.headline)
@@ -70,18 +59,21 @@ struct SizePopover: View {
           set(size.width, size.height)
         })
       ) {
-        if match == nil { Text("Custom").tag(Double?.none) }
+        // No "Custom" segment for other sizes: the Mac gives every segment the widest label's
+        // width, and "Custom" made the picker wider than the popover. None is selected instead.
         ForEach(SizePreset.megapixels, id: \.self) { Text($0.formatted()).tag(Optional($0)) }
       }
       .pickerStyle(.segmented)
       .labelsHidden()
-      // One row on the Mac; iPad's wider steppers need a line each.
-      ViewThatFits(in: .horizontal) {
+      // One row on the Mac; iPad's wider steppers need a line each. Chosen per platform rather
+      // than by ViewThatFits, whose measuring could size the popover for the other layout.
+      #if os(macOS)
         HStack {
           dimension("W", value: width) { set($0, height) }
           swapButton
           dimension("H", value: height) { set(width, $0) }
         }
+      #else
         HStack {
           VStack(alignment: .trailing) {
             dimension("W", value: width) { set($0, height) }
@@ -89,12 +81,36 @@ struct SizePopover: View {
           }
           swapButton
         }
-      }
+      #endif
       Text("\((Double(width * height) / 1_048_576).formatted(.number.precision(.fractionLength(2)))) megapixels; sizes snap to 64 px.")
         .font(.caption).foregroundStyle(.secondary)
     }
     .padding(16)
     .frame(width: 320)
+    // The popover's size is the content's ideal size, never a squeezed one.
+    .fixedSize()
+  }
+
+  private func aspectButton(_ aspect: SizePreset.AspectRatio, selected: Bool, megapixels: Double)
+    -> some View
+  {
+    Button {
+      let size = SizePreset.size(aspect: aspect, megapixels: megapixels)
+      set(size.width, size.height)
+    } label: {
+      VStack(spacing: 4) {
+        let scale = 28 / Double(max(aspect.width, aspect.height))
+        RoundedRectangle(cornerRadius: 2)
+          .strokeBorder(selected ? Color.accentColor : .secondary, lineWidth: selected ? 2 : 1)
+          .frame(width: Double(aspect.width) * scale, height: Double(aspect.height) * scale)
+          .frame(height: 30)
+        Text(aspect.label).font(.caption).monospacedDigit()
+      }
+      .frame(width: 64, height: 52)
+      .contentShape(.rect)
+    }
+    .buttonStyle(.plain)
+    .background(selected ? Color.accentColor.opacity(0.12) : .clear, in: .rect(cornerRadius: 6))
   }
 
   private var swapButton: some View {
