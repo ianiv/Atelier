@@ -11,6 +11,9 @@ struct ModelsView: View {
   }
 
   @Environment(ModelLibrary.self) private var library
+  #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+  #endif
   @Environment(FileDialogs.self) private var fileDialogs
   @State private var search = ""
   @AppStorage("modelsFilter") private var filter = Filter.downloaded
@@ -92,6 +95,25 @@ struct ModelsView: View {
       ) {
         ModelImportSheet()
       }
+      #if DEBUG
+        // Download checks: -AtelierDownload FILE starts that model's download once the catalog
+        // is in, and logs its progress and any error.
+        .task {
+          guard let file = UserDefaults.standard.string(forKey: "AtelierDownload") else { return }
+          while library.catalog.isEmpty { try? await Task.sleep(for: .milliseconds(200)) }
+          guard let model = library.catalog.first(where: { $0.file == file }) else {
+            return NSLog("AtelierDownload: %@ isn't in the catalog", file)
+          }
+          library.download(model)
+          while library.downloads[file] != nil {
+            if let progress = library.downloads[file] {
+              NSLog("AtelierDownload: %@ %lld of %lld", progress.file, progress.bytesWritten, progress.totalBytes)
+            }
+            try? await Task.sleep(for: .seconds(2))
+          }
+          NSLog("AtelierDownload: finished, error: %@", library.errorMessage ?? "none")
+        }
+      #endif
       .debugPresents("modelImport", .constant(false)) {
         library.prepareModelImport([URL(fileURLWithPath: "/tmp/Example Checkpoint.safetensors")])
       }
@@ -151,6 +173,13 @@ struct ModelsView: View {
             if library.isCustom(model) {
               Text("Imported").font(.caption).foregroundStyle(.secondary)
             }
+            #if os(iOS)
+              // A compact-width table shows only this column, so it carries the status too.
+              if horizontalSizeClass == .compact {
+                Spacer()
+                ModelStatus(model: model, library: library)
+              }
+            #endif
           }
           .help(model.file)
         }
@@ -250,6 +279,8 @@ struct ModelStatus: View {
     } else {
       Button("Download") { library.download(model) }
         .controlSize(.small)
+        // In a table row on iPad, a plain button's tap selects the row instead.
+        .formRowButtons()
     }
   }
 
