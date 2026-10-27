@@ -95,6 +95,11 @@
 		F8DCE16F8E6A3EED57882E83 /* TimelineTrack.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FA810DD5B54AFCC1CD74B5D /* TimelineTrack.swift */; };
 		6E51D9FDDD76364020D5131B /* TimelineScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77FD635F00DD90D3AB4AFE0B /* TimelineScreen.swift */; };
 		70E8E18439D847EA73F0D5DD /* AutomationTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5D760BDEB2FA5F04BDAF779 /* AutomationTimeline.swift */; };
+		F1F29ECD79C50D354E0EE7E2 /* ClipUpscale.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A8E4692BF6E0B02895EE031 /* ClipUpscale.swift */; };
+		42B03D63237BF141B72F4ADA /* SeedVR2Restorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC2FB1CF49E1E312CF01272F /* SeedVR2Restorer.swift */; };
+		E360F3396B8D19F63D2D7763 /* SystemSuperResolution.swift in Sources */ = {isa = PBXBuildFile; fileRef = 177D8A305B3B202F8A318C82 /* SystemSuperResolution.swift */; };
+		4D4DA740C5B076119D7E2DC9 /* UpscaleSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F1F88CE15A4A3DD562DD72C /* UpscaleSheet.swift */; };
+		58D2F5882DA905D40744609C /* AutomationUpscale.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2FF5ECF7B3949AB28ABC1A2 /* AutomationUpscale.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -206,6 +211,11 @@
 		5FA810DD5B54AFCC1CD74B5D /* TimelineTrack.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineTrack.swift; sourceTree = "<group>"; };
 		77FD635F00DD90D3AB4AFE0B /* TimelineScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineScreen.swift; sourceTree = "<group>"; };
 		E5D760BDEB2FA5F04BDAF779 /* AutomationTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationTimeline.swift; sourceTree = "<group>"; };
+		3A8E4692BF6E0B02895EE031 /* ClipUpscale.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipUpscale.swift; sourceTree = "<group>"; };
+		BC2FB1CF49E1E312CF01272F /* SeedVR2Restorer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeedVR2Restorer.swift; sourceTree = "<group>"; };
+		177D8A305B3B202F8A318C82 /* SystemSuperResolution.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemSuperResolution.swift; sourceTree = "<group>"; };
+		5F1F88CE15A4A3DD562DD72C /* UpscaleSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpscaleSheet.swift; sourceTree = "<group>"; };
+		D2FF5ECF7B3949AB28ABC1A2 /* AutomationUpscale.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationUpscale.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -255,6 +265,7 @@
 				B99C8284D4164108D9166578 /* Library */,
 				52499566B8E250F1140E5815 /* Projects */,
 				41568DB7ADD0BF0D08CB3F11 /* Queue */,
+				152F168FB1DFB192FE85D9E3 /* Upscale */,
 			);
 			path = Atelier;
 			sourceTree = "<group>";
@@ -294,6 +305,7 @@
 				5BA894EB2074F4930E321607 /* Automation.swift */,
 				E750BAC04D4835E5B2477EB2 /* AutomationProject.swift */,
 				C65576F212CC11B301A189AF /* AutomationQueue.swift */,
+				D2FF5ECF7B3949AB28ABC1A2 /* AutomationUpscale.swift */,
 				E5D760BDEB2FA5F04BDAF779 /* AutomationTimeline.swift */,
 			);
 			path = Automation;
@@ -442,6 +454,17 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		152F168FB1DFB192FE85D9E3 /* Upscale */ = {
+			isa = PBXGroup;
+			children = (
+				3A8E4692BF6E0B02895EE031 /* ClipUpscale.swift */,
+				BC2FB1CF49E1E312CF01272F /* SeedVR2Restorer.swift */,
+				177D8A305B3B202F8A318C82 /* SystemSuperResolution.swift */,
+				5F1F88CE15A4A3DD562DD72C /* UpscaleSheet.swift */,
+			);
+			path = Upscale;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -564,6 +587,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				10171A503FBA24116D0D87F6 /* AppSettings.swift in Sources */,
+				F1F29ECD79C50D354E0EE7E2 /* ClipUpscale.swift in Sources */,
+				42B03D63237BF141B72F4ADA /* SeedVR2Restorer.swift in Sources */,
+				E360F3396B8D19F63D2D7763 /* SystemSuperResolution.swift in Sources */,
+				4D4DA740C5B076119D7E2DC9 /* UpscaleSheet.swift in Sources */,
 				CAD7FD050009B33BA8188223 /* AtelierApp.swift in Sources */,
 				B7FB8865E905277764CD70D9 /* Automation.swift in Sources */,
 				C442D7B6FB6852DA4CD2C251 /* AgentServer.swift in Sources */,
@@ -571,6 +598,7 @@
 				2D94FAD45270F10383644DDE /* LoopbackHTTPServer.swift in Sources */,
 				4549FF9554EB66628271351A /* AutomationProject.swift in Sources */,
 				E03AA58CB9A74D68677591AB /* AutomationQueue.swift in Sources */,
+				58D2F5882DA905D40744609C /* AutomationUpscale.swift in Sources */,
 				70E8E18439D847EA73F0D5DD /* AutomationTimeline.swift in Sources */,
 				02980CB68834C5E6EA77013B /* ContentView.swift in Sources */,
 				90D46F51CBD101C88E0BD1B0 /* CreateModel.swift in Sources */,

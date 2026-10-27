@@ -57,10 +57,19 @@ A video is one tile in History, with a film badge showing its length (and a spea
 
 Videos are stored in the project the way Draw Things stores them: one step per frame, plus the soundtrack, so Draw Things can open them too. That makes them large: a few seconds of video at 720p adds as much to the project file as a hundred images.
 
+## Upscaling videos
+
+To make a larger, sharper copy of a video, right-click it in History and choose **Upscale…**, or click **Upscale…** in its detail panel. Pick a method and a scale; the sheet shows the size it will make.
+
+- **Quality** uses SeedVR2, which restores detail across many frames at once, so it stays steady from frame to frame. Download a SeedVR2 model in **Models** first (the sheet picks the largest you have). It makes videos up to 1920×1088, takes minutes even for a few seconds of video, and needs a lot of memory.
+- **Fast** uses Apple Super Resolution on the Neural Engine and takes seconds. macOS downloads its model the first time you use it. It offers only the scales your device supports (on some Macs, only 4×), for videos up to 1920×1080.
+
+The upscale runs in the Queue like any other job. The result is a new video after the original, with the same prompt and settings at the new size, and the soundtrack kept.
+
 ## Files
 
 Videos are saved as MP4, with AAC sound when there is any. **Settings ▸ Images ▸ Video Format** picks **H.264** (plays everywhere, the default) or **HEVC** (smaller files). With **Save Generated Images to Output Folder** on, each new video is also written there. With **Include Generation Settings in Saved Images** on, the MP4 carries its prompt, model, seed and settings, as images do.
 
 ## On iPad
 
-Everything above works on iPad; touch and hold a video for its menu. Scrubbing a History tile needs a pointer, so on iPad play the video in the detail panel instead. iPadOS stops generation in the background, so a video that was being made when you switched away may fail; **Retry** in the Queue runs it again.
+Everything above works on iPad; touch and hold a video for its menu. Scrubbing a History tile needs a pointer, so on iPad play the video in the detail panel instead. Fast upscaling takes videos up to 1440×1080 on iPad. iPadOS stops generation in the background, so a video that was being made when you switched away may fail; **Retry** in the Queue runs it again.

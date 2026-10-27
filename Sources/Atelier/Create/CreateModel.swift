@@ -856,11 +856,17 @@ final class CreateModel {
       var inputTensorId: Int64?
       var tipTensorId: Int64?
       do {
-        let output = try await engine.generate(request) { progress in
+        let progress: @Sendable (GenerationEngine.Progress) -> Void = { progress in
           Task { @MainActor in
             self.handle(progress)
             self.agentCallbacks[job.id]?.progress(progress)
           }
+        }
+        let output: GenerationEngine.Output
+        if let upscale = request.upscale {
+          output = try await upscaled(request, upscale, progress: progress)
+        } else {
+          output = try await engine.generate(request, progress: progress)
         }
         if output.isVideo { phase = .running("Saving \(output.frames.count) frames…") }
         let item = try await history.save(
@@ -904,6 +910,82 @@ final class CreateModel {
       // Once the queue is empty, the next run shows on the canvas again.
       if generationTask == nil { canvasFollowsRun = true }
     }
+  }
+
+  /// Queues upscaling `item`, a clip, `scale` times with `method` (`seedVR2` names the SeedVR2
+  /// model). The result is a new clip after it, with its prompt, seed and settings at the new size.
+  func upscale(
+    _ item: HistoryItem, method: ClipUpscale.Method, scale: Int, seedVR2: String,
+    frameLimit: Int? = nil
+  ) async {
+    guard item.isVideo else { return }
+    let sidecar = item.sidecar
+    // SeedVR2 makes the frames, so the clip is its; Apple's scaler keeps the source's model.
+    let model = method == .seedVR2 ? seedVR2 : sidecar.model
+    var configuration: PipelineConfiguration
+    if let loaded = try? await engine.loadPipeline(for: model) {
+      configuration = ModelDefaults.recommended(for: model, configuration: loaded)
+    } else if let settings {
+      configuration = settings
+    } else {
+      return
+    }
+    SettingsRegistry.apply(dump: sidecar.configuration, to: &configuration)
+    let size = ClipUpscale.outputSize(
+      width: sidecar.width, height: sidecar.height, scale: scale, method: method)
+    configuration.width = size.width
+    configuration.height = size.height
+    if method == .seedVR2 {
+      let defaults = ModelDefaults.recommended(for: model, configuration: configuration)
+      configuration.steps = 1
+      configuration.guidanceScale = 1
+      configuration.shift = defaults.shift
+      configuration.sampler = defaults.sampler
+    }
+    var request = GenerationEngine.Request(
+      model: model, prompt: sidecar.prompt, negativePrompt: sidecar.negativePrompt,
+      seed: sidecar.seed, configuration: configuration)
+    request.parentTensorId = HistoryStore.tip(of: item)
+    request.upscale = ClipUpscale(
+      method: method, scale: scale, sourceTensorId: item.tensorId, frameLimit: frameLimit)
+    statusNote = nil
+    queue.append([request], currentTensorId: history.currentTensorId)
+    runNext()
+  }
+
+  /// Runs an upscale job: the source clip's frames through the engine, with its soundtrack (at
+  /// the result model's sample rate) and frame rate.
+  private func upscaled(
+    _ request: GenerationEngine.Request, _ upscale: ClipUpscale,
+    progress: @escaping @Sendable (GenerationEngine.Progress) -> Void
+  ) async throws -> GenerationEngine.Output {
+    guard let source = history.item(tensorId: upscale.sourceTensorId), let clip = source.clip else {
+      throw UpscaleError.sourceMissing
+    }
+    phase = .running("Reading \(clip.frames.count) frames…")
+    var frames = await history.frames(of: source)
+    guard frames.count == clip.frames.count else { throw ProjectError.badImage }
+    if let limit = upscale.frameLimit, limit < frames.count { frames = Array(frames.prefix(limit)) }
+    let tensors = try await engine.upscale(request, frames: frames, progress: progress)
+    var output = GenerationEngine.Output(frames: tensors, framesPerSecond: clip.framesPerSecond)
+    if let audio = await history.audio(of: source) {
+      let rate = ModelZoo.audioSampleRateForModel(request.model)
+      var samples = ClipUpscale.resample(audio.samples, from: audio.sampleRate, to: rate)
+      if frames.count < clip.frames.count {
+        let length = min(
+          samples.shape[1], Int(Double(frames.count) / clip.framesPerSecond * Double(rate)))
+        samples = samples[0..<samples.shape[0], 0..<length].copied()
+      }
+      output.audio = samples
+      output.audioSampleRate = rate
+    }
+    return output
+  }
+
+  enum UpscaleError: LocalizedError {
+    case sourceMissing
+
+    var errorDescription: String? { "The clip to upscale is no longer in this project." }
   }
 
   /// Seconds left in sampling, from the pace of the steps so far; nil until two steps are in.

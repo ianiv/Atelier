@@ -24,6 +24,8 @@ enum SavedQueue {
     var audio: URL?
     /// Where a run from a timeline frame goes (`TimelinePlacement`).
     var placement: TimelinePlacement?
+    /// An upscale job's method, scale and source clip.
+    var upscale: ClipUpscale?
   }
 
   /// A saved job, before its settings are put back on its model's defaults.
@@ -49,6 +51,7 @@ enum SavedQueue {
       request.moodboard = moodboard
       request.audio = entry.audio.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
       request.placement = sameProject ? entry.placement : nil
+      request.upscale = entry.upscale
       return request
     }
   }
@@ -83,7 +86,7 @@ enum SavedQueue {
           parentTensorId: request.parentTensorId, hasCanvas: request.canvas != nil,
           canvasTensorId: request.canvasTensorId, canvasIsImported: request.canvasIsImported,
           moodboardWeights: request.moodboard.map(\.weight), audio: request.audio,
-          placement: request.placement))
+          placement: request.placement, upscale: request.upscale))
     }
     if let data = try? JSONEncoder().encode(entries) {
       try? data.write(to: folder.appending(path: "index.json"))
@@ -96,6 +99,8 @@ enum SavedQueue {
       let entries = try? JSONDecoder().decode([Entry].self, from: data)
     else { return [] }
     let jobs = entries.compactMap { entry -> Job? in
+      // An upscale's source clip is a step of its own project.
+      if entry.upscale != nil, entry.project != project { return nil }
       var canvas: CGImage?
       if entry.hasCanvas {
         canvas = ImageLoader.image(at: folder.appending(path: "\(entry.id)-canvas.png"))

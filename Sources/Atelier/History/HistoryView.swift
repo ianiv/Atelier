@@ -32,6 +32,7 @@ struct HistoryView: View {
   @State private var frames: [Int64: CGRect] = [:]
   @State private var marquee: CGRect?
   @State private var quickLookURL: URL?
+  @State private var upscaling: HistoryItem?
   @FocusState private var gridFocused: Bool
   @AppStorage("historyLayout") private var layout = Layout.grid
 
@@ -107,7 +108,8 @@ struct HistoryView: View {
               item: item, use: { use(item, newSeed: false, loadImage: false) },
               rerun: { use(item, newSeed: true) },
               export: { export([item]) },
-              delete: { pendingDelete = [item] }, saveToPhotos: photosAction([item]))
+              delete: { pendingDelete = [item] }, saveToPhotos: photosAction([item]),
+              upscale: { upscaling = item })
           } else if selected.count > 1 {
             HistorySelectionDetail(
               items: selected, export: { export(selected) },
@@ -121,6 +123,7 @@ struct HistoryView: View {
         }
         .inspectorColumnWidth(min: 300, ideal: 340, max: 480)
       }
+      .sheet(item: $upscaling) { UpscaleSheet(item: $0) }
       .confirmationDialog(
         pendingDelete?.count ?? 0 > 1
           ? "Delete \(pendingDelete?.count ?? 0) items from the project?"
@@ -379,6 +382,7 @@ struct HistoryView: View {
       if item.isVideo {
         Divider()
         Button("Add to Timeline") { addToTimeline([item]) }
+        Button("Upscale…") { upscaling = item }
       }
       Divider()
       Button("Delete", role: .destructive) { pendingDelete = [item] }
@@ -650,6 +654,7 @@ struct HistoryDetail: View {
   var delete: () -> Void
   /// iPad only.
   var saveToPhotos: () -> Void = {}
+  var upscale: () -> Void = {}
 
   var body: some View {
     let sidecar = item.sidecar
@@ -682,8 +687,12 @@ struct HistoryDetail: View {
           Button("Delete", role: .destructive, action: delete)
         }
         if item.isVideo {
-          Button("Add to Timeline") { timelines.append([item], undoManager: undoManager) }
-            .help("Add the video to the end of the timeline open in Timeline")
+          ButtonRow {
+            Button("Add to Timeline") { timelines.append([item], undoManager: undoManager) }
+              .help("Add the video to the end of the timeline open in Timeline")
+            Button("Upscale…", action: upscale)
+              .help("Make a sharper, larger copy of the video with SeedVR2 or Apple Super Resolution")
+          }
         }
       }
       Section("Prompt") {

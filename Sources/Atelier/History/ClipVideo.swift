@@ -204,8 +204,9 @@ enum ClipVideo {
       AVFormatIDKey: kAudioFormatMPEG4AAC,
       AVSampleRateKey: rate,
       AVNumberOfChannelsKey: 2,
-      // AAC caps the bit rate per sample rate.
-      AVEncoderBitRateKey: min(192_000, Int(rate) * 6),
+      // AAC caps the bit rate per sample rate: stereo at 24 kHz takes up to 128 kbps, not 6× the
+      // rate, and fails to encode past it.
+      AVEncoderBitRateKey: min(192_000, Int(rate) * 16 / 3),
     ]
   }
 

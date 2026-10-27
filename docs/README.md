@@ -2,7 +2,7 @@
 
 1. [Getting started](getting-started.md): what you need, building and installing the app, pointing it at your models, and making your first image.
 2. [Creating images](creating-images.md): the Create screen, the prompt, size and seed, the settings inspector, presets, image to image and the moodboard.
-3. [Making videos](video.md): video models, length, starting from an image, audio, and watching and reusing videos.
+3. [Making videos](video.md): video models, length, starting from an image, audio, watching and reusing videos, and upscaling them.
 4. [Putting videos together](timeline.md): the Timeline screen, trimming and splitting clips, continuing from any frame, and exporting one longer video.
 5. [The queue](queue.md): queuing images while one runs, making several at once, pausing, reordering and cancelling.
 6. [History and projects](history.md): browsing what you made, reusing settings, exporting and deleting, and switching projects.

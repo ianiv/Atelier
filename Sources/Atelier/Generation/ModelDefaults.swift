@@ -18,7 +18,11 @@ enum ModelDefaults {
   static let fallbacks: [Fallback] = [
     Fallback(
       prefix: "moss_image_", steps: 50, guidanceScale: 3, shift: 5,
-      resolutionDependentShift: false, sampler: .dDIMTrailing)
+      resolutionDependentShift: false, sampler: .dDIMTrailing),
+    // SeedVR2 is a one-step restoration model trained without CFG; guidance above 1 oversharpens.
+    Fallback(
+      prefix: "seedvr2_", steps: 1, guidanceScale: 1, shift: 1,
+      resolutionDependentShift: false, sampler: .dDIMTrailing),
   ]
 
   /// Recommended configuration for `model`: MGK's template, with the fallback table applied when

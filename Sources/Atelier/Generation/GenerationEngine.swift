@@ -40,6 +40,8 @@ actor GenerationEngine {
     var audio: URL?
     /// Started from a timeline frame: where the result goes on the timeline.
     var placement: TimelinePlacement?
+    /// Upscales a clip instead of generating (see `upscale(_:frames:progress:)`).
+    var upscale: ClipUpscale?
   }
 
   /// What a run made: one frame for an image, every frame of a clip and its soundtrack for video.
@@ -270,6 +272,70 @@ actor GenerationEngine {
     return Output(
       frames: frames, audio: audio, audioSampleRate: video.audioSampleRate,
       framesPerSecond: framesPerSecond, audioInput: audioInput)
+  }
+
+  // MARK: - Upscale
+
+  /// Upscales a clip's `frames` as `request.upscale` says, to `request.configuration`'s size
+  /// (SeedVR2, with `request.model` and seed) or by its scale (Apple Super Resolution).
+  func upscale(
+    _ request: Request, frames: [CGImage],
+    progress: @escaping @Sendable (Progress) -> Void
+  ) async throws -> [Tensor<FloatType>] {
+    guard let upscale = request.upscale, let first = frames.first else { throw ProjectError.badImage }
+    await waitForTurn()
+    defer { endTurn() }
+    try Task.checkCancellation()
+    progress(.state(.preparing))
+    switch upscale.method {
+    case .system:
+      let images = try await SystemSuperResolution.run(
+        count: frames.count, width: first.width, height: first.height, scale: upscale.scale,
+        frame: { frames[$0] }
+      ) { done, total, image in
+        guard let image else { return progress(.state(.preparing)) }
+        progress(.state(.generating(step: done, totalSteps: total)))
+        progress(.preview(image, step: done, totalSteps: total))
+      }
+      let tensors = images.compactMap(ImageTensor.tensor(from:))
+      guard tensors.count == frames.count else { throw ProjectError.badImage }
+      return tensors
+    case .seedVR2:
+      // SeedVR2 needs the memory: drop the models the engine keeps loaded.
+      if var dictionary = Self.engineWorkspace()?.dictionary {
+        for key in ["total_weights_cache", "keep_model_in_memory"] {
+          let value = dictionary[key, Int.self]
+          dictionary[key, Int.self] = 0
+          dictionary[key, Int.self] = value
+        }
+      }
+      lastImageInputs = nil
+      let restorer = SeedVR2Restorer(
+        model: request.model, width: request.configuration.width,
+        height: request.configuration.height, seed: request.seed)
+      // The engine's queue, so this never runs alongside another model.
+      let queue = Self.engineResources()?.queue ?? DispatchQueue(label: "Atelier.upscale")
+      let cancellation = EngineCancellation()
+      return try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { continuation in
+          queue.async {
+            do {
+              let result = try restorer.run(
+                count: frames.count, frame: { frames[$0] },
+                progress: { _, done, total in
+                  progress(.state(.generating(step: done, totalSteps: total)))
+                },
+                shouldContinue: { !cancellation.isCancelled })
+              continuation.resume(returning: result)
+            } catch {
+              continuation.resume(throwing: error)
+            }
+          }
+        }
+      } onCancel: {
+        cancellation.cancel()
+      }
+    }
   }
 
   /// Stable Video Diffusion plays at its FPS setting; the others at the rate they were trained at.
