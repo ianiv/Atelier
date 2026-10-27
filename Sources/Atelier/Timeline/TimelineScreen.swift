@@ -67,7 +67,7 @@ struct TimelineScreen: View {
       TimelineBin(append: { store.append([$0], undoManager: undoManager) })
         .inspectorColumnWidth(min: 220, ideal: 260, max: 400)
     }
-    .navigationTitle("Timeline")
+    .navigationTitle("Video Editor")
     .onChange(of: history.project.name, initial: true) {
       store.load()
       selectedEntry = nil

@@ -1,6 +1,6 @@
 # Putting videos together
 
-**Timeline**, in the sidebar after History, puts a project's videos in order to make one longer video. Edits never change or copy the videos themselves: a timeline is a list of which part of which video plays when, saved in the project file. From any frame on a timeline you can start a new video, and it comes back onto the timeline right after that frame.
+The **Video Editor**, in the sidebar after History, puts a project's videos in order to make one longer video. Edits never change or copy the videos themselves: a timeline is a list of which part of which video plays when, saved in the project file. From any frame on a timeline you can start a new video, and it comes back onto the timeline right after that frame.
 
 ## The screen
 
@@ -11,7 +11,7 @@
 
 The menu at the top left picks the timeline when the project has more than one, and has **New Timeline**, **Rename…** and **Delete…**. Deleting a timeline leaves its videos in History.
 
-**Add to Timeline**, on a video's menu in History and in its detail panel, adds it to the end of the timeline last open in Timeline (making one if there's none).
+**Add to Timeline**, on a video's menu in History and in its detail panel, adds it to the end of the timeline last open in the Video Editor (making one if there's none).
 
 ## Editing
 

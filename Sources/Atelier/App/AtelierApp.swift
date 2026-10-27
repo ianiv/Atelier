@@ -78,7 +78,7 @@ struct AtelierApp: App {
           .keyboardShortcut("i", modifiers: [.command, .option])
         Button(moodboardShown ? "Hide Moodboard" : "Show Moodboard") { moodboardShown.toggle() }
         Divider()
-        if navigation.section == .timeline {
+        if navigation.section == .videoEditor {
           TimelineZoomMenuItems(store: create.timelines, history: history)
         } else {
           ZoomMenuItems(canvas: create.canvas)

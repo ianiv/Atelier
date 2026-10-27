@@ -13,7 +13,7 @@ extension Automation {
   ///           [--width 256 --height 256 --steps 2 --num-frames 9] [--snapshot-dir DIR] [--quit]
   ///
   /// `--timeline-check --dump --project NAME [--snapshot-dir DIR]` only prints the project's saved
-  /// timelines (and snapshots the Timeline screen).
+  /// timelines (and snapshots the Video Editor).
   static func timelineCheck(
     _ model: CreateModel, navigation: Navigation, layouts: LayoutStore, presets: PresetStore
   ) {
@@ -30,7 +30,7 @@ extension Automation {
         print("store: \(model.timelines.timelines.count) timelines, \(model.timelines.selected?.entries.count ?? 0) entries")
         fflush(stdout)
         if let folder = value("--snapshot-dir") {
-          navigation.section = .timeline
+          navigation.section = .videoEditor
           ensureWindow(model, navigation: navigation, layouts: layouts, presets: presets)
           try? await Task.sleep(for: .seconds(4))
           AutomationWindows.snapshot(to: URL(fileURLWithPath: folder).appending(path: "timeline.png"))

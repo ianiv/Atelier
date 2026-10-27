@@ -9,7 +9,7 @@ What it does today:
 - Text to image with sensible per-model defaults, and every advanced setting one search away.
 - Image to image: edit an image on the canvas, outpaint by moving it in the frame, and give edit models reference images on a moodboard.
 - Video with LTX-2, MiniMax H3, Wan and the other video models the engine runs: text or an image to video, first and last frames, references, and sound (LTX and H3 make a soundtrack; H3 and LongCat take an audio file). Clips play inline and save as MP4.
-- A timeline to put clips together: trim, split, crossfade, continue a new video from any frame, and export one MP4.
+- A video editor to put clips together on a timeline: trim, split, crossfade, continue a new video from any frame, and export one MP4.
 - Video upscaling: **Fast** (Apple Super Resolution) or **Quality** (FlashVSR+, Turbo or Base), as a new video in History or straight to a file with Export Video….
 - Presets and inspector layouts.
 - History kept in projects, in Draw Things' project file format, with one-click "Use Settings".
@@ -39,7 +39,7 @@ Start with the [user guide](docs/README.md).
 - [Getting started](docs/getting-started.md): requirements, building and installing, choosing your models folder, your first image.
 - [Creating images](docs/creating-images.md): the prompt, size and seed, the inspector, presets, image to image and the moodboard.
 - [Making videos](docs/video.md): video models, length, first and last frames, audio, upscaling (and getting FlashVSR+), and exporting videos.
-- [Putting videos together](docs/timeline.md): assembling clips on a timeline, trimming, splitting and crossfades, continuing from any frame, and exporting.
+- [Putting videos together](docs/video-editor.md): assembling clips on a timeline, trimming, splitting and crossfades, continuing from any frame, and exporting.
 - [The queue](docs/queue.md): queuing, pausing and reordering images, and upscaled exports.
 - [History and projects](docs/history.md)
 - [Models and LoRAs](docs/models-and-loras.md): downloading, importing, Make 8-bit Copy.

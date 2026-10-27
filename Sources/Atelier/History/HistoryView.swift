@@ -617,7 +617,7 @@ struct HistoryView: View {
     return url
   }
 
-  /// Appends videos to the timeline on screen in Timeline (a new one when there's none).
+  /// Appends videos to the timeline on screen in the Video Editor (a new one when there's none).
   private func addToTimeline(_ items: [HistoryItem]) {
     timelines.append(items, undoManager: undoManager)
   }
@@ -727,7 +727,7 @@ struct HistoryDetail: View {
         if item.isVideo {
           ButtonRow {
             Button("Add to Timeline") { timelines.append([item], undoManager: undoManager) }
-              .help("Add the video to the end of the timeline open in Timeline")
+              .help("Add the video to the end of the timeline open in the Video Editor")
             Button("Upscale…", action: upscale)
               .help("Make a sharper, larger copy of the video with FlashVSR+ or Apple Super Resolution")
           }

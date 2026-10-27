@@ -16,7 +16,8 @@ final class Navigation {
     guard SessionState.isEnabled, let saved = UserDefaults.standard.string(forKey: "section") else {
       return .create
     }
-    return ContentView.Section(rawValue: saved) ?? .create
+    // Before 0.4 the Video Editor was called Timeline.
+    return ContentView.Section(rawValue: saved == "Timeline" ? "Video Editor" : saved) ?? .create
   }
 }
 
@@ -25,7 +26,7 @@ struct ContentView: View {
     case create = "Create"
     case queue = "Queue"
     case history = "History"
-    case timeline = "Timeline"
+    case videoEditor = "Video Editor"
     case models = "Models"
     case loras = "LoRAs"
 
@@ -36,7 +37,7 @@ struct ContentView: View {
       case .create: "paintbrush"
       case .queue: "list.number"
       case .history: "clock"
-      case .timeline: "film.stack"
+      case .videoEditor: "film.stack"
       case .models: "shippingbox"
       case .loras: "slider.horizontal.3"
       }
@@ -96,7 +97,7 @@ struct ContentView: View {
         QueueView()
       case .history:
         HistoryView()
-      case .timeline:
+      case .videoEditor:
         TimelineScreen()
       case .models:
         ModelsView()
