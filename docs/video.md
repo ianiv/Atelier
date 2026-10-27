@@ -8,7 +8,7 @@ Pick a video model in Create and the same screen makes videos: the prompt, inspe
 | --- | --- | --- |
 | LTX-2, LTX-2.3 | The prompt; in Edit mode, the canvas as the first frame | Makes its own soundtrack |
 | MiniMax H3 (FL2VA) | The canvas as the first frame and the first moodboard image as the last | Makes its own soundtrack |
-| MiniMax H3 (Ref2VA), FastH3 Omni | The canvas and moodboard images as references, and an audio file | Makes its own soundtrack, following the audio you give it |
+| MiniMax H3 (Ref2VA) | The canvas and moodboard images as references, and an audio file | Makes its own soundtrack, following the audio you give it |
 | Wan 2.1, Wan 2.2, SkyReels, Hunyuan Video | The prompt (T2V models); the canvas as the first frame (I2V models) | None |
 | Stable Video Diffusion | An image to animate | None |
 | LongCat Video Avatar | An image and a voice to lip-sync to | Keeps the voice you give it |
