@@ -369,6 +369,7 @@ final class FlashVSRDenoiser {
         inputs: x, attention, m[2], m[3], m[4], m[5], crossKeys[layer], crossValues[layer]
       )[0].as(of: Float.self)
       Profile.mark("post")
+      graph.garbageCollect()
     }
     let prediction = head(inputs: x, headModulation[0], headModulation[1])[0].as(of: Float.self)
     // Unpatchify: column (ky * 2 + kx) * 16 + c.
@@ -462,9 +463,11 @@ final class FlashVSRDenoiser {
     let kept = select(scores: scores, layer: layer, queryBlocks: queryBlocks, keyBlocks: keyBlocks)
     Profile.mark("select")
 
-    // Attend, gathering each (head, query block)'s kept key blocks.
-    let output = gatheredAttention(
-      queries: q, keys: allKeys, values: allValues, kept: kept, keyBlocks: keyBlocks)
+    // Attend a row of query blocks at a time.
+    let output = stripAttention(
+      queries: q, keys: allKeys, values: allValues, kept: kept, keyBlocks: keyBlocks,
+      span: gridWidth / 8 >= 12 ? 3 : gridWidth / 8)
+    Profile.mark("attention")
 
     // Keep the newest windows for the next chunk.
     let keep = keptWindows(layer)
@@ -578,91 +581,176 @@ final class FlashVSRDenoiser {
     return values[target]
   }
 
-  /// Attention of each (head, query block) over its kept key blocks: rows grouped by how many
-  /// blocks they read, the keys gathered per row, padded within a batch and masked.
-  private func gatheredAttention(
+  /// Attention a strip of query blocks (part of one block row of one window) at a time, over
+  /// the key blocks any of them reads, with each head's block mask spread over the tokens. A
+  /// strip whose heads' masks agree (nothing in the band pruned, as in Turbo's narrow layers)
+  /// takes one call for all heads; otherwise each head goes alone, its keys head-major. Narrow
+  /// layers take strips 3 blocks wide, so their keys are mostly ones they read; wide layers
+  /// take whole rows, since every block reads nearly everything.
+  private func stripAttention(
     queries: DynamicGraph.Tensor<FloatType>, keys: DynamicGraph.Tensor<FloatType>,
-    values: DynamicGraph.Tensor<FloatType>, kept: [[[Int32]]], keyBlocks: Int
+    values: DynamicGraph.Tensor<FloatType>, kept: [[[Int32]]], keyBlocks: Int, span: Int
   ) -> DynamicGraph.Tensor<FloatType> {
     let H = Self.heads, HD = Self.headDimension
-    let queryBlocks = kept[0].count
-    let rowCount = H * queryBlocks
-    // Head-major block tables: [H * blocks, 128 * 128].
-    let queryTable = queries.permuted(2, 0, 1, 3).copied().reshaped(.WC(rowCount, 128 * HD))
-    let keyTable = keys.permuted(2, 0, 1, 3).copied().reshaped(.WC(H * keyBlocks, 128 * HD))
-    let valueTable = values.permuted(2, 0, 1, 3).copied().reshaped(.WC(H * keyBlocks, 128 * HD))
-    // Rows by how many blocks they read, most first.
-    var rows: [(row: Int, blocks: [Int32])] = []
-    for head in 0..<H {
-      for i in 0..<queryBlocks {
-        rows.append((head * queryBlocks + i, kept[head][i].map { Int32(head * keyBlocks) + $0 }))
-      }
-    }
-    rows.sort { $0.blocks.count > $1.blocks.count }
-    // Batches of at most ~256 MiB of gathered keys.
-    let budget = 256 * 1_024 * 1_024 / (128 * HD * MemoryLayout<FloatType>.size)
-    var outputs: [DynamicGraph.Tensor<FloatType>] = []
-    var order: [Int32] = []
-    var start = 0
+    let S = blocksPerWindow
+    let nw = gridWidth / 8, nh = gridHeight / 8
     let scale = 1 / Float(HD).squareRoot()
-    while start < rows.count {
-      let width = rows[start].blocks.count
-      let batch = max(1, min(rows.count - start, budget / max(width, 1)))
-      let slice = rows[start..<(start + batch)]
-      let uniform = slice.allSatisfy { $0.blocks.count == width }
-      var keyIndex = [Int32]()
-      keyIndex.reserveCapacity(batch * width)
-      for entry in slice {
-        keyIndex.append(contentsOf: entry.blocks)
-        // Padding repeats the row's first block; the mask hides it.
-        keyIndex.append(contentsOf: Array(repeating: entry.blocks[0], count: width - entry.blocks.count))
-      }
-      let queryIndex = slice.map { Int32($0.row) }
-      let gatheredQueries = Functional.indexSelect(
-        input: queryTable, index: graph.variable(Tensor<Int32>(queryIndex, .CPU, .C(batch)).toGPU(0))
-      ).reshaped(.NHWC(batch, 128, 1, HD))
-      let keyIndices = graph.variable(Tensor<Int32>(keyIndex, .CPU, .C(batch * width)).toGPU(0))
-      let gatheredKeys = Functional.indexSelect(input: keyTable, index: keyIndices)
-        .reshaped(.NHWC(batch, width * 128, 1, HD))
-      let gatheredValues = Functional.indexSelect(input: valueTable, index: keyIndices)
-        .reshaped(.NHWC(batch, width * 128, 1, HD))
-      let out: DynamicGraph.Tensor<FloatType>
-      if uniform {
-        let attention = ScaledDotProductAttention(scale: scale, flags: [.Float16])
-        out = attention(queries: gatheredQueries, keys: gatheredKeys, values: gatheredValues)
-      } else {
-        // One row per batch entry (0 where a key is real, -inf on padding), spread over the
-        // 128 query rows on the GPU.
-        var row = Tensor<FloatType>(.CPU, .HWC(batch, 1, width * 128))
-        row.withUnsafeMutableBytes { raw in
-          let m = raw.bindMemory(to: FloatType.self)
-          for (b, entry) in slice.enumerated() {
-            let valid = entry.blocks.count * 128
-            for c in 0..<(width * 128) { m[b * width * 128 + c] = c < valid ? 0 : -FloatType.infinity }
+    var output = graph.variable(.GPU(0), .NHWC(2 * S, 128, H, HD), of: FloatType.self)
+    let keyRows = keys.reshaped(.WC(keyBlocks, 128 * H * HD))
+    let valueRows = values.reshaped(.WC(keyBlocks, 128 * H * HD))
+    // Head-major copies, made when a strip first needs them: [H * blocks, 128 * HD].
+    var keysByHead: DynamicGraph.Tensor<FloatType>?
+    var valuesByHead: DynamicGraph.Tensor<FloatType>?
+    var queriesByHead: DynamicGraph.Tensor<FloatType>?
+    for window in 0..<2 {
+      for row in 0..<nh {
+        for column in stride(from: 0, to: nw, by: span) {
+          let first = window * S + row * nw + column
+          let count = min(span, nw - column)
+          let strip = first..<(first + count)
+          // The key blocks any head of any block in the strip reads.
+          var union = Set<Int32>()
+          for head in 0..<H {
+            for i in strip { union.formUnion(kept[head][i]) }
           }
+          let columns = union.sorted()
+          let position = Dictionary(uniqueKeysWithValues: columns.enumerated().map { ($1, $0) })
+          let masks: [[Bool]] = (0..<H).map { head in
+            var mask = [Bool](repeating: false, count: count * columns.count)
+            for (r, i) in strip.enumerated() {
+              for j in kept[head][i] { mask[r * columns.count + position[j]!] = true }
+            }
+            return mask
+          }
+          let shared = masks.allSatisfy { $0 == masks[0] }
+          let result: DynamicGraph.Tensor<FloatType>
+          if shared {
+            let stripKeys: DynamicGraph.Tensor<FloatType>
+            let stripValues: DynamicGraph.Tensor<FloatType>
+            if columns.count == keyBlocks {
+              stripKeys = keys.reshaped(.NHWC(1, keyBlocks * 128, H, HD))
+              stripValues = values.reshaped(.NHWC(1, keyBlocks * 128, H, HD))
+            } else {
+              let index = graph.variable(Tensor<Int32>(columns, .CPU, .C(columns.count)).toGPU(0))
+              stripKeys = Functional.indexSelect(input: keyRows, index: index)
+                .reshaped(.NHWC(1, columns.count * 128, H, HD))
+              stripValues = Functional.indexSelect(input: valueRows, index: index)
+                .reshaped(.NHWC(1, columns.count * 128, H, HD))
+            }
+            let stripQueries = queries[strip, 0..<128, 0..<H, 0..<HD].copied()
+              .reshaped(.NHWC(1, count * 128, H, HD))
+            result = attention(
+              stripQueries, stripKeys, stripValues, mask: masks[0], rows: count,
+              columns: columns.count, scale: scale
+            ).reshaped(.NHWC(count, 128, H, HD))
+          } else {
+            if keysByHead == nil {
+              keysByHead = keys.copied().permuted(2, 0, 1, 3).copied()
+                .reshaped(.WC(H * keyBlocks, 128 * HD))
+              valuesByHead = values.copied().permuted(2, 0, 1, 3).copied()
+                .reshaped(.WC(H * keyBlocks, 128 * HD))
+              queriesByHead = queries.copied().permuted(2, 0, 1, 3).copied()
+                .reshaped(.WC(H * 2 * S, 128 * HD))
+            }
+            // Each head reads its own key blocks: gathered per head, padded to the widest
+            // (padding masked), all heads in one call.
+            let headColumns: [[Int32]] = (0..<H).map { head in
+              var set = Set<Int32>()
+              for i in strip { set.formUnion(kept[head][i]) }
+              return set.sorted()
+            }
+            let width = headColumns.map(\.count).max() ?? 1
+            var index: [Int32] = []
+            var headMasks: [[Bool]] = []
+            for head in 0..<H {
+              let cols = headColumns[head]
+              let at = Dictionary(uniqueKeysWithValues: cols.enumerated().map { ($1, $0) })
+              index.append(contentsOf: cols.map { Int32(head * keyBlocks) + $0 })
+              index.append(
+                contentsOf: Array(repeating: Int32(head * keyBlocks) + cols[0], count: width - cols.count))
+              var mask = [Bool](repeating: false, count: count * width)
+              for (r, i) in strip.enumerated() {
+                for j in kept[head][i] { mask[r * width + at[j]!] = true }
+              }
+              headMasks.append(mask)
+            }
+            let indexVariable = graph.variable(Tensor<Int32>(index, .CPU, .C(index.count)).toGPU(0))
+            let headKeys = Functional.indexSelect(input: keysByHead!, index: indexVariable)
+              .reshaped(.NHWC(H, width * 128, 1, HD))
+            let headValues = Functional.indexSelect(input: valuesByHead!, index: indexVariable)
+              .reshaped(.NHWC(H, width * 128, 1, HD))
+            var queryIndex: [Int32] = []
+            for head in 0..<H { queryIndex.append(contentsOf: strip.map { Int32(head * 2 * S + $0) }) }
+            let headQueries = Functional.indexSelect(
+              input: queriesByHead!,
+              index: graph.variable(Tensor<Int32>(queryIndex, .CPU, .C(queryIndex.count)).toGPU(0))
+            ).reshaped(.NHWC(H, count * 128, 1, HD))
+            let out = attention(
+              headQueries, headKeys, headValues, masks: headMasks, rows: count, columns: width,
+              scale: scale)
+            result = out.reshaped(.HWC(H, count * 128, HD)).permuted(1, 0, 2).copied()
+              .reshaped(.NHWC(count, 128, H, HD))
+          }
+          output[strip, 0..<128, 0..<H, 0..<HD] = result
         }
-        let ones = graph.variable(.GPU(0), .HWC(batch, 128, 1), of: FloatType.self)
-        ones.full(1)
-        let mask = Functional.matmul(left: ones, right: graph.variable(row.toGPU(0)))
-          .reshaped(.NHWC(batch, 1, 128, width * 128))
-        let attention = ScaledDotProductAttention(
-          scale: scale, hasAttentionMask: true, flags: [.Float16])
-        out = attention(
-          queries: gatheredQueries, keys: gatheredKeys, values: gatheredValues,
-          attentionMask: mask)
       }
-      outputs.append(out.reshaped(.WC(batch, 128 * HD)))
-      order.append(contentsOf: queryIndex)
-      start += batch
     }
-    // Back to row order.
-    var inverse = [Int32](repeating: 0, count: rowCount)
-    for (position, row) in order.enumerated() { inverse[Int(row)] = Int32(position) }
-    let stacked = concatenated(outputs)
-    let restored = Functional.indexSelect(
-      input: stacked, index: graph.variable(Tensor<Int32>(inverse, .CPU, .C(rowCount)).toGPU(0)))
-    // [H, queryBlocks, 128, HD] -> [queryBlocks, 128, H, HD].
-    return restored.reshaped(.NHWC(H, queryBlocks, 128, HD)).permuted(1, 2, 0, 3).copied()
+    return output
+  }
+
+  /// Attention batched over the first dimension, each entry with its own block mask.
+  private func attention(
+    _ q: DynamicGraph.Tensor<FloatType>, _ k: DynamicGraph.Tensor<FloatType>,
+    _ v: DynamicGraph.Tensor<FloatType>, masks: [[Bool]], rows: Int, columns: Int, scale: Float
+  ) -> DynamicGraph.Tensor<FloatType> {
+    let batch = masks.count
+    var blocks = Tensor<FloatType>(.CPU, .WC(batch * rows, columns))
+    for (b, mask) in masks.enumerated() {
+      for r in 0..<rows {
+        for c in 0..<columns {
+          blocks[b * rows + r, c] = mask[r * columns + c] ? 0 : -FloatType.infinity
+        }
+      }
+    }
+    let rowIndex = graph.variable(
+      Tensor<Int32>(
+        (0..<(batch * rows * 128)).map { Int32(($0 / (rows * 128)) * rows + ($0 % (rows * 128)) / 128) },
+        .CPU, .C(batch * rows * 128)
+      ).toGPU(0))
+    let columnIndex = graph.variable(
+      Tensor<Int32>((0..<(columns * 128)).map { Int32($0 / 128) }, .CPU, .C(columns * 128)).toGPU(0))
+    let byRow = Functional.indexSelect(input: graph.variable(blocks.toGPU(0)), index: rowIndex)
+    let transposed = byRow.transposed(0, 1).copied()
+    let tokenMask = Functional.indexSelect(input: transposed, index: columnIndex)
+      .transposed(0, 1).copied().reshaped(.NHWC(batch, 1, rows * 128, columns * 128))
+    return ScaledDotProductAttention(scale: scale, hasAttentionMask: true, flags: [.Float16])(
+      queries: q, keys: k, values: v, attentionMask: tokenMask)
+  }
+
+  /// Attention with a block mask (`rows` query blocks × `columns` key blocks, true where read),
+  /// spread to the tokens on the GPU; no mask when every block is read.
+  private func attention(
+    _ q: DynamicGraph.Tensor<FloatType>, _ k: DynamicGraph.Tensor<FloatType>,
+    _ v: DynamicGraph.Tensor<FloatType>, mask: [Bool], rows: Int, columns: Int, scale: Float
+  ) -> DynamicGraph.Tensor<FloatType> {
+    if mask.allSatisfy({ $0 }) {
+      return ScaledDotProductAttention(scale: scale, flags: [.Float16])(queries: q, keys: k, values: v)
+    }
+    var blocks = Tensor<FloatType>(.CPU, .WC(rows, columns))
+    for r in 0..<rows {
+      for c in 0..<columns { blocks[r, c] = mask[r * columns + c] ? 0 : -FloatType.infinity }
+    }
+    // Rows to query tokens, then columns to key tokens.
+    let rowIndex = graph.variable(
+      Tensor<Int32>((0..<(rows * 128)).map { Int32($0 / 128) }, .CPU, .C(rows * 128)).toGPU(0))
+    let columnIndex = graph.variable(
+      Tensor<Int32>((0..<(columns * 128)).map { Int32($0 / 128) }, .CPU, .C(columns * 128)).toGPU(0))
+    let byRow = Functional.indexSelect(input: graph.variable(blocks.toGPU(0)), index: rowIndex)
+    let transposed = byRow.transposed(0, 1).copied()
+    let tokenMask = Functional.indexSelect(input: transposed, index: columnIndex)
+      .transposed(0, 1).copied().reshaped(.NHWC(1, 1, rows * 128, columns * 128))
+    return ScaledDotProductAttention(scale: scale, hasAttentionMask: true, flags: [.Float16])(
+      queries: q, keys: k, values: v, attentionMask: tokenMask)
   }
 }
 

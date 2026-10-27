@@ -73,6 +73,8 @@ struct FlashVSRUpscaler {
           guard let image = frame(index), let rgb = FlashVSRImages.rgb(image) else {
             throw ProjectError.badImage
           }
+          Profile.mark("misc")
+          defer { Profile.mark("bicubic") }
           let resized = FlashVSRImages.bicubic(
             rgb.pixels, width: rgb.width, height: rgb.height, targetWidth: width,
             targetHeight: height)
@@ -94,7 +96,10 @@ struct FlashVSRUpscaler {
           var rows: [DynamicGraph.Tensor<FloatType>] = []
           for t in (4 * chunk)..<(4 * chunk + 4) {
             let frames = concatenated(try (1...4).map { try unshuffled(4 * t + $0) })
+            Profile.mark("unshuffle")
             rows.append(projection.next(frames))
+            if Profile.enabled { _ = rows.last?.rawValue.toCPU() }
+            Profile.mark("projection")
           }
           let noise = graph.variable(
             Self.noise(
@@ -111,19 +116,27 @@ struct FlashVSRUpscaler {
           for offset in 0..<4 {
             let k = 4 * chunk + offset
             let covered = try (0..<4).map { try source(max(0, 4 * k - 3 + $0)) }
+            Profile.mark("misc")
             let packed = graph.variable(
               FlashVSRTinyDecoder.packed(
                 covered, latentHeight: latentHeight, latentWidth: latentWidth
               ).toGPU(0))
             let z = latents[offset..<(offset + 1), 0..<latentHeight, 0..<latentWidth, 0..<16]
               .copied()
-            for decoded in decoder.decode(latent: z, source: packed) {
+            Profile.mark("pack")
+            let decodedFrames = decoder.decode(latent: z, source: packed)
+            if Profile.enabled { _ = decodedFrames.last?.rawValue.toCPU() }
+            Profile.mark("decode")
+            for decoded in decodedFrames {
               defer { emitted += 1 }
               guard emitted < count else { continue }
               let reference = graph.variable(
                 FlashVSRImages.tensor(try source(emitted), width: width, height: height).toGPU(0))
               let fixed = colorFix(decoded, reference: reference)
-              try output(fixed.rawValue.toCPU())
+              let cpu = fixed.rawValue.toCPU()
+              Profile.mark("colorfix")
+              try output(cpu)
+              Profile.mark("output")
             }
           }
           // Source frames before the next chunk's first are done with.

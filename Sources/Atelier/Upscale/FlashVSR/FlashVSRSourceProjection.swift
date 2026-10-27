@@ -39,11 +39,13 @@ final class FlashVSRSourceProjection {
     self.stage2.compile(
       inputs: graph.variable(.GPU(0), .NHWC(4, gridHeight, gridWidth, 2048), of: FloatType.self))
     let normName = checkpoint.contains("norm1.weight") ? "weight" : "gamma"
-    conv1.weight.copy(from: try checkpoint.tensor("conv1.weight", shape: [2048, 768, 4, 3, 3]))
+    conv1.weight.copy(
+      from: Self.im2colWeights(try checkpoint.tensor("conv1.weight"), out: 2048, in: 768))
     conv1.bias.copy(from: try checkpoint.tensor("conv1.bias", shape: [2048]))
     norm1.weight.copy(
       from: try checkpoint.tensor("norm1.\(normName)").reshaped(format: .NCHW, shape: [2048]))
-    conv2.weight.copy(from: try checkpoint.tensor("conv2.weight", shape: [3072, 2048, 4, 3, 3]))
+    conv2.weight.copy(
+      from: Self.im2colWeights(try checkpoint.tensor("conv2.weight"), out: 3072, in: 2048))
     conv2.bias.copy(from: try checkpoint.tensor("conv2.bias", shape: [3072]))
     norm2.weight.copy(
       from: try checkpoint.tensor("norm2.\(normName)").reshaped(format: .NCHW, shape: [3072]))
@@ -53,23 +55,60 @@ final class FlashVSRSourceProjection {
 
   /// Causal conv3d (4×3×3, stride (2,1,1), spatial padding replicating the edge), then the
   /// reference's RMS norm (`F.normalize * sqrt(C) * gamma`) and SiLU. Takes `depth` frames
-  /// `[depth, h, w, C]` (the carry first) and gives `(depth - 2) / 2` frames.
+  /// `[depth, h, w, C]` (the carry first) and gives `(depth - 2) / 2` frames. The convolution
+  /// runs as one matrix multiply over its 36 shifted views (im2col), which is far faster than
+  /// a 3D convolution here; its weights are reordered to match (`im2colWeights`).
   private static func stage(
     depth: Int, height: Int, width: Int, inChannels: Int, outChannels: Int, name: String
-  ) -> (Convolution, RMSNorm, Model) {
+  ) -> (Dense, RMSNorm, Model) {
     let x = Input()
-    let conv = Convolution(
-      groups: 1, filters: outChannels, filterSize: [4, 3, 3],
-      hint: Hint(stride: [2, 1, 1], border: Hint.Border(begin: [0, 0, 0], end: [0, 0, 0])),
-      format: .OIHW, name: "conv\(name)")
     let frames = (depth - 4) / 2 + 1
-    var out = conv(
-      x.padded(.replicate, begin: [0, 1, 1, 0], end: [0, 1, 1, 0])
-        .reshaped([1, depth, height + 2, width + 2, inChannels])
-    ).reshaped([frames, height, width, outChannels])
+    let padded = x.padded(.replicate, begin: [0, 1, 1, 0], end: [0, 1, 1, 0])
+    let rowStride = (width + 2) * inChannels
+    let frameStride = (height + 2) * rowStride
+    var columns: [Model.IO] = []
+    for o in 0..<frames {
+      var views: [Model.IO] = []
+      for kt in 0..<4 {
+        for ky in 0..<3 {
+          for kx in 0..<3 {
+            views.append(
+              padded.reshaped(
+                [1, height, width, inChannels], offset: [2 * o + kt, ky, kx, 0],
+                strides: [frameStride, rowStride, inChannels, 1]))
+          }
+        }
+      }
+      columns.append(Concat(axis: 3)(views).reshaped([height * width, 36 * inChannels]))
+    }
+    let patches = frames == 1 ? columns[0] : Concat(axis: 0)(columns)
+    let conv = Dense(count: outChannels, name: "conv\(name)")
+    var out = conv(patches).reshaped([frames, height, width, outChannels])
     let norm = RMSNorm(epsilon: 1e-12 / Float(outChannels), axis: [3], name: "norm\(name)")
     out = norm(out.to(.Float32)).swish().to(.Float16)
     return (conv, norm, Model([x], [out]))
+  }
+
+  /// A conv3d weight `[out, in, 4, 3, 3]` as the im2col matrix `[out, (t, y, x, in)]`.
+  private static func im2colWeights(_ weight: Tensor<Float>, out: Int, in inChannels: Int)
+    -> Tensor<FloatType>
+  {
+    var result = Tensor<FloatType>(.CPU, .WC(out, 36 * inChannels))
+    weight.withUnsafeBytes { source in
+      let w = source.bindMemory(to: Float.self)
+      result.withUnsafeMutableBytes { target in
+        let r = target.bindMemory(to: FloatType.self)
+        for o in 0..<out {
+          for i in 0..<inChannels {
+            let base = (o * inChannels + i) * 36
+            for tap in 0..<36 {
+              r[o * 36 * inChannels + tap * inChannels + i] = FloatType(w[base + tap])
+            }
+          }
+        }
+      }
+    }
+    return result
   }
 
   /// Back to the start of a clip.
