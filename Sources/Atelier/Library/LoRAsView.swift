@@ -1,6 +1,6 @@
+import _MediaGenerationKit
 import SwiftUI
 import UniformTypeIdentifiers
-import _MediaGenerationKit
 
 struct LoRAsView: View {
   @Environment(ModelLibrary.self) private var library

@@ -28,7 +28,6 @@ enum VideoCodec: String, CaseIterable, Identifiable {
 /// the iTunes tags MP4 files carry (QuickTime's own keys are only kept in .mov). After the engine
 /// CLI's `writeVideo` (Apps/DrawThingsCLI).
 enum ClipVideo {
-
   struct Metadata {
     /// Draw Things' summary of the prompt and settings, as an image's description.
     var description: String
@@ -101,8 +100,8 @@ enum ClipVideo {
             return
           }
           guard let pool = adaptor.pixelBufferPool, let image = index == 0 ? first : frame(index),
-            let buffer = pixelBuffer(image, pool: pool),
-            adaptor.append(buffer, withPresentationTime: CMTimeMultiply(frameDuration, multiplier: Int32(index)))
+                let buffer = pixelBuffer(image, pool: pool),
+                adaptor.append(buffer, withPresentationTime: CMTimeMultiply(frameDuration, multiplier: Int32(index)))
           else {
             state.fail(writer.error ?? ClipVideoError.cantWrite)
             return

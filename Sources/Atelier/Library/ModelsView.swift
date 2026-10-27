@@ -1,6 +1,6 @@
+import _MediaGenerationKit
 import SwiftUI
 import UniformTypeIdentifiers
-import _MediaGenerationKit
 
 struct ModelsView: View {
   enum Filter: String, CaseIterable, Identifiable {
@@ -114,43 +114,43 @@ struct ModelsView: View {
           NSLog("AtelierDownload: finished, error: %@", library.errorMessage ?? "none")
         }
       #endif
-      .debugPresents("modelImport", .constant(false)) {
-        library.prepareModelImport([URL(fileURLWithPath: "/tmp/Example Checkpoint.safetensors")])
-      }
-      .confirmationDialog(
-        "Move \(pendingDelete?.name ?? "this model") to the Trash?",
-        isPresented: Binding(
-          get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
-        presenting: pendingDelete
-      ) { model in
-        Button("Move to Trash", role: .destructive) {
-          pendingDelete = nil
-          Task {
-            await library.delete(model)
-            // The deleted model can drop out of the list (or the catalog); show the first one.
-            if !filtered.contains(where: { $0.file == selection }) {
-              selection = filtered.first?.file
+        .debugPresents("modelImport", .constant(false)) {
+          library.prepareModelImport([URL(fileURLWithPath: "/tmp/Example Checkpoint.safetensors")])
+        }
+        .confirmationDialog(
+          "Move \(pendingDelete?.name ?? "this model") to the Trash?",
+          isPresented: Binding(
+            get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
+          presenting: pendingDelete
+        ) { model in
+          Button("Move to Trash", role: .destructive) {
+            pendingDelete = nil
+            Task {
+              await library.delete(model)
+              // The deleted model can drop out of the list (or the catalog); show the first one.
+              if !filtered.contains(where: { $0.file == selection }) {
+                selection = filtered.first?.file
+              }
             }
           }
+          Button("Cancel", role: .cancel) { pendingDelete = nil }
+        } message: { model in
+          Text(
+            library.isCustom(model)
+              ? "\(model.file) is moved to the Trash and removed from custom.json. Shared files such as text encoders and VAEs stay in the models folder."
+              : "\(model.file) is moved to the Trash. Shared files such as text encoders and VAEs stay in the models folder."
+          )
         }
-        Button("Cancel", role: .cancel) { pendingDelete = nil }
-      } message: { model in
-        Text(
-          library.isCustom(model)
-            ? "\(model.file) is moved to the Trash and removed from custom.json. Shared files such as text encoders and VAEs stay in the models folder."
-            : "\(model.file) is moved to the Trash. Shared files such as text encoders and VAEs stay in the models folder."
-        )
-      }
-      .libraryErrorAlert()
-      .deleteCommand {
-        if let selected, library.canDelete(selected) { pendingDelete = selected }
-      }
-      .task {
-        if library.catalog.isEmpty { await library.refresh() }
-      }
-      .onChange(of: library.create.modelsDirectory) {
-        Task { await library.refresh() }
-      }
+        .libraryErrorAlert()
+        .deleteCommand {
+          if let selected, library.canDelete(selected) { pendingDelete = selected }
+        }
+        .task {
+          if library.catalog.isEmpty { await library.refresh() }
+        }
+        .onChange(of: library.create.modelsDirectory) {
+          Task { await library.refresh() }
+        }
   }
 
   @ViewBuilder
@@ -163,7 +163,7 @@ struct ModelsView: View {
           "No models", systemImage: "shippingbox",
           description: Text("The model catalog couldn't be loaded."))
       }
-    } else if filtered.isEmpty && !search.isEmpty {
+    } else if filtered.isEmpty, !search.isEmpty {
       ContentUnavailableView.search(text: search)
     } else {
       Table(filtered, selection: $selection) {

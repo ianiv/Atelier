@@ -142,8 +142,8 @@ enum Finder {
     let size: CGSize
     let content: Content
 
-    func makeUIView(context: Context) -> Anchor { Anchor(size: size, content: content) }
-    func updateUIView(_ view: Anchor, context: Context) {}
+    func makeUIView(context _: Context) -> Anchor { Anchor(size: size, content: content) }
+    func updateUIView(_: Anchor, context _: Context) {}
 
     final class Anchor: UIView {
       let size: CGSize
@@ -156,7 +156,8 @@ enum Finder {
         super.init(frame: .zero)
       }
 
-      required init?(coder: NSCoder) { fatalError() }
+      @available(*, unavailable)
+      required init?(coder _: NSCoder) { fatalError() }
 
       override func didMoveToWindow() {
         super.didMoveToWindow()
@@ -194,7 +195,8 @@ enum Finder {
       super.init(nibName: nil, bundle: nil)
     }
 
-    required init?(coder: NSCoder) { fatalError() }
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) { fatalError() }
 
     override func viewDidLoad() {
       super.viewDidLoad()

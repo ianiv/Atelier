@@ -1,6 +1,6 @@
+import _MediaGenerationKit
 import SwiftUI
 import UniformTypeIdentifiers
-import _MediaGenerationKit
 
 struct CreateView: View {
   @Environment(CreateModel.self) private var model
@@ -46,9 +46,9 @@ struct CreateView: View {
         }
       }
       .inspector(isPresented: inspectorPresented) {
-      InspectorView()
-        .inspectorColumnWidth(min: 300, ideal: 340, max: 460)
-    }
+        InspectorView()
+          .inspectorColumnWidth(min: 300, ideal: 340, max: 460)
+      }
     #if DEBUG
       // The moodboard weight popover's layout check needs an image on the moodboard.
       .debugPresents("moodboardWeight", .constant(false)) {
@@ -70,23 +70,23 @@ struct CreateView: View {
       }
       .onChange(of: inspectorShown) { if narrow { shownWhileNarrow = inspectorShown } }
     #endif
-    // A plain toolbar, not a customizable `.toolbar(id:)`: AppKit crashes ("NSToolbarItemViewer's
-    // min/max size is nan") switching between a customizable toolbar and the other sections'
-    // `.searchable` toolbars.
-    .toolbar {
-      // The same project menu as History: new images save to the project picked here.
-      ToolbarItem(placement: .navigation) { ProjectMenu() }
-      // Generate lives in the prompt composer only; the toolbar keeps presets and the inspector
-      // toggle, each in its own glass capsule.
-      ToolbarItem(placement: .primaryAction) {
-        PresetMenu()
+      // A plain toolbar, not a customizable `.toolbar(id:)`: AppKit crashes ("NSToolbarItemViewer's
+      // min/max size is nan") switching between a customizable toolbar and the other sections'
+      // `.searchable` toolbars.
+      .toolbar {
+        // The same project menu as History: new images save to the project picked here.
+        ToolbarItem(placement: .navigation) { ProjectMenu() }
+        // Generate lives in the prompt composer only; the toolbar keeps presets and the inspector
+        // toggle, each in its own glass capsule.
+        ToolbarItem(placement: .primaryAction) {
+          PresetMenu()
+        }
+        ToolbarSpacer(.fixed, placement: .primaryAction)
+        ToolbarItem(placement: .primaryAction) {
+          Button("Inspector", systemImage: "sidebar.trailing") { inspectorPresented.wrappedValue.toggle() }
+            .help(inspectorPresented.wrappedValue ? "Hide Inspector (⌥⌘I)" : "Show Inspector (⌥⌘I)")
+        }
       }
-      ToolbarSpacer(.fixed, placement: .primaryAction)
-      ToolbarItem(placement: .primaryAction) {
-        Button("Inspector", systemImage: "sidebar.trailing") { inspectorPresented.wrappedValue.toggle() }
-          .help(inspectorPresented.wrappedValue ? "Hide Inspector (⌥⌘I)" : "Show Inspector (⌥⌘I)")
-      }
-    }
   }
 }
 

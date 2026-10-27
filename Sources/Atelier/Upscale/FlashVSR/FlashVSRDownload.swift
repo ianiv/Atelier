@@ -92,15 +92,15 @@ final class FlashVSRDownload {
     }
 
     func urlSession(
-      _ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64,
-      totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64
+      _: URLSession, downloadTask _: URLSessionDownloadTask, didWriteData _: Int64,
+      totalBytesWritten: Int64, totalBytesExpectedToWrite _: Int64
     ) {
       let progress = progress
       Task { @MainActor in progress(totalBytesWritten) }
     }
 
     func urlSession(
-      _ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL
+      _: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL
     ) {
       // The file only lasts until this returns.
       do {
@@ -114,7 +114,7 @@ final class FlashVSRDownload {
       }
     }
 
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+    func urlSession(_: URLSession, task _: URLSessionTask, didCompleteWithError error: Error?) {
       if let error = error ?? moveError {
         continuation?.resume(throwing: error)
       } else {

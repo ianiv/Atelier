@@ -25,9 +25,9 @@ final class AudioClip {
 
   init() {
     guard SessionState.isEnabled,
-      let file = try? FileManager.default.contentsOfDirectory(
-        at: Self.folder, includingPropertiesForKeys: nil
-      ).first(where: { $0.deletingPathExtension().lastPathComponent == "current" })
+          let file = try? FileManager.default.contentsOfDirectory(
+            at: Self.folder, includingPropertiesForKeys: nil
+          ).first(where: { $0.deletingPathExtension().lastPathComponent == "current" })
     else { return }
     load(file, name: UserDefaults.standard.string(forKey: "audioClipName") ?? file.lastPathComponent)
   }
@@ -76,7 +76,8 @@ final class AudioClip {
     let jobs = folder.appending(path: "Jobs", directoryHint: .isDirectory)
     let kept = Set(keeping.map(\.standardizedFileURL))
     for file in (try? FileManager.default.contentsOfDirectory(at: jobs, includingPropertiesForKeys: nil)) ?? []
-    where !kept.contains(file.standardizedFileURL) {
+      where !kept.contains(file.standardizedFileURL)
+    {
       try? FileManager.default.removeItem(at: file)
     }
   }
@@ -101,7 +102,7 @@ final class AudioClip {
     let format = file.processingFormat
     let frames = AVAudioFrameCount(file.length)
     guard frames > 0, let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames),
-      (try? file.read(into: buffer)) != nil, let channel = buffer.floatChannelData?[0]
+          (try? file.read(into: buffer)) != nil, let channel = buffer.floatChannelData?[0]
     else { return [] }
     let count = Int(buffer.frameLength)
     let perBin = max(count / bins, 1)

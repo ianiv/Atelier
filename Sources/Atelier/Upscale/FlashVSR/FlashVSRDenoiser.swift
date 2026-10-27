@@ -190,7 +190,7 @@ final class FlashVSRDenoiser {
     }
 
     // Compile with this size's shapes, then read the weights in.
-    func zeros<T: TensorNumeric>(_ shape: TensorShape, _ type: T.Type) -> DynamicGraph.Tensor<T> {
+    func zeros<T: TensorNumeric>(_ shape: TensorShape, _: T.Type) -> DynamicGraph.Tensor<T> {
       let tensor = graph.variable(.GPU(0), format: .NHWC, shape: shape, of: T.self)
       tensor.full(0)
       return tensor
@@ -496,7 +496,7 @@ final class FlashVSRDenoiser {
       var list: [Int] = []
       for j in 0..<S {
         let cy = j / nw, cx = j % nw
-        if cy >= ry - half && cy <= ry - half + L - 1 && cx >= rx - half && cx <= rx - half + L - 1 {
+        if cy >= ry - half, cy <= ry - half + L - 1, cx >= rx - half, cx <= rx - half + L - 1 {
           list.append(j)
         }
       }
@@ -763,7 +763,7 @@ final class FlashVSRDenoiser {
     _ q: DynamicGraph.Tensor<FloatType>, _ k: DynamicGraph.Tensor<FloatType>,
     _ v: DynamicGraph.Tensor<FloatType>, mask: [Bool], rows: Int, columns: Int, scale: Float
   ) -> DynamicGraph.Tensor<FloatType> {
-    if mask.allSatisfy({ $0 }) {
+    if mask.allSatisfy(\.self) {
       return ScaledDotProductAttention(scale: scale, flags: [.Float16])(queries: q, keys: k, values: v)
     }
     var blocks = Tensor<FloatType>(.CPU, .WC(rows, columns))
@@ -789,7 +789,7 @@ enum Profile {
   nonisolated(unsafe) static var enabled = ProcessInfo.processInfo.environment["FLASHVSR_PROFILE"] != nil
   nonisolated(unsafe) static var last = Date()
   nonisolated(unsafe) static var totals: [String: Double] = [:]
-  static func mark(_ name: String, graph: DynamicGraph? = nil) {
+  static func mark(_ name: String, graph _: DynamicGraph? = nil) {
     guard enabled else { return }
     let now = Date()
     totals[name, default: 0] += now.timeIntervalSince(last)

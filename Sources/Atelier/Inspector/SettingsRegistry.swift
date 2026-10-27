@@ -1,5 +1,5 @@
-import Foundation
 import _MediaGenerationKit
+import Foundation
 
 typealias PipelineConfiguration = MediaGenerationPipeline.Configuration
 
@@ -43,7 +43,7 @@ struct ModelTraits: Equatable {
 
 enum SettingSection: String, CaseIterable, Identifiable, Codable {
   case essentials, sampling, loras, hiresFix, refiner, upscaler, video, textEncoders, sdxl,
-    imageToImage, tiledDecoding, tiledDiffusion, teaCache, cfgZero, output, kandinsky
+       imageToImage, tiledDecoding, tiledDiffusion, teaCache, cfgZero, output, kandinsky
 
   var id: String { rawValue }
 
@@ -221,7 +221,7 @@ enum SettingsRegistry {
       keywords: keywords, applies: applies, get: { .string(String(describing: $0[keyPath: kp])) },
       set: { configuration, value in
         guard case .string(let name) = value,
-          let match = E.allCases.first(where: { String(describing: $0) == name })
+              let match = E.allCases.first(where: { String(describing: $0) == name })
         else { return }
         configuration[keyPath: kp] = match
       },
@@ -280,7 +280,7 @@ enum SettingsRegistry {
       get: { .object(["width": .number(Double($0.width)), "height": .number(Double($0.height))]) },
       set: { configuration, value in
         guard case .object(let size) = value,
-          let width = size["width"]?.doubleValue, let height = size["height"]?.doubleValue
+              let width = size["width"]?.doubleValue, let height = size["height"]?.doubleValue
         else { return }
         configuration.width = Int(width)
         configuration.height = Int(height)
@@ -310,7 +310,7 @@ enum SettingsRegistry {
           let weight = fields["weight"]?.doubleValue.map(Float.init) ?? 1
           var mode = LoRAMode.all
           if case .string(let name)? = fields["mode"],
-            let match = LoRAMode.allCases.first(where: { String(describing: $0) == name })
+             let match = LoRAMode.allCases.first(where: { String(describing: $0) == name })
           {
             mode = match
           }

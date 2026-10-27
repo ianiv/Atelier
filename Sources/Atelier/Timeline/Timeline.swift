@@ -73,7 +73,7 @@ struct TimelineLayout {
     var segments: [Segment] = []
     for entry in timeline.entries {
       guard let item = item(entry.clip), let clip = item.clip, clip.framesPerSecond > 0,
-        entry.start >= 0, entry.end <= clip.frames.count, entry.frameCount > 0
+            entry.start >= 0, entry.end <= clip.frames.count, entry.frameCount > 0
       else { continue }
       segments.append(
         Segment(
@@ -276,8 +276,8 @@ final class TimelineStore {
   func place(_ item: HistoryItem, at placement: TimelinePlacement) {
     load()
     guard placement.project == loadedProject, let clip = item.clip,
-      var timeline = timelines.first(where: { $0.id == placement.timeline }),
-      !timeline.entries.contains(where: { $0.placement == placement.id })
+          var timeline = timelines.first(where: { $0.id == placement.timeline }),
+          !timeline.entries.contains(where: { $0.placement == placement.id })
     else { return }
     // The clip's first frame repeats the one it started from, and a bridge's last frame the next
     // entry's first: both are trimmed so the joins don't stutter.

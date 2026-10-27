@@ -277,7 +277,7 @@ struct TimelineScreen: View {
   // MARK: - Toolbar
 
   @ToolbarContentBuilder
-  private func toolbar(_ layout: TimelineLayout) -> some ToolbarContent {
+  private func toolbar(_: TimelineLayout) -> some ToolbarContent {
     ToolbarItem(placement: .navigation) { ProjectMenu() }
     ToolbarItem(placement: .navigation) {
       Menu {
@@ -578,7 +578,7 @@ final class TimelinePlayback {
   @discardableResult
   private func takeFrame(at time: CMTime) -> Bool {
     guard let output, output.hasNewPixelBuffer(forItemTime: time),
-      let buffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil)
+          let buffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil)
     else { return false }
     let image = CIImage(cvPixelBuffer: buffer)
     guard let cgImage = context.createCGImage(image, from: image.extent) else { return false }

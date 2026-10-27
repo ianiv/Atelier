@@ -1,7 +1,7 @@
+import _MediaGenerationKit
 import DataModels
 import Foundation
 import ProjectFormat
-import _MediaGenerationKit
 
 /// Conversion between Atelier's settings dump (MGK's `Configuration` field by field) and Draw
 /// Things' `TensorHistoryNode`, following the engine's own bridge (`JSGenerationConfiguration` in
@@ -200,7 +200,7 @@ enum ProjectMapping {
       if case .string(let value)? = values[key], !value.isEmpty { return value }
       return nil
     }
-    func enumeration<E: CaseIterable>(_ key: String, _ type: E.Type) -> E? {
+    func enumeration<E: CaseIterable>(_ key: String, _: E.Type) -> E? {
       guard case .string(let name)? = values[key] else { return nil }
       return E.allCases.first { String(describing: $0) == name }
     }

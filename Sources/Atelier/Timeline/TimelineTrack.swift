@@ -209,22 +209,22 @@ struct TimelineTrack<Menu: View>: View {
       #if os(macOS)
         .pointerStyle(.columnResize)
       #endif
-      .highPriorityGesture(
-        DragGesture(minimumDistance: 1, coordinateSpace: .named(Self.space))
-          .onChanged { drag in
-            let origin = trimOrigin?.id == segment.entry.id ? trimOrigin! : segment.entry
-            trimOrigin = origin
-            let frames = Int((drag.translation.width / pointsPerSecond * segment.framesPerSecond).rounded())
-            if start {
-              trim = (origin.id, min(max(origin.start + frames, 0), origin.end - 1), origin.end)
-            } else {
-              trim = (origin.id, origin.start, min(max(origin.end + frames, origin.start + 1), segment.clip.frames.count))
+        .highPriorityGesture(
+          DragGesture(minimumDistance: 1, coordinateSpace: .named(Self.space))
+            .onChanged { drag in
+              let origin = trimOrigin?.id == segment.entry.id ? trimOrigin! : segment.entry
+              trimOrigin = origin
+              let frames = Int((drag.translation.width / pointsPerSecond * segment.framesPerSecond).rounded())
+              if start {
+                trim = (origin.id, min(max(origin.start + frames, 0), origin.end - 1), origin.end)
+              } else {
+                trim = (origin.id, origin.start, min(max(origin.end + frames, origin.start + 1), segment.clip.frames.count))
+              }
             }
-          }
-          .onEnded { _ in
-            trimOrigin = nil
-            commitTrim()
-          })
+            .onEnded { _ in
+              trimOrigin = nil
+              commitTrim()
+            })
   }
 
   // MARK: - Positions

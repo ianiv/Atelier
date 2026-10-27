@@ -1,5 +1,5 @@
-import Foundation
 import _MediaGenerationKit
+import Foundation
 
 /// App-side defaults for models the community config catalog doesn't cover yet.
 ///
@@ -34,7 +34,7 @@ enum ModelDefaults {
     // Hires fix runs a second sampling pass; keep it off unless the user turns it on.
     settings.hiresFix = false
     guard isGenericTemplate(configuration),
-      let fallback = fallbacks.first(where: { model.hasPrefix($0.prefix) })
+          let fallback = fallbacks.first(where: { model.hasPrefix($0.prefix) })
     else {
       return settings
     }

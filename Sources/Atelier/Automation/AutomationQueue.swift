@@ -63,7 +63,7 @@ extension Automation {
       check(
         queue.running != nil && queue.waiting.count == 2,
         "a count of 3 runs one and queues two (running \(queue.running != nil), waiting \(queue.waiting.count))")
-      let seeds = ([queue.running].compactMap { $0 } + queue.waiting).compactMap(\.request?.seed)
+      let seeds = ([queue.running].compactMap(\.self) + queue.waiting).compactMap(\.request?.seed)
       check(seeds == [100, 101, 102], "a set seed counts up: \(seeds)")
       check(model.seed == 100 && model.seedLocked, "the seed field and Random are left alone")
 

@@ -201,7 +201,7 @@ extension TimelineComposition {
     let height = CVPixelBufferGetHeight(buffer)
     let bytesPerRow = CVPixelBufferGetBytesPerRow(buffer)
     guard let base = CVPixelBufferGetBaseAddress(buffer),
-      let provider = CGDataProvider(data: Data(bytes: base, count: bytesPerRow * height) as CFData)
+          let provider = CGDataProvider(data: Data(bytes: base, count: bytesPerRow * height) as CFData)
     else { return nil }
     return CGImage(
       width: CVPixelBufferGetWidth(buffer), height: height, bitsPerComponent: 8, bitsPerPixel: 32,
@@ -244,7 +244,7 @@ extension TimelineComposition {
   /// The soundtrack, mixed as Export mixes it; false when there's none.
   private func writeSound(to url: URL) async throws -> Bool {
     guard try await !composition.loadTracks(withMediaType: .audio).isEmpty,
-      let session = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetAppleM4A)
+          let session = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetAppleM4A)
     else { return false }
     session.audioMix = audioMix
     try await session.export(to: url, as: .m4a)
@@ -256,16 +256,16 @@ extension TimelineComposition {
     let combined = AVMutableComposition()
     let videoAsset = AVURLAsset(url: video)
     guard let videoTrack = try await videoAsset.loadTracks(withMediaType: .video).first,
-      let track = combined.addMutableTrack(
-        withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid)
+          let track = combined.addMutableTrack(
+            withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid)
     else { throw ClipVideoError.noFrames }
     let videoRange = try await videoTrack.load(.timeRange)
     try track.insertTimeRange(videoRange, of: videoTrack, at: .zero)
     if let sound {
       let soundAsset = AVURLAsset(url: sound)
       if let soundTrack = try await soundAsset.loadTracks(withMediaType: .audio).first,
-        let track = combined.addMutableTrack(
-          withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
+         let track = combined.addMutableTrack(
+           withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
       {
         let range = try await soundTrack.load(.timeRange).intersection(videoRange)
         try track.insertTimeRange(range, of: soundTrack, at: .zero)
@@ -343,7 +343,7 @@ private final class UpscaledVideoWriter {
   func buffer() throws -> CVPixelBuffer {
     var buffer: CVPixelBuffer?
     guard let pool = adaptor.pixelBufferPool,
-      CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer) == kCVReturnSuccess, let buffer
+          CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer) == kCVReturnSuccess, let buffer
     else { throw writer.error ?? ClipVideoError.cantWrite }
     return buffer
   }

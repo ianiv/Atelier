@@ -152,7 +152,7 @@ final class JobQueue {
       if let line = job.line { lineTips[line] = tip }
     }
     if let inputTensorId, let request = job.request, request.canvasTensorId == nil,
-      let key = request.canvasKey
+       let key = request.canvasKey
     {
       savedInputs[key] = inputTensorId
     }

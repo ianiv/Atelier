@@ -1,3 +1,4 @@
+import _MediaGenerationKit
 import AudioConverter
 import CoreGraphics
 import DataModels
@@ -8,7 +9,6 @@ import ImageGenerator
 import LocalImageGenerator
 import ModelZoo
 import NNC
-import _MediaGenerationKit
 
 /// Owns a cached pipeline for the current model and runs one generation at a time.
 actor GenerationEngine {
@@ -141,7 +141,7 @@ actor GenerationEngine {
     await applyPerformanceSettings(using: pipeline)
     dropCachedModelsIfInputsChanged(request)
     if let video = request.configuration.videoModel,
-      let output = try await generateVideo(request, video: video, pipeline: pipeline, progress: progress)
+       let output = try await generateVideo(request, video: video, pipeline: pipeline, progress: progress)
     {
       return output
     }
@@ -192,9 +192,9 @@ actor GenerationEngine {
     progress: @escaping @Sendable (Progress) -> Void
   ) async throws -> Output? {
     guard let engine = Self.engineResources(),
-      let template = Self.reflectedChild(pipeline, "storage").flatMap({
-        Self.reflectedChild($0, "recommendedTemplate")
-      }) as? GenerationConfiguration
+          let template = Self.reflectedChild(pipeline, "storage").flatMap({
+            Self.reflectedChild($0, "recommendedTemplate")
+          }) as? GenerationConfiguration
     else { return nil }
     var settings = request.configuration
     settings.seed = request.seed
@@ -385,7 +385,7 @@ actor GenerationEngine {
       .generating(step: min(max(step + 1, 1), max(totalSteps, 1)), totalSteps: totalSteps)
     case .imageDecoded: .decoding
     case .secondPassImageEncoded, .secondPassSampling, .secondPassImageDecoded, .faceRestored,
-      .imageUpscaled:
+         .imageUpscaled:
       .postprocessing
     }
   }
@@ -407,7 +407,7 @@ actor GenerationEngine {
     let storage = reflectedChild(MediaGenerationEnvironment.default, "storage")
     let resources = storage.flatMap { reflectedChild($0, "cachedLocalResources") }
     guard let generator = resources.flatMap({ reflectedChild($0, "generator") }) as? LocalImageGenerator,
-      let queue = resources.flatMap({ reflectedChild($0, "queue") }) as? DispatchQueue
+          let queue = resources.flatMap({ reflectedChild($0, "queue") }) as? DispatchQueue
     else { return nil }
     return (generator, queue)
   }
@@ -442,15 +442,15 @@ actor GenerationEngine {
   /// (`ModelPreloader.retrieveUNet` doesn't compare them). So when the images sent change, empty
   /// both: set the weights cache and "keep model in memory" to 0 and back.
   private func dropCachedModelsIfInputsChanged(_ request: Request) {
-    let images = [request.canvas].compactMap { $0 } + request.moodboard.map(\.image)
+    let images = [request.canvas].compactMap(\.self) + request.moodboard.map(\.image)
     let inputs = (
       model: request.model, canvas: request.canvas != nil,
       sizes: images.map { [$0.width, $0.height] }
     )
     defer { lastImageInputs = inputs }
     guard let last = lastImageInputs, last.model == inputs.model,
-      last.canvas != inputs.canvas || last.sizes != inputs.sizes,
-      var dictionary = Self.engineWorkspace()?.dictionary
+          last.canvas != inputs.canvas || last.sizes != inputs.sizes,
+          var dictionary = Self.engineWorkspace()?.dictionary
     else { return }
     // The preloader applies each change in order on the generation queue, ahead of this run.
     for key in ["total_weights_cache", "keep_model_in_memory"] {
@@ -518,9 +518,9 @@ actor GenerationEngine {
     _ preview: MediaGenerationPipeline.Preview, size: CGSize
   ) -> CGImage? {
     guard let tensor = reflectedChild(preview, "tensor") as? Tensor<FloatType>,
-      let version = reflectedChild(preview, "version") as? ModelVersion,
-      let image = ImageConverter.cgImages(fromLatent: tensor, canUseTAESD: false, version: version)
-        .0.first
+          let version = reflectedChild(preview, "version") as? ModelVersion,
+          let image = ImageConverter.cgImages(fromLatent: tensor, canUseTAESD: false, version: version)
+            .0.first
     else { return nil }
     return scaled(image, to: size) ?? image
   }
@@ -528,10 +528,10 @@ actor GenerationEngine {
   private nonisolated static func scaled(_ image: CGImage, to size: CGSize) -> CGImage? {
     let width = Int(size.width), height = Int(size.height)
     guard width > 0, height > 0,
-      let context = CGContext(
-        data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
-        space: CGColorSpaceCreateDeviceRGB(),
-        bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+          let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
     else { return nil }
     context.interpolationQuality = .medium
     context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))

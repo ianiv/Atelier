@@ -1,10 +1,10 @@
 #if os(macOS)
+import _MediaGenerationKit
 import CoreGraphics
 import Foundation
 import ImageIO
 import ModelZoo
 import Observation
-import _MediaGenerationKit
 
 /// The tools Atelier offers agents over MCP. Generation runs through Create like a press of
 /// Generate (progress and previews on the canvas, saved to the current project, one run at a
@@ -428,7 +428,7 @@ final class AgentTools {
       let url = URL(fileURLWithPath: (saveTo as NSString).expandingTildeInPath)
       var isDirectory: ObjCBool = false
       let exists = fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory)
-      if !(exists && isDirectory.boolValue) && !saveTo.hasSuffix("/") {
+      if !(exists && isDirectory.boolValue), !saveTo.hasSuffix("/") {
         try fileManager.createDirectory(
           at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         return url.pathExtension.isEmpty ? url.appendingPathExtension(ext) : url

@@ -1,7 +1,7 @@
 import ImageIO
 import QuickLook
-import UniformTypeIdentifiers
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct HistoryView: View {
   @Environment(HistoryStore.self) private var history
@@ -142,7 +142,7 @@ struct HistoryView: View {
         pendingDelete?.count ?? 0 > 1
           ? "Delete \(pendingDelete?.count ?? 0) items from the project?"
           : pendingDelete?.first?.isVideo == true
-            ? "Delete this video from the project?" : "Delete this image from the project?",
+          ? "Delete this video from the project?" : "Delete this image from the project?",
         isPresented: Binding(
           get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
         presenting: pendingDelete
@@ -190,46 +190,46 @@ struct HistoryView: View {
       ContentUnavailableView.search(text: search)
     } else {
       ScrollViewReader { scroller in
-      ScrollView {
-        Group {
-          if layout == .graph { graph } else { gridCells }
+        ScrollView {
+          Group {
+            if layout == .graph { graph } else { gridCells }
+          }
+          .dragContainer(for: PNGExport.self) { ids in
+            ids.compactMap { history.item(tensorId: $0).map(history.dragExport) }
+          }
+          .dragContainerSelection(selectedItems.map(\.tensorId))
         }
-        .dragContainer(for: PNGExport.self) { ids in
-          ids.compactMap { history.item(tensorId: $0).map(history.dragExport) }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+          // The adaptive grid's column count: 150 pt minimum, 10 pt spacing, 12 pt padding.
+          columns = max(1, Int((size.width - 24 + 10) / 160))
+          viewportHeight = size.height
         }
-        .dragContainerSelection(selectedItems.map(\.tensorId))
-      }
-      .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
-        // The adaptive grid's column count: 150 pt minimum, 10 pt spacing, 12 pt padding.
-        columns = max(1, Int((size.width - 24 + 10) / 160))
-        viewportHeight = size.height
-      }
-      .focusable()
-      .focusEffectDisabled()
-      .focused($gridFocused)
-      .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow]) { press in
-        let rows = layout == .graph ? 1 : columns
-        let offset = switch press.key {
-        case .leftArrow: -1
-        case .rightArrow: 1
-        case .upArrow: -rows
-        default: rows
+        .focusable()
+        .focusEffectDisabled()
+        .focused($gridFocused)
+        .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow]) { press in
+          let rows = layout == .graph ? 1 : columns
+          let offset = switch press.key {
+          case .leftArrow: -1
+          case .rightArrow: 1
+          case .upArrow: -rows
+          default: rows
+          }
+          moveSelection(by: offset, extending: press.modifiers.contains(.shift))
+          if let anchor { withAnimation { scroller.scrollTo(anchor) } }
+          return .handled
         }
-        moveSelection(by: offset, extending: press.modifiers.contains(.shift))
-        if let anchor { withAnimation { scroller.scrollTo(anchor) } }
-        return .handled
-      }
-      .onKeyPress(keys: ["a"]) { press in
-        guard press.modifiers == .command else { return .ignored }
-        selection = Set(filtered.map(\.tensorId))
-        return .handled
-      }
-      .onKeyPress(.space) {
-        toggleQuickLook()
-        return .handled
-      }
-      .quickLookPreview($quickLookURL)
-      .background(Color.underPageBackground)
+        .onKeyPress(keys: ["a"]) { press in
+          guard press.modifiers == .command else { return .ignored }
+          selection = Set(filtered.map(\.tensorId))
+          return .handled
+        }
+        .onKeyPress(.space) {
+          toggleQuickLook()
+          return .handled
+        }
+        .quickLookPreview($quickLookURL)
+        .background(Color.underPageBackground)
       }
     }
   }
@@ -446,7 +446,7 @@ struct HistoryView: View {
   private func extend(to id: Int64) {
     let items = filtered
     guard let from = items.firstIndex(where: { $0.tensorId == anchor }),
-      let to = items.firstIndex(where: { $0.tensorId == id })
+          let to = items.firstIndex(where: { $0.tensorId == id })
     else { return selectOnly(id) }
     selection.formUnion(items[min(from, to)...max(from, to)].map(\.tensorId))
     picks += 1
@@ -1102,7 +1102,7 @@ struct HistoryGraphRow: View {
             modelName(sidecar.model),
             item.clip.map { "Video, " + $0.duration.formatted(.number.precision(.fractionLength(1))) + " s" },
             sidecar.createdAt.formatted(date: .abbreviated, time: .shortened),
-          ].compactMap { $0 }.joined(separator: " · "))
+          ].compactMap(\.self).joined(separator: " · "))
           .font(.caption)
           .foregroundStyle(.secondary)
           .lineLimit(1)

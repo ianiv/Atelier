@@ -1,9 +1,9 @@
+import _MediaGenerationKit
 import Diffusion
 import Foundation
 import ModelOp
 import ModelZoo
 import Observation
-import _MediaGenerationKit
 
 /// Models and LoRAs in the models directory: the download catalog, downloads, model and LoRA
 /// imports, and deletes.
@@ -409,7 +409,7 @@ final class ModelLibrary {
   /// registers it as "<name> (8-bit)" or "(8-bit S)" with the same specification.
   func make8BitCopy(_ model: MediaGenerationResolvedModel, _ format: MOSSImporter.EightBit) {
     guard canMake8BitCopy(model, format),
-      var specification = ModelZoo.specificationForModel(model.file)
+          var specification = ModelZoo.specificationForModel(model.file)
     else { return }
     errorMessage = nil
     let output = Self.eightBitFile(for: model.file, format)
@@ -497,7 +497,7 @@ final class ModelLibrary {
     ]
     let named = Set(
       [specification.autoencoder, specification.textEncoder, specification.clipEncoder]
-        .compactMap { $0 } + (specification.additionalClipEncoders ?? []))
+        .compactMap(\.self) + (specification.additionalClipEncoders ?? []))
     return suffixes.map { stem + $0 }.filter(named.contains)
   }
 
@@ -507,7 +507,7 @@ final class ModelLibrary {
     backUpModelRegistryOnce()
     let url = directory.appendingPathComponent("custom.json")
     if let data = try? Data(contentsOf: url),
-      let entries = try JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+       let entries = try JSONSerialization.jsonObject(with: data) as? [[String: Any]]
     {
       let remaining = entries.filter { $0["file"] as? String != file }
       try JSONSerialization.data(
@@ -546,7 +546,7 @@ final class ModelLibrary {
   nonisolated static func loraFamilies(forModel family: String?, refiner: String? = nil)
     -> Set<String>
   {
-    var families = Set([family, refiner].compactMap { $0 })
+    var families = Set([family, refiner].compactMap(\.self))
     if families.contains(ModelZoo.humanReadableNameForVersion(.kandinsky21)) {
       families.insert(ModelZoo.humanReadableNameForVersion(.v1))
     }
@@ -655,7 +655,7 @@ final class ModelLibrary {
     let trimmedName = item.name.trimmingCharacters(in: .whitespacesAndNewlines)
     let name =
       trimmedName.isEmpty
-      ? "\(stem) (\(ModelZoo.humanReadableNameForVersion(detected)))" : trimmedName
+        ? "\(stem) (\(ModelZoo.humanReadableNameForVersion(detected)))" : trimmedName
     register(
       LoRAZoo.Specification(
         name: name, file: file, prefix: item.prefix, version: detected,
@@ -750,7 +750,7 @@ final class ModelLibrary {
   private static func readCustomModels(in directory: URL) -> [String] {
     struct Entry: Decodable { var file: String }
     guard let data = try? Data(contentsOf: directory.appendingPathComponent("custom.json")),
-      let entries = try? JSONDecoder().decode([Lenient<Entry>].self, from: data)
+          let entries = try? JSONDecoder().decode([Lenient<Entry>].self, from: data)
     else { return [] }
     return entries.compactMap(\.value?.file)
   }
@@ -763,8 +763,8 @@ final class ModelLibrary {
     decoder.keyDecodingStrategy = .convertFromSnakeCase
     let custom =
       (try? Data(contentsOf: directory.appendingPathComponent("custom.json")))
-      .flatMap { try? decoder.decode([Lenient<ModelZoo.Specification>].self, from: $0) }?
-      .compactMap(\.value) ?? []
+        .flatMap { try? decoder.decode([Lenient<ModelZoo.Specification>].self, from: $0) }?
+        .compactMap(\.value) ?? []
     let files = Set(custom.map(\.file))
     ModelZoo.availableSpecifications =
       ModelZoo.builtinSpecifications.filter { !files.contains($0.file) } + custom
@@ -774,7 +774,7 @@ final class ModelLibrary {
     let decoder = JSONDecoder()
     decoder.keyDecodingStrategy = .convertFromSnakeCase
     guard let data = try? Data(contentsOf: directory.appendingPathComponent("custom_lora.json")),
-      let entries = try? decoder.decode([Lenient<LoRAZoo.Specification>].self, from: data)
+          let entries = try? decoder.decode([Lenient<LoRAZoo.Specification>].self, from: data)
     else { return [] }
     return entries.compactMap(\.value)
   }

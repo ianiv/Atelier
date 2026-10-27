@@ -1,11 +1,11 @@
+import _MediaGenerationKit
 import AVFoundation
 import CoreGraphics
-import Foundation
 import Diffusion
+import Foundation
 import ModelZoo
 import Observation
 import UserNotifications
-import _MediaGenerationKit
 
 /// State behind the Create screen: the selected model, the inspector values, and the running job.
 @MainActor
@@ -249,7 +249,7 @@ final class CreateModel {
     if ModelZoo.versionForModel(file) == .qwenImage2_1 { return true }
     let modifiers =
       [ModelZoo.modifierForModel(file)]
-      + (settings?.loras ?? []).compactMap(\.file).map(LoRAZoo.modifierForModel)
+        + (settings?.loras ?? []).compactMap(\.file).map(LoRAZoo.modifierForModel)
     return modifiers.contains {
       switch $0 {
       case .kontext, .kontextKv, .qwenimageEditPlus, .qwenimageEdit2511, .fl2va, .ref2va: true
@@ -375,7 +375,7 @@ final class CreateModel {
       negativePrompt = session.negativePrompt
       if let seed = session.seed { self.seed = seed }
       if let project = session.imageProject,
-        session.imageTensorId != nil || session.imageStep != nil
+         session.imageTensorId != nil || session.imageStep != nil
       {
         Task {
           var tensorId = session.imageTensorId
@@ -383,7 +383,7 @@ final class CreateModel {
             tensorId = await history.tensorId(at: step, in: project)
           }
           guard let tensorId, let restoredImage = await history.image(tensorId: tensorId, in: project),
-            image == nil
+                image == nil
           else { return }
           lastSavedTensorId = tensorId
           imageStep = (project, tensorId)
@@ -495,7 +495,7 @@ final class CreateModel {
       guard loadImage else { return }
       if restoreInput, item.inputTensorId != nil {
         if let input = await history.input(of: item, in: projectName),
-          let inputTensorId = item.inputTensorId
+           let inputTensorId = item.inputTensorId
         {
           guard imageStep?.tensorId == item.tensorId else { return }
           // The input becomes the current step, so a rerun branches beside this one.
@@ -517,7 +517,7 @@ final class CreateModel {
       moodboard.replace(with: references)
       // A video run's audio file comes back too.
       if let samples = await history.audioInput(of: item),
-        let rate = VideoModel(model: item.sidecar.model)?.audioSampleRate
+         let rate = VideoModel(model: item.sidecar.model)?.audioSampleRate
       {
         try? audio.set(samples: samples, sampleRate: rate, name: "Audio from \(history.fileName(for: item)).wav")
       }
@@ -770,13 +770,13 @@ final class CreateModel {
         "\(ObjectIdentifier(source.image)) \(source.scale ?? 0) \(source.offset) \(settings.width)x\(settings.height)"
       // The canvas is exactly its step's image when that's fitted at the output size.
       if !source.isImported, !source.isPreview, let step = source.step, step.project == history.project.name,
-        source.image.width == settings.width, source.image.height == settings.height,
-        source.scale == nil || source.scale == 1, source.offset == .zero
+         source.image.width == settings.width, source.image.height == settings.height,
+         source.scale == nil || source.scale == 1, source.offset == .zero
       {
         base.canvasTensorId = step.tensorId
       }
       if let pending = pendingPlacement, source.step?.tensorId == pending.frameTensorId,
-        source.step?.project == pending.project, !source.isPreview
+         source.step?.project == pending.project, !source.isPreview
       {
         base.placement = pending
         pendingPlacement = nil
@@ -921,7 +921,7 @@ final class CreateModel {
   }
 
   /// Runs an export job, its progress in the status bar like a generation's.
-  private func run(_ export: TimelineExportJob, id: UUID) {
+  private func run(_ export: TimelineExportJob, id _: UUID) {
     errorMessage = nil
     phase = .running("Exporting “\(export.title)” upscaled…")
     step = 0

@@ -97,7 +97,7 @@ enum SavedQueue {
   /// The saved jobs, then forgets them. Step ids only carry over in the same project.
   static func load(project: String, from folder: URL = folder) -> [Job] {
     guard let data = try? Data(contentsOf: folder.appending(path: "index.json")),
-      let entries = try? JSONDecoder().decode([Entry].self, from: data)
+          let entries = try? JSONDecoder().decode([Entry].self, from: data)
     else { return [] }
     let jobs = entries.compactMap { entry -> Job? in
       // An upscale's source clip is a step of its own project.

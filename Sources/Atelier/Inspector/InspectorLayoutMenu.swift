@@ -1,5 +1,5 @@
-import SwiftUI
 import _MediaGenerationKit
+import SwiftUI
 
 struct LayoutMenu: View {
   @Binding var customizing: Bool
@@ -108,8 +108,8 @@ struct CustomizeInspectorSheet: View {
             Toggle("Starts expanded", isOn: Binding(
               get: { expanded.contains(section.id) },
               set: { if $0 { expanded.insert(section.id) } else { expanded.remove(section.id) } }))
-            .checkboxToggleStyle()
-            .padding(10)
+              .checkboxToggleStyle()
+              .padding(10)
             List {
               ForEach(binding(section)) { $item in
                 Toggle(item.title, isOn: $item.shown)
@@ -151,7 +151,7 @@ struct CustomizeInspectorSheet: View {
       let (shown, tucked) = layout.ordered(section)
       items[section] =
         shown.map { Item(id: $0.id, title: $0.title, shown: true) }
-        + tucked.map { Item(id: $0.id, title: $0.title, shown: false) }
+          + tucked.map { Item(id: $0.id, title: $0.title, shown: false) }
     }
   }
 

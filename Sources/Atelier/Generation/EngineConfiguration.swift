@@ -1,7 +1,7 @@
+import _MediaGenerationKit
 import DataModels
 import Foundation
 import ScriptDataModels
-import _MediaGenerationKit
 
 extension PipelineConfiguration {
   /// The engine's own configuration for these settings, as MGK builds it before a run

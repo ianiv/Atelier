@@ -120,15 +120,15 @@ struct ContentView: View {
         columns = wide ? .all : .detailOnly
       }
     #endif
-    // Open Image… and Add Images…, from the menus, the canvas and the moodboard.
-    .onChange(of: create.imageImport, initial: true) {
-      guard let target = create.imageImport else { return }
-      create.imageImport = nil
-      fileDialogs.open = FileDialogs.Open(types: [.image], multiple: target == .moodboard) { urls in
-        create.importImages(urls, into: target)
+      // Open Image… and Add Images…, from the menus, the canvas and the moodboard.
+      .onChange(of: create.imageImport, initial: true) {
+        guard let target = create.imageImport else { return }
+        create.imageImport = nil
+        fileDialogs.open = FileDialogs.Open(types: [.image], multiple: target == .moodboard) { urls in
+          create.importImages(urls, into: target)
+        }
       }
-    }
-    .fileDialogs(fileDialogs)
+      .fileDialogs(fileDialogs)
     #if os(iOS)
       .onChange(of: create.isRunning, initial: true) {
         AppLifecycle.keepScreenAwake(create.isRunning)
@@ -150,8 +150,8 @@ struct ContentView: View {
         }
       }
     #endif
-    // For menu commands, which act on the key window's undo stack.
-    .focusedSceneValue(\.windowUndoManager, undoManager)
+      // For menu commands, which act on the key window's undo stack.
+      .focusedSceneValue(\.windowUndoManager, undoManager)
   }
 }
 

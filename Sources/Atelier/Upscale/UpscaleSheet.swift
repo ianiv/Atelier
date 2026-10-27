@@ -138,7 +138,7 @@ struct UpscaleControls: View {
   var body: some View {
     let size =
       method.map { ClipUpscale.outputSize(width: width, height: height, scale: scale, method: $0) }
-      ?? (width: width, height: height)
+        ?? (width: width, height: height)
     // Read while it changes, so the controls follow the download.
     let downloading = download.variant
     let missing = FlashVSRFiles.installed(variant) == nil
@@ -153,8 +153,8 @@ struct UpscaleControls: View {
         method == .flashVSR
           ? "FlashVSR+ restores detail as one stream, steady from frame to frame. It takes a few seconds a frame."
           : method == .system
-            ? "Apple Super Resolution runs on the Neural Engine in seconds. macOS downloads its model the first time."
-            : "At its own size."
+          ? "Apple Super Resolution runs on the Neural Engine in seconds. macOS downloads its model the first time."
+          : "At its own size."
       )
       .font(.caption).foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)

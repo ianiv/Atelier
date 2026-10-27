@@ -1,3 +1,4 @@
+import _MediaGenerationKit
 import CoreGraphics
 import CoreTransferable
 import Diffusion
@@ -7,7 +8,6 @@ import ModelZoo
 import NNC
 import Observation
 import UniformTypeIdentifiers
-import _MediaGenerationKit
 
 /// One generated image: a step in the current project.
 struct HistoryItem: Identifiable, Hashable {
@@ -649,7 +649,7 @@ final class HistoryStore {
     for (index, entry) in legacy.reversed().enumerated() {
       let tensor = await Task.detached { () -> Tensor<FloatType>? in
         guard let source = CGImageSourceCreateWithURL(entry.png as CFURL, nil),
-          let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
         else { return nil }
         return ImageTensor.tensor(from: image)
       }.value
@@ -681,8 +681,8 @@ final class HistoryStore {
       for json in files where json.pathExtension == "json" {
         let png = json.deletingPathExtension().appendingPathExtension("png")
         guard fileManager.fileExists(atPath: png.path),
-          let data = try? Data(contentsOf: json),
-          let sidecar = try? decoder.decode(Sidecar.self, from: data)
+              let data = try? Data(contentsOf: json),
+              let sidecar = try? decoder.decode(Sidecar.self, from: data)
         else { continue }
         items.append((png, sidecar))
       }
@@ -726,7 +726,7 @@ enum PNGText {
         // Then the language tag and translated keyword, each NUL-terminated.
         let rest = body.dropFirst(prefix.count)
         guard let language = rest.firstIndex(of: 0),
-          let translated = rest[(language + 1)...].firstIndex(of: 0)
+              let translated = rest[(language + 1)...].firstIndex(of: 0)
         else { return nil }
         return String(decoding: rest[(translated + 1)...], as: UTF8.self)
       }
@@ -835,7 +835,7 @@ struct PNGExport: Transferable, Identifiable {
   var name: String
   var data: @Sendable () async throws -> Data
   /// Set for a clip: its video file.
-  var video: (@Sendable () async throws -> URL)? = nil
+  var video: (@Sendable () async throws -> URL)?
 
   static var transferRepresentation: some TransferRepresentation {
     FileRepresentation(exportedContentType: .mpeg4Movie) { export in

@@ -1,9 +1,9 @@
 #if os(macOS)
+import _MediaGenerationKit
 import AVFoundation
 import ImageIO
 import NNC
 import SwiftUI
-import _MediaGenerationKit
 
 /// Launch-argument driver for scripted checks: fills the Create screen, presses Generate, logs
 /// progress to stdout and snapshots the window. Does nothing unless `--generate` is passed.
@@ -352,7 +352,7 @@ enum Automation {
       guard
         let item = target == "latest"
           ? model.history.items.first
-          : model.history.items.first(where: { "\($0.id.logicalTime)" == target })
+          : model.history.items.first(where: { target == "\($0.id.logicalTime)" })
       else {
         log("no history item \(target)")
         return finish()
@@ -378,7 +378,7 @@ enum Automation {
         log("loaded: model \(model.selectedModel ?? "?") seed \(model.seed) locked \(model.seedLocked) registry fields differing from sidecar: \(mismatched)")
         model.generate()
       }
-      while !model.isBusy && model.lastSavedStep == previous && model.errorMessage == nil {
+      while !model.isBusy, model.lastSavedStep == previous, model.errorMessage == nil {
         try? await Task.sleep(for: .milliseconds(50))
       }
       while model.isBusy { try? await Task.sleep(for: .milliseconds(100)) }

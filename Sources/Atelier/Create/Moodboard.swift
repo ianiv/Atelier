@@ -34,8 +34,8 @@ final class Moodboard {
 
   init() {
     guard SessionState.isEnabled,
-      let data = try? Data(contentsOf: Self.folder.appending(path: "index.json")),
-      let entries = try? JSONDecoder().decode([Entry].self, from: data)
+          let data = try? Data(contentsOf: Self.folder.appending(path: "index.json")),
+          let entries = try? JSONDecoder().decode([Entry].self, from: data)
     else { return }
     items = entries.compactMap { entry in
       ImageLoader.image(at: Self.folder.appending(path: "\(entry.id).png"), maxSide: Self.maxSide)
@@ -171,10 +171,10 @@ extension CanvasState {
   func render(_ image: CGImage, size: CGSize) -> CGImage? {
     let width = Int(size.width), height = Int(size.height)
     guard width > 0, height > 0,
-      let context = CGContext(
-        data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
-        space: CGColorSpace(name: CGColorSpace.sRGB)!,
-        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+          let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
     else { return nil }
     let fit = min(size.width / Double(image.width), size.height / Double(image.height))
     let zoom = scale ?? fit
@@ -325,11 +325,11 @@ private struct MoodboardThumbnail: View {
         .onHover { hovering = $0 }
       Text(
         [role, Double(item.weight).formatted(.percent.precision(.fractionLength(0)))]
-          .compactMap { $0 }.joined(separator: " · ")
+          .compactMap(\.self).joined(separator: " · ")
       )
-        .font(.caption2)
-        .monospacedDigit()
-        .foregroundStyle(.secondary)
+      .font(.caption2)
+      .monospacedDigit()
+      .foregroundStyle(.secondary)
     }
     .help("Click to set its weight. 0% leaves it out of the next image.")
     .popover(isPresented: $editing, arrowEdge: .leading) {

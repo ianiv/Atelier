@@ -1,5 +1,5 @@
-import SwiftUI
 import _MediaGenerationKit
+import SwiftUI
 
 struct LoRAEditor: View {
   let descriptor: SettingDescriptor
@@ -54,7 +54,7 @@ struct LoRAEditor: View {
             Text(name(item.file)).lineLimit(1).truncationMode(.middle)
               .help(item.file)
             if let lora = library.loras.first(where: { $0.file == item.file }),
-              !compatible.contains(lora.family)
+               !compatible.contains(lora.family)
             {
               Image(systemName: "exclamationmark.triangle").foregroundStyle(.yellow)
                 .help("Made for \(lora.family), so it's skipped with this model.")
@@ -147,13 +147,13 @@ struct LoRAPicker: View {
       if catalog.isEmpty {
         Text("No LoRAs yet. Import them in the LoRAs section.")
           .foregroundStyle(.secondary).padding()
-      } else if fitting.isEmpty && !showAll {
+      } else if fitting.isEmpty, !showAll {
         Text("No LoRAs for \(modelFamily ?? "this model")\(query.isEmpty ? "" : " match").")
           .foregroundStyle(.secondary).padding()
       }
       List {
         ForEach(fitting) { lora in row(lora, enabled: true) }
-        if showAll && !others.isEmpty {
+        if showAll, !others.isEmpty {
           Section("For other models (skipped with this one)") {
             ForEach(others) { lora in row(lora, enabled: false) }
           }
@@ -165,7 +165,7 @@ struct LoRAPicker: View {
         Toggle("Show LoRAs for other models", isOn: $showAll)
           .controlSize(.small)
         Spacer()
-        if !showAll && !others.isEmpty {
+        if !showAll, !others.isEmpty {
           Text("\(others.count) hidden").font(.caption).foregroundStyle(.secondary)
         }
       }

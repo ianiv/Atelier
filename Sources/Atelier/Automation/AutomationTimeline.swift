@@ -111,7 +111,7 @@ extension Automation {
       let store = model.timelines
       let undo = UndoManager()
       undo.groupsByEvent = false
-      @MainActor func step(_ name: String, _ body: () -> Void) {
+      @MainActor func step(_: String, _ body: () -> Void) {
         undo.beginUndoGrouping()
         body()
         undo.endUndoGrouping()

@@ -1,5 +1,5 @@
-import SwiftUI
 import _MediaGenerationKit
+import SwiftUI
 
 /// The settings inspector: model, search, the current layout's sections, the Changed group and a
 /// reset. Built from a lazy stack rather than a grouped Form: Form re-laid out every row on each
@@ -86,7 +86,7 @@ struct InspectorView: View {
     let matches = SettingsRegistry.all.filter { $0.matches(query) }
     let traits = model.traits
     let matchesSeed = "seed".localizedCaseInsensitiveContains(query)
-    if matches.isEmpty && !matchesSeed {
+    if matches.isEmpty, !matchesSeed {
       Text("No settings match “\(query)”.").foregroundStyle(.secondary)
     }
     if matchesSeed {
@@ -124,10 +124,10 @@ struct InspectorGroup<Header: View, Content: View>: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 10)
-      .padding(.vertical, 4)
-      .background(
-        Color.primary.opacity(0.05),
-        in: ConcentricRectangle(corners: .concentric(minimum: .fixed(8)), isUniform: true))
+        .padding(.vertical, 4)
+        .background(
+          Color.primary.opacity(0.05),
+          in: ConcentricRectangle(corners: .concentric(minimum: .fixed(8)), isUniform: true))
       }
     }
   }
@@ -360,7 +360,7 @@ struct SettingRow: View {
   private func fileOptions(_ source: (SettingContext) -> [SettingOption]) -> [SettingOption] {
     var options = source(model.settingContext)
     if case .string(let file)? = model.value(descriptor),
-      !options.contains(where: { $0.value == .string(file) })
+       !options.contains(where: { $0.value == .string(file) })
     {
       options.append(SettingOption(value: .string(file), title: file))
     }

@@ -1,3 +1,4 @@
+import _MediaGenerationKit
 import CoreGraphics
 import DataModels
 import Dflat
@@ -8,7 +9,6 @@ import NNC
 import ProjectFormat
 import SQLiteDflat
 import UniformTypeIdentifiers
-import _MediaGenerationKit
 
 /// A canvas layer (`tensordata`); the bare name clashes with another module's `TensorData`.
 private typealias Layer = ProjectFormat.TensorData
@@ -94,7 +94,7 @@ final class Project: @unchecked Sendable {
   func input(of id: StepID, tensorId: Int64) -> (id: StepID, image: CGImage)? {
     let tree = tree(items: false)
     guard let parent = tree.steps[id]?.parent, tree.steps[parent]?.tensorId == tensorId,
-      let image = self.tensor(id: tensorId).flatMap(ImageTensor.cgImage(from:))
+          let image = self.tensor(id: tensorId).flatMap(ImageTensor.cgImage(from:))
     else { return nil }
     return (parent, image)
   }
@@ -182,7 +182,7 @@ final class Project: @unchecked Sendable {
       ).first?.data
     }
     guard let data, !data.isEmpty,
-      let source = CGImageSourceCreateWithData(Data(data) as CFData, nil)
+          let source = CGImageSourceCreateWithData(Data(data) as CFData, nil)
     else { return nil }
     return CGImageSourceCreateImageAtIndex(source, 0, nil)
   }
@@ -537,7 +537,7 @@ final class Project: @unchecked Sendable {
         if node.tensorId > 0 { names.append("tensor_history_\(node.tensorId)") }
         // As deleteHistory: the clip row and its soundtrack go with the clip's last frame.
         if node.clipId >= 0, !others.contains(where: { $0.clipId == node.clipId }),
-          let clip = workspace.fetch(for: Clip.self).where(Clip.clipId == node.clipId).first
+           let clip = workspace.fetch(for: Clip.self).where(Clip.clipId == node.clipId).first
         {
           if let request = ClipChangeRequest.deletionRequest(clip) { transaction.try(submit: request) }
           let otherClips = workspace.fetch(for: Clip.self).all().filter { $0.clipId != node.clipId }
@@ -546,7 +546,7 @@ final class Project: @unchecked Sendable {
           }
         }
         if let inputAudioId = ProjectMapping.Profile(node.profileData)?.inputAudioId,
-          !others.contains(where: { ProjectMapping.Profile($0.profileData)?.inputAudioId == inputAudioId })
+           !others.contains(where: { ProjectMapping.Profile($0.profileData)?.inputAudioId == inputAudioId })
         {
           names.append("audio_\(inputAudioId)")
         }
@@ -621,8 +621,8 @@ final class Project: @unchecked Sendable {
       let maxLineage = newest.lineage
       // The greatest lineage at the parent's step number: Draw Things' "sacred" one there.
       if parent.logicalTime > 0,
-        let sacred = rows.nodes.filter({ $0.logicalTime == parent.logicalTime }).map(\.lineage).max(),
-        parent.lineage < sacred
+         let sacred = rows.nodes.filter({ $0.logicalTime == parent.logicalTime }).map(\.lineage).max(),
+         parent.lineage < sacred
       {
         for node in rows.nodes where node.lineage == parent.lineage {
           moved[StepID(lineage: node.lineage, logicalTime: node.logicalTime)] = StepID(
@@ -829,13 +829,13 @@ struct ProjectTree: @unchecked Sendable {
       if let recorded = profiles[id]?.parentTensorId, recorded == 0 {
         parent = nil
       } else if let recorded = profiles[id]?.parentTensorId, let ruleParent,
-        allLayerTensors[ruleParent]?.contains(recorded) == true
+                allLayerTensors[ruleParent]?.contains(recorded) == true
       {
         // Earlier builds recorded a canvas's bottom layer, which every step drawn over that
         // canvas shares; Draw Things' rule picks the right one of them.
         parent = ruleParent
       } else if let recorded = profiles[id]?.parentTensorId,
-        byTensor[recorded]?.contains(where: { $0 != id }) == true
+                byTensor[recorded]?.contains(where: { $0 != id }) == true
       {
         parent = candidate(for: recorded, child: id)
       } else {
@@ -1042,10 +1042,10 @@ enum ImageTensor {
     let width = image.width / scale
     let height = image.height / scale
     guard width > 0, height > 0,
-      let context = CGContext(
-        data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
-        space: CGColorSpace(name: CGColorSpace.sRGB)!,
-        bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+          let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
     else { return nil }
     context.interpolationQuality = .high
     context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))

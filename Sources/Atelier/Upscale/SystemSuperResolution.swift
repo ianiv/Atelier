@@ -148,11 +148,11 @@ enum SystemSuperResolution {
       index += 1
       let destination = try buffer(from: destinationPool)
       guard let sourceFrame = VTFrameProcessorFrame(buffer: source, presentationTimeStamp: time),
-        let destinationFrame = VTFrameProcessorFrame(buffer: destination, presentationTimeStamp: time),
-        let parameters = VTSuperResolutionScalerParameters(
-          sourceFrame: sourceFrame, previousFrame: previous, previousOutputFrame: previousOutput,
-          opticalFlow: nil, submissionMode: previous == nil ? .random : .sequential,
-          destinationFrame: destinationFrame)
+            let destinationFrame = VTFrameProcessorFrame(buffer: destination, presentationTimeStamp: time),
+            let parameters = VTSuperResolutionScalerParameters(
+              sourceFrame: sourceFrame, previousFrame: previous, previousOutputFrame: previousOutput,
+              opticalFlow: nil, submissionMode: previous == nil ? .random : .sequential,
+              destinationFrame: destinationFrame)
       else { throw Failure.noBuffer }
       try await processor.process(parameters: parameters)
       previous = sourceFrame
@@ -237,7 +237,7 @@ enum SystemSuperResolution {
     let height = CVPixelBufferGetHeight(bgra)
     let bytesPerRow = CVPixelBufferGetBytesPerRow(bgra)
     guard let base = CVPixelBufferGetBaseAddress(bgra),
-      let provider = CGDataProvider(data: Data(bytes: base, count: bytesPerRow * height) as CFData)
+          let provider = CGDataProvider(data: Data(bytes: base, count: bytesPerRow * height) as CFData)
     else { return nil }
     return CGImage(
       width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,

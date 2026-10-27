@@ -105,8 +105,7 @@ enum MOSSImporter {
         let written = Set(out.keys)
         for (index, key) in keys.enumerated() {
           defer { progress(Float(index + 1) / Float(keys.count)) }
-          guard !written.contains(key) else { continue }
-          guard let tensor = store.read(key, codec: [.q8p, .i8x, .ezm7, .externalData]) else {
+          guard !written.contains(key), let tensor = store.read(key, codec: [.q8p, .i8x, .ezm7, .externalData]) else {
             continue
           }
           if tensor.dataType == .Float32 {

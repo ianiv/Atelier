@@ -1,6 +1,6 @@
+import _MediaGenerationKit
 import ImageIO
 import SwiftUI
-import _MediaGenerationKit
 
 struct PresetMenu: View {
   @Environment(CreateModel.self) private var model
@@ -67,7 +67,7 @@ struct PresetMenu: View {
       .help("Copies every setting, the model and the seed in Draw Things' configuration format.")
       Button("Paste Settings") {
         guard let text = Clipboard.string,
-          let pasted = DrawThingsJSON.decode(Data(text.utf8))
+              let pasted = DrawThingsJSON.decode(Data(text.utf8))
         else {
           pasteFailed = true
           return
@@ -341,7 +341,8 @@ enum DrawThingsJSON {
   }
 
   private static func name<E: CaseIterable & RawRepresentable>(of _: E.Type, raw: Double) -> String?
-  where E.RawValue == Int8 {
+    where E.RawValue == Int8
+  {
     E.allCases.first { Double($0.rawValue) == raw }.map { String(describing: $0) }
   }
 
@@ -397,7 +398,7 @@ enum ImageMetadata {
   static func embedded(in data: Data) -> Embedded? {
     var comments: [String] = []
     if let source = CGImageSourceCreateWithData(data as CFData, nil),
-      let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+       let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
     {
       let exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any]
       let png = properties[kCGImagePropertyPNGDictionary] as? [CFString: Any]
@@ -413,7 +414,7 @@ enum ImageMetadata {
   /// (exact), else Draw Things' JSON.
   @MainActor static func settings(from embedded: Embedded) -> Settings? {
     if let atelier = embedded.atelier,
-      let sidecar = try? sidecarDecoder.decode(HistoryStore.Sidecar.self, from: Data(atelier.utf8))
+       let sidecar = try? sidecarDecoder.decode(HistoryStore.Sidecar.self, from: Data(atelier.utf8))
     {
       return Settings(
         prompt: sidecar.prompt, negativePrompt: sidecar.negativePrompt,
@@ -432,7 +433,7 @@ enum ImageMetadata {
     var flat = legacy(json)
     if case .object(let v2)? = json["v2"] { flat = v2 }
     guard let data = try? JSONEncoder().encode(JSONValue.object(flat)),
-      let pasted = DrawThingsJSON.decode(data)
+          let pasted = DrawThingsJSON.decode(data)
     else { return nil }
     func text(_ key: String) -> String {
       if case .string(let value)? = json[key] { return value }
@@ -458,12 +459,12 @@ enum ImageMetadata {
       }
     }
     if case .string(let title)? = json["sampler"],
-      let sampler = SettingsRegistry.samplerTitles.first(where: { $0.value == title })?.key
+       let sampler = SettingsRegistry.samplerTitles.first(where: { $0.value == title })?.key
     {
       flat["sampler"] = .number(Double(sampler.rawValue))
     }
     if case .string(let title)? = json["seed_mode"],
-      let mode = seedModeTitles.first(where: { $0.value == title })?.key
+       let mode = seedModeTitles.first(where: { $0.value == title })?.key
     {
       flat["seedMode"] = .number(Double(mode.rawValue))
     }
@@ -481,10 +482,10 @@ enum ImageMetadata {
     let negativePrompt = sidecar.negativePrompt.trimmingCharacters(in: .whitespacesAndNewlines)
     let sampler =
       SamplerType.allCases.first { String(describing: $0) == sidecar.sampler }
-      .flatMap { SettingsRegistry.samplerTitles[$0] } ?? sidecar.sampler
+        .flatMap { SettingsRegistry.samplerTitles[$0] } ?? sidecar.sampler
     var seedMode = ""
     if case .string(let name)? = dump["seedMode"],
-      let mode = SeedMode.allCases.first(where: { String(describing: $0) == name })
+       let mode = SeedMode.allCases.first(where: { String(describing: $0) == name })
     {
       seedMode = seedModeTitles[mode] ?? name
     }
@@ -505,7 +506,7 @@ enum ImageMetadata {
       description += ", Shift: \(sidecar.shift)"
     }
     if let data = DrawThingsJSON.encode(values, model: sidecar.model, seed: sidecar.seed),
-      let v2 = try? JSONSerialization.jsonObject(with: data)
+       let v2 = try? JSONSerialization.jsonObject(with: data)
     {
       json["v2"] = v2
     }

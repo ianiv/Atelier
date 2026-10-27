@@ -1,6 +1,6 @@
 #if os(macOS)
-import SwiftUI
 import _MediaGenerationKit
+import SwiftUI
 
 extension Automation {
   /// Checks the Draw Things project format end to end on a scratch project, as PASS/FAIL lines:

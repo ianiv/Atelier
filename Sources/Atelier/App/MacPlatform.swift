@@ -17,7 +17,7 @@ extension Color {
 /// Quits when the last window closes. A single `Window` scene would do that in SwiftUI, but it
 /// drops File ▸ New Window, which the `WindowGroup` offers.
 final class MacAppDelegate: NSObject, NSApplicationDelegate {
-  func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+  func applicationShouldTerminateAfterLastWindowClosed(_: NSApplication) -> Bool {
     true
   }
 }
@@ -128,7 +128,7 @@ enum AutomationWindows {
   /// Puts the content in an off-screen window when no window is visible (the screen is locked),
   /// so snapshots still show the UI.
   static func ensureWindow(_ content: () -> some View, size: CGSize) {
-    guard !NSApp.windows.contains(where: { $0.isVisible }), offscreenWindow == nil else { return }
+    guard !NSApp.windows.contains(where: \.isVisible), offscreenWindow == nil else { return }
     let window = NSWindow(
       contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled],
       backing: .buffered, defer: false)

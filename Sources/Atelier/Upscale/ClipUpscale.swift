@@ -82,18 +82,18 @@ struct ClipUpscale: Codable, Sendable, Hashable {
     let channels = samples.shape[0]
     let count = samples.shape[1]
     guard source != target, source > 0, target > 0, channels > 0, count > 0,
-      let inputFormat = AVAudioFormat(
-        commonFormat: .pcmFormatFloat32, sampleRate: Double(source),
-        channels: AVAudioChannelCount(channels), interleaved: false),
-      let outputFormat = AVAudioFormat(
-        commonFormat: .pcmFormatFloat32, sampleRate: Double(target),
-        channels: AVAudioChannelCount(channels), interleaved: false),
-      let converter = AVAudioConverter(from: inputFormat, to: outputFormat),
-      let input = AVAudioPCMBuffer(pcmFormat: inputFormat, frameCapacity: AVAudioFrameCount(count)),
-      let output = AVAudioPCMBuffer(
-        pcmFormat: outputFormat,
-        frameCapacity: AVAudioFrameCount(count * target / source + 1024)),
-      let inputData = input.floatChannelData
+          let inputFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32, sampleRate: Double(source),
+            channels: AVAudioChannelCount(channels), interleaved: false),
+          let outputFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32, sampleRate: Double(target),
+            channels: AVAudioChannelCount(channels), interleaved: false),
+          let converter = AVAudioConverter(from: inputFormat, to: outputFormat),
+          let input = AVAudioPCMBuffer(pcmFormat: inputFormat, frameCapacity: AVAudioFrameCount(count)),
+          let output = AVAudioPCMBuffer(
+            pcmFormat: outputFormat,
+            frameCapacity: AVAudioFrameCount(count * target / source + 1024)),
+          let inputData = input.floatChannelData
     else { return samples }
     input.frameLength = AVAudioFrameCount(count)
     for channel in 0..<channels {

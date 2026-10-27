@@ -45,7 +45,7 @@ struct InspectorLayout: Codable, Hashable, Identifiable {
       "cfgZeroInitSteps",
     ],
     expanded: [SettingSection.essentials.id, SettingSection.loras.id, SettingSection.sampling.id,
-      SettingSection.video.id])
+               SettingSection.video.id])
 
   /// For video models: length first, then what changes a video most (LTX's two-stage hires fix,
   /// Wan 2.2's low-noise expert as the refiner, Stable Video Diffusion's motion), what speeds it
@@ -162,7 +162,7 @@ final class LayoutStore {
   func moveSection(_ section: SettingSection, by offset: Int) {
     var order = current.sections
     guard let index = order.firstIndex(of: section),
-      order.indices.contains(index + offset)
+          order.indices.contains(index + offset)
     else { return }
     order.swapAt(index, index + offset)
     var layout = current
@@ -229,7 +229,7 @@ final class LayoutStore {
     String(name.map { "/:\\".contains($0) ? "-" : $0 })
   }
 
-  static func loadAll<T: Decodable>(from directory: URL) -> [T] where T: Identifiable {
+  static func loadAll<T: Decodable & Identifiable>(from directory: URL) -> [T] {
     let files = (try? FileManager.default.contentsOfDirectory(
       at: directory, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? []
     return files.filter { $0.pathExtension == "json" }

@@ -10,7 +10,7 @@ struct QueueView: View {
 
   var body: some View {
     Group {
-      if queue.isEmpty && queue.recent.isEmpty {
+      if queue.isEmpty, queue.recent.isEmpty {
         ContentUnavailableView(
           "Nothing Queued", systemImage: "list.number",
           description: Text("Press Generate while an image is being made to queue the next one, or set ×N under Generate to make several."))
@@ -55,7 +55,6 @@ struct QueueView: View {
     .deleteCommand { remove(selection) }
   }
 
-  @ViewBuilder
   private func row(_ job: JobQueue.Job) -> some View {
     Group {
       if let export = job.export {
@@ -133,7 +132,7 @@ struct QueueRow: View {
             modelName(request.model), "\(configuration.width)×\(configuration.height)",
             video.map { length($0, configuration) }, "seed \(request.seed)",
             "\(configuration.steps) steps", job.elapsed.map { "took \(GenerationTime.text($0))" },
-          ].compactMap { $0 }.joined(separator: " · ")
+          ].compactMap(\.self).joined(separator: " · ")
         )
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -166,7 +165,6 @@ struct QueueRow: View {
     .padding(.vertical, 2)
   }
 
-  @ViewBuilder
   private var preview: some View {
     ZStack {
       Color.quaternaryLabel
@@ -238,7 +236,7 @@ struct ExportQueueRow: View {
           [
             method, "\(upscale.scale)×", "\(size.width)×\(size.height)",
             "\(export.composition.frameCount) frames", timing,
-          ].compactMap { $0 }.joined(separator: " · ")
+          ].compactMap(\.self).joined(separator: " · ")
         )
         .font(.caption)
         .foregroundStyle(.secondary)

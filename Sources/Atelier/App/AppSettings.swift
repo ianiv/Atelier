@@ -1,5 +1,5 @@
-import Foundation
 import _MediaGenerationKit
+import Foundation
 
 /// User-facing settings persisted in UserDefaults.
 enum AppSettings {

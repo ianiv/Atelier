@@ -65,7 +65,7 @@ final class AgentServer {
       forcedPort = port
     }
     // Scripted checks leave the user's server (and its port) alone unless asked with `--mcp`.
-    if Automation.isRequested && !forcedOn { return }
+    if Automation.isRequested, !forcedOn { return }
     restart()
   }
 
@@ -303,7 +303,7 @@ struct AgentSettingsView: View {
             .onSubmit { applyPort() }
         }
         LabeledContent("Status") {
-          if !server.isEnabled && !server.isListening {
+          if !server.isEnabled, !server.isListening {
             Text("Off").foregroundStyle(.secondary)
           } else if let error = server.listenError {
             Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
