@@ -132,7 +132,7 @@ struct QueueRow: View {
           [
             modelName(request.model), "\(configuration.width)×\(configuration.height)",
             video.map { length($0, configuration) }, "seed \(request.seed)",
-            "\(configuration.steps) steps",
+            "\(configuration.steps) steps", job.elapsed.map { "took \(GenerationTime.text($0))" },
           ].compactMap { $0 }.joined(separator: " · ")
         )
         .font(.caption)
@@ -237,8 +237,8 @@ struct ExportQueueRow: View {
         Text(
           [
             method, "\(upscale.scale)×", "\(size.width)×\(size.height)",
-            "\(export.composition.frameCount) frames", "about \(Self.duration(export.estimatedSeconds))",
-          ].joined(separator: " · ")
+            "\(export.composition.frameCount) frames", timing,
+          ].compactMap { $0 }.joined(separator: " · ")
         )
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -258,6 +258,14 @@ struct ExportQueueRow: View {
       status
     }
     .padding(.vertical, 2)
+  }
+
+  /// About how long, while waiting or running; how long it took, once done.
+  private var timing: String? {
+    switch job.status {
+    case .waiting, .running: "about \(Self.duration(export.estimatedSeconds))"
+    default: job.elapsed.map { "took \(GenerationTime.text($0))" }
+    }
   }
 
   @ViewBuilder

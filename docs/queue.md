@@ -18,7 +18,7 @@ Results are saved to the project that's open when they finish.
 
 ## The Queue screen
 
-The list has three parts: the image being made, the waiting images and recent ones (finished, failed or cancelled). Each row shows the prompt, model, size, seed and steps, with the result's thumbnail once it's done. Videos show their length and a film icon.
+The list has three parts: the image being made, the waiting images and recent ones (finished, failed or cancelled). Each row shows the prompt, model, size, seed and steps, with the result's thumbnail once it's done; recent ones show how long they took. Videos show their length and a film icon.
 
 - **Pause Queue** (toolbar) lets the current image finish, or be stopped, and then holds the rest. Click it again (**Resume Queue**) to carry on. While paused, Generate still adds to the queue; the status bar says "Paused".
 - **Drag** waiting images to reorder them, or right-click one and choose **Run Next**.
@@ -29,7 +29,7 @@ The list has three parts: the image being made, the waiting images and recent on
 
 ## Exports
 
-An upscaled **Export Video…** (from History or Timeline; see [Exporting videos](video.md#exporting-videos)) is a job in the queue too, after the images already waiting. Its row shows the timeline or video's name, the method, scale, size, frames, about how long it takes, and the file it writes; while it runs, the status bar shows its progress like an image's. You can reorder it, Cancel it or Stop it like any job; a stopped export leaves no file. When it's done, **Show in Finder** (**Show in Files** on iPad) shows the file, and **Export Again** runs it again. Exports aren't kept when you quit: the file you chose is only open to Atelier until then.
+An upscaled **Export Video…** (from History or Timeline; see [Exporting videos](video.md#exporting-videos)) is a job in the queue too, after the images already waiting. Its row shows the timeline or video's name, the method, scale, size, frames, about how long it takes (how long it took, once done), and the file it writes; while it runs, the status bar shows its progress like an image's. You can reorder it, Cancel it or Stop it like any job; a stopped export leaves no file. When it's done, **Show in Finder** (**Show in Files** on iPad) shows the file, and **Export Again** runs it again. Exports aren't kept when you quit: the file you chose is only open to Atelier until then.
 
 ## Stop
 

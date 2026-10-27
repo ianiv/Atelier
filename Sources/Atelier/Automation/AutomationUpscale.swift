@@ -227,7 +227,11 @@ extension Automation {
           log("FAIL \(model.queue.recent.first.map { "\($0.status)" } ?? "no job") \(model.errorMessage ?? "")")
           return finish()
         }
-        log(String(format: "PASS exported %@ in %.1fs, recent row: %@", url.path, Date().timeIntervalSince(exportStarted), "\(job.status)"))
+        log(
+          String(
+            format: "PASS exported %@ in %.1fs, recent row: %@, took %@", url.path,
+            Date().timeIntervalSince(exportStarted), "\(job.status)",
+            job.elapsed.map { GenerationTime.text($0) } ?? "none"))
       } catch {
         log("FAIL \(error as NSError)")
       }

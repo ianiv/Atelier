@@ -28,6 +28,8 @@ final class JobQueue {
     var work: Work
     var status = Status.waiting
     let queuedAt = Date()
+    /// When it started running; nil while waiting, and for a job cancelled before it ran.
+    var startedAt: Date?
     var finishedAt: Date?
     /// Queued by an agent over MCP.
     var fromAgent = false
@@ -48,6 +50,12 @@ final class JobQueue {
     var request: GenerationEngine.Request? {
       guard case .generation(let request) = work else { return nil }
       return request
+    }
+
+    /// How long it ran, once it's done (and if it ran).
+    var elapsed: TimeInterval? {
+      guard let startedAt, let finishedAt else { return nil }
+      return finishedAt.timeIntervalSince(startedAt)
     }
 
     var export: TimelineExportJob? {
@@ -124,6 +132,7 @@ final class JobQueue {
       job.work = .generation(request)
     }
     job.status = .running
+    job.startedAt = Date()
     running = job
     return job
   }
