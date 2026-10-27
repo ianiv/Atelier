@@ -98,7 +98,8 @@ struct FlashVSRUpscaler {
             let frames = concatenated(try (1...4).map { try unshuffled(4 * t + $0) })
             Profile.mark("unshuffle")
             rows.append(projection.next(frames))
-            if Profile.enabled { _ = rows.last?.rawValue.toCPU() }
+            // Wait for the GPU between steps, so queued work doesn't hold memory.
+            FlashVSRUpscaler.wait(rows.last!)
             Profile.mark("projection")
           }
           let noise = graph.variable(
@@ -125,7 +126,7 @@ struct FlashVSRUpscaler {
               .copied()
             Profile.mark("pack")
             let decodedFrames = decoder.decode(latent: z, source: packed)
-            if Profile.enabled { _ = decodedFrames.last?.rawValue.toCPU() }
+            if let last = decodedFrames.last { FlashVSRUpscaler.wait(last) }
             Profile.mark("decode")
             for decoded in decodedFrames {
               defer { emitted += 1 }
@@ -153,6 +154,12 @@ struct FlashVSRUpscaler {
       }
     }
     if let failure { throw failure }
+  }
+
+  /// Waits for the GPU to finish `tensor` (and what was queued before it).
+  static func wait<T: TensorNumeric>(_ tensor: DynamicGraph.Tensor<T>) {
+    let shape = tensor.shape
+    _ = tensor.reshaped(.C(shape.reduce(1, *)))[0..<1].copied().rawValue.toCPU()
   }
 
   /// Standard normal noise `[frames, h, w, 16]`, each latent frame from its own seed, so a frame

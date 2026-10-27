@@ -462,12 +462,18 @@ final class FlashVSRDenoiser {
     Profile.mark("scores")
     let kept = select(scores: scores, layer: layer, queryBlocks: queryBlocks, keyBlocks: keyBlocks)
     Profile.mark("select")
+    if Profile.enabled && chunk >= 1 && (layer == 0 || layer == 1) {
+      let total = kept.reduce(0) { $0 + $1.reduce(0) { $0 + $1.count } }
+      print("KEPT layer \(layer): \(total) of \(Self.heads * queryBlocks * keyBlocks) block pairs, \(Double(total) / Double(Self.heads * queryBlocks)) per row")
+    }
 
     // Attend a row of query blocks at a time.
     let output = stripAttention(
       queries: q, keys: allKeys, values: allValues, kept: kept, keyBlocks: keyBlocks,
-      span: gridWidth / 8 >= 12 ? 3 : gridWidth / 8)
-    Profile.mark("attention")
+      span: isSliding(layer) && gridWidth / 8 >= 12 ? 3 : gridWidth / 8)
+    // Wait for the GPU here: otherwise the queued strips' temporaries pile up and press on memory.
+    _ = output[0..<1, 0..<1, 0..<1, 0..<1].copied().rawValue.toCPU()
+    Profile.mark(isSliding(layer) ? "attention-narrow" : "attention-wide")
 
     // Keep the newest windows for the next chunk.
     let keep = keptWindows(layer)
@@ -660,6 +666,35 @@ final class FlashVSRDenoiser {
               return set.sorted()
             }
             let width = headColumns.map(\.count).max() ?? 1
+            let maskBytes = H * count * 128 * width * 128 * MemoryLayout<FloatType>.size
+            if maskBytes > 768 * 1_024 * 1_024 {
+              // Too large to batch: one head at a time.
+              var heads: [DynamicGraph.Tensor<FloatType>] = []
+              for head in 0..<H {
+                let cols = headColumns[head]
+                let at = Dictionary(uniqueKeysWithValues: cols.enumerated().map { ($1, $0) })
+                var mask = [Bool](repeating: false, count: count * cols.count)
+                for (r, i) in strip.enumerated() {
+                  for j in kept[head][i] { mask[r * cols.count + at[j]!] = true }
+                }
+                let index = graph.variable(
+                  Tensor<Int32>(cols.map { Int32(head * keyBlocks) + $0 }, .CPU, .C(cols.count)).toGPU(0))
+                let headKeys = Functional.indexSelect(input: keysByHead!, index: index)
+                  .reshaped(.NHWC(1, cols.count * 128, 1, HD))
+                let headValues = Functional.indexSelect(input: valuesByHead!, index: index)
+                  .reshaped(.NHWC(1, cols.count * 128, 1, HD))
+                let headQueries = queriesByHead![
+                  (head * 2 * S + first)..<(head * 2 * S + first + count), 0..<(128 * HD)
+                ].copied().reshaped(.NHWC(1, count * 128, 1, HD))
+                heads.append(
+                  attention(
+                    headQueries, headKeys, headValues, mask: mask, rows: count,
+                    columns: cols.count, scale: scale
+                  ).reshaped(.NHWC(count, 128, 1, HD)))
+              }
+              output[strip, 0..<128, 0..<H, 0..<HD] = concatenated(heads, axis: 2)
+              continue
+            }
             var index: [Int32] = []
             var headMasks: [[Bool]] = []
             for head in 0..<H {
