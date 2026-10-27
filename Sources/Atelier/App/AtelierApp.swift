@@ -180,6 +180,74 @@ struct SettingsTabs: View {
             .environment(agents)
         }
       #endif
+      Tab("About", systemImage: "info.circle", value: "About") {
+        AboutSettingsView()
+      }
     }
+  }
+}
+
+/// Settings ▸ About: the version, Atelier's license and the open-source work it builds on (as in
+/// NOTICE).
+struct AboutSettingsView: View {
+  private struct Credit: Identifiable {
+    let name: String
+    let detail: String
+    let url: String
+    var id: String { name }
+  }
+
+  private static var credits: [Credit] {
+    var credits = [
+      Credit(
+        name: "draw-things-community", detail: "The generation engine. Draw Things, GPL-3.0.",
+        url: "https://github.com/drawthingsai/draw-things-community"),
+      Credit(
+        name: "vpipe", detail: "FlashVSR+ upscaling follows its Metal port. T-Go LLC, Apache-2.0.",
+        url: "https://github.com/tgo-app-dev/vpipe"),
+      Credit(
+        name: "FlashVSR and FlashVSR+", detail: "The Quality upscaler and its weights. OpenImagingLab, Apache-2.0.",
+        url: "https://github.com/OpenImagingLab/FlashVSR"),
+    ]
+    #if os(macOS)
+      credits.append(
+        Credit(name: "Sparkle", detail: "Updates. MIT.", url: "https://github.com/sparkle-project/Sparkle"))
+    #endif
+    return credits
+  }
+
+  private var version: String {
+    let info = Bundle.main.infoDictionary
+    let short = info?["CFBundleShortVersionString"] as? String ?? "?"
+    let build = info?["CFBundleVersion"] as? String ?? "?"
+    return "\(short) (\(build))"
+  }
+
+  var body: some View {
+    Form {
+      Section {
+        LabeledContent("Version", value: version)
+        LabeledContent("License") {
+          Link("GNU GPL v3.0", destination: URL(string: "https://www.gnu.org/licenses/gpl-3.0.html")!)
+        }
+        Link("Source and documentation", destination: URL(string: "https://github.com/ianiv/Atelier")!)
+      } header: {
+        Text("Atelier")
+      }
+      Section {
+        ForEach(Self.credits) { credit in
+          VStack(alignment: .leading, spacing: 2) {
+            Link(credit.name, destination: URL(string: credit.url)!)
+            Text(credit.detail).foregroundStyle(.secondary)
+          }
+        }
+      } header: {
+        Text("Acknowledgements")
+      } footer: {
+        Text("Their licenses and notices are in the NOTICE file with Atelier's source. Models you use keep their own licenses.")
+          .foregroundStyle(.secondary)
+      }
+    }
+    .settingsForm()
   }
 }

@@ -1,0 +1,58 @@
+Atelier
+Copyright 2026 Ianiv Schweber and the Atelier contributors. Licensed under the GNU General Public License v3.0 (LICENSE).
+
+Atelier includes or is derived from the following open-source work. Each keeps its own license
+and copyright, reproduced or referenced below.
+
+-------------------------------------------------------------------------------
+draw-things-community
+https://github.com/drawthingsai/draw-things-community
+Copyright Draw Things. Licensed under the GNU General Public License v3.0.
+
+Atelier's generation engine, model formats and project file format.
+
+-------------------------------------------------------------------------------
+vpipe
+https://github.com/tgo-app-dev/vpipe
+Copyright 2026 T-Go LLC. Licensed under the Apache License, Version 2.0.
+
+Atelier's FlashVSR+ upscaler (Sources/Atelier/Upscale/FlashVSR) follows vpipe's Metal port of
+FlashVSR+, written in Swift on the Draw Things engine and modified for Atelier. vpipe's NOTICE
+reads:
+
+    Vpipe
+    Copyright 2026 T-Go LLC
+
+    Vpipe is developed by T-Go LLC.
+    https://github.com/tgo-app-dev/vpipe
+
+    This product includes software developed at T-Go LLC.
+
+-------------------------------------------------------------------------------
+FlashVSR and FlashVSR+
+https://github.com/OpenImagingLab/FlashVSR
+https://github.com/OpenImagingLab/FlashVSR_Plus
+Copyright OpenImagingLab and the FlashVSR authors. Licensed under the Apache License, Version 2.0.
+
+The video super-resolution method behind Upscale ▸ Quality. Atelier doesn't ship the weights;
+it downloads them, or you place them, in a "FlashVSR+" folder of your models folder, from
+https://huggingface.co/ruchangyao/FlashVSR_plus (the prompt embedding, posi_prompt.pth, from
+https://huggingface.co/deAPI-ai/flashvsr-v1-1).
+
+-------------------------------------------------------------------------------
+Sparkle (Mac app only)
+https://github.com/sparkle-project/Sparkle
+Copyright Andy Matuschak, Sparkle Project contributors. Licensed under the MIT License.
+
+-------------------------------------------------------------------------------
+Apache License, Version 2.0
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use these files
+except in compliance with the License. You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the
+License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
+express or implied. See the License for the specific language governing permissions and
+limitations under the License.

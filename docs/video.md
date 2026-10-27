@@ -64,6 +64,29 @@ To make a larger, sharper copy of a video, right-click it in History and choose 
 - **Quality** uses FlashVSR+, which restores the whole video as one stream, each part with the parts before it in view, so detail stays steady from frame to frame instead of shimmering. Pick **Turbo** (faster) or **Base** (slower, a little more detail). The first time, click **Download FlashVSR+** in the sheet: it downloads about 7 GB per version from Hugging Face into a **FlashVSR+** folder in the models folder. It makes videos up to 1920×1152 and takes a few seconds a frame.
 - **Fast** uses Apple Super Resolution on the Neural Engine and takes seconds. macOS downloads its model the first time you use it. It offers only the scales your device supports (on some Macs, only 4×), for videos up to 1920×1080.
 
+### Getting FlashVSR+
+
+Atelier looks for FlashVSR+ in a **FlashVSR+** folder inside your models folder (Settings ▸ Models), and Quality is available for a version once all its files are there. **Download FlashVSR+** in the Upscale or Export Video sheet fetches whatever is missing, with its progress in the sheet; files already there are skipped, so an interrupted download picks up where it left off.
+
+To download them yourself instead, for example on another machine, get these from [ruchangyao/FlashVSR_plus](https://huggingface.co/ruchangyao/FlashVSR_plus) on Hugging Face and lay them out like this:
+
+```
+Models/
+  FlashVSR+/
+    turbo/dit.safetensors        (Turbo, 5.7 GB)
+    turbo/lq_proj_in.safetensors (Turbo, 1.2 GB)
+    base/dit.safetensors         (Base, 5.7 GB)
+    base/lq_proj_in.safetensors  (Base, 1.2 GB)
+    TCDecoder.ckpt               (both, 189 MB)
+    posi_prompt.pth              (both, 4 MB)
+```
+
+You only need the folder for the version you use (`turbo/` or `base/`), plus the two files both share. `posi_prompt.pth` is in [deAPI-ai/flashvsr-v1-1](https://huggingface.co/deAPI-ai/flashvsr-v1-1). Keep the file names as they are; Atelier reads them in place, without converting them.
+
+FlashVSR+ is by OpenImagingLab, and Atelier's version follows T-Go LLC's vpipe port; both are Apache-2.0 (see **Settings ▸ About**).
+
+### When it runs
+
 The upscale runs in the Queue like any other job. The result is a new video after the original, with the same prompt and settings at the new size, and the soundtrack kept.
 
 **Upscale…** makes a new video in History. To save a larger copy as a file instead, use **Export Video…** with an upscale (below).

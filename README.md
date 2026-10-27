@@ -9,6 +9,8 @@ What it does today:
 - Text to image with sensible per-model defaults, and every advanced setting one search away.
 - Image to image: edit an image on the canvas, outpaint by moving it in the frame, and give edit models reference images on a moodboard.
 - Video with LTX-2, MiniMax H3, Wan and the other video models the engine runs: text or an image to video, first and last frames, references, and sound (LTX and H3 make a soundtrack; H3 and LongCat take an audio file). Clips play inline and save as MP4.
+- A timeline to put clips together: trim, split, crossfade, continue a new video from any frame, and export one MP4.
+- Video upscaling: **Fast** (Apple Super Resolution) or **Quality** (FlashVSR+, Turbo or Base), as a new video in History or straight to a file with Export Video….
 - Presets and inspector layouts.
 - History kept in projects, in Draw Things' project file format, with one-click "Use Settings".
 - A model and LoRA library: download from the community catalog, import `.safetensors` checkpoints and LoRAs, and make 8-bit copies of MOSS models.
@@ -23,7 +25,7 @@ Get the latest signed and notarized Atelier from [Releases](https://github.com/i
 Atelier uses Draw Things' engine and project format, so your models and projects work in both. What it adds:
 
 - **An inspector you shape yourself.** Search every setting, see what you've changed from the model's defaults in the Changed group, hide or show any setting, and keep named layouts you can export and share.
-- **A queue.** Press Generate while an image is running to queue the next one, make ×N at once, reorder, pause and retry. Waiting images are kept when you quit.
+- **A queue.** Press Generate while an image is running to queue the next one, make ×N at once, reorder, pause and retry. Upscaled video exports wait their turn there too. Waiting images are kept when you quit.
 - **Agents can make images.** A built-in MCP server lets agents such as Claude Code generate with your models, and their requests join the same queue.
 - **Branches you can see.** History shows every branch as a graph, and the recent strip switches between everything by time and just the current lineage.
 - **Click to reuse.** Clicking a recent image brings back its prompt, size and settings. History supports selecting several images at once.
@@ -36,8 +38,9 @@ Start with the [user guide](docs/README.md).
 
 - [Getting started](docs/getting-started.md): requirements, building and installing, choosing your models folder, your first image.
 - [Creating images](docs/creating-images.md): the prompt, size and seed, the inspector, presets, image to image and the moodboard.
-- [Making videos](docs/video.md): video models, length, first and last frames, audio, and playing and exporting videos.
-- [Putting videos together](docs/timeline.md): assembling clips on a timeline, continuing from any frame, and exporting.
+- [Making videos](docs/video.md): video models, length, first and last frames, audio, upscaling (and getting FlashVSR+), and exporting videos.
+- [Putting videos together](docs/timeline.md): assembling clips on a timeline, trimming, splitting and crossfades, continuing from any frame, and exporting.
+- [The queue](docs/queue.md): queuing, pausing and reordering images, and upscaled exports.
 - [History and projects](docs/history.md)
 - [Models and LoRAs](docs/models-and-loras.md): downloading, importing, Make 8-bit Copy.
 - [Settings](docs/settings.md): models folder, output folder and performance.
@@ -46,3 +49,5 @@ Start with the [user guide](docs/README.md).
 ## License
 
 Atelier is free software, licensed under the [GNU General Public License v3.0](LICENSE). It is built on [draw-things-community](https://github.com/drawthingsai/draw-things-community), which is also GPL-3.0, and any app built on that engine must be GPL-3.0 as a whole. Models you use with Atelier keep their own licenses.
+
+Video upscaling builds on [vpipe](https://github.com/tgo-app-dev/vpipe) (T-Go LLC) and [FlashVSR/FlashVSR+](https://github.com/OpenImagingLab/FlashVSR) (OpenImagingLab), both Apache-2.0. See [NOTICE](NOTICE) for these and the other third-party notices; the app lists them in **Settings ▸ About**.
