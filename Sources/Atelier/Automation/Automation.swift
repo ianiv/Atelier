@@ -30,6 +30,7 @@ enum Automation {
     let flags = [
       "--show", "--resize-bench", "--inspector-check", "--library-check", "--project-check",
       "--reuse", "--generate", "--ux-check", "--edit-input-check", "--queue-check",
+      "--timeline-check",
     ]
     return CommandLine.arguments.contains { flags.contains($0) }
   }
@@ -67,6 +68,10 @@ enum Automation {
     }
     if args.contains("--queue-check") {
       queueCheck(model)
+      return
+    }
+    if args.contains("--timeline-check") {
+      timelineCheck(model, navigation: navigation, layouts: layouts, presets: presets)
       return
     }
     if args.contains("--project-check") {
@@ -1116,7 +1121,7 @@ enum Automation {
 
   private static var library: ModelLibrary?
 
-  private static func ensureWindow(
+  static func ensureWindow(
     _ model: CreateModel, navigation: Navigation, layouts: LayoutStore, presets: PresetStore
   ) {
     // A window hosting the app's content when SwiftUI hasn't put one up (the screen is locked),
@@ -1125,6 +1130,7 @@ enum Automation {
       ContentView()
         .environment(model)
         .environment(model.history)
+        .environment(model.timelines)
         .environment(navigation)
         .environment(layouts)
         .environment(presets)

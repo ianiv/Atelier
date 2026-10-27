@@ -53,7 +53,7 @@ While a video is on the canvas, Edit mode doesn't send it: pick a frame with one
 
 ## In History
 
-A video is one tile in History, with a film badge showing its length (and a speaker when it has sound). On the Mac, moving the pointer across the tile scrubs through its frames. The detail panel plays it and lists its length, frame count and frame rate. **Export Video…** saves it as an MP4, and dragging it out of Atelier drags the MP4. Use **Images / Videos** in the toolbar to show only one kind. Deleting a video deletes all of its frames.
+A video is one tile in History, with a film badge showing its length (and a speaker when it has sound). On the Mac, moving the pointer across the tile scrubs through its frames. The detail panel plays it and lists its length, frame count and frame rate. **Export Video…** saves it as an MP4, and dragging it out of Atelier drags the MP4. Use **Images / Videos** in the toolbar to show only one kind. **Add to Timeline** puts it on a timeline, to make a longer video from several (see [Putting videos together](timeline.md)). Deleting a video deletes all of its frames.
 
 Videos are stored in the project the way Draw Things stores them: one step per frame, plus the soundtrack, so Draw Things can open them too. That makes them large: a few seconds of video at 720p adds as much to the project file as a hundred images.
 

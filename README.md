@@ -37,6 +37,7 @@ Start with the [user guide](docs/README.md).
 - [Getting started](docs/getting-started.md): requirements, building and installing, choosing your models folder, your first image.
 - [Creating images](docs/creating-images.md): the prompt, size and seed, the inspector, presets, image to image and the moodboard.
 - [Making videos](docs/video.md): video models, length, first and last frames, audio, and playing and exporting videos.
+- [Putting videos together](docs/timeline.md): assembling clips on a timeline, continuing from any frame, and exporting.
 - [History and projects](docs/history.md)
 - [Models and LoRAs](docs/models-and-loras.md): downloading, importing, Make 8-bit Copy.
 - [Settings](docs/settings.md): models folder, output folder and performance.

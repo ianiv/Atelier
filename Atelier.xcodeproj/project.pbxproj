@@ -90,6 +90,11 @@
 		D9478AB0A5F467A78FBF0F6F /* ClipVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFEFDFCC1580AA7B96B192D4 /* ClipVideo.swift */; };
 		ABC9C966086FCD6CDDFBF814 /* ClipPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BEBA3D6C6994515FE6F7A28 /* ClipPlayer.swift */; };
 		FA666B187E2913EFB28CCC13 /* AudioClip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EA2F5D417DF60CE076D9B6C /* AudioClip.swift */; };
+		6EDD8483CFFCDF6D6F8845B3 /* Timeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04D1C34CE0E866BE0C89DC75 /* Timeline.swift */; };
+		308C029B5C80B01219EF38CF /* TimelineComposition.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76EC50D121E82ACCE02A85E0 /* TimelineComposition.swift */; };
+		F8DCE16F8E6A3EED57882E83 /* TimelineTrack.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FA810DD5B54AFCC1CD74B5D /* TimelineTrack.swift */; };
+		6E51D9FDDD76364020D5131B /* TimelineScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77FD635F00DD90D3AB4AFE0B /* TimelineScreen.swift */; };
+		70E8E18439D847EA73F0D5DD /* AutomationTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5D760BDEB2FA5F04BDAF779 /* AutomationTimeline.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -196,6 +201,11 @@
 		FFEFDFCC1580AA7B96B192D4 /* ClipVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipVideo.swift; sourceTree = "<group>"; };
 		3BEBA3D6C6994515FE6F7A28 /* ClipPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipPlayer.swift; sourceTree = "<group>"; };
 		2EA2F5D417DF60CE076D9B6C /* AudioClip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioClip.swift; sourceTree = "<group>"; };
+		04D1C34CE0E866BE0C89DC75 /* Timeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Timeline.swift; sourceTree = "<group>"; };
+		76EC50D121E82ACCE02A85E0 /* TimelineComposition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineComposition.swift; sourceTree = "<group>"; };
+		5FA810DD5B54AFCC1CD74B5D /* TimelineTrack.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineTrack.swift; sourceTree = "<group>"; };
+		77FD635F00DD90D3AB4AFE0B /* TimelineScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineScreen.swift; sourceTree = "<group>"; };
+		E5D760BDEB2FA5F04BDAF779 /* AutomationTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationTimeline.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -240,6 +250,7 @@
 				ADEF5850836026B0FCB26117 /* Create */,
 				48E3561D3C3C081F0E6EC772 /* Generation */,
 				0ADB0E05EADC942C1C1FCD37 /* History */,
+				F97E0C52B9EC5C9DC72C7576 /* Timeline */,
 				4190255F978F472407BAFB59 /* Inspector */,
 				B99C8284D4164108D9166578 /* Library */,
 				52499566B8E250F1140E5815 /* Projects */,
@@ -283,6 +294,7 @@
 				5BA894EB2074F4930E321607 /* Automation.swift */,
 				E750BAC04D4835E5B2477EB2 /* AutomationProject.swift */,
 				C65576F212CC11B301A189AF /* AutomationQueue.swift */,
+				E5D760BDEB2FA5F04BDAF779 /* AutomationTimeline.swift */,
 			);
 			path = Automation;
 			sourceTree = "<group>";
@@ -318,6 +330,17 @@
 				59AD5317B0066ECD23EDCDAF /* ModelDefaults.swift */,
 			);
 			path = Generation;
+			sourceTree = "<group>";
+		};
+		F97E0C52B9EC5C9DC72C7576 /* Timeline */ = {
+			isa = PBXGroup;
+			children = (
+				04D1C34CE0E866BE0C89DC75 /* Timeline.swift */,
+				76EC50D121E82ACCE02A85E0 /* TimelineComposition.swift */,
+				5FA810DD5B54AFCC1CD74B5D /* TimelineTrack.swift */,
+				77FD635F00DD90D3AB4AFE0B /* TimelineScreen.swift */,
+			);
+			path = Timeline;
 			sourceTree = "<group>";
 		};
 		0ADB0E05EADC942C1C1FCD37 /* History */ = {
@@ -548,6 +571,7 @@
 				2D94FAD45270F10383644DDE /* LoopbackHTTPServer.swift in Sources */,
 				4549FF9554EB66628271351A /* AutomationProject.swift in Sources */,
 				E03AA58CB9A74D68677591AB /* AutomationQueue.swift in Sources */,
+				70E8E18439D847EA73F0D5DD /* AutomationTimeline.swift in Sources */,
 				02980CB68834C5E6EA77013B /* ContentView.swift in Sources */,
 				90D46F51CBD101C88E0BD1B0 /* CreateModel.swift in Sources */,
 				15B3CBDDD4DC0FCE7C625161 /* CreateView.swift in Sources */,
@@ -555,6 +579,10 @@
 				07ED1A855EFB26A6036EA256 /* EngineConfiguration.swift in Sources */,
 				D9478AB0A5F467A78FBF0F6F /* ClipVideo.swift in Sources */,
 				ABC9C966086FCD6CDDFBF814 /* ClipPlayer.swift in Sources */,
+				6EDD8483CFFCDF6D6F8845B3 /* Timeline.swift in Sources */,
+				308C029B5C80B01219EF38CF /* TimelineComposition.swift in Sources */,
+				F8DCE16F8E6A3EED57882E83 /* TimelineTrack.swift in Sources */,
+				6E51D9FDDD76364020D5131B /* TimelineScreen.swift in Sources */,
 				FA666B187E2913EFB28CCC13 /* AudioClip.swift in Sources */,
 				F9B7B4D35D7382085C916688 /* GenerationEngine.swift in Sources */,
 				63C2BBE1CC163EBF41BCA5B2 /* JobQueue.swift in Sources */,

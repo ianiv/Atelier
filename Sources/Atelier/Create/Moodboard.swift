@@ -48,6 +48,13 @@ final class Moodboard {
     save(writing: items.last)
   }
 
+  /// Puts an image at `index` (the front, for MiniMax H3 FL2VA's last frame).
+  func insert(_ image: CGImage, at index: Int) {
+    let item = MoodboardItem(image: ImageLoader.fitted(image, maxSide: Self.maxSide))
+    items.insert(item, at: min(max(index, 0), items.count))
+    save(writing: item)
+  }
+
   func remove(_ id: MoodboardItem.ID) {
     items.removeAll { $0.id == id }
     try? FileManager.default.removeItem(at: Self.folder.appending(path: "\(id).png"))

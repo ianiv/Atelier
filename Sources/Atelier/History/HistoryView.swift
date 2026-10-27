@@ -8,6 +8,8 @@ struct HistoryView: View {
   @Environment(CreateModel.self) private var create
   @Environment(Navigation.self) private var navigation
   @Environment(FileDialogs.self) private var fileDialogs
+  @Environment(TimelineStore.self) private var timelines
+  @Environment(\.undoManager) private var undoManager
   /// Selected images by image tensor, which stays the same when a fork or delete renumbers steps.
   @State private var selection: Set<Int64> = []
   /// Counts selections made by hand, not the one the screen starts with, so a narrow window opens
@@ -131,7 +133,7 @@ struct HistoryView: View {
         Button("Delete", role: .destructive) { delete(items) }
         Button("Cancel", role: .cancel) { pendingDelete = nil }
       } message: { items in
-        Text("\(items.count > 1 ? "They and their" : items.first?.isVideo == true ? "The video and its" : "The image and its") settings are removed from “\(history.project.name)”. This can't be undone.")
+        Text("\(items.count > 1 ? "They and their" : items.first?.isVideo == true ? "The video and its" : "The image and its") settings are removed from “\(history.project.name)”\(timelineNote(items)). This can't be undone.")
       }
       .alert(
         "Something went wrong",
@@ -351,6 +353,10 @@ struct HistoryView: View {
   private func contextMenu(for item: HistoryItem) -> some View {
     let items = targets(item)
     if items.count > 1 {
+      if items.allSatisfy(\.isVideo) {
+        Button("Add \(items.count) Videos to Timeline") { addToTimeline(items) }
+        Divider()
+      }
       Button("Copy \(items.count) Images") { Task { await history.copyImages(items) } }
       Button("Export \(items.count) Files…") { export(items) }
       #if os(iOS)
@@ -370,6 +376,10 @@ struct HistoryView: View {
       #if os(iOS)
         Button("Save to Photos") { saveToPhotos([item]) }
       #endif
+      if item.isVideo {
+        Divider()
+        Button("Add to Timeline") { addToTimeline([item]) }
+      }
       Divider()
       Button("Delete", role: .destructive) { pendingDelete = [item] }
     }
@@ -565,11 +575,25 @@ struct HistoryView: View {
     return url
   }
 
+  /// Appends videos to the timeline on screen in Timeline (a new one when there's none).
+  private func addToTimeline(_ items: [HistoryItem]) {
+    timelines.append(items, undoManager: undoManager)
+  }
+
+  /// ", and from the timeline “Timeline 1”" when deleting takes clips off timelines.
+  private func timelineNote(_ items: [HistoryItem]) -> String {
+    let names = Set(items.filter(\.isVideo).flatMap { timelines.timelines(using: $0.tensorId) }.map(\.name))
+    guard !names.isEmpty else { return "" }
+    let list = names.sorted().map { "“\($0)”" }.formatted(.list(type: .and))
+    return ", and from the timeline\(names.count > 1 ? "s" : "") \(list)"
+  }
+
   private func delete(_ items: [HistoryItem]) {
     pendingDelete = nil
     Task {
       do {
         try await history.delete(items)
+        timelines.removeClips(Set(items.filter(\.isVideo).map(\.tensorId)))
       } catch {
         deleteError = error.localizedDescription
       }
@@ -617,6 +641,8 @@ struct HistorySelectionDetail: View {
 struct HistoryDetail: View {
   @Environment(CreateModel.self) private var create
   @Environment(HistoryStore.self) private var history
+  @Environment(TimelineStore.self) private var timelines
+  @Environment(\.undoManager) private var undoManager
   var item: HistoryItem
   var use: () -> Void
   var rerun: () -> Void
@@ -654,6 +680,10 @@ struct HistoryDetail: View {
             Button("Save to Photos", action: saveToPhotos)
           #endif
           Button("Delete", role: .destructive, action: delete)
+        }
+        if item.isVideo {
+          Button("Add to Timeline") { timelines.append([item], undoManager: undoManager) }
+            .help("Add the video to the end of the timeline open in Timeline")
         }
       }
       Section("Prompt") {

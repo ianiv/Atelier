@@ -374,6 +374,7 @@ extension Automation {
         .background(.white)
         .environment(model)
         .environment(model.history)
+        .environment(model.timelines)
         let renderer = ImageRenderer(content: rows)
         renderer.scale = 2
         if let image = renderer.cgImage, let png = ImageTensor.png(image) {

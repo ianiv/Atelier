@@ -507,9 +507,12 @@ final class HistoryStore {
     if FileManager.default.fileExists(atPath: url.path) { return url }
     if let pending = videoFiles[url] { return try await pending.value }
     let project = project
-    let audio = await audio(of: item)
     let metadata = videoMetadata(item)
+    let audioId = clip.audioId
+    let sampleRate = ModelZoo.audioSampleRateForModel(item.sidecar.model)
+    // Registered before anything is awaited, so callers asking at once share one write.
     let task = Task.detached {
+      let audio = audioId.flatMap { project.audio(id: $0) }.map { (samples: $0, sampleRate: sampleRate) }
       try FileManager.default.createDirectory(at: Self.clipCache, withIntermediateDirectories: true)
       // Written beside its final name, so a half-written file is never taken as done.
       let partial = url.deletingPathExtension().appendingPathExtension("partial.mp4")

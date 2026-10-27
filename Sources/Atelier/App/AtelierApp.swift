@@ -60,6 +60,7 @@ struct AtelierApp: App {
       LayoutCheckFrame {
         ContentView()
           .environment(create)
+          .environment(create.timelines)
           .environment(history)
           .environment(navigation)
           .environment(layouts)
@@ -77,8 +78,12 @@ struct AtelierApp: App {
           .keyboardShortcut("i", modifiers: [.command, .option])
         Button(moodboardShown ? "Hide Moodboard" : "Show Moodboard") { moodboardShown.toggle() }
         Divider()
-        ZoomMenuItems(canvas: create.canvas)
-          .disabled(navigation.section != .create)
+        if navigation.section == .timeline {
+          TimelineZoomMenuItems(store: create.timelines, history: history)
+        } else {
+          ZoomMenuItems(canvas: create.canvas)
+            .disabled(navigation.section != .create)
+        }
       }
       CommandMenu("Image") {
         Button("Focus Prompt") {

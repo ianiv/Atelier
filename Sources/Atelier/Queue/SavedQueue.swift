@@ -22,6 +22,8 @@ enum SavedQueue {
     var moodboardWeights: [Float]
     /// The audio file's copy (`AudioClip.snapshot`), kept where it is.
     var audio: URL?
+    /// Where a run from a timeline frame goes (`TimelinePlacement`).
+    var placement: TimelinePlacement?
   }
 
   /// A saved job, before its settings are put back on its model's defaults.
@@ -46,6 +48,7 @@ enum SavedQueue {
       }
       request.moodboard = moodboard
       request.audio = entry.audio.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
+      request.placement = sameProject ? entry.placement : nil
       return request
     }
   }
@@ -79,7 +82,8 @@ enum SavedQueue {
           settings: JSONValue.fields(of: settings), project: project,
           parentTensorId: request.parentTensorId, hasCanvas: request.canvas != nil,
           canvasTensorId: request.canvasTensorId, canvasIsImported: request.canvasIsImported,
-          moodboardWeights: request.moodboard.map(\.weight), audio: request.audio))
+          moodboardWeights: request.moodboard.map(\.weight), audio: request.audio,
+          placement: request.placement))
     }
     if let data = try? JSONEncoder().encode(entries) {
       try? data.write(to: folder.appending(path: "index.json"))

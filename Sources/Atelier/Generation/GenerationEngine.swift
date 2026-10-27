@@ -38,6 +38,8 @@ actor GenerationEngine {
     /// An audio file for video models that take one (`VideoModel.takesAudio`), kept by
     /// `AudioInputStore`.
     var audio: URL?
+    /// Started from a timeline frame: where the result goes on the timeline.
+    var placement: TimelinePlacement?
   }
 
   /// What a run made: one frame for an image, every frame of a clip and its soundtrack for video.

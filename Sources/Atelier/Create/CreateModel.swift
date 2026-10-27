@@ -26,6 +26,10 @@ final class CreateModel {
   let history: HistoryStore
   /// Generate adds to it; jobs run one at a time, in order.
   let queue = JobQueue()
+  /// The project's timelines; runs started from a timeline frame land back on them.
+  let timelines: TimelineStore
+  /// Set by Continue from Here and Bridge: the next Generate from that frame takes it.
+  private var pendingPlacement: TimelinePlacement?
   /// How many images each Generate makes (the ×N beside Generate).
   var count = 1
 
@@ -177,6 +181,7 @@ final class CreateModel {
     let tensorId = frames[index]
     let projectName = history.project.name
     statusNote = nil
+    pendingPlacement = nil
     stopFollowingRun()
     history.setCurrent(tensorId: tensorId, exact: true)
     canvasIsImported = false
@@ -188,6 +193,33 @@ final class CreateModel {
       image = frame
       canvas.zoomToFit()
       canvasMode = .edit
+    }
+  }
+
+  /// Puts a timeline frame on the canvas as `useFrame` does; the next run from it goes on the
+  /// timeline right after that frame. A bridge (MiniMax H3 FL2VA) also puts the next entry's
+  /// first frame at the front of the moodboard, as the frame the run ends on, and the run goes
+  /// between the two.
+  func continueTimeline(
+    _ timeline: Timeline, entry: Timeline.Entry, frame: Int, of item: HistoryItem,
+    bridgingTo next: (entry: Timeline.Entry, item: HistoryItem)? = nil
+  ) {
+    guard let frames = item.clip?.frames, frames.indices.contains(frame) else { return }
+    useFrame(frame, of: item)
+    pendingPlacement = TimelinePlacement(
+      project: history.project.name, timeline: timeline.id, entry: entry.id, frame: frame,
+      frameTensorId: frames[frame], bridgesTo: next?.entry.id)
+    if let next, let nextFrames = next.item.clip?.frames, nextFrames.indices.contains(next.entry.start) {
+      let tensorId = nextFrames[next.entry.start]
+      let projectName = history.project.name
+      Task {
+        if let image = await history.image(tensorId: tensorId, in: projectName) {
+          moodboard.insert(image, at: 0)
+        }
+      }
+      statusNote = "The next run goes on “\(timeline.name)” between the two clips."
+    } else {
+      statusNote = "The next run goes on “\(timeline.name)” after this frame."
     }
   }
 
@@ -335,6 +367,7 @@ final class CreateModel {
 
   init(history: HistoryStore) {
     self.history = history
+    timelines = TimelineStore(history: history)
     if let session = SessionState.load() {
       restored = session
       prompt = session.prompt
@@ -741,6 +774,12 @@ final class CreateModel {
       {
         base.canvasTensorId = step.tensorId
       }
+      if let pending = pendingPlacement, source.step?.tensorId == pending.frameTensorId,
+        source.step?.project == pending.project, !source.isPreview
+      {
+        base.placement = pending
+        pendingPlacement = nil
+      }
     }
     if usesReferences { base.moodboard = moodboard.references }
     let takesAudio = videoModel?.takesAudio == true && audio.url != nil
@@ -834,6 +873,7 @@ final class CreateModel {
           canvasIsImported = false
           if let finished { image = finished }
         }
+        if let placement = request.placement, item.isVideo { timelines.place(item, at: placement) }
         if let failure = await history.writeToOutputFolder(item, image: finished) {
           errorMessage = failure
         }

@@ -130,6 +130,13 @@ final class Project: @unchecked Sendable {
     }
   }
 
+  /// The project's timelines as JSON (`TimelineStore`), kept in the project file so they follow
+  /// a rename or a copy. Draw Things ignores the key.
+  var timelinesJSON: String? {
+    get { workspace.dictionary["atelier_timelines", String.self] }
+    set { workspace.dictionary["atelier_timelines", String.self] = newValue }
+  }
+
   /// The image layer's tensor: from the canvas layers when stored (the top one with a tensor), else
   /// the node's own field.
   private func imageTensorId(of node: TensorHistoryNode) -> Int64? {
