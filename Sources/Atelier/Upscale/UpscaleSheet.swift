@@ -128,7 +128,7 @@ struct UpscaleControls: View {
       .pickerStyle(.segmented)
       Text(
         method == .flashVSR
-          ? "FlashVSR+ restores detail as one stream, steady from frame to frame. It takes a while and a lot of memory."
+          ? "FlashVSR+ restores detail as one stream, steady from frame to frame. It takes a few seconds a frame."
           : "Apple Super Resolution runs on the Neural Engine in seconds. macOS downloads its model the first time."
       )
       .font(.caption).foregroundStyle(.secondary)

@@ -23,8 +23,8 @@ struct ClipUpscale: Codable, Sendable, Hashable {
   var variant: FlashVSRFiles.Variant?
 
   static let scales = [2, 4]
-  /// FlashVSR+'s largest output, in pixels per frame: 1920×1152 takes about 33 GB at its peak,
-  /// and the wide layers' attention grows with the square of the size past it.
+  /// FlashVSR+'s largest output, in pixels per frame: 1920×1152. Its wide layers' attention grows
+  /// with the square of the size, so past this it takes minutes a frame.
   static let flashVSRPixelLimit = 1920 * 1152
 
   /// The result's size for a `width`×`height` clip. FlashVSR+ works on a 128-pixel grid.
@@ -64,9 +64,6 @@ struct ClipUpscale: Codable, Sendable, Hashable {
         return "Apple Super Resolution can't scale by \(scale)×."
       }
     case .flashVSR:
-      guard ProcessInfo.processInfo.physicalMemory >= 32 << 30 else {
-        return "FlashVSR+ needs 32 GB of memory or more."
-      }
       guard FlashVSRFiles.installed(variant) != nil else {
         return "Download FlashVSR+ \(variant.title) to use Quality."
       }
