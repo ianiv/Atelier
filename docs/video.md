@@ -61,10 +61,12 @@ Videos are stored in the project the way Draw Things stores them: one step per f
 
 To make a larger, sharper copy of a video, right-click it in History and choose **Upscale…**, or click **Upscale…** in its detail panel. Pick a method and a scale; the sheet shows the size it will make.
 
-- **Quality** uses SeedVR2, which restores detail across many frames at once, so it stays steady from frame to frame. Download a SeedVR2 model in **Models** first (the sheet picks the largest you have). It makes videos up to 1920×1088, takes minutes even for a few seconds of video, and needs a lot of memory.
+- **Quality** uses FlashVSR+, which restores the whole video as one stream, each part with the parts before it in view, so detail stays steady from frame to frame instead of shimmering. Pick **Turbo** (faster) or **Base** (slower, a little more detail). The first time, click **Download FlashVSR+** in the sheet: it downloads about 7 GB per version from Hugging Face into a **FlashVSR+** folder in the models folder. It makes videos up to 1920×1152, takes a few seconds a frame, and needs a lot of memory (about 25 GB at 1664×1024).
 - **Fast** uses Apple Super Resolution on the Neural Engine and takes seconds. macOS downloads its model the first time you use it. It offers only the scales your device supports (on some Macs, only 4×), for videos up to 1920×1080.
 
 The upscale runs in the Queue like any other job. The result is a new video after the original, with the same prompt and settings at the new size, and the soundtrack kept.
+
+To upscale a whole timeline instead, use **Export ▸ Export Upscaled Video…** in Timeline (see [Exporting](timeline.md#exporting)).
 
 ## Files
 
@@ -72,4 +74,4 @@ Videos are saved as MP4, with AAC sound when there is any. **Settings ▸ Images
 
 ## On iPad
 
-Everything above works on iPad; touch and hold a video for its menu. Scrubbing a History tile needs a pointer, so on iPad play the video in the detail panel instead. Fast upscaling takes videos up to 1440×1080 on iPad. iPadOS stops generation in the background, so a video that was being made when you switched away may fail; **Retry** in the Queue runs it again.
+Everything above works on iPad; touch and hold a video for its menu. Scrubbing a History tile needs a pointer, so on iPad play the video in the detail panel instead. Quality upscaling needs 32 GB of memory, more than an iPad has; Fast upscaling takes videos up to 1440×1080 on iPad. iPadOS stops generation in the background, so a video that was being made when you switched away may fail; **Retry** in the Queue runs it again.

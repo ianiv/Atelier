@@ -10,21 +10,24 @@ import NNC
 struct TimelineUpscale: Sendable, Hashable {
   var method: ClipUpscale.Method
   var scale: Int
-  /// The SeedVR2 checkpoint, for Quality.
-  var seedVR2: String
+  /// FlashVSR+'s variant, for Quality.
+  var variant: FlashVSRFiles.Variant
 
   /// The export's size for a `width`×`height` timeline.
   func outputSize(width: Int, height: Int) -> (width: Int, height: Int) {
     ClipUpscale.outputSize(width: width, height: height, scale: scale, method: method)
   }
 
-  /// A rough time for `frames` frames of `width`×`height`, in seconds, from an M5 Max: SeedVR2
-  /// takes about 2.6 s per output megapixel, Apple Super Resolution with encoding about 0.04 s.
+  /// A rough time for `frames` frames of `width`×`height`, in seconds, from an M5 Max: FlashVSR+
+  /// Turbo grows faster than the size (1.7 s a frame at 1664×1024, 4.2 s at 1920×1152, after
+  /// half a minute loading; Base about twice that), Apple Super Resolution with encoding about
+  /// 0.04 s a megapixel.
   func estimatedSeconds(frames: Int, width: Int, height: Int) -> Double {
     let size = outputSize(width: width, height: height)
     let megapixels = Double(size.width * size.height) / 1_000_000
     switch method {
-    case .seedVR2: return Double(frames) * megapixels * 2.6
+    case .flashVSR:
+      return Double(frames) * 0.5 * pow(megapixels, 2.6) * (variant == .turbo ? 1 : 2) + 30
     case .system: return Double(frames) * (0.02 + megapixels * 0.04)
     }
   }
@@ -32,8 +35,8 @@ struct TimelineUpscale: Sendable, Hashable {
 
 extension TimelineComposition {
   /// Writes it as Export does, but upscaled: the composed frames (after trims and crossfades)
-  /// go through Apple Super Resolution one by one, or through SeedVR2 a run between hard cuts at
-  /// a time, straight into the MP4, so no more than a few upscaled frames are held at once. The
+  /// go through Apple Super Resolution one by one, or FlashVSR+ as one stream, straight into the
+  /// MP4, so no more than a chunk of upscaled frames is held at once. The
   /// soundtrack is mixed as Export mixes it and put in unchanged. Runs in the engine's turn, so
   /// not alongside a generation. Cancelling the task stops it.
   func exportUpscaled(
@@ -52,10 +55,10 @@ extension TimelineComposition {
         try await writeWithSystemSuperResolution(
           to: video, codec: codec, scale: upscale.scale
         ) { progress(0.95 * Double($0) / frames) }
-      case .seedVR2:
+      case .flashVSR:
         let composition = self
         try await engine.onEngineQueue { shouldContinue in
-          try composition.writeWithSeedVR2(
+          try composition.writeWithFlashVSR(
             to: video, codec: codec, upscale: upscale, shouldContinue: shouldContinue
           ) { progress(0.95 * Double($0) / frames) }
         }
@@ -97,17 +100,19 @@ extension TimelineComposition {
     }
   }
 
-  /// SeedVR2, one run between hard cuts at a time, so a cut doesn't blur into the next shot.
-  /// Runs on the engine's queue.
-  private func writeWithSeedVR2(
+  /// FlashVSR+, the whole timeline as one stream, as vpipe runs it, each restored frame written
+  /// as it's decoded. Runs on the engine's queue.
+  private func writeWithFlashVSR(
     to url: URL, codec: VideoCodec, upscale: TimelineUpscale, shouldContinue: @escaping () -> Bool,
     written: (Int) -> Void
   ) throws {
+    guard let files = FlashVSRFiles.installed(upscale.variant) else {
+      throw FlashVSRFiles.Failure.missing
+    }
     let size = upscale.outputSize(width: width, height: height)
     let reader = try ComposedFrames(self)
     let writer = try UpscaledVideoWriter(url: url, codec: codec, width: size.width, height: size.height)
-    // The frame last read, which the restorer may ask for again (a chunk starts on the frame the
-    // one before ended on); past the end, the last frame repeats.
+    // The frame last read; past the end, the last frame repeats.
     var last: (index: Int, image: CGImage)?
     func frame(_ index: Int) -> CGImage? {
       while (last?.index ?? -1) < index, let (buffer, _) = reader.next() {
@@ -118,19 +123,15 @@ extension TimelineComposition {
     }
     var count = 0
     do {
-      for run in Self.restorableRuns(runs) {
-        let restorer = SeedVR2Restorer(
-          model: upscale.seedVR2, width: size.width, height: size.height, seed: 0)
-        try restorer.run(
-          count: run.count, frame: { frame(run.lowerBound + $0) }, progress: { _, _, _ in },
-          shouldContinue: shouldContinue
-        ) { tensor in
-          let buffer = try writer.buffer()
-          Self.fill(buffer, with: tensor)
-          try writer.append(buffer, at: Self.frameTime(count, framesPerSecond))
-          count += 1
-          written(count)
-        }
+      let upscaler = FlashVSRUpscaler(files: files, width: size.width, height: size.height)
+      try upscaler.run(
+        count: frameCount, frame: frame, progress: { _, _, _ in }, shouldContinue: shouldContinue
+      ) { tensor in
+        let buffer = try writer.buffer()
+        Self.fill(buffer, with: tensor)
+        try writer.append(buffer, at: Self.frameTime(count, framesPerSecond))
+        count += 1
+        written(count)
       }
       try reader.finish()
       try writer.finish()
@@ -138,19 +139,6 @@ extension TimelineComposition {
       writer.cancel()
       throw error
     }
-  }
-
-  /// `runs`, with ones too short for SeedVR2 (under 5 frames) joined to a neighbor.
-  static func restorableRuns(_ runs: [Range<Int>]) -> [Range<Int>] {
-    var joined: [Range<Int>] = []
-    for run in runs {
-      if let previous = joined.last, run.count < 5 || previous.count < 5 {
-        joined[joined.count - 1] = previous.lowerBound..<run.upperBound
-      } else {
-        joined.append(run)
-      }
-    }
-    return joined
   }
 
   /// A composed frame as an image of its own (the reader reuses its buffers).

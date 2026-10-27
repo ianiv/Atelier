@@ -277,7 +277,7 @@ actor GenerationEngine {
   // MARK: - Upscale
 
   /// Upscales a clip's `frames` as `request.upscale` says, to `request.configuration`'s size
-  /// (SeedVR2, with `request.model` and seed) or by its scale (Apple Super Resolution).
+  /// (FlashVSR+, with the request's seed) or by its scale (Apple Super Resolution).
   func upscale(
     _ request: Request, frames: [CGImage],
     progress: @escaping @Sendable (Progress) -> Void
@@ -300,17 +300,23 @@ actor GenerationEngine {
       let tensors = images.compactMap(ImageTensor.tensor(from:))
       guard tensors.count == frames.count else { throw ProjectError.badImage }
       return tensors
-    case .seedVR2:
-      let restorer = SeedVR2Restorer(
-        model: request.model, width: request.configuration.width,
-        height: request.configuration.height, seed: request.seed)
+    case .flashVSR:
+      guard let files = FlashVSRFiles.installed(upscale.variant ?? .turbo) else {
+        throw FlashVSRFiles.Failure.missing
+      }
+      let upscaler = FlashVSRUpscaler(
+        files: files, width: request.configuration.width, height: request.configuration.height,
+        seed: UInt64(request.seed))
       return try await onEngineQueue { shouldContinue in
-        try restorer.run(
+        var tensors: [Tensor<FloatType>] = []
+        try upscaler.run(
           count: frames.count, frame: { frames[$0] },
-          progress: { _, done, total in
-            progress(.state(.generating(step: done, totalSteps: total)))
+          progress: { phase, done, total in
+            progress(.state(phase == .loading ? .preparing : .generating(step: done, totalSteps: total)))
           },
-          shouldContinue: shouldContinue)
+          shouldContinue: shouldContinue
+        ) { tensors.append($0) }
+        return tensors
       }
     }
   }
@@ -325,7 +331,7 @@ actor GenerationEngine {
   }
 
   /// Runs `work` on the engine's queue after dropping the models the engine keeps loaded, which
-  /// SeedVR2 needs the memory of. Call it in the engine's turn. `work` checks `shouldContinue`,
+  /// FlashVSR+ needs the memory of. Call it in the engine's turn. `work` checks `shouldContinue`,
   /// which turns false when the task is cancelled.
   func onEngineQueue<T>(
     _ work: @escaping @Sendable (_ shouldContinue: @escaping () -> Bool) throws -> T

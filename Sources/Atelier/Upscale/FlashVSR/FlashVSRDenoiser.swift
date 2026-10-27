@@ -345,7 +345,6 @@ final class FlashVSRDenoiser {
     noise: DynamicGraph.Tensor<Float>, rows: DynamicGraph.Tensor<FloatType>,
     shouldContinue: () -> Bool
   ) throws -> DynamicGraph.Tensor<Float>? {
-    let D = Self.hidden
     let T = Self.chunkFrames
     let h = latentHeight, w = latentWidth
     let gh = gridHeight, gw = gridWidth
@@ -462,10 +461,6 @@ final class FlashVSRDenoiser {
     Profile.mark("scores")
     let kept = select(scores: scores, layer: layer, queryBlocks: queryBlocks, keyBlocks: keyBlocks)
     Profile.mark("select")
-    if Profile.enabled && chunk >= 1 && (layer == 0 || layer == 1) {
-      let total = kept.reduce(0) { $0 + $1.reduce(0) { $0 + $1.count } }
-      print("KEPT layer \(layer): \(total) of \(Self.heads * queryBlocks * keyBlocks) block pairs, \(Double(total) / Double(Self.heads * queryBlocks)) per row")
-    }
 
     // Attend a row of query blocks at a time.
     let output = stripAttention(
@@ -789,7 +784,7 @@ final class FlashVSRDenoiser {
   }
 }
 
-/// Temporary timing (FLASHVSR_PROFILE=1): seconds per named step, synchronizing the GPU.
+/// Timing for `--flashvsr-check` (FLASHVSR_PROFILE=1): seconds per named step, printed per chunk.
 enum Profile {
   nonisolated(unsafe) static var enabled = ProcessInfo.processInfo.environment["FLASHVSR_PROFILE"] != nil
   nonisolated(unsafe) static var last = Date()

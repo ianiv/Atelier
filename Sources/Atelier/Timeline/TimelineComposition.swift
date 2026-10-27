@@ -14,7 +14,7 @@ struct TimelineComposition: @unchecked Sendable {
   let height: Int
   let framesPerSecond: Double
   /// The frames between hard cuts, at `framesPerSecond`: a crossfade joins the clips on either
-  /// side into one run. Export Upscaled restores each with SeedVR2 on its own.
+  /// side into one run.
   let runs: [Range<Int>]
 
   var frameCount: Int { runs.last?.upperBound ?? 0 }

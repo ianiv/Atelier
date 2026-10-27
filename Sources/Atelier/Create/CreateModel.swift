@@ -912,16 +912,15 @@ final class CreateModel {
     }
   }
 
-  /// Queues upscaling `item`, a clip, `scale` times with `method` (`seedVR2` names the SeedVR2
-  /// model). The result is a new clip after it, with its prompt, seed and settings at the new size.
+  /// Queues upscaling `item`, a clip, `scale` times with `method` (FlashVSR+ as `variant`). The
+  /// result is a new clip after it, with its model, prompt, seed and settings at the new size.
   func upscale(
-    _ item: HistoryItem, method: ClipUpscale.Method, scale: Int, seedVR2: String,
-    frameLimit: Int? = nil
+    _ item: HistoryItem, method: ClipUpscale.Method, scale: Int,
+    variant: FlashVSRFiles.Variant = .turbo, frameLimit: Int? = nil
   ) async {
     guard item.isVideo else { return }
     let sidecar = item.sidecar
-    // SeedVR2 makes the frames, so the clip is its; Apple's scaler keeps the source's model.
-    let model = method == .seedVR2 ? seedVR2 : sidecar.model
+    let model = sidecar.model
     var configuration: PipelineConfiguration
     if let loaded = try? await engine.loadPipeline(for: model) {
       configuration = ModelDefaults.recommended(for: model, configuration: loaded)
@@ -935,19 +934,13 @@ final class CreateModel {
       width: sidecar.width, height: sidecar.height, scale: scale, method: method)
     configuration.width = size.width
     configuration.height = size.height
-    if method == .seedVR2 {
-      let defaults = ModelDefaults.recommended(for: model, configuration: configuration)
-      configuration.steps = 1
-      configuration.guidanceScale = 1
-      configuration.shift = defaults.shift
-      configuration.sampler = defaults.sampler
-    }
     var request = GenerationEngine.Request(
       model: model, prompt: sidecar.prompt, negativePrompt: sidecar.negativePrompt,
       seed: sidecar.seed, configuration: configuration)
     request.parentTensorId = HistoryStore.tip(of: item)
     request.upscale = ClipUpscale(
-      method: method, scale: scale, sourceTensorId: item.tensorId, frameLimit: frameLimit)
+      method: method, scale: scale, sourceTensorId: item.tensorId, frameLimit: frameLimit,
+      variant: method == .flashVSR ? variant : nil)
     statusNote = nil
     queue.append([request], currentTensorId: history.currentTensorId)
     runNext()

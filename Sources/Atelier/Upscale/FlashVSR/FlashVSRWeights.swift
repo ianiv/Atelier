@@ -17,6 +17,19 @@ struct FlashVSRFiles {
     case turbo
     /// Every layer searches wide: slower, a little more detail.
     case base
+
+    var title: String {
+      switch self {
+      case .turbo: "Turbo"
+      case .base: "Base"
+      }
+    }
+  }
+
+  enum Failure: LocalizedError {
+    case missing
+
+    var errorDescription: String? { "FlashVSR+ isn't downloaded." }
   }
 
   static let folderName = "FlashVSR+"
@@ -42,9 +55,18 @@ struct FlashVSRFiles {
     ]
   }
 
+  /// The folder in the models directory.
+  static var folder: URL { URL(fileURLWithPath: AppSettings.modelsDirectory).appending(path: folderName) }
+
+  /// Where a required file downloads from.
+  static func source(_ path: String) -> URL {
+    let repository = path == "posi_prompt.pth" ? promptRepository : repository
+    return URL(string: "https://huggingface.co/\(repository)/resolve/main/\(path)")!
+  }
+
   /// In the models directory, when every file `variant` needs is there.
   static func installed(_ variant: Variant) -> FlashVSRFiles? {
-    let root = URL(fileURLWithPath: AppSettings.modelsDirectory).appending(path: folderName)
+    let root = folder
     let manager = FileManager.default
     for file in required(variant) {
       guard manager.fileExists(atPath: root.appending(path: file.path).path) else { return nil }
@@ -77,7 +99,7 @@ final class FlashVSRCheckpoint {
       archive = safeTensors
       states = safeTensors.states
     } else {
-      guard let zip = try? Archive(url: url, accessMode: .read) else {
+      guard let zip = Archive(url: url, accessMode: .read) else {
         throw Failure.unreadable(url.lastPathComponent)
       }
       archive = zip

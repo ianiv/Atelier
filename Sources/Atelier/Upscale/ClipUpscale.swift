@@ -1,14 +1,14 @@
 import AVFoundation
 import Foundation
-import ModelZoo
 import NNC
 
-/// A queued job that upscales a clip instead of generating: the request's model, size and seed
-/// are the result's, and the frames come from the source clip when the job runs.
+/// A queued job that upscales a clip instead of generating: the request's size and seed are
+/// the result's (its model stays the source's), and the frames come from the source clip when
+/// the job runs.
 struct ClipUpscale: Codable, Sendable, Hashable {
   enum Method: String, Codable, Sendable, CaseIterable {
-    /// SeedVR2, restoring many frames at once (`SeedVR2Restorer`).
-    case seedVR2
+    /// FlashVSR+, restoring the clip as one stream (`FlashVSRUpscaler`).
+    case flashVSR
     /// Apple's video super resolution (`SystemSuperResolution`).
     case system
   }
@@ -19,41 +19,40 @@ struct ClipUpscale: Codable, Sendable, Hashable {
   var sourceTensorId: Int64
   /// Only the source's first frames, for scripted checks; nil for the whole clip.
   var frameLimit: Int?
+  /// FlashVSR+'s variant; nil for Turbo.
+  var variant: FlashVSRFiles.Variant?
 
   static let scales = [2, 4]
-  /// SeedVR2's largest output, in pixels per frame: 1920×1088. Its encoder can't tile, and past
-  /// this its full-size features (7 padded frames of 128 channels) overflow NNC's 32-bit sizes.
-  static let seedVR2PixelLimit = 1920 * 1088
+  /// FlashVSR+'s largest output, in pixels per frame: 1920×1152 takes about 33 GB at its peak,
+  /// and the wide layers' attention grows with the square of the size past it.
+  static let flashVSRPixelLimit = 1920 * 1152
 
-  static func isSeedVR2(_ model: String) -> Bool {
-    let version = ModelZoo.versionForModel(model)
-    return version == .seedvr2_3b || version == .seedvr2_7b
-  }
-
-  /// The result's size for a `width`×`height` clip. SeedVR2 works in 16-pixel blocks.
+  /// The result's size for a `width`×`height` clip. FlashVSR+ works on a 128-pixel grid.
   static func outputSize(width: Int, height: Int, scale: Int, method: Method) -> (width: Int, height: Int) {
     switch method {
     case .system: (width * scale, height * scale)
-    case .seedVR2: (width * scale / 16 * 16, height * scale / 16 * 16)
+    case .flashVSR: FlashVSRUpscaler.outputSize(width: width, height: height, scale: scale)
     }
   }
 
   /// The scales `method` can upscale a `width`×`height` clip by: what Apple's model supports on
-  /// this device, or SeedVR2's that fit its output limit.
+  /// this device, or FlashVSR+'s that fit its output limit.
   static func offeredScales(width: Int, height: Int, method: Method) -> [Int] {
     switch method {
     case .system:
       SystemSuperResolution.scaleFactors(width: width, height: height)
-    case .seedVR2:
+    case .flashVSR:
       scales.filter { scale in
         let size = outputSize(width: width, height: height, scale: scale, method: method)
-        return size.width * size.height <= seedVR2PixelLimit
+        return size.width * size.height <= flashVSRPixelLimit
       }
     }
   }
 
   /// Why `method` can't upscale a `width`×`height` clip by `scale`; nil when it can.
-  static func problem(width: Int, height: Int, scale: Int, method: Method) -> String? {
+  static func problem(
+    width: Int, height: Int, scale: Int, method: Method, variant: FlashVSRFiles.Variant = .turbo
+  ) -> String? {
     switch method {
     case .system:
       guard SystemSuperResolution.isSupported else { return "This device doesn't support Apple Super Resolution." }
@@ -64,12 +63,18 @@ struct ClipUpscale: Codable, Sendable, Hashable {
       guard SystemSuperResolution.scaleFactors(width: width, height: height).contains(scale) else {
         return "Apple Super Resolution can't scale by \(scale)×."
       }
-    case .seedVR2:
+    case .flashVSR:
+      guard ProcessInfo.processInfo.physicalMemory >= 32 << 30 else {
+        return "FlashVSR+ needs 32 GB of memory or more."
+      }
+      guard FlashVSRFiles.installed(variant) != nil else {
+        return "Download FlashVSR+ \(variant.title) to use Quality."
+      }
       let size = outputSize(width: width, height: height, scale: scale, method: method)
-      guard size.width * size.height <= seedVR2PixelLimit else {
+      guard size.width * size.height <= flashVSRPixelLimit else {
         return offeredScales(width: width, height: height, method: method).isEmpty
-          ? "SeedVR2 makes clips up to 1920×1088, so this one is too large to upscale."
-          : "SeedVR2 makes clips up to 1920×1088; pick a smaller scale."
+          ? "FlashVSR+ makes videos up to 1920×1152, so this one is too large to upscale."
+          : "FlashVSR+ makes videos up to 1920×1152; pick a smaller scale."
       }
     }
     return nil

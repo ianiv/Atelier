@@ -96,7 +96,6 @@
 		6E51D9FDDD76364020D5131B /* TimelineScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77FD635F00DD90D3AB4AFE0B /* TimelineScreen.swift */; };
 		70E8E18439D847EA73F0D5DD /* AutomationTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5D760BDEB2FA5F04BDAF779 /* AutomationTimeline.swift */; };
 		F1F29ECD79C50D354E0EE7E2 /* ClipUpscale.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A8E4692BF6E0B02895EE031 /* ClipUpscale.swift */; };
-		42B03D63237BF141B72F4ADA /* SeedVR2Restorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC2FB1CF49E1E312CF01272F /* SeedVR2Restorer.swift */; };
 		E360F3396B8D19F63D2D7763 /* SystemSuperResolution.swift in Sources */ = {isa = PBXBuildFile; fileRef = 177D8A305B3B202F8A318C82 /* SystemSuperResolution.swift */; };
 		4D4DA740C5B076119D7E2DC9 /* UpscaleSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F1F88CE15A4A3DD562DD72C /* UpscaleSheet.swift */; };
 		E8B7558C1BC967172061F95A /* TimelineUpscaleExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 705B33C92E12A854209C6682 /* TimelineUpscaleExport.swift */; };
@@ -107,6 +106,7 @@
 		D09EF47612F42C97A9AFB39B /* FlashVSRImages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1EC580B666B14D5B6F0C6D /* FlashVSRImages.swift */; };
 		783C639BE2E780DF08C7DDB2 /* FlashVSRDenoiser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0343C10B31AF36F4DB99BC30 /* FlashVSRDenoiser.swift */; };
 		73FFB6A4A227C1669198546E /* FlashVSRUpscaler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 129DAB3BADED6B1DE20EC122 /* FlashVSRUpscaler.swift */; };
+		FDD55D34BA326FA4A99271BF /* FlashVSRDownload.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF6168E6353D798FA48B60AC /* FlashVSRDownload.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -219,7 +219,6 @@
 		77FD635F00DD90D3AB4AFE0B /* TimelineScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineScreen.swift; sourceTree = "<group>"; };
 		E5D760BDEB2FA5F04BDAF779 /* AutomationTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationTimeline.swift; sourceTree = "<group>"; };
 		3A8E4692BF6E0B02895EE031 /* ClipUpscale.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipUpscale.swift; sourceTree = "<group>"; };
-		BC2FB1CF49E1E312CF01272F /* SeedVR2Restorer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeedVR2Restorer.swift; sourceTree = "<group>"; };
 		177D8A305B3B202F8A318C82 /* SystemSuperResolution.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemSuperResolution.swift; sourceTree = "<group>"; };
 		5F1F88CE15A4A3DD562DD72C /* UpscaleSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpscaleSheet.swift; sourceTree = "<group>"; };
 		705B33C92E12A854209C6682 /* TimelineUpscaleExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineUpscaleExport.swift; sourceTree = "<group>"; };
@@ -230,6 +229,7 @@
 		4B1EC580B666B14D5B6F0C6D /* FlashVSRImages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlashVSRImages.swift; sourceTree = "<group>"; };
 		0343C10B31AF36F4DB99BC30 /* FlashVSRDenoiser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlashVSRDenoiser.swift; sourceTree = "<group>"; };
 		129DAB3BADED6B1DE20EC122 /* FlashVSRUpscaler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlashVSRUpscaler.swift; sourceTree = "<group>"; };
+		AF6168E6353D798FA48B60AC /* FlashVSRDownload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlashVSRDownload.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -473,7 +473,6 @@
 			children = (
 				C41D9DC9E410980018EFA07F /* FlashVSR */,
 				3A8E4692BF6E0B02895EE031 /* ClipUpscale.swift */,
-				BC2FB1CF49E1E312CF01272F /* SeedVR2Restorer.swift */,
 				177D8A305B3B202F8A318C82 /* SystemSuperResolution.swift */,
 				705B33C92E12A854209C6682 /* TimelineUpscaleExport.swift */,
 				5F1F88CE15A4A3DD562DD72C /* UpscaleSheet.swift */,
@@ -485,6 +484,7 @@
 			isa = PBXGroup;
 			children = (
 				9E49E0979AF32A5D8D048181 /* FlashVSRWeights.swift */,
+				AF6168E6353D798FA48B60AC /* FlashVSRDownload.swift */,
 				A08CCF40C7CF25F4BF8BAFCF /* FlashVSRSourceProjection.swift */,
 				09EC439DFB06AF76584E0D97 /* FlashVSRTinyDecoder.swift */,
 				4B1EC580B666B14D5B6F0C6D /* FlashVSRImages.swift */,
@@ -617,9 +617,9 @@
 			files = (
 				10171A503FBA24116D0D87F6 /* AppSettings.swift in Sources */,
 				F1F29ECD79C50D354E0EE7E2 /* ClipUpscale.swift in Sources */,
-				42B03D63237BF141B72F4ADA /* SeedVR2Restorer.swift in Sources */,
 				E360F3396B8D19F63D2D7763 /* SystemSuperResolution.swift in Sources */,
 				4E97E7417B4FBD4C0A2D4F5F /* FlashVSRWeights.swift in Sources */,
+				FDD55D34BA326FA4A99271BF /* FlashVSRDownload.swift in Sources */,
 				81757968C9588EE3EE6A6ECA /* FlashVSRSourceProjection.swift in Sources */,
 				399404404C42798FDF78F390 /* FlashVSRTinyDecoder.swift in Sources */,
 				D09EF47612F42C97A9AFB39B /* FlashVSRImages.swift in Sources */,

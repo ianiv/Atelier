@@ -8,8 +8,8 @@ extension Automation {
   /// or `--clip STEP_TENSOR_ID`) and prints how long it took and what came out. With
   /// `--export DIR`, writes the result as an MP4 there.
   ///
-  ///   Atelier --upscale-check --project NAME [--method seedVR2|system] [--scale 2]
-  ///           [--seedvr2 FILE] [--clip ID] [--frames N] [--export DIR]
+  ///   Atelier --upscale-check --project NAME [--method flashVSR|system] [--scale 2]
+  ///           [--variant turbo|base] [--clip ID] [--frames N] [--export DIR]
   ///           [--export-clip ID|latest] [--quit]
   static func upscaleCheck(_ model: CreateModel) {
     let args = CommandLine.arguments
@@ -56,26 +56,25 @@ extension Automation {
         log("FAIL no clip in \(model.history.project.name)")
         return finish()
       }
-      let method = value("--method").flatMap(ClipUpscale.Method.init(rawValue:)) ?? .seedVR2
+      let method = value("--method").flatMap(ClipUpscale.Method.init(rawValue:)) ?? .flashVSR
       let scale = value("--scale").flatMap(Int.init) ?? 2
-      let seedVR2 =
-        value("--seedvr2")
-        ?? model.models.map(\.file).filter(ClipUpscale.isSeedVR2).sorted().last ?? ""
+      let variant = value("--variant").flatMap(FlashVSRFiles.Variant.init(rawValue:)) ?? .turbo
       log(
         "source \(source.tensorId): \(clip.frames.count) frames, \(source.sidecar.width)x\(source.sidecar.height), \(source.sidecar.model)"
       )
       if let problem = ClipUpscale.problem(
-        width: source.sidecar.width, height: source.sidecar.height, scale: scale, method: method)
+        width: source.sidecar.width, height: source.sidecar.height, scale: scale, method: method,
+        variant: variant)
       {
         log("FAIL \(problem)")
         return finish()
       }
-      log("upscaling \(scale)x with \(method == .seedVR2 ? seedVR2 : "Apple Super Resolution")")
+      log("upscaling \(scale)x with \(method == .flashVSR ? "FlashVSR+ \(variant.title)" : "Apple Super Resolution")")
       let before = model.queue.recent.count
       let upscaleStarted = Date()
       let frameLimit = value("--frames").flatMap(Int.init)
       await model.upscale(
-        source, method: method, scale: scale, seedVR2: seedVR2, frameLimit: frameLimit)
+        source, method: method, scale: scale, variant: variant, frameLimit: frameLimit)
       var lastPhase = ""
       while model.queue.recent.count == before || !model.queue.isEmpty {
         if case .running(let text) = model.phase, text != lastPhase {
@@ -123,8 +122,8 @@ extension Automation {
   /// of the first, the start of the rest), both only for the export: the saved timeline is left
   /// as it is.
   ///
-  ///   Atelier --timeline-export-check --project NAME [--method system|seedVR2] [--scale 4]
-  ///           [--seedvr2 FILE] [--crossfade N] [--trim N] --export DIR [--quit]
+  ///   Atelier --timeline-export-check --project NAME [--method system|flashVSR] [--scale 4]
+  ///           [--variant turbo|base] [--crossfade N] [--trim N] --export DIR [--quit]
   static func timelineExportCheck(_ model: CreateModel) {
     let args = CommandLine.arguments
     func value(_ name: String) -> String? {
@@ -166,8 +165,7 @@ extension Automation {
       let method = value("--method").flatMap(ClipUpscale.Method.init(rawValue:)) ?? .system
       let upscale = TimelineUpscale(
         method: method, scale: value("--scale").flatMap(Int.init) ?? (method == .system ? 4 : 2),
-        seedVR2: value("--seedvr2")
-          ?? model.models.map(\.file).filter(ClipUpscale.isSeedVR2).sorted().last ?? "")
+        variant: value("--variant").flatMap(FlashVSRFiles.Variant.init(rawValue:)) ?? .turbo)
       do {
         var files: [URL] = []
         for segment in layout.segments {
@@ -209,16 +207,16 @@ extension Automation {
   ///           [--width 1920 --height 1152] --export DIR [--quit]
   static func flashVSRCheck() {
     let args = CommandLine.arguments
-    func value(_ name: String) -> String? {
+    let value: @Sendable (String) -> String? = { name in
       guard let index = args.firstIndex(of: name), index + 1 < args.count else { return nil }
       return args[index + 1]
     }
     let started = Date()
-    func log(_ message: String) {
+    let log: @Sendable (String) -> Void = { message in
       print(String(format: "[%7.2fs] ", Date().timeIntervalSince(started)) + message)
       fflush(stdout)
     }
-    func finish() {
+    let finish: @Sendable () -> Void = {
       if args.contains("--quit") { Task { @MainActor in AppLifecycle.quit() } }
     }
     guard let input = value("--input"), let directory = value("--export") else {
@@ -239,7 +237,7 @@ extension Automation {
         nonisolated(unsafe) var fps: Double = 24
         Task {
           track = try? await asset.loadTracks(withMediaType: .video).first
-          if let track { fps = Double(try await track.load(.nominalFrameRate)) }
+          if let track, let rate = try? await track.load(.nominalFrameRate) { fps = Double(rate) }
           semaphore.signal()
         }
         semaphore.wait()
@@ -277,7 +275,7 @@ extension Automation {
         log(String(format: "PASS %d frames in %.1fs (%.2fs a frame)", frames.count, seconds, seconds / Double(max(frames.count, 1))))
         let url = URL(fileURLWithPath: directory).appending(
           path: "flashvsr-\(variant.rawValue)-\(width)x\(height)-\(frames.count)f.mp4")
-        nonisolated(unsafe) let written = frames
+        let written = frames
         Task {
           do {
             try await ClipVideo.write(

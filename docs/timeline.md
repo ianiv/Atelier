@@ -38,6 +38,8 @@ Only the first video made from that Generate goes on the timeline; with ×2 or m
 
 **Export** writes the timeline as one MP4, in the format chosen in **Settings ▸ Images ▸ Video Format** (H.264 or HEVC), with AAC sound. It shows its progress over the viewer and can be cancelled; then it asks where to save the file.
 
+**Export ▸ Export Upscaled Video…** writes it larger, the same way: pick **Quality** (FlashVSR+, steady detail, a few seconds a frame) or **Fast** (Apple Super Resolution, seconds for the whole timeline) and a scale, as for [upscaling a video](video.md#upscaling-videos). The sheet shows the size and about how long it will take. The frames are upscaled as they're composed, after trims and crossfades, and the sound is the same as Export's. The timeline and its videos are left as they are.
+
 ## Deleting videos
 
 Deleting a video in History that's on a timeline takes it off the timeline too. The confirmation names the timelines it's on.
