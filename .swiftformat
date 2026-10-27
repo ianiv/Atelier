@@ -1,0 +1,21 @@
+# SwiftFormat (github.com/nicklockwood/SwiftFormat): `brew install swiftformat`, then
+# `swiftformat .` from the repo root. Scripts/install-hooks.sh adds a pre-commit hook that
+# formats the Swift files being committed.
+
+--swift-version 6.0
+--exclude Sources/ProjectFormat,build
+
+# Match the existing style: 2-space indent, no line-width limit, `case .x(let y)`, `0..<n`,
+# `#if` bodies indented as written.
+--indent 2
+--max-width none
+--ifdef preserve
+--pattern-let inline
+--ranges no-space
+
+# Rules that would restyle working code rather than tidy it. One-line bodies stay on one line;
+# argument wrapping, blank lines between members, `try`/`await` placement, explicit `self` and
+# two spaces before trailing comments stay as written. `forEach` stays: some types only offer that.
+--disable wrapArguments,wrapFunctionBodies,wrapPropertyBodies,wrapIfStatementBodies,wrapIfExpressionBodies,wrapLoopBodies
+--disable blankLinesBetweenScopes,hoistTry,hoistAwait,conditionalAssignment,opaqueGenericParameters
+--disable numberFormatting,trailingCommas,docComments,redundantSelf,consecutiveSpaces,preferForLoop

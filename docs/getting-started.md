@@ -25,6 +25,10 @@ Release builds don't include Draw Things' preview decoders, so step-by-step prev
 
 You can also open `Atelier.xcodeproj` in Xcode and run the Atelier scheme.
 
+### Code formatting
+
+The Swift code is formatted with [SwiftFormat](https://github.com/nicklockwood/SwiftFormat), set up in `.swiftformat`. If you change the code, install it with `brew install swiftformat` and run `Scripts/install-hooks.sh` once: a pre-commit hook then formats the Swift files you commit. To format everything, run `swiftformat .` from the repository root.
+
 ### Code signing
 
 You don't need an Apple developer account to build Atelier. By default the app is signed to run locally on your Mac (the settings are in `Config/Atelier.xcconfig`).
