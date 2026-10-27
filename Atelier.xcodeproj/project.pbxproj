@@ -99,6 +99,7 @@
 		42B03D63237BF141B72F4ADA /* SeedVR2Restorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC2FB1CF49E1E312CF01272F /* SeedVR2Restorer.swift */; };
 		E360F3396B8D19F63D2D7763 /* SystemSuperResolution.swift in Sources */ = {isa = PBXBuildFile; fileRef = 177D8A305B3B202F8A318C82 /* SystemSuperResolution.swift */; };
 		4D4DA740C5B076119D7E2DC9 /* UpscaleSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F1F88CE15A4A3DD562DD72C /* UpscaleSheet.swift */; };
+		E8B7558C1BC967172061F95A /* TimelineUpscaleExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 705B33C92E12A854209C6682 /* TimelineUpscaleExport.swift */; };
 		58D2F5882DA905D40744609C /* AutomationUpscale.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2FF5ECF7B3949AB28ABC1A2 /* AutomationUpscale.swift */; };
 /* End PBXBuildFile section */
 
@@ -215,6 +216,7 @@
 		BC2FB1CF49E1E312CF01272F /* SeedVR2Restorer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeedVR2Restorer.swift; sourceTree = "<group>"; };
 		177D8A305B3B202F8A318C82 /* SystemSuperResolution.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemSuperResolution.swift; sourceTree = "<group>"; };
 		5F1F88CE15A4A3DD562DD72C /* UpscaleSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpscaleSheet.swift; sourceTree = "<group>"; };
+		705B33C92E12A854209C6682 /* TimelineUpscaleExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineUpscaleExport.swift; sourceTree = "<group>"; };
 		D2FF5ECF7B3949AB28ABC1A2 /* AutomationUpscale.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationUpscale.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -460,6 +462,7 @@
 				3A8E4692BF6E0B02895EE031 /* ClipUpscale.swift */,
 				BC2FB1CF49E1E312CF01272F /* SeedVR2Restorer.swift */,
 				177D8A305B3B202F8A318C82 /* SystemSuperResolution.swift */,
+				705B33C92E12A854209C6682 /* TimelineUpscaleExport.swift */,
 				5F1F88CE15A4A3DD562DD72C /* UpscaleSheet.swift */,
 			);
 			path = Upscale;
@@ -590,6 +593,7 @@
 				F1F29ECD79C50D354E0EE7E2 /* ClipUpscale.swift in Sources */,
 				42B03D63237BF141B72F4ADA /* SeedVR2Restorer.swift in Sources */,
 				E360F3396B8D19F63D2D7763 /* SystemSuperResolution.swift in Sources */,
+				E8B7558C1BC967172061F95A /* TimelineUpscaleExport.swift in Sources */,
 				4D4DA740C5B076119D7E2DC9 /* UpscaleSheet.swift in Sources */,
 				CAD7FD050009B33BA8188223 /* AtelierApp.swift in Sources */,
 				B7FB8865E905277764CD70D9 /* Automation.swift in Sources */,

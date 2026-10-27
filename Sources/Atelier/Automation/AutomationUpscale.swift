@@ -115,5 +115,102 @@ extension Automation {
       finish()
     }
   }
+
+  /// Exports the project's first timeline upscaled and prints how long it took. `--crossfade N`
+  /// fades the first clip into the second over N frames and `--trim N` keeps N frames of each (the end
+  /// of the first, the start of the rest), both only for the export: the saved timeline is left
+  /// as it is.
+  ///
+  ///   Atelier --timeline-export-check --project NAME [--method system|seedVR2] [--scale 4]
+  ///           [--seedvr2 FILE] [--crossfade N] [--trim N] --export DIR [--quit]
+  static func timelineExportCheck(_ model: CreateModel) {
+    let args = CommandLine.arguments
+    func value(_ name: String) -> String? {
+      guard let index = args.firstIndex(of: name), index + 1 < args.count else { return nil }
+      return args[index + 1]
+    }
+    Task { @MainActor in
+      let started = Date()
+      func log(_ message: String) {
+        print(String(format: "[%7.2fs] ", Date().timeIntervalSince(started)) + message)
+        fflush(stdout)
+      }
+      @MainActor func finish() {
+        if args.contains("--quit") { AppLifecycle.quit() }
+      }
+      while !model.history.isLoaded || model.models.isEmpty || model.isBusy {
+        try? await Task.sleep(for: .milliseconds(100))
+      }
+      model.timelines.load()
+      guard var timeline = model.timelines.timelines.first, let directory = value("--export") else {
+        log("FAIL no timeline in \(model.history.project.name), or no --export")
+        return finish()
+      }
+      if let trim = value("--trim").flatMap(Int.init) {
+        for index in timeline.entries.indices {
+          var entry = timeline.entries[index]
+          if index == 0 {
+            entry.start = max(entry.start, entry.end - trim)
+          } else {
+            entry.end = min(entry.end, entry.start + trim)
+          }
+          timeline.entries[index] = entry
+        }
+      }
+      if let crossfade = value("--crossfade").flatMap(Int.init), timeline.entries.count > 1 {
+        timeline.entries[0].crossfadeFrames = crossfade
+      }
+      let layout = TimelineLayout(timeline, item: model.history.item(tensorId:))
+      let method = value("--method").flatMap(ClipUpscale.Method.init(rawValue:)) ?? .system
+      let upscale = TimelineUpscale(
+        method: method, scale: value("--scale").flatMap(Int.init) ?? (method == .system ? 4 : 2),
+        seedVR2: value("--seedvr2")
+          ?? model.models.map(\.file).filter(ClipUpscale.isSeedVR2).sorted().last ?? "")
+      do {
+        var files: [URL] = []
+        for segment in layout.segments {
+          files.append(try await model.history.videoFile(for: segment.item))
+        }
+        guard let composition = try await TimelineComposition.make(layout, files: files) else {
+          log("FAIL empty timeline")
+          return finish()
+        }
+        let size = upscale.outputSize(width: composition.width, height: composition.height)
+        log(
+          "timeline \(timeline.name): \(composition.frameCount) frames at \(composition.width)x\(composition.height), runs \(composition.runs), \(method.rawValue) \(upscale.scale)x to \(size.width)x\(size.height), estimate \(Int(upscale.estimatedSeconds(frames: composition.frameCount, width: composition.width, height: composition.height)))s"
+        )
+        let url = URL(fileURLWithPath: directory).appending(
+          path: "timeline-\(method.rawValue)-\(upscale.scale)x.mp4")
+        let exportStarted = Date()
+        let lastTenth = ManagedProgress()
+        try await composition.exportUpscaled(
+          to: url, codec: .current, title: timeline.name, upscale: upscale, engine: model.engine
+        ) { fraction in
+          if lastTenth.advance(to: fraction) {
+            Task { @MainActor in log(String(format: "%.0f%%", fraction * 100)) }
+          }
+        }
+        log(String(format: "PASS exported %@ in %.1fs", url.path, Date().timeIntervalSince(exportStarted)))
+      } catch {
+        log("FAIL \(error as NSError)")
+      }
+      finish()
+    }
+  }
+}
+
+/// Reports progress in tenths, from any thread.
+private final class ManagedProgress: @unchecked Sendable {
+  private let lock = NSLock()
+  private var tenth = -1
+
+  func advance(to fraction: Double) -> Bool {
+    lock.withLock {
+      let now = Int(fraction * 10)
+      guard now > tenth else { return false }
+      tenth = now
+      return true
+    }
+  }
 }
 #endif

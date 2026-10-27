@@ -30,7 +30,7 @@ enum Automation {
     let flags = [
       "--show", "--resize-bench", "--inspector-check", "--library-check", "--project-check",
       "--reuse", "--generate", "--ux-check", "--edit-input-check", "--queue-check",
-      "--timeline-check", "--upscale-check",
+      "--timeline-check", "--upscale-check", "--timeline-export-check",
     ]
     return CommandLine.arguments.contains { flags.contains($0) }
   }
@@ -76,6 +76,10 @@ enum Automation {
     }
     if args.contains("--project-check") {
       projectCheck(model)
+      return
+    }
+    if args.contains("--timeline-export-check") {
+      timelineExportCheck(model)
       return
     }
     if args.contains("--upscale-check") {

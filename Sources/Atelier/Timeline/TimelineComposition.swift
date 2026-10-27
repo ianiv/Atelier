@@ -10,6 +10,14 @@ struct TimelineComposition: @unchecked Sendable {
   let videoComposition: AVVideoComposition
   let audioMix: AVAudioMix
   let duration: Double
+  let width: Int
+  let height: Int
+  let framesPerSecond: Double
+  /// The frames between hard cuts, at `framesPerSecond`: a crossfade joins the clips on either
+  /// side into one run. Export Upscaled restores each with SeedVR2 on its own.
+  let runs: [Range<Int>]
+
+  var frameCount: Int { runs.last?.upperBound ?? 0 }
 
   /// nil when the layout has nothing to play.
   static func make(_ layout: TimelineLayout, files: [URL]) async throws -> TimelineComposition? {
@@ -98,9 +106,21 @@ struct TimelineComposition: @unchecked Sendable {
       configuration: AVVideoComposition.Configuration(
         frameDuration: frameTime(1, layout.framesPerSecond), instructions: instructions,
         renderSize: renderSize))
+    let fps = layout.framesPerSecond
+    func frame(_ time: CMTime) -> Int { Int((time.seconds * fps).rounded()) }
+    var runs: [Range<Int>] = []
+    var runStart = 0
+    for index in starts.indices.dropLast() where fades[index] == .zero {
+      let cut = frame(starts[index + 1])
+      if cut > runStart { runs.append(runStart..<cut) }
+      runStart = cut
+    }
+    let end = frame(cursor)
+    if end > runStart { runs.append(runStart..<end) }
     return TimelineComposition(
       composition: composition.copy() as! AVComposition, videoComposition: videoComposition,
-      audioMix: audioMix, duration: cursor.seconds)
+      audioMix: audioMix, duration: cursor.seconds, width: layout.width, height: layout.height,
+      framesPerSecond: fps, runs: runs)
   }
 
   func playerItem() -> AVPlayerItem {

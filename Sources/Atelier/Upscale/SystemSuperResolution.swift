@@ -53,47 +53,99 @@ enum SystemSuperResolution {
     count: Int, width: Int, height: Int, scale: Int, frame: (Int) -> CGImage?,
     progress: @escaping (Int, Int, CGImage?) -> Void
   ) async throws -> [CGImage] {
-    guard isSupported else { throw Failure.unsupported }
-    guard fits(width: width, height: height) else {
-      throw Failure.tooLarge(maximumInput.width, maximumInput.height)
-    }
-    guard VTSuperResolutionScalerConfiguration.supportedScaleFactors.contains(scale) else {
-      throw Failure.scale(scale)
-    }
-    guard
-      let configuration = VTSuperResolutionScalerConfiguration(
-        frameWidth: width, frameHeight: height, scaleFactor: scale, inputType: .video,
-        usePrecomputedFlow: false, qualityPrioritization: .normal,
-        revision: VTSuperResolutionScalerConfiguration.defaultRevision)
-    else { throw Failure.unsupported }
-    if configuration.configurationModelStatus != .ready {
+    let scaler = try await Scaler(width: width, height: height, scale: scale) {
       progress(0, count, nil)
-      try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-        configuration.downloadConfigurationModel { error in
-          if let error { continuation.resume(throwing: error) } else { continuation.resume() }
-        }
-      }
     }
-    let outputWidth = width * scale
-    let outputHeight = height * scale
-    let sourcePool = try pool(configuration.sourcePixelBufferAttributes, width: width, height: height)
-    let destinationPool = try pool(
-      configuration.destinationPixelBufferAttributes, width: outputWidth, height: outputHeight)
-    let transfer = try transferSession()
-
-    let processor = VTFrameProcessor()
-    try processor.startSession(configuration: configuration)
-    defer { processor.endSession() }
-
     var results: [CGImage] = []
-    var previous: VTFrameProcessorFrame?
-    var previousOutput: VTFrameProcessorFrame?
     for index in 0..<count {
       try Task.checkCancellation()
       guard let image = frame(index) else { throw ProjectError.badImage }
-      let time = CMTime(value: CMTimeValue(index), timescale: 30)
+      let result = try await scaler.next(image)
+      results.append(result)
+      progress(index + 1, count, result)
+    }
+    return results
+  }
+
+  /// Upscales frames one at a time, in order: each goes in with the frame before it and that
+  /// frame's result, so detail stays steady. Holds only those two besides the one in hand.
+  final class Scaler {
+    let outputWidth: Int
+    let outputHeight: Int
+    private let processor = VTFrameProcessor()
+    private let sourcePool: CVPixelBufferPool
+    private let destinationPool: CVPixelBufferPool
+    private let transfer: VTPixelTransferSession
+    private var previous: VTFrameProcessorFrame?
+    private var previousOutput: VTFrameProcessorFrame?
+    private var index = 0
+
+    /// `downloading` is called before macOS downloads the model, the first time it's used.
+    init(width: Int, height: Int, scale: Int, downloading: () -> Void = {}) async throws {
+      guard SystemSuperResolution.isSupported else { throw Failure.unsupported }
+      guard SystemSuperResolution.fits(width: width, height: height) else {
+        throw Failure.tooLarge(maximumInput.width, maximumInput.height)
+      }
+      guard VTSuperResolutionScalerConfiguration.supportedScaleFactors.contains(scale) else {
+        throw Failure.scale(scale)
+      }
+      guard
+        let configuration = VTSuperResolutionScalerConfiguration(
+          frameWidth: width, frameHeight: height, scaleFactor: scale, inputType: .video,
+          usePrecomputedFlow: false, qualityPrioritization: .normal,
+          revision: VTSuperResolutionScalerConfiguration.defaultRevision)
+      else { throw Failure.unsupported }
+      if configuration.configurationModelStatus != .ready {
+        downloading()
+        try await withCheckedThrowingContinuation {
+          (continuation: CheckedContinuation<Void, Error>) in
+          configuration.downloadConfigurationModel { error in
+            if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+          }
+        }
+      }
+      outputWidth = width * scale
+      outputHeight = height * scale
+      sourcePool = try pool(configuration.sourcePixelBufferAttributes, width: width, height: height)
+      destinationPool = try pool(
+        configuration.destinationPixelBufferAttributes, width: outputWidth, height: outputHeight)
+      transfer = try transferSession()
+      try processor.startSession(configuration: configuration)
+    }
+
+    deinit { processor.endSession() }
+
+    /// The next frame's result, in the model's pixel format. `frame` is any format the system
+    /// converts from (the model's size); its alpha comes out NaN.
+    func next(_ frame: CVPixelBuffer) async throws -> CVPixelBuffer {
+      let source = try buffer(from: sourcePool)
+      guard VTPixelTransferSessionTransferImage(transfer, from: frame, to: source) == noErr else {
+        throw Failure.noBuffer
+      }
+      return try await process(source)
+    }
+
+    /// The next frame's result as an image.
+    func next(_ image: CGImage) async throws -> CGImage {
       let source = try buffer(from: sourcePool)
       try draw(image, into: source, transfer: transfer)
+      let destination = try await process(source)
+      guard let result = try cgImage(from: destination, transfer: transfer) else {
+        throw Failure.noBuffer
+      }
+      return result
+    }
+
+    /// Converts a result into `buffer` (BGRA for a video writer, say).
+    func copy(_ result: CVPixelBuffer, into buffer: CVPixelBuffer) throws {
+      guard VTPixelTransferSessionTransferImage(transfer, from: result, to: buffer) == noErr else {
+        throw Failure.noBuffer
+      }
+    }
+
+    private func process(_ source: CVPixelBuffer) async throws -> CVPixelBuffer {
+      let time = CMTime(value: CMTimeValue(index), timescale: 30)
+      index += 1
       let destination = try buffer(from: destinationPool)
       guard let sourceFrame = VTFrameProcessorFrame(buffer: source, presentationTimeStamp: time),
         let destinationFrame = VTFrameProcessorFrame(buffer: destination, presentationTimeStamp: time),
@@ -103,15 +155,10 @@ enum SystemSuperResolution {
           destinationFrame: destinationFrame)
       else { throw Failure.noBuffer }
       try await processor.process(parameters: parameters)
-      guard let result = try cgImage(from: destination, transfer: transfer) else {
-        throw Failure.noBuffer
-      }
-      results.append(result)
       previous = sourceFrame
       previousOutput = destinationFrame
-      progress(index + 1, count, result)
+      return destination
     }
-    return results
   }
 
   // MARK: - Pixel buffers

@@ -172,7 +172,7 @@ enum ClipVideo {
     return items
   }
 
-  private static func videoSettings(_ codec: VideoCodec, width: Int, height: Int) -> [String: Any] {
+  static func videoSettings(_ codec: VideoCodec, width: Int, height: Int) -> [String: Any] {
     switch codec {
     case .h264:
       [

@@ -22,6 +22,10 @@ struct TimelineScreen: View {
   @State private var trim: (entry: UUID, start: Int, end: Int)?
   @State private var exportProgress: Double?
   @State private var exportTask: Task<Void, Never>?
+  /// Export Upscaled Video… is choosing how.
+  @State private var choosingUpscale = false
+  /// The export running is upscaled.
+  @State private var exportingUpscaled = false
   @State private var renaming: Timeline?
   @State private var newName = ""
   @State private var editingSettings = false
@@ -138,7 +142,9 @@ struct TimelineScreen: View {
       VStack(spacing: 8) {
         if let exportProgress {
           HStack {
-            ProgressView(value: exportProgress) { Text("Exporting…") }
+            ProgressView(value: exportProgress) {
+              Text(exportingUpscaled ? "Upscaling and exporting…" : "Exporting…")
+            }
               .frame(width: 200)
             Button("Cancel") { exportTask?.cancel() }
           }
@@ -304,6 +310,7 @@ struct TimelineScreen: View {
     ToolbarItem {
       Menu {
         Button("Export Video…") { export(toPhotos: false) }
+        Button("Export Upscaled Video…") { choosingUpscale = true }
         #if os(iOS)
           Button("Save to Photos") { export(toPhotos: true) }
         #endif
@@ -314,6 +321,16 @@ struct TimelineScreen: View {
       }
       .disabled(composition == nil || exportProgress != nil)
       .help("Export the timeline as one MP4")
+      .sheet(isPresented: $choosingUpscale) {
+        if let composition {
+          TimelineUpscaleSheet(
+            width: composition.width, height: composition.height,
+            frameCount: composition.frameCount
+          ) { upscale in
+            export(toPhotos: false, upscale: upscale)
+          }
+        }
+      }
     }
   }
 
@@ -425,18 +442,28 @@ struct TimelineScreen: View {
     }
   }
 
-  /// Writes the timeline to a temporary MP4 (with progress and Cancel), then asks where to save
-  /// it, or on iPad saves it to Photos.
-  private func export(toPhotos: Bool) {
+  /// Writes the timeline to a temporary MP4 (with progress and Cancel), upscaled when `upscale`
+  /// says how, then asks where to save it, or on iPad saves it to Photos.
+  private func export(toPhotos: Bool, upscale: TimelineUpscale? = nil) {
     guard let composition, let timeline = store.selected, exportProgress == nil else { return }
     playback.pause()
     let url = URL.temporaryDirectory.appending(path: "\(UUID().uuidString).mp4")
     let name = "\(history.project.name) \(timeline.name)"
     exportProgress = 0
+    exportingUpscaled = upscale != nil
+    let engine = create.engine
     exportTask = Task {
       do {
-        try await composition.export(to: url, codec: .current, title: timeline.name) { fraction in
+        let progress: @Sendable (Double) -> Void = { fraction in
           Task { @MainActor in if exportProgress != nil { exportProgress = fraction } }
+        }
+        if let upscale {
+          try await composition.exportUpscaled(
+            to: url, codec: .current, title: timeline.name, upscale: upscale, engine: engine,
+            progress: progress)
+        } else {
+          try await composition.export(
+            to: url, codec: .current, title: timeline.name, progress: progress)
         }
         exportProgress = nil
         #if os(iOS)

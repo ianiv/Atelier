@@ -301,40 +301,58 @@ actor GenerationEngine {
       guard tensors.count == frames.count else { throw ProjectError.badImage }
       return tensors
     case .seedVR2:
-      // SeedVR2 needs the memory: drop the models the engine keeps loaded.
-      if var dictionary = Self.engineWorkspace()?.dictionary {
-        for key in ["total_weights_cache", "keep_model_in_memory"] {
-          let value = dictionary[key, Int.self]
-          dictionary[key, Int.self] = 0
-          dictionary[key, Int.self] = value
-        }
-      }
-      lastImageInputs = nil
       let restorer = SeedVR2Restorer(
         model: request.model, width: request.configuration.width,
         height: request.configuration.height, seed: request.seed)
-      // The engine's queue, so this never runs alongside another model.
-      let queue = Self.engineResources()?.queue ?? DispatchQueue(label: "Atelier.upscale")
-      let cancellation = EngineCancellation()
-      return try await withTaskCancellationHandler {
-        try await withCheckedThrowingContinuation { continuation in
-          queue.async {
-            do {
-              let result = try restorer.run(
-                count: frames.count, frame: { frames[$0] },
-                progress: { _, done, total in
-                  progress(.state(.generating(step: done, totalSteps: total)))
-                },
-                shouldContinue: { !cancellation.isCancelled })
-              continuation.resume(returning: result)
-            } catch {
-              continuation.resume(throwing: error)
-            }
+      return try await onEngineQueue { shouldContinue in
+        try restorer.run(
+          count: frames.count, frame: { frames[$0] },
+          progress: { _, done, total in
+            progress(.state(.generating(step: done, totalSteps: total)))
+          },
+          shouldContinue: shouldContinue)
+      }
+    }
+  }
+
+  /// Runs `work` in the engine's turn, so it never runs alongside a generation (an upscaled
+  /// timeline export).
+  func inTurn<T>(_ work: () async throws -> T) async throws -> T {
+    await waitForTurn()
+    defer { endTurn() }
+    try Task.checkCancellation()
+    return try await work()
+  }
+
+  /// Runs `work` on the engine's queue after dropping the models the engine keeps loaded, which
+  /// SeedVR2 needs the memory of. Call it in the engine's turn. `work` checks `shouldContinue`,
+  /// which turns false when the task is cancelled.
+  func onEngineQueue<T>(
+    _ work: @escaping @Sendable (_ shouldContinue: @escaping () -> Bool) throws -> T
+  ) async throws -> T {
+    if var dictionary = Self.engineWorkspace()?.dictionary {
+      for key in ["total_weights_cache", "keep_model_in_memory"] {
+        let value = dictionary[key, Int.self]
+        dictionary[key, Int.self] = 0
+        dictionary[key, Int.self] = value
+      }
+    }
+    lastImageInputs = nil
+    // The engine's queue, so this never runs alongside another model.
+    let queue = Self.engineResources()?.queue ?? DispatchQueue(label: "Atelier.upscale")
+    let cancellation = EngineCancellation()
+    return try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { continuation in
+        queue.async {
+          do {
+            continuation.resume(returning: try work { !cancellation.isCancelled })
+          } catch {
+            continuation.resume(throwing: error)
           }
         }
-      } onCancel: {
-        cancellation.cancel()
       }
+    } onCancel: {
+      cancellation.cancel()
     }
   }
 

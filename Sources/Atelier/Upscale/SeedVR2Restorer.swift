@@ -54,6 +54,22 @@ struct SeedVR2Restorer {
     count: Int, frame: (Int) -> CGImage?,
     progress: (Phase, Int, Int) -> Void, shouldContinue: () -> Bool
   ) throws -> [Tensor<FloatType>] {
+    var results: [Tensor<FloatType>] = []
+    try run(
+      count: count, frame: frame, progress: progress, shouldContinue: shouldContinue,
+      output: { results.append($0) })
+    return results
+  }
+
+  /// As above, but hands each restored frame to `output` in order as soon as it's decoded, so
+  /// only the latents (an eighth of the size) are kept for the whole clip. `frame` is asked for
+  /// frames in order, each at most once more right after (a chunk's first frame is the previous
+  /// one's last); an error from `output` stops the run.
+  func run(
+    count: Int, frame: (Int) -> CGImage?,
+    progress: (Phase, Int, Int) -> Void, shouldContinue: () -> Bool,
+    output: (Tensor<FloatType>) throws -> Void
+  ) throws {
     let version = ModelZoo.versionForModel(model)
     guard version == .seedvr2_3b || version == .seedvr2_7b else { throw Failure.notSeedVR2 }
     guard count >= 5 else { throw Failure.tooFewFrames }
@@ -83,7 +99,7 @@ struct SeedVR2Restorer {
     var done = 0
 
     let graph = DynamicGraph()
-    var results: [Tensor<FloatType>] = []
+    var emitted = 0
     var failure: Error?
     graph.withNoGrad {
       // 1. Encode.
@@ -307,15 +323,20 @@ struct SeedVR2Restorer {
         }
         // The context latents' frames (the first latent makes one frame, the rest four each).
         let dropped = start == 0 ? 0 : 1 + 4 * (start - 1 - context)
-        for i in dropped..<frames where results.count < count {
-          results.append(pixels[i..<(i + 1), 0..<height, 0..<width, 0..<3].copied())
+        for i in dropped..<frames where emitted < count {
+          do {
+            try output(pixels[i..<(i + 1), 0..<height, 0..<width, 0..<3].copied())
+          } catch {
+            failure = error
+            return
+          }
+          emitted += 1
         }
         done += 1
         progress(.decoding, done, total)
       }
     }
     if let failure { throw failure }
-    return results
   }
 
   /// Decoder tiles, in latents (384 pixels), and how much neighbors overlap (64 pixels). Small
