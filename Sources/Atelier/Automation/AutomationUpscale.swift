@@ -1,5 +1,7 @@
 #if os(macOS)
+import AVFoundation
 import SwiftUI
+import VideoToolbox
 
 extension Automation {
   /// Upscales a clip already in the project (the one with the fewest frames, then the smallest,
@@ -195,6 +197,102 @@ extension Automation {
         log("FAIL \(error as NSError)")
       }
       finish()
+    }
+  }
+}
+
+extension Automation {
+  /// Upscales the first frames of an MP4 with FlashVSR+ and writes the result as an MP4, with
+  /// how long each part took. Reads the weights from the models folder's "FlashVSR+".
+  ///
+  ///   Atelier --flashvsr-check --input FILE.mp4 [--frames 33] [--variant turbo|base]
+  ///           [--width 1920 --height 1152] --export DIR [--quit]
+  static func flashVSRCheck() {
+    let args = CommandLine.arguments
+    func value(_ name: String) -> String? {
+      guard let index = args.firstIndex(of: name), index + 1 < args.count else { return nil }
+      return args[index + 1]
+    }
+    let started = Date()
+    func log(_ message: String) {
+      print(String(format: "[%7.2fs] ", Date().timeIntervalSince(started)) + message)
+      fflush(stdout)
+    }
+    func finish() {
+      if args.contains("--quit") { Task { @MainActor in AppLifecycle.quit() } }
+    }
+    guard let input = value("--input"), let directory = value("--export") else {
+      log("FAIL --input and --export are needed")
+      return finish()
+    }
+    let variant = value("--variant").flatMap(FlashVSRFiles.Variant.init(rawValue:)) ?? .turbo
+    guard let files = FlashVSRFiles.installed(variant) else {
+      log("FAIL FlashVSR+ \(variant.rawValue) isn't in \(AppSettings.modelsDirectory)/FlashVSR+")
+      return finish()
+    }
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        let asset = AVURLAsset(url: URL(fileURLWithPath: input))
+        let reader = try AVAssetReader(asset: asset)
+        let semaphore = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) var track: AVAssetTrack?
+        nonisolated(unsafe) var fps: Double = 24
+        Task {
+          track = try? await asset.loadTracks(withMediaType: .video).first
+          if let track { fps = Double(try await track.load(.nominalFrameRate)) }
+          semaphore.signal()
+        }
+        semaphore.wait()
+        guard let track else { throw ClipVideoError.noFrames }
+        let output = AVAssetReaderTrackOutput(
+          track: track,
+          outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)])
+        reader.add(output)
+        reader.startReading()
+        let limit = value("--frames").flatMap(Int.init) ?? 33
+        var sources: [CGImage] = []
+        while sources.count < limit, let sample = output.copyNextSampleBuffer(),
+          let buffer = sample.imageBuffer
+        {
+          var image: CGImage?
+          VTCreateCGImageFromCVPixelBuffer(buffer, options: nil, imageOut: &image)
+          if let image, let copy = image.copy() { sources.append(copy) }
+        }
+        guard let first = sources.first else { throw ClipVideoError.noFrames }
+        let size = FlashVSRUpscaler.outputSize(width: first.width, height: first.height)
+        let width = value("--width").flatMap(Int.init) ?? size.width
+        let height = value("--height").flatMap(Int.init) ?? size.height
+        log("\(sources.count) frames at \(first.width)x\(first.height) -> \(width)x\(height), \(variant.rawValue)")
+        let upscaler = FlashVSRUpscaler(files: files, width: width, height: height)
+        var frames: [CGImage] = []
+        let runStarted = Date()
+        try upscaler.run(
+          count: sources.count, frame: { sources[$0] },
+          progress: { phase, done, total in log("\(phase) \(done)/\(total)") },
+          shouldContinue: { true }
+        ) { tensor in
+          if let image = ImageTensor.cgImage(from: tensor) { frames.append(image) }
+        }
+        let seconds = Date().timeIntervalSince(runStarted)
+        log(String(format: "PASS %d frames in %.1fs (%.2fs a frame)", frames.count, seconds, seconds / Double(max(frames.count, 1))))
+        let url = URL(fileURLWithPath: directory).appending(
+          path: "flashvsr-\(variant.rawValue)-\(width)x\(height)-\(frames.count)f.mp4")
+        nonisolated(unsafe) let written = frames
+        Task {
+          do {
+            try await ClipVideo.write(
+              to: url, count: written.count, frame: { written[$0] }, framesPerSecond: fps,
+              audio: nil, audioSampleRate: 0, codec: .h264, metadata: nil)
+            log("exported \(url.path)")
+          } catch {
+            log("FAIL export \(error)")
+          }
+          finish()
+        }
+      } catch {
+        log("FAIL \(error)")
+        finish()
+      }
     }
   }
 }

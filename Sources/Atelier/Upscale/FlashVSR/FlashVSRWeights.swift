@@ -80,23 +80,44 @@ final class FlashVSRCheckpoint {
       guard let zip = try? Archive(url: url, accessMode: .read) else {
         throw Failure.unreadable(url.lastPathComponent)
       }
-      let root = try Interpreter.unpickle(zip: zip)
-      let dictionary = root["state_dict"] as? Interpreter.Dictionary ?? root
-      var states: [String: TensorDescriptor] = [:]
-      dictionary.forEach { key, value in
-        if let value = value as? TensorDescriptor { states[key] = value }
-      }
       archive = zip
-      self.states = states
+      do {
+        let root = try Interpreter.unpickle(zip: zip)
+        let dictionary = root["state_dict"] as? Interpreter.Dictionary ?? root
+        var states: [String: TensorDescriptor] = [:]
+        dictionary.forEach { key, value in
+          if let value = value as? TensorDescriptor { states[key] = value }
+        }
+        self.states = states
+      } catch UnpickleError.noRootObject {
+        // A bare tensor (posi_prompt.pth): its one storage, float32, rows of 4096, under the
+        // file's name.
+        guard let entry = (zip.first { $0.path.hasSuffix("/data/0") }) else {
+          throw Failure.unreadable(url.lastPathComponent)
+        }
+        var data = Data()
+        _ = try zip.extract(entry) { data.append($0) }
+        let count = data.count / 4
+        var tensor = Tensor<Float>(.CPU, .WC(count / 4096, 4096))
+        tensor.withUnsafeMutableBytes { raw in
+          data.withUnsafeBytes { source in raw.copyMemory(from: source) }
+        }
+        states = [:]
+        bare = [url.deletingPathExtension().lastPathComponent: tensor]
+      }
     }
   }
 
-  var names: [String] { Array(states.keys) }
+  /// Tensors stored bare rather than in a state dict.
+  private var bare: [String: Tensor<Float>] = [:]
 
-  func contains(_ name: String) -> Bool { states[name] != nil }
+  var names: [String] { Array(states.keys) + Array(bare.keys) }
+
+  func contains(_ name: String) -> Bool { states[name] != nil || bare[name] != nil }
 
   /// The tensor, float32 on the CPU, in its checkpoint shape.
   func tensor(_ name: String) throws -> Tensor<Float> {
+    if let tensor = bare[name] { return tensor }
     guard let descriptor = states[name] else { throw Failure.missing(name) }
     return try descriptor.inflate(from: archive, of: Float.self)
   }

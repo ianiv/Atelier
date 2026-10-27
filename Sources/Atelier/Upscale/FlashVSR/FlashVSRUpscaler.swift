@@ -27,10 +27,11 @@ struct FlashVSRUpscaler {
     return (grid(width), grid(height))
   }
 
-  /// Frames the stream runs: 16k + 1, at least 17, past `count` padded with the last frame.
-  static func alignedFrames(_ count: Int) -> Int {
-    guard count > 17 else { return 17 }
-    return (count - 1 + 15) / 16 * 16 + 1
+  /// Chunks the stream runs for `count` frames. Chunk c reads source frames through 16c + 16
+  /// and restores them through 16c + 12 (the decoder looks 4 ahead), so the end is padded with
+  /// the last frame until every frame is restored.
+  static func chunks(_ count: Int) -> Int {
+    count <= 13 ? 1 : 1 + (count - 13 + 15) / 16
   }
 
   /// Restores `count` frames, each read with `frame(i)` (in order, at any size), handing each
@@ -42,8 +43,7 @@ struct FlashVSRUpscaler {
     output: (Tensor<FloatType>) throws -> Void
   ) throws {
     precondition(width % 128 == 0 && height % 128 == 0 && count > 0)
-    let aligned = Self.alignedFrames(count)
-    let chunks = (aligned - 1) / 16
+    let chunks = Self.chunks(count)
     let latentHeight = height / 8, latentWidth = width / 8
     let graph = DynamicGraph()
     var failure: Error?
@@ -101,6 +101,7 @@ struct FlashVSRUpscaler {
               frames: (4 * chunk)..<(4 * chunk + 4), height: latentHeight, width: latentWidth,
               seed: seed
             ).toGPU(0))
+          Profile.mark("rows")
           guard
             let latent = try denoiser.next(
               noise: noise, rows: concatenated(rows), shouldContinue: shouldContinue)
@@ -131,6 +132,7 @@ struct FlashVSRUpscaler {
             sources[index] = nil
           }
           graph.garbageCollect()
+          Profile.report()
           progress(.upscaling, chunk + 1, chunks)
         }
       } catch {

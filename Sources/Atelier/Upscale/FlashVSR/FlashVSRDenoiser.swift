@@ -44,8 +44,12 @@ final class FlashVSRDenoiser {
   private let graph: DynamicGraph
   private let embed: Model
   private let head: Model
-  private var preAttention: [Model] = []
-  private var postAttention: [Model] = []
+  /// One block's layers, compiled once and shared by every block: each block's weights are
+  /// copied in before it runs (`blockSlots`, `blockWeights`), so activations are held once.
+  private let preAttention: Model
+  private let postAttention: Model
+  private var blockSlots: [Model.Parameters] = []
+  private var blockWeights: [[AnyTensor]] = []
   /// Folded at load: each block's 6 modulation rows, the head's 2, and each block's cross
   /// attention keys and values over the fixed prompt.
   private var modulations: [[DynamicGraph.Tensor<Float>]] = []
@@ -79,6 +83,8 @@ final class FlashVSRDenoiser {
     let D = Self.hidden
     let seq = Self.chunkFrames * (height / 16) * (width / 16)
     var loaders: [(Model.Parameters, String, TensorShape, Float)] = []
+    // Norms that run in float32 take float32 weights.
+    var floatLoaders: [(Model.Parameters, String, TensorShape)] = []
 
     // Patch embedding plus the source rows.
     do {
@@ -102,8 +108,11 @@ final class FlashVSRDenoiser {
       let y = (norm(x) .* (1 + scale) + shift).to(.Float16)
       head = Model([x, shift, scale], [proj(y).to(.Float32)])
     }
-    for layer in 0..<Self.layers {
-      let prefix = "blocks.\(layer)."
+    // "#" stands for the block's index in the checkpoint's names.
+    var preAttentionModel: Model?
+    var postAttentionModel: Model?
+    do {
+      let prefix = "blocks.#."
       // Before attention: modulated norm, q/k/v, q/k RMS norm over the whole width, RoPE.
       do {
         let x = Input()
@@ -120,7 +129,7 @@ final class FlashVSRDenoiser {
           var out = dense(y)
           if name != "v" {
             let rms = RMSNorm(epsilon: 1e-6, axis: [1], name: "\(prefix)self_attn.norm_\(name)")
-            loaders.append((rms.weight, "\(prefix)self_attn.norm_\(name).weight", [D], 1))
+            floatLoaders.append((rms.weight, "\(prefix)self_attn.norm_\(name).weight", [D]))
             out = rms(out.to(.Float32)).to(.Float16)
               .reshaped([1, seq, Self.heads, Self.headDimension])
             out = Functional.cmul(left: out, right: rot)
@@ -129,7 +138,7 @@ final class FlashVSRDenoiser {
           }
           outs.append(out)
         }
-        preAttention.append(Model([x, rot, shift, scale], outs))
+        preAttentionModel = Model([x, rot, shift, scale], outs)
       }
       // After attention: output projection and gate, cross attention to the prompt (ungated),
       // the feed-forward and its gate.
@@ -147,13 +156,13 @@ final class FlashVSRDenoiser {
         loaders.append((o.bias, "\(prefix)self_attn.o.bias", [D], 1))
         var out = x + gate .* o(attention).to(.Float32)
         let norm3 = LayerNorm(epsilon: 1e-6, axis: [1], name: "\(prefix)norm3")
-        loaders.append((norm3.weight, "\(prefix)norm3.weight", [D], 1))
-        loaders.append((norm3.bias, "\(prefix)norm3.bias", [D], 1))
+        floatLoaders.append((norm3.weight, "\(prefix)norm3.weight", [D]))
+        floatLoaders.append((norm3.bias, "\(prefix)norm3.bias", [D]))
         let crossQ = Dense(count: D, name: "\(prefix)cross_attn.q")
         loaders.append((crossQ.weight, "\(prefix)cross_attn.q.weight", [D, D], 1))
         loaders.append((crossQ.bias, "\(prefix)cross_attn.q.bias", [D], 1))
         let crossNorm = RMSNorm(epsilon: 1e-6, axis: [1], name: "\(prefix)cross_attn.norm_q")
-        loaders.append((crossNorm.weight, "\(prefix)cross_attn.norm_q.weight", [D], 1))
+        floatLoaders.append((crossNorm.weight, "\(prefix)cross_attn.norm_q.weight", [D]))
         let queries = crossNorm(crossQ(norm3(out).to(.Float16)).to(.Float32))
           .to(.Float16).reshaped([1, seq, Self.heads, Self.headDimension])
         let crossAttention = ScaledDotProductAttention(
@@ -175,8 +184,8 @@ final class FlashVSRDenoiser {
         loaders.append((ffn2.bias, "\(prefix)ffn.2.bias", [D], 1.0 / 8))
         let hiddenOut = (1.0 / 8) * ffn0(y).GELU(approximate: .tanh)
         out = out + ffnGate .* (8 * ffn2(hiddenOut).to(.Float32))
-        postAttention.append(
-          Model([x, attention, gate, ffnShift, ffnScale, ffnGate, crossKeys, crossValues], [out]))
+        postAttentionModel = Model(
+          [x, attention, gate, ffnShift, ffnScale, ffnGate, crossKeys, crossValues], [out])
       }
     }
 
@@ -191,13 +200,44 @@ final class FlashVSRDenoiser {
     head.compile(inputs: zeros([seq, D], Float.self), row, row)
     let rot = zeros([1, seq, 1, Self.headDimension], FloatType.self)
     let promptKeys = zeros([1, 512, Self.heads, Self.headDimension], FloatType.self)
-    for layer in 0..<Self.layers {
-      preAttention[layer].compile(inputs: zeros([seq, D], Float.self), rot, row, row)
-      postAttention[layer].compile(
-        inputs: zeros([seq, D], Float.self), zeros([seq, D], FloatType.self), row, row, row, row,
-        promptKeys, promptKeys)
+    preAttention = preAttentionModel!
+    postAttention = postAttentionModel!
+    preAttention.compile(inputs: zeros([seq, D], Float.self), rot, row, row)
+    postAttention.compile(
+      inputs: zeros([seq, D], Float.self), zeros([seq, D], FloatType.self), row, row, row, row,
+      promptKeys, promptKeys)
+    func read(_ name: String, scale: Float) throws -> Tensor<Float> {
+      var tensor = try checkpoint.tensor(name)
+      if scale != 1 {
+        tensor.withUnsafeMutableBytes { raw in
+          let values = raw.bindMemory(to: Float.self)
+          for i in values.indices { values[i] *= scale }
+        }
+      }
+      return tensor
     }
-    for (parameters, name, shape, scale) in loaders {
+    // The blocks' weights, kept on the GPU for copying into the shared layers.
+    var slots: [(Model.Parameters, String, TensorShape, Float, Bool)] = []
+    for (parameters, name, shape, scale) in loaders where name.contains("#") {
+      slots.append((parameters, name, shape, scale, false))
+    }
+    for (parameters, name, shape) in floatLoaders where name.contains("#") {
+      slots.append((parameters, name, shape, 1, true))
+    }
+    blockSlots = slots.map(\.0)
+    for layer in 0..<Self.layers {
+      var weights: [AnyTensor] = []
+      for (_, name, shape, scale, isFloat) in slots {
+        let tensor = try read(name.replacingOccurrences(of: "#", with: "\(layer)"), scale: scale)
+        if isFloat {
+          weights.append(tensor.reshaped(format: .NCHW, shape: shape).toGPU(0))
+        } else {
+          weights.append(Tensor<FloatType>(from: tensor).reshaped(format: .NCHW, shape: shape).toGPU(0))
+        }
+      }
+      blockWeights.append(weights)
+    }
+    for (parameters, name, shape, scale) in loaders where !name.contains("#") {
       var tensor = try checkpoint.tensor(name)
       if scale != 1 {
         tensor.withUnsafeMutableBytes { raw in
@@ -207,6 +247,9 @@ final class FlashVSRDenoiser {
       }
       parameters.copy(
         from: Tensor<FloatType>(from: tensor).reshaped(format: .NCHW, shape: shape))
+    }
+    for (parameters, name, shape) in floatLoaders where !name.contains("#") {
+      parameters.copy(from: try checkpoint.tensor(name).reshaped(format: .NCHW, shape: shape))
     }
     try fold(checkpoint: checkpoint, prompt: prompt)
     reset()
@@ -316,12 +359,16 @@ final class FlashVSRDenoiser {
     for layer in 0..<Self.layers {
       guard shouldContinue() else { return nil }
       let m = modulations[layer]
-      let qkv = preAttention[layer](inputs: x, rot, m[0], m[1]).map { $0.as(of: FloatType.self) }
+      for (slot, weight) in zip(blockSlots, blockWeights[layer]) { slot.copy(from: weight) }
+      let qkv = preAttention(inputs: x, rot, m[0], m[1]).map { $0.as(of: FloatType.self) }
+      Profile.mark("pre")
       let attention = try attend(
         layer: layer, queries: qkv[0], keys: qkv[1], values: qkv[2])
-      x = postAttention[layer](
+      Profile.mark("attend")
+      x = postAttention(
         inputs: x, attention, m[2], m[3], m[4], m[5], crossKeys[layer], crossValues[layer]
       )[0].as(of: Float.self)
+      Profile.mark("post")
     }
     let prediction = head(inputs: x, headModulation[0], headModulation[1])[0].as(of: Float.self)
     // Unpatchify: column (ky * 2 + kx) * 16 + c.
@@ -411,7 +458,9 @@ final class FlashVSRDenoiser {
       .reshaped(.HWC(H, keyBlocks, HD))
     let scores = Functional.matmul(left: queryMeans, right: keyMeans, rightTranspose: (1, 2))
       .rawValue.toCPU()
+    Profile.mark("scores")
     let kept = select(scores: scores, layer: layer, queryBlocks: queryBlocks, keyBlocks: keyBlocks)
+    Profile.mark("select")
 
     // Attend, gathering each (head, query block)'s kept key blocks.
     let output = gatheredAttention(
@@ -582,22 +631,25 @@ final class FlashVSRDenoiser {
         let attention = ScaledDotProductAttention(scale: scale, flags: [.Float16])
         out = attention(queries: gatheredQueries, keys: gatheredKeys, values: gatheredValues)
       } else {
-        var mask = Tensor<FloatType>(.CPU, .NHWC(batch, 1, 128, width * 128))
-        mask.withUnsafeMutableBytes { raw in
+        // One row per batch entry (0 where a key is real, -inf on padding), spread over the
+        // 128 query rows on the GPU.
+        var row = Tensor<FloatType>(.CPU, .HWC(batch, 1, width * 128))
+        row.withUnsafeMutableBytes { raw in
           let m = raw.bindMemory(to: FloatType.self)
           for (b, entry) in slice.enumerated() {
             let valid = entry.blocks.count * 128
-            for r in 0..<128 {
-              let base = (b * 128 + r) * width * 128
-              for c in 0..<(width * 128) { m[base + c] = c < valid ? 0 : -FloatType.infinity }
-            }
+            for c in 0..<(width * 128) { m[b * width * 128 + c] = c < valid ? 0 : -FloatType.infinity }
           }
         }
+        let ones = graph.variable(.GPU(0), .HWC(batch, 128, 1), of: FloatType.self)
+        ones.full(1)
+        let mask = Functional.matmul(left: ones, right: graph.variable(row.toGPU(0)))
+          .reshaped(.NHWC(batch, 1, 128, width * 128))
         let attention = ScaledDotProductAttention(
           scale: scale, hasAttentionMask: true, flags: [.Float16])
         out = attention(
           queries: gatheredQueries, keys: gatheredKeys, values: gatheredValues,
-          attentionMask: graph.variable(mask.toGPU(0)))
+          attentionMask: mask)
       }
       outputs.append(out.reshaped(.WC(batch, 128 * HD)))
       order.append(contentsOf: queryIndex)
@@ -611,5 +663,23 @@ final class FlashVSRDenoiser {
       input: stacked, index: graph.variable(Tensor<Int32>(inverse, .CPU, .C(rowCount)).toGPU(0)))
     // [H, queryBlocks, 128, HD] -> [queryBlocks, 128, H, HD].
     return restored.reshaped(.NHWC(H, queryBlocks, 128, HD)).permuted(1, 2, 0, 3).copied()
+  }
+}
+
+/// Temporary timing (FLASHVSR_PROFILE=1): seconds per named step, synchronizing the GPU.
+enum Profile {
+  nonisolated(unsafe) static var enabled = ProcessInfo.processInfo.environment["FLASHVSR_PROFILE"] != nil
+  nonisolated(unsafe) static var last = Date()
+  nonisolated(unsafe) static var totals: [String: Double] = [:]
+  static func mark(_ name: String, graph: DynamicGraph? = nil) {
+    guard enabled else { return }
+    let now = Date()
+    totals[name, default: 0] += now.timeIntervalSince(last)
+    last = now
+  }
+  static func report() {
+    guard enabled else { return }
+    print("PROFILE", totals.sorted { $0.key < $1.key }.map { "\($0.key)=\(String(format: "%.2f", $0.value))" }.joined(separator: " "))
+    totals = [:]
   }
 }

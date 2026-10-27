@@ -41,10 +41,12 @@ final class FlashVSRSourceProjection {
     let normName = checkpoint.contains("norm1.weight") ? "weight" : "gamma"
     conv1.weight.copy(from: try checkpoint.tensor("conv1.weight", shape: [2048, 768, 4, 3, 3]))
     conv1.bias.copy(from: try checkpoint.tensor("conv1.bias", shape: [2048]))
-    norm1.weight.copy(from: try checkpoint.tensor("norm1.\(normName)", shape: [2048]))
+    norm1.weight.copy(
+      from: try checkpoint.tensor("norm1.\(normName)").reshaped(format: .NCHW, shape: [2048]))
     conv2.weight.copy(from: try checkpoint.tensor("conv2.weight", shape: [3072, 2048, 4, 3, 3]))
     conv2.bias.copy(from: try checkpoint.tensor("conv2.bias", shape: [3072]))
-    norm2.weight.copy(from: try checkpoint.tensor("norm2.\(normName)", shape: [3072]))
+    norm2.weight.copy(
+      from: try checkpoint.tensor("norm2.\(normName)").reshaped(format: .NCHW, shape: [3072]))
     linear.weight.copy(from: try checkpoint.tensor("linear_layers.0.weight", shape: [1536, 3072]))
     linear.bias.copy(from: try checkpoint.tensor("linear_layers.0.bias", shape: [1536]))
   }
