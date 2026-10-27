@@ -135,13 +135,16 @@ final class TimelineStore {
   /// The track's visible width, for Zoom to Fit.
   var trackWidth: Double = 800
 
-  func zoomIn() { pointsPerSecond = min(pointsPerSecond * 1.5, 2000) }
-  func zoomOut() { pointsPerSecond = max(pointsPerSecond / 1.5, 4) }
+  /// The closest and farthest the track zooms, in points per second.
+  static let zoomRange: ClosedRange<Double> = 4...2000
+
+  func zoomIn() { pointsPerSecond = min(pointsPerSecond * 1.5, Self.zoomRange.upperBound) }
+  func zoomOut() { pointsPerSecond = max(pointsPerSecond / 1.5, Self.zoomRange.lowerBound) }
 
   /// Fits the timeline on screen.
   func zoomToFit(duration: Double) {
     guard duration > 0 else { return }
-    pointsPerSecond = min(max((trackWidth - 140) / duration, 4), 2000)
+    pointsPerSecond = min(max((trackWidth - 140) / duration, Self.zoomRange.lowerBound), Self.zoomRange.upperBound)
   }
 
   init(history: HistoryStore) {

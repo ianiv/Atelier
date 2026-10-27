@@ -54,6 +54,9 @@ struct TimelineScreen: View {
         commitTrim: commitTrim, menu: { entryMenu($0, layout: layout) },
         insert: insert, move: move)
         .frame(height: 128)
+        .overlay(alignment: .bottomTrailing) {
+          TimelineZoomControl(duration: layout.duration).padding(6)
+        }
     }
     .toolbar { toolbar(layout) }
     .detailInspector(selection: 0, isEmpty: false, clearSelection: {}) {

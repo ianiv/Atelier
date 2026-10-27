@@ -7,6 +7,7 @@
 - **The viewer**, at the top, plays the whole timeline with sound. Click it, or press Space, to play or pause. The bar under it steps a frame back or forward, shows the time and which clip and frame are under the playhead, and has Loop and Mute.
 - **The track**, at the bottom, shows the timeline's clips end to end, each as a strip of its frames. The red line is the playhead: click or drag along the ruler or the track to move it. A speaker marks a clip with sound, a crossed-out speaker a muted one, and a half-filled circle a crossfade into the next clip.
 - **Videos**, in the column on the right, lists the project's videos, newest first. Drag one into the track to put it there, or double-click it to add it at the end. Moving the pointer across a video scrubs through it, as in History.
+- **Zoom**, at the track's bottom-right corner, shows more or less of the timeline: drag the slider, click − or +, or click **Fit** to fit it all in. ⌘+, ⌘− and ⌘9 do the same.
 
 The menu at the top left picks the timeline when the project has more than one, and has **New Timeline**, **Rename…** and **Delete…**. Deleting a timeline leaves its videos in History.
 

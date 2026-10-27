@@ -327,3 +327,39 @@ struct TimelineZoomMenuItems: View {
     .keyboardShortcut("9", modifiers: .command)
   }
 }
+
+/// − / a zoom slider / + and Fit, over the track's corner. The slider moves in equal steps of
+/// scale, so each part of its travel zooms as much.
+struct TimelineZoomControl: View {
+  let duration: Double
+  @Environment(TimelineStore.self) private var store
+
+  var body: some View {
+    let range = TimelineStore.zoomRange
+    HStack(spacing: 6) {
+      Button("Zoom Out", systemImage: "minus.magnifyingglass") { store.zoomOut() }
+        .help("Zoom Out (⌘−)")
+        .touchTarget()
+      Slider(
+        value: Binding(
+          get: { log(store.pointsPerSecond) },
+          set: { store.pointsPerSecond = exp($0) }),
+        in: log(range.lowerBound)...log(range.upperBound)
+      )
+      .frame(width: 120)
+      .controlSize(.small)
+      .help("Zoom the track")
+      Button("Zoom In", systemImage: "plus.magnifyingglass") { store.zoomIn() }
+        .help("Zoom In (⌘+)")
+        .touchTarget()
+      Button("Fit") { store.zoomToFit(duration: duration) }
+        .help("Fit the timeline in the track (⌘9)")
+        .disabled(duration <= 0)
+    }
+    .labelStyle(.iconOnly)
+    .buttonStyle(.borderless)
+    .padding(.horizontal, 10)
+    .padding(.vertical, 4)
+    .glassEffect(in: .capsule)
+  }
+}
