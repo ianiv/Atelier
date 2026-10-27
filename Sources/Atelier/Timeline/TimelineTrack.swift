@@ -51,6 +51,17 @@ struct TimelineTrack<Menu: View>: View {
                 y: Self.rulerHeight + 8)
               .zIndex(dragging?.entry == segment.entry.id ? 1 : 0)
           }
+          // Crossfades, over the part where two clips overlap.
+          if dragging == nil {
+            ForEach(layout.segments.filter { $0.fade > 0 }, id: \.entry.id) { segment in
+              CrossfadeMark(frames: segment.entry.crossfadeFrames)
+                .frame(width: max(segment.fade * pointsPerSecond, 6), height: Self.clipHeight)
+                .offset(x: (segment.end - segment.fade) * pointsPerSecond, y: Self.rulerHeight + 8)
+                .contextMenu { menu(segment.entry) }
+                .help("Crossfade, \(segment.entry.crossfadeFrames) frames")
+                .zIndex(2)
+            }
+          }
           if dropTargeted {
             RoundedRectangle(cornerRadius: 5)
               .strokeBorder(.tint, lineWidth: 2)
@@ -149,23 +160,19 @@ struct TimelineTrack<Menu: View>: View {
       .help(segment.item.sidecar.prompt)
   }
 
-  /// Muted, sound and crossfade marks over a clip's corner.
+  /// A muted or sound mark over a clip's corner.
+  @ViewBuilder
   private func marks(_ segment: TimelineLayout.Segment) -> some View {
-    HStack(spacing: 3) {
-      if segment.entry.muted {
-        Image(systemName: "speaker.slash.fill")
-      } else if segment.clip.audioId != nil {
-        Image(systemName: "speaker.wave.2.fill")
-      }
-      if segment.fade > 0 { Image(systemName: "circle.lefthalf.filled") }
+    if segment.entry.muted || segment.clip.audioId != nil {
+      Image(systemName: segment.entry.muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+        .font(.caption2)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
+        .background(.black.opacity(0.55), in: .capsule)
+        .foregroundStyle(.white)
+        .padding(4)
+        .allowsHitTesting(false)
     }
-    .font(.caption2)
-    .padding(.horizontal, 4)
-    .padding(.vertical, 2)
-    .background(.black.opacity(0.55), in: .capsule)
-    .foregroundStyle(.white)
-    .padding(4)
-    .allowsHitTesting(false)
   }
 
   /// A click picks the clip and puts the playhead there; a drag moves it among the others.
@@ -305,6 +312,38 @@ private struct Filmstrip: View {
     var item = segment.item
     item.previewId = segment.clip.previewId(index)
     return item
+  }
+}
+
+/// A crossfade over the track, as video editors draw one: a shaded box with a diagonal from
+/// the outgoing clip's top to the incoming clip's bottom, and a mark when it's wide enough.
+private struct CrossfadeMark: View {
+  let frames: Int
+
+  var body: some View {
+    GeometryReader { geometry in
+      let size = geometry.size
+      ZStack {
+        RoundedRectangle(cornerRadius: 4)
+          .fill(.black.opacity(0.45))
+        Path { path in
+          path.move(to: CGPoint(x: 0, y: size.height))
+          path.addLine(to: CGPoint(x: size.width, y: 0))
+          path.move(to: .zero)
+          path.addLine(to: CGPoint(x: size.width, y: size.height))
+        }
+        .stroke(.white.opacity(0.7), lineWidth: 1)
+        if size.width >= 22 {
+          Image(systemName: "circle.lefthalf.filled")
+            .font(.caption)
+            .foregroundStyle(.white)
+            .padding(3)
+            .background(.black.opacity(0.6), in: .circle)
+        }
+        RoundedRectangle(cornerRadius: 4)
+          .strokeBorder(.white.opacity(0.85), lineWidth: 1)
+      }
+    }
   }
 }
 
