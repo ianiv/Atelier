@@ -17,12 +17,12 @@ The menu at the top left picks the timeline when the project has more than one, 
 
 - **Move** a clip by dragging it along the track.
 - **Trim** a clip by dragging its left or right edge. It moves a frame at a time and can't go past the video's own first or last frame.
-- **Split at Playhead** (⌘B, or the scissors) cuts the clip under the playhead in two there.
+- **Split at Playhead** (⌘B, or the scissors beside the play controls) cuts the clip under the playhead in two there.
 - Right-click a clip for **Mute**, **Crossfade into Next** (from 4 to 48 frames), **Duplicate**, **Show in History** and **Remove from Timeline**. Delete also removes the selected clip.
 
 Every edit can be undone with ⌘Z.
 
-**Timeline Settings** (the sliders button) sets the size and frame rate it plays and exports at. Both start as the first clip's. Clips of another size are scaled to fit inside, on black; clips at another frame rate play at their own speed.
+**Timeline Settings** (the sliders button beside the play controls) sets the size and frame rate it plays and exports at. Both start as the first clip's. Clips of another size are scaled to fit inside, on black; clips at another frame rate play at their own speed.
 
 ## Starting a new video from a frame
 

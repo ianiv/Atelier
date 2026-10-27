@@ -1,5 +1,5 @@
 import AVFoundation
-import AVKit
+import CoreImage
 import SwiftUI
 
 /// Puts a project's clips in order: a viewer playing the whole timeline, a track of its clips to
@@ -11,6 +11,8 @@ struct TimelineScreen: View {
   @Environment(TimelineStore.self) private var store
   @Environment(FileDialogs.self) private var fileDialogs
   @Environment(\.undoManager) private var undoManager
+  /// The app's appearance (the controls over the video are always dark).
+  @Environment(\.colorScheme) private var colorScheme
   @State private var playback = TimelinePlayback()
   @State private var composition: TimelineComposition?
   @State private var preparing = false
@@ -111,8 +113,7 @@ struct TimelineScreen: View {
     ZStack {
       Color.black
       if composition != nil {
-        VideoPlayer(player: playback.player)
-          .allowsHitTesting(false)
+        TimelineVideo(playback: playback)
           .aspectRatio(CGSize(width: max(layout.width, 1), height: max(layout.height, 1)), contentMode: .fit)
       } else if preparing {
         ProgressView("Preparing clips…").controlSize(.small).foregroundStyle(.white)
@@ -145,13 +146,44 @@ struct TimelineScreen: View {
           .glassEffect(in: .rect(cornerRadius: 12))
         }
         if composition != nil {
-          TimelineTransport(playback: playback, layout: layout, playhead: playhead)
+          HStack(spacing: 10) {
+            TimelineTransport(playback: playback, layout: layout, playhead: playhead)
+            editingTools(layout)
+          }
         }
       }
       .padding(10)
       // Over black video, whatever the app's appearance.
       .environment(\.colorScheme, .dark)
     }
+  }
+
+  /// Split and the timeline's size and frame rate, beside the transport.
+  private func editingTools(_ layout: TimelineLayout) -> some View {
+    HStack(spacing: 10) {
+      Button("Split at Playhead", systemImage: "scissors") { split() }
+        .keyboardShortcut("b", modifiers: .command)
+        .disabled(!canSplit)
+        .help("Split the clip at the playhead (⌘B)")
+        .touchTarget()
+      Button("Timeline Settings", systemImage: "slider.horizontal.3") { editingSettings = true }
+        .disabled(store.selected == nil)
+        .help("The size and frame rate the timeline plays and exports at")
+        .touchTarget()
+        .popover(isPresented: $editingSettings) {
+          if let timeline = store.selected {
+            TimelineSettings(timeline: timeline, layout: layout) { change in
+              store.edit(timeline.id, "Timeline Settings", undoManager: undoManager, change)
+            }
+            .environment(\.colorScheme, colorScheme)
+          }
+        }
+    }
+    .labelStyle(.iconOnly)
+    .buttonStyle(.borderless)
+    .padding(.horizontal, 12)
+    .padding(.vertical, 6)
+    .glassEffect(in: .capsule)
   }
 
   // MARK: - Menus
@@ -268,24 +300,6 @@ struct TimelineScreen: View {
           .labelStyle(.titleAndIcon)
       }
       .help("Choose, add, rename or delete this project's timelines")
-    }
-    ToolbarItem {
-      Button("Split at Playhead", systemImage: "scissors") { split() }
-        .keyboardShortcut("b", modifiers: .command)
-        .disabled(!canSplit)
-        .help("Split the clip at the playhead (⌘B)")
-    }
-    ToolbarItem {
-      Button("Timeline Settings", systemImage: "slider.horizontal.3") { editingSettings = true }
-        .disabled(store.selected == nil)
-        .help("The size and frame rate the timeline plays and exports at")
-        .popover(isPresented: $editingSettings) {
-          if let timeline = store.selected {
-            TimelineSettings(timeline: timeline, layout: layout) { change in
-              store.edit(timeline.id, "Timeline Settings", undoManager: undoManager, change)
-            }
-          }
-        }
     }
     ToolbarItem {
       Menu {
@@ -466,8 +480,14 @@ final class TimelinePlayback {
   var isMuted = false {
     didSet { player.isMuted = isMuted }
   }
+  /// The frame on screen. Drawn here rather than by the system player, whose own controls
+  /// would show over the video and not work.
+  private(set) var frame: CGImage?
   @ObservationIgnored private var timeObserver: Any?
   @ObservationIgnored private var endObserver: NSObjectProtocol?
+  @ObservationIgnored private var output: AVPlayerItemVideoOutput?
+  @ObservationIgnored private var frameTask: Task<Void, Never>?
+  @ObservationIgnored private let context = CIContext()
 
   init() {
     player.actionAtItemEnd = .pause
@@ -487,12 +507,20 @@ final class TimelinePlayback {
     endObserver = nil
     guard let composition else {
       player.replaceCurrentItem(with: nil)
+      output = nil
+      frame = nil
       duration = 0
       time = 0
       isPlaying = false
+      frameTask?.cancel()
       return
     }
     let item = composition.playerItem()
+    let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
+      kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
+    ])
+    item.add(output)
+    self.output = output
     duration = composition.duration
     player.replaceCurrentItem(with: item)
     endObserver = NotificationCenter.default.addObserver(
@@ -501,13 +529,53 @@ final class TimelinePlayback {
       MainActor.assumeIsolated { self?.reachedEnd() }
     }
     seek(to: min(time, duration))
-    if isPlaying { player.play() }
+    if isPlaying {
+      player.play()
+      followFrames()
+    }
+  }
+
+  /// Copies the frame for `time` from the video output, when there's a new one.
+  @discardableResult
+  private func takeFrame(at time: CMTime) -> Bool {
+    guard let output, output.hasNewPixelBuffer(forItemTime: time),
+      let buffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil)
+    else { return false }
+    let image = CIImage(cvPixelBuffer: buffer)
+    guard let cgImage = context.createCGImage(image, from: image.extent) else { return false }
+    frame = cgImage
+    return true
+  }
+
+  /// Keeps `frame` current while playing, at the screen's pace.
+  private func followFrames() {
+    frameTask?.cancel()
+    frameTask = Task { [weak self] in
+      while let self, self.isPlaying, !Task.isCancelled {
+        self.takeFrame(at: self.player.currentTime())
+        try? await Task.sleep(for: .milliseconds(15))
+      }
+    }
+  }
+
+  /// Shows the frame at the playhead once a seek lands (decoding it can take a moment).
+  private func showFrameAfterSeek() {
+    guard !isPlaying else { return }
+    frameTask?.cancel()
+    frameTask = Task { [weak self] in
+      for _ in 0..<60 {
+        guard let self, !Task.isCancelled, !self.isPlaying else { return }
+        if self.takeFrame(at: self.player.currentTime()) { return }
+        try? await Task.sleep(for: .milliseconds(16))
+      }
+    }
   }
 
   private func reachedEnd() {
     if isLooping {
       seek(to: 0)
       player.play()
+      followFrames()
     } else {
       isPlaying = false
       time = duration
@@ -519,6 +587,7 @@ final class TimelinePlayback {
     if time >= duration - 0.01 { seek(to: 0) }
     player.rate = 1
     isPlaying = true
+    followFrames()
   }
 
   /// Plays backwards (J).
@@ -526,6 +595,7 @@ final class TimelinePlayback {
     guard player.currentItem?.canPlayReverse == true else { return }
     player.rate = -1
     isPlaying = true
+    followFrames()
   }
 
   func pause() {
@@ -542,7 +612,25 @@ final class TimelinePlayback {
   func seek(to seconds: Double) {
     time = min(max(seconds, 0), duration)
     player.seek(
-      to: CMTime(seconds: time, preferredTimescale: 60_000), toleranceBefore: .zero, toleranceAfter: .zero)
+      to: CMTime(seconds: time, preferredTimescale: 60_000), toleranceBefore: .zero, toleranceAfter: .zero
+    ) { [weak self] _ in
+      Task { @MainActor in self?.showFrameAfterSeek() }
+    }
+  }
+}
+
+/// The timeline's video: the player's frames, fitted, on black.
+private struct TimelineVideo: View {
+  let playback: TimelinePlayback
+
+  var body: some View {
+    if let frame = playback.frame {
+      Image(decorative: frame, scale: 1)
+        .resizable()
+        .interpolation(.high)
+    } else {
+      Color.black
+    }
   }
 }
 
