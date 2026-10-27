@@ -20,6 +20,9 @@ struct TimelineTrack<Menu: View>: View {
   @State private var trimOrigin: Timeline.Entry?
   @State private var dropTargeted = false
   @FocusState private var focused: Bool
+  @State private var scroll = ScrollPosition()
+  /// The part of the track on screen, in its own coordinates.
+  @State private var visible = CGRect.zero
 
   private static var rulerHeight: CGFloat { 22 }
   private static var clipHeight: CGFloat { 64 }
@@ -78,6 +81,10 @@ struct TimelineTrack<Menu: View>: View {
           return true
         } isTargeted: { dropTargeted = $0 }
       }
+      .scrollPosition($scroll)
+      .onScrollGeometryChange(for: CGRect.self) { $0.visibleRect } action: { visible = $1 }
+      .onChange(of: playback.time) { keepPlayheadVisible() }
+      .onChange(of: store.pointsPerSecond) { keepPlayheadVisible() }
       .onChange(of: geometry.size.width, initial: true) { store.trackWidth = geometry.size.width }
     }
     .background(.background.secondary)
@@ -209,6 +216,16 @@ struct TimelineTrack<Menu: View>: View {
   }
 
   // MARK: - Positions
+
+  /// Turns the page when the playhead nears the edge of the visible track (playing, stepping, or
+  /// a zoom), so it stays in view: it goes back to near the left edge.
+  private func keepPlayheadVisible() {
+    guard visible.width > 0 else { return }
+    let x = playback.time * pointsPerSecond
+    let margin = min(40, visible.width / 10)
+    guard x < visible.minX + (visible.minX > 0 ? margin : 0) || x > visible.maxX - margin else { return }
+    scroll.scrollTo(x: max(x - margin, 0))
+  }
 
   /// Where a clip dropped at `time` goes: before the first clip whose middle is after it.
   private func insertionIndex(at time: Double) -> Int {
