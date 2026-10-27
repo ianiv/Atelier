@@ -53,7 +53,7 @@ While a video is on the canvas, Edit mode doesn't send it: pick a frame with one
 
 ## In History
 
-A video is one tile in History, with a film badge showing its length (and a speaker when it has sound). On the Mac, moving the pointer across the tile scrubs through its frames. The detail panel plays it and lists its length, frame count and frame rate. **Export Video…** saves it as an MP4, and dragging it out of Atelier drags the MP4. Use **Images / Videos** in the toolbar to show only one kind. **Add to Timeline** puts it on a timeline, to make a longer video from several (see [Putting videos together](timeline.md)). Deleting a video deletes all of its frames.
+A video is one tile in History, with a film badge showing its length (and a speaker when it has sound). On the Mac, moving the pointer across the tile scrubs through its frames. The detail panel plays it and lists its length, frame count and frame rate. **Export Video…** saves it as an MP4, as it is or upscaled (see [Exporting videos](#exporting-videos)), and dragging it out of Atelier drags the MP4. Use **Images / Videos** in the toolbar to show only one kind. **Add to Timeline** puts it on a timeline, to make a longer video from several (see [Putting videos together](timeline.md)). Deleting a video deletes all of its frames.
 
 Videos are stored in the project the way Draw Things stores them: one step per frame, plus the soundtrack, so Draw Things can open them too. That makes them large: a few seconds of video at 720p adds as much to the project file as a hundred images.
 
@@ -66,7 +66,16 @@ To make a larger, sharper copy of a video, right-click it in History and choose 
 
 The upscale runs in the Queue like any other job. The result is a new video after the original, with the same prompt and settings at the new size, and the soundtrack kept.
 
-To upscale a whole timeline instead, use **Export ▸ Export Upscaled Video…** in Timeline (see [Exporting](timeline.md#exporting)).
+**Upscale…** makes a new video in History. To save a larger copy as a file instead, use **Export Video…** with an upscale (below).
+
+## Exporting videos
+
+**Export Video…**, on a video in History (its menu or the detail panel) and in Timeline, opens one sheet:
+
+- **Upscale**: **None** (as it is), **Fast** or **Quality**, as above, with Quality's **Turbo** or **Base**.
+- **Scale**: the scales that work for the video (disabled with None). The sheet shows the size it makes and, when upscaling, about how long it takes.
+
+Then you choose where to save it. As it is, it exports right away. Upscaled, it's a job in the [Queue](queue.md#exports): it waits its turn after what's already queued, shows its progress in the status bar and the Queue, and writes the file when it's done. The video in History (or the timeline) is left as it is.
 
 ## Files
 

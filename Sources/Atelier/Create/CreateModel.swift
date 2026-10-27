@@ -1,3 +1,4 @@
+import AVFoundation
 import CoreGraphics
 import Foundation
 import Diffusion
@@ -842,7 +843,8 @@ final class CreateModel {
   }
 
   private func run(_ job: JobQueue.Job) {
-    let request = job.request
+    if let export = job.export { return run(export, id: job.id) }
+    guard let request = job.request else { return }
     errorMessage = nil
     phase = .running("Preparing…")
     step = 0
@@ -909,6 +911,48 @@ final class CreateModel {
       runNext()
       // Once the queue is empty, the next run shows on the canvas again.
       if generationTask == nil { canvasFollowsRun = true }
+    }
+  }
+
+  /// Queues an upscaled timeline export, after what's already queued.
+  func queue(_ export: TimelineExportJob) {
+    queue.append(export)
+    runNext()
+  }
+
+  /// Runs an export job, its progress in the status bar like a generation's.
+  private func run(_ export: TimelineExportJob, id: UUID) {
+    errorMessage = nil
+    phase = .running("Exporting “\(export.title)” upscaled…")
+    step = 0
+    totalSteps = 1_000
+    runStartedAt = Date()
+    samplingStart = nil
+    lastStepAt = nil
+    generationTask = Task { [engine] in
+      var status = JobQueue.Job.Status.cancelled
+      do {
+        try await export.run(engine: engine) { fraction in
+          Task { @MainActor in
+            guard self.generationTask != nil, self.phase != .cancelling else { return }
+            self.step = Int(fraction * 1_000)
+          }
+        }
+        status = .exported(export.destination)
+      } catch is CancellationError {
+        export.discardPlaceholder()
+      } catch {
+        export.discardPlaceholder()
+        if (error as? AVError)?.code != .operationCancelled {
+          errorMessage = "Couldn't export: \(error.localizedDescription)"
+          status = .failed(error.localizedDescription)
+        }
+      }
+      queue.finishRunning(status)
+      phase = .idle
+      generationTask = nil
+      runStartedAt = nil
+      runNext()
     }
   }
 

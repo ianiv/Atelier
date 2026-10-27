@@ -33,6 +33,8 @@ struct HistoryView: View {
   @State private var marquee: CGRect?
   @State private var quickLookURL: URL?
   @State private var upscaling: HistoryItem?
+  /// Export Video… is choosing how.
+  @State private var exportingVideo: HistoryItem?
   @FocusState private var gridFocused: Bool
   @AppStorage("historyLayout") private var layout = Layout.grid
 
@@ -124,6 +126,18 @@ struct HistoryView: View {
         .inspectorColumnWidth(min: 300, ideal: 340, max: 480)
       }
       .sheet(item: $upscaling) { UpscaleSheet(item: $0) }
+      .sheet(item: $exportingVideo) { item in
+        VideoExportSheet(
+          width: item.sidecar.width, height: item.sidecar.height,
+          frameCount: item.clip?.frames.count ?? 0
+        ) { upscale in
+          if let upscale {
+            queueUpscaledExport(item, upscale)
+          } else {
+            ClipActions.save(item, history: history, dialogs: fileDialogs)
+          }
+        }
+      }
       .confirmationDialog(
         pendingDelete?.count ?? 0 > 1
           ? "Delete \(pendingDelete?.count ?? 0) items from the project?"
@@ -524,10 +538,11 @@ struct HistoryView: View {
     #endif
   }
 
-  /// One image or clip: a save panel. Several: a folder, each named like a single export.
+  /// One clip: the export sheet (as it is, or upscaled). One image: a save panel. Several: a
+  /// folder, each named like a single export.
   private func export(_ items: [HistoryItem]) {
     if items.count == 1, let item = items.first, item.isVideo {
-      ClipActions.save(item, history: history, dialogs: fileDialogs)
+      exportingVideo = item
     } else if items.count == 1, let item = items.first {
       let history = history
       fileDialogs.save = FileDialogs.Save(
@@ -563,6 +578,29 @@ struct HistoryView: View {
           } catch {
             deleteError = error.localizedDescription
           }
+        }
+      }
+    }
+  }
+
+  /// Asks where to save `item` upscaled, then queues the export.
+  private func queueUpscaledExport(_ item: HistoryItem, _ upscale: TimelineUpscale) {
+    let history = history, create = create
+    let name = "\(history.fileName(for: item)) \(upscale.scale)x"
+    fileDialogs.save = FileDialogs.Save(
+      // An empty file holds the place until the export replaces it.
+      file: ExportedFile(type: .mpeg4Movie) { Data() }, name: name + ".mp4"
+    ) { result in
+      guard case .success(let url) = result else { return }
+      Task {
+        do {
+          let composition = try await TimelineComposition.make(clip: item, history: history)
+          create.queue(
+            TimelineExportJob(
+              composition: composition, upscale: upscale, title: history.fileName(for: item),
+              destination: url))
+        } catch {
+          deleteError = error.localizedDescription
         }
       }
     }

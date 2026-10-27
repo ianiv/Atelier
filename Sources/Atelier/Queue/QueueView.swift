@@ -55,10 +55,17 @@ struct QueueView: View {
     .deleteCommand { remove(selection) }
   }
 
+  @ViewBuilder
   private func row(_ job: JobQueue.Job) -> some View {
-    QueueRow(job: job)
-      .tag(job.id)
-      .contextMenu { menu(for: job) }
+    Group {
+      if let export = job.export {
+        ExportQueueRow(job: job, export: export)
+      } else {
+        QueueRow(job: job)
+      }
+    }
+    .tag(job.id)
+    .contextMenu { menu(for: job) }
   }
 
   @ViewBuilder
@@ -77,6 +84,10 @@ struct QueueView: View {
       }
       .disabled(create.history.item(tensorId: tensorId) == nil)
       Button("Run Again") { create.retry(job.id) }
+      Button("Remove from List") { queue.removeRecent(job.id) }
+    case .exported(let url):
+      Button(Finder.showTitle) { Finder.reveal([url]) }
+      Button("Export Again") { create.retry(job.id) }
       Button("Remove from List") { queue.removeRecent(job.id) }
     case .failed, .cancelled:
       Button("Retry") { create.retry(job.id) }
@@ -103,7 +114,11 @@ struct QueueRow: View {
   var job: JobQueue.Job
 
   var body: some View {
-    let request = job.request
+    if let request = job.request { content(request) }
+  }
+
+  @ViewBuilder
+  private func content(_ request: GenerationEngine.Request) -> some View {
     let configuration = request.configuration
     let video = configuration.videoModel
     HStack(spacing: 10) {
@@ -159,7 +174,7 @@ struct QueueRow: View {
         Thumbnail(item: item)
       } else if job.status == .running, let image = create.livePreview {
         Image(decorative: image, scale: 1).resizable().aspectRatio(contentMode: .fill)
-      } else if let canvas = job.request.canvas {
+      } else if let canvas = job.request?.canvas {
         Image(decorative: canvas, scale: 1).resizable().aspectRatio(contentMode: .fill)
       }
     }
@@ -177,7 +192,7 @@ struct QueueRow: View {
       } else {
         ProgressView().controlSize(.small)
       }
-    case .finished:
+    case .finished, .exported:
       Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).help("Finished")
     case .failed:
       Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red).help("Failed")
@@ -194,6 +209,77 @@ struct QueueRow: View {
   private func length(_ video: VideoModel, _ configuration: PipelineConfiguration) -> String {
     let frames = video.snapped(configuration.numFrames)
     return video.seconds(frames).formatted(.number.precision(.fractionLength(1))) + " s, \(frames) frames"
+  }
+}
+
+/// An upscaled timeline export: the timeline, how it's upscaled, the size, frames and about how
+/// long, and where it goes.
+struct ExportQueueRow: View {
+  @Environment(CreateModel.self) private var create
+  var job: JobQueue.Job
+  var export: TimelineExportJob
+
+  var body: some View {
+    let size = export.outputSize
+    let upscale = export.upscale
+    let method =
+      upscale.method == .flashVSR ? "FlashVSR+ \(upscale.variant.title)" : "Apple Super Resolution"
+    HStack(spacing: 10) {
+      ZStack {
+        Color.quaternaryLabel
+        Image(systemName: "square.and.arrow.up").foregroundStyle(.secondary)
+      }
+      .frame(width: 48, height: 48)
+      .clipShape(.rect(cornerRadius: 4))
+      VStack(alignment: .leading, spacing: 2) {
+        Text("Export “\(export.title)” upscaled")
+          .lineLimit(1)
+        Text(
+          [
+            method, "\(upscale.scale)×", "\(size.width)×\(size.height)",
+            "\(export.composition.frameCount) frames", "about \(Self.duration(export.estimatedSeconds))",
+          ].joined(separator: " · ")
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        Text(export.destination.lastPathComponent)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+        if case .failed(let message) = job.status {
+          Text(message).font(.caption).foregroundStyle(.red).lineLimit(2)
+        }
+      }
+      Spacer(minLength: 0)
+      Image(systemName: "film.stack")
+        .foregroundStyle(.secondary)
+        .help("Timeline export")
+      status
+    }
+    .padding(.vertical, 2)
+  }
+
+  @ViewBuilder
+  private var status: some View {
+    switch job.status {
+    case .waiting:
+      EmptyView()
+    case .running:
+      ProgressView(value: Double(create.step), total: Double(max(create.totalSteps, 1)))
+        .frame(width: 80)
+    case .finished, .exported:
+      Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).help("Exported")
+    case .failed:
+      Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red).help("Failed")
+    case .cancelled:
+      Image(systemName: "xmark.circle").foregroundStyle(.secondary).help("Cancelled")
+    }
+  }
+
+  private static func duration(_ seconds: Double) -> String {
+    Duration.seconds(max(seconds, 60).rounded(.up))
+      .formatted(.units(allowed: [.hours, .minutes], width: .abbreviated, maximumUnitCount: 2))
   }
 }
 

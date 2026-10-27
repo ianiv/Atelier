@@ -13,7 +13,8 @@ struct UpscaleSheet: View {
   var body: some View {
     let sidecar = item.sidecar
     let controls = UpscaleControls(
-      width: sidecar.width, height: sidecar.height, method: $method, scale: $scale,
+      width: sidecar.width, height: sidecar.height,
+      method: Binding(get: { method }, set: { if let new = $0 { method = new } }), scale: $scale,
       variant: $variant)
     VStack(alignment: .leading, spacing: 12) {
       Text("Upscale Video").font(.headline)
@@ -36,36 +37,49 @@ struct UpscaleSheet: View {
   }
 }
 
-/// Export Upscaled Video… on a timeline: the same choices, for the whole timeline at its size,
-/// with roughly how long it will take.
-struct TimelineUpscaleSheet: View {
+/// Export Video… for a timeline or a video in History: as it is, or upscaled (Fast or Quality,
+/// at a scale), with the size it makes and, when upscaling, about how long it takes. As it is
+/// exports right away; upscaled, it's a Queue job.
+struct VideoExportSheet: View {
   @Environment(\.dismiss) private var dismiss
   let width: Int
   let height: Int
   let frameCount: Int
-  let export: (TimelineUpscale) -> Void
-  @AppStorage("timelineUpscaleMethod") private var method = ClipUpscale.Method.system
-  @AppStorage("timelineUpscaleScale") private var scale = 4
+  /// Called with how to upscale, or nil to export as it is.
+  let export: (TimelineUpscale?) -> Void
+  /// "none" or a `ClipUpscale.Method`.
+  @AppStorage("exportUpscale") private var upscaleChoice = "none"
+  @AppStorage("exportUpscaleScale") private var scale = 2
   @AppStorage("upscaleFlashVSRVariant") private var variant = FlashVSRFiles.Variant.turbo
+
+  private var method: ClipUpscale.Method? { ClipUpscale.Method(rawValue: upscaleChoice) }
 
   var body: some View {
     let controls = UpscaleControls(
-      width: width, height: height, method: $method, scale: $scale, variant: $variant)
-    let upscale = TimelineUpscale(method: method, scale: scale, variant: variant)
+      width: width, height: height,
+      method: Binding(get: { method }, set: { upscaleChoice = $0?.rawValue ?? "none" }),
+      scale: $scale, variant: $variant, offersNone: true)
+    let upscale = method.map { TimelineUpscale(method: $0, scale: scale, variant: variant) }
     let problem = controls.problem
     VStack(alignment: .leading, spacing: 12) {
-      Text("Export Upscaled Video").font(.headline)
+      Text("Export Video").font(.headline)
       controls
       LabeledContent(
         "Takes about",
-        value: problem == nil
-          ? Self.duration(upscale.estimatedSeconds(frames: frameCount, width: width, height: height))
-          : "—")
+        value: upscale.map { problem == nil ? Self.duration($0.estimatedSeconds(frames: frameCount, width: width, height: height)) : "—" }
+          ?? "Seconds")
+      Text(
+        upscale == nil
+          ? "Exports right away."
+          : "Upscaled exports run in the Queue, after what's queued; you choose where the file goes first."
+      )
+      .font(.caption).foregroundStyle(.secondary)
+      .fixedSize(horizontal: false, vertical: true)
       HStack {
         Spacer()
         Button("Cancel", role: .cancel) { dismiss() }
           .keyboardShortcut(.cancelAction)
-        Button("Export") {
+        Button("Export…") {
           dismiss()
           export(upscale)
         }
@@ -74,7 +88,7 @@ struct TimelineUpscaleSheet: View {
       }
     }
     .padding(20)
-    .sheetFrame(width: 440, height: 390)
+    .sheetFrame(width: 440, height: 430)
   }
 
   private static func duration(_ seconds: Double) -> String {
@@ -89,47 +103,58 @@ struct TimelineUpscaleSheet: View {
 struct UpscaleControls: View {
   let width: Int
   let height: Int
-  @Binding var method: ClipUpscale.Method
+  /// nil: not upscaling (only when `offersNone`).
+  @Binding var method: ClipUpscale.Method?
   @Binding var scale: Int
   @Binding var variant: FlashVSRFiles.Variant
+  /// A None choice before Quality and Fast, for exporting as it is.
+  let offersNone: Bool
   private var download = FlashVSRDownload.shared
 
   init(
-    width: Int, height: Int, method: Binding<ClipUpscale.Method>, scale: Binding<Int>,
-    variant: Binding<FlashVSRFiles.Variant>
+    width: Int, height: Int, method: Binding<ClipUpscale.Method?>, scale: Binding<Int>,
+    variant: Binding<FlashVSRFiles.Variant>, offersNone: Bool = false
   ) {
     self.width = width
     self.height = height
     _method = method
     _scale = scale
     _variant = variant
+    self.offersNone = offersNone
   }
 
   /// The scales the chosen method can do at this size.
   private var scales: [Int] {
-    ClipUpscale.offeredScales(width: width, height: height, method: method)
+    method.map { ClipUpscale.offeredScales(width: width, height: height, method: $0) } ?? []
   }
 
-  /// Why it can't upscale with these choices; nil when it can.
+  /// Why it can't upscale with these choices; nil when it can (or isn't upscaling).
   var problem: String? {
-    ClipUpscale.problem(width: width, height: height, scale: scale, method: method, variant: variant)
+    guard let method else { return nil }
+    return ClipUpscale.problem(
+      width: width, height: height, scale: scale, method: method, variant: variant)
   }
 
   var body: some View {
-    let size = ClipUpscale.outputSize(width: width, height: height, scale: scale, method: method)
+    let size =
+      method.map { ClipUpscale.outputSize(width: width, height: height, scale: scale, method: $0) }
+      ?? (width: width, height: height)
     // Read while it changes, so the controls follow the download.
     let downloading = download.variant
     let missing = FlashVSRFiles.installed(variant) == nil
     Group {
-      Picker("Method", selection: $method) {
-        Text("Quality").tag(ClipUpscale.Method.flashVSR)
-        Text("Fast").tag(ClipUpscale.Method.system)
+      Picker(offersNone ? "Upscale" : "Method", selection: $method) {
+        if offersNone { Text("None").tag(ClipUpscale.Method?.none) }
+        Text("Quality").tag(ClipUpscale.Method?.some(.flashVSR))
+        Text("Fast").tag(ClipUpscale.Method?.some(.system))
       }
       .pickerStyle(.segmented)
       Text(
         method == .flashVSR
           ? "FlashVSR+ restores detail as one stream, steady from frame to frame. It takes a few seconds a frame."
-          : "Apple Super Resolution runs on the Neural Engine in seconds. macOS downloads its model the first time."
+          : method == .system
+            ? "Apple Super Resolution runs on the Neural Engine in seconds. macOS downloads its model the first time."
+            : "At its own size."
       )
       .font(.caption).foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)
@@ -164,7 +189,7 @@ struct UpscaleControls: View {
         }
       }
       .pickerStyle(.segmented)
-      .disabled(scales.isEmpty)
+      .disabled(method == nil || scales.isEmpty)
       LabeledContent("Size", value: "\(width) × \(height) → \(size.width) × \(size.height)")
       if let problem {
         Text(problem).font(.caption).foregroundStyle(.secondary)

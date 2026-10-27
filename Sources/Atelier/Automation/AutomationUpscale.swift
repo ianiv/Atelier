@@ -122,8 +122,11 @@ extension Automation {
   /// of the first, the start of the rest), both only for the export: the saved timeline is left
   /// as it is.
   ///
-  ///   Atelier --timeline-export-check --project NAME [--method system|flashVSR] [--scale 4]
-  ///           [--variant turbo|base] [--crossfade N] [--trim N] --export DIR [--quit]
+  /// `--clip ID` exports that History video instead (the first `--trim` frames when given), and
+  /// `--method none` exports as it is, as Export Video… does without upscaling.
+  ///
+  ///   Atelier --timeline-export-check --project NAME [--method none|system|flashVSR] [--scale 4]
+  ///           [--variant turbo|base] [--clip ID] [--crossfade N] [--trim N] --export DIR [--quit]
   static func timelineExportCheck(_ model: CreateModel) {
     let args = CommandLine.arguments
     func value(_ name: String) -> String? {
@@ -143,11 +146,17 @@ extension Automation {
         try? await Task.sleep(for: .milliseconds(100))
       }
       model.timelines.load()
+      let clip = value("--clip").flatMap(Int64.init).flatMap(model.history.item(tensorId:))
       guard var timeline = model.timelines.timelines.first, let directory = value("--export") else {
         log("FAIL no timeline in \(model.history.project.name), or no --export")
         return finish()
       }
-      if let trim = value("--trim").flatMap(Int.init) {
+      if let clip, let frames = clip.clip?.frames.count {
+        // The video alone, as History's Export Video… makes it.
+        timeline = Timeline(name: model.history.fileName(for: clip))
+        let end = min(frames, value("--trim").flatMap(Int.init) ?? frames)
+        timeline.entries = [Timeline.Entry(clip: clip.tensorId, start: 0, end: end)]
+      } else if let trim = value("--trim").flatMap(Int.init) {
         for index in timeline.entries.indices {
           var entry = timeline.entries[index]
           if index == 0 {
@@ -162,6 +171,7 @@ extension Automation {
         timeline.entries[0].crossfadeFrames = crossfade
       }
       let layout = TimelineLayout(timeline, item: model.history.item(tensorId:))
+      let none = value("--method") == "none"
       let method = value("--method").flatMap(ClipUpscale.Method.init(rawValue:)) ?? .system
       let upscale = TimelineUpscale(
         method: method, scale: value("--scale").flatMap(Int.init) ?? (method == .system ? 4 : 2),
@@ -171,8 +181,21 @@ extension Automation {
         for segment in layout.segments {
           files.append(try await model.history.videoFile(for: segment.item))
         }
-        guard let composition = try await TimelineComposition.make(layout, files: files) else {
+        let composition: TimelineComposition
+        if let clip, value("--trim") == nil {
+          composition = try await TimelineComposition.make(clip: clip, history: model.history)
+        } else if let made = try await TimelineComposition.make(layout, files: files) {
+          composition = made
+        } else {
           log("FAIL empty timeline")
+          return finish()
+        }
+        if none {
+          let url = URL(fileURLWithPath: directory).appending(
+            path: "\(clip == nil ? "timeline" : "clip")-export.mp4")
+          let exportStarted = Date()
+          try await composition.export(to: url, codec: .current, title: timeline.name) { _ in }
+          log(String(format: "PASS exported %@ (%d frames, no upscale) in %.1fs", url.path, composition.frameCount, Date().timeIntervalSince(exportStarted)))
           return finish()
         }
         let size = upscale.outputSize(width: composition.width, height: composition.height)
@@ -180,17 +203,31 @@ extension Automation {
           "timeline \(timeline.name): \(composition.frameCount) frames at \(composition.width)x\(composition.height), runs \(composition.runs), \(method.rawValue) \(upscale.scale)x to \(size.width)x\(size.height), estimate \(Int(upscale.estimatedSeconds(frames: composition.frameCount, width: composition.width, height: composition.height)))s"
         )
         let url = URL(fileURLWithPath: directory).appending(
-          path: "timeline-\(method.rawValue)-\(upscale.scale)x.mp4")
+          path: "\(clip == nil ? "timeline" : "clip")-\(method.rawValue)-\(upscale.scale)x.mp4")
         let exportStarted = Date()
-        let lastTenth = ManagedProgress()
-        try await composition.exportUpscaled(
-          to: url, codec: .current, title: timeline.name, upscale: upscale, engine: model.engine
-        ) { fraction in
-          if lastTenth.advance(to: fraction) {
-            Task { @MainActor in log(String(format: "%.0f%%", fraction * 100)) }
+        // Through the Queue, as Export Upscaled Video… runs it.
+        model.queue(
+          TimelineExportJob(
+            composition: composition, upscale: upscale, title: timeline.name, destination: url))
+        log("queued: \(model.queue.running.map { _ in "running" } ?? "waiting"), \(model.queue.waiting.count) waiting")
+        var lastTenth = -1
+        while !model.queue.isEmpty {
+          if model.queue.running?.export != nil, model.totalSteps > 0 {
+            let tenth = model.step * 10 / model.totalSteps
+            if tenth > lastTenth {
+              lastTenth = tenth
+              log("\(tenth * 10)% (status bar: \(model.phase))")
+            }
           }
+          try? await Task.sleep(for: .milliseconds(200))
         }
-        log(String(format: "PASS exported %@ in %.1fs", url.path, Date().timeIntervalSince(exportStarted)))
+        guard let job = model.queue.recent.first, case .exported(let written) = job.status,
+          written == url
+        else {
+          log("FAIL \(model.queue.recent.first.map { "\($0.status)" } ?? "no job") \(model.errorMessage ?? "")")
+          return finish()
+        }
+        log(String(format: "PASS exported %@ in %.1fs, recent row: %@", url.path, Date().timeIntervalSince(exportStarted), "\(job.status)"))
       } catch {
         log("FAIL \(error as NSError)")
       }
@@ -295,18 +332,4 @@ extension Automation {
   }
 }
 
-/// Reports progress in tenths, from any thread.
-private final class ManagedProgress: @unchecked Sendable {
-  private let lock = NSLock()
-  private var tenth = -1
-
-  func advance(to fraction: Double) -> Bool {
-    lock.withLock {
-      let now = Int(fraction * 10)
-      guard now > tenth else { return false }
-      tenth = now
-      return true
-    }
-  }
-}
 #endif

@@ -36,9 +36,8 @@ Only the first video made from that Generate goes on the timeline; with ×2 or m
 
 ## Exporting
 
-**Export** writes the timeline as one MP4, in the format chosen in **Settings ▸ Images ▸ Video Format** (H.264 or HEVC), with AAC sound. It shows its progress over the viewer and can be cancelled; then it asks where to save the file.
+**Export Video…** writes the timeline as one MP4, in the format chosen in **Settings ▸ Images ▸ Video Format** (H.264 or HEVC), with AAC sound, as it is or upscaled. Pick **Upscale** **None**, **Fast** (Apple Super Resolution) or **Quality** (FlashVSR+) and a scale in its sheet, as for [exporting a video](video.md#exporting-videos). As it is, it shows its progress over the viewer and can be cancelled; then it asks where to save the file. Upscaled, it first asks where to save the file, then runs as a job in the [Queue](queue.md#exports); the frames are upscaled as they're composed, after trims and crossfades, and the sound is the same.
 
-**Export ▸ Export Upscaled Video…** writes it larger, the same way: pick **Quality** (FlashVSR+, steady detail, a few seconds a frame) or **Fast** (Apple Super Resolution, seconds for the whole timeline) and a scale, as for [upscaling a video](video.md#upscaling-videos). The sheet shows the size and about how long it will take. The frames are upscaled as they're composed, after trims and crossfades, and the sound is the same as Export's. The timeline and its videos are left as they are.
 
 ## Deleting videos
 
@@ -46,4 +45,4 @@ Deleting a video in History that's on a timeline takes it off the timeline too. 
 
 ## On iPad
 
-Everything above works on iPad. Touch and hold a clip or the viewer for its menu, and drag a clip's edge to trim it. **Export ▸ Save to Photos** saves the timeline to Photos.
+Everything above works on iPad. Touch and hold a clip or the viewer for its menu, and drag a clip's edge to trim it. **Export ▸ Save to Photos** saves the timeline to Photos, as it is.

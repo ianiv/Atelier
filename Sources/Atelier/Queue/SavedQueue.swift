@@ -63,12 +63,13 @@ enum SavedQueue {
   static func save(_ jobs: [JobQueue.Job], project: String, in folder: URL = folder) {
     let manager = FileManager.default
     try? manager.removeItem(at: folder)
-    let jobs = jobs.filter { !$0.fromAgent }
+    // Exports write where a save panel allowed for this session only, so they aren't kept.
+    let jobs = jobs.filter { !$0.fromAgent && $0.request != nil }
     guard !jobs.isEmpty, (try? manager.createDirectory(at: folder, withIntermediateDirectories: true)) != nil
     else { return }
     var entries: [Entry] = []
     for job in jobs {
-      let request = job.request
+      guard let request = job.request else { continue }
       var settings = request.configuration
       settings.seed = request.seed
       if let canvas = request.canvas {

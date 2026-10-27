@@ -1,9 +1,9 @@
 import Foundation
 import Observation
 
-/// Generations waiting to run, the one running and the recent ones, in order. Each job holds its
-/// own snapshot of the prompt, settings, seed, canvas and moodboard, taken when it was queued.
-/// CreateModel runs them one at a time.
+/// Generations (and upscaled timeline exports) waiting to run, the one running and the recent
+/// ones, in order. Each generation holds its own snapshot of the prompt, settings, seed, canvas
+/// and moodboard, taken when it was queued. CreateModel runs them one at a time.
 @MainActor
 @Observable
 final class JobQueue {
@@ -11,12 +11,21 @@ final class JobQueue {
     enum Status: Equatable {
       case waiting, running
       case finished(tensorId: Int64)
+      /// An export written to this file.
+      case exported(URL)
       case failed(String)
       case cancelled
     }
 
+    /// What the job does.
+    enum Work {
+      case generation(GenerationEngine.Request)
+      /// Export Upscaled Video… on a timeline.
+      case export(TimelineExportJob)
+    }
+
     var id = UUID()
-    var request: GenerationEngine.Request
+    var work: Work
     var status = Status.waiting
     let queuedAt = Date()
     var finishedAt: Date?
@@ -25,6 +34,26 @@ final class JobQueue {
     /// Jobs queued one after another, while you didn't pick another step, form a line: each
     /// follows the line's latest result when it starts, whatever order they end up running in.
     var line: UUID?
+
+    init(work: Work, fromAgent: Bool = false) {
+      self.work = work
+      self.fromAgent = fromAgent
+    }
+
+    init(request: GenerationEngine.Request, fromAgent: Bool = false) {
+      self.init(work: .generation(request), fromAgent: fromAgent)
+    }
+
+    /// The generation's request; nil for an export.
+    var request: GenerationEngine.Request? {
+      guard case .generation(let request) = work else { return nil }
+      return request
+    }
+
+    var export: TimelineExportJob? {
+      guard case .export(let export) = work else { return nil }
+      return export
+    }
   }
 
   private(set) var waiting: [Job] = []
@@ -49,7 +78,7 @@ final class JobQueue {
 
   /// Whether a waiting or running job uses `model`.
   func uses(_ model: String) -> Bool {
-    running?.request.model == model || waiting.contains { $0.request.model == model }
+    running?.request?.model == model || waiting.contains { $0.request?.model == model }
   }
 
   /// Adds jobs at the end. Ones without a step to follow go on the line being queued, or start
@@ -75,13 +104,24 @@ final class JobQueue {
     return waiting.suffix(requests.count).map(\.id)
   }
 
+  /// Adds an export at the end; returns its id.
+  @discardableResult
+  func append(_ export: TimelineExportJob) -> UUID {
+    let job = Job(work: .export(export))
+    waiting.append(job)
+    return job.id
+  }
+
   /// Takes the first waiting job and marks it running, unless paused or one is running.
   func startNext() -> Job? {
     guard running == nil, !isPaused, !waiting.isEmpty else { return nil }
     var job = waiting.removeFirst()
-    if let line = job.line, let tip = lineTips[line] { job.request.parentTensorId = tip }
-    if job.request.canvas != nil, job.request.canvasTensorId == nil, let key = job.request.canvasKey {
-      job.request.canvasTensorId = savedInputs[key]
+    if case .generation(var request) = job.work {
+      if let line = job.line, let tip = lineTips[line] { request.parentTensorId = tip }
+      if request.canvas != nil, request.canvasTensorId == nil, let key = request.canvasKey {
+        request.canvasTensorId = savedInputs[key]
+      }
+      job.work = .generation(request)
     }
     job.status = .running
     running = job
@@ -102,7 +142,9 @@ final class JobQueue {
       expectedCurrent = tip
       if let line = job.line { lineTips[line] = tip }
     }
-    if let inputTensorId, job.request.canvasTensorId == nil, let key = job.request.canvasKey {
+    if let inputTensorId, let request = job.request, request.canvasTensorId == nil,
+      let key = request.canvasKey
+    {
       savedInputs[key] = inputTensorId
     }
     forgetIfEmpty()
@@ -142,7 +184,7 @@ final class JobQueue {
   /// same step.
   func retry(_ id: UUID) {
     guard let job = recent.first(where: { $0.id == id }) else { return }
-    waiting.append(Job(request: job.request))
+    waiting.append(Job(work: job.work))
   }
 
   /// Takes every waiting job out of the queue; returns their ids.

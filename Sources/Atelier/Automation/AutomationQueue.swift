@@ -63,7 +63,7 @@ extension Automation {
       check(
         queue.running != nil && queue.waiting.count == 2,
         "a count of 3 runs one and queues two (running \(queue.running != nil), waiting \(queue.waiting.count))")
-      let seeds = ([queue.running].compactMap { $0 } + queue.waiting).map(\.request.seed)
+      let seeds = ([queue.running].compactMap { $0 } + queue.waiting).compactMap(\.request?.seed)
       check(seeds == [100, 101, 102], "a set seed counts up: \(seeds)")
       check(model.seed == 100 && model.seedLocked, "the seed field and Random are left alone")
 
@@ -95,8 +95,8 @@ extension Automation {
       let done = finished()
       check(done.count == 4, "four images finished (\(done.count))")
       check(
-        done.map(\.request.seed) == [100, 201, 101, 200],
-        "they ran in queue order after the move and cancel: \(done.map(\.request.seed))")
+        done.compactMap(\.request?.seed) == [100, 201, 101, 200],
+        "they ran in queue order after the move and cancel: \(done.compactMap(\.request?.seed))")
       let items = done.compactMap { job -> HistoryItem? in
         if case .finished(let tensorId) = job.status { return model.history.item(tensorId: tensorId) }
         return nil
@@ -133,7 +133,7 @@ extension Automation {
       let folder = FileManager.default.temporaryDirectory.appending(path: "atelier-queue-check-\(UUID())")
       SavedQueue.save(queue.waiting, project: model.history.project.name, in: folder)
       let restored = await model.savedRequests(SavedQueue.load(project: model.history.project.name, from: folder))
-      let original = queue.waiting.map(\.request)
+      let original = queue.waiting.compactMap(\.request)
       check(
         restored.count == original.count
           && zip(restored, original).allSatisfy {

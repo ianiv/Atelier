@@ -26,6 +26,7 @@ You can also drag images from History onto the canvas or the moodboard in Create
 Right-click an image (on iPad, touch and hold), or use the buttons in the detail panel:
 
 - **Copy Image**, **Copy Prompt**, **Copy Seed**.
+- **Export Video…** (on a video) saves it as an MP4, as it is or upscaled; see [Exporting videos](video.md#exporting-videos).
 - **Export PNG…** saves a PNG with its prompt, model, seed and settings embedded, in the format Draw Things uses, so Atelier and Draw Things can read them back. Images saved from the canvas or dragged out of Atelier carry them too. You can turn this off in [Settings](settings.md#saved-images).
 - **Save to Photos** (iPad only) adds the image to your photo library, with its settings embedded like an export. The first time, iPadOS asks whether Atelier may add photos.
 - **Delete** removes the image and its settings from the project. This can't be undone.

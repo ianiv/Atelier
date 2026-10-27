@@ -33,7 +33,60 @@ struct TimelineUpscale: Sendable, Hashable {
   }
 }
 
+/// An upscaled timeline export waiting in the Queue: what to export, how, and the file the save
+/// panel allowed it to write (for this session).
+struct TimelineExportJob: @unchecked Sendable {
+  let composition: TimelineComposition
+  let upscale: TimelineUpscale
+  /// The timeline's name.
+  let title: String
+  let destination: URL
+
+  var outputSize: (width: Int, height: Int) {
+    upscale.outputSize(width: composition.width, height: composition.height)
+  }
+
+  var estimatedSeconds: Double {
+    upscale.estimatedSeconds(
+      frames: composition.frameCount, width: composition.width, height: composition.height)
+  }
+
+  /// Exports to a temporary file, then puts it at `destination`.
+  func run(engine: GenerationEngine, progress: @escaping @Sendable (Double) -> Void) async throws {
+    let temporary = URL.temporaryDirectory.appending(path: "\(UUID().uuidString).mp4")
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    try await composition.exportUpscaled(
+      to: temporary, codec: .current, title: title, upscale: upscale, engine: engine,
+      progress: progress)
+    let access = destination.startAccessingSecurityScopedResource()
+    defer { if access { destination.stopAccessingSecurityScopedResource() } }
+    try? FileManager.default.removeItem(at: destination)
+    try FileManager.default.moveItem(at: temporary, to: destination)
+  }
+
+  /// Takes away the empty file the save panel left, after a failed or cancelled export.
+  func discardPlaceholder() {
+    let access = destination.startAccessingSecurityScopedResource()
+    defer { if access { destination.stopAccessingSecurityScopedResource() } }
+    let size = (try? FileManager.default.attributesOfItem(atPath: destination.path)[.size] as? Int) ?? nil
+    if size == 0 { try? FileManager.default.removeItem(at: destination) }
+  }
+}
+
 extension TimelineComposition {
+  /// A History video as a composition of its own (the whole clip, its sound), so it exports
+  /// the way a timeline does.
+  @MainActor
+  static func make(clip item: HistoryItem, history: HistoryStore) async throws -> TimelineComposition {
+    guard let clip = item.clip else { throw ClipVideoError.noFrames }
+    var timeline = Timeline(name: history.fileName(for: item))
+    timeline.entries = [Timeline.Entry(clip: item.tensorId, start: 0, end: clip.frames.count)]
+    let layout = TimelineLayout(timeline) { $0 == item.tensorId ? item : nil }
+    guard let composition = try await make(layout, files: [try await history.videoFile(for: item)])
+    else { throw ClipVideoError.noFrames }
+    return composition
+  }
+
   /// Writes it as Export does, but upscaled: the composed frames (after trims and crossfades)
   /// go through Apple Super Resolution one by one, or FlashVSR+ as one stream, straight into the
   /// MP4, so no more than a chunk of upscaled frames is held at once. The

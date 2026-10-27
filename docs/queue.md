@@ -27,6 +27,10 @@ The list has three parts: the image being made, the waiting images and recent on
 - **Retry** (on failed or cancelled images) and **Run Again** (on finished ones) queue the image again with the same settings and seed.
 - **Show in History** opens a finished image in History. **Clear Finished** empties the recent list; the images stay in History.
 
+## Exports
+
+An upscaled **Export Video…** (from History or Timeline; see [Exporting videos](video.md#exporting-videos)) is a job in the queue too, after the images already waiting. Its row shows the timeline or video's name, the method, scale, size, frames, about how long it takes, and the file it writes; while it runs, the status bar shows its progress like an image's. You can reorder it, Cancel it or Stop it like any job; a stopped export leaves no file. When it's done, **Show in Finder** (**Show in Files** on iPad) shows the file, and **Export Again** runs it again. Exports aren't kept when you quit: the file you chose is only open to Atelier until then.
+
 ## Stop
 
 **Stop** under the prompt (or Esc) stops only the image being made; the queue goes on with the next one. To stop and hold everything, press Pause Queue first, then Stop.
