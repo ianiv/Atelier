@@ -21,8 +21,10 @@ struct TimelineTrack<Menu: View>: View {
   @State private var dropTargeted = false
   @FocusState private var focused: Bool
   @State private var scroll = ScrollPosition()
-  /// The part of the track on screen, in its own coordinates.
+  /// The part of the track on screen, in its own coordinates, and how much of each side the
+  /// sidebar and the inspector cover (their glass floats over the track's ends).
   @State private var visible = CGRect.zero
+  @State private var covered = EdgeInsets()
 
   private static var rulerHeight: CGFloat { 22 }
   private static var clipHeight: CGFloat { 64 }
@@ -82,10 +84,13 @@ struct TimelineTrack<Menu: View>: View {
         } isTargeted: { dropTargeted = $0 }
       }
       .scrollPosition($scroll)
-      .onScrollGeometryChange(for: CGRect.self) { $0.visibleRect } action: { visible = $1 }
+      .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geometry in
+        visible = geometry.visibleRect
+        covered = geometry.contentInsets
+        store.trackWidth = geometry.containerSize.width - covered.leading - covered.trailing
+      }
       .onChange(of: playback.time) { keepPlayheadVisible() }
       .onChange(of: store.pointsPerSecond) { keepPlayheadVisible() }
-      .onChange(of: geometry.size.width, initial: true) { store.trackWidth = geometry.size.width }
     }
     .background(.background.secondary)
     .focusable()
@@ -220,11 +225,15 @@ struct TimelineTrack<Menu: View>: View {
   /// Turns the page when the playhead nears the edge of the visible track (playing, stepping, or
   /// a zoom), so it stays in view: it goes back to near the left edge.
   private func keepPlayheadVisible() {
-    guard visible.width > 0 else { return }
+    // Only the part between the sidebar and the inspector counts as visible.
+    let left = visible.minX + covered.leading
+    let right = visible.maxX - covered.trailing
+    guard right > left else { return }
     let x = playback.time * pointsPerSecond
-    let margin = min(40, visible.width / 10)
-    guard x < visible.minX + (visible.minX > 0 ? margin : 0) || x > visible.maxX - margin else { return }
-    scroll.scrollTo(x: max(x - margin, 0))
+    let margin = min(40, (right - left) / 10)
+    let atStart = visible.minX <= -covered.leading + 0.5
+    guard x < left + (atStart ? 0 : margin) || x > right - margin else { return }
+    scroll.scrollTo(x: max(x - margin, 0) - covered.leading)
   }
 
   /// Where a clip dropped at `time` goes: before the first clip whose middle is after it.
