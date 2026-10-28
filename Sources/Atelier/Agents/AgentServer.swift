@@ -206,7 +206,7 @@ final class AgentServer {
     }
     calls[key] = task
     // A client that hangs up (some give up on calls after a few minutes) doesn't stop the run:
-    // generate keeps it going as a job for get_job. notifications/cancelled still stops it.
+    // generate keeps it going as a job for get_job.
   }
 
   private func respond(result: [String: Any], id: Any, via responder: LoopbackHTTPServer.Responder) {

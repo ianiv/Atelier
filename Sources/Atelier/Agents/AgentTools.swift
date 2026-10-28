@@ -233,7 +233,7 @@ final class AgentTools {
           "audio": ["type": "string", "description": "Video models that take audio (see list_models): path to an audio file."],
           "save_to": ["type": "string", "description": "Where to write the PNG or MP4: a file path, or a folder. Defaults to a temporary folder."],
           "include_image": ["type": "boolean", "description": "Return the image inline (scaled to 1024 px on the long side). Default true."],
-          "background": ["type": "boolean", "description": "Return a job_id right away instead of waiting for the result, then check on it with get_job. Use it for videos and anything that may take more than a couple of minutes, since some clients give up on long calls."],
+          "background": ["type": "boolean", "description": "Return a job_id right away instead of waiting for the result, then check on it with get_job. Use it for videos and anything that may take more than a couple of minutes, since some clients give up on long calls. Either way the run keeps going if the call is cancelled or dropped; only cancel_job stops it."],
         ],
       ],
     ],
@@ -259,7 +259,7 @@ final class AgentTools {
     [
       "name": "list_jobs",
       "title": "List jobs",
-      "description": "Lists generate jobs from the last hour, newest first: job_id, status, progress, elapsed time and prompt. A generate call that timed out or lost its connection keeps running and shows here.",
+      "description": "Lists generate jobs from the last hour, newest first: job_id, status, progress, elapsed time and prompt. A generate call that timed out, was cancelled or lost its connection keeps running and shows here.",
       "inputSchema": ["type": "object", "properties": [String: Any]()],
       "annotations": ["readOnlyHint": true],
     ],
@@ -515,8 +515,8 @@ final class AgentTools {
   // MARK: - Jobs
 
   /// Runs generate as a job. In the background it answers with the job id once the arguments
-  /// check out; otherwise it waits for the result, streaming progress. Only cancelling this call
-  /// (or cancel_job) stops the run: a client that just hangs up leaves it going.
+  /// check out; otherwise it waits for the result, streaming progress. Nothing that happens to
+  /// the call stops the run; cancel_job and the Queue do.
   private func startGenerate(
     _ arguments: [String: Any], progress: @escaping (Progress) -> Void
   ) async throws -> [String: Any] {
@@ -553,12 +553,15 @@ final class AgentTools {
       summary["note"] = "Running in the background. Call get_job with this job_id to wait for it."
       return try Self.textResult(json: summary)
     }
-    await withTaskCancellationHandler {
-      _ = await job.task?.value
-    } onCancel: {
-      Task { @MainActor in job.task?.cancel() }
+    // A cancelled call only stops waiting: clients cancel calls they give up on (Claude's
+    // bridge does at three minutes), so only cancel_job and the Queue stop the run itself.
+    while job.finishedAt == nil, !Task.isCancelled {
+      try? await Task.sleep(for: .milliseconds(250))
     }
     job.onProgress = nil
+    guard job.finishedAt != nil else {
+      throw ToolError("Stopped waiting; \(job.id) is still running. Call get_job to collect it.")
+    }
     return try Self.outcome(of: job)
   }
 

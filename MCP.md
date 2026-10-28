@@ -97,13 +97,15 @@ For example: "Look at what I have in Atelier's Create screen, make the lighting 
 
 ## Progress and cancelling
 
-Runs stream progress (`notifications/progress`) to clients that send a progress token, and cancelling the call in the client (`notifications/cancelled`) stops the generation. A client that just disconnects doesn't: the run carries on as a job.
+Runs stream progress (`notifications/progress`) to clients that send a progress token. Cancelling or dropping the call doesn't stop the generation, because clients also cancel calls they give up on. The run carries on as a job, and `cancel_job` (or Cancel in the Queue) stops it.
 
 ## Long runs
 
-Some clients give up on a tool call after a few minutes; Claude's connection to a Mac, for one, drops calls after 180 seconds. A video can take longer than that, so every `generate` runs as a job that keeps going when its call is dropped.
+Some clients give up on a tool call after a few minutes; Claude's connection to a Mac, for one, cancels calls after 180 seconds. A video can take longer than that, so every `generate` runs as a job that keeps going when its call is cancelled or dropped.
 
-For long runs, call `generate` with `background: true`. It checks the arguments, queues the run and returns a `job_id` at once. Then call `get_job` with it: each call waits up to `wait_seconds` for the run to finish and otherwise returns its progress, so the agent checks in every half minute or so without one call outlasting the client's timeout. When the job is `done`, `get_job` returns exactly what `generate` would have, image included. A `generate` call that was dropped without `background` shows up in `list_jobs`, and `get_job` collects its result the same way. `cancel_job`, or Cancel in the Queue, stops a job.
+For long runs, call `generate` with `background: true`. It checks the arguments, queues the run and returns a `job_id` at once. Then call `get_job` with it: each call waits up to `wait_seconds` for the run to finish and otherwise returns its progress, so the agent checks in every half minute or so without one call outlasting the client's timeout. When the job is `done`, `get_job` returns exactly what `generate` would have, image included. A `generate` call that was cancelled or dropped without `background` shows up in `list_jobs`, and `get_job` collects its result the same way. `cancel_job`, or Cancel in the Queue, stops a job.
+
+Clients read the tool list when they connect, so after updating Atelier reconnect the agent (for example `/mcp` in Claude Code) to see `background` and the job tools.
 
 Jobs are kept for an hour (the newest 20 finished ones) and are forgotten when Atelier quits; their images and videos stay in the project.
 
