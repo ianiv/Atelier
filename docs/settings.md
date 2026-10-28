@@ -45,7 +45,7 @@ These match Draw Things' Machine Settings. **Automatic** uses what the engine pi
 
 ## Agents
 
-Lets Claude Code, Codex, Gemini CLI, Cursor, VS Code and other MCP clients on this Mac generate images with your models. Pick your agent to see how to connect it. See [Atelier for agents (MCP)](../MCP.md).
+Lets Claude Code, Codex, Gemini CLI, Cursor, VS Code and other MCP clients on this Mac generate images with your models, and read and change the Create screen's prompt and settings. Pick your agent to see how to connect it. See [Atelier for agents (MCP)](../MCP.md).
 
 ## Where Atelier keeps things
 

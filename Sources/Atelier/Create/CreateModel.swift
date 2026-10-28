@@ -808,6 +808,18 @@ final class CreateModel {
     self.settings = configuration
   }
 
+  /// Replaces the inspector's values as one undo step, for an agent's edits.
+  func replaceSettings(with configuration: PipelineConfiguration, actionName: String, undoManager: UndoManager?) {
+    guard let settings else { return }
+    registerUndo(restoring: settings, undoManager, actionName: actionName)
+    self.settings = configuration
+  }
+
+  /// Returns once a model switch has loaded the new model's defaults into the inspector.
+  func modelLoaded() async {
+    await loadTask?.value
+  }
+
   /// Current values of `ids`, for saving a preset.
   func values(for ids: [String]) -> [String: JSONValue] {
     guard let settings else { return [:] }

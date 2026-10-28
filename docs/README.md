@@ -8,7 +8,7 @@
 6. [History and projects](history.md): browsing what you made, reusing settings, exporting and deleting, and switching projects.
 7. [Models and LoRAs](models-and-loras.md): downloading models, importing checkpoints and LoRAs, and making 8-bit copies of MOSS models.
 8. [Settings](settings.md): the models folder, the output folder and the performance options.
-9. [Atelier for agents (MCP)](../MCP.md): letting Claude Code and other agents generate images and videos with your models (Mac only).
+9. [Atelier for agents (MCP)](../MCP.md): letting Claude Code and other agents generate images and videos with your models, and work on the Create screen with you (Mac only).
 
 The iPad version works the same way, with a few differences noted under "On iPad" in each page; see [Atelier on iPad](getting-started.md#atelier-on-ipad) to build and install it.
 

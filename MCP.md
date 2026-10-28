@@ -1,6 +1,6 @@
 # Atelier for agents (MCP)
 
-Atelier runs an MCP server inside the app, so agents such as Claude Code and Codex can generate images and videos with your local models. Agents use the app's own engine: their runs join your queue (one image at a time) instead of loading a second copy of a model onto the GPU. An agent's run shows in the Queue and on the Create screen like one of yours (progress, previews, the result on the canvas, Stop or Cancel in the Queue stops it) without changing your prompt or settings, and is saved to the current project. While the queue is paused, an agent's request waits.
+Atelier runs an MCP server inside the app, so agents such as Claude Code and Codex can generate images and videos with your local models. Agents use the app's own engine: their runs join your queue (one image at a time) instead of loading a second copy of a model onto the GPU. An agent's run shows in the Queue and on the Create screen like one of yours (progress, previews, the result on the canvas, Stop or Cancel in the Queue stops it) without changing your prompt or settings, and is saved to the current project. Agents can also read the Create screen and change its model, prompt and settings live, so you and an agent can iterate on the same screen. While the queue is paused, an agent's request waits.
 
 ## Turn it on
 
@@ -70,11 +70,25 @@ Then ask for an image, for example: "Use Atelier to make a 1024×1024 watercolor
 | `list_models` | Downloaded models: file, name, family, which one is selected in the app, and whether it takes reference images. Video models say so, with their frame rate, the inputs they take and whether they make sound. |
 | `list_presets` | Saved presets, the model each belongs to, which are model defaults, and their settings. |
 | `get_settings` | The full settings `generate` would start from for a model (and preset), as Draw Things configuration JSON. |
+| `get_create_screen` | What's on the Create screen now: model, prompt, negative prompt, seed and whether it's random, image count, every inspector setting (Draw Things configuration JSON), the settings that differ from the model's defaults, and the number of reference images. |
+| `set_create_screen` | Changes the Create screen live: model, prompt, negative prompt, preset, settings, size, steps, guidance, strength, video length, seed, Random and image count. Returns the screen as `get_create_screen` does. |
 | `generate` | One image, or with a video model one video. Returns the image (a video's first frame) inline (1024 px on the long side), writes the full PNG, or the MP4 with its sound (settings embedded), and saves it to the current project. |
 
-`generate` arguments: `prompt` (required), `negative_prompt`, `model` (file or name; default is the app's selected model), `preset`, `use_app_settings` (start from the inspector's current values), `settings` (any Draw Things configuration keys, e.g. `{"sampler": 1, "shift": 3}`), `width`, `height`, `steps`, `guidance_scale`, `seed`, `input_image` (a path or `data:` URL to edit), `strength`, `reference_images` (paths, or `{"image", "weight"}`), `num_frames` or `seconds` and `audio` (a path) for video models, `save_to` (a file or folder; default is a temporary folder) and `include_image`.
+`generate` arguments: `prompt` (required unless `use_app_settings` is on), `negative_prompt`, `model` (file or name; default is the app's selected model), `preset`, `use_app_settings` (start from the inspector's current values; without a `prompt`, generate the Create screen as it is), `settings` (any Draw Things configuration keys, e.g. `{"sampler": 1, "shift": 3}`), `width`, `height`, `steps`, `guidance_scale`, `seed`, `input_image` (a path or `data:` URL to edit), `strength`, `reference_images` (paths, or `{"image", "weight"}`), `num_frames` or `seconds` and `audio` (a path) for video models, `save_to` (a file or folder; default is a temporary folder) and `include_image`.
 
 Settings are layered like Create's: the model's recommended settings and its default preset, then `preset`, then `settings`, then the explicit fields. An `input_image` without a size gives the output that image's aspect ratio at the model's usual pixel count. For a video model, `input_image` is the first frame and, for MiniMax H3 FL2VA, the first reference image is the last; the length snaps to the frame counts the model takes. Videos take minutes, so give the agent a generous timeout.
+
+## Working on the Create screen together
+
+`get_create_screen` and `set_create_screen` let an agent work on the same Create screen you're looking at: it reads what you've set, changes the prompt or settings, and you see each change in the prompt box and inspector as it happens. You can keep editing too, so an agent should read the screen again rather than assume it's unchanged.
+
+`set_create_screen` arguments, all optional (only what's passed changes), applied in this order: `model` (file or name; keeps the current settings, like picking it in the model menu), then `preset` (applied like the inspector's Presets menu, on top of the model's defaults; a preset for another model selects it) or `reset_settings` (back to the model's defaults and default preset), then `settings` (Draw Things configuration keys, merged into the current values), then `width`, `height` (rounded to 64), `steps`, `guidance_scale`, `strength`, `num_frames` or `seconds`. Then `prompt`, `negative_prompt`, `seed` (also turns Random off), `random_seed` and `count` (1, 2, 3, 4, 6, 8, 12 or 16). Each call's setting changes are one step you can undo with ⌘Z.
+
+To generate what's on the screen and get the image back, call `generate` with `use_app_settings: true` and no `prompt`: it takes the Create screen's model, prompt, negative prompt, settings and, unless Random is on, seed. It doesn't take the canvas image or the moodboard; pass those as `input_image` and `reference_images`.
+
+For example: "Look at what I have in Atelier's Create screen, make the lighting moodier, and generate it."
+
+## Progress and cancelling
 
 Long runs stream progress (`notifications/progress`) to clients that send a progress token, and cancelling the call in the client stops the generation.
 

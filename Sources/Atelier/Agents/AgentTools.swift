@@ -1,5 +1,6 @@
 #if os(macOS)
 import _MediaGenerationKit
+import AppKit
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -8,7 +9,9 @@ import Observation
 
 /// The tools Atelier offers agents over MCP. Generation runs through Create like a press of
 /// Generate (progress and previews on the canvas, saved to the current project, one run at a
-/// time); the Create screen's prompt, inspector and moodboard are left alone.
+/// time) and leaves the Create screen's prompt, inspector and moodboard alone;
+/// `get_create_screen` and `set_create_screen` read and change them, so an agent and the user
+/// can work on the same screen.
 @MainActor
 @Observable
 final class AgentTools {
@@ -73,6 +76,48 @@ final class AgentTools {
       "annotations": ["readOnlyHint": true],
     ],
     [
+      "name": "get_create_screen",
+      "title": "Get Create screen",
+      "description":
+        "Returns what's on Atelier's Create screen right now: the selected model, prompt, negative prompt, seed and whether it's random, the image count, every inspector setting as Draw Things configuration JSON, the settings that differ from the model's defaults, and how many reference images there are. The user may have changed any of it since your last call.",
+      "inputSchema": ["type": "object", "properties": [String: Any]()],
+      "annotations": ["readOnlyHint": true],
+    ],
+    [
+      "name": "set_create_screen",
+      "title": "Change Create screen",
+      "description": """
+        Changes Atelier's Create screen live, as if the user had edited it: the model, prompt, \
+        negative prompt, seed and inspector settings. Only what you pass changes. Applied in \
+        order: `model` (keeps the current settings, like picking it in the app), `preset` and \
+        `reset_settings` (both start from the model's defaults), then `settings`, then the \
+        explicit fields. The user can undo setting changes with ⌘Z. Returns the screen as \
+        get_create_screen does. To generate what's on the screen, call generate with \
+        use_app_settings true and no prompt.
+        """,
+      "inputSchema": [
+        "type": "object",
+        "properties": [
+          "model": ["type": "string", "description": "Model file or name to select (see list_models)."],
+          "prompt": ["type": "string"],
+          "negative_prompt": ["type": "string"],
+          "preset": ["type": "string", "description": "A preset to apply, as the inspector's Presets menu does (see list_presets). A preset for another model selects that model."],
+          "reset_settings": ["type": "boolean", "description": "Put every setting back to the model's defaults (with its default preset) first."],
+          "settings": ["type": "object", "description": "Settings to change, as Draw Things configuration JSON keys (see get_create_screen), e.g. {\"sampler\": 1, \"shift\": 3}. Keys you leave out keep their current values."],
+          "width": ["type": "integer", "description": "Pixels, rounded to a multiple of 64."],
+          "height": ["type": "integer", "description": "Pixels, rounded to a multiple of 64."],
+          "steps": ["type": "integer"],
+          "guidance_scale": ["type": "number"],
+          "strength": ["type": "number", "description": "0–1."],
+          "num_frames": ["type": "integer", "description": "Video models: how many frames, snapped to the counts the model takes."],
+          "seconds": ["type": "number", "description": "Video models: how long, instead of num_frames."],
+          "seed": ["type": "integer", "minimum": 0, "maximum": 4_294_967_295, "description": "Sets the seed and turns off Random, so every Generate uses it."],
+          "random_seed": ["type": "boolean", "description": "true: a new seed for every Generate (the Random checkbox). false: keep the current seed."],
+          "count": ["type": "integer", "description": "How many images each press of Generate makes: 1, 2, 3, 4, 6, 8, 12 or 16."],
+        ],
+      ],
+    ],
+    [
       "name": "generate",
       "title": "Generate image or video",
       "description": """
@@ -83,17 +128,18 @@ final class AgentTools {
         Settings start from the model's recommended settings and default preset, then `preset`, \
         then `settings`, then the explicit fields. With `input_image` the run edits that image \
         (image to image), or for video models starts from it as the first frame; \
-        `reference_images` go to models that take references (see list_models).
+        `reference_images` go to models that take references (see list_models). With \
+        use_app_settings and no prompt, it generates what's on the Create screen: its model, \
+        prompt, negative prompt, settings and (unless Random is on) seed.
         """,
       "inputSchema": [
         "type": "object",
-        "required": ["prompt"],
         "properties": [
-          "prompt": ["type": "string"],
+          "prompt": ["type": "string", "description": "Required, unless use_app_settings is true: then it defaults to the Create screen's prompt."],
           "negative_prompt": ["type": "string"],
           "model": ["type": "string", "description": "Model file or name (see list_models). Defaults to the model selected in the app."],
           "preset": ["type": "string", "description": "Name of a saved preset to apply (see list_presets)."],
-          "use_app_settings": ["type": "boolean", "description": "Start from the settings currently in Atelier's inspector instead of the model's defaults. Only when `model` is the app's selected model."],
+          "use_app_settings": ["type": "boolean", "description": "Start from the settings currently in Atelier's inspector instead of the model's defaults. Only when `model` is the app's selected model. Without `prompt`, also takes the Create screen's prompt, negative prompt and seed."],
           "settings": ["type": "object", "description": "Any other settings as Draw Things configuration JSON keys, e.g. {\"sampler\": 1, \"shift\": 3, \"loras\": [{\"file\": \"x_lora_f16.ckpt\", \"weight\": 0.8}]}. See get_settings."],
           "width": ["type": "integer", "description": "Pixels, rounded to a multiple of 64."],
           "height": ["type": "integer", "description": "Pixels, rounded to a multiple of 64."],
@@ -134,6 +180,8 @@ final class AgentTools {
     case "list_models": return try Self.textResult(json: await listModels())
     case "list_presets": return try Self.textResult(json: listPresets(arguments))
     case "get_settings": return try await getSettings(arguments)
+    case "get_create_screen": return try Self.textResult(json: createScreen())
+    case "set_create_screen": return try await setCreateScreen(arguments)
     case "generate": return try await generate(arguments, progress: progress)
     default: throw ToolError("Unknown tool \(name).")
     }
@@ -182,9 +230,12 @@ final class AgentTools {
   private func generate(
     _ arguments: [String: Any], progress: @escaping (Progress) -> Void
   ) async throws -> [String: Any] {
-    guard let prompt = arguments["prompt"] as? String,
-      !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    else { throw ToolError("`prompt` is required.") }
+    // Without a prompt, use_app_settings generates the Create screen as it is.
+    let fromScreen = arguments["use_app_settings"] as? Bool == true && arguments["prompt"] == nil
+    let prompt = fromScreen ? create.prompt : arguments["prompt"] as? String ?? ""
+    guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      throw ToolError(fromScreen ? "The Create screen's prompt is empty." : "`prompt` is required.")
+    }
     if create.models.isEmpty { await create.refreshModelList() }
     let model = try resolveModel(arguments["model"] as? String)
     var notes: [String] = []
@@ -239,12 +290,15 @@ final class AgentTools {
     if let value = Self.int(arguments["seed"]) {
       guard value >= 0, value <= Int(UInt32.max) else { throw ToolError("`seed` must be 0–4294967295.") }
       seed = UInt32(value)
+    } else if fromScreen, create.seedLocked {
+      seed = create.seed
     } else {
       seed = UInt32.random(in: 0...UInt32.max)
     }
 
+    let negativePrompt = arguments["negative_prompt"] as? String ?? (fromScreen ? create.negativePrompt : "")
     var request = GenerationEngine.Request(
-      model: model, prompt: prompt, negativePrompt: arguments["negative_prompt"] as? String ?? "",
+      model: model, prompt: prompt, negativePrompt: negativePrompt,
       seed: seed, configuration: configuration)
     if let source = arguments["input_image"] as? String {
       let image = try Self.loadImage(source)
@@ -347,6 +401,124 @@ final class AgentTools {
       structured["has_audio"] = clip.audioId != nil
     }
     return ["content": content, "structuredContent": structured]
+  }
+
+  // MARK: - Create screen
+
+  private func createScreen() -> [String: Any] {
+    let all = create.values(for: SettingsRegistry.all.map(\.id))
+    let changed = create.values(for: create.changedSettings.map(\.id))
+    return [
+      "model": create.selectedModel ?? NSNull(),
+      "model_name": create.selectedModelInfo?.name ?? NSNull(),
+      "loading_model": create.isLoadingModel,
+      "prompt": create.prompt,
+      "negative_prompt": create.negativePrompt,
+      "seed": Int(create.seed),
+      "random_seed": !create.seedLocked,
+      "count": create.count,
+      "settings": create.settings == nil ? NSNull() : Self.jsonObject(DrawThingsJSON.encode(all, model: nil, seed: nil)),
+      "changed_from_defaults": Self.jsonObject(DrawThingsJSON.encode(changed, model: nil, seed: nil)),
+      "reference_images": create.moodboard.items.count,
+      "canvas_has_image": create.image != nil,
+      "busy": create.workUnderway ?? NSNull(),
+    ]
+  }
+
+  private func setCreateScreen(_ arguments: [String: Any]) async throws -> [String: Any] {
+    if create.models.isEmpty { await create.refreshModelList() }
+    let undoManager = Self.mainWindowUndoManager
+    var notes: [String] = []
+
+    if let name = arguments["model"] as? String {
+      let model = try resolveModel(name)
+      if model != create.selectedModel { create.selectedModel = model }
+    }
+    await create.modelLoaded()
+    guard let model = create.selectedModel else { throw ToolError("No model is downloaded.") }
+
+    if let name = arguments["preset"] as? String {
+      // This model's or a shared preset first, else one for another downloaded model.
+      let named = presets.presets.filter { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+      guard
+        let preset = named.first(where: { $0.model == nil || $0.model == model })
+          ?? named.first(where: { preset in create.models.contains { $0.file == preset.model } })
+      else { throw ToolError("No preset “\(name)” for a downloaded model. See list_presets.") }
+      create.apply(preset, undoManager: undoManager)
+      await create.modelLoaded()
+    } else if arguments["reset_settings"] as? Bool == true {
+      create.resetToModelDefaults(undoManager: undoManager)
+    }
+
+    guard var configuration = create.settings else {
+      throw ToolError(create.errorMessage ?? "\(model)'s settings didn't load.")
+    }
+    var changed = false
+    if let settings = arguments["settings"] as? [String: Any], !settings.isEmpty {
+      let data = try JSONSerialization.data(withJSONObject: settings)
+      guard let pasted = DrawThingsJSON.decode(data) else {
+        throw ToolError("None of the keys in `settings` are settings Atelier knows. See get_create_screen.")
+      }
+      SettingsRegistry.apply(dump: pasted.dump, to: &configuration)
+      changed = true
+      let ignored = settings.keys.filter { pasted.dump[$0] == nil && $0 != "model" && $0 != "seed" }
+      if !ignored.isEmpty { notes.append("Ignored unknown settings: \(ignored.sorted().joined(separator: ", ")).") }
+    }
+    let width = Self.int(arguments["width"])
+    let height = Self.int(arguments["height"])
+    if width != nil || height != nil {
+      configuration.width = Self.roundTo64(width ?? configuration.width)
+      configuration.height = Self.roundTo64(height ?? configuration.height)
+      changed = true
+    }
+    if let steps = Self.int(arguments["steps"]) {
+      configuration.steps = max(steps, 1)
+      changed = true
+    }
+    if let guidance = Self.double(arguments["guidance_scale"]) {
+      configuration.guidanceScale = Float(guidance)
+      changed = true
+    }
+    if let strength = Self.double(arguments["strength"]) {
+      configuration.strength = Float(min(max(strength, 0), 1))
+      changed = true
+    }
+    let frames = Self.int(arguments["num_frames"])
+    let seconds = Self.double(arguments["seconds"])
+    if frames != nil || seconds != nil {
+      if let video = VideoModel(model: model, loras: configuration.loras.compactMap(\.file)) {
+        configuration.numFrames = video.snapped(frames ?? Int((seconds! * video.framesPerSecond).rounded()) + 1)
+        changed = true
+      } else {
+        notes.append("\(model) isn't a video model, so num_frames and seconds were ignored.")
+      }
+    }
+    if changed {
+      create.replaceSettings(with: configuration, actionName: "Agent Settings", undoManager: undoManager)
+    }
+
+    if let prompt = arguments["prompt"] as? String { create.prompt = prompt }
+    if let negative = arguments["negative_prompt"] as? String { create.negativePrompt = negative }
+    if let value = Self.int(arguments["seed"]) {
+      guard value >= 0, value <= Int(UInt32.max) else { throw ToolError("`seed` must be 0–4294967295.") }
+      create.seed = UInt32(value)
+      create.seedLocked = true
+    }
+    if let random = arguments["random_seed"] as? Bool { create.seedLocked = !random }
+    if let count = Self.int(arguments["count"]) {
+      let counts = [1, 2, 3, 4, 6, 8, 12, 16]
+      guard counts.contains(count) else { throw ToolError("`count` must be one of 1, 2, 3, 4, 6, 8, 12 or 16.") }
+      create.count = count
+    }
+
+    var result = createScreen()
+    if !notes.isEmpty { result["notes"] = notes }
+    return try Self.textResult(json: result)
+  }
+
+  /// The main window's undo manager, which the Create screen's ⌘Z uses.
+  private static var mainWindowUndoManager: UndoManager? {
+    NSApp.windows.first { $0.identifier?.rawValue.hasPrefix("main") == true && $0.isVisible }?.undoManager
   }
 
   // MARK: - Helpers

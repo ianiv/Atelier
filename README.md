@@ -14,7 +14,7 @@ What it does today:
 - Presets and inspector layouts.
 - History kept in projects, in Draw Things' project file format, with one-click "Use Settings".
 - A model and LoRA library: download from the community catalog, import `.safetensors` checkpoints and LoRAs, and make 8-bit copies of MOSS models.
-- An MCP server so agents such as Claude Code can generate images and videos with your models.
+- An MCP server so agents such as Claude Code can generate images and videos with your models, and read and change the Create screen alongside you.
 
 ## Download
 
@@ -26,7 +26,7 @@ Atelier uses Draw Things' engine and project format, so your models and projects
 
 - **An inspector you shape yourself.** Search every setting, see what you've changed from the model's defaults in the Changed group, hide or show any setting, and keep named layouts you can export and share.
 - **A queue.** Press Generate while an image is running to queue the next one, make ×N at once, reorder, pause and retry. Upscaled video exports wait their turn there too. Waiting images are kept when you quit.
-- **Agents can make images.** A built-in MCP server lets agents such as Claude Code generate with your models, and their requests join the same queue.
+- **Agents can make images.** A built-in MCP server lets agents such as Claude Code generate with your models, and their requests join the same queue. They can also read and change the Create screen's prompt and settings live, so you and the agent iterate on the same screen.
 - **Branches you can see.** History shows every branch as a graph, and the recent strip switches between everything by time and just the current lineage.
 - **Click to reuse.** Clicking a recent image brings back its prompt, size and settings. History supports selecting several images at once.
 - **Presets as files.** Presets are kept apart from layouts, remember their model, and export and import as JSON.

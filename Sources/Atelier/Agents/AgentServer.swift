@@ -54,7 +54,10 @@ final class AgentServer {
     Atelier generates images on this Mac with local diffusion models (the Draw Things engine). \
     Call list_models first to pick a model, then generate. Images are saved to the user's \
     current Atelier project and written as PNG files; one image is generated at a time, so a \
-    call may wait for a run already in progress. Larger models can take minutes per image.
+    call may wait for a run already in progress. Larger models can take minutes per image. \
+    To work on the same Create screen as the user, read it with get_create_screen, change its \
+    prompt and settings with set_create_screen, and generate it with generate and \
+    use_app_settings (no prompt).
     """
 
   init(create: CreateModel, presets: PresetStore) {
@@ -294,7 +297,7 @@ struct AgentSettingsView: View {
       Section {
         Toggle(isOn: $server.isEnabled) {
           Text("Let agents generate images")
-          Text("Runs an MCP server that apps on this Mac, such as Claude Code, can use to list models and presets and generate images. Images are saved to the current project.")
+          Text("Runs an MCP server that apps on this Mac, such as Claude Code, can use to list models and presets, read and change the Create screen, and generate images. Images are saved to the current project.")
         }
         LabeledContent("Port") {
           TextField("Port", text: $portText)
