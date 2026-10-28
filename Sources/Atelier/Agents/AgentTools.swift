@@ -6,6 +6,7 @@ import Foundation
 import ImageIO
 import ModelZoo
 import Observation
+import SwiftUI
 
 /// The tools Atelier offers agents over MCP. Generation runs through Create like a press of
 /// Generate (progress and previews on the canvas, saved to the current project, one run at a
@@ -114,6 +115,7 @@ final class AgentTools {
           "seed": ["type": "integer", "minimum": 0, "maximum": 4_294_967_295, "description": "Sets the seed and turns off Random, so every Generate uses it."],
           "random_seed": ["type": "boolean", "description": "true: a new seed for every Generate (the Random checkbox). false: keep the current seed."],
           "count": ["type": "integer", "description": "How many images each press of Generate makes: 1, 2, 3, 4, 6, 8, 12 or 16."],
+          "layout_editor": ["type": "boolean", "description": "Open (true) or close (false) the Layout editor, which draws a layout prompt's boxes on the canvas. Only for models that take layout prompts (FLUX.3, Ideogram 4, MOSS Image). While it's open, a new layout prompt moves the boxes on screen."],
         ],
       ],
     ],
@@ -420,6 +422,7 @@ final class AgentTools {
       "settings": create.settings == nil ? NSNull() : Self.jsonObject(DrawThingsJSON.encode(all, model: nil, seed: nil)),
       "changed_from_defaults": Self.jsonObject(DrawThingsJSON.encode(changed, model: nil, seed: nil)),
       "reference_images": create.moodboard.items.count,
+      "layout_editor": create.layout != nil ? "open" : create.layoutFormat == nil ? "not available for this model" : "closed",
       "canvas_has_image": create.image != nil,
       "busy": create.workUnderway ?? NSNull(),
     ]
@@ -497,7 +500,19 @@ final class AgentTools {
       create.replaceSettings(with: configuration, actionName: "Agent Settings", undoManager: undoManager)
     }
 
-    if let prompt = arguments["prompt"] as? String { create.prompt = prompt }
+    if let prompt = arguments["prompt"] as? String {
+      // With the Layout editor open, the boxes glide to the new layout instead of jumping.
+      withAnimation(create.layout == nil ? nil : .smooth(duration: 0.8)) { create.prompt = prompt }
+    }
+    if let open = arguments["layout_editor"] as? Bool {
+      if !open {
+        create.closeLayout()
+      } else if create.layoutFormat == nil {
+        notes.append("\(model) doesn't take layout prompts, so the Layout editor stayed closed.")
+      } else if create.layout == nil {
+        create.openLayout()
+      }
+    }
     if let negative = arguments["negative_prompt"] as? String { create.negativePrompt = negative }
     if let value = Self.int(arguments["seed"]) {
       guard value >= 0, value <= Int(UInt32.max) else { throw ToolError("`seed` must be 0–4294967295.") }
