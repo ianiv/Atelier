@@ -58,7 +58,9 @@ final class AgentServer {
     To work on the same Create screen as the user, read it with get_create_screen, change its \
     prompt and settings with set_create_screen, and generate it with generate and \
     use_app_settings (no prompt). To see an image, including ones the user generated, use \
-    get_image (the canvas by default) and list_history.
+    get_image (the canvas by default) and list_history. For videos and other long runs, call \
+    generate with background: true and check on the job_id with get_job, which waits up to \
+    wait_seconds per call.
     """
 
   init(create: CreateModel, presets: PresetStore) {
@@ -203,7 +205,8 @@ final class AgentServer {
       }
     }
     calls[key] = task
-    responder.onClientClose { task.cancel() }
+    // A client that hangs up (some give up on calls after a few minutes) doesn't stop the run:
+    // generate keeps it going as a job for get_job. notifications/cancelled still stops it.
   }
 
   private func respond(result: [String: Any], id: Any, via responder: LoopbackHTTPServer.Responder) {

@@ -20,6 +20,39 @@ final class AgentTools {
     var step: Int
     var total: Int?
     var message: String
+    /// Queued behind other runs, not started yet.
+    var isQueued = false
+  }
+
+  /// One `generate` run. A run outlives the call that started it: `background` returns its id
+  /// at once, and a waiting call whose client hangs up leaves it running for `get_job`.
+  @MainActor
+  final class Job {
+    let id: String
+    let prompt: String
+    let startedAt = Date()
+    var progress = Progress(step: 0, total: nil, message: "Starting", isQueued: true)
+    /// Checked its arguments and joined the queue (or failed doing so).
+    var accepted = false
+    var result: [String: Any]?
+    var error: String?
+    var wasCancelled = false
+    var finishedAt: Date?
+    var task: Task<Void, Never>?
+    /// The waiting call's progress stream, while there is one.
+    var onProgress: ((Progress) -> Void)?
+
+    init(id: String, prompt: String) {
+      self.id = id
+      self.prompt = prompt
+    }
+
+    var status: String {
+      if result != nil { return "done" }
+      if wasCancelled { return "cancelled" }
+      if error != nil { return "failed" }
+      return progress.isQueued ? "waiting" : "running"
+    }
   }
 
   struct ToolError: LocalizedError {
@@ -32,6 +65,9 @@ final class AgentTools {
   /// What an agent's run is doing, for the Agents settings tab.
   private(set) var activity: String?
   private(set) var lastResult: String?
+  /// Jobs by id; finished ones are kept for an hour (the newest 20).
+  @ObservationIgnored private var jobs: [String: Job] = [:]
+  @ObservationIgnored private var jobCount = 0
 
   init(create: CreateModel, presets: PresetStore) {
     self.create = create
@@ -197,7 +233,44 @@ final class AgentTools {
           "audio": ["type": "string", "description": "Video models that take audio (see list_models): path to an audio file."],
           "save_to": ["type": "string", "description": "Where to write the PNG or MP4: a file path, or a folder. Defaults to a temporary folder."],
           "include_image": ["type": "boolean", "description": "Return the image inline (scaled to 1024 px on the long side). Default true."],
+          "background": ["type": "boolean", "description": "Return a job_id right away instead of waiting for the result, then check on it with get_job. Use it for videos and anything that may take more than a couple of minutes, since some clients give up on long calls."],
         ],
+      ],
+    ],
+    [
+      "name": "get_job",
+      "title": "Get job",
+      "description": """
+        Checks on a generate job: waiting (queued behind other runs), running (with step and \
+        total), done (with everything generate returns: text, image and structured result), \
+        failed or cancelled. Waits up to wait_seconds for it to finish first, so calling it in a \
+        loop checks in periodically without busy polling.
+        """,
+      "inputSchema": [
+        "type": "object",
+        "required": ["job_id"],
+        "properties": [
+          "job_id": ["type": "string", "description": "From generate with background, or list_jobs."],
+          "wait_seconds": ["type": "integer", "description": "How long to wait for the job to finish before returning its progress, 0–60. Default 30."],
+        ],
+      ],
+      "annotations": ["readOnlyHint": true],
+    ],
+    [
+      "name": "list_jobs",
+      "title": "List jobs",
+      "description": "Lists generate jobs from the last hour, newest first: job_id, status, progress, elapsed time and prompt. A generate call that timed out or lost its connection keeps running and shows here.",
+      "inputSchema": ["type": "object", "properties": [String: Any]()],
+      "annotations": ["readOnlyHint": true],
+    ],
+    [
+      "name": "cancel_job",
+      "title": "Cancel job",
+      "description": "Stops a generate job, like Cancel in Atelier's Queue: a waiting job leaves the queue and a running one stops.",
+      "inputSchema": [
+        "type": "object",
+        "required": ["job_id"],
+        "properties": ["job_id": ["type": "string"]],
       ],
     ],
   ]
@@ -215,7 +288,10 @@ final class AgentTools {
     case "set_create_screen": return try await setCreateScreen(arguments)
     case "list_history": return try Self.textResult(json: listHistory(arguments))
     case "get_image": return try await getImage(arguments)
-    case "generate": return try await generate(arguments, progress: progress)
+    case "generate": return try await startGenerate(arguments, progress: progress)
+    case "get_job": return try await getJob(arguments, progress: progress)
+    case "list_jobs": return try Self.textResult(json: jobs.values.sorted { $0.startedAt > $1.startedAt }.map(Self.summary))
+    case "cancel_job": return try cancelJob(arguments)
     default: throw ToolError("Unknown tool \(name).")
     }
   }
@@ -382,7 +458,7 @@ final class AgentTools {
 
     let summary = String(prompt.prefix(60))
     activity = "Waiting: “\(summary)”"
-    progress(Progress(step: 0, total: nil, message: "Waiting for the current run to finish"))
+    progress(Progress(step: 0, total: nil, message: "Waiting for the current run to finish", isQueued: true))
     defer { activity = nil }
     let item = try await create.generate(forAgent: request) { [weak self] update in
       guard case .state(let state) = update else { return }
@@ -434,6 +510,121 @@ final class AgentTools {
       structured["has_audio"] = clip.audioId != nil
     }
     return ["content": content, "structuredContent": structured]
+  }
+
+  // MARK: - Jobs
+
+  /// Runs generate as a job. In the background it answers with the job id once the arguments
+  /// check out; otherwise it waits for the result, streaming progress. Only cancelling this call
+  /// (or cancel_job) stops the run: a client that just hangs up leaves it going.
+  private func startGenerate(
+    _ arguments: [String: Any], progress: @escaping (Progress) -> Void
+  ) async throws -> [String: Any] {
+    pruneJobs()
+    jobCount += 1
+    let job = Job(id: "job-\(jobCount)", prompt: (arguments["prompt"] as? String) ?? create.prompt)
+    jobs[job.id] = job
+    let background = arguments["background"] as? Bool == true
+    if !background { job.onProgress = progress }
+    job.task = Task { [weak self] in
+      do {
+        guard let self else { return }
+        let result = try await self.generate(arguments) { update in
+          job.accepted = true
+          job.progress = update
+          job.onProgress?(update)
+        }
+        job.result = result
+      } catch is CancellationError {
+        job.wasCancelled = true
+      } catch {
+        job.error = error.localizedDescription
+      }
+      job.accepted = true
+      job.finishedAt = Date()
+      job.onProgress = nil
+    }
+
+    if background {
+      // Bad arguments fail here rather than in the first get_job.
+      while !job.accepted { try? await Task.sleep(for: .milliseconds(50)) }
+      if let error = job.error { throw ToolError(error) }
+      var summary = Self.summary(job)
+      summary["note"] = "Running in the background. Call get_job with this job_id to wait for it."
+      return try Self.textResult(json: summary)
+    }
+    await withTaskCancellationHandler {
+      _ = await job.task?.value
+    } onCancel: {
+      Task { @MainActor in job.task?.cancel() }
+    }
+    job.onProgress = nil
+    return try Self.outcome(of: job)
+  }
+
+  private func getJob(_ arguments: [String: Any], progress: @escaping (Progress) -> Void) async throws -> [String: Any] {
+    let job = try job(arguments)
+    let wait = Double(min(max(Self.int(arguments["wait_seconds"]) ?? 30, 0), 60))
+    let deadline = Date().addingTimeInterval(wait)
+    var reported = -1
+    while job.finishedAt == nil, Date() < deadline, !Task.isCancelled {
+      if job.progress.step != reported {
+        reported = job.progress.step
+        progress(job.progress)
+      }
+      try? await Task.sleep(for: .milliseconds(250))
+    }
+    guard job.finishedAt != nil else { return try Self.textResult(json: Self.summary(job)) }
+    return try Self.outcome(of: job)
+  }
+
+  private func cancelJob(_ arguments: [String: Any]) throws -> [String: Any] {
+    let job = try job(arguments)
+    if job.finishedAt == nil { job.task?.cancel() }
+    return try Self.textResult(json: Self.summary(job))
+  }
+
+  private func job(_ arguments: [String: Any]) throws -> Job {
+    let id = arguments["job_id"] as? String ?? ""
+    guard let job = jobs[id] else { throw ToolError("No job “\(id)”. Jobs last an hour and end when Atelier quits; see list_jobs.") }
+    return job
+  }
+
+  private func pruneJobs() {
+    let finished = jobs.values.filter { $0.finishedAt != nil }.sorted { $0.startedAt > $1.startedAt }
+    for (index, job) in finished.enumerated() where index >= 20 || job.finishedAt! < Date().addingTimeInterval(-3600) {
+      jobs[job.id] = nil
+    }
+  }
+
+  /// A finished job's answer: what generate returns, or its error.
+  private static func outcome(of job: Job) throws -> [String: Any] {
+    if job.wasCancelled { throw CancellationError() }
+    if let error = job.error { throw ToolError(error) }
+    guard var result = job.result else { throw ToolError("\(job.id) hasn't finished.") }
+    if var structured = result["structuredContent"] as? [String: Any] {
+      structured["job_id"] = job.id
+      result["structuredContent"] = structured
+    }
+    return result
+  }
+
+  private static func summary(_ job: Job) -> [String: Any] {
+    var summary: [String: Any] = [
+      "job_id": job.id, "status": job.status, "prompt": shortened(job.prompt),
+      "elapsed_seconds": Int((job.finishedAt ?? Date()).timeIntervalSince(job.startedAt)),
+    ]
+    if job.finishedAt == nil {
+      summary["message"] = job.progress.message
+      if job.progress.step > 0 { summary["step"] = job.progress.step }
+      if let total = job.progress.total { summary["total_steps"] = total }
+    }
+    if let error = job.error { summary["error"] = error }
+    if let structured = job.result?["structuredContent"] as? [String: Any] {
+      summary["history_step"] = structured["history_step"]
+      summary["path"] = structured["path"]
+    }
+    return summary
   }
 
   // MARK: - Create screen

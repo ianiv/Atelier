@@ -74,11 +74,14 @@ Then ask for an image, for example: "Use Atelier to make a 1024×1024 watercolor
 | `set_create_screen` | Changes the Create screen live: model, prompt, negative prompt, preset, settings, size, steps, guidance, strength, video length, seed, Random, image count, and whether the Layout editor is open. Returns the screen as `get_create_screen` does. |
 | `list_history` | The newest images and videos in the current project (yours and the agent's), newest first: history step, prompt, model, seed, size, rating, and which one is on the canvas. |
 | `get_image` | Shows the agent an image: what's on the canvas (the default), the project's newest (`latest`), or a History image by `history_step`. Returns it inline (`max_size`, default 1024 px on the long side) with its prompt and settings, and with `save_to` writes the full PNG. |
-| `generate` | One image, or with a video model one video. Returns the image (a video's first frame) inline (1024 px on the long side), writes the full PNG, or the MP4 with its sound (settings embedded), and saves it to the current project. |
+| `generate` | One image, or with a video model one video. Returns the image (a video's first frame) inline (1024 px on the long side), writes the full PNG, or the MP4 with its sound (settings embedded), and saves it to the current project. With `background: true` it returns a `job_id` right away instead. |
+| `get_job` | Checks on a job: `waiting`, `running` (with step and total), `done` (with everything `generate` returns), `failed` or `cancelled`. Waits up to `wait_seconds` (default 30, at most 60) for it to finish first. |
+| `list_jobs` | Jobs from the last hour, newest first, with status and progress. |
+| `cancel_job` | Stops a job, like Cancel in the Queue. |
 
-`generate` arguments: `prompt` (required unless `use_app_settings` is on), `negative_prompt`, `model` (file or name; default is the app's selected model), `preset`, `use_app_settings` (start from the inspector's current values; without a `prompt`, generate the Create screen as it is), `settings` (any Draw Things configuration keys, e.g. `{"sampler": 1, "shift": 3}`), `width`, `height`, `steps`, `guidance_scale`, `seed`, `input_image` (a path or `data:` URL to edit), `strength`, `reference_images` (paths, or `{"image", "weight"}`), `num_frames` or `seconds` and `audio` (a path) for video models, `save_to` (a file or folder; default is a temporary folder) and `include_image`.
+`generate` arguments: `prompt` (required unless `use_app_settings` is on), `negative_prompt`, `model` (file or name; default is the app's selected model), `preset`, `use_app_settings` (start from the inspector's current values; without a `prompt`, generate the Create screen as it is), `settings` (any Draw Things configuration keys, e.g. `{"sampler": 1, "shift": 3}`), `width`, `height`, `steps`, `guidance_scale`, `seed`, `input_image` (a path or `data:` URL to edit), `strength`, `reference_images` (paths, or `{"image", "weight"}`), `num_frames` or `seconds` and `audio` (a path) for video models, `save_to` (a file or folder; default is a temporary folder), `include_image` and `background`.
 
-Settings are layered like Create's: the model's recommended settings and its default preset, then `preset`, then `settings`, then the explicit fields. An `input_image` without a size gives the output that image's aspect ratio at the model's usual pixel count. For a video model, `input_image` is the first frame and, for MiniMax H3 FL2VA, the first reference image is the last; the length snaps to the frame counts the model takes. Videos take minutes, so give the agent a generous timeout.
+Settings are layered like Create's: the model's recommended settings and its default preset, then `preset`, then `settings`, then the explicit fields. An `input_image` without a size gives the output that image's aspect ratio at the model's usual pixel count. For a video model, `input_image` is the first frame and, for MiniMax H3 FL2VA, the first reference image is the last; the length snaps to the frame counts the model takes. Videos take minutes, so run them in the background (see Long runs).
 
 ## Working on the Create screen together
 
@@ -94,7 +97,15 @@ For example: "Look at what I have in Atelier's Create screen, make the lighting 
 
 ## Progress and cancelling
 
-Long runs stream progress (`notifications/progress`) to clients that send a progress token, and cancelling the call in the client stops the generation.
+Runs stream progress (`notifications/progress`) to clients that send a progress token, and cancelling the call in the client (`notifications/cancelled`) stops the generation. A client that just disconnects doesn't: the run carries on as a job.
+
+## Long runs
+
+Some clients give up on a tool call after a few minutes; Claude's connection to a Mac, for one, drops calls after 180 seconds. A video can take longer than that, so every `generate` runs as a job that keeps going when its call is dropped.
+
+For long runs, call `generate` with `background: true`. It checks the arguments, queues the run and returns a `job_id` at once. Then call `get_job` with it: each call waits up to `wait_seconds` for the run to finish and otherwise returns its progress, so the agent checks in every half minute or so without one call outlasting the client's timeout. When the job is `done`, `get_job` returns exactly what `generate` would have, image included. A `generate` call that was dropped without `background` shows up in `list_jobs`, and `get_job` collects its result the same way. `cancel_job`, or Cancel in the Queue, stops a job.
+
+Jobs are kept for an hour (the newest 20 finished ones) and are forgotten when Atelier quits; their images and videos stay in the project.
 
 ## Scripted testing
 
