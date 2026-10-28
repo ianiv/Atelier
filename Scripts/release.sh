@@ -4,6 +4,7 @@
 # version. Attach both to the release, tagged v<version>: the app reads the latest release's appcast.xml.
 # Usage: release.sh [version] (default: MARKETING_VERSION in the project). The build number is the commit
 # count, so every release from a newer commit has a higher one, which is what Sparkle compares.
+# RELEASE_NOTES=<file.md> embeds those notes in the appcast, so the update dialog shows them.
 #
 # One-time setup on the Mac that signs:
 # - A "Developer ID Application" certificate for your team in the login keychain.
@@ -96,7 +97,12 @@ ditto -c -k --keepParent "$APP" "$ZIP"
 FEED="$OUT/feed"
 mkdir "$FEED"
 cp "$ZIP" "$FEED/"
-"$SPARKLE_BIN/generate_appcast" --account atelier \
+NOTES_ARGS=()
+if [ -n "$RELEASE_NOTES" ]; then
+  cp "$RELEASE_NOTES" "$FEED/Atelier-$VERSION.md"
+  NOTES_ARGS=(--embed-release-notes)
+fi
+"$SPARKLE_BIN/generate_appcast" --account atelier "${NOTES_ARGS[@]}" \
   --download-url-prefix "https://github.com/ianiv/Atelier/releases/download/v$VERSION/" \
   --full-release-notes-url "https://github.com/ianiv/Atelier/releases/tag/v$VERSION" \
   --link "https://github.com/ianiv/Atelier" "$FEED"
