@@ -70,6 +70,8 @@
 		E963577B874C666B52965C34 /* tensor_history_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19CEE9846E073058B4D28395 /* tensor_history_generated.swift */; };
 		ED54BBA9675D386950B31E44 /* tensor_moodboard_data_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93F2C9861172F381CCBBF6B5 /* tensor_moodboard_data_generated.swift */; };
 		F37644302DD33DAC7A1E63B0 /* SizePreset.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A3DAA7DA03971183D18CEAA /* SizePreset.swift */; };
+		A1B2C3D4E5F6A7B8C9D0E103 /* LayoutEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E104 /* LayoutEditor.swift */; };
+		A1B2C3D4E5F6A7B8C9D0E101 /* LayoutPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E102 /* LayoutPrompt.swift */; };
 		A1D7E0C1B2F34A5D6E7F8091 /* Moodboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2E8F1D2C3A45B6E7F809102 /* Moodboard.swift */; };
 		800D1F384501DE33108E1679 /* SavedQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A5F014D5E239A1A24374130 /* SavedQueue.swift */; };
 		63C2BBE1CC163EBF41BCA5B2 /* JobQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89CC06C542BAF09E99B9847E /* JobQueue.swift */; };
@@ -163,6 +165,8 @@
 		59AD5317B0066ECD23EDCDAF /* ModelDefaults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelDefaults.swift; sourceTree = "<group>"; };
 		59F515F87137E071504E3001 /* tensor_moodboard_data_query_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = tensor_moodboard_data_query_generated.swift; sourceTree = "<group>"; };
 		5A3DAA7DA03971183D18CEAA /* SizePreset.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SizePreset.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E104 /* LayoutEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutEditor.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E102 /* LayoutPrompt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutPrompt.swift; sourceTree = "<group>"; };
 		B2E8F1D2C3A45B6E7F809102 /* Moodboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Moodboard.swift; sourceTree = "<group>"; };
 		5BA894EB2074F4930E321607 /* Automation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Automation.swift; sourceTree = "<group>"; };
 		5FEF4CE7AD32E77D359D8F85 /* clip_query_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = clip_query_generated.swift; sourceTree = "<group>"; };
@@ -333,6 +337,8 @@
 				B147BCDA9E5FEDE9CC9B373A /* CreateView.swift */,
 				B2E8F1D2C3A45B6E7F809102 /* Moodboard.swift */,
 				5A3DAA7DA03971183D18CEAA /* SizePreset.swift */,
+				A1B2C3D4E5F6A7B8C9D0E104 /* LayoutEditor.swift */,
+				A1B2C3D4E5F6A7B8C9D0E102 /* LayoutPrompt.swift */,
 			);
 			path = Create;
 			sourceTree = "<group>";
@@ -673,6 +679,8 @@
 				4862B9A4F2A7A226E9BB6C7C /* SettingsRegistry.swift in Sources */,
 				A1D7E0C1B2F34A5D6E7F8091 /* Moodboard.swift in Sources */,
 				F37644302DD33DAC7A1E63B0 /* SizePreset.swift in Sources */,
+				A1B2C3D4E5F6A7B8C9D0E103 /* LayoutEditor.swift in Sources */,
+				A1B2C3D4E5F6A7B8C9D0E101 /* LayoutPrompt.swift in Sources */,
 				16E53F5DAD3A2F11B88D6688 /* InspectorLayoutMenu.swift in Sources */,
 				0D77AE715B479EAF62D0C820 /* InspectorLoRAs.swift in Sources */,
 				C1A1B98D2F1D4DB733D3A91A /* InspectorPresets.swift in Sources */,

@@ -12,6 +12,16 @@ Type what you want in **Describe the image…** and press Return, or click **Gen
 
 While an image generates, the canvas shows a preview at each step. Click **Stop** or press Esc to cancel it. You can look at other images, open or paste one, or clear the canvas while it runs: the canvas then stays on what you picked, and a small live thumbnail in the status bar shows the running image. Click the thumbnail to put the canvas back on it. Finished images still save to the project and the recent strip either way. You can keep editing settings during a run; changes apply to the next one. Pressing Generate during a run queues the next image, and **×N** under Generate makes several at once (see [The queue](queue.md)).
 
+### Layout prompts
+
+FLUX.3, Ideogram 4 and MOSS Image can place things where you put them. With one of them picked, click **Layout** under the prompt:
+
+- **Drag on the canvas** to draw a box, or click **+** in the Layout panel to add one in the middle. Drag a box to move it; the picked box has corner handles to resize it. Right-click a box, or click its trash button, to delete it.
+- In the **Layout panel**, write the **Caption** (the whole image: medium, setting, light) and, for each box, what goes in it. Make a box **Text** to give the exact words to show; MOSS also has **Character**. Ideogram adds a **Background** field. FLUX.3 cites boxes in the caption by id, such as `<object_1>`: the button beside a box adds its id to the caption.
+- Atelier writes the prompt in the model's own layout format as you go, so the prompt box always shows what Generate will send. Boxes follow the image size you set.
+- Pasting or reusing a layout prompt while the panel is open turns it back into boxes, and opening Layout on a layout prompt shows its boxes. Switching to another of these models rewrites the layout in that model's format, keeping the boxes and descriptions.
+- **Done** closes the panel. The prompt keeps the layout, so the image saves it like any prompt.
+
 ## Model
 
 Pick a model from the **Model** menu in the toolbar. Only downloaded models are listed (see [Models and LoRAs](models-and-loras.md)). Switching models keeps your current settings. To start from the new model's recommended settings (and its default preset, if it has one), use **Reset All to Model Defaults** at the bottom of the inspector. Picking a video model makes videos on the same screen; see [Making videos](video.md).

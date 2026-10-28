@@ -38,6 +38,10 @@ final class CreateModel {
   var selectedModel: String? {
     didSet {
       if selectedModel != oldValue, let selectedModel { loadDefaults(for: selectedModel) }
+      // The open layout follows to the new model's format, or closes for one without layouts.
+      if selectedModel != oldValue, layout != nil {
+        if layoutFormat == nil { closeLayout() } else { writeLayout() }
+      }
     }
   }
   var modelsDirectory = AppSettings.modelsDirectory
@@ -46,7 +50,17 @@ final class CreateModel {
     @ObservationIgnored private var pausedForBackground = false
   #endif
 
-  var prompt = ""
+  var prompt = "" {
+    didSet { if prompt != oldValue, !writingLayout { readLayout() } }
+  }
+  /// The layout being drawn on the canvas, while the Layout editor is open. Every change is
+  /// written into the prompt, and a layout prompt typed or pasted there comes back as boxes.
+  var layout: LayoutPrompt? {
+    didSet { if layout != oldValue, !writingLayout { writeLayout() } }
+  }
+  /// The box picked on the canvas or in the layout list.
+  var selectedLayoutItem: UUID?
+  @ObservationIgnored private var writingLayout = false
   var negativePrompt = ""
   var seed = UInt32.random(in: 0...UInt32.max)
   /// Off means "always random": every Generate rolls a new seed. Only the Random checkbox changes
@@ -58,7 +72,14 @@ final class CreateModel {
     }
   }
   /// The inspector's values: every setting the next run uses (the seed lives in `seed`).
-  var settings: PipelineConfiguration?
+  var settings: PipelineConfiguration? {
+    didSet {
+      // MOSS boxes are in pixels and Ideogram names the aspect ratio: a new size rewrites them.
+      if layout != nil, settings?.width != oldValue?.width || settings?.height != oldValue?.height {
+        writeLayout()
+      }
+    }
+  }
   /// The selected model's defaults, the baseline for changed markers, reset and presets.
   private(set) var recommended: PipelineConfiguration?
   /// MGK's template plus the app's fallbacks, before the model's default preset.
@@ -253,6 +274,73 @@ final class CreateModel {
 
   var selectedModelInfo: MediaGenerationResolvedModel? {
     models.first { $0.file == selectedModel }
+  }
+
+  /// The selected model's layout prompt format; nil when it doesn't read layouts.
+  var layoutFormat: LayoutPrompt.Format? { LayoutPrompt.Format(version: selectedModelInfo?.version) }
+
+  /// The size layouts are drawn for: the configured output size.
+  var layoutSize: (width: Int, height: Int) {
+    guard let settings, settings.width > 0, settings.height > 0 else { return (1024, 1024) }
+    return (settings.width, settings.height)
+  }
+
+  /// Opens the Layout editor on the prompt's layout, or a new one captioned with the prompt.
+  func openLayout() {
+    guard let format = layoutFormat else { return }
+    let size = layoutSize
+    if let read = LayoutPrompt(prompt: prompt, format: format, width: size.width, height: size.height) {
+      // The prompt keeps its own formatting until a box changes.
+      writingLayout = true
+      layout = read
+      writingLayout = false
+    } else {
+      layout = LayoutPrompt(caption: prompt)
+    }
+  }
+
+  /// Adds a box in the middle of the frame and picks it.
+  func addLayoutItem() {
+    guard let format = layoutFormat, var layout else { return }
+    let kind = format.kinds[0]
+    let item = LayoutPrompt.Item(
+      name: layout.newName(for: kind), kind: kind, rect: CGRect(x: 0.3, y: 0.3, width: 0.4, height: 0.4))
+    layout.items.append(item)
+    self.layout = layout
+    selectedLayoutItem = item.id
+  }
+
+  /// Closes the Layout editor. The prompt keeps the layout it wrote.
+  func closeLayout() {
+    layout = nil
+    selectedLayoutItem = nil
+  }
+
+  private func writeLayout() {
+    guard let layout, let format = layoutFormat else { return }
+    let size = layoutSize
+    writingLayout = true
+    prompt = layout.prompt(format, width: size.width, height: size.height)
+    writingLayout = false
+  }
+
+  /// A layout prompt typed, pasted or brought back (Reuse, the recent prompts) while the editor
+  /// is open replaces the boxes; other text is left for the next box edit to overwrite.
+  private func readLayout() {
+    guard layout != nil, let format = layoutFormat else { return }
+    let size = layoutSize
+    guard var read = LayoutPrompt(prompt: prompt, format: format, width: size.width, height: size.height)
+    else { return }
+    // Boxes keep their identity by position, so typing in the prompt keeps the selection.
+    for (index, item) in (layout?.items ?? []).enumerated() where index < read.items.count {
+      read.items[index].id = item.id
+    }
+    writingLayout = true
+    layout = read
+    writingLayout = false
+    if let selectedLayoutItem, !read.items.contains(where: { $0.id == selectedLayoutItem }) {
+      self.selectedLayoutItem = nil
+    }
   }
 
   var traits: ModelTraits { ModelTraits(selectedModelInfo, sampler: settings?.sampler) }

@@ -29,26 +29,32 @@ struct CreateView: View {
 
   var body: some View {
     @Bindable var model = model
-    CanvasView()
-      .overlay(alignment: .topTrailing) {
-        if model.usesReferences || !model.moodboard.items.isEmpty || model.videoModel?.takesAudio == true {
-          MoodboardColumn().padding(12)
+    HStack(spacing: 0) {
+      if model.layout != nil {
+        LayoutPanel()
+        Divider()
+      }
+      CanvasView()
+        .overlay(alignment: .topTrailing) {
+          if model.usesReferences || !model.moodboard.items.isEmpty || model.videoModel?.takesAudio == true {
+            MoodboardColumn().padding(12)
+          }
         }
+    }
+    // A safe-area bar rather than a stacked view: the canvas runs underneath it and the system
+    // draws the bar's edge, so the composer sits on the canvas like the toolbar does.
+    .safeAreaBar(edge: .bottom, spacing: 0) {
+      VStack(spacing: 0) {
+        PromptSplitter()
+        RecentStrip()
+        StatusBar()
+        PromptComposer()
       }
-      // A safe-area bar rather than a stacked view: the canvas runs underneath it and the system
-      // draws the bar's edge, so the composer sits on the canvas like the toolbar does.
-      .safeAreaBar(edge: .bottom, spacing: 0) {
-        VStack(spacing: 0) {
-          PromptSplitter()
-          RecentStrip()
-          StatusBar()
-          PromptComposer()
-        }
-      }
-      .inspector(isPresented: inspectorPresented) {
-        InspectorView()
-          .inspectorColumnWidth(min: 300, ideal: 340, max: 460)
-      }
+    }
+    .inspector(isPresented: inspectorPresented) {
+      InspectorView()
+        .inspectorColumnWidth(min: 300, ideal: 340, max: 460)
+    }
     #if DEBUG
       // The moodboard weight popover's layout check needs an image on the moodboard.
       .debugPresents("moodboardWeight", .constant(false)) {
@@ -195,7 +201,10 @@ struct CanvasView: View {
             .position(x: frameRect.midX, y: frameRect.midY)
             .allowsHitTesting(false)
         }
-        if model.image == nil {
+        if model.layout != nil {
+          LayoutCanvas(size: frameRect.size)
+            .position(x: frameRect.midX, y: frameRect.midY)
+        } else if model.image == nil {
           ContentUnavailableView(
             "No image yet", systemImage: "photo",
             description: Text("Write a prompt below and press Generate (⌘↩), or drop an image here to edit it."))
@@ -714,6 +723,17 @@ struct PromptComposer: View {
           ClickableLabel("Negative Prompt", isExpanded: $showNegative)
         }
         .font(.callout)
+        if model.layoutFormat != nil {
+          Toggle(
+            isOn: Binding(get: { model.layout != nil }, set: { $0 ? model.openLayout() : model.closeLayout() })
+          ) {
+            Label("Layout", systemImage: "rectangle.3.group")
+          }
+          .toggleStyle(.button)
+          .compactPickerSize()
+          .fixedSize()
+          .help("Draw boxes on the canvas and say what goes in each. The prompt is written in this model's layout format.")
+        }
         Picker(
           "Mode", selection: Binding(get: { model.effectiveCanvasMode }, set: { model.canvasMode = $0 })
         ) {
