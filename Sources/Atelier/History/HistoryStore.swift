@@ -780,6 +780,11 @@ enum JSONValue: Codable, Hashable {
   case object([String: JSONValue])
 
   static func fields(of value: Any) -> [String: JSONValue] {
+    if let configuration = value as? PipelineConfiguration {
+      var fields = fields(of: configuration.base)
+      fields["shiftForAudio"] = JSONValue(configuration.shiftForAudio)
+      return fields
+    }
     var fields: [String: JSONValue] = [:]
     for child in Mirror(reflecting: value).children {
       guard let label = child.label else { continue }

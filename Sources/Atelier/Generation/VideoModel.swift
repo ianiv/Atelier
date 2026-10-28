@@ -86,6 +86,6 @@ struct VideoModel: Equatable {
 extension PipelineConfiguration {
   /// The video model this configuration runs, if it's one.
   var videoModel: VideoModel? {
-    VideoModel(model: model, loras: loras.compactMap(\.file))
+    VideoModel(model: self.model, loras: self.loras.compactMap(\.file))
   }
 }

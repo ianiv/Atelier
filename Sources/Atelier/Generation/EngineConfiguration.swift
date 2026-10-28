@@ -4,12 +4,22 @@ import Foundation
 import ScriptDataModels
 
 extension PipelineConfiguration {
+  /// The engine's own configuration for these settings: MGK's fields as MGK writes them, then the
+  /// ones only the app carries. For runs that call the engine directly
+  /// (`GenerationEngine.generateVideo`).
+  func engineConfiguration(template: GenerationConfiguration) -> GenerationConfiguration {
+    let options = base.engineOptions(template: template)
+    options.shiftForAudio = shiftForAudio
+    return options.createGenerationConfiguration()
+  }
+}
+
+extension MediaGenerationPipeline.Configuration {
   /// The engine's own configuration for these settings, as MGK builds it before a run
   /// (`MediaGenerationPipeline.Configuration.runtimeConfiguration`, internal there): the model's
   /// recommended template with every public field written over it, through the engine's
-  /// scripting bridge. Settings MGK doesn't expose (audio shift, SOL attention) keep the
-  /// template's values. For runs that call the engine directly (`GenerationEngine.generateVideo`).
-  func engineConfiguration(template: GenerationConfiguration) -> GenerationConfiguration {
+  /// scripting bridge. Settings MGK doesn't expose keep the template's values.
+  fileprivate func engineOptions(template: GenerationConfiguration) -> JSGenerationConfiguration {
     let options = JSGenerationConfiguration(configuration: template)
     options.model = model
     options.width = UInt32(clamping: width)
@@ -94,7 +104,7 @@ extension PipelineConfiguration {
     options.compressionArtifactsQuality = compressionArtifactsQuality
     options.colorCalibration = colorCalibrationName
     options.expandPromptToJson = expandPromptToJson
-    return options.createGenerationConfiguration()
+    return options
   }
 
   private var compressionArtifactsName: String {

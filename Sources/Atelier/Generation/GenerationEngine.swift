@@ -124,8 +124,8 @@ actor GenerationEngine {
   }
 
   /// Loads (or reuses) the pipeline for `model` and returns its recommended configuration.
-  func loadPipeline(for model: String) async throws -> MediaGenerationPipeline.Configuration {
-    try await pipeline(for: model).configuration
+  func loadPipeline(for model: String) async throws -> PipelineConfiguration {
+    try await PipelineConfiguration(pipeline(for: model).configuration)
   }
 
   func generate(
@@ -145,7 +145,7 @@ actor GenerationEngine {
     {
       return output
     }
-    pipeline.configuration = request.configuration
+    pipeline.configuration = request.configuration.base
     pipeline.configuration.seed = request.seed
     pipeline.configuration.batchCount = 1
     pipeline.configuration.batchSize = 1

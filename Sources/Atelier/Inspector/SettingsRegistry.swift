@@ -1,7 +1,26 @@
 import _MediaGenerationKit
 import Foundation
 
-typealias PipelineConfiguration = MediaGenerationPipeline.Configuration
+/// MGK's configuration plus the engine settings MGK doesn't expose, which runs that call the
+/// engine directly write over the template (`engineConfiguration(template:)`). MGK's fields read
+/// and write through it as if it were MGK's own.
+@dynamicMemberLookup
+struct PipelineConfiguration: Sendable {
+  var base: MediaGenerationPipeline.Configuration
+  /// MiniMax H3's shift for its audio latents.
+  var shiftForAudio: Float = 3
+
+  init(_ base: MediaGenerationPipeline.Configuration) { self.base = base }
+
+  subscript<T>(dynamicMember keyPath: KeyPath<MediaGenerationPipeline.Configuration, T>) -> T {
+    base[keyPath: keyPath]
+  }
+
+  subscript<T>(dynamicMember keyPath: WritableKeyPath<MediaGenerationPipeline.Configuration, T>) -> T {
+    get { base[keyPath: keyPath] }
+    set { base[keyPath: keyPath] = newValue }
+  }
+}
 
 /// What the inspector knows about the selected model, for hiding settings it doesn't use.
 struct ModelTraits: Equatable {
@@ -342,6 +361,10 @@ enum SettingsRegistry {
       toggle(
         "resolutionDependentShift", \.resolutionDependentShift, "Resolution-Dependent Shift",
         .sampling, "Scale the shift with image size. Off uses Shift as is.", applies: flow),
+      float(
+        "shiftForAudio", \.shiftForAudio, "Audio Shift", .sampling,
+        "Shifts the soundtrack's noise schedule, as Shift does the video's.", range: 0...12,
+        step: 0.1, applies: { $0.version.hasPrefix("MiniMax H3") }),
       choice(
         "seedMode", \.seedMode, "Seed Mode", .sampling,
         "How the seed turns into noise. Scale Alike keeps compositions similar across sizes.",

@@ -174,7 +174,8 @@ enum ProjectMapping {
       audio: step.hasAudio,
       colorCalibration: d.enumeration("colorCalibration", DataModels.ColorCalibration.self)
         .flatMap { ProjectFormat.ColorCalibration(rawValue: $0.rawValue) },
-      expandPromptToJson: d.bool("expandPromptToJson", false)
+      expandPromptToJson: d.bool("expandPromptToJson", false),
+      shiftForAudio: d.float("shiftForAudio", 3)
     )
   }
 
@@ -319,6 +320,7 @@ enum ProjectMapping {
       "compressionArtifactsQuality": f(node.compressionArtifactsQuality),
       "colorCalibration": e(DataModels.ColorCalibration(rawValue: node.colorCalibration.rawValue)),
       "expandPromptToJson": .bool(node.expandPromptToJson),
+      "shiftForAudio": f(node.shiftForAudio),
     ]
   }
 
