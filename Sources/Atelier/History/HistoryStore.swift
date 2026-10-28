@@ -78,6 +78,8 @@ final class HistoryStore {
   private(set) var isLoaded = false
   /// The current project's output folder overrides.
   private(set) var output = ProjectOutput()
+  /// Star ratings (1 to 5) by image tensor; a clip's is under its first frame.
+  private(set) var ratings: [Int64: Int] = [:]
   /// Progress of the one-time import of the old PNG history, while it runs.
   private(set) var importProgress: (done: Int, total: Int)?
 
@@ -111,12 +113,14 @@ final class HistoryStore {
 
   func reload() async {
     let project = project
-    let (tree, stored, output) = await Task.detached { () -> (ProjectTree, StepID?, ProjectOutput) in
+    let (tree, stored, output, ratings) = await Task.detached {
+      () -> (ProjectTree, StepID?, ProjectOutput, [Int64: Int]) in
       let tree = project.tree()
-      return (tree, project.storedCurrentStep(in: tree), project.output)
+      return (tree, project.storedCurrentStep(in: tree), project.output, project.ratings)
     }.value
     guard project === self.project else { return }
     self.output = output
+    self.ratings = ratings
     self.tree = tree
     items = tree.itemsNewestFirst
     byTensor = Dictionary(items.map { ($0.tensorId, $0) }, uniquingKeysWith: { a, _ in a })
@@ -148,6 +152,7 @@ final class HistoryStore {
     tree = ProjectTree()
     currentTensorId = nil
     output = ProjectOutput()
+    ratings = [:]
     await reload()
   }
 
@@ -315,6 +320,23 @@ final class HistoryStore {
     project.setCurrentStep(nil)
     await reload()
     recordCurrent()
+    // A later image could be given a deleted one's tensor: don't let it inherit the rating.
+    let kept = ratings.filter { byTensor[$0.key] != nil }
+    if kept.count != ratings.count { ratings = kept; project.ratings = kept }
+  }
+
+  // MARK: - Ratings
+
+  /// The item's star rating, 0 when it has none.
+  func rating(of item: HistoryItem) -> Int {
+    ratings[item.tensorId] ?? 0
+  }
+
+  /// Gives the items `stars` (0 to 5; 0 clears the rating), saved in the project.
+  func setRating(_ stars: Int, for items: [HistoryItem]) {
+    let stars = min(max(stars, 0), 5)
+    for item in items { ratings[item.tensorId] = stars > 0 ? stars : nil }
+    project.ratings = ratings
   }
 
   func item(_ id: StepID) -> HistoryItem? {

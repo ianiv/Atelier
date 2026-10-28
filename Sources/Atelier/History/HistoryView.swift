@@ -24,6 +24,7 @@ struct HistoryView: View {
   @State private var search = ""
   @State private var modelFilter: String?
   @State private var kindFilter = Kind.all
+  @State private var ratingFilter = RatingFilter.any
   @State private var pendingDelete: [HistoryItem]?
   @State private var deleteError: String?
   @State private var columns = 1
@@ -46,11 +47,25 @@ struct HistoryView: View {
     case all, images, videos
   }
 
+  /// Which ratings History shows: any, only unrated, or at least some stars.
+  enum RatingFilter: Hashable {
+    case any, unrated, atLeast(Int)
+
+    func matches(_ stars: Int) -> Bool {
+      switch self {
+      case .any: true
+      case .unrated: stars == 0
+      case .atLeast(let minimum): stars >= minimum
+      }
+    }
+  }
+
   private var filtered: [HistoryItem] {
     let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
     return history.items.filter { item in
       (modelFilter == nil || item.sidecar.model == modelFilter)
         && (kindFilter == .all || item.isVideo == (kindFilter == .videos))
+        && ratingFilter.matches(history.rating(of: item))
         && (query.isEmpty || item.sidecar.prompt.localizedCaseInsensitiveContains(query))
     }
   }
@@ -86,6 +101,18 @@ struct HistoryView: View {
             }
             .help("Show images, videos or both")
           }
+        }
+        ToolbarItem {
+          Picker("Rating", selection: $ratingFilter) {
+            Text("Any rating").tag(RatingFilter.any)
+            Divider()
+            ForEach((1...5).reversed(), id: \.self) { stars in
+              Text(StarRating.text(stars) + (stars < 5 ? " or more" : "")).tag(RatingFilter.atLeast(stars))
+            }
+            Divider()
+            Text("Unrated").tag(RatingFilter.unrated)
+          }
+          .help("Show only images with at least this many stars, or only unrated ones")
         }
         ToolbarItem {
           Picker("Model", selection: $modelFilter) {
@@ -186,6 +213,12 @@ struct HistoryView: View {
       ContentUnavailableView(
         "No images in “\(history.project.name)”", systemImage: "clock",
         description: Text("Images you generate in Create are saved to the current project."))
+    } else if filtered.isEmpty, ratingFilter != .any, search.isEmpty {
+      ContentUnavailableView {
+        Label("No images with this rating", systemImage: "star")
+      } actions: {
+        Button("Show All Ratings") { ratingFilter = .any }
+      }
     } else if filtered.isEmpty {
       ContentUnavailableView.search(text: search)
     } else {
@@ -228,6 +261,14 @@ struct HistoryView: View {
           toggleQuickLook()
           return .handled
         }
+        // 1 to 5 rate the selection, 0 clears its rating, as in Photos and Lightroom.
+        .onKeyPress(characters: .decimalDigits) { press in
+          guard press.modifiers.isEmpty, let stars = Int(press.characters), stars <= 5,
+                !selection.isEmpty
+          else { return .ignored }
+          history.setRating(stars, for: selectedItems)
+          return .handled
+        }
         .quickLookPreview($quickLookURL)
         .background(Color.underPageBackground)
       }
@@ -247,6 +288,10 @@ struct HistoryView: View {
             }
             .overlay(alignment: .bottomLeading) {
               if let clip = item.clip { ClipBadge(clip: clip).padding(5) }
+            }
+            .overlay(alignment: .topLeading) {
+              let stars = history.rating(of: item)
+              if stars > 0 { RatingBadge(stars: stars).padding(5) }
             }
             .overlay(alignment: .bottomTrailing) {
               Text(GenerationTime.text(item.sidecar.durationSeconds))
@@ -302,7 +347,7 @@ struct HistoryView: View {
         cell(
           HistoryGraphRow(
             item: item, row: row, lanes: layout.lanes, isCurrent: item.tensorId == current,
-            isSelected: selection.contains(item.tensorId)),
+            isSelected: selection.contains(item.tensorId), stars: history.rating(of: item)),
           item: item)
       }
     }
@@ -380,6 +425,8 @@ struct HistoryView: View {
         Button("Save \(items.count) Images to Photos") { saveToPhotos(items) }
       #endif
       Divider()
+      ratingMenu(items)
+      Divider()
       Button("Delete \(items.count) Images", role: .destructive) { pendingDelete = items }
     } else {
       Button("Use Settings") { use(item, newSeed: false, loadImage: false) }
@@ -399,7 +446,23 @@ struct HistoryView: View {
         Button("Upscale…") { upscaling = item }
       }
       Divider()
+      ratingMenu(items)
+      Divider()
       Button("Delete", role: .destructive) { pendingDelete = [item] }
+    }
+  }
+
+  /// Rating: a check on the items' rating when they share one.
+  private func ratingMenu(_ items: [HistoryItem]) -> some View {
+    let ratings = Set(items.map(history.rating(of:)))
+    return Menu("Rating") {
+      ForEach(0...5, id: \.self) { stars in
+        Toggle(
+          stars == 0 ? "None" : StarRating.text(stars),
+          isOn: Binding(
+            get: { ratings == [stars] }, set: { _ in history.setRating(stars, for: items) }))
+          .keyboardShortcut(KeyEquivalent(Character(String(stars))), modifiers: [])
+      }
     }
   }
 
@@ -666,6 +729,12 @@ struct HistorySelectionDetail: View {
         }
         Text("\(items.count) selected")
           .foregroundStyle(.secondary)
+        LabeledContent("Rating") {
+          let ratings = Set(items.map(history.rating(of:)))
+          StarRating(stars: ratings.count == 1 ? ratings.first ?? 0 : 0) {
+            history.setRating($0, for: items)
+          }
+        }
         ButtonRow {
           Button("Copy Images") { Task { await history.copyImages(items) } }
           Button("Export…", action: export)
@@ -712,6 +781,9 @@ struct HistoryDetail: View {
           Button("Rerun with New Seed", action: rerun)
         }
         .disabled(!create.canUse(item))
+        LabeledContent("Rating") {
+          StarRating(stars: history.rating(of: item)) { history.setRating($0, for: [item]) }
+        }
         if !create.models.contains(where: { $0.file == sidecar.model }) {
           Label("\(sidecar.model) isn't downloaded.", systemImage: "exclamationmark.triangle")
             .font(.caption).foregroundStyle(.secondary)
@@ -765,6 +837,58 @@ struct HistoryDetail: View {
 
   private func modelName(_ file: String) -> String {
     create.models.first { $0.file == file }?.name ?? file
+  }
+}
+
+/// Five stars to click: a star sets that rating, the current rating's star clears it.
+struct StarRating: View {
+  var stars: Int
+  var set: (Int) -> Void
+
+  var body: some View {
+    HStack(spacing: 2) {
+      ForEach(1...5, id: \.self) { n in
+        Button {
+          set(n == stars ? 0 : n)
+        } label: {
+          Image(systemName: n <= stars ? "star.fill" : "star")
+            .foregroundStyle(n <= stars ? Color.yellow : Color.secondary)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .help(n == stars ? "Clear the rating" : "Rate \(Self.text(n))")
+        .accessibilityLabel(n == 1 ? "1 star" : "\(n) stars")
+      }
+    }
+    .accessibilityElement(children: .contain)
+    .accessibilityValue(stars == 0 ? "Unrated" : "\(stars) of 5 stars")
+  }
+
+  /// "★★★".
+  static func text(_ stars: Int) -> String {
+    String(repeating: "★", count: stars)
+  }
+}
+
+/// An image's rating in grids and graph rows.
+struct RatingBadge: View {
+  let stars: Int
+  /// Without the dark capsule grids draw over images.
+  var plain = false
+
+  var body: some View {
+    let label = Text(StarRating.text(stars))
+      .font(.caption2)
+      .foregroundStyle(.yellow)
+      .help(stars == 1 ? "Rated 1 star" : "Rated \(stars) stars")
+    if plain {
+      label
+    } else {
+      label
+        .padding(.horizontal, 5)
+        .padding(.vertical, 2)
+        .background(.black.opacity(0.55), in: .capsule)
+    }
   }
 }
 
@@ -1081,6 +1205,7 @@ struct HistoryGraphRow: View {
   var lanes: Int
   var isCurrent: Bool
   var isSelected: Bool
+  var stars = 0
 
   private static let height: CGFloat = 60
   private static let laneWidth: CGFloat = 14
@@ -1108,6 +1233,7 @@ struct HistoryGraphRow: View {
           .lineLimit(1)
       }
       Spacer(minLength: 0)
+      if stars > 0 { RatingBadge(stars: stars, plain: true) }
       if isCurrent {
         Text("Current")
           .font(.caption)

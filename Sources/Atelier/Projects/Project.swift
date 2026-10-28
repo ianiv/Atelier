@@ -137,6 +137,24 @@ final class Project: @unchecked Sendable {
     set { workspace.dictionary["atelier_timelines", String.self] = newValue }
   }
 
+  /// Star ratings (1 to 5) by image tensor, which a fork or delete doesn't renumber; unrated
+  /// images aren't listed. Kept as JSON in the project file, which Draw Things ignores.
+  var ratings: [Int64: Int] {
+    get {
+      guard let json = workspace.dictionary["atelier_ratings", String.self],
+            let stored = try? JSONDecoder().decode([String: Int].self, from: Data(json.utf8))
+      else { return [:] }
+      return Dictionary(
+        stored.compactMap { key, value in Int64(key).map { ($0, value) } },
+        uniquingKeysWith: { a, _ in a })
+    }
+    set {
+      let stored = Dictionary(newValue.map { (String($0.key), $0.value) }, uniquingKeysWith: { a, _ in a })
+      workspace.dictionary["atelier_ratings", String.self] = stored.isEmpty
+        ? nil : (try? JSONEncoder().encode(stored)).map { String(decoding: $0, as: UTF8.self) }
+    }
+  }
+
   /// The image layer's tensor: from the canvas layers when stored (the top one with a tensor), else
   /// the node's own field.
   private func imageTensorId(of node: TensorHistoryNode) -> Int64? {
