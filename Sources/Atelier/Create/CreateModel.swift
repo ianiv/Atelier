@@ -229,6 +229,22 @@ final class CreateModel {
 
   var isRunning: Bool { phase != .idle }
 
+  /// What quitting now would stop, for asking first; nil when nothing is under way. Jobs held in
+  /// a paused queue don't count: they're kept for the next launch.
+  var workUnderway: String? {
+    var parts: [String] = []
+    if let running = queue.running {
+      parts.append(running.export != nil ? "an upscaled export is running" : "a generation is running")
+    }
+    if !queue.isPaused, !queue.waiting.isEmpty {
+      parts.append(queue.waiting.count == 1 ? "1 job is queued" : "\(queue.waiting.count) jobs are queued")
+    }
+    if timelines.isExporting { parts.append("a video is exporting") }
+    guard !parts.isEmpty else { return nil }
+    let list = parts.formatted(.list(type: .and))
+    return list.prefix(1).uppercased() + list.dropFirst() + "."
+  }
+
   /// Generate works while a job runs: it queues the next one.
   var canGenerate: Bool {
     !isLoadingModel && selectedModel != nil && settings != nil

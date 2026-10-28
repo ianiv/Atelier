@@ -470,6 +470,7 @@ struct TimelineScreen: View {
     let url = URL.temporaryDirectory.appending(path: "\(UUID().uuidString).mp4")
     let name = "\(history.project.name) \(timeline.name)"
     exportProgress = 0
+    store.isExporting = true
     exportTask = Task {
       do {
         let progress: @Sendable (Double) -> Void = { fraction in
@@ -478,6 +479,7 @@ struct TimelineScreen: View {
         try await composition.export(
           to: url, codec: .current, title: timeline.name, progress: progress)
         exportProgress = nil
+        store.isExporting = false
         #if os(iOS)
           if toPhotos {
             try await PhotoLibrary.save([], videos: [url])
@@ -491,6 +493,7 @@ struct TimelineScreen: View {
         ) { _ in try? FileManager.default.removeItem(at: url) }
       } catch {
         exportProgress = nil
+        store.isExporting = false
         try? FileManager.default.removeItem(at: url)
         if !(error is CancellationError), (error as? AVError)?.code != .operationCancelled {
           failure = "Couldn't export: \(error.localizedDescription)"

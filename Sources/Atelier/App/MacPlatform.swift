@@ -16,9 +16,28 @@ extension Color {
 
 /// Quits when the last window closes. A single `Window` scene would do that in SwiftUI, but it
 /// drops File ▸ New Window, which the `WindowGroup` offers.
+///
+/// Also asks before quitting while work is under way (`AppLifecycle.workUnderway`). SwiftUI has no
+/// hook for a quit about to happen, and its alerts need a window, which is already gone when
+/// closing the last one is what quits; so this asks with an app-wide `NSAlert`.
 final class MacAppDelegate: NSObject, NSApplicationDelegate {
   func applicationShouldTerminateAfterLastWindowClosed(_: NSApplication) -> Bool {
     true
+  }
+
+  func applicationShouldTerminate(_: NSApplication) -> NSApplication.TerminateReply {
+    MainActor.assumeIsolated {
+      guard !AppLifecycle.isQuittingWithoutAsking, let work = AppLifecycle.workUnderway?() else {
+        return .terminateNow
+      }
+      let alert = NSAlert()
+      alert.messageText = "Quit while Atelier is working?"
+      alert.informativeText =
+        "\(work) Quitting stops it. Queued generations come back paused next time you open Atelier; exports don't."
+      alert.addButton(withTitle: "Quit")
+      alert.addButton(withTitle: "Cancel")
+      return alert.runModal() == .alertFirstButtonReturn ? .terminateNow : .terminateCancel
+    }
   }
 }
 
@@ -77,6 +96,9 @@ enum Clipboard {
 enum AppLifecycle {
   static var isActive: Bool { NSApp.isActive }
 
+  /// What quitting now would stop, in a sentence, or nil to quit without asking.
+  static var workUnderway: (@MainActor () -> String?)?
+
   static func onWillTerminate(_ action: @escaping @MainActor () -> Void) {
     observe(NSApplication.willTerminateNotification, action)
   }
@@ -89,8 +111,13 @@ enum AppLifecycle {
     observe(NSApplication.didBecomeActiveNotification, action)
   }
 
-  /// Quits normally, so will-terminate work (saving the session and queue) still runs.
+  /// Set by `quit()`, which scripted runs call, so they don't stop to ask.
+  fileprivate static var isQuittingWithoutAsking = false
+
+  /// Quits normally, so will-terminate work (saving the session and queue) still runs, without
+  /// asking about work under way.
   static func quit() {
+    isQuittingWithoutAsking = true
     NSApp.terminate(nil)
   }
 

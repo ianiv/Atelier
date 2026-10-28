@@ -44,6 +44,7 @@ struct AtelierApp: App {
     _library = State(initialValue: library)
     #if os(macOS)
       _agents = State(initialValue: AgentServer(create: create, presets: presets))
+      AppLifecycle.workUnderway = { create.workUnderway }
       // Started here rather than from a view's .task: SwiftUI doesn't put windows up while the
       // screen is locked, and scripted checks still need to run then.
       Task { @MainActor in

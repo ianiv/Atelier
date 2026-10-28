@@ -134,6 +134,8 @@ final class TimelineStore {
   var pointsPerSecond: Double = 120
   /// The track's visible width, for Zoom to Fit.
   var trackWidth: Double = 800
+  /// A timeline is being written out by Export Video… (upscaled exports run in the queue).
+  var isExporting = false
 
   /// The closest and farthest the track zooms, in points per second.
   static let zoomRange: ClosedRange<Double> = 4...2000
