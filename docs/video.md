@@ -8,10 +8,12 @@ Pick a video model in Create and the same screen makes videos: the prompt, inspe
 | --- | --- | --- |
 | LTX-2, LTX-2.3 | The prompt; in Edit mode, the canvas as the first frame | Makes its own soundtrack |
 | MiniMax H3 (FL2VA) | The canvas as the first frame and the first moodboard image as the last | Makes its own soundtrack |
-| MiniMax H3 (Ref2VA) | The canvas and moodboard images as references, and an audio file | Makes its own soundtrack, following the audio you give it |
+| MiniMax H3 (Ref2VA), FastH3 Omni | The canvas and moodboard images as references, and an audio file | Makes its own soundtrack, following the audio you give it |
 | Wan 2.1, Wan 2.2, SkyReels, Hunyuan Video | The prompt (T2V models); the canvas as the first frame (I2V models) | None |
 | Stable Video Diffusion | An image to animate | None |
 | LongCat Video Avatar | An image and a voice to lip-sync to | Keeps the voice you give it |
+
+FastH3 Omni is a fast MiniMax H3 Ref2VA: it starts at 1280×768, 8 steps and guidance 1.
 
 Download them from **Models** like any other model. They're large, and a video takes minutes, not seconds.
 
@@ -34,7 +36,7 @@ Longer and larger videos take much longer and need much more memory. Try a short
 
 Models that take an audio file show an **Audio** box at the top of the moodboard column. Drop an audio file on it or click **Choose Audio…**; it shows the file's name, length and waveform. For MiniMax H3 Ref2VA, refer to it in the prompt as `<Audio 1>`. Each queued video keeps the audio it was given, and **Use Settings** on a video brings its audio back.
 
-LTX and MiniMax H3 make a soundtrack with the video. It's saved with the video, plays with it and is in the files you export.
+LTX and MiniMax H3 make a soundtrack with the video. It's saved with the video, plays with it and is in the files you export. For MiniMax H3 models, **Audio Shift** (next to Shift in the inspector) shifts the soundtrack's noise schedule the way Shift does the video's.
 
 ## While it runs
 

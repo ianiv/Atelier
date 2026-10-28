@@ -7,12 +7,13 @@ Atelier is a native macOS app for generating images with local models, with an i
 What it does today:
 
 - Text to image with sensible per-model defaults, and every advanced setting one search away.
+- Layout prompts for FLUX.3, Ideogram 4 and MOSS Image: draw boxes on the canvas and say what goes in each.
 - Image to image: edit an image on the canvas, outpaint by moving it in the frame, and give edit models reference images on a moodboard.
 - Video with LTX-2, MiniMax H3, Wan and the other video models the engine runs: text or an image to video, first and last frames, references, and sound (LTX and H3 make a soundtrack; H3 and LongCat take an audio file). Clips play inline and save as MP4.
 - A video editor to put clips together on a timeline: trim, split, crossfade, continue a new video from any frame, and export one MP4.
 - Video upscaling: **Fast** (Apple Super Resolution) or **Quality** (FlashVSR+, Turbo or Base), as a new video in History or straight to a file with Export Video….
 - Presets and inspector layouts.
-- History kept in projects, in Draw Things' project file format, with one-click "Use Settings".
+- History kept in projects, in Draw Things' project file format, with one-click "Use Settings" and 1 to 5 star ratings.
 - A model and LoRA library: download from the community catalog, import `.safetensors` checkpoints and LoRAs, and make 8-bit copies of MOSS models.
 - An MCP server so agents such as Claude Code can generate images and videos with your models, and read and change the Create screen alongside you.
 

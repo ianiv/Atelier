@@ -37,6 +37,8 @@ An upscaled **Export Video…** (from History or the Video Editor; see [Exportin
 
 ## Quitting
 
+If an image is being made, jobs are waiting or a video is exporting, Atelier asks before quitting on the Mac. A paused queue doesn't count: its jobs are kept anyway.
+
 Waiting images, and the one being made, are kept when you quit and come back paused at the next launch. Press Resume Queue to run them. Images for a model you've since deleted are dropped.
 
 ## On iPad
