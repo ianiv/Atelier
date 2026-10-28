@@ -685,12 +685,8 @@ struct PromptComposer: View {
       : AnyLayout(HStackLayout(alignment: .bottom, spacing: 10))
     VStack(alignment: .leading, spacing: 6) {
       row {
-        TextField("Describe the image…", text: $model.prompt, axis: .vertical)
-          .lineLimit(promptLines, reservesSpace: true)
-          .textFieldStyle(.plain)
-          .font(.body)
+        promptField
           .focused($promptFocused)
-          .onSubmit { model.generate() }
           .padding(8)
           .background(Color.textBackground, in: Self.fieldShape)
           .overlay(
@@ -760,6 +756,46 @@ struct PromptComposer: View {
   }
 
   /// Follows the window's corners, never tighter than a text field's.
+  /// On the Mac a vertical text field doesn't scroll with the trackpad or mouse wheel, only by
+  /// moving the caret, so there the prompt is a text editor sized to the same number of lines.
+  @ViewBuilder private var promptField: some View {
+    @Bindable var model = model
+    #if os(macOS)
+      Text(verbatim: " ")
+        .lineLimit(promptLines, reservesSpace: true)
+        .font(.body)
+        .frame(maxWidth: .infinity)
+        .hidden()
+        .overlay {
+          TextEditor(text: $model.prompt)
+            .font(.body)
+            .scrollContentBackground(.hidden)
+            // The editor's own inset: line it up with where the field's text sat.
+            .padding(.horizontal, -5)
+            .onKeyPress(.return, phases: .down) { press in
+              // ⌥↩ (and other modified returns) fall through and add a line.
+              guard press.modifiers.isEmpty else { return .ignored }
+              model.generate()
+              return .handled
+            }
+        }
+        .overlay(alignment: .topLeading) {
+          if model.prompt.isEmpty {
+            Text("Describe the image…")
+              .font(.body)
+              .foregroundStyle(.placeholder)
+              .allowsHitTesting(false)
+          }
+        }
+    #else
+      TextField("Describe the image…", text: $model.prompt, axis: .vertical)
+        .lineLimit(promptLines, reservesSpace: true)
+        .textFieldStyle(.plain)
+        .font(.body)
+        .onSubmit { model.generate() }
+    #endif
+  }
+
   private static let fieldShape = ConcentricRectangle(corners: .concentric(minimum: .fixed(8)), isUniform: true)
 }
 
