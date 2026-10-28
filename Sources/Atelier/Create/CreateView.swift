@@ -694,32 +694,15 @@ struct PromptComposer: View {
               .stroke(promptFocused ? Color.accentColor : Color.separator)
           )
           .help("Prompt. Return generates; ⌥↩ adds a line. ⌘L focuses this field.")
-        GlassEffectContainer(spacing: 8) {
-          HStack(spacing: 8) {
-            // Always shown so the row never shifts; disabled while idle.
-            Button {
-              model.cancel()
-            } label: {
-              Label("Stop", systemImage: "stop.fill")
+        VStack(spacing: 8) {
+          // The rating of the image on the canvas, as in History.
+          if let item = model.imageItem {
+            StarRating(stars: model.history.rating(of: item)) {
+              model.history.setRating($0, for: [item])
             }
-            .labelStyle(.iconOnly)
-            .buttonStyle(.glass)
-            .help("Stop this image; the queue goes on (Esc)")
-            .keyboardShortcut(.escape, modifiers: [])
-            .disabled(!model.isRunning || model.phase == .cancelling)
-            CountControl()
-            Button {
-              model.generate()
-            } label: {
-              Label("Generate", systemImage: model.isRunning ? "text.badge.plus" : "sparkles")
-            }
-            .labelStyle(.iconOnly)
-            .help(model.isRunning ? "Add to Queue (⌘↩)" : "Generate (⌘↩)")
-            .buttonStyle(.glassProminent)
-            .keyboardShortcut(.return, modifiers: .command)
-            .disabled(!model.canGenerate)
+            .imageScale(.large)
           }
-          .controlSize(.large)
+          buttons
         }
       }
       HStack(alignment: .top, spacing: 12) {
@@ -753,6 +736,37 @@ struct PromptComposer: View {
     #if os(iOS)
       .onGeometryChange(for: Bool.self) { $0.size.width < 480 } action: { narrow = $0 }
     #endif
+  }
+
+  /// Stop, the image count and Generate.
+  private var buttons: some View {
+    GlassEffectContainer(spacing: 8) {
+      HStack(spacing: 8) {
+        // Always shown so the row never shifts; disabled while idle.
+        Button {
+          model.cancel()
+        } label: {
+          Label("Stop", systemImage: "stop.fill")
+        }
+        .labelStyle(.iconOnly)
+        .buttonStyle(.glass)
+        .help("Stop this image; the queue goes on (Esc)")
+        .keyboardShortcut(.escape, modifiers: [])
+        .disabled(!model.isRunning || model.phase == .cancelling)
+        CountControl()
+        Button {
+          model.generate()
+        } label: {
+          Label("Generate", systemImage: model.isRunning ? "text.badge.plus" : "sparkles")
+        }
+        .labelStyle(.iconOnly)
+        .help(model.isRunning ? "Add to Queue (⌘↩)" : "Generate (⌘↩)")
+        .buttonStyle(.glassProminent)
+        .keyboardShortcut(.return, modifiers: .command)
+        .disabled(!model.canGenerate)
+      }
+      .controlSize(.large)
+    }
   }
 
   /// Follows the window's corners, never tighter than a text field's.
