@@ -57,7 +57,8 @@ final class AgentServer {
     call may wait for a run already in progress. Larger models can take minutes per image. \
     To work on the same Create screen as the user, read it with get_create_screen, change its \
     prompt and settings with set_create_screen, and generate it with generate and \
-    use_app_settings (no prompt).
+    use_app_settings (no prompt). To see an image, including ones the user generated, use \
+    get_image (the canvas by default) and list_history.
     """
 
   init(create: CreateModel, presets: PresetStore) {

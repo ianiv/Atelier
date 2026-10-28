@@ -120,6 +120,35 @@ final class AgentTools {
       ],
     ],
     [
+      "name": "list_history",
+      "title": "List history",
+      "description":
+        "Lists the newest images and videos in the current Atelier project, newest first: history step, prompt (shortened), model, seed, size, star rating, and whether it's a video. Includes what the user generated themselves. Use get_image to look at one.",
+      "inputSchema": [
+        "type": "object",
+        "properties": [
+          "limit": ["type": "integer", "description": "How many to list. Default 20."]
+        ],
+      ],
+      "annotations": ["readOnlyHint": true],
+    ],
+    [
+      "name": "get_image",
+      "title": "Get image",
+      "description":
+        "Returns an image so you can see it: what's on the Create screen's canvas (the default), the project's newest image, or a History image by step (see list_history). For a video, its first frame. Comes with its prompt and settings when it's a saved image.",
+      "inputSchema": [
+        "type": "object",
+        "properties": [
+          "history_step": ["type": "integer", "description": "A history step from list_history or generate. Omit for the canvas."],
+          "latest": ["type": "boolean", "description": "The project's newest image instead of the canvas."],
+          "max_size": ["type": "integer", "description": "Long side of the returned image in pixels, 256–2048. Default 1024."],
+          "save_to": ["type": "string", "description": "Also write the full-size PNG (settings embedded) to this file or folder."],
+        ],
+      ],
+      "annotations": ["readOnlyHint": true],
+    ],
+    [
       "name": "generate",
       "title": "Generate image or video",
       "description": """
@@ -184,6 +213,8 @@ final class AgentTools {
     case "get_settings": return try await getSettings(arguments)
     case "get_create_screen": return try Self.textResult(json: createScreen())
     case "set_create_screen": return try await setCreateScreen(arguments)
+    case "list_history": return try Self.textResult(json: listHistory(arguments))
+    case "get_image": return try await getImage(arguments)
     case "generate": return try await generate(arguments, progress: progress)
     default: throw ToolError("Unknown tool \(name).")
     }
@@ -529,6 +560,75 @@ final class AgentTools {
     var result = createScreen()
     if !notes.isEmpty { result["notes"] = notes }
     return try Self.textResult(json: result)
+  }
+
+  // MARK: - Images
+
+  private func listHistory(_ arguments: [String: Any]) -> [[String: Any]] {
+    let limit = max(Self.int(arguments["limit"]) ?? 20, 1)
+    return create.history.items.prefix(limit).map { item in
+      let sidecar = item.sidecar
+      return [
+        "history_step": item.id.logicalTime, "prompt": Self.shortened(sidecar.prompt),
+        "model": sidecar.model, "seed": Int(sidecar.seed), "width": sidecar.width, "height": sidecar.height,
+        "rating": create.history.rating(of: item), "video": item.isVideo,
+        "on_canvas": create.imageItem == item || create.canvasClip == item,
+      ]
+    }
+  }
+
+  private func getImage(_ arguments: [String: Any]) async throws -> [String: Any] {
+    let item: HistoryItem?
+    let image: CGImage
+    if let step = Self.int(arguments["history_step"]) {
+      guard let found = create.history.items.first(where: { $0.id.logicalTime == step }) else {
+        throw ToolError("No history step \(step) in “\(create.history.project.name)”. See list_history.")
+      }
+      item = found
+    } else if arguments["latest"] as? Bool == true {
+      guard let newest = create.history.items.first else { throw ToolError("The project has no images yet.") }
+      item = newest
+    } else {
+      item = create.imageItem ?? create.canvasClip
+    }
+    if let item {
+      guard let loaded = await create.history.image(for: item) else { throw ToolError("Couldn't read that image.") }
+      image = loaded
+    } else {
+      guard let canvas = create.image else { throw ToolError("The canvas is empty.") }
+      image = canvas
+    }
+
+    var text: String
+    if let item {
+      let sidecar = item.sidecar
+      text =
+        "History step \(item.id.logicalTime) in “\(create.history.project.name)”\(item.isVideo ? " (a video; this is its first frame)" : "").\n"
+        + "Model \(sidecar.model), \(sidecar.width)×\(sidecar.height), \(sidecar.steps) steps, "
+        + "guidance \(sidecar.guidanceScale), seed \(sidecar.seed).\nPrompt: \(sidecar.prompt)"
+      if !sidecar.negativePrompt.isEmpty { text += "\nNegative prompt: \(sidecar.negativePrompt)" }
+    } else {
+      text = "The canvas image (\(image.width)×\(image.height)), not a saved history image: an imported image or a run in progress."
+    }
+    if let saveTo = arguments["save_to"] as? String {
+      let url = try Self.outputURL(
+        saveTo, name: item.map(create.history.fileName(for:)) ?? "Canvas", extension: "png")
+      let png = try item.map { try HistoryStore.pngData(image, sidecar: $0.sidecar) } ?? ImageTensor.png(image)
+      guard let png else { throw ToolError("Couldn't encode the image.") }
+      try png.write(to: url)
+      text += "\nSaved to \(url.path)."
+    }
+    let maxSide = min(max(Self.int(arguments["max_size"]) ?? 1024, 256), 2048)
+    var content: [[String: Any]] = [["type": "text", "text": text]]
+    if let preview = Self.jpeg(ImageLoader.fitted(image, maxSide: maxSide)) {
+      content.append(["type": "image", "data": preview.base64EncodedString(), "mimeType": "image/jpeg"])
+    }
+    return ["content": content]
+  }
+
+  private static func shortened(_ prompt: String) -> String {
+    let line = prompt.split(whereSeparator: \.isNewline).joined(separator: " ")
+    return line.count > 160 ? String(line.prefix(160)) + "…" : line
   }
 
   /// The main window's undo manager, which the Create screen's ⌘Z uses.
