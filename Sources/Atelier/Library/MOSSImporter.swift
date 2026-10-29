@@ -210,3 +210,88 @@ enum MOSSImporter {
     return specification
   }
 }
+
+/// Rewrites a LoRA from the MOSS Image Edit trainer (github.com/Chenkin-x/Moss-Image-Edit, header
+/// format "moss-edit-lora") into names LoRAImporter reads. Its tensors are `<module>.lora_A` and
+/// `<module>.lora_B` with no `.weight`, so the importer matched none of them; the module names
+/// (`layers.N.proj.q`, `proj.ffn_up_gate`, …) already match the engine's MOSS mapper. Each
+/// module's alpha, kept in the header's adapter config, is added as a `<module>.alpha` tensor.
+enum MOSSEditLoRA {
+  /// A converted copy of `url` in a new temporary folder, or nil when `url` isn't in this format.
+  /// The caller removes the copy's folder.
+  static func convertedCopy(of url: URL) throws -> URL? {
+    let input = try FileHandle(forReadingFrom: url)
+    defer { try? input.close() }
+    guard let lengthData = try input.read(upToCount: 8), lengthData.count == 8 else { return nil }
+    let headerLength = lengthData.withUnsafeBytes { Int(UInt64(littleEndian: $0.loadUnaligned(as: UInt64.self))) }
+    guard headerLength > 0, headerLength < 100_000_000,
+          let headerData = try input.read(upToCount: headerLength), headerData.count == headerLength,
+          let header = try JSONSerialization.jsonObject(with: headerData) as? [String: Any]
+    else { return nil }
+    let suffixes = [".lora_A", ".lora_B"]
+    guard header.keys.contains(where: { key in suffixes.contains { key.hasSuffix($0) } }) else {
+      return nil
+    }
+    var alphas: [String: Double] = [:]
+    if let metadata = header["__metadata__"] as? [String: String],
+       let config = metadata["adapter_config"]?.data(using: .utf8),
+       let object = try? JSONSerialization.jsonObject(with: config) as? [String: Any],
+       let modules = object["modules"] as? [String: [String: Any]]
+    {
+      for (module, info) in modules {
+        if let alpha = (info["alpha"] as? NSNumber)?.doubleValue { alphas[module] = alpha }
+      }
+    }
+    var renamed: [String: Any] = [:]
+    var dataLength = 0
+    for (key, value) in header {
+      if key == "__metadata__" {
+        renamed[key] = value
+        continue
+      }
+      if let end = (value as? [String: Any])?["data_offsets"] as? [NSNumber], end.count == 2 {
+        dataLength = max(dataLength, end[1].intValue)
+      }
+      renamed[suffixes.contains { key.hasSuffix($0) } ? key + ".weight" : key] = value
+    }
+    // Alphas go after the original tensor data as FP32 scalars.
+    var alphaData = Data()
+    for (module, alpha) in alphas.sorted(by: { $0.key < $1.key })
+      where header[module + ".lora_A"] != nil && header[module + ".alpha"] == nil
+    {
+      let start = dataLength + alphaData.count
+      withUnsafeBytes(of: Float(alpha).bitPattern.littleEndian) { alphaData.append(contentsOf: $0) }
+      renamed[module + ".alpha"] = [
+        "dtype": "F32", "shape": [Int](), "data_offsets": [start, start + 4],
+      ]
+    }
+    var newHeader = try JSONSerialization.data(withJSONObject: renamed, options: [.sortedKeys])
+    // Pads the header to 8 bytes so the tensor data stays aligned.
+    newHeader.append(contentsOf: [UInt8](repeating: 0x20, count: (8 - newHeader.count % 8) % 8))
+
+    let folder = FileManager.default.temporaryDirectory
+      .appendingPathComponent("AtelierLoRA-" + UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    let output = folder.appendingPathComponent(url.lastPathComponent)
+    do {
+      FileManager.default.createFile(atPath: output.path, contents: nil)
+      let handle = try FileHandle(forWritingTo: output)
+      defer { try? handle.close() }
+      withUnsafeBytes(of: UInt64(newHeader.count).littleEndian) { handle.write(Data($0)) }
+      handle.write(newHeader)
+      var remaining = dataLength
+      while remaining > 0 {
+        guard let chunk = try input.read(upToCount: min(remaining, 64 << 20)), !chunk.isEmpty else {
+          throw CocoaError(.fileReadCorruptFile)
+        }
+        handle.write(chunk)
+        remaining -= chunk.count
+      }
+      handle.write(alphaData)
+    } catch {
+      try? FileManager.default.removeItem(at: folder)
+      throw error
+    }
+    return output
+  }
+}

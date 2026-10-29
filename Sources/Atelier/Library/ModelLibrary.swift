@@ -643,8 +643,14 @@ final class ModelLibrary {
     // ModelZoo.externalUrls: the models directory the engine set. MGK's LoRAImporter swaps
     // externalUrls to a temp folder instead, which would race a running generation.
     let (detected, isLoHa) = try await Task.detached {
+      let converted = try MOSSEditLoRA.convertedCopy(of: source)
+      defer {
+        if let converted {
+          try? FileManager.default.removeItem(at: converted.deletingLastPathComponent())
+        }
+      }
       let result = try ModelOp.LoRAImporter.import(
-        downloadedFile: source.path, name: stem, filename: file, scaleFactor: 1,
+        downloadedFile: (converted ?? source).path, name: stem, filename: file, scaleFactor: 1,
         forceVersion: version, progress: progress)
       return (result.0, result.3)
     }.value
