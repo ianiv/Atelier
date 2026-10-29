@@ -895,8 +895,15 @@ final class ModelLibrary {
     _ source: URL, name: String, file: String, version: String?, into folder: URL,
     progress: @escaping @Sendable (Float) -> Void
   ) async throws -> (ModelVersion, Bool) {
+    // MOSS Image Edit trainer LoRAs need renamed tensors first; see MOSSEditLoRA.
+    let converted = try MOSSEditLoRA.convertedCopy(of: source)
+    defer {
+      if let converted {
+        try? FileManager.default.removeItem(at: converted.deletingLastPathComponent())
+      }
+    }
     let result = try ModelOp.LoRAImporter.import(
-      downloadedFile: source.path, name: name, filename: file, scaleFactor: 1,
+      downloadedFile: (converted ?? source).path, name: name, filename: file, scaleFactor: 1,
       forceVersion: version.flatMap(ModelVersion.init(rawValue:)), outputDirectory: folder.path,
       progress: progress)
     return (result.0, result.3)
