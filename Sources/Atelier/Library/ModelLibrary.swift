@@ -894,19 +894,19 @@ final class ModelLibrary {
   @concurrent private nonisolated static func importLoRAFile(
     _ source: URL, name: String, file: String, version: String?, into folder: URL,
     progress: @escaping @Sendable (Float) -> Void
-  ) async throws -> (ModelVersion, Bool) {
+  ) async throws -> (ModelVersion, Bool, Bool) {
     // MOSS Image Edit trainer LoRAs need renamed tensors first; see MOSSEditLoRA.
     let converted = try MOSSEditLoRA.convertedCopy(of: source)
     defer {
       if let converted {
-        try? FileManager.default.removeItem(at: converted.deletingLastPathComponent())
+        try? FileManager.default.removeItem(at: converted.url.deletingLastPathComponent())
       }
     }
     let result = try ModelOp.LoRAImporter.import(
-      downloadedFile: (converted ?? source).path, name: name, filename: file, scaleFactor: 1,
+      downloadedFile: (converted?.url ?? source).path, name: name, filename: file, scaleFactor: 1,
       forceVersion: version.flatMap(ModelVersion.init(rawValue:)), outputDirectory: folder.path,
       progress: progress)
-    return (result.0, result.3)
+    return (result.0, result.3, converted?.isEdit ?? false)
   }
 
   private func importLoRA(_ item: LoRAImport, version: ModelVersion?) async throws {
@@ -930,7 +930,7 @@ final class ModelLibrary {
     // ModelOp writes to the folder it's given (an `outputDirectory` the fork adds). MGK's
     // LoRAImporter swaps externalUrls to a temp folder instead, which would race a running
     // generation.
-    let (detected, isLoHa) = try await Self.importLoRAFile(
+    let (detected, isLoHa, isEdit) = try await Self.importLoRAFile(
       source, name: stem, file: file, version: version?.rawValue, into: folder, progress: progress)
     guard FileManager.default.fileExists(atPath: folder.appendingPathComponent(file).path)
     else {
@@ -943,7 +943,7 @@ final class ModelLibrary {
     try register(
       LoRAZoo.Specification(
         name: name, file: file, prefix: item.prefix, version: detected,
-        isLoHa: isLoHa), in: folder)
+        isLoHa: isLoHa, modifier: isEdit && detected == .mossImage ? .kontext : nil), in: folder)
     succeeded = true
   }
 
