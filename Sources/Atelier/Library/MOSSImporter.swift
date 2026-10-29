@@ -216,10 +216,14 @@ enum MOSSImporter {
 /// `<module>.lora_B` with no `.weight`, so the importer matched none of them; the module names
 /// (`layers.N.proj.q`, `proj.ffn_up_gate`, …) already match the engine's MOSS mapper. Each
 /// module's alpha, kept in the header's adapter config, is added as a `<module>.alpha` tensor.
+///
+/// These LoRAs edit: they read the canvas as a reference image, which the engine's MOSS graph takes
+/// when the LoRA has the Kontext modifier.
 enum MOSSEditLoRA {
   /// A converted copy of `url` in a new temporary folder, or nil when `url` isn't in this format.
-  /// The caller removes the copy's folder.
-  static func convertedCopy(of url: URL) throws -> URL? {
+  /// `isEdit` is whether the header says it's a MOSS edit LoRA. The caller removes the copy's
+  /// folder.
+  static func convertedCopy(of url: URL) throws -> (url: URL, isEdit: Bool)? {
     let input = try FileHandle(forReadingFrom: url)
     defer { try? input.close() }
     guard let lengthData = try input.read(upToCount: 8), lengthData.count == 8 else { return nil }
@@ -233,11 +237,13 @@ enum MOSSEditLoRA {
       return nil
     }
     var alphas: [String: Double] = [:]
+    var isEdit = false
     if let metadata = header["__metadata__"] as? [String: String],
        let config = metadata["adapter_config"]?.data(using: .utf8),
        let object = try? JSONSerialization.jsonObject(with: config) as? [String: Any],
        let modules = object["modules"] as? [String: [String: Any]]
     {
+      isEdit = object["format"] as? String == "moss-edit-lora"
       for (module, info) in modules {
         if let alpha = (info["alpha"] as? NSNumber)?.doubleValue { alphas[module] = alpha }
       }
@@ -292,6 +298,6 @@ enum MOSSEditLoRA {
       try? FileManager.default.removeItem(at: folder)
       throw error
     }
-    return output
+    return (output, isEdit)
   }
 }
