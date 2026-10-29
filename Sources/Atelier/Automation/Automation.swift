@@ -438,7 +438,8 @@ enum Automation {
   /// Scripted checks of the Phase 4 library, logged as PASS/FAIL lines:
   ///
   ///   Atelier --library-check [--import-lora FILE [--lora-name NAME]]
-  ///           [--generate-with-lora MODEL [--steps N] [--seed N] [--lora-weight W]]
+  ///           [--generate-with-lora MODEL [--steps N] [--seed N] [--lora-weight W]
+  ///            [--input FILE] [--guidance G]]
   ///           [--delete-lora FILE] [--download MODEL [--cancel-after-bytes N]]
   ///           [--import-model FILE [--model-name NAME]] [--generate-model [MODEL] [--steps N]]
   ///           [--make-8bit MODEL [--8bit-s]] [--compare-weights REFERENCE [--compare-model MODEL]]
@@ -540,15 +541,20 @@ enum Automation {
         let weight = value("--lora-weight").flatMap(Float.init) ?? 1
         settings.loras = [LoRA(file: lora.file, weight: weight, mode: .all)]
         if let steps = value("--steps").flatMap(Int.init) { settings.steps = steps }
+        if let guidance = value("--guidance").flatMap(Float.init) { settings.guidanceScale = guidance }
         settings.width = 512
         settings.height = 512
         model.settings = settings
         model.seed = value("--seed").flatMap(UInt32.init) ?? 42
         model.seedLocked = true
         model.prompt = value("--prompt") ?? "portrait photo of a woman in a garden"
+        // An edit LoRA reads the canvas as a reference image.
+        if let path = value("--input"), let input = ImageLoader.image(at: URL(fileURLWithPath: path)) {
+          model.setCanvasImage(input)
+        }
         navigation.section = .create
         let previous = model.lastSavedStep
-        log("generate with \(lora.file) weight \(weight) on \(target), \(settings.steps) steps")
+        log("generate with \(lora.file) weight \(weight) on \(target), \(settings.steps) steps, mode \(model.effectiveCanvasMode), references \(model.usesReferences)")
         model.generate()
         while model.isBusy { try? await Task.sleep(for: .milliseconds(100)) }
         if let error = model.errorMessage { log("error: \(error)") }
@@ -556,6 +562,11 @@ enum Automation {
           let saved = model.history.item(step)
           let savedLoRAs = saved?.sidecar.configuration["loras"].map { "\($0)" } ?? "none"
           check(true, "saved step \(step.logicalTime), project loras \(savedLoRAs)")
+          if let snapshotDir, let saved, let image = await model.history.image(for: saved),
+             let png = ImageTensor.png(image)
+          {
+            try? png.write(to: snapshotDir.appendingPathComponent("result-with-lora.png"))
+          }
         } else {
           check(false, "no image saved")
         }

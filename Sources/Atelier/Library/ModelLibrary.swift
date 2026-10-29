@@ -642,17 +642,17 @@ final class ModelLibrary {
     // ModelOp writes to LoRAZoo.filePathForModelDownloaded(file), which resolves against
     // ModelZoo.externalUrls: the models directory the engine set. MGK's LoRAImporter swaps
     // externalUrls to a temp folder instead, which would race a running generation.
-    let (detected, isLoHa) = try await Task.detached {
+    let (detected, isLoHa, isEdit) = try await Task.detached {
       let converted = try MOSSEditLoRA.convertedCopy(of: source)
       defer {
         if let converted {
-          try? FileManager.default.removeItem(at: converted.deletingLastPathComponent())
+          try? FileManager.default.removeItem(at: converted.url.deletingLastPathComponent())
         }
       }
       let result = try ModelOp.LoRAImporter.import(
-        downloadedFile: (converted ?? source).path, name: stem, filename: file, scaleFactor: 1,
-        forceVersion: version, progress: progress)
-      return (result.0, result.3)
+        downloadedFile: (converted?.url ?? source).path, name: stem, filename: file,
+        scaleFactor: 1, forceVersion: version, progress: progress)
+      return (result.0, result.3, converted?.isEdit ?? false)
     }.value
     guard FileManager.default.fileExists(atPath: directory.appendingPathComponent(file).path)
     else {
@@ -665,7 +665,7 @@ final class ModelLibrary {
     register(
       LoRAZoo.Specification(
         name: name, file: file, prefix: item.prefix, version: detected,
-        isLoHa: isLoHa))
+        isLoHa: isLoHa, modifier: isEdit && detected == .mossImage ? .kontext : nil))
   }
 
   /// Renames a LoRA or changes its trigger words; other fields in custom_lora.json are kept.
