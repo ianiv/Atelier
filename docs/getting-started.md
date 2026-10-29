@@ -25,6 +25,8 @@ Release builds don't include Draw Things' preview decoders, so step-by-step prev
 
 You can also open `Atelier.xcodeproj` in Xcode and run the Atelier scheme.
 
+Builds stay in `build/`, and the scripts keep them out of Spotlight and Open With so only the installed app shows there. If old copies still show up, run `Scripts/clean-builds.sh`. It also deletes Xcode's own build folder for Atelier. Add `--all` to delete the build caches in `build/` too, which makes the next build a full one.
+
 ### Code formatting
 
 The Swift code is formatted with [SwiftFormat](https://github.com/nicklockwood/SwiftFormat), set up in `.swiftformat`. If you change the code, install it with `brew install swiftformat` and run `Scripts/install-hooks.sh` once: a pre-commit hook then formats the Swift files you commit. To format everything, run `swiftformat .` from the repository root.

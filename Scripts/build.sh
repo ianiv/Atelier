@@ -59,4 +59,8 @@ xcodebuild -project Atelier.xcodeproj -scheme Atelier -configuration "$CONFIGURA
 
 rm -rf "$OUTPUT"
 cp -R "$DERIVED/Build/Products/$PRODUCTS/Atelier.app" "$OUTPUT"
+# macOS registers every built copy with Launch Services, so they pile up in Spotlight and Open With.
+# Keep the installed app the only one listed.
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+"$LSREGISTER" -u "$DERIVED/Build/Products/$PRODUCTS/Atelier.app" "$OUTPUT" 2>/dev/null || true
 echo "Built $PROJECT_ROOT/$OUTPUT"

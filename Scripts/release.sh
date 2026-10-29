@@ -109,4 +109,8 @@ fi
 mv "$FEED/appcast.xml" "$OUT/appcast.xml"
 rm -rf "$FEED"
 
+# Keep the installed app the only copy listed in Spotlight and Open With.
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+"$LSREGISTER" -u build/DerivedData/Build/Products/Release/Atelier.app "$APP" 2>/dev/null || true
+
 echo "Built $PROJECT_ROOT/$ZIP and $PROJECT_ROOT/$OUT/appcast.xml; attach both to the v$VERSION release"
