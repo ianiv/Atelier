@@ -53,6 +53,8 @@ if ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>
   exit 1
 fi
 
+Scripts/apply-patches.sh
+
 OUT=build/release
 EMPTY_DIR="$(mktemp -d)"
 trap 'rm -rf "$EMPTY_DIR"' EXIT

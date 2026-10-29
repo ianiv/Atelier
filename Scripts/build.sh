@@ -53,6 +53,9 @@ case "$PLATFORM" in
     ;;
 esac
 
+# Engine changes Atelier needs before they're upstream (Patches/).
+Scripts/apply-patches.sh
+
 xcodebuild -project Atelier.xcodeproj -scheme Atelier -configuration "$CONFIGURATION" \
   -derivedDataPath "$DERIVED" -clonedSourcePackagesDirPath build/SourcePackages \
   -destination "$DESTINATION" -quiet "${SIGNING[@]}" build
