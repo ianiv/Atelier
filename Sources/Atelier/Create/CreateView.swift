@@ -702,7 +702,7 @@ struct PromptComposer: View {
             Self.fieldShape
               .stroke(promptFocused ? Color.accentColor : Color.separator)
           )
-          .help("Prompt. Return generates; ⌥↩ adds a line. ⌘L focuses this field.")
+          .help("Prompt. ⌘↩ generates. ⌘L focuses this field.")
         VStack(spacing: 8) {
           // The rating of the image on the canvas, as in History.
           if let item = model.imageItem {
@@ -806,12 +806,6 @@ struct PromptComposer: View {
             .scrollContentBackground(.hidden)
             // The editor's own inset: line it up with where the field's text sat.
             .padding(.horizontal, -5)
-            .onKeyPress(.return, phases: .down) { press in
-              // ⌥↩ (and other modified returns) fall through and add a line.
-              guard press.modifiers.isEmpty else { return .ignored }
-              model.generate()
-              return .handled
-            }
         }
         .overlay(alignment: .topLeading) {
           if model.prompt.isEmpty {
