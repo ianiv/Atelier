@@ -1035,12 +1035,14 @@ struct ModelsSettingsView: View {
   }
 #endif
 
-/// Settings ▸ Images: what saved images carry, how videos are written, and the output folder.
+/// Settings ▸ Images: what saved images carry, how videos are written, the output folder, and
+/// notifications.
 struct ImagesSettingsView: View {
   @AppStorage(AppSettings.embedsSettingsKey) private var embedsSettings = true
   @AppStorage(VideoCodec.key) private var videoCodec = VideoCodec.h264
   @AppStorage(AppSettings.savesToOutputFolderKey) private var savesToOutputFolder = false
   @AppStorage(AppSettings.outputFolderKey) private var outputFolder = AppSettings.defaultOutputFolder
+  @AppStorage(AppSettings.notifiesKey) private var notifies = true
   @State private var choosingOutputFolder = false
 
   var body: some View {
@@ -1091,6 +1093,16 @@ struct ImagesSettingsView: View {
         #endif
       } header: {
         Text("Output Folder")
+      }
+      Section {
+        Toggle(isOn: $notifies) {
+          Text("Notify When Generations Finish")
+          Text(
+            "When an image or video finishes while Atelier is in the background, puts a count on the app's icon and posts a notification."
+          )
+        }
+      } header: {
+        Text("Notifications")
       }
       #if os(macOS)
         .fileImporter(isPresented: $choosingOutputFolder, allowedContentTypes: [.folder]) { result in

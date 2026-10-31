@@ -1374,14 +1374,14 @@ final class CreateModel {
 }
 
 /// Tells you a generation finished while Atelier was in the background: a badge on the app icon
-/// (cleared when you come back) and a notification, if allowed.
+/// (cleared when you come back) and a notification, if allowed and turned on in Settings.
 @MainActor
 enum FinishedNotice {
   private static var unseen = 0
   private static var observing = false
 
   static func post(prompt: String, seconds: Double, isVideo: Bool = false) {
-    guard !AppLifecycle.isActive else { return }
+    guard !AppLifecycle.isActive, AppSettings.notifies else { return }
     let center = UNUserNotificationCenter.current()
     unseen += 1
     let count = unseen

@@ -47,6 +47,13 @@ enum AppSettings {
     UserDefaults.standard.object(forKey: savesToOutputFolderKey) as? Bool ?? false
   }
 
+  /// Whether Atelier badges its icon and posts a notification when a generation finishes in the
+  /// background (on by default).
+  static let notifiesKey = "notifyWhenFinished"
+  static var notifies: Bool {
+    UserDefaults.standard.object(forKey: notifiesKey) as? Bool ?? true
+  }
+
   /// The default output folder; a project can name its own (`ProjectOutput`).
   static let outputFolderKey = "outputFolder"
   static var outputFolder: String {

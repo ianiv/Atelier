@@ -30,6 +30,10 @@ The folder Atelier reads models and LoRAs from, and downloads and imports into. 
 
 Each project can turn saving on or off for itself and use its own folder, from **Output Folder…** in the project menu (see [Projects](history.md#projects)). Projects follow these settings until you change that.
 
+### Notifications
+
+**Notify When Generations Finish** (on by default) badges Atelier's icon and posts a notification when an image or video finishes while Atelier is in the background. Turn it off for neither. See [Notifications](#notifications).
+
 ## Performance
 
 These match Draw Things' Machine Settings. **Automatic** uses what the engine picks for your Mac, shown in brackets. Changes apply from the next generation.
@@ -64,3 +68,5 @@ On iPad, projects and the default output folder are in **On My iPad ▸ Atelier 
 ## Notifications
 
 When an image or video finishes while Atelier is in the background, it posts a notification and puts a count on the app's icon, cleared when you come back. The first time, macOS (or iPadOS) asks whether Atelier may show notifications and badges; you can change either later in System Settings ▸ Notifications (on iPad, Settings ▸ Notifications).
+
+To stop them, turn off **Notify When Generations Finish** in Settings ▸ Images (on by default). Atelier then neither badges its icon nor posts notifications, and doesn't ask for permission.
