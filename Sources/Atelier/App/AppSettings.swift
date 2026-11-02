@@ -28,6 +28,34 @@ enum AppSettings {
       .appendingPathComponent("Models", isDirectory: true).path
   }
 
+  private static let additionalModelsDirectoriesKey = "additionalModelsDirectories"
+
+  /// More folders models and LoRAs are read from, after `modelsDirectory`. Downloads and imports
+  /// still go to `modelsDirectory`.
+  static var additionalModelsDirectories: [String] {
+    get { UserDefaults.standard.stringArray(forKey: additionalModelsDirectoriesKey) ?? [] }
+    set { UserDefaults.standard.set(newValue, forKey: additionalModelsDirectoriesKey) }
+  }
+
+  /// The models folders that can be read now, in the order a file is looked up: the models
+  /// directory, then the additional folders as listed, without duplicates. A folder that's missing
+  /// (on a disconnected drive, say) is left out until it's back. The default models directory
+  /// always counts: it's made on first use.
+  static func availableModelsDirectories(primary: String, additional: [String])
+    -> [String]
+  {
+    var seen = Set<String>()
+    var folders: [String] = []
+    for (index, path) in ([primary] + additional).enumerated() {
+      let key = URL(fileURLWithPath: path).standardizedFileURL.path
+      guard !path.isEmpty, seen.insert(key).inserted else { continue }
+      if FolderBookmarks.isReachable(path) || (index == 0 && path == defaultModelsDirectory) {
+        folders.append(path)
+      }
+    }
+    return folders
+  }
+
   /// Forgets the saved models directory, back to the default. The default isn't saved: on iPad
   /// it's inside the app's container, whose path can change when the app is updated.
   static func useDefaultModelsDirectory() {

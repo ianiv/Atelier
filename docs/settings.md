@@ -12,6 +12,12 @@ The folder Atelier reads models and LoRAs from, and downloads and imports into. 
 
 **On iPad** there's no path to type. Settings shows the folder as the Files app names it, such as **On My iPad ▸ Atelier ▸ Models (Default)**. **Choose…** picks any folder Files can reach (iCloud Drive, another app's folder, an external drive), and **Use Default** goes back to the Models folder in Atelier's own folder. If a chosen folder can't be reached, for example on a disconnected drive, Settings says so.
 
+### Additional model folders
+
+More folders Atelier reads models and LoRAs from, such as a second drive or another app's models folder. Click **Add Folder…** to add one and the minus button to stop using it (its files stay where they are). Models and LoRAs from every folder can be picked in Create, and LoRAs listed in any folder's `custom_lora.json` show up in the LoRAs screen. Downloads and imports still go to the models directory above.
+
+When the same file name is in more than one folder, Atelier uses the one in the models directory first, then the additional folders in the order listed. A folder that can't be reached, for example on a disconnected drive, is marked **Not available** and skipped; Atelier picks it up again within a few seconds of the drive being reconnected. If the model you had picked was on that drive, it's picked again when the drive comes back.
+
 ## Images
 
 ### Saved images
@@ -56,7 +62,7 @@ Lets Claude Code, Codex, Gemini CLI, Cursor, VS Code and other MCP clients on th
 | What | Where |
 | --- | --- |
 | Projects (your images and their settings) | `~/Pictures/Atelier/Projects/` |
-| Models, LoRAs, `custom.json`, `custom_lora.json` | Your models directory |
+| Models, LoRAs, `custom.json`, `custom_lora.json` | Your models directory (and any additional model folders) |
 | Presets and inspector layouts | `~/Library/Application Support/Atelier/` (the Presets and inspector menus have Show Folder items) |
 | Images saved to the output folder | `~/Pictures/Atelier/Output/`, or the folder you set (in Settings or for a project) |
 | Moodboard images | `~/Library/Application Support/Atelier/Moodboard/` |

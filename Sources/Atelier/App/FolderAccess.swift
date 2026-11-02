@@ -36,10 +36,10 @@ enum FolderBookmarks {
 
   private static var held: [String: ScopedAccess] = [:]
 
-  /// Keeps the folder at `path` open until another is kept open in its place, for the models
-  /// folder the engine reads from.
-  @MainActor static func keepOpen(_ path: String) {
-    held = ["models": open(path)]
+  /// Keeps the folders at `paths` open until others are kept open in their place, for the models
+  /// folders the engine reads from.
+  @MainActor static func keepOpen(_ paths: [String]) {
+    held = Dictionary(paths.map { ($0, open($0)) }) { first, _ in first }
   }
 
   /// Forgets a folder's bookmark once a setting stops using it.

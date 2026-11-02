@@ -32,7 +32,7 @@ build/Atelier.app/Contents/MacOS/Atelier --generate --model <file.ckpt> --prompt
 build/Atelier.app/Contents/MacOS/Atelier --queue-check --project <scratch project> [--model M] [--steps N] --quit
 ```
 
-Other checks: `--project-check`, `--edit-input-check`, `--inspector-check`, `--library-check`, `--ux-check`, `--timeline-check`, `--timeline-export-check`, `--upscale-check`, `--flashvsr-check`, `--reuse latest|STEP`, `--resize-bench`, `--show <section>`. Usage for each is in the doc comment at the top of its `Automation*.swift` file. Always pass `--project NAME` for checks that write, so the user's current project isn't touched; scripted runs also skip saving `SessionState`. These need real models in the user's models folder — never hardcode its path. Automation is Mac-only (`#if os(macOS)`).
+Other checks: `--project-check`, `--edit-input-check`, `--inspector-check`, `--library-check`, `--ux-check`, `--timeline-check`, `--timeline-export-check`, `--upscale-check`, `--flashvsr-check`, `--model-folders-check`, `--reuse latest|STEP`, `--resize-bench`, `--show <section>`. Usage for each is in the doc comment at the top of its `Automation*.swift` file. Always pass `--project NAME` for checks that write, so the user's current project isn't touched; scripted runs also skip saving `SessionState`. These need real models in the user's models folder — never hardcode its path. Automation is Mac-only (`#if os(macOS)`).
 
 ## Architecture
 

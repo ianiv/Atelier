@@ -148,7 +148,7 @@ struct ModelsView: View {
         .task {
           if library.catalog.isEmpty { await library.refresh() }
         }
-        .onChange(of: library.create.modelsDirectory) {
+        .onChange(of: library.create.availableModelsDirectories) {
           Task { await library.refresh() }
         }
   }

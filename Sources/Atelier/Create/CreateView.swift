@@ -937,6 +937,7 @@ struct ModelsSettingsView: View {
         } footer: {
           Text("Models you download are saved here. The default is in Atelier's folder in Files.")
         }
+        AdditionalModelFoldersSection()
       }
       .settingsForm()
     #endif
@@ -960,6 +961,7 @@ struct ModelsSettingsView: View {
             .disabled(directory == model.modelsDirectory)
         }
       }
+      AdditionalModelFoldersSection()
     }
     .settingsForm()
     .fileImporter(isPresented: $choosing, allowedContentTypes: [.folder]) { result in
@@ -974,6 +976,74 @@ struct ModelsSettingsView: View {
       // The window focuses the first field, which selects the whole path; start unfocused.
       Task { directoryFocused = false }
     }
+  }
+}
+
+/// Settings ▸ Models: more folders models and LoRAs are read from. A file found in several
+/// folders comes from the first (the models directory first, then this list in order).
+private struct AdditionalModelFoldersSection: View {
+  @Environment(CreateModel.self) private var model
+  @State private var adding = false
+
+  var body: some View {
+    Section {
+      ForEach(model.additionalModelsDirectories, id: \.self) { path in
+        row(path)
+      }
+      Button("Add Folder…") { adding = true }
+        .fileImporter(isPresented: $adding, allowedContentTypes: [.folder]) { result in
+          guard case .success(let url) = result else { return }
+          let path = url.path
+          guard path != model.modelsDirectory, !model.additionalModelsDirectories.contains(path)
+          else { return }
+          FolderBookmarks.remember(url)
+          model.setAdditionalModelsDirectories(model.additionalModelsDirectories + [path])
+        }
+    } header: {
+      Text("Additional Model Folders")
+    } footer: {
+      Text(
+        "Models and LoRAs in these folders can be picked in Create too. When a file is in more than one folder, the models folder comes first, then these in order. A folder on a disconnected drive is skipped until it's back."
+      )
+    }
+  }
+
+  private func row(_ path: String) -> some View {
+    let available = model.availableModelsDirectories.contains(path)
+    return HStack {
+      Image(systemName: "folder")
+        .foregroundStyle(.secondary)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(displayName(path))
+          .lineLimit(1)
+          .truncationMode(.middle)
+          .help(path)
+        if !available {
+          Label("Not available", systemImage: "exclamationmark.triangle")
+            .font(.caption)
+            .foregroundStyle(.orange)
+            .help("This folder can't be reached now. Its models are skipped until it's back.")
+        }
+      }
+      Spacer()
+      Button {
+        FolderBookmarks.forget(path)
+        model.setAdditionalModelsDirectories(model.additionalModelsDirectories.filter { $0 != path })
+      } label: {
+        Image(systemName: "minus.circle")
+      }
+      .buttonStyle(.borderless)
+      .help("Stop reading models from this folder. Its files stay where they are.")
+      .accessibilityLabel("Remove \(displayName(path))")
+    }
+  }
+
+  private func displayName(_ path: String) -> String {
+    #if os(iOS)
+      FolderSetting.location(of: path)
+    #else
+      (path as NSString).abbreviatingWithTildeInPath
+    #endif
   }
 }
 

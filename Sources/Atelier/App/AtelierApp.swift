@@ -26,8 +26,8 @@ struct AtelierApp: App {
       for folder in [URL(fileURLWithPath: AppSettings.modelsDirectory), AppSettings.historyDirectory] {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
       }
-      // A models folder picked outside the app stays readable while Atelier runs.
-      FolderBookmarks.keepOpen(AppSettings.modelsDirectory)
+      // Models folders picked outside the app stay readable while Atelier runs.
+      FolderBookmarks.keepOpen([AppSettings.modelsDirectory] + AppSettings.additionalModelsDirectories)
     #endif
     let history = HistoryStore()
     _history = State(initialValue: history)

@@ -2,6 +2,7 @@
 import _MediaGenerationKit
 import AVFoundation
 import ImageIO
+import ModelZoo
 import NNC
 import SwiftUI
 
@@ -31,6 +32,7 @@ enum Automation {
       "--show", "--resize-bench", "--inspector-check", "--library-check", "--project-check",
       "--reuse", "--generate", "--ux-check", "--edit-input-check", "--queue-check",
       "--timeline-check", "--upscale-check", "--timeline-export-check", "--flashvsr-check",
+      "--model-folders-check",
     ]
     return CommandLine.arguments.contains { flags.contains($0) }
   }
@@ -80,6 +82,10 @@ enum Automation {
     }
     if args.contains("--flashvsr-check") {
       flashVSRCheck()
+      return
+    }
+    if args.contains("--model-folders-check") {
+      modelFoldersCheck(model, library: library)
       return
     }
     if args.contains("--timeline-export-check") {
@@ -1157,9 +1163,112 @@ enum Automation {
     AutomationWindows.snapshot(to: url)
   }
 }
+
+extension Automation {
+  /// `--model-folders-check`: several models folders. Launch with the folders as argument
+  /// defaults, so the saved settings stay as they are:
+  ///
+  ///   Atelier --model-folders-check -modelsDirectory A \
+  ///     -additionalModelsDirectories '(B, C)' [--quit]
+  ///
+  /// A and C are scratch folders (C must not exist yet); B is a real models folder, read only.
+  /// Writes LoRA entries into A and C, then checks that B's models can be picked, that LoRAs from
+  /// every folder are offered with the first folder winning a duplicate, and that C is picked up
+  /// once it appears and dropped once it goes away.
+  static func modelFoldersCheck(_ model: CreateModel, library: ModelLibrary) {
+    Task { @MainActor in
+      func log(_ message: String) { print(message); fflush(stdout) }
+      func check(_ ok: Bool, _ message: String) { log((ok ? "PASS " : "FAIL ") + message) }
+      func waitFor(_ seconds: Double, _ condition: () -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while !condition(), Date() < deadline { try? await Task.sleep(for: .milliseconds(200)) }
+        return condition()
+      }
+      let a = model.modelsDirectory
+      guard model.additionalModelsDirectories.count == 2 else {
+        log("FAIL pass -additionalModelsDirectories '(B, C)'")
+        return
+      }
+      let b = model.additionalModelsDirectories[0]
+      let c = model.additionalModelsDirectories[1]
+      let fm = FileManager.default
+      func writeLoRAs(_ entries: [(name: String, file: String)], in folder: String) {
+        try? fm.createDirectory(atPath: folder, withIntermediateDirectories: true)
+        let json = entries.map {
+          #"{"name": "\#($0.name)", "file": "\#($0.file)", "prefix": "", "version": "flux1"}"#
+        }
+        try? ("[" + json.joined(separator: ",") + "]").write(
+          toFile: folder + "/custom_lora.json", atomically: true, encoding: .utf8)
+        for entry in entries {
+          fm.createFile(atPath: folder + "/" + entry.file, contents: Data([0]))
+        }
+      }
+      check(!fm.fileExists(atPath: c), "C doesn't exist yet")
+      writeLoRAs(
+        [("Shared from A", "folders_shared_lora_f16.ckpt"), ("Only A", "folders_a_lora_f16.ckpt")],
+        in: a)
+      await model.reloadModels()
+
+      check(model.availableModelsDirectories == [a, b], "folders in use: A, B (C missing)")
+      check(
+        !model.models.isEmpty,
+        "models from B can be picked though A has none: \(model.models.count) models")
+      let bFiles = (try? fm.contentsOfDirectory(atPath: b)) ?? []
+      check(
+        !bFiles.isEmpty && model.settingContext.files.contains(bFiles[0]),
+        "B's files are offered (\(bFiles.first ?? "none"))")
+      check(
+        library.loras.contains { $0.file == "folders_a_lora_f16.ckpt" }, "A's LoRA is offered")
+      let bLoRAs = library.loras.filter { $0.registry.path == b }.count
+      check(bLoRAs > 0, "B's LoRAs are offered: \(bLoRAs)")
+      check(
+        ModelZoo.isModelDownloaded(model.models[0].file, memorizedBy: []),
+        "the engine finds \(model.models[0].file) in B")
+      struct Entry: Decodable { var file: String }
+      if let data = fm.contents(atPath: b + "/custom.json"),
+         let custom = try? JSONDecoder().decode([Entry].self, from: data).first
+      {
+        check(
+          ModelZoo.specificationForModel(custom.file) != nil,
+          "the engine knows B's imported model \(custom.file)")
+      }
+
+      // C appears, as when a drive is connected.
+      let staging = c + "-staging"
+      writeLoRAs(
+        [("Shared from C", "folders_shared_lora_f16.ckpt"), ("Only C", "folders_c_lora_f16.ckpt")],
+        in: staging)
+      try? fm.moveItem(atPath: staging, toPath: c)
+      let appeared = await waitFor(15) { model.availableModelsDirectories == [a, b, c] }
+      check(appeared, "C is picked up once it appears")
+      check(
+        await waitFor(5) { library.loras.contains { $0.file == "folders_c_lora_f16.ckpt" } },
+        "C's LoRA is offered")
+      let shared = library.loras.filter { $0.file == "folders_shared_lora_f16.ckpt" }
+      check(
+        shared.count == 1 && shared.first?.name == "Shared from A",
+        "a LoRA in A and C is listed once, from A: \(shared.map(\.name))")
+      check(
+        LoRAZoo.specificationForModel("folders_c_lora_f16.ckpt") != nil,
+        "the engine knows C's LoRA")
+
+      // C goes away, as when the drive is disconnected.
+      try? fm.removeItem(atPath: c)
+      check(
+        await waitFor(15) { model.availableModelsDirectories == [a, b] },
+        "C is dropped once it's gone")
+      check(
+        await waitFor(5) { !library.loras.contains { $0.file == "folders_c_lora_f16.ckpt" } },
+        "C's LoRA is no longer offered")
+      log("DONE model folders check")
+      if CommandLine.arguments.contains("--quit") { exit(0) }
+    }
+  }
+}
 #else
 /// Scripted runs are Mac only.
 enum Automation {
   nonisolated static var isRequested: Bool { false }
 }
+
 #endif

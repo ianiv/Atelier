@@ -95,24 +95,25 @@ actor GenerationEngine {
     }
   }
 
-  /// Points MGK's default environment at `directory`, loads its custom.json, and drops any
-  /// cached pipeline.
-  func setModelsDirectory(_ directory: String) async {
-    let url = URL(fileURLWithPath: directory, isDirectory: true)
-    MediaGenerationEnvironment.default.externalUrls = [url]
+  /// Points MGK's default environment at the models folders (a file is looked up in each, in
+  /// order, and downloads go to the first), loads their custom.json and custom_lora.json, and
+  /// drops any cached pipeline.
+  func setModelsDirectories(_ directories: [String]) async {
+    let urls = directories.map { URL(fileURLWithPath: $0, isDirectory: true) }
+    MediaGenerationEnvironment.default.externalUrls = urls
     pipeline = nil
-    await ModelLibrary.loadCustomModels(in: url)
+    await ModelLibrary.loadCustomSpecifications(in: urls)
   }
 
-  /// Points MGK at `directory` unless it already is, keeping the cached pipeline.
-  func useModelsDirectory(_ directory: String) async {
-    let url = URL(fileURLWithPath: directory, isDirectory: true)
-    if MediaGenerationEnvironment.default.externalUrls != [url] {
-      await setModelsDirectory(directory)
+  /// Points MGK at the models folders unless it already is, keeping the cached pipeline.
+  func useModelsDirectories(_ directories: [String]) async {
+    let urls = directories.map { URL(fileURLWithPath: $0, isDirectory: true) }
+    if MediaGenerationEnvironment.default.externalUrls != urls {
+      await setModelsDirectories(directories)
     }
   }
 
-  /// Models from the catalog (built-in plus custom.json) whose files are in the models directory.
+  /// Models from the catalog (built-in plus custom.json) whose files are in the models folders.
   /// Includes the community catalog (fetched once, then cached): the offline list alone misses
   /// downloaded community models such as Krea 2 and Ideogram 4.
   func downloadedModels() async -> [MediaGenerationResolvedModel] {

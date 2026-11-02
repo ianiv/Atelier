@@ -44,7 +44,15 @@ final class CreateModel {
       }
     }
   }
+  /// Where downloads and imports go, and the first folder a model file is looked up in.
   var modelsDirectory = AppSettings.modelsDirectory
+  /// More folders models and LoRAs are read from, in lookup order after `modelsDirectory`.
+  var additionalModelsDirectories = AppSettings.additionalModelsDirectories
+  /// The models folders the engine reads now: the ones above that can be reached, in lookup
+  /// order. A folder on a disconnected drive is left out until it's back.
+  private(set) var availableModelsDirectories: [String] = []
+  /// Called after the models folders are reread (ModelLibrary rereads its LoRAs).
+  @ObservationIgnored var onModelsReloaded: (() -> Void)?
   #if os(iOS)
     /// The queue was paused for going to the background, not by the user.
     @ObservationIgnored private var pausedForBackground = false
@@ -515,6 +523,17 @@ final class CreateModel {
       await reloadModels()
       await restoreQueue()
     }
+    AppLifecycle.onBecomeActive { [weak self] in
+      Task { await self?.checkModelsDirectories() }
+    }
+    // Notices a drive with a models folder being connected or disconnected.
+    Task { [weak self] in
+      while !Task.isCancelled {
+        try? await Task.sleep(for: .seconds(5))
+        guard let self else { return }
+        await checkModelsDirectories()
+      }
+    }
   }
 
   /// Keeps the running and waiting jobs for the next launch (not for scripted runs).
@@ -653,7 +672,7 @@ final class CreateModel {
       FolderBookmarks.forget(modelsDirectory)
       AppSettings.useDefaultModelsDirectory()
       modelsDirectory = AppSettings.modelsDirectory
-      FolderBookmarks.keepOpen(modelsDirectory)
+      FolderBookmarks.keepOpen(allModelsDirectories)
       Task { await reloadModels() }
     }
   #endif
@@ -661,13 +680,47 @@ final class CreateModel {
   func setModelsDirectory(_ directory: String) {
     AppSettings.modelsDirectory = directory
     modelsDirectory = directory
-    FolderBookmarks.keepOpen(directory)
+    FolderBookmarks.keepOpen(allModelsDirectories)
     Task { await reloadModels() }
   }
 
+  func setAdditionalModelsDirectories(_ directories: [String]) {
+    AppSettings.additionalModelsDirectories = directories
+    additionalModelsDirectories = directories
+    FolderBookmarks.keepOpen(allModelsDirectories)
+    Task { await reloadModels() }
+  }
+
+  private var allModelsDirectories: [String] { [modelsDirectory] + additionalModelsDirectories }
+
+  /// The models folders that can be reached now. Checked off the main thread: a folder on a
+  /// drive that's going away can take a while to answer.
+  private func reachableModelsDirectories() async -> [String] {
+    let primary = modelsDirectory
+    let additional = additionalModelsDirectories
+    return await Task.detached {
+      AppSettings.availableModelsDirectories(primary: primary, additional: additional)
+    }.value
+  }
+
+  /// Rereads the models when a models folder has come or gone since the last read.
+  private var isReloadingModels = false
+  private func checkModelsDirectories() async {
+    guard !isReloadingModels else { return }
+    let reachable = await reachableModelsDirectories()
+    if reachable != availableModelsDirectories, !isReloadingModels {
+      await reloadModels()
+    }
+  }
+
   func reloadModels() async {
-    await engine.setModelsDirectory(modelsDirectory)
+    isReloadingModels = true
+    defer { isReloadingModels = false }
+    let directories = await reachableModelsDirectories()
+    availableModelsDirectories = directories
+    await engine.setModelsDirectories(directories)
     await loadModelList()
+    onModelsReloaded?()
     if let restored, let model = restored.model, models.contains(where: { $0.file == model }) {
       self.restored = nil
       pendingSettings = restored.settings
@@ -675,12 +728,25 @@ final class CreateModel {
       return
     }
     restored = nil
+    // The model picked before its folder's drive went away comes back with the drive, unless
+    // another model was picked meanwhile.
+    if let lost = modelLostWithFolder, models.contains(where: { $0.file == lost.model }) {
+      modelLostWithFolder = nil
+      if selectedModel == lost.replacement {
+        selectedModel = lost.model
+        return
+      }
+    }
     if let selectedModel, models.contains(where: { $0.file == selectedModel }) {
       loadDefaults(for: selectedModel)
     } else {
+      if let selectedModel { modelLostWithFolder = (selectedModel, models.first?.file) }
       selectedModel = models.first?.file
     }
   }
+
+  /// The selected model when it went missing on a reload, and the one picked in its place.
+  @ObservationIgnored private var modelLostWithFolder: (model: String, replacement: String?)?
 
   /// Rereads the downloaded models after a download or delete, keeping the current settings
   /// unless the selected model is gone.
@@ -693,9 +759,10 @@ final class CreateModel {
 
   private func loadModelList() async {
     let models = await engine.downloadedModels()
-    let directory = modelsDirectory
+    let directories = availableModelsDirectories
     let modelFiles = await Task.detached {
-      ((try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? []).sorted()
+      Set(directories.flatMap { (try? FileManager.default.contentsOfDirectory(atPath: $0)) ?? [] })
+        .sorted()
     }.value
     // Assigned after the last await, so callers pick a selection before the model picker redraws.
     self.models = models

@@ -5,8 +5,9 @@ import ModelOp
 import ModelZoo
 import Observation
 
-/// Models and LoRAs in the models directory: the download catalog, downloads, model and LoRA
-/// imports, and deletes.
+/// Models and LoRAs in the models folders: the download catalog, downloads, model and LoRA
+/// imports, and deletes. Files are looked up in each available models folder in order (the first
+/// one with a file wins); downloads and imports go to the first.
 ///
 /// `ModelZoo`, `ModelOp` and `Diffusion` aren't products of the engine package, but they're built
 /// as dependencies of `_MediaGenerationKit` and import fine from the pinned revision. They're
@@ -23,6 +24,8 @@ final class ModelLibrary {
     /// `ModelVersion` raw value, e.g. "moss_image".
     var version: String
     var size: Int64?
+    /// The models folder whose custom_lora.json lists it.
+    var registry: URL
 
     var id: String { file }
     var isDownloaded: Bool { size != nil }
@@ -104,10 +107,18 @@ final class ModelLibrary {
 
   init(create: CreateModel) {
     self.create = create
+    create.onModelsReloaded = { [weak self] in self?.reloadLoRAs() }
   }
 
+  /// Where downloads and imports go: the first models folder that can be reached (the engine
+  /// writes there too), else the models directory setting.
   private var directory: URL {
-    URL(fileURLWithPath: create.modelsDirectory, isDirectory: true)
+    directories.first ?? URL(fileURLWithPath: create.modelsDirectory, isDirectory: true)
+  }
+
+  /// The models folders that can be reached, in lookup order.
+  private var directories: [URL] {
+    create.availableModelsDirectories.map { URL(fileURLWithPath: $0, isDirectory: true) }
   }
 
   // MARK: - Models
@@ -117,14 +128,14 @@ final class ModelLibrary {
   func refresh() async {
     isLoadingCatalog = true
     defer { isLoadingCatalog = false }
-    // The engine points MGK at the models directory; wait until it has.
-    await create.engine.useModelsDirectory(create.modelsDirectory)
+    // The engine points MGK at the models folders; wait until it has.
+    await create.engine.useModelsDirectories(create.availableModelsDirectories)
     let models = await MediaGenerationEnvironment.default.downloadableModels(
       includeDownloaded: true, offline: false)
     catalog = models.sorted {
       $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
     }
-    customModels = Set(Self.readCustomModels(in: directory))
+    customModels = Set(directories.flatMap { Self.readCustomModels(in: $0) })
     reloadLoRAs()
     await measure()
   }
@@ -132,11 +143,12 @@ final class ModelLibrary {
   /// Disk sizes of downloaded models and LoRAs, and free space on the volume.
   private func measure() async {
     let directory = directory
+    let directories = directories
     let files = catalog.filter(\.isDownloaded).map(\.file)
     let (sizes, free) = await Task.detached {
       var sizes: [String: Int64] = [:]
       for file in files {
-        sizes[file] = Self.size(of: file, in: directory)
+        sizes[file] = Self.size(of: file, in: directories)
       }
       let free = try? directory.resourceValues(
         forKeys: [.volumeAvailableCapacityForImportantUsageKey]
@@ -205,7 +217,7 @@ final class ModelLibrary {
     let companions = isCustom ? Self.importedCompanions(of: model.file) : []
     do {
       for file in [model.file] + companions {
-        for url in Self.files(of: file, in: directory) {
+        for url in Self.files(of: file, in: directories) {
           try FileManager.default.trashItem(at: url, resultingItemURL: nil)
         }
       }
@@ -217,7 +229,7 @@ final class ModelLibrary {
   }
 
   func reveal(_ file: String) {
-    let urls = Self.files(of: file, in: directory)
+    let urls = Self.files(of: file, in: directories)
     Finder.reveal(urls.isEmpty ? [directory] : urls)
   }
 
@@ -327,7 +339,7 @@ final class ModelLibrary {
   /// Imports one checkpoint and returns the model file it registered.
   private func importModel(_ item: ModelImport) async throws -> String {
     let stem = item.source.deletingPathExtension().lastPathComponent
-    let modelName = Self.availableModelName(for: stem, in: directory)
+    let modelName = Self.availableModelName(for: stem, in: directories)
     let trimmedName = item.name.trimmingCharacters(in: .whitespacesAndNewlines)
     let displayName = trimmedName.isEmpty ? stem : trimmedName
     let source = item.source
@@ -413,7 +425,8 @@ final class ModelLibrary {
     else { return }
     errorMessage = nil
     let output = Self.eightBitFile(for: model.file, format)
-    let source = directory.appendingPathComponent(model.file).path
+    let source = (Self.files(of: model.file, in: directories).first
+      ?? directory.appendingPathComponent(model.file)).path
     let destination = directory.appendingPathComponent(output).path
     quantizing[output] = 0
     let progress: @Sendable (Float) -> Void = { [weak self] value in
@@ -469,15 +482,14 @@ final class ModelLibrary {
     }
   }
 
-  /// `<cleaned stem>`, numbered if `<stem>_f16.ckpt` is taken. ModelImporter adds `_f16.ckpt`
-  /// (and `_vae_f16.ckpt` and the like for companion files).
-  private static func availableModelName(for stem: String, in directory: URL) -> String {
+  /// `<cleaned stem>`, numbered if `<stem>_f16.ckpt` is taken in any models folder (the
+  /// importer would write over a file the engine finds in another folder). ModelImporter adds
+  /// `_f16.ckpt` (and `_vae_f16.ckpt` and the like for companion files).
+  private static func availableModelName(for stem: String, in directories: [URL]) -> String {
     let base = Importer.cleanup(filename: stem)
     var candidate = base
     var counter = 2
-    while FileManager.default.fileExists(
-      atPath: directory.appendingPathComponent(candidate + "_f16.ckpt").path)
-    {
+    while !files(of: candidate + "_f16.ckpt", in: directories).isEmpty {
       candidate = "\(base)_\(counter)"
       counter += 1
     }
@@ -501,42 +513,53 @@ final class ModelLibrary {
     return suffixes.map { stem + $0 }.filter(named.contains)
   }
 
-  /// Removes `file`'s custom.json entry, keeping every other entry as written, and drops it from
-  /// the running engine's model list.
+  /// Removes `file`'s custom.json entries in every models folder, keeping every other entry as
+  /// written, and drops it from the running engine's model list.
   private func unregisterModel(_ file: String) throws {
-    backUpModelRegistryOnce()
-    let url = directory.appendingPathComponent("custom.json")
-    if let data = try? Data(contentsOf: url),
-       let entries = try JSONSerialization.jsonObject(with: data) as? [[String: Any]]
-    {
-      let remaining = entries.filter { $0["file"] as? String != file }
-      try JSONSerialization.data(
-        withJSONObject: remaining, options: [.prettyPrinted, .withoutEscapingSlashes]
-      ).write(to: url, options: .atomic)
+    for directory in directories where Self.readCustomModels(in: directory).contains(file) {
+      backUpModelRegistryOnce(in: directory)
+      let url = directory.appendingPathComponent("custom.json")
+      if let data = try? Data(contentsOf: url),
+         let entries = try JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+      {
+        let remaining = entries.filter { $0["file"] as? String != file }
+        try JSONSerialization.data(
+          withJSONObject: remaining, options: [.prettyPrinted, .withoutEscapingSlashes]
+        ).write(to: url, options: .atomic)
+      }
     }
     ModelZoo.availableSpecifications.removeAll { $0.file == file }
+    ModelZoo.fallbackMapping[file] = nil
   }
 
-  /// Copies custom.json aside before the app first changes it in a session.
-  private var backedUpModels = false
-  private func backUpModelRegistryOnce() {
-    guard !backedUpModels else { return }
-    backedUpModels = true
+  /// Copies a folder's custom.json aside before the app first changes it in a session.
+  private var backedUpModelFolders: Set<URL> = []
+  private func backUpModelRegistryOnce(in directory: URL? = nil) {
+    let directory = directory ?? self.directory
+    guard backedUpModelFolders.insert(directory).inserted else { return }
     Self.backUp("custom.json", in: directory)
   }
 
   // MARK: - LoRAs
 
-  /// Rereads custom_lora.json (it can also change outside the app).
+  /// Rereads every models folder's custom_lora.json (they can also change outside the app). A
+  /// LoRA listed in more than one folder comes from the first.
   func reloadLoRAs() {
-    let directory = directory
-    loras = Self.readLoRASpecifications(in: directory).map { specification in
-      LoRA(
-        name: specification.name, file: specification.file, prefix: specification.prefix,
-        version: specification.version.rawValue,
-        size: Self.size(of: specification.file, in: directory))
+    let directories = directories
+    var seen = Set<String>()
+    var loras: [LoRA] = []
+    for directory in directories {
+      for specification in Self.readLoRASpecifications(in: directory)
+        where seen.insert(specification.file).inserted
+      {
+        loras.append(
+          LoRA(
+            name: specification.name, file: specification.file, prefix: specification.prefix,
+            version: specification.version.rawValue,
+            size: Self.size(of: specification.file, in: directories), registry: directory))
+      }
     }
-    .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    self.loras = loras.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
   }
 
   /// Model families (readable names, as MGK reports a model's `version`) whose LoRAs the engine
@@ -629,7 +652,7 @@ final class ModelLibrary {
   private func importLoRA(_ item: LoRAImport, version: ModelVersion?) async throws {
     let directory = directory
     let stem = item.source.deletingPathExtension().lastPathComponent
-    let file = Self.availableLoRAFileName(for: stem, in: directory)
+    let file = Self.availableLoRAFileName(for: stem, in: directories)
     let source = item.source
     let id = item.id
     let progress: @Sendable (Float) -> Void = { [weak self] value in
@@ -656,43 +679,54 @@ final class ModelLibrary {
     let name =
       trimmedName.isEmpty
         ? "\(stem) (\(ModelZoo.humanReadableNameForVersion(detected)))" : trimmedName
-    register(
+    try register(
       LoRAZoo.Specification(
         name: name, file: file, prefix: item.prefix, version: detected,
-        isLoHa: isLoHa))
+        isLoHa: isLoHa), in: directory)
   }
 
   /// Renames a LoRA or changes its trigger words; other fields in custom_lora.json are kept.
   func update(_ lora: LoRA, name: String, prefix: String) {
     guard
-      var specification = Self.readLoRASpecifications(in: directory).first(where: {
+      var specification = Self.readLoRASpecifications(in: lora.registry).first(where: {
         $0.file == lora.file
       })
     else { return }
     specification.name = name
     specification.prefix = prefix
-    register(specification)
+    do {
+      try register(specification, in: lora.registry)
+    } catch {
+      errorMessage = "Couldn't rename \(lora.name): \(error.localizedDescription)"
+    }
     reloadLoRAs()
   }
 
-  /// Writes `specification` to custom_lora.json and the running engine's LoRA table.
-  private func register(_ specification: LoRAZoo.Specification) {
-    backUpLoRARegistryOnce()
-    LoRAZoo.appendCustomSpecification(specification)
-    LoRAZoo.sortCustomSpecifications()
+  /// Writes `specification` to `directory`'s custom_lora.json (sorted by name, as LoRAZoo keeps
+  /// it) and reloads the running engine's LoRA table. Written here rather than by LoRAZoo, which
+  /// writes to the first folder that has a custom_lora.json, not necessarily this one.
+  private func register(_ specification: LoRAZoo.Specification, in directory: URL) throws {
+    backUpLoRARegistryOnce(in: directory)
+    let specifications =
+      (Self.readLoRASpecifications(in: directory).filter { $0.file != specification.file }
+        + [specification])
+      .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    try Self.writeLoRASpecifications(specifications, in: directory)
+    Self.loadCustomLoRAs(in: directories)
   }
 
   /// Moves the LoRA file to the Trash and removes its custom_lora.json entry.
   func delete(_ lora: LoRA) {
     errorMessage = nil
-    let url = directory.appendingPathComponent(lora.file)
     do {
-      if FileManager.default.fileExists(atPath: url.path) {
+      for url in Self.files(of: lora.file, in: directories) {
         try FileManager.default.trashItem(at: url, resultingItemURL: nil)
       }
-      backUpLoRARegistryOnce()
-      let remaining = Self.readLoRASpecifications(in: directory).filter { $0.file != lora.file }
-      try Self.writeLoRASpecifications(remaining, in: directory)
+      backUpLoRARegistryOnce(in: lora.registry)
+      let remaining = Self.readLoRASpecifications(in: lora.registry).filter {
+        $0.file != lora.file
+      }
+      try Self.writeLoRASpecifications(remaining, in: lora.registry)
       // The engine's in-memory table keeps the entry, but with the file gone it's skipped.
     } catch {
       errorMessage = "Couldn't delete \(lora.name): \(error.localizedDescription)"
@@ -700,11 +734,10 @@ final class ModelLibrary {
     reloadLoRAs()
   }
 
-  /// Copies custom_lora.json aside before the app first changes it in a session.
-  private var backedUp = false
-  private func backUpLoRARegistryOnce() {
-    guard !backedUp else { return }
-    backedUp = true
+  /// Copies a folder's custom_lora.json aside before the app first changes it in a session.
+  private var backedUpLoRAFolders: Set<URL> = []
+  private func backUpLoRARegistryOnce(in directory: URL) {
+    guard backedUpLoRAFolders.insert(directory).inserted else { return }
     Self.backUp("custom_lora.json", in: directory)
   }
 
@@ -719,13 +752,20 @@ final class ModelLibrary {
 
   // MARK: - Files
 
-  private nonisolated static func files(of file: String, in directory: URL) -> [URL] {
-    [file, file + "-tensordata"].map { directory.appendingPathComponent($0) }
-      .filter { FileManager.default.fileExists(atPath: $0.path) }
+  /// `file` and its `-tensordata`, from the first models folder that has the file (the one the
+  /// engine reads).
+  private nonisolated static func files(of file: String, in directories: [URL]) -> [URL] {
+    for directory in directories
+      where FileManager.default.fileExists(atPath: directory.appendingPathComponent(file).path)
+    {
+      return [file, file + "-tensordata"].map { directory.appendingPathComponent($0) }
+        .filter { FileManager.default.fileExists(atPath: $0.path) }
+    }
+    return []
   }
 
-  private nonisolated static func size(of file: String, in directory: URL) -> Int64? {
-    let urls = files(of: file, in: directory)
+  private nonisolated static func size(of file: String, in directories: [URL]) -> Int64? {
+    let urls = files(of: file, in: directories)
     guard !urls.isEmpty else { return nil }
     return urls.reduce(Int64(0)) { total, url in
       let size = (try? url.resourceValues(forKeys: [.totalFileAllocatedSizeKey]))?
@@ -735,12 +775,12 @@ final class ModelLibrary {
   }
 
   /// `<stem>_lora_f16.ckpt`, cleaned up the way Draw Things names files, with a numeric suffix if
-  /// that file already exists.
-  private static func availableLoRAFileName(for stem: String, in directory: URL) -> String {
+  /// that file already exists in any models folder.
+  private static func availableLoRAFileName(for stem: String, in directories: [URL]) -> String {
     let base = Importer.cleanup(filename: stem)
     var candidate = base + "_lora_f16.ckpt"
     var counter = 2
-    while FileManager.default.fileExists(atPath: directory.appendingPathComponent(candidate).path) {
+    while !files(of: candidate, in: directories).isEmpty {
       candidate = "\(base)_\(counter)_lora_f16.ckpt"
       counter += 1
     }
@@ -755,28 +795,53 @@ final class ModelLibrary {
     return entries.compactMap(\.value?.file)
   }
 
-  /// Rebuilds the engine's model list from the built-in models and `directory`'s custom.json, as
-  /// ModelZoo does at first use. ModelZoo reads custom.json only once, from wherever it pointed
-  /// then, so models imported in Draw Things stayed missing after the models folder changed.
-  static func loadCustomModels(in directory: URL) {
-    let decoder = JSONDecoder()
-    decoder.keyDecodingStrategy = .convertFromSnakeCase
-    let custom =
-      (try? Data(contentsOf: directory.appendingPathComponent("custom.json")))
-        .flatMap { try? decoder.decode([Lenient<ModelZoo.Specification>].self, from: $0) }?
-        .compactMap(\.value) ?? []
+  /// Rebuilds the engine's model and LoRA lists from the built-in ones and every models folder's
+  /// custom.json and custom_lora.json, as ModelZoo and LoRAZoo do at first use. They read those
+  /// only once, from the one folder they pointed at then, so models imported in Draw Things
+  /// stayed missing after the models folder changed, and other folders were never read.
+  static func loadCustomSpecifications(in directories: [URL]) {
+    let custom = firstOfEachFile(directories.flatMap { directory in
+      decodeRegistry(ModelZoo.Specification.self, "custom.json", in: directory)
+    }, file: \.file)
     let files = Set(custom.map(\.file))
     ModelZoo.availableSpecifications =
       ModelZoo.builtinSpecifications.filter { !files.contains($0.file) } + custom
+    // ModelZoo looks a model up in a table it fills once; one it doesn't have is looked up here.
+    ModelZoo.fallbackMapping = Dictionary(custom.map { ($0.file, $0) }) { first, _ in first }
+    loadCustomLoRAs(in: directories)
+  }
+
+  /// The LoRA half of `loadCustomSpecifications(in:)`.
+  static func loadCustomLoRAs(in directories: [URL]) {
+    let custom = firstOfEachFile(
+      directories.flatMap { readLoRASpecifications(in: $0) }, file: \.file)
+    let files = Set(custom.map(\.file))
+    LoRAZoo.availableSpecifications =
+      LoRAZoo.builtinSpecifications.filter { !files.contains($0.file) } + custom
+    LoRAZoo.fallbackMapping = Dictionary(custom.map { ($0.file, $0) }) { first, _ in first }
+  }
+
+  /// Keeps the first entry for each file name.
+  private static func firstOfEachFile<Value>(_ values: [Value], file: (Value) -> String)
+    -> [Value]
+  {
+    var seen = Set<String>()
+    return values.filter { seen.insert(file($0)).inserted }
+  }
+
+  private static func decodeRegistry<Value: Decodable>(
+    _: Value.Type, _ name: String, in directory: URL
+  ) -> [Value] {
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    guard let data = try? Data(contentsOf: directory.appendingPathComponent(name)),
+          let entries = try? decoder.decode([Lenient<Value>].self, from: data)
+    else { return [] }
+    return entries.compactMap(\.value)
   }
 
   private static func readLoRASpecifications(in directory: URL) -> [LoRAZoo.Specification] {
-    let decoder = JSONDecoder()
-    decoder.keyDecodingStrategy = .convertFromSnakeCase
-    guard let data = try? Data(contentsOf: directory.appendingPathComponent("custom_lora.json")),
-          let entries = try? decoder.decode([Lenient<LoRAZoo.Specification>].self, from: data)
-    else { return [] }
-    return entries.compactMap(\.value)
+    decodeRegistry(LoRAZoo.Specification.self, "custom_lora.json", in: directory)
   }
 
   /// Same encoding LoRAZoo uses for custom_lora.json.

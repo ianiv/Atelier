@@ -1,6 +1,6 @@
 # Models and LoRAs
 
-Atelier keeps models and LoRAs in your models folder (see [Settings](settings.md)), in the same layout as Draw Things, so the two apps can share one folder.
+Atelier keeps models and LoRAs in your models folder (see [Settings](settings.md)), in the same layout as Draw Things, so the two apps can share one folder. It can also read models and LoRAs from [additional folders](settings.md#additional-model-folders), such as an external drive.
 
 ## Models
 
