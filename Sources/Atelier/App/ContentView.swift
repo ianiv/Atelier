@@ -29,6 +29,7 @@ struct ContentView: View {
     case videoEditor = "Video Editor"
     case models = "Models"
     case loras = "LoRAs"
+    case styles = "Styles"
 
     var id: String { rawValue }
 
@@ -40,6 +41,7 @@ struct ContentView: View {
       case .videoEditor: "film.stack"
       case .models: "shippingbox"
       case .loras: "slider.horizontal.3"
+      case .styles: "paintpalette"
       }
     }
   }
@@ -103,6 +105,8 @@ struct ContentView: View {
         ModelsView()
       case .loras:
         LoRAsView()
+      case .styles:
+        StylesView()
       }
     }
     .confirmationDialog(

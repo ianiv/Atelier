@@ -2,13 +2,14 @@
 
 1. [Getting started](getting-started.md): what you need, building and installing the app, pointing it at your models, and making your first image.
 2. [Creating images](creating-images.md): the Create screen, the prompt, size and seed, the settings inspector, presets, image to image and the moodboard.
-3. [Making videos](video.md): video models, length, starting from an image, audio, watching and reusing videos, and upscaling them.
-4. [Putting videos together](video-editor.md): the Video Editor, trimming, splitting and crossfading clips, continuing from any frame, and exporting one longer video.
-5. [The queue](queue.md): queuing images while one runs, making several at once, pausing, reordering and cancelling, and upscaled video exports.
-6. [History and projects](history.md): browsing what you made, reusing settings, exporting and deleting, and switching projects.
-7. [Models and LoRAs](models-and-loras.md): downloading models, importing checkpoints and LoRAs, and making 8-bit copies of MOSS models.
-8. [Settings](settings.md): the models folder, the output folder and the performance options.
-9. [Atelier for agents (MCP)](../MCP.md): letting Claude Code and other agents generate images and videos with your models, and work on the Create screen with you (Mac only).
+3. [Styles](styles.md): prompt templates your prompt is written into, the Styles screen, and the style file format for importing and sharing them.
+4. [Making videos](video.md): video models, length, starting from an image, audio, watching and reusing videos, and upscaling them.
+5. [Putting videos together](video-editor.md): the Video Editor, trimming, splitting and crossfading clips, continuing from any frame, and exporting one longer video.
+6. [The queue](queue.md): queuing images while one runs, making several at once, pausing, reordering and cancelling, and upscaled video exports.
+7. [History and projects](history.md): browsing what you made, reusing settings, exporting and deleting, and switching projects.
+8. [Models and LoRAs](models-and-loras.md): downloading models, importing checkpoints and LoRAs, and making 8-bit copies of MOSS models.
+9. [Settings](settings.md): the models folder, the output folder and the performance options.
+10. [Atelier for agents (MCP)](../MCP.md): letting Claude Code and other agents generate images and videos with your models, and work on the Create screen with you (Mac only).
 
 The iPad version works the same way, with a few differences noted under "On iPad" in each page; see [Atelier on iPad](getting-started.md#atelier-on-ipad) to build and install it.
 

@@ -21,6 +21,8 @@ import SwiftUI
 /// in the current project) through "Use settings" (or "Rerun with new seed"), generates, and
 /// compares the new image's pixels with the original.
 ///
+/// `--styles-check` reads a style file (AutomationStyles.swift).
+///
 /// `--project-check` exercises the project format on a scratch project, and `--edit-input-check`
 /// Use Settings on Edit steps (AutomationProject.swift). `--queue-check` runs the queue
 /// (AutomationQueue.swift).
@@ -32,7 +34,7 @@ enum Automation {
       "--show", "--resize-bench", "--inspector-check", "--library-check", "--project-check",
       "--reuse", "--generate", "--ux-check", "--edit-input-check", "--queue-check",
       "--timeline-check", "--upscale-check", "--timeline-export-check", "--flashvsr-check",
-      "--model-folders-check",
+      "--model-folders-check", "--styles-check",
     ]
     return CommandLine.arguments.contains { flags.contains($0) }
   }
@@ -82,6 +84,10 @@ enum Automation {
     }
     if args.contains("--flashvsr-check") {
       flashVSRCheck()
+      return
+    }
+    if args.contains("--styles-check") {
+      stylesCheck(model, navigation: navigation, layouts: layouts, presets: presets)
       return
     }
     if args.contains("--model-folders-check") {
@@ -1152,6 +1158,7 @@ enum Automation {
         .environment(navigation)
         .environment(layouts)
         .environment(presets)
+        .environment(model.styles ?? StyleStore(persists: false))
         .environment(library ?? ModelLibrary(create: model))
         .environment(FileDialogs())
         .frame(width: 1280, height: 860)
@@ -1159,7 +1166,7 @@ enum Automation {
   }
 
   /// Renders the main window into a PNG; needs no screen-recording permission.
-  private static func snapshot(to url: URL) {
+  static func snapshot(to url: URL) {
     AutomationWindows.snapshot(to: url)
   }
 }

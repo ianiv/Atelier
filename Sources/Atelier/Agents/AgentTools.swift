@@ -116,7 +116,7 @@ final class AgentTools {
       "name": "get_create_screen",
       "title": "Get Create screen",
       "description":
-        "Returns what's on Atelier's Create screen right now: the selected model, prompt, negative prompt, seed and whether it's random, the image count, every inspector setting as Draw Things configuration JSON, the settings that differ from the model's defaults, and how many reference images there are. The user may have changed any of it since your last call.",
+        "Returns what's on Atelier's Create screen right now: the selected model, prompt, negative prompt, the selected style (Generate writes the prompt into its template; styled_prompt is the result), seed and whether it's random, the image count, every inspector setting as Draw Things configuration JSON, the settings that differ from the model's defaults, and how many reference images there are. The user may have changed any of it since your last call.",
       "inputSchema": ["type": "object", "properties": [String: Any]()],
       "annotations": ["readOnlyHint": true],
     ],
@@ -341,7 +341,8 @@ final class AgentTools {
   ) async throws -> [String: Any] {
     // Without a prompt, use_app_settings generates the Create screen as it is.
     let fromScreen = arguments["use_app_settings"] as? Bool == true && arguments["prompt"] == nil
-    let prompt = fromScreen ? create.prompt : arguments["prompt"] as? String ?? ""
+    // The screen's prompt as Generate sends it: written into the selected style.
+    let prompt = fromScreen ? create.styledPrompts.prompt : arguments["prompt"] as? String ?? ""
     guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
       throw ToolError(fromScreen ? "The Create screen's prompt is empty." : "`prompt` is required.")
     }
@@ -405,7 +406,7 @@ final class AgentTools {
       seed = UInt32.random(in: 0...UInt32.max)
     }
 
-    let negativePrompt = arguments["negative_prompt"] as? String ?? (fromScreen ? create.negativePrompt : "")
+    let negativePrompt = arguments["negative_prompt"] as? String ?? (fromScreen ? create.styledPrompts.negativePrompt : "")
     var request = GenerationEngine.Request(
       model: model, prompt: prompt, negativePrompt: negativePrompt,
       seed: seed, configuration: configuration)
@@ -641,6 +642,8 @@ final class AgentTools {
       "loading_model": create.isLoadingModel,
       "prompt": create.prompt,
       "negative_prompt": create.negativePrompt,
+      "style": create.style?.name ?? NSNull(),
+      "styled_prompt": create.style == nil ? NSNull() : create.styledPrompts.prompt,
       "seed": Int(create.seed),
       "random_seed": !create.seedLocked,
       "count": create.count,

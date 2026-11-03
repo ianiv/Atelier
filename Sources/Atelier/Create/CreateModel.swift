@@ -70,6 +70,21 @@ final class CreateModel {
   var selectedLayoutItem: UUID?
   @ObservationIgnored private var writingLayout = false
   var negativePrompt = ""
+  /// The user's styles (set by the app).
+  var styles: StyleStore?
+  /// The style Generate writes the prompt into; nil for the prompt as typed. Remembered across
+  /// launches, except for what scripted runs set.
+  var styleID: UUID? = UserDefaults.standard.string(forKey: "style").flatMap(UUID.init(uuidString:)) {
+    didSet {
+      if !Automation.isRequested { UserDefaults.standard.set(styleID?.uuidString, forKey: "style") }
+    }
+  }
+  /// What a style's `{{SETTING}}` slot takes.
+  var styleSetting = UserDefaults.standard.string(forKey: "styleSetting") ?? "" {
+    didSet {
+      if !Automation.isRequested { UserDefaults.standard.set(styleSetting, forKey: "styleSetting") }
+    }
+  }
   var seed = UInt32.random(in: 0...UInt32.max)
   /// Off means "always random": every Generate rolls a new seed. Only the Random checkbox changes
   /// it; reusing an image, presets and pasted settings bring back a seed but leave this alone.
@@ -280,6 +295,32 @@ final class CreateModel {
       && !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
 
+  var style: Style? { styles?.style(id: styleID) }
+
+  /// The prompt and negative prompt a run sends: written into the selected style, if any.
+  var styledPrompts: (prompt: String, negativePrompt: String) {
+    guard let style else { return (prompt, negativePrompt) }
+    return style.apply(prompt: prompt, negativePrompt: negativePrompt, setting: styleSetting)
+  }
+
+  /// Puts a saved image's prompts on the Create screen. A prompt one of the styles wrote comes
+  /// back as its subject with that style selected; any other clears the style, so the prompt
+  /// isn't styled twice.
+  private func restorePrompts(_ savedPrompt: String, _ savedNegative: String) {
+    for style in styles?.styles ?? [] {
+      if let matched = style.match(prompt: savedPrompt, negativePrompt: savedNegative) {
+        prompt = matched.prompt
+        negativePrompt = matched.negativePrompt
+        styleID = style.id
+        if style.takesSetting { styleSetting = matched.setting }
+        return
+      }
+    }
+    prompt = savedPrompt
+    negativePrompt = savedNegative
+    styleID = nil
+  }
+
   var selectedModelInfo: MediaGenerationResolvedModel? {
     models.first { $0.file == selectedModel }
   }
@@ -450,8 +491,7 @@ final class CreateModel {
   /// plus the prompts. The Random checkbox stays as it is.
   func loadCanvasImageSettings(undoManager: UndoManager?) {
     guard let loaded = canvasImageSettings else { return }
-    prompt = loaded.prompt
-    negativePrompt = loaded.negativePrompt
+    restorePrompts(loaded.prompt, loaded.negativePrompt)
     errorMessage = nil
     statusNote = nil
     paste(loaded.pasted, undoManager: undoManager)
@@ -596,8 +636,7 @@ final class CreateModel {
   ) {
     guard canUse(item) else { return }
     let sidecar = item.sidecar
-    prompt = sidecar.prompt
-    negativePrompt = sidecar.negativePrompt
+    restorePrompts(sidecar.prompt, sidecar.negativePrompt)
     errorMessage = nil
     if newSeed {
       rollSeed()
@@ -938,8 +977,9 @@ final class CreateModel {
     statusNote = nil
     // Each job snapshots the settings, canvas and moodboard, so edits made after queuing it apply
     // to the next one.
+    let styled = styledPrompts
     var base = GenerationEngine.Request(
-      model: model, prompt: prompt, negativePrompt: negativePrompt, seed: seed,
+      model: model, prompt: styled.prompt, negativePrompt: styled.negativePrompt, seed: seed,
       configuration: settings)
     // A clip playing on the canvas isn't an input: Use Last Frame as Input picks a frame.
     if effectiveCanvasMode == .edit, canvasClip == nil, let source = canvasSource {
@@ -1270,8 +1310,7 @@ final class CreateModel {
   /// leaving the model, seed and other settings alone.
   func showWithPrompt(_ item: HistoryItem, undoManager: UndoManager?) {
     let sidecar = item.sidecar
-    prompt = sidecar.prompt
-    negativePrompt = sidecar.negativePrompt
+    restorePrompts(sidecar.prompt, sidecar.negativePrompt)
     if let descriptor = SettingsRegistry.byID["size"] {
       set(
         descriptor,

@@ -723,6 +723,7 @@ struct PromptComposer: View {
           ClickableLabel("Negative Prompt", isExpanded: $showNegative)
         }
         .font(.callout)
+        if !narrow { StyleControls() }
         if model.layoutFormat != nil {
           Toggle(
             isOn: Binding(get: { model.layout != nil }, set: { $0 ? model.openLayout() : model.closeLayout() })
@@ -750,6 +751,8 @@ struct PromptComposer: View {
             ? "Generate starts from the prompt alone. Edit also sends the canvas: what's inside the frame is the input, and empty areas are filled in."
             : "This model doesn't take image inputs, so it always generates from the prompt. Lower Strength below 100% in the inspector to edit from the canvas.")
       }
+      // A narrow window has no room for the style beside the other controls: it gets its own row.
+      if narrow { StyleControls() }
     }
     .padding(12)
     .onChange(of: model.focusPromptRequest) { promptFocused = true }
