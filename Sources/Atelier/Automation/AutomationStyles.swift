@@ -5,7 +5,11 @@
   /// (docs/styles.md), checks that writing it back reads the same styles, that every style's
   /// prompt is found again in what it writes (so Reuse brings the style back), and imports it into
   /// a copy of the user's styles that isn't saved. With `--snapshot-dir`, snapshots the Styles
-  /// screen, the style picker and Create with a style selected.
+  /// screen and Create with a style selected.
+  ///
+  /// `--thumbnails N --model M [--steps S] [--width W --height H]` also makes thumbnails for the
+  /// file's first N styles with that model (pass `--project` for a scratch project: the images
+  /// save there) and checks each style got one.
   extension Automation {
     static func stylesCheck(
       _ model: CreateModel, navigation: Navigation, layouts: LayoutStore, presets: PresetStore
@@ -72,6 +76,37 @@
         model.styleID = withSetting.id
         model.styleSetting = setting
         check(model.styledPrompts.prompt.contains(subject) && model.styledPrompts.prompt.contains(setting), "Create writes the prompt into \(withSetting.name)")
+
+        if let count = value("--thumbnails").flatMap(Int.init), let file = value("--model") {
+          while model.models.isEmpty || model.settings == nil || model.isBusy {
+            try? await Task.sleep(for: .milliseconds(100))
+          }
+          model.selectedModel = file
+          try? await Task.sleep(for: .milliseconds(200))
+          while model.isBusy || model.isLoadingModel { try? await Task.sleep(for: .milliseconds(100)) }
+          if var settings = model.settings {
+            if let steps = value("--steps").flatMap(Int.init) { settings.steps = steps }
+            if let width = value("--width").flatMap(Int.init) { settings.width = width }
+            if let height = value("--height").flatMap(Int.init) { settings.height = height }
+            model.settings = settings
+          }
+          let chosen = Array(store.styles.prefix(count))
+          for style in chosen { store.setThumbnail(nil, for: style.id) }
+          check(store.thumbnailBlocker(model) == nil, "thumbnails can be made: \(store.thumbnailBlocker(model) ?? "ok")")
+          let started = Date()
+          store.makeThumbnails(for: chosen, create: model)
+          var lastDone = -1
+          while store.thumbnailRun != nil {
+            if let run = store.thumbnailRun, run.done != lastDone {
+              lastDone = run.done
+              log("thumbnail \(run.done + 1) of \(run.total): \(run.current)")
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+          }
+          let made = chosen.filter { store.thumbnail($0.id) != nil }
+          check(made.count == chosen.count, "\(made.count) of \(chosen.count) styles got a thumbnail in \(Int(Date().timeIntervalSince(started)))s")
+          check(made.allSatisfy { store.thumbnail($0.id)?.width == StyleStore.thumbnailSize }, "thumbnails are \(StyleStore.thumbnailSize) px squares")
+        }
 
         if let snapshotDir {
           ensureWindow(model, navigation: navigation, layouts: layouts, presets: presets)

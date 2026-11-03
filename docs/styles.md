@@ -22,7 +22,16 @@ The prompt box keeps only what you typed. History saves the full prompt the mode
 - **Import Styles…** (the toolbar's import/export menu) reads one or more style files, or drop them on the screen. A style with the same category and name as one you have replaces it.
 - **Export Styles…** writes the selected styles, or all the styles the filter shows, to a style file to share or keep.
 
-Styles are saved in `Styles.json` in Atelier's Application Support folder.
+## Thumbnails
+
+Each style can have a square thumbnail, shown in the list and the editor.
+
+- In the editor's **Thumbnail** section: **Generate** makes one now, **Use Canvas Image** takes the image on Create's canvas, **Choose Image…** takes an image file, and **Remove** takes it away.
+- To make thumbnails for many styles at once, write a subject in the **Thumbnail subject** field under the list ("A woman with a red umbrella walking down a rainy city street"), select the styles (⇧- or ⌘-click, or ⌘A), and click **Make Thumbnails**. The bar shows which one is running; **Stop** ends the batch and keeps the thumbnails already made.
+
+Generated thumbnails use the model, settings and seed on the Create screen, with the subject written into each style (its Setting slot left empty), so styles compare like for like. Pick an image model there first, and lower the size or steps for a quicker batch. The jobs run in the queue like any other, and their images also save to the current project.
+
+Styles are saved in `Styles.json` and thumbnails in `StyleThumbnails` in Atelier's Application Support folder. Style files don't carry thumbnails.
 
 ## Style file format
 

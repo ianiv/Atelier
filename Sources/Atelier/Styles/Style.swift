@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import Observation
 
@@ -198,8 +199,19 @@ enum StyleFile {
 @Observable
 final class StyleStore {
   private(set) var styles: [Style] = []
+  /// Thumbnails read so far, by style (StyleThumbnails.swift); nil marks one with none.
+  var thumbnails: [UUID: CGImage?] = [:]
+  /// The subject written into each style to make its thumbnail.
+  var thumbnailSubject = UserDefaults.standard.string(forKey: "styleThumbnailSubject")
+    ?? "A woman with a red umbrella walking down a rainy city street"
+  {
+    didSet { if persists { UserDefaults.standard.set(thumbnailSubject, forKey: "styleThumbnailSubject") } }
+  }
+  /// The thumbnails being made: how many are done (and failed) of how many, and the style running.
+  var thumbnailRun: (done: Int, total: Int, failed: Int, current: String)?
+  @ObservationIgnored var thumbnailTask: Task<Void, Never>?
   /// Off for scripted runs: they read the user's styles but don't change them.
-  @ObservationIgnored private let persists: Bool
+  @ObservationIgnored let persists: Bool
 
   static var file: URL {
     FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -237,6 +249,7 @@ final class StyleStore {
 
   func delete(_ ids: Set<UUID>) {
     styles.removeAll { ids.contains($0.id) }
+    for id in ids { setThumbnail(nil, for: id) }
     write()
   }
 

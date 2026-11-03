@@ -68,6 +68,9 @@ struct StylesView: View {
         }
       }
       .searchable(text: $search, placement: .toolbar, prompt: "Filter styles")
+      .safeAreaBar(edge: .bottom, spacing: 0) {
+        ThumbnailBar(selected: styles.styles.filter { selection.contains($0.id) })
+      }
       .detailInspector(selection: selection, isEmpty: selected == nil, clearSelection: { selection = [] }) {
         Group {
           if let selected {
@@ -156,6 +159,13 @@ struct StylesView: View {
   }
 
   private func row(_ style: Style) -> some View {
+    HStack(alignment: .top, spacing: 10) {
+      StyleThumbnail(id: style.id, side: 56)
+      rowText(style)
+    }
+  }
+
+  private func rowText(_ style: Style) -> some View {
     VStack(alignment: .leading, spacing: 2) {
       HStack(spacing: 6) {
         Text(style.name).fontWeight(.medium)
@@ -271,6 +281,7 @@ struct StyleEditor: View {
 
   var body: some View {
     Form {
+      ThumbnailSection(style: style)
       Section {
         TextField("Name", text: $draft.name)
         TextField("Category", text: $draft.category, prompt: Text("Uncategorized"))
@@ -328,5 +339,126 @@ struct StyleEditor: View {
     style.negative = style.negative.trimmingCharacters(in: .whitespacesAndNewlines)
     style.notes = style.notes.trimmingCharacters(in: .whitespacesAndNewlines)
     return style
+  }
+}
+
+/// A style's thumbnail, or a placeholder the same size when it has none.
+struct StyleThumbnail: View {
+  let id: UUID
+  let side: CGFloat
+  @Environment(StyleStore.self) private var styles
+
+  var body: some View {
+    let shape = RoundedRectangle(cornerRadius: side / 8)
+    Group {
+      if let image = styles.thumbnail(id) {
+        Image(decorative: image, scale: 1).resizable().scaledToFill()
+      } else {
+        Image(systemName: "paintpalette")
+          .font(.system(size: side / 3))
+          .foregroundStyle(.tertiary)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .background(.quaternary)
+      }
+    }
+    .frame(width: side, height: side)
+    .clipShape(shape)
+    .task(id: id) { await styles.loadThumbnail(id) }
+  }
+}
+
+/// The editor's thumbnail and the ways to change it.
+private struct ThumbnailSection: View {
+  let style: Style
+  @Environment(StyleStore.self) private var styles
+  @Environment(CreateModel.self) private var create
+  @Environment(FileDialogs.self) private var fileDialogs
+
+  var body: some View {
+    let blocker = styles.thumbnailBlocker(create)
+    Section {
+      HStack(alignment: .top, spacing: 12) {
+        StyleThumbnail(id: style.id, side: 128)
+        VStack(alignment: .leading, spacing: 8) {
+          Button("Generate", systemImage: "sparkles") {
+            styles.makeThumbnails(for: [style], create: create)
+          }
+          .disabled(blocker != nil || styles.thumbnailRun != nil)
+          .help(blocker ?? "Generate a thumbnail of the subject below the list in this style, with the model and settings on Create")
+          Button("Use Canvas Image", systemImage: "photo") {
+            styles.setThumbnail(create.image, for: style.id)
+          }
+          .disabled(create.image == nil)
+          .help("Use the image on Create's canvas")
+          Button("Choose Image…", systemImage: "folder") {
+            fileDialogs.open = FileDialogs.Open(types: [.image], message: "Choose a thumbnail for “\(style.name)”") { urls in
+              guard let url = urls.first else { return }
+              let access = url.startAccessingSecurityScopedResource()
+              defer { if access { url.stopAccessingSecurityScopedResource() } }
+              _ = styles.setThumbnail(contentsOf: url, for: style.id)
+            }
+          }
+          Button("Remove", systemImage: "trash") { styles.setThumbnail(nil, for: style.id) }
+            .disabled(styles.thumbnail(style.id) == nil)
+        }
+        .buttonStyle(.borderless)
+        .labelStyle(.titleAndIcon)
+      }
+    } header: {
+      Text("Thumbnail")
+    }
+  }
+}
+
+/// Under the list: the thumbnail subject, and making thumbnails for the selected styles.
+private struct ThumbnailBar: View {
+  let selected: [Style]
+  @Environment(StyleStore.self) private var styles
+  @Environment(CreateModel.self) private var create
+  /// Too narrow for everything on one row (a narrow iPad window).
+  @State private var narrow = false
+
+  var body: some View {
+    @Bindable var styles = styles
+    let blocker = styles.thumbnailBlocker(create)
+    let row = narrow
+      ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+      : AnyLayout(HStackLayout(spacing: 10))
+    row {
+      TextField("Thumbnail subject", text: $styles.thumbnailSubject, prompt: Text("Thumbnail subject"))
+        .textFieldStyle(.roundedBorder)
+        .help("What every thumbnail shows, written into each style's {{SUBJECT}}")
+      HStack(spacing: 10) {
+        Text(status)
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .monospacedDigit()
+          .lineLimit(1)
+        // Both always there so the bar doesn't shift; each disabled when it can't act.
+        Button("Stop", systemImage: "stop.fill") { styles.stopThumbnails() }
+          .labelStyle(.iconOnly)
+          .disabled(styles.thumbnailRun == nil)
+          .help("Stop making thumbnails; the ones made are kept")
+        Button(selected.count > 1 ? "Make \(selected.count) Thumbnails" : "Make Thumbnail") {
+          styles.makeThumbnails(for: selected, create: create)
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(selected.isEmpty || blocker != nil || styles.thumbnailRun != nil)
+        .help(blocker ?? (selected.isEmpty ? "Select styles to make their thumbnails" : "Generate a thumbnail for each selected style with the model, settings and seed on Create. The images also save to the project."))
+      }
+      .fixedSize()
+    }
+    .padding(12)
+    #if os(iOS)
+      .onGeometryChange(for: Bool.self) { $0.size.width < 560 } action: { narrow = $0 }
+    #endif
+  }
+
+  private var status: String {
+    if let run = styles.thumbnailRun {
+      return "\(run.done + 1) of \(run.total): \(run.current)"
+    }
+    if let model = create.selectedModelInfo?.name { return model }
+    return ""
   }
 }

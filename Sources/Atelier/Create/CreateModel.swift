@@ -1044,11 +1044,15 @@ final class CreateModel {
   /// Queues an agent's request (AgentTools) like Generate: progress, previews and the result show
   /// on the canvas and in the status bar, and Stop or the Queue cancel it. The prompt, inspector
   /// and moodboard are left alone. Cancelling the caller cancels the job.
+  /// With `styleThumbnail`, the job makes that style's thumbnail (StyleStore) rather than an
+  /// agent's image.
   func generate(
-    forAgent request: GenerationEngine.Request,
+    forAgent request: GenerationEngine.Request, styleThumbnail: String? = nil,
     progress: @escaping (GenerationEngine.Progress) -> Void
   ) async throws -> HistoryItem {
-    let id = queue.append([request], currentTensorId: history.currentTensorId, fromAgent: true)[0]
+    let id = queue.append(
+      [request], currentTensorId: history.currentTensorId, fromAgent: styleThumbnail == nil,
+      styleThumbnail: styleThumbnail)[0]
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
         agentCallbacks[id] = (progress, { continuation.resume(with: $0) })

@@ -113,6 +113,7 @@
 		FCCFBA8B0194B3451E1EF165 /* StylePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1670AD2B7B1F7F13F59A3837 /* StylePicker.swift */; };
 		CD95A4543274E56F501FE116 /* StylesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0E294BC751172662C37EFAE /* StylesView.swift */; };
 		735C1F1480A124F947F8E040 /* AutomationStyles.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2281AF0711BE0FA0D08E56A /* AutomationStyles.swift */; };
+		D479477FCC5E7DD8BD9B71CB /* StyleThumbnails.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8161C304ECBE1DE03129BC2C /* StyleThumbnails.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -242,6 +243,7 @@
 		1670AD2B7B1F7F13F59A3837 /* StylePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StylePicker.swift; sourceTree = "<group>"; };
 		E0E294BC751172662C37EFAE /* StylesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StylesView.swift; sourceTree = "<group>"; };
 		B2281AF0711BE0FA0D08E56A /* AutomationStyles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationStyles.swift; sourceTree = "<group>"; };
+		8161C304ECBE1DE03129BC2C /* StyleThumbnails.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StyleThumbnails.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -359,6 +361,7 @@
 				B5FF95DD35ACFE7DE6BA3A6F /* Style.swift */,
 				1670AD2B7B1F7F13F59A3837 /* StylePicker.swift */,
 				E0E294BC751172662C37EFAE /* StylesView.swift */,
+				8161C304ECBE1DE03129BC2C /* StyleThumbnails.swift */,
 			);
 			path = Styles;
 			sourceTree = "<group>";
@@ -680,6 +683,7 @@
 				372C34D8907AF48D8677F809 /* Style.swift in Sources */,
 				FCCFBA8B0194B3451E1EF165 /* StylePicker.swift in Sources */,
 				CD95A4543274E56F501FE116 /* StylesView.swift in Sources */,
+				D479477FCC5E7DD8BD9B71CB /* StyleThumbnails.swift in Sources */,
 				59D4CC0F01D0DEA897EE5065 /* QueueView.swift in Sources */,
 				800D1F384501DE33108E1679 /* SavedQueue.swift in Sources */,
 				BFD85CF044154FC07421FF64 /* HistoryStore.swift in Sources */,

@@ -33,6 +33,8 @@ final class JobQueue {
     var finishedAt: Date?
     /// Queued by an agent over MCP.
     var fromAgent = false
+    /// Makes the thumbnail of the style with this name (Styles screen); not kept across quits.
+    var styleThumbnail: String?
     /// Jobs queued one after another, while you didn't pick another step, form a line: each
     /// follows the line's latest result when it starts, whatever order they end up running in.
     var line: UUID?
@@ -93,7 +95,8 @@ final class JobQueue {
   /// a new line after the current step when you picked another step since. Returns their ids.
   @discardableResult
   func append(
-    _ requests: [GenerationEngine.Request], currentTensorId: Int64?, fromAgent: Bool = false
+    _ requests: [GenerationEngine.Request], currentTensorId: Int64?, fromAgent: Bool = false,
+    styleThumbnail: String? = nil
   ) -> [UUID] {
     let line: UUID
     if let lastLine, !isEmpty, currentTensorId == expectedCurrent {
@@ -106,6 +109,7 @@ final class JobQueue {
     expectedCurrent = currentTensorId
     for request in requests {
       var job = Job(request: request, fromAgent: fromAgent)
+      job.styleThumbnail = styleThumbnail
       if request.parentTensorId == nil { job.line = line }
       waiting.append(job)
     }

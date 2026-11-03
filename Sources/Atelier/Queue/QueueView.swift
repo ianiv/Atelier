@@ -160,6 +160,11 @@ struct QueueRow: View {
           .foregroundStyle(.secondary)
           .help("Queued by an agent")
       }
+      if let style = job.styleThumbnail {
+        Image(systemName: "paintpalette")
+          .foregroundStyle(.secondary)
+          .help("Thumbnail for the style “\(style)”")
+      }
       status
     }
     .padding(.vertical, 2)
