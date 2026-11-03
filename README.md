@@ -12,6 +12,7 @@ What it does today:
 - Video with LTX-2, MiniMax H3, Wan and the other video models the engine runs: text or an image to video, first and last frames, references, and sound (LTX and H3 make a soundtrack; H3 and LongCat take an audio file). Clips play inline and save as MP4.
 - A video editor to put clips together on a timeline: trim, split, crossfade, continue a new video from any frame, and export one MP4.
 - Video upscaling: **Fast** (Apple Super Resolution) or **Quality** (FlashVSR+, Turbo or Base), as a new video in History or straight to a file with Export Video….
+- Styles: prompt templates you pick on the Create screen, with thumbnails, and libraries you can import, export and browse as a web page.
 - Presets and inspector layouts.
 - History kept in projects, in Draw Things' project file format, with one-click "Use Settings" and 1 to 5 star ratings.
 - A model and LoRA library: download from the community catalog, import `.safetensors` checkpoints and LoRAs, and make 8-bit copies of MOSS models.
@@ -39,6 +40,7 @@ Start with the [user guide](docs/README.md).
 
 - [Getting started](docs/getting-started.md): requirements, building and installing, choosing your models folder, your first image.
 - [Creating images](docs/creating-images.md): the prompt, size and seed, the inspector, presets, image to image and the moodboard.
+- [Styles](docs/styles.md): prompt templates, thumbnails, and importing and exporting style libraries.
 - [Making videos](docs/video.md): video models, length, first and last frames, audio, upscaling (and getting FlashVSR+), and exporting videos.
 - [Putting videos together](docs/video-editor.md): assembling clips on a timeline, trimming, splitting and crossfades, continuing from any frame, and exporting.
 - [The queue](docs/queue.md): queuing, pausing and reordering images, and upscaled exports.
