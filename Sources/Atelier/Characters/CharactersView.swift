@@ -215,17 +215,28 @@ struct CharactersView: View {
   }
 }
 
-/// A character's saved image as a square, or a placeholder the same size.
+/// A character's main image as a square, or a placeholder the same size.
 struct CharacterPortrait: View {
   let id: UUID
   let side: CGFloat
   @Environment(CharacterStore.self) private var store
 
   var body: some View {
+    SavedImageSquare(image: store.character(id: id)?.mainImageID, side: side)
+  }
+}
+
+/// A saved image as a square, or a placeholder the same size.
+private struct SavedImageSquare: View {
+  let image: UUID?
+  let side: CGFloat
+  @Environment(CharacterStore.self) private var store
+
+  var body: some View {
     let shape = RoundedRectangle(cornerRadius: side / 8)
     Group {
-      if let image = store.thumbnail(id) {
-        Image(decorative: image, scale: 1).resizable().scaledToFill()
+      if let image, let thumbnail = store.thumbnail(image) {
+        Image(decorative: thumbnail, scale: 1).resizable().scaledToFill()
       } else {
         Image(systemName: "person.crop.square")
           .font(.system(size: side / 3))
@@ -236,28 +247,38 @@ struct CharacterPortrait: View {
     }
     .frame(width: side, height: side)
     .clipShape(shape)
-    .task(id: id) { await store.loadThumbnail(id) }
+    .task(id: image) {
+      if let image { await store.loadThumbnail(image) }
+    }
   }
 }
 
-/// The centre: the image shown large (the running render, a preview or the saved image), what can
-/// be done with it, and the Previews strip.
+/// The centre: the image shown large (the running render, a preview or a saved image), what can be
+/// done with it, and the strip of saved images and previews.
 private struct CharacterStage: View {
   let character: SavedCharacter
   @Environment(CharacterStore.self) private var store
   @Environment(CreateModel.self) private var create
   @Environment(Navigation.self) private var navigation
   @Environment(\.undoManager) private var undoManager
+  @State private var pendingRemove: UUID?
 
   private var previews: [CharacterPreview] { store.previews[character.id] ?? [] }
-  private var shown: CharacterPreview? {
-    store.shownPreview[character.id].flatMap { id in previews.first { $0.id == id } }
+  private var chosen: UUID? { store.shownImage[character.id] }
+  private var shownPreview: CharacterPreview? {
+    chosen.flatMap { id in previews.first { $0.id == id } }
   }
 
-  private var saved: CGImage? { store.savedImages[character.id] }
-  /// The image Save and Send act on.
-  private var image: CGImage? { shown?.image ?? saved }
-  private var info: CharacterImageInfo? { shown?.info ?? store.savedInfo[character.id] }
+  /// The saved image shown: the one picked, else with no preview picked, the main one.
+  private var shownSaved: UUID? {
+    if shownPreview != nil { return nil }
+    if let chosen, character.images.contains(chosen) { return chosen }
+    return character.mainImageID
+  }
+
+  /// The image Send to Create acts on.
+  private var image: CGImage? { shownPreview?.image ?? shownSaved.flatMap { store.savedImages[$0] } }
+  private var info: CharacterImageInfo? { shownPreview?.info ?? shownSaved.flatMap { store.savedInfo[$0] } }
   /// This character's render is on the engine now.
   private var rendering: Bool {
     store.renderRun?.character == character.id && create.queue.running?.characterPreview != nil
@@ -274,7 +295,20 @@ private struct CharacterStage: View {
       Divider()
       strip
     }
-    .task(id: character.id) { await store.loadSaved(character.id) }
+    .task(id: shownSaved) {
+      if let shownSaved { await store.loadSaved(shownSaved) }
+    }
+    .confirmationDialog(
+      "Remove this saved image?", isPresented: Binding(get: { pendingRemove != nil }, set: { if !$0 { pendingRemove = nil } })
+    ) {
+      Button("Remove", role: .destructive) {
+        if let pendingRemove { store.removeSavedImage(pendingRemove, from: character.id) }
+        pendingRemove = nil
+      }
+      Button("Cancel", role: .cancel) { pendingRemove = nil }
+    } message: {
+      Text("This can't be undone. Images sent to Create stay in their project.")
+    }
   }
 
   private var canvas: some View {
@@ -307,11 +341,21 @@ private struct CharacterStage: View {
         .lineLimit(2, reservesSpace: true)
         .frame(maxWidth: .infinity, alignment: .leading)
         .help(caption)
-      Button("Save to Character", systemImage: "square.and.arrow.down") {
-        if let shown { store.setSavedImage(shown.image, info: shown.info, for: character.id) }
+      Button("Make Main Image", systemImage: "star") {
+        if let shownSaved { store.makeMain(shownSaved, of: character.id) }
       }
-      .disabled(shown == nil)
-      .help(shown == nil ? "Pick a preview to make it the character's saved image" : "Make this preview the character's saved image, replacing the one before")
+      .labelStyle(.iconOnly)
+      .disabled(shownSaved == nil || shownSaved == character.mainImageID)
+      .help("Make this saved image the character's portrait in the library, and what shows when you come back to it")
+      Button("Remove", systemImage: "trash") { pendingRemove = shownSaved }
+        .labelStyle(.iconOnly)
+        .disabled(shownSaved == nil)
+        .help("Remove this saved image from the character")
+      Button("Save to Character", systemImage: "square.and.arrow.down") {
+        if let shownPreview { store.save(shownPreview, to: character.id) }
+      }
+      .disabled(shownPreview == nil || shownPreview.map { store.savedPreviews.contains($0.id) } == true)
+      .help(saveHelp)
       Button("Send to Create", systemImage: "arrow.up.forward.app") {
         guard let image, let info else { return }
         Task {
@@ -319,41 +363,54 @@ private struct CharacterStage: View {
         }
       }
       .disabled(image == nil || info == nil)
-      .help("Add this image to the current project and load it on Create with its model, seed, style and tag boxes")
+      .help("Add this image to the current project and load it on Create with its model, settings, seed, style and tag boxes")
     }
+  }
+
+  private var saveHelp: String {
+    guard let shownPreview else { return "Pick a preview to add it to the character's saved images" }
+    return store.savedPreviews.contains(shownPreview.id) ? "This preview is already saved to the character" : "Add this preview to the character's saved images"
   }
 
   /// What's shown large, or why the last run failed.
   private var caption: String {
     if let error = store.renderError { return error }
-    if let shown {
-      return "Preview in \(shown.info.styleName) · \(madeWith(shown.info))"
+    if let shownPreview {
+      return "Preview: \(shownPreview.info.styleName) · \(madeWith(shownPreview.info))"
     }
-    if image == nil { return "" }
-    if let info { return "Saved image in \(info.styleName) · \(madeWith(info))" }
-    return "Saved image"
+    guard let shownSaved, image != nil else { return "" }
+    let name = shownSaved == character.mainImageID ? "Main image" : "Saved image"
+    if let info { return "\(name): \(info.styleName) · \(madeWith(info))" }
+    return name
   }
 
-  /// The model and seed an image was made with, which may no longer be what's on Create.
+  /// The model, size and seed an image was made with, which may no longer be what's on Create.
   private func madeWith(_ info: CharacterImageInfo) -> String {
     let file = info.source.model ?? "unknown model"
     let name = create.models.first { $0.file == file }?.name ?? file
     return "\(name) · seed \(info.source.seed.map(String.init) ?? "unknown")"
   }
 
+  /// Saved images and previews side by side, each with its heading whether or not it has any.
   private var strip: some View {
-    VStack(alignment: .leading, spacing: 4) {
-      Text("Previews").font(.callout).foregroundStyle(.secondary)
-      ScrollView(.horizontal) {
-        HStack(spacing: 8) {
-          tile(selected: shown == nil, title: "Saved", help: "The character's saved image") {
-            store.shownPreview[character.id] = nil
-          } content: {
-            CharacterPortrait(id: character.id, side: Self.tileSide)
+    ScrollView(.horizontal) {
+      HStack(alignment: .top, spacing: 12) {
+        group("Saved", empty: character.images.isEmpty, emptyText: "Save a preview to keep it") {
+          ForEach(character.images, id: \.self) { id in
+            tile(selected: shownSaved == id, main: id == character.mainImageID, title: store.savedInfo[id]?.styleName ?? (id == character.mainImageID ? "Main" : "Saved"), help: id == character.mainImageID ? "The main image" : "A saved image") {
+              store.shownImage[character.id] = id
+            } content: {
+              SavedImageSquare(image: id, side: Self.tileSide)
+            }
+            // The tile's caption is the style it was made in.
+            .task(id: id) { await store.loadSaved(id) }
           }
+        }
+        Divider()
+        group("Previews", empty: previews.isEmpty, emptyText: "Renders show here until you quit") {
           ForEach(previews) { preview in
-            tile(selected: shown?.id == preview.id, title: preview.info.styleName, help: "\(preview.info.styleName): not saved until you use Save to Character or Send to Create") {
-              store.shownPreview[character.id] = preview.id
+            tile(selected: shownPreview?.id == preview.id, main: false, title: preview.info.styleName, help: "\(preview.info.styleName): not saved until you use Save to Character or Send to Create") {
+              store.shownImage[character.id] = preview.id
             } content: {
               Image(decorative: preview.image, scale: 1)
                 .resizable()
@@ -363,18 +420,38 @@ private struct CharacterStage: View {
             }
           }
         }
-        .padding(.bottom, 2)
       }
-      .scrollIndicators(.automatic)
+      .padding(10)
     }
-    .padding(10)
-    .frame(height: Self.tileSide + 62)
+    .scrollIndicators(.automatic)
+    .frame(height: Self.tileSide + 66)
   }
 
   private static let tileSide: CGFloat = 72
 
+  private func group(_ title: String, empty: Bool, emptyText: String, @ViewBuilder tiles: () -> some View) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Text(title).font(.callout).foregroundStyle(.secondary)
+      HStack(alignment: .top, spacing: 8) {
+        if empty {
+          Text(emptyText)
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+            .multilineTextAlignment(.center)
+            .padding(6)
+            .frame(width: Self.tileSide * 1.5, height: Self.tileSide)
+            .overlay {
+              RoundedRectangle(cornerRadius: Self.tileSide / 8)
+                .strokeBorder(.quaternary, style: StrokeStyle(lineWidth: 1, dash: [4]))
+            }
+        }
+        tiles()
+      }
+    }
+  }
+
   private func tile(
-    selected: Bool, title: String, help: String, action: @escaping () -> Void, @ViewBuilder content: () -> some View
+    selected: Bool, main: Bool, title: String, help: String, action: @escaping () -> Void, @ViewBuilder content: () -> some View
   ) -> some View {
     Button(action: action) {
       VStack(spacing: 2) {
@@ -382,6 +459,14 @@ private struct CharacterStage: View {
           .overlay {
             RoundedRectangle(cornerRadius: Self.tileSide / 8)
               .strokeBorder(selected ? Color.accentColor : .clear, lineWidth: 2)
+          }
+          .overlay(alignment: .topTrailing) {
+            Image(systemName: "star.fill")
+              .font(.caption)
+              .foregroundStyle(.yellow)
+              .shadow(radius: 1)
+              .padding(4)
+              .opacity(main ? 1 : 0)
           }
         Text(title)
           .font(.caption)

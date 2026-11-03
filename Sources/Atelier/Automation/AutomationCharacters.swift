@@ -11,7 +11,8 @@
   /// `--model M [--project NAME] [--steps S] [--width W --height H] [--styles N]` also renders with
   /// that model (pass `--project` for a scratch project: Send to Create adds to it): in No Style
   /// and in the first N of the user's styles with one seed, checks that previews stay out of
-  /// History, then saves one to the character and sends it to Create.
+  /// History, then saves one to the character and sends it to Create. `--sheet ID` also renders
+  /// that sheet at 1 MP and checks its size.
   extension Automation {
     static func charactersCheck(
       _ model: CreateModel, navigation: Navigation, layouts: LayoutStore, presets: PresetStore
@@ -138,26 +139,71 @@
         let info = CharacterImageInfo(
           source: ThumbnailSource(prompt: "p", negativePrompt: "n", model: "m", seed: 7, settings: [:]),
           styleID: nil, styleName: "No Style", tagValues: [:], subject: womanWritten)
-        first.setSavedImage(pixels, info: info, for: added.id)
+        let image1 = first.addSavedImage(pixels, info: info, to: added.id)
+        let image2 = first.addSavedImage(pixels, info: info, to: added.id)
+        check(first.character(id: added.id)?.images == [image1, image2].compactMap(\.self) && first.character(id: added.id)?.mainImageID == image1, "saving adds images; the first is the main image")
+        if let image2 { first.makeMain(image2, of: added.id) }
+        check(first.character(id: added.id)?.mainImageID == image2, "Make Main Image changes the main image")
         first.duplicate(added.id)
         first.flush()
         let second = CharacterStore(persists: false, directory: scratch)
         check(second.characters.count == 2 && second.characters[0].knobs == woman.knobs, "characters come back from the file")
-        await second.loadSaved(second.characters[1].id)
-        await second.loadThumbnail(second.characters[1].id)
-        check(
-          second.savedImages[second.characters[1].id]?.width == pixels.width
-            && second.thumbnail(second.characters[1].id)?.width == StyleStore.thumbnailSize
-            && second.savedInfo[second.characters[1].id]?.source.seed == 7,
-          "the saved image and its settings come back, for the duplicate too")
+        let copy = second.characters[1]
+        check(copy.images.count == 2 && Set(copy.images).isDisjoint(with: second.characters[0].images), "a duplicate gets its own saved images")
+        if let main = copy.mainImageID {
+          await second.loadSaved(main)
+          await second.loadThumbnail(main)
+          check(
+            main == copy.images[1] && second.savedImages[main]?.width == pixels.width
+              && second.thumbnail(main)?.width == StyleStore.thumbnailSize
+              && second.savedInfo[main]?.source.seed == 7,
+            "saved images, their settings and the main image come back, for the duplicate too")
+          second.removeSavedImage(main, from: copy.id)
+          check(second.character(id: copy.id)?.mainImageID == copy.images[0] && second.character(id: copy.id)?.images.count == 1, "removing the main image hands over to the first left")
+          second.makeMain(copy.images[0], of: copy.id)
+          second.addSavedImage(pixels, info: info, to: copy.id)
+        }
+        // A character from when there was one saved image, its files under the character's id.
+        let legacy = scratch.appendingPathComponent("legacy", isDirectory: true)
+        let legacyID = UUID()
+        try? FileManager.default.createDirectory(at: legacy.appendingPathComponent("CharacterImages"), withIntermediateDirectories: true)
+        try? Data("[{\"id\":\"\(legacyID.uuidString)\",\"name\":\"Old\"}]".utf8).write(to: legacy.appendingPathComponent("Characters.json"))
+        try? Data(ImageTensor.jpeg(pixels, quality: 0.85) ?? []).write(to: legacy.appendingPathComponent("CharacterImages/\(legacyID.uuidString).jpg"))
+        try? ImageTensor.png(pixels)?.write(to: legacy.appendingPathComponent("CharacterImages/\(legacyID.uuidString)-full.png"))
+        let migrated = CharacterStore(persists: false, directory: legacy)
+        await migrated.loadThumbnail(legacyID)
+        check(migrated.characters.first?.images == [legacyID] && migrated.characters.first?.mainImageID == legacyID && migrated.thumbnail(legacyID) != nil, "an earlier single saved image becomes the main image")
+        migrated.flush()
+        check(CharacterStore(persists: false, directory: legacy).characters.first?.images == [legacyID], "the migration is saved")
+        // Sheets.
+        check(knobs.sheets.count >= 4 && knobs.sheets.contains { $0.takesText == true }, "\(knobs.sheets.map(\.title)) sheets")
+        for sheet in knobs.sheets {
+          for megapixels in CharacterKnobSet.sheetMegapixels {
+            let size = sheet.size(megapixels: megapixels)
+            let area = Double(size.width * size.height) / 1_000_000
+            check(
+              size.width % 64 == 0 && size.height % 64 == 0 && abs(area - Double(megapixels)) < 0.15 * Double(megapixels)
+                && abs(Double(size.width) / Double(size.height) - sheet.aspect) < 0.1,
+              "\(sheet.title) at \(megapixels) MP is \(size.width)×\(size.height)")
+          }
+          let wrapped = sheet.subject(description: "A cat.", custom: "in three hats.")
+          check(wrapped.contains("A cat.") && !wrapped.contains("{{") && !wrapped.contains("hats.."), "\(sheet.title) wraps the description")
+        }
+        let noStyleSheet = knobs.referenceSheetStyle.apply([Style.subject: "S."], negativePrompt: "")
+        check(noStyleSheet.prompt.lowercased().contains("deep focus") && !noStyleSheet.prompt.contains("facing the viewer") && noStyleSheet.negativePrompt.contains("bokeh"), "a No Style sheet keeps the plain look without the single framing")
         let exported = second.exported(second.characters.map(\.id))
         let third = CharacterStore(persists: false, directory: scratch.appendingPathComponent("import", isDirectory: true))
         let imported = third.importCharacters(exported)
-        check(imported?.added == 2 && third.thumbnail(third.characters[0].id) != nil, "a characters file imports, with images")
+        check(
+          imported?.added == 2 && third.characters[0].images.count == 2 && third.characters[0].mainImageID == third.characters[0].images[1]
+            && third.characters[0].mainImageID.flatMap(third.thumbnail) != nil,
+          "a characters file imports, with its images and main image")
         check(third.importCharacters(exported)?.replaced == 2 && third.characters.count == 2, "importing twice replaces instead of duplicating")
         check(third.importCharacters(Data("[]".utf8)) == nil, "another file isn't taken for a characters file")
-        second.delete(second.characters[0].id)
+        let deleted = second.characters[0]
+        second.delete(deleted.id)
         second.flush()
+        check(!FileManager.default.fileExists(atPath: scratch.appendingPathComponent("CharacterImages/\(deleted.images[0].uuidString).jpg").path), "deleting a character removes its images")
         check(CharacterStore(persists: false, directory: scratch).characters.count == 1, "deleting a character is saved")
 
         // The screen's store, with characters to show.
@@ -213,8 +259,29 @@
             check(preview.info.source.prompt.contains(womanWritten), "\(preview.info.styleName) has the description in its prompt")
           }
           if let preview = previews.first {
-            store.setSavedImage(preview.image, info: preview.info, for: shown.id)
-            check(store.thumbnail(shown.id) != nil && store.savedImages[shown.id] != nil, "Save to Character keeps the preview")
+            store.save(preview, to: shown.id)
+            store.save(preview, to: shown.id)
+            check(store.character(id: shown.id)?.images.count == 1, "Save to Character adds the preview once")
+            if let sheetValue = value("--sheet") {
+              store.edit(shown.id) { $0.sheet = sheetValue; $0.sheetMegapixels = 1 }
+              let before = store.previews[shown.id]?.count ?? 0
+              let createSize = model.settings.map { ($0.width, $0.height) }
+              let sheetCharacter = store.character(id: shown.id)!
+              let expected = store.knobs.sheet(of: sheetCharacter)?.size(megapixels: 1)
+              check(store.sheetBlocker(model, for: sheetCharacter) == nil, "ready to render a sheet")
+              store.renderSheet(sheetCharacter, in: nil, create: model)
+              while store.renderRun != nil { try? await Task.sleep(for: .milliseconds(200)) }
+              let sheetPreview = store.previews[shown.id]?.first
+              check((store.previews[shown.id]?.count ?? 0) == before + 1, "a sheet is one preview\(store.renderError.map { ": \($0)" } ?? "")")
+              check(sheetPreview?.image.width == expected?.width && sheetPreview?.image.height == expected?.height, "the sheet is \(sheetPreview?.image.width ?? 0)×\(sheetPreview?.image.height ?? 0), its own size")
+              check(model.settings?.width == createSize?.0 && model.settings?.height == createSize?.1, "Create's size isn't changed")
+              check(model.history.items.count == historyBefore, "the sheet isn't saved to the project")
+              log("sheet prompt: \(sheetPreview?.info.source.prompt ?? "")")
+              if let snapshotDir, let sheetPreview, let png = ImageTensor.png(sheetPreview.image) {
+                try? FileManager.default.createDirectory(at: snapshotDir, withIntermediateDirectories: true)
+                try? png.write(to: snapshotDir.appendingPathComponent("sheet.png"))
+              }
+            }
             await store.sendToCreate(preview.image, info: preview.info, create: model, navigation: navigation, undoManager: nil)
             check(store.renderError == nil, "Send to Create worked: \(store.renderError ?? "ok")")
             check(navigation.section == .create, "Send to Create goes to Create")

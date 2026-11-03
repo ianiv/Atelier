@@ -7,7 +7,7 @@ A character is a saved, named description you build by turning knobs. Atelier wr
 **Characters** in the sidebar has three parts:
 
 - **The library**, on the left: your characters as a list or a grid of portraits, with a search field. **+** adds a character; the buttons beside it duplicate and delete the selected one. Deleting can't be undone, so export first to keep a copy.
-- **The image**, in the centre: the character's saved image or the preview you picked, with the **Previews** strip under it.
+- **The image**, in the centre: the saved image or preview you picked, with its **Saved** and **Previews** strip under it.
 - **The knob panel**, on the right: the knobs, and below them, always in view, the description, the style and **Render**.
 
 Changes save as you make them.
@@ -51,21 +51,37 @@ The **Style** button is the same picker as on Create. The description fills the 
 
 - **Render** (⌘↩, also while typing in a knob's text box) makes one preview in the selected style.
 - **Render in Styles…** lets you tick several styles (No Style among them) and renders the character in each with the same seed.
+- **Render Sheet** (⇧⌘↩) makes one image showing the character several ways; see below.
 
 Renders use what's on the Create screen when you start: the model, every inspector setting and the seed. The line above **Render** shows the model, size, steps and seed they'll use, and **Go to Create** takes you there to change them. Keep the seed and moving one knob shows only that knob's effect. Create's prompt, negative prompt, canvas and moodboard aren't used; only the style's own negative prompt is. Pick an image model on Create first, and lower the size or steps for quicker renders. The jobs run in the queue like any other, and **Stop** ends a batch and keeps what's made.
 
-## Previews and the saved image
+## Character sheets
 
-Renders are previews only. They appear in the **Previews** strip, aren't in any project or in History, and are cleared when you quit.
+A sheet is one image, from one prompt, showing the same character several ways. Pick one from the menu beside **Render Sheet**:
 
-- **Save to Character** makes the preview shown the character's saved image, replacing the one before. The saved image is its portrait in the library, is what the screen shows when you come back, and keeps the settings it was made with.
-- **Send to Create** adds the preview or saved image to the current project, so it shows in History, and loads it on Create's canvas with the model, settings and seed it was made with. With a style, that style is selected with the description as its Subject and its tag boxes filled. With No Style, the whole prompt it was made with goes in the prompt box.
+- **Turnaround**: front, three-quarter, side and back views, side by side on a 2:1 canvas.
+- **Expressions**: six expressions in a grid, on a 3:2 canvas.
+- **Poses**: standing, walking, sitting and running, on a 7:4 canvas.
+- **Custom**: say what it shows in the box underneath ("in three outfits, side by side"), on a 3:2 canvas.
+
+A sheet sets its own size from its shape and the **1 MP** or **2 MP** picker; the line above **Render** shows that size. Everything else comes from Create, whose own size isn't changed. The sheet's words wrap the description and fill the selected style's subject; with No Style it keeps the plain backdrop and deep focus, without the reference look's single full-body framing.
+
+The result is a preview like any other. How well the views stay consistent depends on the model.
+
+## Previews and saved images
+
+Renders are previews only. They appear under **Previews**, aren't in any project or in History, and are cleared when you quit.
+
+- **Save to Character** adds the preview shown to the character's saved images, under **Saved**. Saved images keep the settings they were made with.
+- The **main image**, marked with a star, is the character's portrait in the library and what the screen shows when you come back. It's the first one saved until you pick another with **Make Main Image** (the star button) on a saved image.
+- **Remove** (the trash button) removes a saved image. If it was the main image, the first one left takes over.
+- **Send to Create** adds the preview or saved image shown to the current project, so it shows in History, and loads it on Create's canvas with the model, settings and seed it was made with, a sheet's size included. With a style, that style is selected with the description as its Subject (with a sheet's words around it) and its tag boxes filled. With No Style, the whole prompt it was made with goes in the prompt box.
 
 ## Files
 
 **Export Selected…** and **Export All…** (the import/export menu under the library, or **Export…** in a character's right-click menu) write a `.json` characters file with the saved images. **Import Characters…** reads one; a character with the same name as one you have replaces it.
 
-Characters are saved in `Characters.json` and saved images (a square for the library, the full image and its settings) in `CharacterImages` in Atelier's Application Support folder.
+Characters are saved in `Characters.json` and each saved image (a square for the library, the full image and its settings) in `CharacterImages` in Atelier's Application Support folder.
 
 ## Adding knobs
 
@@ -89,7 +105,9 @@ The knobs are data. To change them, copy `CharacterKnobs.json` from inside the a
 - `randomizes: false` keeps the dice off a knob.
 - `numericFormat` writes a plain number in the Custom box in words (`"{value}-year-old"` for Age), and `customPrompt` is that box's placeholder.
 
-A section has `id`, `title`, `textPrompt` and `knobs`, plus `sentence` (`opening`, `is`, `has` or `wears`) or `joinsPrevious: true` to share the sentence before it. `noun` adds the noun picker, and `separator` goes between its adjectives. The top-level `reference` holds the No Style `template` and `negative`.
+Sheets are in the file's top-level `sheets`: each has `id`, `title`, `aspect` (width over height), and `template`, where `{{SUBJECT}}` is the description and `{{CUSTOM}}` the custom box's text with `takesText: true`.
+
+A section has `id`, `title`, `textPrompt` and `knobs`, plus `sentence` (`opening`, `is`, `has` or `wears`) or `joinsPrevious: true` to share the sentence before it. `noun` adds the noun picker, and `separator` goes between its adjectives. The top-level `reference` holds the No Style `template` and `negative`, and `sheetTemplate`, the No Style look of a sheet.
 
 Characters store each knob by its `id` and each choice by its label, so renaming either leaves that knob unset on existing characters.
 

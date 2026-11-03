@@ -13,7 +13,7 @@ What it does today:
 - A video editor to put clips together on a timeline: trim, split, crossfade, continue a new video from any frame, and export one MP4.
 - Video upscaling: **Fast** (Apple Super Resolution) or **Quality** (FlashVSR+, Turbo or Base), as a new video in History or straight to a file with Export Video….
 - Styles: prompt templates you pick on the Create screen, with thumbnails, and libraries you can import, export and browse as a web page.
-- Characters: saved characters built with knobs and written as a description, rendered in any of your styles side by side.
+- Characters: saved characters built with knobs and written as a description, rendered in any of your styles side by side, with character sheets such as turnarounds.
 - Presets and inspector layouts.
 - History kept in projects, in Draw Things' project file format, with one-click "Use Settings" and 1 to 5 star ratings.
 - A model and LoRA library: download from the community catalog, import `.safetensors` checkpoints and LoRAs, and make 8-bit copies of MOSS models.

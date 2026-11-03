@@ -1,8 +1,36 @@
 {
   "reference": {
     "template": "Full body, facing the viewer. {{SUBJECT}} Plain seamless backdrop, even soft light, deep focus, everything sharp from front to back.",
-    "negative": "bokeh, blurred background, shallow depth of field"
+    "negative": "bokeh, blurred background, shallow depth of field",
+    "sheetTemplate": "{{SUBJECT}} Plain seamless backdrop, even soft light, deep focus, everything sharp from front to back."
   },
+  "sheets": [
+    {
+      "id": "turnaround",
+      "title": "Turnaround",
+      "aspect": 2.0,
+      "template": "A character turnaround sheet: the same character shown four times, side by side on one wide canvas, in a front view, a three-quarter view, a side view and a back view. Every view is full body, at the same scale, with the same outfit, hair and features. The character: {{SUBJECT}}"
+    },
+    {
+      "id": "expressions",
+      "title": "Expressions",
+      "aspect": 1.5,
+      "template": "A character expression sheet: the same character's head and shoulders shown six times on one canvas, in a grid of two rows of three, with neutral, happy, sad, angry, surprised and laughing expressions. The same face, hair and outfit in every view. The character: {{SUBJECT}}"
+    },
+    {
+      "id": "poses",
+      "title": "Poses",
+      "aspect": 1.75,
+      "template": "A character pose sheet: the same character shown four times, side by side on one canvas, standing, walking, sitting and running. Every view is full body, at the same scale, with the same outfit, hair and features. The character: {{SUBJECT}}"
+    },
+    {
+      "id": "custom",
+      "title": "Custom",
+      "aspect": 1.5,
+      "takesText": true,
+      "template": "A character sheet: the same character shown several ways on one canvas, {{CUSTOM}}. The same character and outfit in every view. The character: {{SUBJECT}}"
+    }
+  ],
   "sections": [
     {
       "id": "identity",

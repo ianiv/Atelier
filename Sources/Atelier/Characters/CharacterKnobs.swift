@@ -8,6 +8,33 @@ struct CharacterKnobSet: Decodable {
   struct Reference: Decodable {
     var template: String
     var negative: String
+    /// The No Style look of a sheet: the look without the framing, which the sheet sets.
+    var sheetTemplate: String?
+  }
+
+  /// A character sheet: one image showing the character several ways, from one prompt.
+  struct Sheet: Decodable, Identifiable {
+    var id: String
+    var title: String
+    /// Width over height, which suits how many views it holds and how they're laid out.
+    var aspect: Double
+    /// `{{SUBJECT}}` is the description, and `{{CUSTOM}}` the character's custom sheet text.
+    var template: String
+    /// Asks for text of your own (`{{CUSTOM}}`).
+    var takesText: Bool?
+
+    /// The size for this sheet at so many megapixels, in the 64-pixel units the size setting uses.
+    func size(megapixels: Int) -> (width: Int, height: Int) {
+      let height = (Double(megapixels) * 1_000_000 / aspect).squareRoot()
+      func units(_ value: Double) -> Int { max(Int((value / 64).rounded()), 1) * 64 }
+      return (units(height * aspect), units(height))
+    }
+
+    /// The sheet's words around the description, which then fill a style's subject.
+    func subject(description: String, custom: String) -> String {
+      let values = [Style.subject: description, "CUSTOM": English.withoutFinalStop(custom.trimmed)]
+      return Style(name: title, template: template).apply(values, negativePrompt: "").prompt
+    }
   }
 
   struct Option: Decodable, Hashable {
@@ -175,6 +202,34 @@ struct CharacterKnobSet: Decodable {
 
   var reference: Reference
   var sections: [Section]
+  var sheets: [Sheet] = []
+
+  /// The two sizes a sheet can be, in megapixels.
+  static let sheetMegapixels = [1, 2]
+
+  private enum CodingKeys: String, CodingKey { case reference, sections, sheets }
+
+  init(reference: Reference, sections: [Section]) {
+    self.reference = reference
+    self.sections = sections
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    reference = try container.decode(Reference.self, forKey: .reference)
+    sections = try container.decode([Section].self, forKey: .sections)
+    sheets = try container.decodeIfPresent([Sheet].self, forKey: .sheets) ?? []
+  }
+
+  /// The look of a sheet with No Style.
+  var referenceSheetStyle: Style {
+    Style(name: "No Style", template: reference.sheetTemplate ?? "{{SUBJECT}}", negative: reference.negative)
+  }
+
+  /// The character's chosen sheet, else the first.
+  func sheet(of character: SavedCharacter) -> Sheet? {
+    sheets.first { $0.id == character.sheet } ?? sheets.first
+  }
 
   /// The look of a render with No Style.
   var referenceStyle: Style {
@@ -191,13 +246,22 @@ struct CharacterKnobSet: Decodable {
 
   /// The knobs in Application Support when there's a readable file there, else the app's own.
   static func load() -> CharacterKnobSet {
+    let own = bundled()
     if let data = try? Data(contentsOf: overrideFile) {
       do {
-        return try JSONDecoder().decode(CharacterKnobSet.self, from: data)
+        var knobs = try JSONDecoder().decode(CharacterKnobSet.self, from: data)
+        // A copy from before sheets keeps working, with the app's.
+        if knobs.sheets.isEmpty { knobs.sheets = own.sheets }
+        if knobs.reference.sheetTemplate == nil { knobs.reference.sheetTemplate = own.reference.sheetTemplate }
+        return knobs
       } catch {
         print("Couldn't read \(overrideFile.path): \(error)")
       }
     }
+    return own
+  }
+
+  private static func bundled() -> CharacterKnobSet {
     guard let url = Bundle.main.url(forResource: "CharacterKnobs", withExtension: "json"),
           let data = try? Data(contentsOf: url),
           let knobs = try? JSONDecoder().decode(CharacterKnobSet.self, from: data)

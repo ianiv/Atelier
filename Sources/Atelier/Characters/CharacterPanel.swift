@@ -218,6 +218,7 @@ struct CharacterPanel: View {
           .help(blocker ?? "Render a preview with the model, settings and seed on Create. It isn't saved to the project.")
       }
       .frame(height: 26)
+      sheetControls(running: running)
     }
     .sheet(isPresented: $pickingStyles) {
       RenderInStylesSheet(settings: settingsText) { chosen in
@@ -227,13 +228,55 @@ struct CharacterPanel: View {
     }
   }
 
+  /// Render Sheet and what it makes: one image showing the character several ways.
+  private func sheetControls(running: Bool) -> some View {
+    let blocker = store.sheetBlocker(create, for: character)
+    let sheet = knobs.sheet(of: character)
+    return VStack(spacing: 8) {
+      HStack(spacing: 8) {
+        Picker(
+          "Sheet", selection: Binding(get: { sheet?.id ?? "" }, set: { value in edit { $0.sheet = value } })
+        ) {
+          ForEach(knobs.sheets) { Text($0.title).tag($0.id) }
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .help("What the sheet shows, on one canvas shaped to suit it")
+        Picker(
+          "Resolution", selection: Binding(get: { character.sheetMegapixels }, set: { value in edit { $0.sheetMegapixels = value } })
+        ) {
+          ForEach(CharacterKnobSet.sheetMegapixels, id: \.self) { Text("\($0) MP").tag($0) }
+        }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+        .fixedSize()
+        .help("The sheet's size. It has its own, whatever size is on Create.")
+        Button("Render Sheet") {
+          store.renderSheet(character, in: style, create: create)
+        }
+        .keyboardShortcut(.return, modifiers: [.command, .shift])
+        .disabled(blocker != nil || running)
+        .help(blocker ?? "Render one image showing the character several ways. It comes out as a preview.")
+      }
+      .frame(height: 26)
+      TextField(
+        "Custom sheet", text: Binding(get: { character.customSheet }, set: { value in edit { $0.customSheet = value } }),
+        prompt: Text("Custom sheet: in three outfits, side by side")
+      )
+      .frame(height: 26)
+      .disabled(sheet?.takesText != true)
+      .help("What a Custom sheet shows. Pick Custom to use it.")
+    }
+  }
+
   /// Says what renders use, in place of asking you to remember: it isn't this screen's to change.
   private var createSettings: some View {
     HStack(spacing: 8) {
-      Label(settingsText, systemImage: "paintbrush")
+      Text(settingsText)
         .font(.callout)
         .foregroundStyle(settingsUsable ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
-        .lineLimit(2, reservesSpace: true)
+        .lineLimit(3, reservesSpace: true)
         .frame(maxWidth: .infinity, alignment: .leading)
         .help(settingsText)
       Button("Go to Create") { navigation.section = .create }
@@ -251,7 +294,12 @@ struct CharacterPanel: View {
       return "Uses Create's settings: pick a model there first."
     }
     if create.videoModel != nil { return "Uses Create's settings: \(name) makes video. Pick an image model there." }
-    return "Uses Create's settings: \(name), \(settings.width)×\(settings.height), \(settings.steps) steps, seed \(create.seed)"
+    var text = "Uses Create's settings: \(name), \(settings.width)×\(settings.height), \(settings.steps) steps, seed \(create.seed)."
+    if let sheet = knobs.sheet(of: character) {
+      let size = sheet.size(megapixels: character.sheetMegapixels)
+      text += " \(sheet.title) sheet: \(size.width)×\(size.height)."
+    }
+    return text
   }
 
   private var description: some View {
@@ -283,7 +331,7 @@ struct CharacterPanel: View {
           }
         }
       }
-      .frame(height: 92)
+      .frame(height: 72)
       .promptBox(focused: false)
     }
   }

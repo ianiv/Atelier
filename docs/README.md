@@ -3,7 +3,7 @@
 1. [Getting started](getting-started.md): what you need, building and installing the app, pointing it at your models, and making your first image.
 2. [Creating images](creating-images.md): the Create screen, the prompt, size and seed, the settings inspector, presets, image to image and the moodboard.
 3. [Styles](styles.md): prompt templates your prompt is written into, with a box per tag and defaults, the Styles screen, thumbnails, and style libraries: self-contained web pages that browse styles and write prompts in any browser, and import back into Atelier.
-4. [Characters](characters.md): saved characters built with knobs, written as a description that fills any style, with previews, a saved image and Send to Create.
+4. [Characters](characters.md): saved characters built with knobs, written as a description that fills any style, with previews, saved images, character sheets and Send to Create.
 5. [Making videos](video.md): video models, length, starting from an image, audio, watching and reusing videos, and upscaling them.
 6. [Putting videos together](video-editor.md): the Video Editor, trimming, splitting and crossfading clips, continuing from any frame, and exporting one longer video.
 7. [The queue](queue.md): queuing images while one runs, making several at once, pausing, reordering and cancelling, and upscaled video exports.
@@ -20,7 +20,7 @@ The iPad version works the same way, with a few differences noted under "On iPad
 | --- | --- |
 | ⌘↩ or Return in the prompt | Generate |
 | ⌥↩ in the prompt | New line |
-| ⌘↩ on the Characters screen | Render |
+| ⌘↩ / ⇧⌘↩ on the Characters screen | Render / Render Sheet |
 | Esc | Stop the running image (the queue goes on) |
 | ⌘L | Focus the prompt |
 | ⌘R | Roll a new seed |
