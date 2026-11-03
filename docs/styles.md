@@ -6,11 +6,13 @@ A style is a prompt template. Pick one on the Create screen and Generate writes 
 
 The **Style** button under the prompt shows the style in use, or **No Style**. Click it to search the styles by name or category and pick one; **No Style** sends the prompt as typed.
 
-- Your prompt replaces the template's `{{SUBJECT}}`. A template without `{{SUBJECT}}` gets your prompt in front of it.
-- The **Setting** field beside the style fills a template's `{{SETTING}}` slot, for styles whose look depends on the environment ("a misty pine forest at dawn"). It's dimmed for styles without the slot. Left empty, the slot is dropped.
+With a style selected, the prompt box shows one labelled box for each tag in the style's template, in the order they appear:
+
+- **Subject** (`{{SUBJECT}}`) is your prompt. A template without `{{SUBJECT}}` still gets a Subject box, and the subject goes in front of the template.
+- Any other tag, such as **Setting** (`{{SETTING}}`) for styles whose look depends on the environment ("a misty pine forest at dawn"), gets its own box. An empty box drops its tag from the prompt. A tag's text is kept when you switch styles, so styles that share a tag share its text.
 - A style's negative prompt is added after yours.
 
-The prompt box keeps only what you typed. History saves the full prompt the model got. **Use Settings**, **Rerun** and the other ways of reusing an image recognise a prompt one of your styles wrote: the prompt box gets the subject back, with that style (and its setting) selected. A prompt no style wrote clears the style, so it isn't styled twice.
+The boxes keep only what you typed. History saves the full prompt the model got. **Use Settings**, **Rerun** and the other ways of reusing an image recognise a prompt one of your styles wrote: the boxes get their text back, with that style selected. A prompt no style wrote clears the style, so it isn't styled twice.
 
 ## The Styles screen
 
@@ -27,9 +29,10 @@ The prompt box keeps only what you typed. History saves the full prompt the mode
 Each style can have a square thumbnail, shown in the list and the editor.
 
 - In the editor's **Thumbnail** section: **Generate** makes one now, **Use Canvas Image** takes the image on Create's canvas, **Choose Image…** takes an image file, and **Remove** takes it away.
-- To make thumbnails for many styles at once, write a subject in the **Thumbnail subject** field under the list ("A woman with a red umbrella walking down a rainy city street"), select the styles (⇧- or ⌘-click, or ⌘A), and click **Make Thumbnails**. The bar shows which one is running; **Stop** ends the batch and keeps the thumbnails already made.
+- The bar under the list has a box for every tag your styles use: **Thumbnail subject** ("A woman with a red umbrella walking down a rainy city street"), and others such as **Thumbnail setting**. Each style's tags take these values; an empty one is left out. **Generate** in the editor uses them too.
+- To make thumbnails for many styles at once, select the styles (⇧- or ⌘-click, or ⌘A) and click **Make Thumbnails**. The bar shows which one is running; **Stop** ends the batch and keeps the thumbnails already made.
 
-Generated thumbnails use the model, settings and seed on the Create screen, with the subject written into each style (its Setting slot left empty), so styles compare like for like. Pick an image model there first, and lower the size or steps for a quicker batch. The jobs run in the queue like any other, and their images also save to the current project.
+Generated thumbnails use what's on the Create screen when you start: the model, every inspector setting (size, steps, sampler, LoRAs and so on) and the seed, the same seed for every style so they compare like for like. Create's negative prompt, canvas and moodboard aren't used; only each style's own negative prompt is. Pick an image model there first, and lower the size or steps for a quicker batch. The jobs run in the queue like any other, and their images also save to the current project.
 
 Styles are saved in `Styles.json` and thumbnails in `StyleThumbnails` in Atelier's Application Support folder. Style files don't carry thumbnails.
 
@@ -58,7 +61,7 @@ photorealistic, 3D render
 - `# Heading`: the category for the styles under it, until the next `#`.
 - `## Heading`: the subcategory (optional), until the next `##` or `#`.
 - `### Heading`: a style's name. Its sections follow, each a label on its own line (or with text after it on the same line) and text that runs until the next label, heading or `---` rule:
-  - `TEMPLATE:` (required): the prompt template, with `{{SUBJECT}}` where the prompt goes and, optionally, `{{SETTING}}`. Other `{{…}}` placeholders are removed.
+  - `TEMPLATE:` (required): the prompt template, with `{{SUBJECT}}` where the prompt goes. Any other `{{TAG}}` (letters, digits and `_`, such as `{{SETTING}}` or `{{CAMERA_ANGLE}}`) becomes a box of its own on the Create screen, labelled from its name ("Camera angle").
   - `NEGATIVE:` (optional): added to the negative prompt.
   - `NOTES:` (optional): shown in the editor only; not sent to the model.
 

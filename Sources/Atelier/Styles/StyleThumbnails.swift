@@ -70,26 +70,28 @@ extension StyleStore {
       return "Pick a model on Create first."
     }
     if create.videoModel != nil { return "Pick an image model on Create: thumbnails are images." }
-    if thumbnailSubject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Write a subject first." }
+    if (thumbnailValues[Style.subject] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      return "Write a subject first."
+    }
     return nil
   }
 
   /// Generates a thumbnail for each style, one after another in the queue, with the model and
-  /// settings on Create and one seed, so the styles compare like for like. The subject goes into
-  /// each style's `{{SUBJECT}}` (its `{{SETTING}}` is left empty). The images also save to the
-  /// project, like any other run.
+  /// settings on Create and one seed, so the styles compare like for like. Each style's tags take
+  /// `thumbnailValues` (an empty one is dropped). Create's negative prompt, canvas and moodboard
+  /// aren't used. The images also save to the project, like any other run.
   func makeThumbnails(for chosen: [Style], create: CreateModel) {
     guard thumbnailRun == nil, !chosen.isEmpty, thumbnailBlocker(create) == nil,
           let model = create.selectedModel, let settings = create.settings
     else { return }
-    let subject = thumbnailSubject
+    let values = thumbnailValues
     let seed = create.seed
     thumbnailRun = (0, chosen.count, 0, chosen[0].name)
     thumbnailTask = Task { [weak self] in
       for style in chosen {
         guard let self, !Task.isCancelled else { break }
         thumbnailRun?.current = style.name
-        let prompts = style.apply(prompt: subject, negativePrompt: "", setting: "")
+        let prompts = style.apply(values, negativePrompt: "")
         let request = GenerationEngine.Request(
           model: model, prompt: prompts.prompt, negativePrompt: prompts.negativePrompt, seed: seed,
           configuration: settings)

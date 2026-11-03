@@ -40,27 +40,28 @@
         check(reread.map(content) == parsed.map(content), "writing the styles back reads the same styles")
 
         let subject = "A red fox sitting on a mossy log, looking over its shoulder."
-        let setting = "A misty pine forest at dawn."
+        // Each tag gets distinct text, so a wrong match shows.
+        func values(_ style: Style) -> [String: String] {
+          Dictionary(uniqueKeysWithValues: style.tags.map { ($0, $0 == Style.subject ? subject : "a misty pine forest (\($0))") })
+        }
         var unmatched: [String] = []
         var leftovers: [String] = []
         for style in parsed {
-          let applied = style.apply(prompt: subject, negativePrompt: "blurry", setting: setting)
+          let filled = values(style)
+          let applied = style.apply(filled, negativePrompt: "blurry")
           if applied.prompt.contains("{{") { leftovers.append(style.name) }
           let matched = style.match(prompt: applied.prompt, negativePrompt: applied.negativePrompt)
-          if matched?.prompt != subject || matched?.negativePrompt != "blurry"
-            || (style.takesSetting && matched?.setting != setting)
-          {
-            unmatched.append(style.name)
+          if matched?.values != filled || matched?.negativePrompt != "blurry" { unmatched.append(style.name) }
+          // Empty tags drop out, and the subject still comes back.
+          let bare = style.apply([Style.subject: subject], negativePrompt: "")
+          if style.match(prompt: bare.prompt, negativePrompt: "")?.values[Style.subject] != subject {
+            unmatched.append(style.name + " (other tags empty)")
           }
-          // Empty slots drop out, and the prompt still comes back.
-          let bare = style.apply(prompt: subject, negativePrompt: "", setting: "")
-          if style.match(prompt: bare.prompt, negativePrompt: "")?.prompt != subject { unmatched.append(style.name + " (no setting)") }
         }
+        log("tags used: \(Set(parsed.flatMap(\.tags)).sorted())")
         check(leftovers.isEmpty, "no placeholders left in written prompts \(leftovers.prefix(5))")
-        check(unmatched.isEmpty, "every style finds its prompt again \(unmatched.prefix(5))")
-        let wrong = parsed.filter { other in
-          other.match(prompt: subject, negativePrompt: "") != nil && other.template.replacingOccurrences(of: Style.subject, with: "") != ""
-        }
+        check(unmatched.isEmpty, "every style finds its tag values again \(unmatched.prefix(5))")
+        let wrong = parsed.filter { $0.match(prompt: subject, negativePrompt: "") != nil && $0.tags != [Style.subject] }
         check(wrong.isEmpty, "a plain prompt matches no style \(wrong.prefix(3).map(\.name))")
 
         guard let store = model.styles else { return log("FAIL no style store") }
@@ -71,11 +72,14 @@
           second.added == 0 && second.replaced == parsed.count && store.styles.count == before + first.added,
           "importing twice replaces instead of duplicating (\(first.added) added, then \(second.replaced) replaced)")
 
-        guard let withSetting = store.styles.first(where: \.takesSetting) else { return }
+        guard let withTags = store.styles.first(where: { $0.tags.count > 1 }) else { return }
+        let setting = "a misty pine forest at dawn"
         model.prompt = subject
-        model.styleID = withSetting.id
-        model.styleSetting = setting
-        check(model.styledPrompts.prompt.contains(subject) && model.styledPrompts.prompt.contains(setting), "Create writes the prompt into \(withSetting.name)")
+        model.styleID = withTags.id
+        for tag in withTags.tags where tag != Style.subject { model.styleValues[tag] = setting }
+        check(
+          model.styledPrompts.prompt.contains(subject) && model.styledPrompts.prompt.contains(setting),
+          "Create writes the boxes \(withTags.tags) into \(withTags.name)")
 
         if let count = value("--thumbnails").flatMap(Int.init), let file = value("--model") {
           while model.models.isEmpty || model.settings == nil || model.isBusy {
@@ -90,7 +94,9 @@
             if let height = value("--height").flatMap(Int.init) { settings.height = height }
             model.settings = settings
           }
-          let chosen = Array(store.styles.prefix(count))
+          // Styles with more tags than SUBJECT, so their thumbnail tag values are used.
+          let chosen = Array(store.styles.filter { $0.tags.count > 1 }.prefix(count))
+          for tag in store.allTags where tag != Style.subject { store.thumbnailValues[tag] = "a misty pine forest at dawn" }
           for style in chosen { store.setThumbnail(nil, for: style.id) }
           check(store.thumbnailBlocker(model) == nil, "thumbnails can be made: \(store.thumbnailBlocker(model) ?? "ok")")
           let started = Date()

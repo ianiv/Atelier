@@ -1,42 +1,30 @@
 import SwiftUI
 
-/// The style beside the prompt, and the Setting field its `{{SETTING}}` slot takes. The field is
-/// always there, disabled for a style without the slot, so the row never shifts.
+/// The style button under the prompt. With a style, the prompt box becomes one box per tag of
+/// its template (PromptComposer).
 struct StyleControls: View {
   @Environment(CreateModel.self) private var model
   @State private var picking = false
 
   var body: some View {
-    @Bindable var model = model
     let style = model.style
-    HStack(spacing: 6) {
-      Button {
-        picking = true
-      } label: {
-        Label(style?.name ?? "No Style", systemImage: "paintpalette")
-          .lineLimit(1)
-          .frame(maxWidth: 180)
+    Button {
+      picking = true
+    } label: {
+      Label(style?.name ?? "No Style", systemImage: "paintpalette")
+        .lineLimit(1)
+        .frame(maxWidth: 180)
+    }
+    .buttonStyle(.bordered)
+    .compactPickerSize()
+    .fixedSize()
+    .help(style.map { "Style: \($0.name). Generate writes the boxes above into its template." } ?? "Pick a style to write the prompt into at Generate")
+    .debugPresents("stylePicker", $picking)
+    .popover(isPresented: $picking) {
+      StylePicker(selection: model.styleID) { picked in
+        model.styleID = picked
+        picking = false
       }
-      .buttonStyle(.bordered)
-      .compactPickerSize()
-      .fixedSize()
-      .help(style.map { "Style: \($0.name). Generate writes the prompt into its template." } ?? "Pick a style to write the prompt into at Generate")
-      .debugPresents("stylePicker", $picking)
-      .popover(isPresented: $picking) {
-        StylePicker(selection: model.styleID) { picked in
-          model.styleID = picked
-          picking = false
-        }
-      }
-      TextField("Setting", text: $model.styleSetting, prompt: Text("Setting"))
-        .textFieldStyle(.roundedBorder)
-        .compactPickerSize()
-        .frame(width: 150)
-        .disabled(style?.takesSetting != true)
-        .help(
-          style?.takesSetting == true
-            ? "Where the scene takes place, for this style's {{SETTING}} slot. Left empty, the slot is dropped."
-            : "Only for styles with a {{SETTING}} slot")
     }
   }
 }

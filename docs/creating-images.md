@@ -7,7 +7,7 @@ The **Create** screen has three parts: the canvas in the middle, the prompt box 
 Type what you want in **Describe the image…** and press Return, or click **Generate** (⌘↩). Press ⌥↩ to start a new line instead. ⌘L jumps to the prompt from anywhere.
 
 - **Negative Prompt**: click the disclosure under the prompt to describe what to avoid. Not every model uses it.
-- **Style**: the button under the prompt picks a [style](styles.md), a template Generate writes your prompt into, with a Setting field for styles that take one.
+- **Style**: the button under the prompt picks a [style](styles.md), a template Generate writes your prompt into. With a style, the prompt box becomes one box per tag in its template (Subject, Setting and so on).
 - **Recent prompts**: ⌘↑ and ⌘↓ step through prompts you used before. **Image ▸ Clear Prompt History…** forgets them; images in History keep their prompts.
 - Drag the handle above the prompt box to make it taller. Double-click the handle to go back to the default height.
 

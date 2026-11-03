@@ -79,10 +79,13 @@ final class CreateModel {
       if !Automation.isRequested { UserDefaults.standard.set(styleID?.uuidString, forKey: "style") }
     }
   }
-  /// What a style's `{{SETTING}}` slot takes.
-  var styleSetting = UserDefaults.standard.string(forKey: "styleSetting") ?? "" {
+  /// What the style's tags other than `SUBJECT` (which is `prompt`) take, by tag. Kept across
+  /// style changes, so a tag two styles share keeps its text.
+  var styleValues: [String: String] =
+    UserDefaults.standard.dictionary(forKey: "styleValues") as? [String: String] ?? [:]
+  {
     didSet {
-      if !Automation.isRequested { UserDefaults.standard.set(styleSetting, forKey: "styleSetting") }
+      if !Automation.isRequested { UserDefaults.standard.set(styleValues, forKey: "styleValues") }
     }
   }
   var seed = UInt32.random(in: 0...UInt32.max)
@@ -300,7 +303,9 @@ final class CreateModel {
   /// The prompt and negative prompt a run sends: written into the selected style, if any.
   var styledPrompts: (prompt: String, negativePrompt: String) {
     guard let style else { return (prompt, negativePrompt) }
-    return style.apply(prompt: prompt, negativePrompt: negativePrompt, setting: styleSetting)
+    var values = styleValues
+    values[Style.subject] = prompt
+    return style.apply(values, negativePrompt: negativePrompt)
   }
 
   /// Puts a saved image's prompts on the Create screen. A prompt one of the styles wrote comes
@@ -309,10 +314,10 @@ final class CreateModel {
   private func restorePrompts(_ savedPrompt: String, _ savedNegative: String) {
     for style in styles?.styles ?? [] {
       if let matched = style.match(prompt: savedPrompt, negativePrompt: savedNegative) {
-        prompt = matched.prompt
+        prompt = matched.values[Style.subject] ?? ""
         negativePrompt = matched.negativePrompt
         styleID = style.id
-        if style.takesSetting { styleSetting = matched.setting }
+        for (tag, value) in matched.values where tag != Style.subject { styleValues[tag] = value }
         return
       }
     }

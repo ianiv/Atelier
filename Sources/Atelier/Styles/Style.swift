@@ -2,9 +2,9 @@ import CoreGraphics
 import Foundation
 import Observation
 
-/// A prompt style: a template the prompt is written into at Generate. `{{SUBJECT}}` takes the
-/// prompt and `{{SETTING}}` the Setting field beside the style picker; the format is in
-/// docs/styles.md.
+/// A prompt style: a template the prompt is written into at Generate. Each `{{TAG}}` in it is a
+/// box on the Create screen in place of the prompt box; `{{SUBJECT}}` is the prompt itself. The
+/// format is in docs/styles.md.
 struct Style: Codable, Identifiable, Hashable {
   var id = UUID()
   var name: String
@@ -15,70 +15,82 @@ struct Style: Codable, Identifiable, Hashable {
   var negative = ""
   var notes = ""
 
-  static let subject = "{{SUBJECT}}"
-  static let setting = "{{SETTING}}"
+  /// The tag the prompt fills.
+  static let subject = "SUBJECT"
+  static let subjectPlaceholder = "{{SUBJECT}}"
+  private static let placeholder = try! NSRegularExpression(pattern: #"\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}"#)
 
-  var takesSetting: Bool { template.contains(Self.setting) }
+  /// The template, with `{{SUBJECT}}` in front when it has none: the prompt goes first.
+  private var fullTemplate: String {
+    template.contains(Self.subjectPlaceholder) ? template : Self.subjectPlaceholder + " " + template
+  }
 
-  /// The prompt and negative prompt a run sends: the prompt in the `{{SUBJECT}}` slot (before the
-  /// template when it has none), the setting in `{{SETTING}}`. An empty slot is dropped, and any
-  /// other `{{…}}` placeholder is removed.
-  func apply(prompt: String, negativePrompt: String, setting: String) -> (prompt: String, negativePrompt: String) {
-    let subject = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-    var text = template
-    if !text.contains(Self.subject) { text = Self.subject + " " + text }
-    text = text.replacingOccurrences(of: Self.subject, with: subject)
-    text = text.replacingOccurrences(of: Self.setting, with: setting.trimmingCharacters(in: .whitespacesAndNewlines))
-    text = text.replacingOccurrences(of: #"\{\{[A-Za-z_]+\}\}"#, with: "", options: .regularExpression)
-    // Close the gap an empty slot leaves, without touching line breaks.
-    text = text.replacingOccurrences(of: #"[ \t]{2,}"#, with: " ", options: .regularExpression)
+  /// The template's tags in the order they first appear, `SUBJECT` always among them.
+  var tags: [String] {
+    let text = fullTemplate as NSString
+    var seen = Set<String>()
+    return Self.placeholder.matches(in: fullTemplate, range: NSRange(location: 0, length: text.length))
+      .map { text.substring(with: $0.range(at: 1)) }
+      .filter { seen.insert($0).inserted }
+  }
+
+  /// A tag as a box's label: `CAMERA_ANGLE` is "Camera angle".
+  static func label(_ tag: String) -> String {
+    let words = tag.replacingOccurrences(of: "_", with: " ").lowercased()
+    return words.prefix(1).uppercased() + words.dropFirst()
+  }
+
+  /// The prompt and negative prompt a run sends: each tag replaced by its value (`SUBJECT` by the
+  /// prompt). An empty tag is dropped along with the gap it leaves.
+  func apply(_ values: [String: String], negativePrompt: String) -> (prompt: String, negativePrompt: String) {
+    let text = fullTemplate as NSString
+    var result = ""
+    var location = 0
+    for found in Self.placeholder.matches(in: fullTemplate, range: NSRange(location: 0, length: text.length)) {
+      result += text.substring(with: NSRange(location: location, length: found.range.location - location))
+      result += (values[text.substring(with: found.range(at: 1))] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+      location = found.range.location + found.range.length
+    }
+    result += text.substring(from: location)
+    // Close the gap an empty tag leaves, without touching line breaks.
+    result = result.replacingOccurrences(of: #"[ \t]{2,}"#, with: " ", options: .regularExpression)
     let negatives = [negativePrompt, negative]
       .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
       .filter { !$0.isEmpty }
-    return (text.trimmingCharacters(in: .whitespacesAndNewlines), negatives.joined(separator: ", "))
+    return (result.trimmingCharacters(in: .whitespacesAndNewlines), negatives.joined(separator: ", "))
   }
 
-  /// The reverse of `apply`: the subject, setting and the user's own negative prompt of a prompt
-  /// this style wrote, or nil when it didn't write it. Lets a reused image bring its style back
-  /// instead of the style wrapping its already-styled prompt again.
-  func match(prompt: String, negativePrompt: String) -> (prompt: String, negativePrompt: String, setting: String)? {
-    var template = template
-    if !template.contains(Self.subject) { template = Self.subject + " " + template }
-    // Literal text with any run of spaces matching any run (an empty slot closes a gap), and the
-    // slots as groups.
+  /// The reverse of `apply`: the tag values and the user's own negative prompt of a prompt this
+  /// style wrote, or nil when it didn't write it. Lets a reused image bring its style back instead
+  /// of the style wrapping its already-styled prompt again.
+  func match(prompt: String, negativePrompt: String) -> (values: [String: String], negativePrompt: String)? {
+    // Literal text with any run of spaces matching any run (an empty tag closes a gap), and each
+    // tag a group.
+    let text = fullTemplate as NSString
     var pattern = "^\\s*"
     var slots: [String] = []
-    let placeholder = try! NSRegularExpression(pattern: #"\{\{[A-Za-z_]+\}\}"#)
-    let ns = template as NSString
     var location = 0
     func literal(_ text: String) -> String {
       text.split(omittingEmptySubsequences: false) { $0 == " " || $0 == "\t" }
         .map { NSRegularExpression.escapedPattern(for: String($0)) }
         .joined(separator: "[ \\t]*")
     }
-    for found in placeholder.matches(in: template, range: NSRange(location: 0, length: ns.length)) {
-      pattern += literal(ns.substring(with: NSRange(location: location, length: found.range.location - location)))
-      let slot = ns.substring(with: found.range)
-      if slot == Self.subject || slot == Self.setting {
-        slots.append(slot)
-        pattern += "(.*?)"
-      } else {
-        pattern += "[ \\t]*"
-      }
+    for found in Self.placeholder.matches(in: fullTemplate, range: NSRange(location: 0, length: text.length)) {
+      pattern += literal(text.substring(with: NSRange(location: location, length: found.range.location - location)))
+      slots.append(text.substring(with: found.range(at: 1)))
+      pattern += "(.*?)"
       location = found.range.location + found.range.length
     }
-    pattern += literal(ns.substring(from: location)) + "\\s*$"
+    pattern += literal(text.substring(from: location)) + "\\s*$"
+    let prompt = prompt as NSString
     guard let regex = try? NSRegularExpression(pattern: pattern, options: .dotMatchesLineSeparators),
-          let found = regex.firstMatch(in: prompt, range: NSRange(location: 0, length: (prompt as NSString).length))
+          let found = regex.firstMatch(in: prompt as String, range: NSRange(location: 0, length: prompt.length))
     else { return nil }
-    var subject = ""
-    var setting = ""
-    for (index, slot) in slots.enumerated() {
-      let value = (prompt as NSString).substring(with: found.range(at: index + 1))
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-      if slot == Self.subject { subject = value } else { setting = value }
+    var values: [String: String] = [:]
+    for (index, slot) in slots.enumerated() where values[slot] == nil {
+      values[slot] = prompt.substring(with: found.range(at: index + 1)).trimmingCharacters(in: .whitespacesAndNewlines)
     }
-    guard !subject.isEmpty else { return nil }
+    guard values[Self.subject]?.isEmpty == false else { return nil }
     var userNegative = negativePrompt.trimmingCharacters(in: .whitespacesAndNewlines)
     let styleNegative = negative.trimmingCharacters(in: .whitespacesAndNewlines)
     if !styleNegative.isEmpty {
@@ -88,7 +100,7 @@ struct Style: Codable, Identifiable, Hashable {
         userNegative = String(userNegative.dropLast(styleNegative.count + 2))
       }
     }
-    return (subject, userNegative, setting)
+    return (values, userNegative)
   }
 }
 
@@ -201,11 +213,17 @@ final class StyleStore {
   private(set) var styles: [Style] = []
   /// Thumbnails read so far, by style (StyleThumbnails.swift); nil marks one with none.
   var thumbnails: [UUID: CGImage?] = [:]
-  /// The subject written into each style to make its thumbnail.
-  var thumbnailSubject = UserDefaults.standard.string(forKey: "styleThumbnailSubject")
-    ?? "A woman with a red umbrella walking down a rainy city street"
+  /// What each tag takes when making thumbnails, by tag (`SUBJECT` included).
+  var thumbnailValues = UserDefaults.standard.dictionary(forKey: "styleThumbnailValues") as? [String: String]
+    ?? [Style.subject: "A woman with a red umbrella walking down a rainy city street"]
   {
-    didSet { if persists { UserDefaults.standard.set(thumbnailSubject, forKey: "styleThumbnailSubject") } }
+    didSet { if persists { UserDefaults.standard.set(thumbnailValues, forKey: "styleThumbnailValues") } }
+  }
+
+  /// Every tag the styles use, `SUBJECT` first, then in the order they first appear.
+  var allTags: [String] {
+    var seen: Set = [Style.subject]
+    return [Style.subject] + styles.flatMap(\.tags).filter { seen.insert($0).inserted }
   }
   /// The thumbnails being made: how many are done (and failed) of how many, and the style running.
   var thumbnailRun: (done: Int, total: Int, failed: Int, current: String)?

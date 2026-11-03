@@ -194,7 +194,7 @@ struct StylesView: View {
 
   private func newStyle() {
     let style = Style(
-      name: "New Style", category: category ?? "My Styles", template: "\(Style.subject), ")
+      name: "New Style", category: category ?? "My Styles", template: "\(Style.subjectPlaceholder), ")
     styles.save(style)
     search = ""
     selection = [style.id]
@@ -295,7 +295,7 @@ struct StyleEditor: View {
       } header: {
         Text("Template")
       } footer: {
-        Text("{{SUBJECT}} is replaced by your prompt; without it, your prompt goes first. {{SETTING}} takes the Setting field beside the style on Create, and is dropped when that's empty.")
+        Text("Each {{TAG}} (letters, digits and _) becomes a box on Create in place of the prompt box, and is dropped when that's empty. {{SUBJECT}} is the prompt; without it, the prompt goes first.")
       }
       Section {
         TextField("Negative", text: $draft.negative, prompt: Text("None"), axis: .vertical)
@@ -384,7 +384,7 @@ private struct ThumbnailSection: View {
             styles.makeThumbnails(for: [style], create: create)
           }
           .disabled(blocker != nil || styles.thumbnailRun != nil)
-          .help(blocker ?? "Generate a thumbnail of the subject below the list in this style, with the model and settings on Create")
+          .help(blocker ?? "Generate a thumbnail in this style from the thumbnail boxes under the list, with the model, settings and seed on Create")
           Button("Use Canvas Image", systemImage: "photo") {
             styles.setThumbnail(create.image, for: style.id)
           }
@@ -410,7 +410,7 @@ private struct ThumbnailSection: View {
   }
 }
 
-/// Under the list: the thumbnail subject, and making thumbnails for the selected styles.
+/// Under the list: the thumbnails' tag values, and making thumbnails for the selected styles.
 private struct ThumbnailBar: View {
   let selected: [Style]
   @Environment(StyleStore.self) private var styles
@@ -425,9 +425,19 @@ private struct ThumbnailBar: View {
       ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
       : AnyLayout(HStackLayout(spacing: 10))
     row {
-      TextField("Thumbnail subject", text: $styles.thumbnailSubject, prompt: Text("Thumbnail subject"))
-        .textFieldStyle(.roundedBorder)
-        .help("What every thumbnail shows, written into each style's {{SUBJECT}}")
+      // One box per tag any style uses, so the bar stays the same whatever is selected.
+      ForEach(styles.allTags, id: \.self) { tag in
+        TextField(
+          Style.label(tag),
+          text: Binding(get: { styles.thumbnailValues[tag] ?? "" }, set: { styles.thumbnailValues[tag] = $0 }),
+          prompt: Text("Thumbnail \(Style.label(tag).lowercased())"))
+          .textFieldStyle(.roundedBorder)
+          .frame(maxWidth: tag == Style.subject ? .infinity : 260)
+          .help(
+            tag == Style.subject
+              ? "What every thumbnail shows, written into each style's {{SUBJECT}}"
+              : "Written into the {{\(tag)}} of styles that have it; left out when empty")
+      }
       HStack(spacing: 10) {
         Text(status)
           .font(.callout)

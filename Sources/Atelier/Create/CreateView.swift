@@ -684,6 +684,8 @@ struct PromptComposer: View {
   @AppStorage("showNegativePrompt") private var showNegative = false
   @AppStorage(PromptSplitter.linesKey) private var promptLines = 3
   @FocusState private var promptFocused: Bool
+  /// The focused box while a style shows one per tag.
+  @FocusState private var focusedTag: String?
   /// Too narrow for the buttons beside the prompt (a narrow iPad window): they go under it.
   @State private var narrow = false
 
@@ -694,15 +696,20 @@ struct PromptComposer: View {
       : AnyLayout(HStackLayout(alignment: .bottom, spacing: 10))
     VStack(alignment: .leading, spacing: 6) {
       row {
-        promptField
-          .focused($promptFocused)
-          .padding(8)
-          .background(Color.textBackground, in: Self.fieldShape)
-          .overlay(
-            Self.fieldShape
-              .stroke(promptFocused ? Color.accentColor : Color.separator)
-          )
-          .help("Prompt. ⌘↩ generates. ⌘L focuses this field.")
+        Group {
+          if let style = model.style {
+            tagFields(style)
+          } else {
+            promptField.focused($promptFocused)
+          }
+        }
+        .padding(8)
+        .background(Color.textBackground, in: Self.fieldShape)
+        .overlay(
+          Self.fieldShape
+            .stroke(promptFocused || focusedTag != nil ? Color.accentColor : Color.separator)
+        )
+        .help("Prompt. ⌘↩ generates. ⌘L focuses this field.")
         VStack(spacing: 8) {
           // The rating of the image on the canvas, as in History.
           if let item = model.imageItem {
@@ -723,7 +730,7 @@ struct PromptComposer: View {
           ClickableLabel("Negative Prompt", isExpanded: $showNegative)
         }
         .font(.callout)
-        if !narrow { StyleControls() }
+        StyleControls()
         if model.layoutFormat != nil {
           Toggle(
             isOn: Binding(get: { model.layout != nil }, set: { $0 ? model.openLayout() : model.closeLayout() })
@@ -751,11 +758,11 @@ struct PromptComposer: View {
             ? "Generate starts from the prompt alone. Edit also sends the canvas: what's inside the frame is the input, and empty areas are filled in."
             : "This model doesn't take image inputs, so it always generates from the prompt. Lower Strength below 100% in the inspector to edit from the canvas.")
       }
-      // A narrow window has no room for the style beside the other controls: it gets its own row.
-      if narrow { StyleControls() }
     }
     .padding(12)
-    .onChange(of: model.focusPromptRequest) { promptFocused = true }
+    .onChange(of: model.focusPromptRequest) {
+      if model.style != nil { focusedTag = Style.subject } else { promptFocused = true }
+    }
     #if os(iOS)
       .onGeometryChange(for: Bool.self) { $0.size.width < 480 } action: { narrow = $0 }
     #endif
@@ -795,6 +802,50 @@ struct PromptComposer: View {
   /// Follows the window's corners, never tighter than a text field's.
   /// On the Mac a vertical text field doesn't scroll with the trackpad or mouse wheel, only by
   /// moving the caret, so there the prompt is a text editor sized to the same number of lines.
+  /// With a style, one box per tag of its template in place of the prompt box, in the space the
+  /// prompt box takes; `SUBJECT` is the prompt.
+  private func tagFields(_ style: Style) -> some View {
+    Text(verbatim: " ")
+      .lineLimit(promptLines, reservesSpace: true)
+      .font(.body)
+      .frame(maxWidth: .infinity)
+      .hidden()
+      .overlay {
+        ScrollView {
+          Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 8, verticalSpacing: 6) {
+            ForEach(style.tags, id: \.self) { tag in
+              GridRow {
+                Text(Style.label(tag))
+                  .font(.callout)
+                  .foregroundStyle(.secondary)
+                  .gridColumnAlignment(.trailing)
+                TextField(Style.label(tag), text: tagBinding(tag), prompt: Text(tagPrompt(tag)), axis: .vertical)
+                  .textFieldStyle(.plain)
+                  .font(.body)
+                  .focused($focusedTag, equals: tag)
+                  #if os(iOS)
+                    .onSubmit { model.generate() }
+                  #endif
+              }
+            }
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .scrollIndicators(.automatic)
+      }
+  }
+
+  private func tagBinding(_ tag: String) -> Binding<String> {
+    if tag == Style.subject {
+      return Binding(get: { model.prompt }, set: { model.prompt = $0 })
+    }
+    return Binding(get: { model.styleValues[tag] ?? "" }, set: { model.styleValues[tag] = $0 })
+  }
+
+  private func tagPrompt(_ tag: String) -> String {
+    tag == Style.subject ? "Describe the subject…" : "Optional: left out when empty"
+  }
+
   @ViewBuilder private var promptField: some View {
     @Bindable var model = model
     #if os(macOS)

@@ -644,6 +644,9 @@ final class AgentTools {
       "negative_prompt": create.negativePrompt,
       "style": create.style?.name ?? NSNull(),
       "styled_prompt": create.style == nil ? NSNull() : create.styledPrompts.prompt,
+      "style_tags": create.style.map { style in
+        Dictionary(uniqueKeysWithValues: style.tags.map { ($0, $0 == Style.subject ? create.prompt : create.styleValues[$0] ?? "") })
+      } ?? NSNull(),
       "seed": Int(create.seed),
       "random_seed": !create.seedLocked,
       "count": create.count,
