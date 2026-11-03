@@ -7,7 +7,7 @@ The **Create** screen has three parts: the canvas in the middle, the prompt box 
 Type what you want in **Describe the image…** and press Return, or click **Generate** (⌘↩). Press ⌥↩ to start a new line instead. ⌘L jumps to the prompt from anywhere.
 
 - **Negative Prompt**: click the disclosure under the prompt to describe what to avoid. Not every model uses it.
-- **Style**: the button under the prompt picks a [style](styles.md), a template Generate writes your prompt into. With a style, the prompt box becomes one box per tag in its template (Subject, Setting and so on).
+- **Style**: the button beside the prompt, above Generate, picks a [style](styles.md), a template Generate writes your prompt into. With a style, the prompt box becomes one box per tag in its template (Subject, Setting and so on).
 - **Recent prompts**: ⌘↑ and ⌘↓ step through prompts you used before. **Image ▸ Clear Prompt History…** forgets them; images in History keep their prompts.
 - Drag the handle above the prompt box to make it taller. Double-click the handle to go back to the default height.
 
@@ -15,7 +15,7 @@ While an image generates, the canvas shows a preview at each step. Click **Stop*
 
 ### Layout prompts
 
-FLUX.3, Ideogram 4 and MOSS Image can place things where you put them. With one of them picked, click **Layout** under the prompt:
+FLUX.3, Ideogram 4 and MOSS Image can place things where you put them. With one of them picked, click **Layout** beside the prompt, above Generate:
 
 - **Drag on the canvas** to draw a box, or click **+** in the Layout panel to add one in the middle. Drag a box to move it; the picked box has corner handles to resize it. Right-click a box, or click its trash button, to delete it.
 - In the **Layout panel**, write the **Caption** (the whole image: medium, setting, light) and, for each box, what goes in it. Make a box **Text** to give the exact words to show; MOSS also has **Character**. Ideogram adds a **Background** field. FLUX.3 cites boxes in the caption by id, such as `<object_1>`: the button beside a box adds its id to the caption.
@@ -107,7 +107,7 @@ The two buttons at the strip's left switch what it shows: **Chronological** (clo
 
 ## Image to image
 
-The **Generate / Edit** switch under the prompt decides whether the canvas is sent to the model.
+The **Generate / Edit** switch beside the prompt, above the Generate button, decides whether the canvas is sent to the model.
 
 - **Generate** makes an image from the prompt alone. The canvas is ignored.
 - **Edit** sends what's inside the frame on the canvas as the input image. Empty areas of the frame (where the image doesn't reach) are filled in, so moving or zooming the image out inside the frame extends it (outpainting). An **Input** badge on the frame tells you Edit is on.

@@ -30,11 +30,10 @@ struct StyleControls: View {
     } label: {
       Label(style?.name ?? "No Style", systemImage: "paintpalette")
         .lineLimit(1)
-        .frame(maxWidth: 180)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
     .buttonStyle(.bordered)
     .compactPickerSize()
-    .fixedSize()
     .help(style.map { "Style: \($0.name). Generate writes the boxes above into its template." } ?? "Pick a style to write the prompt into at Generate")
     .debugPresents("stylePicker", $picking)
     .popover(isPresented: $picking) {

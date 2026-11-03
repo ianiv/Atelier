@@ -2,7 +2,7 @@
 
 1. [Getting started](getting-started.md): what you need, building and installing the app, pointing it at your models, and making your first image.
 2. [Creating images](creating-images.md): the Create screen, the prompt, size and seed, the settings inspector, presets, image to image and the moodboard.
-3. [Styles](styles.md): prompt templates your prompt is written into, the Styles screen, and the style file format for importing and sharing them.
+3. [Styles](styles.md): prompt templates your prompt is written into, with a box per tag and defaults, the Styles screen, thumbnails, and style libraries: self-contained web pages that browse styles and write prompts in any browser, and import back into Atelier.
 4. [Making videos](video.md): video models, length, starting from an image, audio, watching and reusing videos, and upscaling them.
 5. [Putting videos together](video-editor.md): the Video Editor, trimming, splitting and crossfading clips, continuing from any frame, and exporting one longer video.
 6. [The queue](queue.md): queuing images while one runs, making several at once, pausing, reordering and cancelling, and upscaled video exports.

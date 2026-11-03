@@ -4,7 +4,7 @@ A style is a prompt template. Pick one on the Create screen and Generate writes 
 
 ## Using a style
 
-The **Style** button under the prompt shows the style in use, or **No Style**. Click it to search the styles by name or category and pick one; **No Style** sends the prompt as typed.
+The **Style** button beside the prompt (above Generate) shows the style in use, or **No Style**. Click it to search the styles by name or category and pick one; **No Style** sends the prompt as typed.
 
 With a style selected, the prompt box shows one labelled box for each tag in the style's template, in the order they appear:
 

@@ -688,6 +688,8 @@ struct PromptComposer: View {
   @FocusState private var focusedTag: String?
   /// Too narrow for the buttons beside the prompt (a narrow iPad window): they go under it.
   @State private var narrow = false
+  /// The Stop, count and Generate buttons' width, which the controls above them take.
+  @State private var buttonsWidth: CGFloat?
 
   var body: some View {
     @Bindable var model = model
@@ -705,54 +707,46 @@ struct PromptComposer: View {
         }
         .promptBox(focused: promptFocused || focusedTag != nil)
         .help("Prompt. ⌘↩ generates. ⌘L focuses this field.")
-        VStack(spacing: 8) {
+        // Beside the prompt, as wide as the buttons at the bottom: the style, Layout and the mode
+        // above them.
+        VStack(alignment: .trailing, spacing: 8) {
           // The rating of the image on the canvas, as in History.
           if let item = model.imageItem {
             StarRating(stars: model.history.rating(of: item)) {
               model.history.setRating($0, for: [item])
             }
             .imageScale(.large)
+            .frame(maxWidth: .infinity)
+          }
+          StyleControls()
+          HStack(spacing: 6) {
+            if model.layoutFormat != nil {
+              Toggle(
+                isOn: Binding(get: { model.layout != nil }, set: { $0 ? model.openLayout() : model.closeLayout() })
+              ) {
+                Label("Layout", systemImage: "rectangle.3.group")
+              }
+              .toggleStyle(.button)
+              .compactPickerSize()
+              .fixedSize()
+              .help("Draw boxes on the canvas and say what goes in each. The prompt is written in this model's layout format.")
+            }
+            modePicker
           }
           buttons
+            .fixedSize()
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { buttonsWidth = $0 }
         }
+        .frame(width: buttonsWidth)
       }
-      HStack(alignment: .top, spacing: 12) {
-        DisclosureGroup(isExpanded: $showNegative) {
-          TextField("What to avoid", text: $model.negativePrompt, axis: .vertical)
-            .lineLimit(1...4)
-            .textFieldStyle(.roundedBorder)
-        } label: {
-          ClickableLabel("Negative Prompt", isExpanded: $showNegative)
-        }
-        .font(.callout)
-        StyleControls()
-        if model.layoutFormat != nil {
-          Toggle(
-            isOn: Binding(get: { model.layout != nil }, set: { $0 ? model.openLayout() : model.closeLayout() })
-          ) {
-            Label("Layout", systemImage: "rectangle.3.group")
-          }
-          .toggleStyle(.button)
-          .compactPickerSize()
-          .fixedSize()
-          .help("Draw boxes on the canvas and say what goes in each. The prompt is written in this model's layout format.")
-        }
-        Picker(
-          "Mode", selection: Binding(get: { model.effectiveCanvasMode }, set: { model.canvasMode = $0 })
-        ) {
-          Text("Generate").tag(CreateModel.CanvasMode.generate)
-          Text("Edit").tag(CreateModel.CanvasMode.edit)
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .compactPickerSize()
-        .fixedSize()
-        .disabled(!model.canEdit)
-        .help(
-          model.canEdit
-            ? "Generate starts from the prompt alone. Edit also sends the canvas: what's inside the frame is the input, and empty areas are filled in."
-            : "This model doesn't take image inputs, so it always generates from the prompt. Lower Strength below 100% in the inspector to edit from the canvas.")
+      DisclosureGroup(isExpanded: $showNegative) {
+        TextField("What to avoid", text: $model.negativePrompt, axis: .vertical)
+          .lineLimit(1...4)
+          .textFieldStyle(.roundedBorder)
+      } label: {
+        ClickableLabel("Negative Prompt", isExpanded: $showNegative)
       }
+      .font(.callout)
     }
     .padding(12)
     .onChange(of: model.focusPromptRequest) {
@@ -761,6 +755,25 @@ struct PromptComposer: View {
     #if os(iOS)
       .onGeometryChange(for: Bool.self) { $0.size.width < 480 } action: { narrow = $0 }
     #endif
+  }
+
+  /// Generate starts from the prompt; Edit also sends the canvas.
+  private var modePicker: some View {
+    Picker(
+      "Mode", selection: Binding(get: { model.effectiveCanvasMode }, set: { model.canvasMode = $0 })
+    ) {
+      Text("Generate").tag(CreateModel.CanvasMode.generate)
+      Text("Edit").tag(CreateModel.CanvasMode.edit)
+    }
+    .pickerStyle(.segmented)
+    .labelsHidden()
+    .compactPickerSize()
+    .frame(maxWidth: .infinity)
+    .disabled(!model.canEdit)
+    .help(
+      model.canEdit
+        ? "Generate starts from the prompt alone. Edit also sends the canvas: what's inside the frame is the input, and empty areas are filled in."
+        : "This model doesn't take image inputs, so it always generates from the prompt. Lower Strength below 100% in the inspector to edit from the canvas.")
   }
 
   /// Stop, the image count and Generate.
