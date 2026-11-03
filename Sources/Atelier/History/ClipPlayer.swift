@@ -10,11 +10,16 @@ struct ClipPlayer: View {
   let item: HistoryItem
   /// Starts playing once loaded (the canvas); History's detail waits for Play.
   var autoplay = true
+  /// Plays the canvas's playback and offers the canvas menu; otherwise (History) its own and
+  /// the frame menu, since opening, clearing and zooming are about the canvas.
+  var onCanvas = false
   @Environment(HistoryStore.self) private var history
   @Environment(CreateModel.self) private var model
-  @State private var playback = ClipPlayback()
+  @State private var ownPlayback = ClipPlayback()
   @State private var failure: String?
   @State private var hovering = false
+
+  private var playback: ClipPlayback { onCanvas ? model.canvasPlayback : ownPlayback }
 
   var body: some View {
     ZStack {
@@ -44,7 +49,13 @@ struct ClipPlayer: View {
           }
       }
     }
-    .contextMenu { ClipFrameMenu(item: item, playback: playback) }
+    .contextMenu {
+      if onCanvas {
+        CanvasClipMenu(item: item, playback: playback)
+      } else {
+        ClipFrameMenu(item: item, playback: playback)
+      }
+    }
     .task(id: item.tensorId) {
       failure = nil
       do {
@@ -202,6 +213,48 @@ struct ClipFrameMenu: View {
       let index = playback.pauseOnFrame(count: count)
       Task { if let frame = await history.frame(index, of: item) { model.moodboard.add(frame) } }
     }
+  }
+}
+
+/// The canvas menu while the canvas plays a clip: the image menu's groups in its order, with the
+/// frame actions a video adds. Copy and Add to Moodboard take the frame on screen.
+struct CanvasClipMenu: View {
+  let item: HistoryItem
+  let playback: ClipPlayback
+  @Environment(CreateModel.self) private var model
+  @Environment(HistoryStore.self) private var history
+  @Environment(FileDialogs.self) private var fileDialogs
+
+  var body: some View {
+    let count = item.clip?.frames.count ?? 0
+    Button("Copy Frame") {
+      let index = playback.pauseOnFrame(count: count)
+      Task { if let frame = await history.frame(index, of: item) { HistoryStore.copy(frame) } }
+    }
+    Button("Save Video…") { ClipActions.save(item, history: history, dialogs: fileDialogs) }
+    Button("Save to Photos") { ClipActions.saveToPhotos(item, history: history, model: model) }
+    Divider()
+    Button("Use This Frame as Input") {
+      let index = playback.pauseOnFrame(count: count)
+      model.useFrame(index, of: item)
+    }
+    Button("Use Last Frame as Input") {
+      playback.pause()
+      model.useFrame(count - 1, of: item)
+    }
+    Divider()
+    CanvasContentItems(
+      noun: "Video", addToMoodboardTitle: "Add Frame to Moodboard",
+      canLoadSettings: model.canUse(item),
+      loadSettings: { model.use(item, loadImage: false) },
+      addToMoodboard: {
+        let index = playback.pauseOnFrame(count: count)
+        Task { if let frame = await history.frame(index, of: item) { model.moodboard.add(frame) } }
+      })
+    Divider()
+    // A clip always fills the frame: canvas zoom doesn't reach it.
+    ZoomMenuItems(canvas: model.canvas)
+      .disabled(true)
   }
 }
 

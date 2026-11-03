@@ -114,6 +114,8 @@ final class CreateModel {
   var presets: PresetStore?
   /// The canvas's zoom and position.
   let canvas = CanvasState()
+  /// The clip the canvas plays, here so the canvas menu reaches the frame on screen wherever it opens.
+  let canvasPlayback = ClipPlayback()
   /// Reference images, sent in both modes to models that take them.
   let moodboard = Moodboard()
   /// The audio file for video models that take one.

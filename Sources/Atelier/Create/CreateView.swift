@@ -153,7 +153,7 @@ struct CanvasView: View {
       ZStack {
         if let clip = model.canvasClip {
           // A finished video plays in the frame.
-          ClipPlayer(item: clip)
+          ClipPlayer(item: clip, onCanvas: true)
             .frame(width: frameRect.width, height: frameRect.height)
             .position(x: frameRect.midX, y: frameRect.midY)
         } else if let image = model.image {
@@ -219,7 +219,14 @@ struct CanvasView: View {
       .onTapGesture(count: 2) {
         if canvas.scale == nil { canvas.zoom(to: 1) } else { canvas.zoomToFit() }
       }
-      .contextMenu { contextMenu(canvas) }
+      // The margin around a video offers its menu too, not the image one.
+      .contextMenu {
+        if let clip = model.canvasClip {
+          CanvasClipMenu(item: clip, playback: model.canvasPlayback)
+        } else {
+          contextMenu(canvas)
+        }
+      }
       .dropDestination(for: DroppedImage.self) { images, _ in
         guard let image = images.first else { return false }
         model.setCanvasImage(image.image, metadata: image.metadata)
@@ -285,17 +292,11 @@ struct CanvasView: View {
     Button("Save to Photos") { saveToPhotos() }
       .disabled(model.image == nil)
     Divider()
-    Button("Open Image…") { model.imageImport = .canvas }
-    Button("Open from Photos…") { model.photosImport = .canvas }
-    Button("Paste Image") { model.pasteImage() }
-    Button("Load Settings from Image") { model.loadCanvasImageSettings(undoManager: undoManager) }
-      .disabled(model.canvasImageSettings == nil)
-    Button("Add to Moodboard") { model.addCanvasToMoodboard() }
-      .disabled(model.image == nil)
-    Button("Match Size to Image") { model.matchSizeToImage(undoManager: undoManager) }
-      .disabled(model.image == nil)
-    Button("Clear Canvas") { model.clearCanvas() }
-      .disabled(model.image == nil)
+    CanvasContentItems(
+      noun: "Image", addToMoodboardTitle: "Add to Moodboard",
+      canLoadSettings: model.canvasImageSettings != nil,
+      loadSettings: { model.loadCanvasImageSettings(undoManager: undoManager) },
+      addToMoodboard: { model.addCanvasToMoodboard() })
     Divider()
     ZoomMenuItems(canvas: canvas)
   }
@@ -335,6 +336,32 @@ struct CanvasView: View {
     ) { result in
       if case .failure(let error) = result { saveError = error.localizedDescription }
     }
+  }
+}
+
+/// What goes on the canvas and comes from it, the same for an image and a video so the two menus
+/// keep their order.
+struct CanvasContentItems: View {
+  let noun: String
+  let addToMoodboardTitle: String
+  let canLoadSettings: Bool
+  let loadSettings: () -> Void
+  let addToMoodboard: () -> Void
+  @Environment(CreateModel.self) private var model
+  @Environment(\.undoManager) private var undoManager
+
+  var body: some View {
+    Button("Open Image…") { model.imageImport = .canvas }
+    Button("Open from Photos…") { model.photosImport = .canvas }
+    Button("Paste Image") { model.pasteImage() }
+    Button("Load Settings from \(noun)", action: loadSettings)
+      .disabled(!canLoadSettings)
+    Button(addToMoodboardTitle, action: addToMoodboard)
+      .disabled(model.image == nil)
+    Button("Match Size to \(noun)") { model.matchSizeToImage(undoManager: undoManager) }
+      .disabled(model.image == nil)
+    Button("Clear Canvas") { model.clearCanvas() }
+      .disabled(model.image == nil)
   }
 }
 
