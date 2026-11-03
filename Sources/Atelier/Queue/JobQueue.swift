@@ -11,6 +11,8 @@ final class JobQueue {
     enum Status: Equatable {
       case waiting, running
       case finished(tensorId: Int64)
+      /// A style thumbnail made; it isn't saved to the project.
+      case madeThumbnail
       /// An export written to this file.
       case exported(URL)
       case failed(String)

@@ -3,8 +3,8 @@ import Foundation
 import Observation
 
 /// A prompt style: a template the prompt is written into at Generate. Each `{{TAG}}` in it is a
-/// box on the Create screen in place of the prompt box; `{{SUBJECT}}` is the prompt itself. The
-/// format is in docs/styles.md.
+/// box on the Create screen in place of the prompt box; `{{SUBJECT}}` is the prompt itself.
+/// `{{TAG:text}}` gives the text used when the box is left empty. The format is in docs/styles.md.
 struct Style: Codable, Identifiable, Hashable {
   var id = UUID()
   var name: String
@@ -18,11 +18,27 @@ struct Style: Codable, Identifiable, Hashable {
   /// The tag the prompt fills.
   static let subject = "SUBJECT"
   static let subjectPlaceholder = "{{SUBJECT}}"
-  private static let placeholder = try! NSRegularExpression(pattern: #"\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}"#)
+  /// `{{TAG}}` or `{{TAG:default}}`: group 1 is the tag, group 2 its default.
+  private static let placeholder = try! NSRegularExpression(pattern: #"\{\{([A-Za-z_][A-Za-z0-9_]*)(?::([^}]*))?\}\}"#)
 
   /// The template, with `{{SUBJECT}}` in front when it has none: the prompt goes first.
   private var fullTemplate: String {
-    template.contains(Self.subjectPlaceholder) ? template : Self.subjectPlaceholder + " " + template
+    template.range(of: #"\{\{SUBJECT(:[^}]*)?\}\}"#, options: .regularExpression) != nil
+      ? template : Self.subjectPlaceholder + " " + template
+  }
+
+  /// Each tag's default text (from its first `{{TAG:default}}`), used when its box is empty.
+  var defaults: [String: String] {
+    let text = fullTemplate as NSString
+    var defaults: [String: String] = [:]
+    for found in Self.placeholder.matches(in: fullTemplate, range: NSRange(location: 0, length: text.length))
+      where found.range(at: 2).location != NSNotFound
+    {
+      let tag = text.substring(with: found.range(at: 1))
+      let value = text.substring(with: found.range(at: 2)).trimmingCharacters(in: .whitespacesAndNewlines)
+      if defaults[tag] == nil, !value.isEmpty { defaults[tag] = value }
+    }
+    return defaults
   }
 
   /// The template's tags in the order they first appear, `SUBJECT` always among them.
@@ -41,14 +57,18 @@ struct Style: Codable, Identifiable, Hashable {
   }
 
   /// The prompt and negative prompt a run sends: each tag replaced by its value (`SUBJECT` by the
-  /// prompt). An empty tag is dropped along with the gap it leaves.
+  /// prompt), or when that's empty its default. A tag left empty with no default is dropped along
+  /// with the gap it leaves.
   func apply(_ values: [String: String], negativePrompt: String) -> (prompt: String, negativePrompt: String) {
     let text = fullTemplate as NSString
+    let defaults = defaults
     var result = ""
     var location = 0
     for found in Self.placeholder.matches(in: fullTemplate, range: NSRange(location: 0, length: text.length)) {
       result += text.substring(with: NSRange(location: location, length: found.range.location - location))
-      result += (values[text.substring(with: found.range(at: 1))] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+      let tag = text.substring(with: found.range(at: 1))
+      let value = (values[tag] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+      result += value.isEmpty ? defaults[tag] ?? "" : value
       location = found.range.location + found.range.length
     }
     result += text.substring(from: location)
@@ -91,6 +111,8 @@ struct Style: Codable, Identifiable, Hashable {
       values[slot] = prompt.substring(with: found.range(at: index + 1)).trimmingCharacters(in: .whitespacesAndNewlines)
     }
     guard values[Self.subject]?.isEmpty == false else { return nil }
+    // A tag holding its default was left empty: its box comes back empty, showing the default.
+    for (tag, value) in defaults where values[tag] == value { values[tag] = "" }
     var userNegative = negativePrompt.trimmingCharacters(in: .whitespacesAndNewlines)
     let styleNegative = negative.trimmingCharacters(in: .whitespacesAndNewlines)
     if !styleNegative.isEmpty {
@@ -225,6 +247,26 @@ final class StyleStore {
     var seen: Set = [Style.subject]
     return [Style.subject] + styles.flatMap(\.tags).filter { seen.insert($0).inserted }
   }
+  // The Styles screen's filter, category, selection and scroll position, kept while you visit
+  // other screens and across launches.
+  var screenSearch = UserDefaults.standard.string(forKey: "stylesSearch") ?? "" {
+    didSet { remember(screenSearch, "stylesSearch") }
+  }
+  var screenCategory = UserDefaults.standard.string(forKey: "stylesCategory") {
+    didSet { remember(screenCategory, "stylesCategory") }
+  }
+  var screenSelection = Set((UserDefaults.standard.stringArray(forKey: "stylesSelection") ?? []).compactMap(UUID.init(uuidString:))) {
+    didSet { remember(screenSelection.map(\.uuidString), "stylesSelection") }
+  }
+  /// The style at the top of the list.
+  var screenScrolledTo = UserDefaults.standard.string(forKey: "stylesScrolledTo").flatMap(UUID.init(uuidString:)) {
+    didSet { remember(screenScrolledTo?.uuidString, "stylesScrolledTo") }
+  }
+
+  private func remember(_ value: Any?, _ key: String) {
+    if persists { UserDefaults.standard.set(value, forKey: key) }
+  }
+
   /// The thumbnails being made: how many are done (and failed) of how many, and the style running.
   var thumbnailRun: (done: Int, total: Int, failed: Int, current: String)?
   @ObservationIgnored var thumbnailTask: Task<Void, Never>?
@@ -272,10 +314,13 @@ final class StyleStore {
   }
 
   /// Adds the styles in a style file. One with the same category and name as a style already
-  /// here replaces it, keeping its id (and so the selection on Create).
-  func importStyles(_ imported: [Style]) -> (added: Int, replaced: Int) {
+  /// here replaces it, keeping its id (and so the selection on Create). Returns each imported
+  /// style's id here, in order.
+  @discardableResult
+  func importStyles(_ imported: [Style]) -> (added: Int, replaced: Int, ids: [UUID]) {
     var added = 0
     var replaced = 0
+    var ids: [UUID] = []
     for var style in imported {
       if let existing = styles.first(where: {
         $0.category.caseInsensitiveCompare(style.category) == .orderedSame
@@ -286,6 +331,7 @@ final class StyleStore {
       } else {
         added += 1
       }
+      ids.append(style.id)
       if let index = styles.firstIndex(where: { $0.id == style.id }) {
         styles[index] = style
       } else {
@@ -293,7 +339,7 @@ final class StyleStore {
       }
     }
     write()
-    return (added, replaced)
+    return (added, replaced, ids)
   }
 
   private func write() {

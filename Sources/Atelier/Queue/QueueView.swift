@@ -88,8 +88,12 @@ struct QueueView: View {
       Button(Finder.showTitle) { Finder.reveal([url]) }
       Button("Export Again") { create.retry(job.id) }
       Button("Remove from List") { queue.removeRecent(job.id) }
+    case .madeThumbnail:
+      Button("Remove from List") { queue.removeRecent(job.id) }
     case .failed, .cancelled:
+      // A thumbnail job's result goes back to the Styles screen that queued it, so it isn't rerun here.
       Button("Retry") { create.retry(job.id) }
+        .disabled(job.styleThumbnail != nil)
       Button("Remove from List") { queue.removeRecent(job.id) }
     }
   }
@@ -195,7 +199,7 @@ struct QueueRow: View {
       } else {
         ProgressView().controlSize(.small)
       }
-    case .finished, .exported:
+    case .finished, .exported, .madeThumbnail:
       Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).help("Finished")
     case .failed:
       Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red).help("Failed")
@@ -279,7 +283,7 @@ struct ExportQueueRow: View {
     case .running:
       ProgressView(value: Double(create.step), total: Double(max(create.totalSteps, 1)))
         .frame(width: 80)
-    case .finished, .exported:
+    case .finished, .exported, .madeThumbnail:
       Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).help("Exported")
     case .failed:
       Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red).help("Failed")

@@ -176,6 +176,8 @@ final class CreateModel {
   /// An agent's progress and result callbacks, by its job.
   private var agentCallbacks:
     [UUID: (progress: (GenerationEngine.Progress) -> Void, completion: (Result<HistoryItem, Error>) -> Void)] = [:]
+  /// Where each style thumbnail job's image goes, by its job.
+  private var thumbnailCallbacks: [UUID: (Result<CGImage, Error>) -> Void] = [:]
   /// What the canvas held when the running job's first preview covered it, with its placement:
   /// Edit jobs queued meanwhile start from it, not from a preview.
   private var canvasBeforePreview: CanvasSnapshot?
@@ -295,7 +297,8 @@ final class CreateModel {
   /// Generate works while a job runs: it queues the next one.
   var canGenerate: Bool {
     !isLoadingModel && selectedModel != nil && settings != nil
-      && !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      // An empty prompt is fine when the style has a default subject.
+      && (!prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || style?.defaults[Style.subject] != nil)
   }
 
   var style: Style? { styles?.style(id: styleID) }
@@ -306,6 +309,24 @@ final class CreateModel {
     var values = styleValues
     values[Style.subject] = prompt
     return style.apply(values, negativePrompt: negativePrompt)
+  }
+
+  /// Writes the style's tag boxes out as the full prompt and negative prompt in the plain prompt
+  /// box, and drops the style, so the whole prompt can be edited. One way: the style isn't put
+  /// back, since the edited text no longer fits its template, but Undo right after brings it back.
+  func expandStyle(undoManager: UndoManager?) {
+    guard style != nil else { return }
+    let styled = styledPrompts
+    let before = (styleID, prompt, negativePrompt)
+    undoManager?.registerUndo(withTarget: self) { model in
+      model.styleID = before.0
+      model.prompt = before.1
+      model.negativePrompt = before.2
+    }
+    undoManager?.setActionName("Edit Full Prompt")
+    styleID = nil
+    prompt = styled.prompt
+    negativePrompt = styled.negativePrompt
   }
 
   /// Puts a saved image's prompts on the Create screen. A prompt one of the styles wrote comes
@@ -490,6 +511,28 @@ final class CreateModel {
   var canvasImageSettings: ImageMetadata.Settings? {
     guard let importedSettings, importedSettings.image === image else { return nil }
     return importedSettings.settings
+  }
+
+  /// How the canvas image was made, when that's known: its History step, or the settings an
+  /// imported image carries. Kept with a style thumbnail taken from the canvas.
+  var canvasThumbnailSource: ThumbnailSource? {
+    if let sidecar = imageItem?.sidecar {
+      return ThumbnailSource(
+        prompt: sidecar.prompt, negativePrompt: sidecar.negativePrompt, model: sidecar.model,
+        seed: sidecar.seed, settings: sidecar.configuration)
+    }
+    return canvasImageSettings.map(ThumbnailSource.init)
+  }
+
+  /// Opens a style thumbnail: its image on the canvas, and its model, settings, seed and prompts
+  /// (with its style and tag text, when one of the styles wrote the prompt). Generate or Edit
+  /// stays as it was.
+  func openThumbnail(_ image: CGImage, source: ThumbnailSource, undoManager: UndoManager?) {
+    let mode = canvasMode
+    setCanvasImage(image)
+    canvasMode = mode
+    importedSettings = (image, source.metadata)
+    loadCanvasImageSettings(undoManager: undoManager)
   }
 
   /// Loads the prompts, model, seed and settings the canvas image carries, like Paste Settings
@@ -1049,15 +1092,11 @@ final class CreateModel {
   /// Queues an agent's request (AgentTools) like Generate: progress, previews and the result show
   /// on the canvas and in the status bar, and Stop or the Queue cancel it. The prompt, inspector
   /// and moodboard are left alone. Cancelling the caller cancels the job.
-  /// With `styleThumbnail`, the job makes that style's thumbnail (StyleStore) rather than an
-  /// agent's image.
   func generate(
-    forAgent request: GenerationEngine.Request, styleThumbnail: String? = nil,
+    forAgent request: GenerationEngine.Request,
     progress: @escaping (GenerationEngine.Progress) -> Void
   ) async throws -> HistoryItem {
-    let id = queue.append(
-      [request], currentTensorId: history.currentTensorId, fromAgent: styleThumbnail == nil,
-      styleThumbnail: styleThumbnail)[0]
+    let id = queue.append([request], currentTensorId: history.currentTensorId, fromAgent: true)[0]
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
         agentCallbacks[id] = (progress, { continuation.resume(with: $0) })
@@ -1102,6 +1141,16 @@ final class CreateModel {
         } else {
           output = try await engine.generate(request, progress: progress)
         }
+        // A style thumbnail goes back to the Styles screen, not into the project.
+        if job.styleThumbnail != nil {
+          guard let made = output.frames.first.flatMap(ImageTensor.cgImage(from:)) else {
+            throw CocoaError(.fileWriteUnknown)
+          }
+          status = .madeThumbnail
+          thumbnailCallbacks.removeValue(forKey: job.id)?(.success(made))
+          finish(job, status: status)
+          return
+        }
         if output.isVideo { phase = .running("Saving \(output.frames.count) frames…") }
         let item = try await history.save(
           output, request: request, startedAt: startedAt, finishedAt: Date(),
@@ -1127,22 +1176,46 @@ final class CreateModel {
       } catch is CancellationError {
         // Stopped; keep the last preview on the canvas (when it's showing the run).
         agentCallbacks.removeValue(forKey: job.id)?.completion(.failure(CancellationError()))
+        thumbnailCallbacks.removeValue(forKey: job.id)?(.failure(CancellationError()))
       } catch {
         errorMessage = error.localizedDescription
         status = .failed(error.localizedDescription)
         agentCallbacks.removeValue(forKey: job.id)?.completion(.failure(error))
+        thumbnailCallbacks.removeValue(forKey: job.id)?(.failure(error))
       }
-      queue.finishRunning(status, inputTensorId: inputTensorId, tipTensorId: tipTensorId)
-      phase = .idle
-      generationTask = nil
-      runStartedAt = nil
-      canvasBeforePreview = nil
-      previewCoversCanvas = false
-      livePreview = nil
-      livePreviewFrames = []
-      runNext()
-      // Once the queue is empty, the next run shows on the canvas again.
-      if generationTask == nil { canvasFollowsRun = true }
+      finish(job, status: status, inputTensorId: inputTensorId, tipTensorId: tipTensorId)
+    }
+  }
+
+  /// Ends the running job and starts the next.
+  private func finish(
+    _: JobQueue.Job, status: JobQueue.Job.Status, inputTensorId: Int64? = nil, tipTensorId: Int64? = nil
+  ) {
+    queue.finishRunning(status, inputTensorId: inputTensorId, tipTensorId: tipTensorId)
+    phase = .idle
+    generationTask = nil
+    runStartedAt = nil
+    canvasBeforePreview = nil
+    previewCoversCanvas = false
+    livePreview = nil
+    livePreviewFrames = []
+    runNext()
+    // Once the queue is empty, the next run shows on the canvas again.
+    if generationTask == nil { canvasFollowsRun = true }
+  }
+
+  /// Queues a style thumbnail (StyleStore) like Generate, with progress and previews in the status
+  /// bar, and returns its image. It isn't saved to the project. Cancelling the caller cancels
+  /// the job.
+  func generateStyleThumbnail(_ request: GenerationEngine.Request, style: String) async throws -> CGImage {
+    let id = queue.append([request], currentTensorId: history.currentTensorId, styleThumbnail: style)[0]
+    return try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { continuation in
+        thumbnailCallbacks[id] = { continuation.resume(with: $0) }
+        runNext()
+      }
+    } onCancel: {
+      Task { @MainActor in self.cancel(id) }
     }
   }
 
@@ -1362,6 +1435,8 @@ final class CreateModel {
   }
 
   private func coverCanvas(with preview: CGImage) {
+    // A style thumbnail's previews show in the status bar only: the canvas keeps your image.
+    guard queue.running?.styleThumbnail == nil else { return }
     if !previewCoversCanvas {
       canvasBeforePreview = canvasSource
       previewCoversCanvas = true
@@ -1385,6 +1460,7 @@ final class CreateModel {
       cancel()
     } else if queue.removeWaiting(id) != nil {
       agentCallbacks.removeValue(forKey: id)?.completion(.failure(CancellationError()))
+      thumbnailCallbacks.removeValue(forKey: id)?(.failure(CancellationError()))
     }
   }
 
@@ -1392,6 +1468,7 @@ final class CreateModel {
   func cancelAll() {
     for id in queue.removeAllWaiting() {
       agentCallbacks.removeValue(forKey: id)?.completion(.failure(CancellationError()))
+      thumbnailCallbacks.removeValue(forKey: id)?(.failure(CancellationError()))
     }
     cancel()
   }

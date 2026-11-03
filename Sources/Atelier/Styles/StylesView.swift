@@ -4,16 +4,35 @@ import UniformTypeIdentifiers
 /// The Styles screen: browse the styles, edit them in the inspector, and import or export style
 /// files (docs/styles.md).
 struct StylesView: View {
+  @Environment(\.undoManager) private var undoManager
   @Environment(StyleStore.self) private var styles
   @Environment(CreateModel.self) private var create
   @Environment(Navigation.self) private var navigation
   @Environment(FileDialogs.self) private var fileDialogs
-  @State private var search = ""
-  @State private var category: String?
-  @State private var selection: Set<UUID> = []
+  // Kept in the store, so the screen comes back as you left it.
+  private var search: String {
+    get { styles.screenSearch }
+    nonmutating set { styles.screenSearch = newValue }
+  }
+  private var category: String? {
+    get { styles.screenCategory }
+    nonmutating set { styles.screenCategory = newValue }
+  }
+  private var selection: Set<UUID> {
+    get { styles.screenSelection }
+    nonmutating set { styles.screenSelection = newValue }
+  }
   @State private var pendingDelete: Set<UUID> = []
   @State private var message: (title: String, text: String)?
+  @State private var exporting = false
   @State private var dropTargeted = false
+  /// The modifier keys held now, for ⌘- and ⇧-click in the list.
+  @State private var modifiers: EventModifiers = []
+  /// Where a ⇧-click range starts: the last row clicked without ⇧.
+  @State private var anchor: UUID?
+  @FocusState private var listFocused: Bool
+  /// The far end of a ⇧-arrow selection.
+  @State private var lastExtended: UUID?
 
   private var filtered: [Style] {
     let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -31,7 +50,7 @@ struct StylesView: View {
   }
 
   var body: some View {
-    @Bindable var create = create
+    @Bindable var styles = styles
     content
       .overlay {
         if dropTargeted {
@@ -46,7 +65,7 @@ struct StylesView: View {
       } isTargeted: { dropTargeted = $0 }
       .toolbar {
         ToolbarItem {
-          Picker("Category", selection: $category) {
+          Picker("Category", selection: $styles.screenCategory) {
             Text("All categories").tag(String?.none)
             ForEach(styles.categories, id: \.self) { Text($0.isEmpty ? "Uncategorized" : $0).tag(Optional($0)) }
           }
@@ -55,19 +74,19 @@ struct StylesView: View {
         ToolbarItem {
           Menu {
             Button("Import Styles…", systemImage: "square.and.arrow.down") { chooseFiles() }
-            Button("Export Styles…", systemImage: "square.and.arrow.up") { export() }
+            Button("Export Styles…", systemImage: "square.and.arrow.up") { exporting = true }
               .disabled(styles.styles.isEmpty)
           } label: {
             Label("Import or Export", systemImage: "square.and.arrow.down.on.square")
           }
-          .help("Import a style file, or export these styles to one")
+          .help("Import a style library or Markdown style file, or export these styles as a library page that works in any browser")
         }
         ToolbarItem {
           Button("New Style", systemImage: "plus") { newStyle() }
             .help("Add a style")
         }
       }
-      .searchable(text: $search, placement: .toolbar, prompt: "Filter styles")
+      .searchable(text: $styles.screenSearch, placement: .toolbar, prompt: "Filter styles")
       .safeAreaBar(edge: .bottom, spacing: 0) {
         ThumbnailBar(selected: styles.styles.filter { selection.contains($0.id) })
       }
@@ -109,6 +128,15 @@ struct StylesView: View {
         Text(message?.text ?? "")
       }
       .deleteCommand { pendingDelete = selection }
+      .debugPresents("exportStyles", $exporting)
+      .sheet(isPresented: $exporting) {
+        ExportStylesSheet(
+          selectedCount: selection.count, shownCount: filtered.count, suggestedTitle: category ?? "Styles"
+        ) { options in
+          exporting = false
+          export(options)
+        }
+      }
   }
 
   @ViewBuilder
@@ -125,27 +153,115 @@ struct StylesView: View {
     } else if filtered.isEmpty {
       ContentUnavailableView.search(text: search)
     } else {
-      List(selection: $selection) {
-        ForEach(sections, id: \.category) { section in
-          Section(section.category.isEmpty ? "Uncategorized" : section.category) {
-            ForEach(section.styles) { style in
-              row(style).tag(style.id)
+      @Bindable var styles = styles
+      // A scroll view rather than a List: a List can't reliably scroll back to a row, and the
+      // screen comes back where you left it (`screenScrolledTo`). Selection follows a List's:
+      // click, ⌘-click, ⇧-click, ⌘A and the arrow keys.
+      ScrollViewReader { proxy in
+        ScrollView {
+          LazyVStack(alignment: .leading, spacing: 0) {
+            ForEach(sections, id: \.category) { section in
+              Section {
+                ForEach(section.styles) { style in
+                  row(style)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(
+                      selection.contains(style.id) ? AnyShapeStyle(.selection) : AnyShapeStyle(.clear),
+                      in: .rect(cornerRadius: 6))
+                    .padding(.horizontal, 8)
+                    .contentShape(.rect)
+                    .onTapGesture { click(style.id) }
+                    .contextMenu { menu(for: selection.contains(style.id) ? selection : [style.id]) }
+                    .id(style.id)
+                }
+              } header: {
+                Text(section.category.isEmpty ? "Uncategorized" : section.category)
+                  .font(.headline)
+                  .frame(maxWidth: .infinity, alignment: .leading)
+                  .padding(.horizontal, 18)
+                  .padding(.top, 12)
+                  .padding(.bottom, 4)
+              }
             }
           }
+          .scrollTargetLayout()
+          .padding(.bottom, 8)
         }
-      }
-      .contextMenu(forSelectionType: UUID.self) { ids in
-        if ids.count == 1, let style = styles.style(id: ids.first) {
-          Button("Use on Create") { use(style) }
-          Button("Duplicate") { duplicate(style) }
-          Divider()
-        }
-        Button(ids.count > 1 ? "Delete \(ids.count) Styles…" : "Delete…", role: .destructive) {
-          pendingDelete = ids
-        }
-        .disabled(ids.isEmpty)
+        .scrollPosition(id: $styles.screenScrolledTo, anchor: .top)
+        .focusable()
+        .focusEffectDisabled()
+        .focused($listFocused)
+        #if os(macOS)
+          // For ⌘- and ⇧-click; iPadOS has no such modifier, so a tap there selects one style.
+          .onModifierKeysChanged { _, new in modifiers = new }
+        #endif
+          .onKeyPress(.downArrow, phases: .down) { press in
+            step(1, extend: press.modifiers.contains(.shift), proxy: proxy)
+          }
+          .onKeyPress(.upArrow, phases: .down) { press in
+            step(-1, extend: press.modifiers.contains(.shift), proxy: proxy)
+          }
+          .onKeyPress(characters: ["a"], phases: .down) { press in
+            guard press.modifiers.contains(.command) else { return .ignored }
+            selection = Set(filtered.map(\.id))
+            return .handled
+          }
       }
     }
+  }
+
+  @ViewBuilder
+  private func menu(for ids: Set<UUID>) -> some View {
+    if ids.count == 1, let style = styles.style(id: ids.first) {
+      Button("Use on Create") { use(style) }
+      Button("Open Thumbnail in Create") {
+        openThumbnail(style, styles: styles, create: create, navigation: navigation, undoManager: undoManager)
+      }
+      .disabled(!styles.canOpenThumbnail(style.id))
+      Button("Duplicate") { duplicate(style) }
+      Divider()
+    }
+    Button(ids.count > 1 ? "Delete \(ids.count) Styles…" : "Delete…", role: .destructive) {
+      pendingDelete = ids
+    }
+  }
+
+  /// A click on a row: selects it alone, or with ⌘ adds or removes it, or with ⇧ selects the rows
+  /// from the last one clicked.
+  private func click(_ id: UUID) {
+    listFocused = true
+    let ids = filtered.map(\.id)
+    if modifiers.contains(.shift), let anchor, let from = ids.firstIndex(of: anchor), let to = ids.firstIndex(of: id) {
+      selection = Set(ids[min(from, to)...max(from, to)])
+      return
+    }
+    if modifiers.contains(.command) {
+      if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
+    } else {
+      selection = [id]
+    }
+    anchor = id
+  }
+
+  /// ↑/↓: the row above or below the last one clicked; with ⇧, extends the selection to it.
+  private func step(_ offset: Int, extend: Bool, proxy: ScrollViewProxy) -> KeyPress.Result {
+    let ids = filtered.map(\.id)
+    guard !ids.isEmpty else { return .ignored }
+    let current = (extend ? lastExtended : anchor).flatMap { ids.firstIndex(of: $0) }
+      ?? ids.firstIndex { selection.contains($0) }
+    let next = current.map { min(max($0 + offset, 0), ids.count - 1) } ?? 0
+    if extend, let anchor, let from = ids.firstIndex(of: anchor) {
+      selection = Set(ids[min(from, next)...max(from, next)])
+      lastExtended = ids[next]
+    } else {
+      selection = [ids[next]]
+      anchor = ids[next]
+      lastExtended = nil
+    }
+    // Keep the moved-to row on screen (scrolling only when it's off it).
+    proxy.scrollTo(ids[next])
+    return .handled
   }
 
   private var sections: [(category: String, styles: [Style])] {
@@ -210,7 +326,7 @@ struct StylesView: View {
 
   private func chooseFiles() {
     fileDialogs.open = FileDialogs.Open(
-      types: [.markdownText, .plainText], multiple: true,
+      types: [.html, .markdownText, .plainText], multiple: true,
       directory: FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first,
       message: "Choose style files to import"
     ) { urls in
@@ -220,26 +336,32 @@ struct StylesView: View {
 
   private func importFiles(_ urls: [URL]) {
     var parsed: [Style] = []
+    var thumbnails: [Data?] = []
     var unreadable: [String] = []
     for url in urls {
       let access = url.startAccessingSecurityScopedResource()
       defer { if access { url.stopAccessingSecurityScopedResource() } }
-      if let text = try? String(contentsOf: url, encoding: .utf8) {
-        let found = StyleFile.parse(text)
-        if found.isEmpty { unreadable.append(url.lastPathComponent) }
-        parsed += found
-      } else {
+      guard let text = try? String(contentsOf: url, encoding: .utf8) else {
         unreadable.append(url.lastPathComponent)
+        continue
       }
+      // A library page (with its thumbnails), else a Markdown style file.
+      let found = StyleLibrary.read(text) ?? StyleFile.parse(text).map { ($0, nil) }
+      if found.isEmpty { unreadable.append(url.lastPathComponent) }
+      parsed += found.map(\.style)
+      thumbnails += found.map(\.thumbnail)
     }
     guard !parsed.isEmpty else {
       message = (
         "No styles found",
-        "\(unreadable.formatted(.list(type: .and))) has no styles in Atelier's format: a ### heading per style with a TEMPLATE: section under it. See Styles in Atelier's help."
+        "\(unreadable.formatted(.list(type: .and))) has no styles Atelier can read: a style library exported from Atelier, or Markdown with a ### heading per style and a TEMPLATE: section under it. See Styles in Atelier's help."
       )
       return
     }
     let result = styles.importStyles(parsed)
+    for (id, thumbnail) in zip(result.ids, thumbnails) {
+      if let thumbnail { styles.setThumbnail(data: thumbnail, for: id) }
+    }
     var text = "\(result.added) added"
     if result.replaced > 0 { text += ", \(result.replaced) replaced (same category and name)" }
     text += "."
@@ -249,12 +371,26 @@ struct StylesView: View {
     category = nil
   }
 
-  private func export() {
-    // The selection when there is one, else what the filter shows.
-    let chosen = selection.isEmpty ? filtered : styles.styles.filter { selection.contains($0.id) }
-    let text = StyleFile.write(chosen)
+  /// Writes a library page (styles and thumbnails, usable in any browser) or a Markdown style
+  /// file, of the selected styles or the ones the filter shows.
+  private func export(_ options: ExportStylesSheet.Options) {
+    let chosen = options.selectedOnly ? styles.styles.filter { selection.contains($0.id) } : filtered
+    let title = options.title
+    if options.markdown {
+      let text = StyleFile.write(chosen)
+      fileDialogs.save = FileDialogs.Save(
+        file: ExportedFile(type: .markdownText) { Data(text.utf8) }, name: title + ".md")
+      return
+    }
+    let store = styles
+    let thumbnails = Dictionary(uniqueKeysWithValues: chosen.compactMap { style in
+      store.thumbnailJPEG(style.id).map { (style.id, $0) }
+    })
     fileDialogs.save = FileDialogs.Save(
-      file: ExportedFile(type: .markdownText) { Data(text.utf8) }, name: "Styles.md")
+      file: ExportedFile(type: .html) {
+        Data(try StyleLibrary.html(title: title, styles: chosen) { thumbnails[$0] }.utf8)
+      },
+      name: title + ".html")
   }
 }
 
@@ -295,7 +431,7 @@ struct StyleEditor: View {
       } header: {
         Text("Template")
       } footer: {
-        Text("Each {{TAG}} (letters, digits and _) becomes a box on Create in place of the prompt box, and is dropped when that's empty. {{SUBJECT}} is the prompt; without it, the prompt goes first.")
+        Text("Each {{TAG}} (letters, digits and _) becomes a box on Create in place of the prompt box. Write {{TAG:text}} to give it a default for when the box is left empty; without one, an empty tag is dropped. {{SUBJECT}} is the prompt; without it, the prompt goes first.")
       }
       Section {
         TextField("Negative", text: $draft.negative, prompt: Text("None"), axis: .vertical)
@@ -372,7 +508,9 @@ private struct ThumbnailSection: View {
   let style: Style
   @Environment(StyleStore.self) private var styles
   @Environment(CreateModel.self) private var create
+  @Environment(Navigation.self) private var navigation
   @Environment(FileDialogs.self) private var fileDialogs
+  @Environment(\.undoManager) private var undoManager
 
   var body: some View {
     let blocker = styles.thumbnailBlocker(create)
@@ -386,7 +524,7 @@ private struct ThumbnailSection: View {
           .disabled(blocker != nil || styles.thumbnailRun != nil)
           .help(blocker ?? "Generate a thumbnail in this style from the thumbnail boxes under the list, with the model, settings and seed on Create")
           Button("Use Canvas Image", systemImage: "photo") {
-            styles.setThumbnail(create.image, for: style.id)
+            styles.setThumbnail(create.image, for: style.id, source: create.canvasThumbnailSource)
           }
           .disabled(create.image == nil)
           .help("Use the image on Create's canvas")
@@ -398,6 +536,14 @@ private struct ThumbnailSection: View {
               _ = styles.setThumbnail(contentsOf: url, for: style.id)
             }
           }
+          Button("Open in Create", systemImage: "arrow.up.forward.app") {
+            openThumbnail(style, styles: styles, create: create, navigation: navigation, undoManager: undoManager)
+          }
+          .disabled(!styles.canOpenThumbnail(style.id))
+          .help(
+            styles.canOpenThumbnail(style.id)
+              ? "Put the thumbnail's image on Create's canvas and load the model, settings, seed and prompt it was made with"
+              : "Only for thumbnails generated here, or taken from an image whose settings are known")
           Button("Remove", systemImage: "trash") { styles.setThumbnail(nil, for: style.id) }
             .disabled(styles.thumbnail(style.id) == nil)
         }
@@ -417,27 +563,33 @@ private struct ThumbnailBar: View {
   @Environment(CreateModel.self) private var create
   /// Too narrow for everything on one row (a narrow iPad window).
   @State private var narrow = false
+  @FocusState private var focusedTag: String?
+
+  /// The tags the selected styles use, `SUBJECT` first (alone when none is selected).
+  private var tags: [String] {
+    var seen: Set = [Style.subject]
+    return [Style.subject] + selected.flatMap(\.tags).filter { seen.insert($0).inserted }
+  }
 
   var body: some View {
     @Bindable var styles = styles
     let blocker = styles.thumbnailBlocker(create)
     let row = narrow
       ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
-      : AnyLayout(HStackLayout(spacing: 10))
+      : AnyLayout(HStackLayout(alignment: .bottom, spacing: 10))
     row {
-      // One box per tag any style uses, so the bar stays the same whatever is selected.
-      ForEach(styles.allTags, id: \.self) { tag in
-        TextField(
-          Style.label(tag),
-          text: Binding(get: { styles.thumbnailValues[tag] ?? "" }, set: { styles.thumbnailValues[tag] = $0 }),
-          prompt: Text("Thumbnail \(Style.label(tag).lowercased())"))
-          .textFieldStyle(.roundedBorder)
-          .frame(maxWidth: tag == Style.subject ? .infinity : 260)
-          .help(
-            tag == Style.subject
-              ? "What every thumbnail shows, written into each style's {{SUBJECT}}"
-              : "Written into the {{\(tag)}} of styles that have it; left out when empty")
-      }
+      // The Create screen's prompt box, with a box for each tag of the selected styles.
+      StyleTagFields(
+        tags: tags, lines: 3, focus: $focusedTag,
+        text: { tag in
+          Binding(get: { styles.thumbnailValues[tag] ?? "" }, set: { styles.thumbnailValues[tag] = $0 })
+        },
+        prompt: { tag in
+          if let fallback = selected.lazy.compactMap({ $0.defaults[tag] }).first { return fallback }
+          return tag == Style.subject ? "What every thumbnail shows" : "Optional: left out when empty"
+        })
+        .promptBox(focused: focusedTag != nil)
+        .help("Written into each selected style's tags to make its thumbnail")
       HStack(spacing: 10) {
         Text(status)
           .font(.callout)
@@ -454,11 +606,13 @@ private struct ThumbnailBar: View {
         }
         .buttonStyle(.borderedProminent)
         .disabled(selected.isEmpty || blocker != nil || styles.thumbnailRun != nil)
-        .help(blocker ?? (selected.isEmpty ? "Select styles to make their thumbnails" : "Generate a thumbnail for each selected style with the model, settings and seed on Create. The images also save to the project."))
+        .help(blocker ?? (selected.isEmpty ? "Select styles to make their thumbnails" : "Generate a thumbnail for each selected style with the model, settings and seed on Create. The images aren't saved to the project."))
       }
       .fixedSize()
     }
     .padding(12)
+    // Opaque, unlike the Create bar over the canvas: list rows would show through around the box.
+    .background(.bar)
     #if os(iOS)
       .onGeometryChange(for: Bool.self) { $0.size.width < 560 } action: { narrow = $0 }
     #endif
@@ -470,5 +624,76 @@ private struct ThumbnailBar: View {
     }
     if let model = create.selectedModelInfo?.name { return model }
     return ""
+  }
+}
+
+/// Opens a style's thumbnail in Create: its image on the canvas and the settings it was made with.
+@MainActor
+private func openThumbnail(
+  _ style: Style, styles: StyleStore, create: CreateModel, navigation: Navigation, undoManager: UndoManager?
+) {
+  guard let (image, source) = styles.thumbnailSource(style.id) else { return }
+  create.openThumbnail(image, source: source, undoManager: undoManager)
+  navigation.section = .create
+}
+
+/// Export Styles…: which styles, the library page's title, and the format.
+private struct ExportStylesSheet: View {
+  struct Options {
+    var selectedOnly: Bool
+    var title: String
+    var markdown: Bool
+  }
+
+  let selectedCount: Int
+  let shownCount: Int
+  let suggestedTitle: String
+  let export: (Options) -> Void
+  @Environment(\.dismiss) private var dismiss
+  @State private var selectedOnly = false
+  @State private var title = ""
+  @State private var markdown = false
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Text("Export Styles").font(.headline).padding([.top, .horizontal])
+      Form {
+        Picker("Styles", selection: $selectedOnly) {
+          Text("Selected (\(selectedCount))").tag(true)
+          Text("All shown (\(shownCount))").tag(false)
+        }
+        .pickerStyle(.segmented)
+        .disabled(selectedCount == 0)
+        TextField("Title", text: $title, prompt: Text(suggestedTitle))
+          .help("The library page's heading and the file's name")
+        Picker("Format", selection: $markdown) {
+          Text("Library page (.html)").tag(false)
+          Text("Markdown (.md)").tag(true)
+        }
+        Text(
+          markdown
+            ? "A Markdown style file: styles only, no thumbnails. Atelier imports it."
+            : "A self-contained web page that browses the styles and writes prompts in any browser, thumbnails included. Atelier imports it."
+        )
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+      }
+      .formStyle(.grouped)
+      HStack {
+        Spacer()
+        Button("Cancel", role: .cancel) { dismiss() }
+          .keyboardShortcut(.cancelAction)
+        Button("Export…") {
+          let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+          export(Options(selectedOnly: selectedOnly, title: trimmed.isEmpty ? suggestedTitle : trimmed, markdown: markdown))
+        }
+        .keyboardShortcut(.defaultAction)
+        .disabled((selectedOnly ? selectedCount : shownCount) == 0)
+      }
+      .padding()
+    }
+    .sheetFrame(width: 460)
+    .onAppear { selectedOnly = selectedCount > 0 }
   }
 }

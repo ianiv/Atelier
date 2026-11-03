@@ -3,19 +3,101 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
+/// How a thumbnail was made, kept with its full-size image so Open in Create can bring both back.
+struct ThumbnailSource: Codable {
+  var prompt: String
+  var negativePrompt: String
+  var model: String?
+  var seed: UInt32?
+  /// The settings in the history dump format (`JSONValue.fields(of:)`).
+  var settings: [String: JSONValue]
+
+  init(prompt: String, negativePrompt: String, model: String?, seed: UInt32?, settings: [String: JSONValue]) {
+    self.prompt = prompt
+    self.negativePrompt = negativePrompt
+    self.model = model
+    self.seed = seed
+    self.settings = settings
+  }
+
+  init(_ settings: ImageMetadata.Settings) {
+    self.init(
+      prompt: settings.prompt, negativePrompt: settings.negativePrompt, model: settings.pasted.model,
+      seed: settings.pasted.seed, settings: settings.pasted.dump)
+  }
+
+  var metadata: ImageMetadata.Settings {
+    ImageMetadata.Settings(
+      prompt: prompt, negativePrompt: negativePrompt,
+      pasted: DrawThingsJSON.Pasted(dump: settings, model: model, seed: seed))
+  }
+}
+
 /// Style thumbnails: square JPEGs in Application Support, one per style id, made from a generated
-/// image, the Create canvas or an image file.
+/// image, the Create canvas or an image file. When it's known how the image was made, the
+/// full-size image and its settings are kept beside it (`<id>-full.png`, `<id>.json`).
 extension StyleStore {
   static var thumbnailsDirectory: URL {
-    FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    scratchThumbnailsDirectory
+      ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
       .appendingPathComponent("Atelier/StyleThumbnails", isDirectory: true)
   }
+
+  /// Where a scripted run (which doesn't save the user's styles) writes thumbnails instead.
+  @MainActor static var scratchThumbnailsDirectory: URL?
+
+  /// Thumbnails are written to disk: always, except in a scripted run without a scratch folder.
+  private var writesThumbnails: Bool { persists || Self.scratchThumbnailsDirectory != nil }
 
   /// Pixels on a side: sharp in the editor at 2x.
   static let thumbnailSize = 384
 
   private static func thumbnailURL(_ id: UUID) -> URL {
     thumbnailsDirectory.appendingPathComponent(id.uuidString + ".jpg")
+  }
+
+  private static func fullImageURL(_ id: UUID) -> URL {
+    thumbnailsDirectory.appendingPathComponent(id.uuidString + "-full.png")
+  }
+
+  private static func sourceURL(_ id: UUID) -> URL {
+    thumbnailsDirectory.appendingPathComponent(id.uuidString + ".json")
+  }
+
+  /// The style's thumbnail as JPEG, for a library file.
+  func thumbnailJPEG(_ id: UUID) -> Data? {
+    if let data = try? Data(contentsOf: Self.thumbnailURL(id)) { return data }
+    // A scripted run keeps thumbnails in memory only.
+    let data = NSMutableData()
+    guard let image = thumbnails[id] ?? nil,
+          let destination = CGImageDestinationCreateWithData(data as CFMutableData, UTType.jpeg.identifier as CFString, 1, nil)
+    else { return nil }
+    CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
+    return CGImageDestinationFinalize(destination) ? data as Data : nil
+  }
+
+  /// Sets a thumbnail from image file data (a library file's).
+  func setThumbnail(data: Data, for id: UUID) {
+    guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+          let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+    else { return }
+    setThumbnail(image, for: id)
+  }
+
+  /// Whether the style's thumbnail can be opened in Create (its image and settings are kept).
+  func canOpenThumbnail(_ id: UUID) -> Bool {
+    // Read again when the thumbnail changes.
+    _ = thumbnails[id]
+    return FileManager.default.fileExists(atPath: Self.sourceURL(id).path)
+  }
+
+  /// The full-size image and settings of the style's thumbnail.
+  func thumbnailSource(_ id: UUID) -> (image: CGImage, source: ThumbnailSource)? {
+    guard let data = try? Data(contentsOf: Self.sourceURL(id)),
+          let source = try? JSONDecoder().decode(ThumbnailSource.self, from: data),
+          let image = ImageLoader.image(at: Self.fullImageURL(id))
+    else { return nil }
+    return (image, source)
   }
 
   /// The style's thumbnail, once `loadThumbnail` has read it.
@@ -33,34 +115,41 @@ extension StyleStore {
     thumbnails[id] = .some(image)
   }
 
-  /// Sets the style's thumbnail from `image`, cropped to its centre square; nil removes it.
-  func setThumbnail(_ image: CGImage?, for id: UUID) {
+  /// Sets the style's thumbnail from `image`, cropped to its centre square; nil removes it. With
+  /// `source`, the full image and how it was made are kept for Open in Create.
+  func setThumbnail(_ image: CGImage?, for id: UUID, source: ThumbnailSource? = nil) {
     let url = Self.thumbnailURL(id)
+    if writesThumbnails {
+      for file in [Self.fullImageURL(id), Self.sourceURL(id)] { try? FileManager.default.removeItem(at: file) }
+    }
     guard let image, let square = Self.square(image, side: Self.thumbnailSize) else {
       thumbnails[id] = .some(nil)
-      if persists { try? FileManager.default.removeItem(at: url) }
+      if writesThumbnails { try? FileManager.default.removeItem(at: url) }
       return
     }
-    thumbnails[id] = .some(square)
-    guard persists else { return }
+    guard writesThumbnails else {
+      thumbnails[id] = .some(square)
+      return
+    }
     try? FileManager.default.createDirectory(at: Self.thumbnailsDirectory, withIntermediateDirectories: true)
+    if let source, let png = ImageTensor.png(image), let json = try? JSONEncoder().encode(source) {
+      try? png.write(to: Self.fullImageURL(id), options: .atomic)
+      try? json.write(to: Self.sourceURL(id), options: .atomic)
+    }
+    // Set after the files, so views reading `canOpenThumbnail` see them.
+    defer { thumbnails[id] = .some(square) }
     guard let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.jpeg.identifier as CFString, 1, nil)
     else { return }
     CGImageDestinationAddImage(destination, square, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
     CGImageDestinationFinalize(destination)
   }
 
-  /// Sets the thumbnail from an image file (security-scoped access is the caller's).
+  /// Sets the thumbnail from an image file (security-scoped access is the caller's), keeping its
+  /// generation settings when it carries them.
   func setThumbnail(contentsOf url: URL, for id: UUID) -> Bool {
-    let options = [
-      kCGImageSourceCreateThumbnailFromImageAlways: true,
-      kCGImageSourceCreateThumbnailWithTransform: true,
-      kCGImageSourceThumbnailMaxPixelSize: Self.thumbnailSize * 4,
-    ] as CFDictionary
-    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-          let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options)
-    else { return false }
-    setThumbnail(image, for: id)
+    guard let image = ImageLoader.image(at: url) else { return false }
+    let settings = ImageMetadata.embedded(at: url).flatMap(ImageMetadata.settings(from:))
+    setThumbnail(image, for: id, source: settings.map(ThumbnailSource.init))
     return true
   }
 
@@ -79,13 +168,16 @@ extension StyleStore {
   /// Generates a thumbnail for each style, one after another in the queue, with the model and
   /// settings on Create and one seed, so the styles compare like for like. Each style's tags take
   /// `thumbnailValues` (an empty one is dropped). Create's negative prompt, canvas and moodboard
-  /// aren't used. The images also save to the project, like any other run.
+  /// aren't used. The images aren't saved to the project.
   func makeThumbnails(for chosen: [Style], create: CreateModel) {
     guard thumbnailRun == nil, !chosen.isEmpty, thumbnailBlocker(create) == nil,
           let model = create.selectedModel, let settings = create.settings
     else { return }
     let values = thumbnailValues
     let seed = create.seed
+    var used = settings
+    used.seed = seed
+    let dump = JSONValue.fields(of: used)
     thumbnailRun = (0, chosen.count, 0, chosen[0].name)
     thumbnailTask = Task { [weak self] in
       for style in chosen {
@@ -96,10 +188,11 @@ extension StyleStore {
           model: model, prompt: prompts.prompt, negativePrompt: prompts.negativePrompt, seed: seed,
           configuration: settings)
         var made = false
-        if let item = try? await create.generate(forAgent: request, styleThumbnail: style.name, progress: { _ in }),
-           let image = await create.history.image(tensorId: item.tensorId, in: create.history.project.name)
-        {
-          setThumbnail(image, for: style.id)
+        if let image = try? await create.generateStyleThumbnail(request, style: style.name) {
+          let source = ThumbnailSource(
+            prompt: prompts.prompt, negativePrompt: prompts.negativePrompt, model: model, seed: seed,
+            settings: dump)
+          setThumbnail(image, for: style.id, source: source)
           made = true
         }
         thumbnailRun?.done += 1

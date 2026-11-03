@@ -703,12 +703,7 @@ struct PromptComposer: View {
             promptField.focused($promptFocused)
           }
         }
-        .padding(8)
-        .background(Color.textBackground, in: Self.fieldShape)
-        .overlay(
-          Self.fieldShape
-            .stroke(promptFocused || focusedTag != nil ? Color.accentColor : Color.separator)
-        )
+        .promptBox(focused: promptFocused || focusedTag != nil)
         .help("Prompt. ⌘↩ generates. ⌘L focuses this field.")
         VStack(spacing: 8) {
           // The rating of the image on the canvas, as in History.
@@ -805,34 +800,9 @@ struct PromptComposer: View {
   /// With a style, one box per tag of its template in place of the prompt box, in the space the
   /// prompt box takes; `SUBJECT` is the prompt.
   private func tagFields(_ style: Style) -> some View {
-    Text(verbatim: " ")
-      .lineLimit(promptLines, reservesSpace: true)
-      .font(.body)
-      .frame(maxWidth: .infinity)
-      .hidden()
-      .overlay {
-        ScrollView {
-          Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 8, verticalSpacing: 6) {
-            ForEach(style.tags, id: \.self) { tag in
-              GridRow {
-                Text(Style.label(tag))
-                  .font(.callout)
-                  .foregroundStyle(.secondary)
-                  .gridColumnAlignment(.trailing)
-                TextField(Style.label(tag), text: tagBinding(tag), prompt: Text(tagPrompt(tag)), axis: .vertical)
-                  .textFieldStyle(.plain)
-                  .font(.body)
-                  .focused($focusedTag, equals: tag)
-                  #if os(iOS)
-                    .onSubmit { model.generate() }
-                  #endif
-              }
-            }
-          }
-          .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .scrollIndicators(.automatic)
-      }
+    StyleTagFields(
+      tags: style.tags, lines: promptLines, focus: $focusedTag, text: tagBinding, prompt: tagPrompt,
+      submit: { model.generate() })
   }
 
   private func tagBinding(_ tag: String) -> Binding<String> {
@@ -842,8 +812,10 @@ struct PromptComposer: View {
     return Binding(get: { model.styleValues[tag] ?? "" }, set: { model.styleValues[tag] = $0 })
   }
 
+  /// A box's placeholder: the style's default for the tag, which an empty box uses.
   private func tagPrompt(_ tag: String) -> String {
-    tag == Style.subject ? "Describe the subject…" : "Optional: left out when empty"
+    if let fallback = model.style?.defaults[tag] { return fallback }
+    return tag == Style.subject ? "Describe the subject…" : "Optional: left out when empty"
   }
 
   @ViewBuilder private var promptField: some View {
@@ -878,7 +850,8 @@ struct PromptComposer: View {
     #endif
   }
 
-  private static let fieldShape = ConcentricRectangle(corners: .concentric(minimum: .fixed(8)), isUniform: true)
+  /// Follows the window's corners, never tighter than a text field's.
+  static let fieldShape = ConcentricRectangle(corners: .concentric(minimum: .fixed(8)), isUniform: true)
 }
 
 /// How many images Generate makes, beside the Generate button.
