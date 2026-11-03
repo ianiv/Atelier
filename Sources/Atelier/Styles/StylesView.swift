@@ -284,6 +284,11 @@ struct StylesView: View {
         in: .rect(cornerRadius: styles.screenGrid ? 10 : 6))
       .contentShape(.rect)
       .onTapGesture { click(style.id) }
+      // A double click shows the thumbnail full size, after the first click selected the style.
+      .simultaneousGesture(
+        TapGesture(count: 2).onEnded {
+          if styles.thumbnail(style.id) != nil { styles.viewingThumbnail = style.id }
+        })
       .contextMenu { menu(for: selection.contains(style.id) ? selection : [style.id]) }
       .id(style.id)
   }
@@ -387,10 +392,8 @@ struct StylesView: View {
 
   private func cell(_ style: Style) -> some View {
     VStack(alignment: .leading, spacing: 4) {
-      StyleThumbnail(id: style.id, side: gridSide) {
-        click(style.id)
-        styles.viewingThumbnail = style.id
-      }
+      // A click selects, as anywhere in the cell; a double click shows it full size (`item`).
+      StyleThumbnail(id: style.id, side: gridSide)
       HStack(alignment: .firstTextBaseline, spacing: 4) {
         VStack(alignment: .leading, spacing: 0) {
           Text(style.name).fontWeight(.medium).lineLimit(1)
