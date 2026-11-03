@@ -20,6 +20,7 @@ The iPad version works the same way, with a few differences noted under "On iPad
 | --- | --- |
 | ⌘↩ or Return in the prompt | Generate |
 | ⌥↩ in the prompt | New line |
+| ⌘↩ on the Characters screen | Render |
 | Esc | Stop the running image (the queue goes on) |
 | ⌘L | Focus the prompt |
 | ⌘R | Roll a new seed |

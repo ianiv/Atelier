@@ -12,6 +12,7 @@
       "knobs": [
         { "id": "kind", "title": "Kind", "control": "text", "role": "kind", "placeholder": "woman, boy, old man, dog, cat, dragon…" },
         { "id": "age", "title": "Age", "control": "slider", "role": "before",
+          "numericFormat": "{value}-year-old", "customPrompt": "Custom or 35",
           "options": ["baby", "little", "young", "teenage", "adult", "middle-aged", "older", "elderly", "ancient"] },
         { "id": "pronoun", "title": "Pronoun", "control": "picker", "role": "pronoun", "randomizes": false,
           "options": ["she", "he", { "label": "they", "plural": true }, "it"] }

@@ -304,7 +304,7 @@ private struct CharacterStage: View {
       Text(caption)
         .font(.callout)
         .foregroundStyle(store.renderError == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.red))
-        .lineLimit(2)
+        .lineLimit(2, reservesSpace: true)
         .frame(maxWidth: .infinity, alignment: .leading)
         .help(caption)
       Button("Save to Character", systemImage: "square.and.arrow.down") {
@@ -327,11 +327,18 @@ private struct CharacterStage: View {
   private var caption: String {
     if let error = store.renderError { return error }
     if let shown {
-      return "Preview in \(shown.info.styleName) · seed \(shown.info.source.seed.map(String.init) ?? "unknown")"
+      return "Preview in \(shown.info.styleName) · \(madeWith(shown.info))"
     }
     if image == nil { return "" }
-    if let info { return "Saved image in \(info.styleName) · seed \(info.source.seed.map(String.init) ?? "unknown")" }
+    if let info { return "Saved image in \(info.styleName) · \(madeWith(info))" }
     return "Saved image"
+  }
+
+  /// The model and seed an image was made with, which may no longer be what's on Create.
+  private func madeWith(_ info: CharacterImageInfo) -> String {
+    let file = info.source.model ?? "unknown model"
+    let name = create.models.first { $0.file == file }?.name ?? file
+    return "\(name) · seed \(info.source.seed.map(String.init) ?? "unknown")"
   }
 
   private var strip: some View {

@@ -88,6 +88,10 @@
         expect(written(["kind": "lion"]) { $0.nouns["hair"] = "mane"; $0.knobs["hairLength"] = KnobSetting(value: "long") }, "A lion. The lion has a long mane.")
         expect(written(["kind": "wizard"]) { $0.knobs["age"] = KnobSetting(custom: "ageless") }, "An ageless wizard.")
         expect(written(["kind": "wizard", "age": "young"]) { $0.knobs["age"]?.custom = "thousand-year-old" }, "A thousand-year-old wizard.")
+        for (age, wanted) in [("35", "A 35-year-old woman."), ("8", "An 8-year-old woman."), ("18", "An 18-year-old woman."), ("11", "An 11-year-old woman."), ("80", "An 80-year-old woman."), ("110", "A 110-year-old woman."), ("2.5", "A 2.5-year-old woman.")] {
+          expect(written(["kind": "woman", "age": "young"]) { $0.knobs["age"]?.custom = age }, wanted)
+        }
+        expect(written(["kind": "woman"]) { $0.knobs["height"] = KnobSetting(custom: "6") }, "A woman. The woman is 6.")
         expect(written(["kind": "knight", "era": "medieval"]) { $0.knobs["outfit"] = KnobSetting(custom: "a battered trench coat") }, "A knight. The knight wears a medieval battered trench coat.")
         expect(written(["kind": "woman", "pronoun": "she"]) { $0.texts["identity"] = "of Irish descent."; $0.texts["face"] = "a crooked nose" }, "A woman, of Irish descent, with a crooked nose.")
         expect(written(["pronoun": "he"]) { $0.texts["marks"] = "a limp" }, "He has a limp.")

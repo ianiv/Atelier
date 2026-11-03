@@ -20,6 +20,7 @@ Every knob starts unset and writes nothing until you set it, so knobs that don't
 - **Sliders** step through words. The far left is unset, and the phrase beside the slider is what the model will be told.
 - **Pickers** have an **Unset** choice.
 - **Custom**: type your own phrase in the box beside any slider or picker ("ageless") and it replaces the knob's phrase. The knob stays in place, disabled, until you clear the box.
+- **Age** also takes a number: type 35 in its Custom box and the description says "A 35-year-old woman".
 - **Pronoun** sets how later sentences refer to the character (she, he, they, it). Unset repeats the kind: "The dog has…".
 - **Hair or fur** and **Skin, coat or surface** have a small picker on the section header that switches their noun (fur, feathers, mane; coat, scales, shell, plating).
 - Each section ends with a **free-text box** for anything the knobs don't cover; its text goes at the end of that section's sentence.
@@ -48,10 +49,10 @@ The **Style** button is the same picker as on Create. The description fills the 
 
 **No Style** renders a neutral reference look: full body, facing the viewer, plain backdrop, even light and deep focus, with bokeh in the negative prompt.
 
-- **Render** makes one preview in the selected style.
+- **Render** (⌘↩, also while typing in a knob's text box) makes one preview in the selected style.
 - **Render in Styles…** lets you tick several styles (No Style among them) and renders the character in each with the same seed.
 
-Renders use what's on the Create screen when you start: the model, every inspector setting and the seed. Keep the seed and moving one knob shows only that knob's effect. Create's prompt, negative prompt, canvas and moodboard aren't used; only the style's own negative prompt is. Pick an image model on Create first, and lower the size or steps for quicker renders. The jobs run in the queue like any other, and **Stop** ends a batch and keeps what's made.
+Renders use what's on the Create screen when you start: the model, every inspector setting and the seed. The line above **Render** shows the model, size, steps and seed they'll use, and **Go to Create** takes you there to change them. Keep the seed and moving one knob shows only that knob's effect. Create's prompt, negative prompt, canvas and moodboard aren't used; only the style's own negative prompt is. Pick an image model on Create first, and lower the size or steps for quicker renders. The jobs run in the queue like any other, and **Stop** ends a batch and keeps what's made.
 
 ## Previews and the saved image
 
@@ -86,6 +87,7 @@ The knobs are data. To change them, copy `CharacterKnobs.json` from inside the a
 - `format`: how a label is written. `{value}` is the label and `{a}` is a or an.
 - `options`: a plain string is just a label. As an object, an option can add `phrase` (written instead of the format; `{noun}` is the section's noun), `word` (the noun when it isn't the label), `article` (takes a or an), `alone` (stands for the section's whole phrase), `after` (goes after the noun) and `plural` (takes plural verbs).
 - `randomizes: false` keeps the dice off a knob.
+- `numericFormat` writes a plain number in the Custom box in words (`"{value}-year-old"` for Age), and `customPrompt` is that box's placeholder.
 
 A section has `id`, `title`, `textPrompt` and `knobs`, plus `sentence` (`opening`, `is`, `has` or `wears`) or `joinsPrevious: true` to share the sentence before it. `noun` adds the noun picker, and `separator` goes between its adjectives. The top-level `reference` holds the No Style `template` and `negative`.
 

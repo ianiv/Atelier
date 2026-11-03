@@ -81,11 +81,15 @@ struct CharacterKnobSet: Decodable {
     /// How an option's label is written: `{value}` is the label, `{a}` is a or an.
     var format: String?
     var placeholder: String?
+    /// How a plain number in the Custom box is written: 35 is "35-year-old" for Age.
+    var numericFormat: String?
+    /// The Custom box's placeholder, when "Custom" doesn't say enough.
+    var customPrompt: String?
     /// Whether the dice change it. Off for Pronoun: the kind usually decides it.
     var randomizes: Bool
 
     private enum CodingKeys: String, CodingKey {
-      case id, title, control, role, options, format, placeholder, randomizes
+      case id, title, control, role, options, format, placeholder, numericFormat, customPrompt, randomizes
     }
 
     init(from decoder: Decoder) throws {
@@ -97,11 +101,21 @@ struct CharacterKnobSet: Decodable {
       options = try container.decodeIfPresent([Option].self, forKey: .options) ?? []
       format = try container.decodeIfPresent(String.self, forKey: .format)
       placeholder = try container.decodeIfPresent(String.self, forKey: .placeholder)
+      numericFormat = try container.decodeIfPresent(String.self, forKey: .numericFormat)
+      customPrompt = try container.decodeIfPresent(String.self, forKey: .customPrompt)
       randomizes = try container.decodeIfPresent(Bool.self, forKey: .randomizes) ?? (control != .text)
     }
 
     func option(_ label: String?) -> Option? {
       label.flatMap { label in options.first { $0.label == label } }
+    }
+
+    /// What the Custom box writes: its text, or for a knob that takes numbers, a number in words
+    /// around it. Empty when Custom is off.
+    func customPhrase(_ custom: String) -> String {
+      let custom = custom.trimmed
+      guard let numericFormat, custom.range(of: #"^\d+(\.\d+)?$"#, options: .regularExpression) != nil else { return custom }
+      return numericFormat.replacingOccurrences(of: "{value}", with: custom)
     }
 
     /// The words an option writes, with `noun` for `{noun}`.
@@ -250,7 +264,7 @@ struct CharacterKnobSet: Decodable {
     /// What a knob writes in this section, or nil when it's unset: Custom replaces the phrase.
     private func phrase(_ knob: Knob, in section: Section) -> String? {
       let setting = character.setting(knob.id)
-      let custom = setting.custom.trimmed
+      let custom = knob.customPhrase(setting.custom)
       if !custom.isEmpty { return custom }
       if knob.control == .text { return setting.value?.trimmed.nilIfEmpty }
       guard let option = knob.option(setting.value) else { return nil }
@@ -439,8 +453,11 @@ enum English {
     let word = words.lowercased()
     for start in ["hour", "honest", "heir"] where word.hasPrefix(start) { return "an" }
     for start in ["uni", "use", "usu", "uto", "one", "once", "eu"] where word.hasPrefix(start) { return "a" }
-    // Digits read as words: "an 1890s".
-    for start in ["8", "11", "18"] where word.hasPrefix(start) { return "an" }
+    // Digits read as words: "an 8-year-old", "an 18-year-old", "an 1890s", but "a 180-year-old".
+    let digits = word.prefix { $0.isNumber }
+    if !digits.isEmpty {
+      return digits.hasPrefix("8") || (digits.count != 3 && (digits.hasPrefix("11") || digits.hasPrefix("18"))) ? "an" : "a"
+    }
     return word.first.map { "aeiou".contains($0) } == true ? "an" : "a"
   }
 

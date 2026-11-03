@@ -7,6 +7,7 @@ struct CharacterPanel: View {
   let character: SavedCharacter
   @Environment(CharacterStore.self) private var store
   @Environment(CreateModel.self) private var create
+  @Environment(Navigation.self) private var navigation
   @Environment(\.undoManager) private var undoManager
   /// Sections you collapsed, remembered across launches (one id per line).
   @AppStorage("characterSectionsCollapsed") private var collapsedStorage = ""
@@ -60,6 +61,8 @@ struct CharacterPanel: View {
     VStack(alignment: .leading, spacing: 8) {
       TextField("Name", text: Binding(get: { character.name }, set: { value in edit { $0.name = value } }))
         .font(.title3)
+        // A field in this font is 4 points shorter while it has focus; the form mustn't move.
+        .frame(height: 28)
         .help("Only for you: the name is never sent to the model")
       Button("Randomize All", systemImage: "dice") {
         editWithUndo("Randomize All") { knobs.randomizeAll(in: &$0) }
@@ -87,7 +90,9 @@ struct CharacterPanel: View {
             set: { value in edit { $0.texts[section.id] = value } }),
           prompt: Text(section.textPrompt), axis: .vertical
         )
-        .lineLimit(1...3)
+        // Two lines always: a box that grew as it wrapped would move every section below it.
+        .lineLimit(2, reservesSpace: true)
+        .frame(height: 46)
         .help("Goes at the end of this section's sentence")
       }
     }
@@ -137,12 +142,14 @@ struct CharacterPanel: View {
       .disabled(!section.knobs.contains(where: \.randomizes))
       .help("Change this section's knobs that aren't locked or Custom")
     }
+    .frame(height: 24)
   }
 
   /// What the knob writes now, shown beside it.
   private func phrase(_ knob: CharacterKnobSet.Knob, in section: CharacterKnobSet.Section) -> String {
     let current = character.setting(knob.id)
-    if !current.custom.trimmed.isEmpty { return current.custom.trimmed }
+    let custom = knob.customPhrase(current.custom)
+    if !custom.isEmpty { return custom }
     guard let option = knob.option(current.value) else { return "Unset" }
     return knob.phrase(option, noun: section.noun?.option(character.nouns[section.id])?.label ?? "")
   }
@@ -154,7 +161,8 @@ struct CharacterPanel: View {
         "Notes", text: Binding(get: { character.notes }, set: { value in edit { $0.notes = value } }),
         prompt: Text("Only for you: not sent to the model"), axis: .vertical
       )
-      .lineLimit(1...4)
+      .lineLimit(3, reservesSpace: true)
+      .frame(height: 62)
     }
   }
 
@@ -185,6 +193,7 @@ struct CharacterPanel: View {
         }
       }
       tagBoxes
+      createSettings
       HStack(spacing: 8) {
         Text(status)
           .font(.callout)
@@ -203,16 +212,46 @@ struct CharacterPanel: View {
           .help(blocker ?? "Render this character in several styles with one seed")
         Button("Render") { store.render(character, in: [style], create: create) }
           .buttonStyle(.borderedProminent)
+          // As Generate has on Create; it works from a knob's text box too.
+          .keyboardShortcut(.return, modifiers: .command)
           .disabled(blocker != nil || running)
           .help(blocker ?? "Render a preview with the model, settings and seed on Create. It isn't saved to the project.")
       }
+      .frame(height: 26)
     }
     .sheet(isPresented: $pickingStyles) {
-      RenderInStylesSheet { chosen in
+      RenderInStylesSheet(settings: settingsText) { chosen in
         pickingStyles = false
         store.render(character, in: chosen, create: create)
       }
     }
+  }
+
+  /// Says what renders use, in place of asking you to remember: it isn't this screen's to change.
+  private var createSettings: some View {
+    HStack(spacing: 8) {
+      Label(settingsText, systemImage: "paintbrush")
+        .font(.callout)
+        .foregroundStyle(settingsUsable ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
+        .lineLimit(2, reservesSpace: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .help(settingsText)
+      Button("Go to Create") { navigation.section = .create }
+        .help("Change the model, settings or seed that renders use")
+    }
+  }
+
+  private var settingsUsable: Bool {
+    create.selectedModel != nil && create.settings != nil && !create.isLoadingModel && create.videoModel == nil
+  }
+
+  /// The model and main settings on Create, which every render uses.
+  private var settingsText: String {
+    guard let settings = create.settings, let name = create.selectedModelInfo?.name, !create.isLoadingModel else {
+      return "Uses Create's settings: pick a model there first."
+    }
+    if create.videoModel != nil { return "Uses Create's settings: \(name) makes video. Pick an image model there." }
+    return "Uses Create's settings: \(name), \(settings.width)×\(settings.height), \(settings.steps) steps, seed \(create.seed)"
   }
 
   private var description: some View {
@@ -259,7 +298,6 @@ struct CharacterPanel: View {
           .font(.callout)
           .foregroundStyle(.tertiary)
           .frame(maxWidth: .infinity, alignment: .leading)
-          .lineLimit(2, reservesSpace: true)
       } else {
         StyleTagFields(
           tags: tags, lines: 2, focus: $focusedTag,
@@ -269,13 +307,15 @@ struct CharacterPanel: View {
           prompt: { tag in style?.defaults[tag] ?? "Optional: left out when empty" })
       }
     }
+    // The same with or without tags: a footer that changed height would resize the knobs above it.
+    .frame(height: 36)
     .promptBox(focused: focusedTag != nil)
     .help("Used for this tag when a style has it. Framing, pose and setting belong here, not on the character.")
   }
 
   private var status: String {
     if let run = store.renderRun { return "\(run.done + 1) of \(run.total): \(run.current)" }
-    return create.selectedModelInfo?.name ?? ""
+    return ""
   }
 }
 
@@ -289,17 +329,16 @@ private struct KnobRow: View {
   private var isCustom: Bool { !setting.custom.trimmed.isEmpty }
   private static let customWidth: CGFloat = 120
 
+  // Fixed row heights: a text field's own height changes with focus, and any change here moves
+  // every knob below it.
+  private static let titleHeight: CGFloat = 18
+  private static let controlHeight: CGFloat = 26
+
   var body: some View {
-    if knob.control == .text {
-      VStack(alignment: .leading, spacing: 3) {
+    VStack(alignment: .leading, spacing: 3) {
+      HStack(spacing: 6) {
         Text(knob.title).font(.callout)
-        TextField(knob.title, text: Binding(get: { setting.value ?? "" }, set: { setting.value = $0 }), prompt: Text(knob.placeholder ?? ""))
-          .labelsHidden()
-      }
-    } else {
-      VStack(alignment: .leading, spacing: 3) {
-        HStack(spacing: 6) {
-          Text(knob.title).font(.callout)
+        if knob.control != .text {
           Spacer(minLength: 8)
           Text(phrase)
             .font(.callout)
@@ -316,13 +355,20 @@ private struct KnobRow: View {
           .disabled(!knob.randomizes)
           .help(knob.randomizes ? (setting.locked ? "Locked: Randomize leaves this knob alone" : "Lock this knob against Randomize") : "Randomize never changes this knob")
         }
-        HStack(spacing: 8) {
+      }
+      .frame(height: Self.titleHeight)
+      HStack(spacing: 8) {
+        if knob.control == .text {
+          TextField(knob.title, text: Binding(get: { setting.value ?? "" }, set: { setting.value = $0 }), prompt: Text(knob.placeholder ?? ""))
+            .labelsHidden()
+        } else {
           control.disabled(isCustom)
-          TextField("Custom", text: $setting.custom, prompt: Text("Custom"))
+          TextField("Custom", text: $setting.custom, prompt: Text(knob.customPrompt ?? "Custom"))
             .frame(width: Self.customWidth)
-            .help("Your own phrase, in place of this knob's")
+            .help(knob.numericFormat == nil ? "Your own phrase, in place of this knob's" : "A number (35 writes “35-year-old”) or your own phrase, in place of this knob's")
         }
       }
+      .frame(height: Self.controlHeight)
     }
   }
 
@@ -359,6 +405,8 @@ private struct KnobRow: View {
 /// Render in Styles…: tick several styles, No Style among them, and render the character in each
 /// with one seed.
 private struct RenderInStylesSheet: View {
+  /// What on Create the renders use.
+  let settings: String
   let render: ([Style?]) -> Void
   @Environment(CreateModel.self) private var create
   @Environment(\.dismiss) private var dismiss
@@ -382,6 +430,12 @@ private struct RenderInStylesSheet: View {
   var body: some View {
     VStack(spacing: 0) {
       Text("Render in Styles").font(.headline).padding(.top)
+      Text(settings)
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .multilineTextAlignment(.center)
+        .lineLimit(2, reservesSpace: true)
+        .padding(.horizontal)
       SearchField(text: $query, prompt: "Search styles").padding(8)
       Divider()
       List {
