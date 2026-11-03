@@ -270,6 +270,8 @@ final class StyleStore {
   /// The thumbnails being made: how many are done (and failed) of how many, and the style running.
   var thumbnailRun: (done: Int, total: Int, failed: Int, current: String)?
   @ObservationIgnored var thumbnailTask: Task<Void, Never>?
+  /// The style whose thumbnail is shown full size (`ThumbnailViewer`), from the list or the editor.
+  var viewingThumbnail: UUID?
   /// Off for scripted runs: they read the user's styles but don't change them.
   @ObservationIgnored let persists: Bool
 

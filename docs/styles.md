@@ -29,6 +29,7 @@ The boxes keep only what you typed. History saves the full prompt the model got.
 
 Each style can have a square thumbnail, shown in the list and the editor.
 
+- **Click a thumbnail**, in the list or the editor, or press **Space** with a style selected, to see it full size: the image the thumbnail was cut from, fitted to the window. Pinch or use the zoom buttons (⌘+ and ⌘-, ⌘0 for actual size, ⌘9 to fit) to zoom, drag to pan, and double-click to switch between fit and actual size. Space, Escape or **Done** closes it. An imported library's thumbnails have only the square to show.
 - In the editor's **Thumbnail** section: **Generate** makes one now, **Use Canvas Image** takes the image on Create's canvas, **Choose Image…** takes an image file, and **Remove** takes it away.
 - **Open in Create** (in the editor, or **Open Thumbnail in Create** in the right-click menu) puts the thumbnail's full-size image on Create's canvas and loads the model, settings, seed and prompt it was made with, the style and its tag boxes included. It works for thumbnails generated here, and for ones taken from the canvas or a file when that image's settings are known.
 - The box under the list works like the Create screen's prompt box: it has a **Subject** ("A woman with a red umbrella walking down a rainy city street") and a box for each other tag the selected styles use, such as **Setting**. Each style's tags take these values; an empty one is left out. **Generate** in the editor uses them too.
@@ -36,7 +37,7 @@ Each style can have a square thumbnail, shown in the list and the editor.
 
 Generated thumbnails use what's on the Create screen when you start: the model, every inspector setting (size, steps, sampler, LoRAs and so on) and the seed, the same seed for every style so they compare like for like. Create's negative prompt, canvas and moodboard aren't used; only each style's own negative prompt is. Pick an image model there first, and lower the size or steps for a quicker batch. The jobs run in the queue like any other, but their images only become thumbnails: they aren't saved to a project and don't replace the image on the canvas.
 
-Styles are saved in `Styles.json` and thumbnails (with their full-size images and settings) in `StyleThumbnails` in Atelier's Application Support folder. Style files don't carry thumbnails.
+Styles are saved in `Styles.json` and thumbnails (with their full-size images, and settings when they're known) in `StyleThumbnails` in Atelier's Application Support folder. Style files don't carry thumbnails.
 
 ## Style libraries
 

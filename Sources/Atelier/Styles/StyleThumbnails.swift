@@ -100,6 +100,14 @@ extension StyleStore {
     return (image, source)
   }
 
+  /// The image the style's thumbnail was cut from, full size, else the thumbnail itself (a
+  /// library's, or one made before full images were kept for every thumbnail).
+  func fullThumbnailImage(_ id: UUID) async -> CGImage? {
+    let urls = [Self.fullImageURL(id), Self.thumbnailURL(id)]
+    let image = await Task.detached { urls.lazy.compactMap { ImageLoader.image(at: $0) }.first }.value
+    return image ?? thumbnail(id)
+  }
+
   /// The style's thumbnail, once `loadThumbnail` has read it.
   func thumbnail(_ id: UUID) -> CGImage? {
     thumbnails[id] ?? nil
@@ -132,9 +140,14 @@ extension StyleStore {
       return
     }
     try? FileManager.default.createDirectory(at: Self.thumbnailsDirectory, withIntermediateDirectories: true)
-    if let source, let png = ImageTensor.png(image), let json = try? JSONEncoder().encode(source) {
+    // The full image is kept for the viewer whenever the square is cut from more (not a library's
+    // own thumbnail), and with its settings for Open in Create.
+    let cropped = image.width != square.width || image.height != square.height
+    if source != nil || cropped, let png = ImageTensor.png(image) {
       try? png.write(to: Self.fullImageURL(id), options: .atomic)
-      try? json.write(to: Self.sourceURL(id), options: .atomic)
+      if let source, let json = try? JSONEncoder().encode(source) {
+        try? json.write(to: Self.sourceURL(id), options: .atomic)
+      }
     }
     // Set after the files, so views reading `canOpenThumbnail` see them.
     defer { thumbnails[id] = .some(square) }

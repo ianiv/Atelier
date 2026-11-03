@@ -5,7 +5,7 @@
   /// (docs/styles.md), checks that writing it back reads the same styles, that every style's
   /// prompt is found again in what it writes (so Reuse brings the style back), and imports it into
   /// a copy of the user's styles that isn't saved. With `--snapshot-dir`, snapshots the Styles
-  /// screen and Create with a style selected.
+  /// screen, a thumbnail full size and Create with a style selected.
   ///
   /// `--thumbnails N --model M [--steps S] [--width W --height H]` also makes thumbnails for the
   /// file's first N styles with that model (pass `--project` for a scratch project: the images
@@ -176,6 +176,19 @@
           navigation.section = .styles
           try? await Task.sleep(for: .seconds(1))
           snapshot(to: snapshotDir.appendingPathComponent("styles.png"))
+          // A thumbnail full size, as a click on it or Space shows it.
+          for style in store.styles.prefix(200) { await store.loadThumbnail(style.id) }
+          if let shown = store.styles.first(where: { store.thumbnail($0.id) != nil }) {
+            let full = await store.fullThumbnailImage(shown.id)
+            log("\(shown.name)'s thumbnail is \(full.map { "\($0.width)×\($0.height)" } ?? "missing") full size")
+            store.viewingThumbnail = shown.id
+            try? await Task.sleep(for: .seconds(2))
+            check(
+              AutomationWindows.snapshotSheet(to: snapshotDir.appendingPathComponent("thumbnail-viewer.png")),
+              "the thumbnail viewer opens")
+            store.viewingThumbnail = nil
+            try? await Task.sleep(for: .seconds(1))
+          }
           navigation.section = .create
           try? await Task.sleep(for: .seconds(1))
           snapshot(to: snapshotDir.appendingPathComponent("create.png"))

@@ -129,6 +129,10 @@ struct StylesView: View {
       }
       .deleteCommand { pendingDelete = selection }
       .debugPresents("exportStyles", $exporting)
+      .sheet(
+        item: Binding(
+          get: { styles.viewingThumbnail.map(ViewedThumbnail.init) }, set: { styles.viewingThumbnail = $0?.id })
+      ) { ThumbnailViewer(id: $0.id) }
       .sheet(isPresented: $exporting) {
         ExportStylesSheet(
           selectedCount: selection.count, shownCount: filtered.count, suggestedTitle: category ?? "Styles"
@@ -201,6 +205,12 @@ struct StylesView: View {
           }
           .onKeyPress(.upArrow, phases: .down) { press in
             step(-1, extend: press.modifiers.contains(.shift), proxy: proxy)
+          }
+          // Space: the selected style's thumbnail full size, as Quick Look in History.
+          .onKeyPress(.space) {
+            guard let id = selected?.id ?? anchor, styles.thumbnail(id) != nil else { return .ignored }
+            styles.viewingThumbnail = id
+            return .handled
           }
           .onKeyPress(characters: ["a"], phases: .down) { press in
             guard press.modifiers.contains(.command) else { return .ignored }
@@ -276,7 +286,10 @@ struct StylesView: View {
 
   private func row(_ style: Style) -> some View {
     HStack(alignment: .top, spacing: 10) {
-      StyleThumbnail(id: style.id, side: 56)
+      StyleThumbnail(id: style.id, side: 56) {
+        click(style.id)
+        styles.viewingThumbnail = style.id
+      }
       rowText(style)
     }
   }
@@ -478,11 +491,15 @@ struct StyleEditor: View {
   }
 }
 
-/// A style's thumbnail, or a placeholder the same size when it has none.
+/// A style's thumbnail, or a placeholder the same size when it has none. With `open`, clicking a
+/// thumbnail calls it (to show it full size); clicking the placeholder doesn't.
 struct StyleThumbnail: View {
   let id: UUID
   let side: CGFloat
+  var open: (() -> Void)?
   @Environment(StyleStore.self) private var styles
+
+  private var opens: Bool { open != nil && styles.thumbnail(id) != nil }
 
   var body: some View {
     let shape = RoundedRectangle(cornerRadius: side / 8)
@@ -499,6 +516,10 @@ struct StyleThumbnail: View {
     }
     .frame(width: side, height: side)
     .clipShape(shape)
+    .contentShape(shape)
+    // Off for the placeholder, so a click there reaches the row beneath and selects it.
+    .gesture(TapGesture().onEnded { open?() }, including: opens ? .all : .subviews)
+    .help(opens ? "Show full size" : "")
     .task(id: id) { await styles.loadThumbnail(id) }
   }
 }
@@ -516,7 +537,7 @@ private struct ThumbnailSection: View {
     let blocker = styles.thumbnailBlocker(create)
     Section {
       HStack(alignment: .top, spacing: 12) {
-        StyleThumbnail(id: style.id, side: 128)
+        StyleThumbnail(id: style.id, side: 128) { styles.viewingThumbnail = style.id }
         VStack(alignment: .leading, spacing: 8) {
           Button("Generate", systemImage: "sparkles") {
             styles.makeThumbnails(for: [style], create: create)
@@ -696,4 +717,200 @@ private struct ExportStylesSheet: View {
     .sheetFrame(width: 460)
     .onAppear { selectedOnly = selectedCount > 0 }
   }
+}
+
+/// A style's thumbnail full size, in a sheet sized to the image: fitted to start, then zoomed with
+/// a pinch, the buttons or ⌘+ / ⌘- (⌘0 actual size, ⌘9 fit), and panned by dragging. A double
+/// click switches between fit and actual size there. Space, Escape or Done closes it.
+struct ThumbnailViewer: View {
+  let id: UUID
+  @Environment(StyleStore.self) private var styles
+  @Environment(\.dismiss) private var dismiss
+  @State private var image: CGImage?
+  @State private var loaded = false
+  /// Points per image pixel; nil while fitted, so the image keeps fitting as the sheet resizes.
+  @State private var zoom: CGFloat?
+  /// The image's centre from the view's, in points.
+  @State private var offset: CGSize = .zero
+  /// The offset when a drag began, and the zoom and offset when a pinch began.
+  @State private var panStart: CGSize?
+  @State private var magnifyStart: (zoom: CGFloat, offset: CGSize)?
+  @State private var viewSize: CGSize = .zero
+  @FocusState private var focused: Bool
+
+  /// The largest the image area gets, before it's fitted to the image's shape.
+  private static let maxArea = CGSize(width: 900, height: 700)
+
+  var body: some View {
+    VStack(spacing: 0) {
+      canvas
+      Divider()
+      controls.padding(10)
+    }
+    .sheetFrame(width: sheetSize.width, height: sheetSize.height)
+    .focusable()
+    .focusEffectDisabled()
+    .focused($focused)
+    .onKeyPress(.space) {
+      dismiss()
+      return .handled
+    }
+    .task(id: id) {
+      image = await styles.fullThumbnailImage(id)
+      loaded = true
+      focused = true
+    }
+  }
+
+  /// The image area fitted to the image's aspect within `maxArea`, plus the controls.
+  private var sheetSize: CGSize {
+    let controls: CGFloat = 52
+    guard let image, image.width > 0, image.height > 0 else { return CGSize(width: 560, height: 560 + controls) }
+    let aspect = CGFloat(image.width) / CGFloat(image.height)
+    var size = Self.maxArea
+    if aspect > size.width / size.height { size.height = size.width / aspect } else { size.width = size.height * aspect }
+    return CGSize(width: max(size.width, 480).rounded(), height: (max(size.height, 320) + controls).rounded())
+  }
+
+  private var pixels: CGSize {
+    image.map { CGSize(width: $0.width, height: $0.height) } ?? .zero
+  }
+
+  /// The zoom that fits the whole image in the view.
+  private var fitZoom: CGFloat {
+    guard pixels.width > 0, pixels.height > 0, viewSize.width > 0, viewSize.height > 0 else { return 1 }
+    return min(viewSize.width / pixels.width, viewSize.height / pixels.height)
+  }
+
+  private var currentZoom: CGFloat { zoom ?? fitZoom }
+  private var minZoom: CGFloat { min(fitZoom, 1) / 2 }
+  private var maxZoom: CGFloat { max(fitZoom, 1) * 8 }
+
+  private var canvas: some View {
+    GeometryReader { geometry in
+      ZStack {
+        if let image {
+          let scale = currentZoom
+          Image(decorative: image, scale: 1)
+            .resizable()
+            // Pixels stay sharp when zoomed well in, for a close look at the detail.
+            .interpolation(scale > 2 ? .none : .high)
+            .frame(width: pixels.width * scale, height: pixels.height * scale)
+            .offset(offset)
+        } else if loaded {
+          ContentUnavailableView("No Thumbnail", systemImage: "photo")
+        } else {
+          ProgressView()
+        }
+      }
+      .frame(width: geometry.size.width, height: geometry.size.height)
+      .clipped()
+      .contentShape(.rect)
+      .gesture(panGesture)
+      .simultaneousGesture(magnifyGesture)
+      .gesture(
+        SpatialTapGesture(count: 2).onEnded { value in
+          let center = CGPoint(x: geometry.size.width / 2, y: geometry.size.height / 2)
+          let point = CGSize(width: value.location.x - center.x, height: value.location.y - center.y)
+          setZoom(zoom == nil ? (fitZoom < 1 ? 1 : fitZoom * 2) : nil, around: point, animated: true)
+        }
+      )
+      .onGeometryChange(for: CGSize.self) { $0.size } action: {
+        viewSize = $0
+        offset = clamped(offset, zoom: currentZoom)
+      }
+    }
+    .background(.black.opacity(0.85))
+  }
+
+  private var controls: some View {
+    HStack(spacing: 12) {
+      Button("Zoom Out", systemImage: "minus.magnifyingglass") { step(1 / 1.5) }
+        .keyboardShortcut("-", modifiers: .command)
+        .disabled(image == nil || currentZoom <= minZoom)
+      Button("Zoom In", systemImage: "plus.magnifyingglass") { step(1.5) }
+        .keyboardShortcut("=", modifiers: .command)
+        .disabled(image == nil || currentZoom >= maxZoom)
+      Text(image == nil ? "" : "\(Int((currentZoom * 100).rounded()))%")
+        .monospacedDigit()
+        .foregroundStyle(.secondary)
+        .frame(minWidth: 48, alignment: .leading)
+      Button("Actual Size") { setZoom(1, around: .zero, animated: true) }
+        .keyboardShortcut("0", modifiers: .command)
+        .disabled(image == nil)
+        .help("One image pixel per point")
+      Button("Fit") { setZoom(nil, around: .zero, animated: true) }
+        .keyboardShortcut("9", modifiers: .command)
+        .disabled(image == nil || zoom == nil)
+        .help("Show the whole image")
+      Spacer()
+      if let image {
+        Text(verbatim: "\(image.width) × \(image.height)").foregroundStyle(.secondary)
+      }
+      Button("Done") { dismiss() }
+        .keyboardShortcut(.cancelAction)
+    }
+    .labelStyle(.iconOnly)
+  }
+
+  private var panGesture: some Gesture {
+    DragGesture(minimumDistance: 1)
+      .onChanged { value in
+        if panStart == nil { panStart = offset }
+        let start = panStart ?? offset
+        offset = clamped(
+          CGSize(width: start.width + value.translation.width, height: start.height + value.translation.height),
+          zoom: currentZoom)
+      }
+      .onEnded { _ in panStart = nil }
+  }
+
+  private var magnifyGesture: some Gesture {
+    MagnifyGesture()
+      .onChanged { value in
+        if magnifyStart == nil { magnifyStart = (currentZoom, offset) }
+        guard let start = magnifyStart else { return }
+        let point = CGSize(
+          width: value.startLocation.x - viewSize.width / 2, height: value.startLocation.y - viewSize.height / 2)
+        setZoom(start.zoom * value.magnification, around: point, from: start, animated: false)
+      }
+      .onEnded { _ in magnifyStart = nil }
+  }
+
+  /// Zooms by `factor` about the view's centre.
+  private func step(_ factor: CGFloat) {
+    setZoom(currentZoom * factor, around: .zero, animated: true)
+  }
+
+  /// Sets the zoom (nil fits) keeping the image under `point` (from the view's centre) in place.
+  private func setZoom(
+    _ newZoom: CGFloat?, around point: CGSize, from start: (zoom: CGFloat, offset: CGSize)? = nil, animated: Bool
+  ) {
+    let start = start ?? (currentZoom, offset)
+    let target = newZoom.map { min(max($0, minZoom), maxZoom) }
+    let resolved = target ?? fitZoom
+    let ratio = resolved / start.zoom
+    let moved = CGSize(
+      width: point.width - (point.width - start.offset.width) * ratio,
+      height: point.height - (point.height - start.offset.height) * ratio)
+    withAnimation(animated ? .snappy(duration: 0.2) : nil) {
+      // Fitting (or zooming to exactly the fit) centres the image again.
+      zoom = target.flatMap { abs($0 - fitZoom) < 0.001 ? nil : $0 }
+      offset = zoom == nil ? .zero : clamped(moved, zoom: resolved)
+    }
+  }
+
+  /// Keeps the image from being dragged away: a side larger than the view can move until its
+  /// edge reaches the view's; a smaller one stays centred.
+  private func clamped(_ offset: CGSize, zoom: CGFloat) -> CGSize {
+    let limit = CGSize(
+      width: max(0, (pixels.width * zoom - viewSize.width) / 2), height: max(0, (pixels.height * zoom - viewSize.height) / 2))
+    return CGSize(
+      width: min(max(offset.width, -limit.width), limit.width), height: min(max(offset.height, -limit.height), limit.height))
+  }
+}
+
+/// The style a `ThumbnailViewer` sheet shows.
+private struct ViewedThumbnail: Identifiable {
+  let id: UUID
 }
