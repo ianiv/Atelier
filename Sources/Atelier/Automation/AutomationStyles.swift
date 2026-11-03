@@ -163,6 +163,13 @@
         }
 
         if let snapshotDir {
+          // `--model` without `--thumbnails` picks the model the snapshots show (one with
+          // Layout fills the column beside the prompt most).
+          if value("--thumbnails") == nil, let file = value("--model") {
+            model.selectedModel = file
+            try? await Task.sleep(for: .milliseconds(200))
+            while model.isLoadingModel { try? await Task.sleep(for: .milliseconds(100)) }
+          }
           // Give SwiftUI's own window time to come up, so there's only one Styles screen.
           try? await Task.sleep(for: .seconds(2))
           ensureWindow(model, navigation: navigation, layouts: layouts, presets: presets)
@@ -187,6 +194,8 @@
             check(
               store.screenScrolledTo == top.id,
               "the list comes back scrolled to \(top.name) (top row now \(store.style(id: store.screenScrolledTo)?.name ?? "none"))")
+            // End on Create, for a look at the composer.
+            navigation.section = .create
           }
         }
       }

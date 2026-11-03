@@ -688,8 +688,6 @@ struct PromptComposer: View {
   @FocusState private var focusedTag: String?
   /// Too narrow for the buttons beside the prompt (a narrow iPad window): they go under it.
   @State private var narrow = false
-  /// The Stop, count and Generate buttons' width, which the controls above them take.
-  @State private var buttonsWidth: CGFloat?
 
   var body: some View {
     @Bindable var model = model
@@ -709,16 +707,17 @@ struct PromptComposer: View {
         .help("Prompt. ⌘↩ generates. ⌘L focuses this field.")
         // Beside the prompt, as wide as the buttons at the bottom: the style, Layout and the mode
         // above them.
-        VStack(alignment: .trailing, spacing: 8) {
+        ComposerColumn(spacing: 8) {
           // The rating of the image on the canvas, as in History.
           if let item = model.imageItem {
             StarRating(stars: model.history.rating(of: item)) {
               model.history.setRating($0, for: [item])
             }
             .imageScale(.large)
-            .frame(maxWidth: .infinity)
           }
+          // Takes the column's width rather than setting it, so a long name is cut short.
           StyleControls()
+            .layoutValue(key: ComposerColumn.FollowsWidth.self, value: true)
           HStack(spacing: 6) {
             if model.layoutFormat != nil {
               Toggle(
@@ -734,10 +733,7 @@ struct PromptComposer: View {
             modePicker
           }
           buttons
-            .fixedSize()
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { buttonsWidth = $0 }
         }
-        .frame(width: buttonsWidth)
       }
       DisclosureGroup(isExpanded: $showNegative) {
         TextField("What to avoid", text: $model.negativePrompt, axis: .vertical)
@@ -865,6 +861,38 @@ struct PromptComposer: View {
 
   /// Follows the window's corners, never tighter than a text field's.
   static let fieldShape = ConcentricRectangle(corners: .concentric(minimum: .fixed(8)), isUniform: true)
+}
+
+/// The controls beside the prompt, stacked and trailing-aligned: as wide as the widest at its own
+/// size (the buttons, or Layout beside the mode switch), each given that width. A view marked
+/// `FollowsWidth` doesn't count toward it.
+struct ComposerColumn: Layout {
+  var spacing: CGFloat
+
+  struct FollowsWidth: LayoutValueKey {
+    static let defaultValue = false
+  }
+
+  private func width(_ subviews: Subviews) -> CGFloat {
+    subviews.filter { !$0[FollowsWidth.self] }.map { $0.sizeThatFits(.unspecified).width }.max() ?? 0
+  }
+
+  func sizeThatFits(proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()) -> CGSize {
+    let width = width(subviews)
+    let heights = subviews.map { $0.sizeThatFits(ProposedViewSize(width: width, height: nil)).height }
+    return CGSize(width: width, height: heights.reduce(0, +) + spacing * CGFloat(max(subviews.count - 1, 0)))
+  }
+
+  func placeSubviews(in bounds: CGRect, proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()) {
+    let width = width(subviews)
+    var y = bounds.minY
+    for subview in subviews {
+      let size = subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
+      subview.place(
+        at: CGPoint(x: bounds.maxX, y: y), anchor: .topTrailing, proposal: ProposedViewSize(width: width, height: size.height))
+      y += size.height + spacing
+    }
+  }
 }
 
 /// How many images Generate makes, beside the Generate button.
