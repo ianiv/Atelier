@@ -232,7 +232,7 @@ extension StyleStore {
     thumbnailTask?.cancel()
   }
 
-  private static func square(_ image: CGImage, side: Int) -> CGImage? {
+  static func square(_ image: CGImage, side: Int) -> CGImage? {
     let crop = min(image.width, image.height)
     guard crop > 0,
           let cropped = image.cropping(to: CGRect(

@@ -72,6 +72,8 @@ final class CreateModel {
   var negativePrompt = ""
   /// The user's styles (set by the app).
   var styles: StyleStore?
+  /// The user's characters (set by the app).
+  var characters: CharacterStore?
   /// The style Generate writes the prompt into; nil for the prompt as typed. Remembered across
   /// launches, except for what scripted runs set.
   var styleID: UUID? = UserDefaults.standard.string(forKey: "style").flatMap(UUID.init(uuidString:)) {
@@ -554,6 +556,42 @@ final class CreateModel {
     canvasMode = mode
     importedSettings = (image, source.metadata)
     loadCanvasImageSettings(undoManager: undoManager)
+  }
+
+  /// Send to Create from the Characters screen: adds the image to the current project as a
+  /// generated step, puts it on the canvas, and loads the model, settings and seed it was made
+  /// with, its style and tag boxes, and the character's description as the subject. Without a
+  /// style (or when it's been deleted) the whole prompt it was made with goes in the prompt box.
+  /// Generate or Edit stays as it was.
+  func openCharacterRender(_ rendered: CGImage, info: CharacterImageInfo, undoManager: UndoManager?) async throws {
+    let item = try await history.addRendered(rendered, source: info.source)
+    stopFollowingRun()
+    imageStep = (history.project.name, item.tensorId)
+    lastSavedTensorId = item.tensorId
+    image = rendered
+    canvasIsImported = false
+    importedSettings = nil
+    canvas.zoomToFit()
+    if let style = styles?.style(id: info.styleID) {
+      styleID = style.id
+      prompt = info.subject
+      negativePrompt = ""
+      for (tag, value) in info.tagValues where tag != Style.subject { styleValues[tag] = value }
+      for tag in style.tags where tag != Style.subject && info.tagValues[tag] == nil { styleValues[tag] = "" }
+    } else {
+      styleID = nil
+      prompt = info.source.prompt
+      negativePrompt = info.source.negativePrompt
+    }
+    errorMessage = nil
+    statusNote = nil
+    let pasted = info.source.metadata.pasted
+    paste(pasted, undoManager: undoManager)
+    if let file = pasted.model, !models.contains(where: { $0.file == file }) {
+      statusNote = "\(file) isn't downloaded, so its settings apply to the current model."
+    }
+    if let failure = await history.writeToOutputFolder(item, image: rendered) { errorMessage = failure }
+    saveSession()
   }
 
   /// Loads the prompts, model, seed and settings the canvas image carries, like Paste Settings
@@ -1162,8 +1200,8 @@ final class CreateModel {
         } else {
           output = try await engine.generate(request, progress: progress)
         }
-        // A style thumbnail goes back to the Styles screen, not into the project.
-        if job.styleThumbnail != nil {
+        // A style thumbnail or character preview goes back to its screen, not into the project.
+        if job.staysOutOfProject {
           guard let made = output.frames.first.flatMap(ImageTensor.cgImage(from:)) else {
             throw CocoaError(.fileWriteUnknown)
           }
@@ -1230,6 +1268,20 @@ final class CreateModel {
   /// the job.
   func generateStyleThumbnail(_ request: GenerationEngine.Request, style: String) async throws -> CGImage {
     let id = queue.append([request], currentTensorId: history.currentTensorId, styleThumbnail: style)[0]
+    return try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { continuation in
+        thumbnailCallbacks[id] = { continuation.resume(with: $0) }
+        runNext()
+      }
+    } onCancel: {
+      Task { @MainActor in self.cancel(id) }
+    }
+  }
+
+  /// Queues a preview for the Characters screen, like a style thumbnail. Its live steps show on
+  /// that screen (`livePreview`).
+  func generateCharacterPreview(_ request: GenerationEngine.Request, label: String) async throws -> CGImage {
+    let id = queue.append([request], currentTensorId: history.currentTensorId, characterPreview: label)[0]
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
         thumbnailCallbacks[id] = { continuation.resume(with: $0) }
@@ -1456,8 +1508,8 @@ final class CreateModel {
   }
 
   private func coverCanvas(with preview: CGImage) {
-    // A style thumbnail's previews show in the status bar only: the canvas keeps your image.
-    guard queue.running?.styleThumbnail == nil else { return }
+    // A style thumbnail's or character preview's steps don't show here: the canvas keeps your image.
+    guard queue.running?.staysOutOfProject != true else { return }
     if !previewCoversCanvas {
       canvasBeforePreview = canvasSource
       previewCoversCanvas = true

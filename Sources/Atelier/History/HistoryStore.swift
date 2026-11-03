@@ -278,6 +278,21 @@ final class HistoryStore {
     return self.item(tensorId: item.tensorId) ?? item
   }
 
+  /// Adds an image rendered earlier and kept out of the project (a character's) as a step after
+  /// the current one, which it becomes, with the settings it was made with.
+  func addRendered(_ image: CGImage, source: ThumbnailSource) async throws -> HistoryItem {
+    guard let tensor = ImageTensor.tensor(from: image) else { throw ProjectError.badImage }
+    let project = project
+    let item = try await project.append(
+      tensor: tensor, model: source.model ?? "", prompt: source.prompt, negativePrompt: source.negativePrompt,
+      seed: source.seed ?? 0, settings: source.settings, createdAt: Date(), duration: 0, after: currentTensorId)
+    if project === self.project {
+      currentTensorId = item.tensorId
+      await reload()
+    }
+    return self.item(tensorId: item.tensorId) ?? item
+  }
+
   /// The step a run after `item` follows: its own, or a clip's last frame.
   static func tip(of item: HistoryItem) -> Int64 {
     item.clip?.frames.last ?? item.tensorId

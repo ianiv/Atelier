@@ -30,6 +30,7 @@ struct ContentView: View {
     case models = "Models"
     case loras = "LoRAs"
     case styles = "Styles"
+    case characters = "Characters"
 
     var id: String { rawValue }
 
@@ -42,6 +43,7 @@ struct ContentView: View {
       case .models: "shippingbox"
       case .loras: "slider.horizontal.3"
       case .styles: "paintpalette"
+      case .characters: "person.2"
       }
     }
   }
@@ -107,6 +109,8 @@ struct ContentView: View {
         LoRAsView()
       case .styles:
         StylesView()
+      case .characters:
+        CharactersView()
       }
     }
     .confirmationDialog(

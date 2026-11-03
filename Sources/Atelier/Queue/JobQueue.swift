@@ -37,6 +37,10 @@ final class JobQueue {
     var fromAgent = false
     /// Makes the thumbnail of the style with this name (Styles screen); not kept across quits.
     var styleThumbnail: String?
+    /// Makes a preview on the Characters screen, described by this; not kept across quits.
+    var characterPreview: String?
+    /// The image goes back to the screen that queued the job, not into the project.
+    var staysOutOfProject: Bool { styleThumbnail != nil || characterPreview != nil }
     /// Jobs queued one after another, while you didn't pick another step, form a line: each
     /// follows the line's latest result when it starts, whatever order they end up running in.
     var line: UUID?
@@ -98,7 +102,7 @@ final class JobQueue {
   @discardableResult
   func append(
     _ requests: [GenerationEngine.Request], currentTensorId: Int64?, fromAgent: Bool = false,
-    styleThumbnail: String? = nil
+    styleThumbnail: String? = nil, characterPreview: String? = nil
   ) -> [UUID] {
     let line: UUID
     if let lastLine, !isEmpty, currentTensorId == expectedCurrent {
@@ -112,6 +116,7 @@ final class JobQueue {
     for request in requests {
       var job = Job(request: request, fromAgent: fromAgent)
       job.styleThumbnail = styleThumbnail
+      job.characterPreview = characterPreview
       if request.parentTensorId == nil { job.line = line }
       waiting.append(job)
     }

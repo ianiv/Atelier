@@ -93,7 +93,7 @@ struct QueueView: View {
     case .failed, .cancelled:
       // A thumbnail job's result goes back to the Styles screen that queued it, so it isn't rerun here.
       Button("Retry") { create.retry(job.id) }
-        .disabled(job.styleThumbnail != nil)
+        .disabled(job.staysOutOfProject)
       Button("Remove from List") { queue.removeRecent(job.id) }
     }
   }
@@ -168,6 +168,11 @@ struct QueueRow: View {
         Image(systemName: "paintpalette")
           .foregroundStyle(.secondary)
           .help("Thumbnail for the style “\(style)”")
+      }
+      if let preview = job.characterPreview {
+        Image(systemName: "person.2")
+          .foregroundStyle(.secondary)
+          .help("Preview of \(preview), not saved to the project")
       }
       status
     }

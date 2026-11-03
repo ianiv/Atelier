@@ -12,6 +12,7 @@ struct AtelierApp: App {
   @State private var layouts: LayoutStore
   @State private var presets: PresetStore
   @State private var styles: StyleStore
+  @State private var characters: CharacterStore
   @State private var library: ModelLibrary
   #if os(macOS)
     @State private var agents: AgentServer
@@ -43,6 +44,9 @@ struct AtelierApp: App {
     let styles = StyleStore(persists: !Automation.isRequested)
     create.styles = styles
     _styles = State(initialValue: styles)
+    let characters = CharacterStore(persists: !Automation.isRequested)
+    create.characters = characters
+    _characters = State(initialValue: characters)
     _presets = State(initialValue: presets)
     let library = ModelLibrary(create: create)
     _library = State(initialValue: library)
@@ -71,6 +75,7 @@ struct AtelierApp: App {
           .environment(layouts)
           .environment(presets)
           .environment(styles)
+          .environment(characters)
           .environment(library)
           .environment(fileDialogs)
       }

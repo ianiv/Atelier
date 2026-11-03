@@ -23,6 +23,8 @@ import SwiftUI
 ///
 /// `--styles-check` reads a style file (AutomationStyles.swift).
 ///
+/// `--characters-check` checks the Characters screen (AutomationCharacters.swift).
+///
 /// `--project-check` exercises the project format on a scratch project, and `--edit-input-check`
 /// Use Settings on Edit steps (AutomationProject.swift). `--queue-check` runs the queue
 /// (AutomationQueue.swift).
@@ -34,7 +36,7 @@ enum Automation {
       "--show", "--resize-bench", "--inspector-check", "--library-check", "--project-check",
       "--reuse", "--generate", "--ux-check", "--edit-input-check", "--queue-check",
       "--timeline-check", "--upscale-check", "--timeline-export-check", "--flashvsr-check",
-      "--model-folders-check", "--styles-check",
+      "--model-folders-check", "--styles-check", "--characters-check",
     ]
     return CommandLine.arguments.contains { flags.contains($0) }
   }
@@ -88,6 +90,10 @@ enum Automation {
     }
     if args.contains("--styles-check") {
       stylesCheck(model, navigation: navigation, layouts: layouts, presets: presets)
+      return
+    }
+    if args.contains("--characters-check") {
+      charactersCheck(model, navigation: navigation, layouts: layouts, presets: presets)
       return
     }
     if args.contains("--model-folders-check") {
@@ -1159,6 +1165,7 @@ enum Automation {
         .environment(layouts)
         .environment(presets)
         .environment(model.styles ?? StyleStore(persists: false))
+        .environment(model.characters ?? CharacterStore(persists: false))
         .environment(library ?? ModelLibrary(create: model))
         .environment(FileDialogs())
         .frame(width: 1280, height: 860)

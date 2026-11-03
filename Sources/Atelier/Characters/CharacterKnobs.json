@@ -1,0 +1,132 @@
+{
+  "reference": {
+    "template": "Full body, facing the viewer. {{SUBJECT}} Plain seamless backdrop, even soft light, deep focus, everything sharp from front to back.",
+    "negative": "bokeh, blurred background, shallow depth of field"
+  },
+  "sections": [
+    {
+      "id": "identity",
+      "title": "Identity",
+      "sentence": "opening",
+      "textPrompt": "Anything else about who they are",
+      "knobs": [
+        { "id": "kind", "title": "Kind", "control": "text", "role": "kind", "placeholder": "woman, boy, old man, dog, cat, dragon…" },
+        { "id": "age", "title": "Age", "control": "slider", "role": "before",
+          "options": ["baby", "little", "young", "teenage", "adult", "middle-aged", "older", "elderly", "ancient"] },
+        { "id": "pronoun", "title": "Pronoun", "control": "picker", "role": "pronoun", "randomizes": false,
+          "options": ["she", "he", { "label": "they", "plural": true }, "it"] }
+      ]
+    },
+    {
+      "id": "face",
+      "title": "Face",
+      "joinsPrevious": true,
+      "textPrompt": "Anything else about the face",
+      "knobs": [
+        { "id": "faceShape", "title": "Face shape", "control": "picker", "role": "list", "format": "{a} {value} face",
+          "options": ["round", "oval", "square", "long", "heart-shaped", "angular", "broad"] },
+        { "id": "eyeColour", "title": "Eye colour", "control": "picker", "role": "list", "format": "{value} eyes",
+          "options": ["brown", "dark brown", "hazel", "green", "blue", "grey", "amber", "golden", "red", "glowing"] },
+        { "id": "facialHair", "title": "Facial hair", "control": "picker", "role": "list",
+          "options": [
+            { "label": "clean-shaven", "phrase": "a clean-shaven chin" }, "stubble",
+            { "label": "moustache", "phrase": "a moustache" }, { "label": "goatee", "phrase": "a goatee" },
+            { "label": "short beard", "phrase": "a short beard" }, { "label": "full beard", "phrase": "a full beard" },
+            { "label": "long beard", "phrase": "a long beard" }, "whiskers"
+          ] },
+        { "id": "expression", "title": "Expression", "control": "slider", "role": "list",
+          "options": [
+            { "label": "stern", "phrase": "a stern expression" }, { "label": "serious", "phrase": "a serious expression" },
+            { "label": "neutral", "phrase": "a neutral expression" }, { "label": "calm", "phrase": "a calm expression" },
+            { "label": "gentle smile", "phrase": "a gentle smile" }, { "label": "warm smile", "phrase": "a warm smile" },
+            { "label": "laughing", "phrase": "a laughing expression" }
+          ] },
+        { "id": "glasses", "title": "Glasses", "control": "picker", "role": "list",
+          "options": ["round glasses", "rectangular glasses", "sunglasses", { "label": "monocle", "phrase": "a monocle" }, "goggles"] }
+      ]
+    },
+    {
+      "id": "body",
+      "title": "Body",
+      "sentence": "is",
+      "textPrompt": "Anything else about the body",
+      "knobs": [
+        { "id": "height", "title": "Height", "control": "slider", "role": "adjective",
+          "options": ["tiny", "small", "short", { "label": "average", "phrase": "of average height" }, "tall", "very tall", "towering"] },
+        { "id": "build", "title": "Build", "control": "slider", "role": "adjective",
+          "options": ["skinny", "slender", { "label": "average", "phrase": "of average build" }, "sturdy", "heavyset", "very heavy"] },
+        { "id": "muscle", "title": "Muscle", "control": "slider", "role": "adjective",
+          "options": ["soft", "toned", "athletic", "muscular", "powerfully built"] },
+        { "id": "posture", "title": "Posture", "control": "picker", "role": "with", "format": "{a} {value} posture",
+          "options": ["upright", "relaxed", "slouched", "hunched", "proud", "poised"] }
+      ]
+    },
+    {
+      "id": "hair",
+      "title": "Hair or fur",
+      "sentence": "has",
+      "separator": " ",
+      "textPrompt": "Anything else about the hair",
+      "noun": { "default": "hair", "options": ["hair", "fur", "feathers", { "label": "mane", "article": true }] },
+      "knobs": [
+        { "id": "hairLength", "title": "Length", "control": "slider", "role": "before",
+          "options": [
+            { "label": "hairless", "phrase": "no {noun}", "alone": true },
+            "very short", "short", "chin-length", "shoulder-length", "long", "very long"
+          ] },
+        { "id": "hairStyle", "title": "Texture / style", "control": "picker", "role": "before",
+          "options": [
+            "straight", "wavy", "curly", "coily", "braided",
+            { "label": "ponytail", "after": "in a ponytail" }, { "label": "bun", "after": "in a bun" },
+            { "label": "buzz cut", "after": "in a buzz cut" }, { "label": "mohawk", "after": "in a mohawk" },
+            "shaggy", { "label": "slicked back", "phrase": "slicked-back" }, "wiry", "fluffy"
+          ] },
+        { "id": "hairColour", "title": "Colour", "control": "picker", "role": "before",
+          "options": ["black", "dark brown", "brown", "chestnut", "auburn", "red", "ginger", "blonde", "platinum", "grey", "silver", "white", "blue", "green", "pink", "purple"] }
+      ]
+    },
+    {
+      "id": "skin",
+      "title": "Skin, coat or surface",
+      "joinsPrevious": true,
+      "separator": ", ",
+      "textPrompt": "Anything else about the surface",
+      "noun": { "default": "skin", "options": ["skin", { "label": "coat", "article": true }, "scales", { "label": "shell", "article": true }, "plating"] },
+      "knobs": [
+        { "id": "skinTone", "title": "Tone / colour", "control": "picker", "role": "before",
+          "options": ["very fair", "fair", "light", "olive", "tan", "brown", "dark brown", "deep", "grey", "green", "blue", "red", "gold", "black", "white"] },
+        { "id": "skinTexture", "title": "Texture / pattern", "control": "picker", "role": "before",
+          "options": ["smooth", "freckled", "weathered", "wrinkled", "scarred", "tattooed", "scaly", "spotted", "striped", "tabby", "patched", "metallic", "rusted"] }
+      ]
+    },
+    {
+      "id": "clothing",
+      "title": "Clothing and gear",
+      "sentence": "wears",
+      "textPrompt": "Anything else they wear or carry",
+      "knobs": [
+        { "id": "outfit", "title": "Outfit", "control": "picker", "role": "head",
+          "options": [
+            "casual clothes", { "label": "suit", "article": true }, { "label": "evening gown", "article": true },
+            { "label": "dress", "article": true }, { "label": "work uniform", "article": true },
+            { "label": "military uniform", "article": true }, "armour", "robes", "sportswear", "streetwear",
+            "traditional dress", "swimwear", "pyjamas",
+            { "label": "a collar", "word": "collar", "article": true, "colourFirst": true },
+            { "label": "nothing", "alone": true }
+          ] },
+        { "id": "era", "title": "Era / genre", "control": "picker", "role": "before",
+          "options": ["contemporary", "medieval", "Renaissance", "Victorian", "1920s", "1950s", "1970s", "1990s", "futuristic", "fantasy", "cyberpunk", "steampunk", "post-apocalyptic"] },
+        { "id": "mainColour", "title": "Main colour", "control": "picker", "role": "after", "format": "in {value}",
+          "options": ["black", "white", "grey", "navy", "red", "deep green", "mustard", "brown", "pastel", "bright multicoloured"] },
+        { "id": "accessories", "title": "Accessories", "control": "text", "role": "with", "placeholder": "a leather satchel and a pocket watch" }
+      ]
+    },
+    {
+      "id": "marks",
+      "title": "Distinguishing marks",
+      "sentence": "has",
+      "textPrompt": "a scar through the left eyebrow, a silver nose ring",
+      "knobs": []
+    }
+  ]
+}

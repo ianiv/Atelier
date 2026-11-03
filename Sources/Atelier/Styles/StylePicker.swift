@@ -49,6 +49,8 @@ struct StyleControls: View {
 /// every category with a match is open.
 struct StylePicker: View {
   let selection: UUID?
+  /// What No Style means here.
+  var noStyleDetail = "The prompt as typed"
   let pick: (UUID?) -> Void
   @Environment(CreateModel.self) private var model
   @Environment(Navigation.self) private var navigation
@@ -70,7 +72,7 @@ struct StylePicker: View {
       SearchField(text: $query, prompt: "Search styles").padding(8)
       Divider()
       List {
-        if query.isEmpty { row(name: "No Style", detail: "The prompt as typed", id: nil) }
+        if query.isEmpty { row(name: "No Style", detail: noStyleDetail, id: nil) }
         ForEach(categories, id: \.self) { category in
           let inCategory = matching.filter { $0.category == category }
           if !inCategory.isEmpty {
