@@ -247,7 +247,7 @@ final class StyleStore {
     var seen: Set = [Style.subject]
     return [Style.subject] + styles.flatMap(\.tags).filter { seen.insert($0).inserted }
   }
-  // The Styles screen's filter, category, selection and scroll position, kept while you visit
+  // The Styles screen's filter, category, selection, layout and scroll position, kept while you visit
   // other screens and across launches.
   var screenSearch = UserDefaults.standard.string(forKey: "stylesSearch") ?? "" {
     didSet { remember(screenSearch, "stylesSearch") }
@@ -257,6 +257,10 @@ final class StyleStore {
   }
   var screenSelection = Set((UserDefaults.standard.stringArray(forKey: "stylesSelection") ?? []).compactMap(UUID.init(uuidString:))) {
     didSet { remember(screenSelection.map(\.uuidString), "stylesSelection") }
+  }
+  /// Thumbnails in a grid rather than rows with the start of each template.
+  var screenGrid = UserDefaults.standard.bool(forKey: "stylesGrid") {
+    didSet { remember(screenGrid, "stylesGrid") }
   }
   /// The style at the top of the list.
   var screenScrolledTo = UserDefaults.standard.string(forKey: "stylesScrolledTo").flatMap(UUID.init(uuidString:)) {

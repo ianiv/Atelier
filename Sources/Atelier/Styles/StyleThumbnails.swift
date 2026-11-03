@@ -166,13 +166,16 @@ extension StyleStore {
     return true
   }
 
-  /// Why thumbnails can't be made now, or nil when they can.
-  func thumbnailBlocker(_ create: CreateModel) -> String? {
+  /// Why thumbnails of `chosen` can't be made now, or nil when they can. An empty subject is
+  /// fine when every one of them has a `{{SUBJECT:default}}` to use instead.
+  func thumbnailBlocker(_ create: CreateModel, for chosen: [Style]) -> String? {
     if create.selectedModel == nil || create.settings == nil || create.isLoadingModel {
       return "Pick a model on Create first."
     }
     if create.videoModel != nil { return "Pick an image model on Create: thumbnails are images." }
-    if (thumbnailValues[Style.subject] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+    if (thumbnailValues[Style.subject] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+       !chosen.allSatisfy({ $0.defaults[Style.subject] != nil })
+    {
       return "Write a subject first."
     }
     return nil
@@ -183,7 +186,7 @@ extension StyleStore {
   /// `thumbnailValues` (an empty one is dropped). Create's negative prompt, canvas and moodboard
   /// aren't used. The images aren't saved to the project.
   func makeThumbnails(for chosen: [Style], create: CreateModel) {
-    guard thumbnailRun == nil, !chosen.isEmpty, thumbnailBlocker(create) == nil,
+    guard thumbnailRun == nil, !chosen.isEmpty, thumbnailBlocker(create, for: chosen) == nil,
           let model = create.selectedModel, let settings = create.settings
     else { return }
     let values = thumbnailValues

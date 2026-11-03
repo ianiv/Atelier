@@ -33,6 +33,15 @@ struct StylesView: View {
   @FocusState private var listFocused: Bool
   /// The far end of a ⇧-arrow selection.
   @State private var lastExtended: UUID?
+  /// The style the arrow keys moved to, scrolled to when it's off screen.
+  @State private var revealed: UUID?
+  /// The grid's width, for its column count and thumbnail size.
+  @State private var gridWidth: CGFloat = 0
+
+  /// The grid's cells: at least this wide, this far apart.
+  private static let gridMinimum: CGFloat = 140
+  private static let gridSpacing: CGFloat = 12
+  private static let gridPadding: CGFloat = 16
 
   private var filtered: [Style] {
     let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -64,6 +73,14 @@ struct StylesView: View {
         return true
       } isTargeted: { dropTargeted = $0 }
       .toolbar {
+        ToolbarItem {
+          Picker("View", selection: $styles.screenGrid) {
+            Label("List", systemImage: "list.bullet").tag(false)
+            Label("Grid", systemImage: "square.grid.2x2").tag(true)
+          }
+          .pickerStyle(.segmented)
+          .help("Show the styles as a list or a grid of thumbnails")
+        }
         ToolbarItem {
           Picker("Category", selection: $styles.screenCategory) {
             Text("All categories").tag(String?.none)
@@ -129,10 +146,17 @@ struct StylesView: View {
       }
       .deleteCommand { pendingDelete = selection }
       .debugPresents("exportStyles", $exporting)
+      // Presented while there's a style to show, not per style, so the arrow keys in it change
+      // the style shown without closing and reopening it.
       .sheet(
-        item: Binding(
-          get: { styles.viewingThumbnail.map(ViewedThumbnail.init) }, set: { styles.viewingThumbnail = $0?.id })
-      ) { ThumbnailViewer(id: $0.id) }
+        isPresented: Binding(get: { styles.viewingThumbnail != nil }, set: { if !$0 { styles.viewingThumbnail = nil } })
+      ) {
+        ThumbnailViewer { key in
+          let result = arrow(key, extend: false)
+          if result == .handled, let anchor { styles.viewingThumbnail = anchor }
+          return result
+        }
+      }
       .sheet(isPresented: $exporting) {
         ExportStylesSheet(
           selectedCount: selection.count, shownCount: filtered.count, suggestedTitle: category ?? "Styles"
@@ -163,36 +187,16 @@ struct StylesView: View {
       // click, ⌘-click, ⇧-click, ⌘A and the arrow keys.
       ScrollViewReader { proxy in
         ScrollView {
-          LazyVStack(alignment: .leading, spacing: 0) {
-            ForEach(sections, id: \.category) { section in
-              Section {
-                ForEach(section.styles) { style in
-                  row(style)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(
-                      selection.contains(style.id) ? AnyShapeStyle(.selection) : AnyShapeStyle(.clear),
-                      in: .rect(cornerRadius: 6))
-                    .padding(.horizontal, 8)
-                    .contentShape(.rect)
-                    .onTapGesture { click(style.id) }
-                    .contextMenu { menu(for: selection.contains(style.id) ? selection : [style.id]) }
-                    .id(style.id)
-                }
-              } header: {
-                Text(section.category.isEmpty ? "Uncategorized" : section.category)
-                  .font(.headline)
-                  .frame(maxWidth: .infinity, alignment: .leading)
-                  .padding(.horizontal, 18)
-                  .padding(.top, 12)
-                  .padding(.bottom, 4)
-              }
-            }
+          Group {
+            if styles.screenGrid { grid } else { list }
           }
           .scrollTargetLayout()
           .padding(.bottom, 8)
         }
         .scrollPosition(id: $styles.screenScrolledTo, anchor: .top)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { gridWidth = $0 }
+        // Keep the moved-to style on screen (scrolling only when it's off it).
+        .onChange(of: revealed) { _, id in if let id { proxy.scrollTo(id) } }
         .focusable()
         .focusEffectDisabled()
         .focused($listFocused)
@@ -200,11 +204,8 @@ struct StylesView: View {
           // For ⌘- and ⇧-click; iPadOS has no such modifier, so a tap there selects one style.
           .onModifierKeysChanged { _, new in modifiers = new }
         #endif
-          .onKeyPress(.downArrow, phases: .down) { press in
-            step(1, extend: press.modifiers.contains(.shift), proxy: proxy)
-          }
-          .onKeyPress(.upArrow, phases: .down) { press in
-            step(-1, extend: press.modifiers.contains(.shift), proxy: proxy)
+          .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow], phases: .down) { press in
+            arrow(press.key, extend: press.modifiers.contains(.shift))
           }
           // Space: the selected style's thumbnail full size, as Quick Look in History.
           .onKeyPress(.space) {
@@ -219,6 +220,72 @@ struct StylesView: View {
           }
       }
     }
+  }
+
+  private var list: some View {
+    LazyVStack(alignment: .leading, spacing: 0) {
+      ForEach(sections, id: \.category) { section in
+        Section {
+          ForEach(section.styles) { style in
+            item(style) { row(style) }
+              .padding(.horizontal, 8)
+          }
+        } header: {
+          header(section.category).padding(.horizontal, 18)
+        }
+      }
+    }
+  }
+
+  /// Thumbnails filling the width, `gridColumns` across, with each style's name under its own.
+  private var grid: some View {
+    let columns = Array(repeating: GridItem(.flexible(), spacing: Self.gridSpacing, alignment: .top), count: gridColumns)
+    return LazyVGrid(columns: columns, alignment: .leading, spacing: Self.gridSpacing) {
+      ForEach(sections, id: \.category) { section in
+        Section {
+          ForEach(section.styles) { style in
+            item(style) { cell(style) }
+          }
+        } header: {
+          header(section.category).padding(.horizontal, 2)
+        }
+      }
+    }
+    .padding(.horizontal, Self.gridPadding)
+  }
+
+  /// How many grid cells fit across.
+  private var gridColumns: Int {
+    max(1, Int((gridWidth - 2 * Self.gridPadding + Self.gridSpacing) / (Self.gridMinimum + Self.gridSpacing)))
+  }
+
+  /// A grid cell's thumbnail size.
+  private var gridSide: CGFloat {
+    let count = CGFloat(gridColumns)
+    let side = (gridWidth - 2 * Self.gridPadding - Self.gridSpacing * (count - 1)) / count - 12
+    return max(side.rounded(.down), 64)
+  }
+
+  private func header(_ category: String) -> some View {
+    Text(category.isEmpty ? "Uncategorized" : category)
+      .font(.headline)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.top, 12)
+      .padding(.bottom, 4)
+  }
+
+  /// A row or grid cell: selected by clicks, highlighted when selected, with the context menu.
+  private func item(_ style: Style, @ViewBuilder content: () -> some View) -> some View {
+    content()
+      .padding(.horizontal, styles.screenGrid ? 6 : 10)
+      .padding(.vertical, styles.screenGrid ? 6 : 5)
+      .background(
+        selection.contains(style.id) ? AnyShapeStyle(.selection) : AnyShapeStyle(.clear),
+        in: .rect(cornerRadius: styles.screenGrid ? 10 : 6))
+      .contentShape(.rect)
+      .onTapGesture { click(style.id) }
+      .contextMenu { menu(for: selection.contains(style.id) ? selection : [style.id]) }
+      .id(style.id)
   }
 
   @ViewBuilder
@@ -254,13 +321,22 @@ struct StylesView: View {
     anchor = id
   }
 
-  /// ↑/↓: the row above or below the last one clicked; with ⇧, extends the selection to it.
-  private func step(_ offset: Int, extend: Bool, proxy: ScrollViewProxy) -> KeyPress.Result {
+  /// An arrow key: in the list ↑/↓ move to the row above or below the last one clicked; in the
+  /// grid ←/→ move to the cell before or after it and ↑/↓ to the one above or below. With ⇧, extends
+  /// the selection to it.
+  private func arrow(_ key: KeyEquivalent, extend: Bool) -> KeyPress.Result {
     let ids = filtered.map(\.id)
     guard !ids.isEmpty else { return .ignored }
     let current = (extend ? lastExtended : anchor).flatMap { ids.firstIndex(of: $0) }
       ?? ids.firstIndex { selection.contains($0) }
-    let next = current.map { min(max($0 + offset, 0), ids.count - 1) } ?? 0
+    let next: Int
+    switch (key, styles.screenGrid) {
+    case (.upArrow, false), (.leftArrow, true): next = current.map { max($0 - 1, 0) } ?? 0
+    case (.downArrow, false), (.rightArrow, true): next = current.map { min($0 + 1, ids.count - 1) } ?? 0
+    case (.upArrow, true), (.downArrow, true):
+      next = current.map { gridIndex(from: $0, rows: key == .upArrow ? -1 : 1) } ?? 0
+    default: return .ignored
+    }
     if extend, let anchor, let from = ids.firstIndex(of: anchor) {
       selection = Set(ids[min(from, next)...max(from, next)])
       lastExtended = ids[next]
@@ -269,9 +345,24 @@ struct StylesView: View {
       anchor = ids[next]
       lastExtended = nil
     }
-    // Keep the moved-to row on screen (scrolling only when it's off it).
-    proxy.scrollTo(ids[next])
+    revealed = ids[next]
     return .handled
+  }
+
+  /// The grid cell `rows` rows above or below the one at `index` (in `filtered`), in the same
+  /// column or the last cell of a shorter row. Each category starts a new row, as in the grid.
+  private func gridIndex(from index: Int, rows: Int) -> Int {
+    var gridRows: [Range<Int>] = []
+    var start = 0
+    for section in sections {
+      for offset in stride(from: 0, to: section.styles.count, by: gridColumns) {
+        gridRows.append((start + offset)..<(start + min(offset + gridColumns, section.styles.count)))
+      }
+      start += section.styles.count
+    }
+    guard let row = gridRows.firstIndex(where: { $0.contains(index) }) else { return index }
+    let target = gridRows[min(max(row + rows, 0), gridRows.count - 1)]
+    return min(target.lowerBound + (index - gridRows[row].lowerBound), target.upperBound - 1)
   }
 
   private var sections: [(category: String, styles: [Style])] {
@@ -292,6 +383,30 @@ struct StylesView: View {
       }
       rowText(style)
     }
+  }
+
+  private func cell(_ style: Style) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      StyleThumbnail(id: style.id, side: gridSide) {
+        click(style.id)
+        styles.viewingThumbnail = style.id
+      }
+      HStack(alignment: .firstTextBaseline, spacing: 4) {
+        VStack(alignment: .leading, spacing: 0) {
+          Text(style.name).fontWeight(.medium).lineLimit(1)
+          // Always laid out, so the cells in a row line up.
+          Text(style.subcategory.isEmpty ? " " : style.subcategory)
+            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        }
+        Spacer(minLength: 0)
+        Image(systemName: "checkmark.circle.fill")
+          .foregroundStyle(.tint)
+          .opacity(create.styleID == style.id ? 1 : 0)
+          .help("Used on Create")
+      }
+      .frame(width: gridSide)
+    }
+    .help(style.name)
   }
 
   private func rowText(_ style: Style) -> some View {
@@ -534,7 +649,7 @@ private struct ThumbnailSection: View {
   @Environment(\.undoManager) private var undoManager
 
   var body: some View {
-    let blocker = styles.thumbnailBlocker(create)
+    let blocker = styles.thumbnailBlocker(create, for: [style])
     Section {
       HStack(alignment: .top, spacing: 12) {
         StyleThumbnail(id: style.id, side: 128) { styles.viewingThumbnail = style.id }
@@ -594,7 +709,7 @@ private struct ThumbnailBar: View {
 
   var body: some View {
     @Bindable var styles = styles
-    let blocker = styles.thumbnailBlocker(create)
+    let blocker = styles.thumbnailBlocker(create, for: selected)
     let row = narrow
       ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
       : AnyLayout(HStackLayout(alignment: .bottom, spacing: 10))
@@ -721,9 +836,10 @@ private struct ExportStylesSheet: View {
 
 /// A style's thumbnail full size, in a sheet sized to the image: fitted to start, then zoomed with
 /// a pinch, the buttons or ⌘+ / ⌘- (⌘0 actual size, ⌘9 fit), and panned by dragging. A double
-/// click switches between fit and actual size there. Space, Escape or Done closes it.
+/// click switches between fit and actual size there. Space, Escape or Done closes it. It shows
+/// `StyleStore.viewingThumbnail`; the arrow keys go to `arrow`, which moves that to another style.
 struct ThumbnailViewer: View {
-  let id: UUID
+  let arrow: (KeyEquivalent) -> KeyPress.Result
   @Environment(StyleStore.self) private var styles
   @Environment(\.dismiss) private var dismiss
   @State private var image: CGImage?
@@ -755,8 +871,17 @@ struct ThumbnailViewer: View {
       dismiss()
       return .handled
     }
-    .task(id: id) {
-      image = await styles.fullThumbnailImage(id)
+    .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow], phases: .down) { press in
+      arrow(press.key)
+    }
+    // Kept from the last style while closing, so the sheet doesn't empty as it goes.
+    .task(id: styles.viewingThumbnail) {
+      guard let id = styles.viewingThumbnail else { return }
+      let full = await styles.fullThumbnailImage(id)
+      guard !Task.isCancelled else { return }
+      image = full
+      zoom = nil
+      offset = .zero
       loaded = true
       focused = true
     }
@@ -908,9 +1033,4 @@ struct ThumbnailViewer: View {
     return CGSize(
       width: min(max(offset.width, -limit.width), limit.width), height: min(max(offset.height, -limit.height), limit.height))
   }
-}
-
-/// The style a `ThumbnailViewer` sheet shows.
-private struct ViewedThumbnail: Identifiable {
-  let id: UUID
 }

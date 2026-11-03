@@ -5,7 +5,8 @@
   /// (docs/styles.md), checks that writing it back reads the same styles, that every style's
   /// prompt is found again in what it writes (so Reuse brings the style back), and imports it into
   /// a copy of the user's styles that isn't saved. With `--snapshot-dir`, snapshots the Styles
-  /// screen, a thumbnail full size and Create with a style selected.
+  /// screen (list and grid), a thumbnail full size (and another in the same sheet) and Create with
+  /// a style selected.
   ///
   /// `--thumbnails N --model M [--steps S] [--width W --height H]` also makes thumbnails for the
   /// file's first N styles with that model (pass `--project` for a scratch project: the images
@@ -131,7 +132,15 @@
           let chosen = Array(store.styles.filter { $0.tags.count > 1 }.prefix(count))
           for tag in store.allTags where tag != Style.subject { store.thumbnailValues[tag] = "a misty pine forest at dawn" }
           for style in chosen { store.setThumbnail(nil, for: style.id) }
-          check(store.thumbnailBlocker(model) == nil, "thumbnails can be made: \(store.thumbnailBlocker(model) ?? "ok")")
+          // An empty subject blocks only styles without a {{SUBJECT:default}}.
+          let typedSubject = store.thumbnailValues[Style.subject]
+          store.thumbnailValues[Style.subject] = ""
+          let plain = Style(name: "Plain", template: "{{SUBJECT}}, watercolor")
+          check(
+            store.thumbnailBlocker(model, for: [defaulted]) == nil && store.thumbnailBlocker(model, for: [defaulted, plain]) != nil,
+            "an empty subject is fine when every style has a default subject")
+          store.thumbnailValues[Style.subject] = typedSubject?.isEmpty == false ? typedSubject : subject
+          check(store.thumbnailBlocker(model, for: chosen) == nil, "thumbnails can be made: \(store.thumbnailBlocker(model, for: chosen) ?? "ok")")
           let started = Date()
           let historyBefore = model.history.items.count
           store.makeThumbnails(for: chosen, create: model)
@@ -186,9 +195,23 @@
             check(
               AutomationWindows.snapshotSheet(to: snapshotDir.appendingPathComponent("thumbnail-viewer.png")),
               "the thumbnail viewer opens")
+            // Another style, as the arrow keys pick one, shows in the same sheet.
+            if let next = store.styles.first(where: { $0.id != shown.id && store.thumbnail($0.id) != nil }) {
+              store.viewingThumbnail = next.id
+              try? await Task.sleep(for: .seconds(1))
+              check(
+                AutomationWindows.snapshotSheet(to: snapshotDir.appendingPathComponent("thumbnail-viewer-next.png")),
+                "the thumbnail viewer stays open for \(next.name)")
+            }
             store.viewingThumbnail = nil
             try? await Task.sleep(for: .seconds(1))
           }
+          // The grid, then back to the list it started with.
+          let wasGrid = store.screenGrid
+          store.screenGrid = true
+          try? await Task.sleep(for: .seconds(1))
+          snapshot(to: snapshotDir.appendingPathComponent("styles-grid.png"))
+          store.screenGrid = wasGrid
           navigation.section = .create
           try? await Task.sleep(for: .seconds(1))
           snapshot(to: snapshotDir.appendingPathComponent("create.png"))
