@@ -181,9 +181,7 @@ struct ClipFrameMenu: View {
   var body: some View {
     let count = item.clip?.frames.count ?? 0
     Button("Save Video…") { ClipActions.save(item, history: history, dialogs: fileDialogs) }
-    #if os(iOS)
-      Button("Save to Photos") { ClipActions.saveToPhotos(item, history: history) }
-    #endif
+    Button("Save to Photos") { ClipActions.saveToPhotos(item, history: history, model: model) }
     Divider()
     Button("Use This Frame as Input") {
       let index = playback.pauseOnFrame(count: count)
@@ -234,9 +232,13 @@ enum ClipActions {
       name: history.fileName(for: item) + ".mp4")
   }
 
-  #if os(iOS)
-    static func saveToPhotos(_ item: HistoryItem, history: HistoryStore) {
-      Task { try? await PhotoLibrary.save([], videos: [try await history.videoFile(for: item)]) }
+  static func saveToPhotos(_ item: HistoryItem, history: HistoryStore, model: CreateModel) {
+    Task {
+      do {
+        try await PhotoLibrary.save([], videos: [try await history.videoFile(for: item)])
+      } catch {
+        model.errorMessage = error.localizedDescription
+      }
     }
-  #endif
+  }
 }

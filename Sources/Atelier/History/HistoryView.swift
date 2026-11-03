@@ -137,12 +137,12 @@ struct HistoryView: View {
               item: item, use: { use(item, newSeed: false, loadImage: false) },
               rerun: { use(item, newSeed: true) },
               export: { export([item]) },
-              delete: { pendingDelete = [item] }, saveToPhotos: photosAction([item]),
+              delete: { pendingDelete = [item] }, saveToPhotos: { saveToPhotos([item]) },
               upscale: { upscaling = item })
           } else if selected.count > 1 {
             HistorySelectionDetail(
               items: selected, export: { export(selected) },
-              delete: { pendingDelete = selected }, saveToPhotos: photosAction(selected))
+              delete: { pendingDelete = selected }, saveToPhotos: { saveToPhotos(selected) })
 
           } else {
             ContentUnavailableView(
@@ -421,9 +421,7 @@ struct HistoryView: View {
       }
       Button("Copy \(items.count) Images") { Task { await history.copyImages(items) } }
       Button("Export \(items.count) Files…") { export(items) }
-      #if os(iOS)
-        Button("Save \(items.count) Images to Photos") { saveToPhotos(items) }
-      #endif
+      Button("Save \(items.count) Images to Photos") { saveToPhotos(items) }
       Divider()
       ratingMenu(items)
       Divider()
@@ -437,9 +435,7 @@ struct HistoryView: View {
       Button("Copy Prompt") { copy(item.sidecar.prompt) }
       Button("Copy Seed") { copy(String(item.sidecar.seed)) }
       Button(item.isVideo ? "Export Video…" : "Export PNG…") { export([item]) }
-      #if os(iOS)
-        Button("Save to Photos") { saveToPhotos([item]) }
-      #endif
+      Button("Save to Photos") { saveToPhotos([item]) }
       if item.isVideo {
         Divider()
         Button("Add to Timeline") { addToTimeline([item]) }
@@ -570,35 +566,24 @@ struct HistoryView: View {
     navigation.section = .create
   }
 
-  #if os(iOS)
-    /// Adds the images to Photos as PNGs carrying their settings, like Export.
-    private func saveToPhotos(_ items: [HistoryItem]) {
-      Task {
-        do {
-          var pngs: [Data] = []
-          var videos: [URL] = []
-          for item in items {
-            if item.isVideo {
-              videos.append(try await history.videoFile(for: item))
-            } else {
-              pngs.append(try await history.pngData(item))
-            }
+  /// Adds the images to Photos as PNGs carrying their settings, like Export.
+  private func saveToPhotos(_ items: [HistoryItem]) {
+    Task {
+      do {
+        var pngs: [Data] = []
+        var videos: [URL] = []
+        for item in items {
+          if item.isVideo {
+            videos.append(try await history.videoFile(for: item))
+          } else {
+            pngs.append(try await history.pngData(item))
           }
-          try await PhotoLibrary.save(pngs, videos: videos)
-        } catch {
-          deleteError = error.localizedDescription
         }
+        try await PhotoLibrary.save(pngs, videos: videos)
+      } catch {
+        deleteError = error.localizedDescription
       }
     }
-  #endif
-
-  /// Save to Photos for the detail panes' buttons, which only iPad shows.
-  private func photosAction(_ items: [HistoryItem]) -> () -> Void {
-    #if os(iOS)
-      { saveToPhotos(items) }
-    #else
-      {}
-    #endif
   }
 
   /// One clip: the export sheet (as it is, or upscaled). One image: a save panel. Several: a
@@ -713,7 +698,6 @@ struct HistorySelectionDetail: View {
   var items: [HistoryItem]
   var export: () -> Void
   var delete: () -> Void
-  /// iPad only.
   var saveToPhotos: () -> Void = {}
 
   var body: some View {
@@ -738,9 +722,9 @@ struct HistorySelectionDetail: View {
         ButtonRow {
           Button("Copy Images") { Task { await history.copyImages(items) } }
           Button("Export…", action: export)
-          #if os(iOS)
-            Button("Save to Photos", action: saveToPhotos)
-          #endif
+        }
+        ButtonRow {
+          Button("Save to Photos", action: saveToPhotos)
           Button("Delete", role: .destructive, action: delete)
         }
       }
@@ -759,7 +743,6 @@ struct HistoryDetail: View {
   var rerun: () -> Void
   var export: () -> Void
   var delete: () -> Void
-  /// iPad only.
   var saveToPhotos: () -> Void = {}
   var upscale: () -> Void = {}
 
@@ -791,9 +774,9 @@ struct HistoryDetail: View {
         ButtonRow {
           Button(item.isVideo ? "Copy Frame" : "Copy Image") { Task { await history.copyImage(item) } }
           Button(item.isVideo ? "Export Video…" : "Export PNG…", action: export)
-          #if os(iOS)
-            Button("Save to Photos", action: saveToPhotos)
-          #endif
+        }
+        ButtonRow {
+          Button("Save to Photos", action: saveToPhotos)
           Button("Delete", role: .destructive, action: delete)
         }
         if item.isVideo {

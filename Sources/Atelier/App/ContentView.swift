@@ -133,6 +133,14 @@ struct ContentView: View {
           create.importImages(urls, into: target)
         }
       }
+      // Open from Photos… and Add from Photos…, likewise.
+      .onChange(of: create.photosImport, initial: true) {
+        guard let target = create.photosImport else { return }
+        create.photosImport = nil
+        fileDialogs.photos = FileDialogs.Photos(multiple: target == .moodboard) { photos, failed in
+          create.importPhotos(photos, failed: failed, into: target)
+        }
+      }
       .fileDialogs(fileDialogs)
     #if os(iOS)
       .onChange(of: create.isRunning, initial: true) {

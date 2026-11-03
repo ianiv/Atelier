@@ -97,7 +97,7 @@ Open the **Presets** menu in the toolbar:
 ## The canvas
 
 - Pinch, or use ⌘+ and ⌘−, to zoom. Drag to move. Double-click to switch between fit and actual size. The zoom controls are also under **View**.
-- Right-click the canvas for **Copy Image**, **Save Image…**, **Open Image…**, **Paste Image**, **Load Settings from Image**, **Add to Moodboard**, **Match Size to Image** and **Clear Canvas**.
+- Right-click the canvas for **Copy Image**, **Save Image…**, **Save to Photos**, **Open Image…**, **Open from Photos…**, **Paste Image**, **Load Settings from Image**, **Add to Moodboard**, **Match Size to Image** and **Clear Canvas**.
 
 ### Recent images
 
@@ -115,7 +115,7 @@ The **Generate / Edit** switch beside the prompt, above the Generate button, dec
 Bringing in an image switches to Edit for you. Ways to bring one in:
 
 - Drop an image file on the canvas.
-- **Image ▸ Open Image…** (⌘O) or **Paste Image** (⇧⌘V).
+- **Image ▸ Open Image…** (⌘O), **Open from Photos…** or **Paste Image** (⇧⌘V). A photo saved by Atelier or Draw Things keeps its settings.
 - Right-click a recent image and choose **Use as Input**.
 
 ### Settings from an image
@@ -137,7 +137,7 @@ Areas of an image that are transparent are treated as the region to fill in. The
 
 The **Moodboard** column on the right edge of the canvas holds reference images. Only models that take references (the edit models above) use it; with other models, such as MOSS, it says "Not used by this model". Collapse or expand it with its own button or from the **View** menu.
 
-- Add images by dropping them on the moodboard, with its **+** button, or with **Add to Moodboard** from the canvas or the recent strip.
+- Add images by dropping them on the moodboard, with its **+** button (**Add Images…** for files, **Add from Photos…** for your photo library), or with **Add to Moodboard** from the canvas or the recent strip.
 - Click an image to set its **Weight**. 0% leaves it out of the next run. For edit models such as FLUX.2 and Kontext, any weight above 0% counts the same.
 - Right-click an image for **Show on Canvas**, **Remove** and **Clear Moodboard**.
 

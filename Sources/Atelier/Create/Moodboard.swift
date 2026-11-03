@@ -217,8 +217,13 @@ struct MoodboardColumn: View {
         if shown {
           Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
           Spacer(minLength: 0)
-          Button("Add Images…", systemImage: "plus") { model.imageImport = .moodboard }
-            .help("Add reference images")
+          Menu("Add Images", systemImage: "plus") {
+            Button("Add Images…") { model.imageImport = .moodboard }
+            Button("Add from Photos…") { model.photosImport = .moodboard }
+          }
+          .menuIndicator(.hidden)
+          .fixedSize()
+          .help("Add reference images")
         }
         Button(shown ? "Hide Moodboard" : "Show Moodboard", systemImage: "square.stack") {
           shown.toggle()

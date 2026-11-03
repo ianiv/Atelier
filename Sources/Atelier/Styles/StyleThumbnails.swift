@@ -84,6 +84,14 @@ extension StyleStore {
     setThumbnail(image, for: id)
   }
 
+  /// A thumbnail from a photo picked in the photo library, with any settings it carries, like
+  /// `setThumbnail(contentsOf:for:)`.
+  func setThumbnail(photo data: Data, for id: UUID) {
+    guard let image = ImageLoader.image(from: data) else { return }
+    let settings = ImageMetadata.embedded(in: data).flatMap(ImageMetadata.settings(from:))
+    setThumbnail(image, for: id, source: settings.map(ThumbnailSource.init))
+  }
+
   /// Whether the style's thumbnail can be opened in Create (its image and settings are kept).
   func canOpenThumbnail(_ id: UUID) -> Bool {
     // Read again when the thumbnail changes.

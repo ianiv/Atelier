@@ -1,10 +1,11 @@
 import Observation
+import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The main window's Open and Save panels: one SwiftUI file importer and one file exporter for the
-/// whole window, which every screen asks for a panel. Two file importers in one view hierarchy
-/// compete for the same presentation.
+/// The main window's Open and Save panels: one SwiftUI file importer, one file exporter and one
+/// photo picker for the whole window, which every screen asks for a panel. Two file importers in
+/// one view hierarchy compete for the same presentation.
 @MainActor
 @Observable
 final class FileDialogs {
@@ -26,6 +27,19 @@ final class FileDialogs {
     var completion: @MainActor (Result<URL, Error>) -> Void = { _ in }
   }
 
+  /// A pick from the photo library. The picker runs outside the app, so it needs no permission
+  /// to read the library.
+  struct Photos {
+    var multiple = false
+    /// The picked photos' files as they are in the library, in the order they were picked, and how
+    /// many couldn't be loaded; not called on cancel.
+    var completion: @MainActor ([Data], _ failed: Int) -> Void
+  }
+
+  var photos: Photos? {
+    didSet { if let photos { presentedPhotos = photos } }
+  }
+
   var open: Open? {
     didSet { if let open { presentedOpen = open } }
   }
@@ -38,6 +52,7 @@ final class FileDialogs {
   /// before it reports.
   @ObservationIgnored fileprivate var presentedOpen: Open?
   @ObservationIgnored fileprivate var presentedSave: Save?
+  @ObservationIgnored fileprivate var presentedPhotos: Photos?
 }
 
 /// A file a Save panel writes: PNG, JSON, an MP4 video, Markdown or HTML, made when the panel confirms.
@@ -68,6 +83,7 @@ extension View {
 
 private struct FileDialogsModifier: ViewModifier {
   let dialogs: FileDialogs
+  @State private var pickedPhotos: [PhotosPickerItem] = []
 
   func body(content: Content) -> some View {
     let open = dialogs.open
@@ -95,5 +111,27 @@ private struct FileDialogsModifier: ViewModifier {
       .fileDialogDefaultDirectory(open?.directory)
       .fileDialogConfirmationLabel(open?.confirmation.map { Text($0) })
       .fileDialogMessage(open?.message.map { Text($0) })
+      // `.current` keeps each photo's original file rather than a converted copy, so a PNG saved by
+      // Atelier or Draw Things still carries its settings.
+      .photosPicker(
+        isPresented: Binding(get: { dialogs.photos != nil }, set: { if !$0 { dialogs.photos = nil } }),
+        selection: $pickedPhotos,
+        maxSelectionCount: dialogs.photos?.multiple == true ? nil : 1,
+        selectionBehavior: .ordered,
+        matching: .images,
+        preferredItemEncoding: .current
+      )
+      .onChange(of: pickedPhotos) {
+        guard !pickedPhotos.isEmpty, let request = dialogs.presentedPhotos else { return }
+        let items = pickedPhotos
+        pickedPhotos = []
+        Task {
+          var photos: [Data] = []
+          for item in items {
+            if let data = try? await item.loadTransferable(type: Data.self) { photos.append(data) }
+          }
+          request.completion(photos, items.count - photos.count)
+        }
+      }
   }
 }

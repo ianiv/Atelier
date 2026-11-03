@@ -1,4 +1,5 @@
 import Foundation
+import Photos
 
 /// Keeps a security-scoped file or folder open while something needs it, such as a file picked on
 /// iPad waiting in the import sheet. Free on the Mac, where Atelier isn't sandboxed.
@@ -74,10 +75,7 @@ enum FolderBookmarks {
   }
 }
 
-#if os(iOS)
-import Photos
-
-/// The iPad's photo library, for Save to Photos.
+/// The photo library, for Save to Photos.
 enum PhotoLibrary {
   /// Adds PNGs (and videos, from their files) to the library, asking for permission to add the
   /// first time.
@@ -85,7 +83,7 @@ enum PhotoLibrary {
     guard await PHPhotoLibrary.requestAuthorization(for: .addOnly) == .authorized else {
       throw CocoaError(.fileWriteNoPermission, userInfo: [
         NSLocalizedDescriptionKey:
-          "Atelier isn't allowed to add photos. Turn it on in Settings ▸ Apps ▸ Atelier ▸ Photos."
+          "Atelier isn't allowed to add photos. Turn it on in \(settingsPath)."
       ])
     }
     try await PHPhotoLibrary.shared().performChanges {
@@ -97,5 +95,12 @@ enum PhotoLibrary {
       }
     }
   }
+
+  private static var settingsPath: String {
+    #if os(macOS)
+      "System Settings ▸ Privacy & Security ▸ Photos"
+    #else
+      "Settings ▸ Apps ▸ Atelier ▸ Photos"
+    #endif
+  }
 }
-#endif

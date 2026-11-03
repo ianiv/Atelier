@@ -130,6 +130,8 @@ final class CreateModel {
   private var importedSettings: (image: CGImage, settings: ImageMetadata.Settings)?
   /// Where images picked in the Open panel go; set to show the panel.
   var imageImport: ImageImportTarget?
+  /// Where images picked from the photo library go; set to show the picker.
+  var photosImport: ImageImportTarget?
 
   enum ImageImportTarget {
     case canvas, moodboard
@@ -504,6 +506,23 @@ final class CreateModel {
         setCanvasImage(image, metadata: ImageMetadata.embedded(at: url))
       }
     }
+  }
+
+  /// Images picked from the photo library: one for the canvas, any number for the moodboard.
+  func importPhotos(_ photos: [Data], failed: Int, into target: ImageImportTarget) {
+    var failed = failed
+    for data in photos {
+      guard let image = ImageLoader.image(from: data) else {
+        failed += 1
+        continue
+      }
+      if target == .moodboard {
+        moodboard.add(image)
+      } else {
+        setCanvasImage(image, metadata: ImageMetadata.embedded(in: data))
+      }
+    }
+    if failed > 0 { errorMessage = "Couldn't load \(failed == 1 ? "the photo" : "\(failed) photos")." }
   }
 
   /// The generation settings the canvas image carries, while it's the imported image they came

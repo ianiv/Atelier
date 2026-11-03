@@ -10,5 +10,7 @@
 	<string>ezs3okxIgkPwyf+GLRNCaOaessELrI8UCduF6yp43wo=</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save to Photos adds your generated images to your photo library.</string>
 </dict>
 </plist>

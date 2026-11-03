@@ -675,6 +675,11 @@ private struct ThumbnailSection: View {
               _ = styles.setThumbnail(contentsOf: url, for: style.id)
             }
           }
+          Button("Choose from Photos…", systemImage: "photo.on.rectangle") {
+            fileDialogs.photos = FileDialogs.Photos { photos, _ in
+              if let photo = photos.first { styles.setThumbnail(photo: photo, for: style.id) }
+            }
+          }
           Button("Open in Create", systemImage: "arrow.up.forward.app") {
             openThumbnail(style, styles: styles, create: create, navigation: navigation, undoManager: undoManager)
           }

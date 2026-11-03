@@ -120,6 +120,10 @@ struct AtelierApp: App {
           create.imageImport = .canvas
         }
         .keyboardShortcut("o", modifiers: .command)
+        Button("Open from Photos…") {
+          navigation.section = .create
+          create.photosImport = .canvas
+        }
         Button("Paste Image") {
           navigation.section = .create
           create.pasteImage()
