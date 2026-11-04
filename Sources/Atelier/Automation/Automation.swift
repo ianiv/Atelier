@@ -40,7 +40,7 @@ enum Automation {
       "--reuse", "--generate", "--ux-check", "--edit-input-check", "--queue-check",
       "--timeline-check", "--upscale-check", "--timeline-export-check", "--flashvsr-check",
       "--model-folders-check", "--styles-check", "--cleanup-check", "--engine-check", "--playback-check",
-      "--remote-check", "--remote-net-check", "--remote-shots", "--remote-url-check",
+      "--remote-check", "--remote-net-check", "--remote-shots", "--remote-url-check", "--remote-tailnet-check",
     ]
     // The unit tests run inside the app. Like a scripted run, that leaves the user's data alone: no
     // cleanup at launch, no saving the session or queue.
@@ -114,6 +114,10 @@ enum Automation {
     }
     if args.contains("--remote-net-check") {
       remoteNetCheck(model, library: library)
+      return
+    }
+    if args.contains("--remote-tailnet-check") {
+      remoteTailnetCheck(model, library: library)
       return
     }
     if args.contains("--remote-url-check") {

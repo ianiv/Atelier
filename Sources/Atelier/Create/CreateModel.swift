@@ -26,6 +26,8 @@ final class CreateModel {
   let engine = GenerationEngine()
   /// The servers this device can run jobs on.
   let remoteServers = RemoteServerList()
+  /// Atelier's own place on your tailnet.
+  let tailnet = RemoteTailnet()
   /// What runs jobs for `target`.
   func backend(for target: JobTarget) -> any GenerationBackend {
     switch target {
@@ -164,6 +166,7 @@ final class CreateModel {
   /// Watches paired servers: whether each is there (Run on disables one that isn't), and when one
   /// comes back, what's waiting for it. Only asks once there are servers on the list.
   private func watchServers() {
+    remoteServers.router = { [tailnet] in tailnet.bridge(to: $0) }
     remoteServers.onServerOnline = { [weak self] id in
       guard let self else { return }
       Task { await self.recoverRemoteJobs() }

@@ -742,6 +742,175 @@ extension Automation {
     return found.withLock { $0 }
   }
 
+  /// Real tailnet connections on this one Mac, with no real sign-in: Tailscale's test control server
+  /// stands in for theirs, and two nodes in this process play server and client. Pairing and a real
+  /// image go through the embedded nodes, then the account limit. Needs
+  /// `Scripts/build-tailscale.sh --with-test-control`.
+  ///
+  ///   Atelier --remote-tailnet-check [--model M] [--quit]
+  static func remoteTailnetCheck(_ model: CreateModel, library: ModelLibrary) {
+    let args = CommandLine.arguments
+    Task { @MainActor in
+      var failures = 0
+      func check(_ ok: Bool, _ message: String) {
+        if !ok { failures += 1 }
+        print("\(ok ? "PASS" : "FAIL") \(message)")
+        fflush(stdout)
+      }
+      let root = FileManager.default.temporaryDirectory.appending(path: "atelier-remote-tailnet-\(UUID())", directoryHint: .isDirectory)
+      @MainActor func finish() {
+        try? FileManager.default.removeItem(at: root)
+        removeScratchFiles()
+        print(failures == 0 ? "remote tailnet check: all passed" : "remote tailnet check: \(failures) failed")
+        fflush(stdout)
+        // Go's runtime and the nodes' threads don't wind down for a normal quit.
+        exit(failures == 0 ? 0 : 1)
+      }
+      @MainActor func wait(until condition: () -> Bool, seconds: Double = 120) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while !condition() {
+          if Date() > deadline { return false }
+          try? await Task.sleep(for: .milliseconds(100))
+        }
+        return true
+      }
+      if RemoteTailnet().state == .unavailable {
+        check(false, "this build has TailscaleKit (run Scripts/build-tailscale.sh and build again)")
+        return finish()
+      }
+      guard let controlURL = Self.startTestControl() else {
+        check(false, "the test control server starts (run Scripts/build-tailscale.sh --with-test-control)")
+        return finish()
+      }
+      print("control: \(controlURL)")
+      while !model.history.isLoaded || model.models.isEmpty || model.settings == nil || model.isBusy {
+        try? await Task.sleep(for: .milliseconds(100))
+      }
+
+      @MainActor func tailnet(_ name: String) -> RemoteTailnet {
+        var options = RemoteTailnet.Options()
+        options.folder = root.appending(path: name, directoryHint: .isDirectory)
+        options.persists = false
+        options.controlURL = controlURL
+        options.hostname = name
+        return RemoteTailnet(options: options)
+      }
+      let serverNode = tailnet("check-server")
+      let clientNode = tailnet("check-client")
+      serverNode.signIn()
+      clientNode.signIn()
+      let up = await wait(until: { serverNode.isSignedIn && clientNode.isSignedIn })
+      check(up, "both nodes join the tailnet (\(serverNode.state), \(clientNode.state))")
+      guard up else { return finish() }
+      print("server \(serverNode.status.login ?? "?") at \(serverNode.addresses); client \(clientNode.status.login ?? "?") at \(clientNode.addresses)")
+
+      // A server that only takes the tailnet's connections: Tailscale only, and nothing but loopback
+      // to arrive on otherwise, which that filter turns away.
+      var options = RemoteServer.Options()
+      options.store = MemorySecretStore()
+      options.root = root.appending(path: "Server", directoryHint: .isDirectory)
+      options.isApp = false
+      options.loopbackOnly = true
+      options.filter = .tailscale
+      options.port = 0
+      options.tailnet = serverNode
+      serverNode.limitsToAccount = false
+      let server = RemoteServer(create: model, library: library, options: options)
+      server.isEnabled = true
+      await server.settled()
+      server.startPairing()
+      await server.settled()
+      guard let link = server.pairing?.link else {
+        check(false, "pairing opens")
+        return finish()
+      }
+      print("link: \(link.addresses.map(\.description).joined(separator: " "))")
+      check(link.addresses.first.map { RemoteIP($0.host)?.isTailscale == true || $0.host.hasSuffix(".ts.net") || !$0.host.hasPrefix("127.") } ?? false, "the pairing link starts with the tailnet address")
+
+      // Wait for the two nodes to see each other.
+      for _ in 0..<100 where clientNode.status.peerLogins.isEmpty { try? await Task.sleep(for: .milliseconds(200)) }
+      check(!clientNode.status.peerLogins.isEmpty, "the client's node sees the server's")
+
+      let clients = RemoteServerList(
+        store: MemorySecretStore(), downloads: root.appending(path: "Downloads", directoryHint: .isDirectory),
+        identity: RemoteDeviceIdentity(id: UUID(), name: "Tailnet Client"))
+      clients.router = { [clientNode] in clientNode.bridge(to: $0) }
+      // The link's addresses without the loopback one, which the filter refuses anyway.
+      var tailnetLink = link
+      tailnetLink.addresses = link.addresses.filter { !$0.host.hasPrefix("127.") }
+      do {
+        try await clients.pair(link: tailnetLink)
+        check(clients.servers.count == 1, "pairing works over the tailnet, TLS-PSK inside it")
+      } catch {
+        check(false, "pairing over the tailnet: \(error.localizedDescription)")
+        return finish()
+      }
+      guard let record = clients.servers.first else { return finish() }
+      await server.settled()
+      let backend = clients.backend(for: record.id)
+      let reachable = await backend.client?.isReachable() ?? false
+      check(reachable, "a paired device connects over it, past the Tailscale only filter")
+
+      let file = args.firstIndex(of: "--model").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } ?? "flux_2_klein_9b_kv_q8p.ckpt"
+      model.selectedModel = file
+      _ = await wait(until: { !model.isLoadingModel })
+      model.resetToModelDefaults(undoManager: nil)
+      if var settings = model.settings {
+        settings.steps = 2
+        settings.width = 512
+        settings.height = 512
+        do {
+          let output = try await backend.generate(
+            GenerationEngine.Request(model: file, prompt: "a red apple", negativePrompt: "", seed: 1, configuration: settings)
+          ) { _ in }
+          check(output.frames.first.flatMap(ImageTensor.cgImage(from:))?.width == 512, "a real image comes back over it")
+        } catch {
+          check(false, "an image over the tailnet: \(error.localizedDescription)")
+        }
+      }
+
+      // The account limit, as far as the test server's users allow.
+      let clientAddress = clientNode.status.addresses.first ?? ""
+      let sameUser = serverNode.status.peerLogins[clientAddress] == serverNode.status.login
+      print("users: server \(serverNode.status.login ?? "?"), client \(serverNode.status.peerLogins[clientAddress] ?? "unknown")")
+      await backend.client?.disconnect()
+      serverNode.limitsToAccount = true
+      let allowed = await backend.client?.isReachable() ?? false
+      if sameUser {
+        check(allowed, "the same account gets through the limit")
+      } else {
+        check(!allowed, "another account is turned away by the limit")
+        await backend.client?.disconnect()
+        serverNode.limitsToAccount = false
+        let allowedAgain = await backend.client?.isReachable() ?? false
+        check(allowedAgain, "and gets through with the limit off")
+      }
+
+      // Signing out stops the route.
+      await backend.client?.disconnect()
+      await clientNode.signOut()
+      let afterSignOut = await backend.client?.isReachable() ?? false
+      check(!afterSignOut && clientNode.state == .signedOut, "signing out ends it")
+      finish()
+    }
+  }
+
+  /// Starts Tailscale's test control server, from the library the build script can make; its address.
+  private static func startTestControl() -> String? {
+    let library = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+      .deletingLastPathComponent().deletingLastPathComponent().appending(path: "build/Tailscale/libtstestcontrol.dylib")
+    guard let handle = dlopen(library.path, RTLD_NOW) else {
+      print("couldn't load \(library.path): \(String(cString: dlerror()))")
+      return nil
+    }
+    guard let symbol = dlsym(handle, "RunControl") else { return nil }
+    typealias Run = @convention(c) (UnsafeMutablePointer<CChar>, Int) -> Int32
+    var buffer = [CChar](repeating: 0, count: 1024)
+    guard unsafeBitCast(symbol, to: Run.self)(&buffer, buffer.count) == 0 else { return nil }
+    let url = String(cString: buffer)
+    return url.isEmpty ? nil : url
+  }
+
   /// Waits for an `atelier-pair://` link opened from outside, as a scanned QR code does: it should
   /// ask to pair, in the window already up.
   ///

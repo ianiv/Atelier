@@ -170,6 +170,16 @@ nonisolated enum RemoteNetworkInfo {
     return hosts.filter { seen.insert($0).inserted }.map { RemoteAddress(host: $0, port: port) }
   }
 
+  /// How a browsing client on the same network reaches this device: its address there. Not its host
+  /// name, which the network may rename (a router's DHCP can make it vimeswifi.home).
+  static var localNetworkHost: String {
+    let local = interfaces().first { interface in
+      guard case .v4 = interface.ip else { return false }
+      return interface.ip.isLocalNetwork
+    }
+    return local?.address ?? ProcessInfo.processInfo.hostName
+  }
+
   /// This device, as servers list it.
   static var deviceName: String {
     #if os(macOS)

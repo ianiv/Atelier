@@ -395,6 +395,8 @@ final class RemoteServerList {
   /// Servers Bonjour finds on the local network, paired or not.
   private(set) var nearby: [RemoteNearby] = []
   private var browser: NWBrowser?
+  /// Routes through Atelier's own tailnet node.
+  @ObservationIgnored var router: RemoteRouter?
   /// Told when a server is seen to come online.
   @ObservationIgnored var onServerOnline: ((UUID) -> Void)?
 
@@ -494,7 +496,7 @@ final class RemoteServerList {
     loadIfNeeded()
     if let client = clients[id] { return RemoteBackend(client: client) }
     guard let server = servers.first(where: { $0.id == id }) else { return RemoteBackend(client: nil) }
-    let client = RemoteClient(server: server, device: identity, downloads: downloads)
+    let client = RemoteClient(server: server, device: identity, downloads: downloads, router: router)
     if let here = nearby.first(where: { $0.id == id }) { Task { await client.setNearby(here.address) } }
     clients[id] = client
     return RemoteBackend(client: client)
@@ -502,7 +504,7 @@ final class RemoteServerList {
 
   func pair(link: RemotePairingLink) async throws {
     try await add(RemoteClient.pair(
-      addresses: link.addresses, code: link.secret, expectedServerID: link.serverID, device: identity))
+      addresses: link.addresses, code: link.secret, expectedServerID: link.serverID, device: identity, router: router))
   }
 
   /// `Add Server…` without a link: a host and the code the server shows.
@@ -510,7 +512,7 @@ final class RemoteServerList {
     guard let address = RemoteAddress(host), let code = RemotePairing.normalizedCode(code) else {
       throw RemoteError.invalidPairingLink
     }
-    try await add(RemoteClient.pair(addresses: [address], code: code, expectedServerID: nil, device: identity))
+    try await add(RemoteClient.pair(addresses: [address], code: code, expectedServerID: nil, device: identity, router: router))
   }
 
   private func add(_ server: RemoteServerRecord) {

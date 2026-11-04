@@ -67,6 +67,11 @@ private final nonisolated class RemoteIdentityGate: Sendable {
 /// then). Connections already open outlive their listener, so removing a device has to close its
 /// connections itself, which `RemoteJobStore.removeDevice` does. A client that catches the moment
 /// between two listeners gets a refused connection, and retries.
+///
+/// Beside it runs a second listener on a free loopback port with the same keys, the bridge: what
+/// arrives from Atelier's own tailnet node comes in there, so it gets the same TLS-PSK as anything
+/// else, and being on that port is what says it came over the tailnet. Only this device can reach
+/// the port, and it still takes a paired device's key to get anywhere.
 final nonisolated class RemoteListener: Sendable {
   struct Configuration: Sendable {
     /// 0 picks a free one, kept from then on.
@@ -82,6 +87,8 @@ final nonisolated class RemoteListener: Sendable {
     var listener: NWListener?
     var filter = RemoteAddressFilter.tailscale
     var boundPort: UInt16 = 0
+    var bridge: NWListener?
+    var bridgePort: UInt16?
     /// The port asked for, to notice it changing rather than the keys.
     var requestedPort: UInt16?
   }
@@ -104,6 +111,9 @@ final nonisolated class RemoteListener: Sendable {
 
   func setFilter(_ filter: RemoteAddressFilter) { state.withLock { $0.filter = filter } }
 
+  /// Where the tailnet's connections go; nil while there's no listener.
+  var bridgePort: UInt16? { state.withLock(\.bridgePort) }
+
   /// Listens with `configuration`, replacing a listener already running. Returns the port.
   func update(_ configuration: Configuration) async throws -> UInt16 {
     await stop()
@@ -121,6 +131,7 @@ final nonisolated class RemoteListener: Sendable {
       do {
         let bound = try await start(configuration, port: port)
         state.withLock { $0.boundPort = bound }
+        try await startBridge(configuration)
         return bound
       } catch let error as NWError {
         lastError = error
@@ -143,7 +154,7 @@ final nonisolated class RemoteListener: Sendable {
     }
     if configuration.advertises, Self.canAdvertise {
       let record = NWTXTRecord([
-        RemoteNearby.idKey: configuration.serverID.uuidString, RemoteNearby.hostKey: ProcessInfo.processInfo.hostName,
+        RemoteNearby.idKey: configuration.serverID.uuidString, RemoteNearby.hostKey: RemoteNetworkInfo.localNetworkHost,
         RemoteNearby.portKey: String(port),
       ])
       listener.service = NWListener.Service(type: RemoteProtocol.serviceType, txtRecord: record.data)
@@ -187,8 +198,49 @@ final nonisolated class RemoteListener: Sendable {
     }
   }
 
+  /// The bridge listener: loopback only, on a free port, and past the network filter.
+  private func startBridge(_ configuration: Configuration) async throws {
+    let parameters = RemoteTLS.server(keys: configuration.keys, queue: queue, accepts: accepts)
+    parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: .any)
+    let listener = try NWListener(using: parameters)
+    listener.newConnectionHandler = { [weak self] connection in
+      guard let self else { return connection.cancel() }
+      onConnection(connection)
+    }
+    let port = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<UInt16, Error>) in
+      let answered = Mutex(false)
+      let answer: @Sendable () -> Bool = {
+        answered.withLock { value in
+          defer { value = true }
+          return !value
+        }
+      }
+      listener.stateUpdateHandler = { update in
+        switch update {
+        case .ready:
+          if answer() { continuation.resume(returning: listener.port?.rawValue ?? 0) }
+        case .failed(let error), .waiting(let error):
+          listener.cancel()
+          if answer() { continuation.resume(throwing: error) }
+        default:
+          break
+        }
+      }
+      listener.start(queue: queue)
+    }
+    state.withLock {
+      $0.bridge = listener
+      $0.bridgePort = port
+    }
+  }
+
   /// Stops listening; returns once the port is free. Connections stay open.
   func stop() async {
+    state.withLock {
+      $0.bridge?.cancel()
+      $0.bridge = nil
+      $0.bridgePort = nil
+    }
     guard let listener = state.withLock({ state -> NWListener? in
       defer { state.listener = nil }
       return state.listener
@@ -243,6 +295,8 @@ final class RemoteServer {
     var loopbackOnly = !SessionState.isEnabled
     var filter: RemoteAddressFilter? = SessionState.isEnabled ? nil : .any
     var port: UInt16? = SessionState.isEnabled ? nil : 0
+    /// In place of the app's own node, for a check.
+    var tailnet: RemoteTailnet?
   }
 
   struct Pairing: Equatable {
@@ -316,6 +370,28 @@ final class RemoteServer {
     filter = options.filter ?? defaults.string(forKey: Self.filterKey).flatMap(RemoteAddressFilter.init(rawValue:)) ?? .tailscale
     port = options.port ?? (defaults.object(forKey: Self.portKey) as? Int).flatMap { UInt16(exactly: $0) } ?? RemoteProtocol.defaultPort
     if isEnabled, !options.isApp || SessionState.isEnabled { apply() }
+    tailnet?.onChange = { [weak self] in self?.syncTailnet() }
+  }
+
+  private var tailnet: RemoteTailnet? { options.tailnet ?? create?.tailnet }
+
+  /// Whether the tailnet is what's being served on, and on which port. Starting a listener over
+  /// this one drops nothing: connections outlive it.
+  private var tailnetListening: UInt16?
+
+  /// Serves over Tailscale while it's on, signed in and this server is listening.
+  private func syncTailnet() {
+    guard let tailnet else { return }
+    let tailnetPort = port != 0 ? port : boundPort
+    let shouldListen = isEnabled && isListening && tailnet.serves && tailnet.isSignedIn && tailnetPort != 0
+    guard shouldListen != (tailnetListening != nil) || (shouldListen && tailnetListening != tailnetPort) else { return }
+    tailnetListening = shouldListen ? tailnetPort : nil
+    if shouldListen {
+      let listener = listener
+      tailnet.startListening(port: tailnetPort) { listener?.bridgePort }
+    } else {
+      tailnet.stopListening()
+    }
   }
 
   /// Reads the saved keys, the first time they're needed: the Keychain may have to ask.
@@ -371,6 +447,7 @@ final class RemoteServer {
           self?.boundPort = bound
           self?.isListening = true
           self?.listenError = nil
+          self?.syncTailnet()
         } catch {
           self?.isListening = false
           self?.listenError = (error as? NWError).map(RemoteListener.describe) ?? error.localizedDescription
@@ -379,6 +456,7 @@ final class RemoteServer {
         await listener.stop()
         self?.isListening = false
         self?.listenError = nil
+        self?.syncTailnet()
       }
     }
   }
@@ -418,6 +496,11 @@ final class RemoteServer {
     loadIfNeeded()
     var addresses = RemoteNetworkInfo.pairingAddresses(port: boundPort, tailscaleName: tailscaleName)
     if options.loopbackOnly { addresses = [RemoteAddress(host: "127.0.0.1", port: boundPort)] }
+    // Atelier's own place on the tailnet comes first: it's the route that works from anywhere.
+    if let tailnet, tailnet.serves {
+      let tailnetPort = port != 0 ? port : boundPort
+      addresses = tailnet.addresses.map { RemoteAddress(host: $0, port: tailnetPort) } + addresses
+    }
     if addresses.isEmpty { addresses = [RemoteAddress(host: ProcessInfo.processInfo.hostName, port: boundPort)] }
     let code = RemotePairing.newCode()
     let lifetime = RemotePairing.codeLifetime

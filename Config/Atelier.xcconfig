@@ -17,3 +17,6 @@ ATELIER_BUNDLE_SUFFIX =
 OTHER_LDFLAGS = $(inherited) -framework AVKit
 
 #include? "Local.xcconfig"
+
+// TailscaleKit, when Scripts/build-tailscale.sh has built it.
+#include? "../build/Tailscale/Tailscale.xcconfig"

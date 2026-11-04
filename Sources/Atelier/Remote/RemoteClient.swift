@@ -29,11 +29,16 @@ actor RemoteClient {
   /// The next connection's first route, for checks.
   var firstRoute: RemoteAddress? { nearby ?? server.addresses.first }
 
-  init(server: RemoteServerRecord, device: RemoteDeviceIdentity, downloads: URL) {
+  init(server: RemoteServerRecord, device: RemoteDeviceIdentity, downloads: URL, router: RemoteRouter? = nil) {
     self.server = server
     self.device = device
     self.downloads = downloads
+    self.router = router
   }
+
+  /// Routes through Atelier's own tailnet node. Without one, a Tailscale app's addresses work as
+  /// they are.
+  nonisolated let router: RemoteRouter?
 
   // MARK: - Connecting
 
@@ -49,7 +54,8 @@ actor RemoteClient {
     if let nearby { server.addresses = [nearby] + server.addresses.filter { $0 != nearby } }
     let route = server
     let device = device
-    let task = Task { try await Self.open(route, device: device, rounds: rounds, timeout: timeout) }
+    let router = router
+    let task = Task { try await Self.open(route, device: device, router: router, rounds: rounds, timeout: timeout) }
     opening = task
     defer { opening = nil }
     let connection = try await task.value
@@ -61,11 +67,12 @@ actor RemoteClient {
   /// Tries each address, a few rounds with short backoff: a server replacing its listener refuses
   /// connections for a moment. A server that turned the key down isn't asked again.
   private static func open(
-    _ server: RemoteServerRecord, device: RemoteDeviceIdentity, rounds: Int, timeout: TimeInterval
+    _ server: RemoteServerRecord, device: RemoteDeviceIdentity, router: RemoteRouter?, rounds: Int, timeout: TimeInterval
   ) async throws -> RemoteConnection {
     for round in 0..<rounds {
       if round > 0 { try await Task.sleep(for: .milliseconds(250 << (round - 1))) }
-      for address in server.addresses {
+      // Through the node first where it applies, then as it is, for a Tailscale app.
+      for address in server.addresses.flatMap({ address in [router?(address), address].compactMap(\.self) }) {
         let connection = RemoteConnection(to: address, identity: device.id.uuidString, key: server.key)
         do {
           try await connection.start(timeout: timeout)
@@ -242,14 +249,15 @@ actor RemoteClient {
   /// Pairs with the server at `addresses` using its code. A wrong code fails the TLS handshake.
   /// Returns the server, with this device's new key: nothing is saved here.
   static func pair(
-    addresses: [RemoteAddress], code: String, expectedServerID: UUID?, device: RemoteDeviceIdentity
+    addresses: [RemoteAddress], code: String, expectedServerID: UUID?, device: RemoteDeviceIdentity,
+    router: RemoteRouter? = nil
   ) async throws -> RemoteServerRecord {
     let key = RemotePairing.pairingKey(code: code)
     let ordered = addresses.enumerated().sorted { ($0.element.routeRank, $0.offset) < ($1.element.routeRank, $1.offset) }.map(\.element)
     var lastError: Error = RemoteError.unreachable(server: addresses.first?.host ?? "the server")
     for round in 0..<3 {
       if round > 0 { try await Task.sleep(for: .milliseconds(500 << (round - 1))) }
-      for address in ordered {
+      for address in ordered.flatMap({ address in [router?(address), address].compactMap(\.self) }) {
         let connection = RemoteConnection(to: address, identity: RemoteProtocol.pairIdentity, key: key)
         defer { connection.cancel() }
         do {

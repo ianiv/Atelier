@@ -78,6 +78,13 @@ rm -rf "$SPARKLE/Versions/B/XPCServices" "$SPARKLE/XPCServices"
 for code in "$SPARKLE/Versions/B/Autoupdate" "$SPARKLE/Versions/B/Updater.app" "$SPARKLE"; do
   codesign --force --sign "$IDENTITY" --options runtime --timestamp "$code"
 done
+# TailscaleKit is in the app only if Scripts/build-tailscale.sh built it. Without it, Atelier can't
+# join a tailnet by itself, so a release should normally have it.
+if [ -d "$APP/Contents/Frameworks/TailscaleKit.framework" ]; then
+  codesign --force --sign "$IDENTITY" --options runtime --timestamp "$APP/Contents/Frameworks/TailscaleKit.framework"
+else
+  echo "warning: this release has no TailscaleKit; run Scripts/build-tailscale.sh first to include it"
+fi
 codesign --force --sign "$IDENTITY" --options runtime --timestamp \
   --preserve-metadata=entitlements,requirements,flags "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"

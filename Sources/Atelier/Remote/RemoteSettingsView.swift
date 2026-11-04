@@ -52,7 +52,7 @@ struct RemoteSettingsView: View {
             Text("Starting…").foregroundStyle(.secondary)
           }
         }
-        LabeledContent("Tailscale") {
+        LabeledContent("Tailscale App") {
           Text(tailscaleText)
             .foregroundStyle(.secondary)
             .textSelection(.enabled)
@@ -60,6 +60,7 @@ struct RemoteSettingsView: View {
       } header: {
         Text("This Device as a Server")
       }
+      RemoteTailscaleSection(tailnet: create.tailnet)
       Section {
         ForEach(server.devices) { device in
           LabeledContent {
@@ -157,6 +158,99 @@ struct RemoteSettingsView: View {
       server.port = port
     }
     portText = String(server.port)
+  }
+}
+
+/// Atelier's own Tailscale sign-in, which needs no Tailscale app.
+private struct RemoteTailscaleSection: View {
+  @Bindable var tailnet: RemoteTailnet
+  @Environment(\.openURL) private var openURL
+  @State private var hostnameText = ""
+
+  private var isAvailable: Bool { tailnet.state != .unavailable }
+
+  var body: some View {
+    Section {
+      LabeledContent {
+        switch tailnet.state {
+        case .unavailable:
+          EmptyView()
+        case .signedOut, .failed:
+          Button("Sign In…") { tailnet.signIn() }
+        case .starting:
+          ProgressView().controlSize(.small)
+        case .needsLogin(let url):
+          Button("Open Sign-In Page") { openURL(url) }
+        case .running:
+          Button("Sign Out…") { Task { await tailnet.signOut() } }
+        }
+      } label: {
+        Text(title)
+        Text(detail)
+      }
+      Toggle(isOn: $tailnet.serves) {
+        Text("Serve over Tailscale")
+        Text("Paired devices can reach this one over your tailnet.")
+      }
+      .disabled(!isAvailable)
+      Toggle(isOn: $tailnet.limitsToAccount) {
+        Text("Limit access to your Tailscale account")
+        Text(tailnet.status.login.map { "Only devices signed in as \($0) can connect, on top of being paired." } ?? "Only devices signed in as you can connect, on top of being paired.")
+      }
+      .disabled(!isAvailable)
+      TextField("Control Server", text: $tailnet.controlURL, prompt: Text("Tailscale"))
+        .help("Leave empty for Tailscale's own. For Headscale, its address.")
+        .disabled(!isAvailable || tailnet.isSignedIn)
+      LabeledContent {
+        TextField("Preferred Hostname", text: $hostnameText)
+          .labelsHidden()
+          .onSubmit { applyHostname() }
+      } label: {
+        Text("Preferred Hostname")
+        Text("Used to generate the Tailscale address.")
+      }
+      .disabled(!isAvailable)
+    } header: {
+      Text("Tailscale")
+    }
+    .onAppear { hostnameText = tailnet.hostname }
+    .onChange(of: tailnet.state) { _, state in
+      // The page to sign in on opens by itself the first time it's there.
+      if case .needsLogin(let url) = state { openURL(url) }
+    }
+  }
+
+  private var title: String {
+    switch tailnet.state {
+    case .unavailable: "Not in This Build"
+    case .signedOut: "Not Signed In to Tailscale"
+    case .starting: "Connecting to Tailscale…"
+    case .needsLogin: "Waiting for Sign-In"
+    case .running: "Signed In to Tailscale"
+    case .failed: "Couldn't Connect to Tailscale"
+    }
+  }
+
+  private var detail: String {
+    switch tailnet.state {
+    case .unavailable: "Run Scripts/build-tailscale.sh and build again. A Tailscale app still works."
+    case .signedOut: "Atelier joins your tailnet by itself, with no Tailscale app needed."
+    case .starting: "This takes a few seconds."
+    case .needsLogin: "Finish signing in in your browser."
+    case .running:
+      ["Signed in as \(tailnet.status.login ?? "you")", tailnet.status.dnsName].compactMap(\.self).joined(separator: " · ")
+    case .failed(let message): message
+    }
+  }
+
+  private func applyHostname() {
+    let name = hostnameText.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !name.isEmpty, name != tailnet.hostname else {
+      hostnameText = tailnet.hostname
+      return
+    }
+    tailnet.hostname = name
+    Task { await tailnet.restart() }
   }
 }
 

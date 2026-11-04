@@ -435,3 +435,117 @@ struct RemoteClipTests {
     }
   }
 }
+
+struct RemoteTailnetTests {
+  @Test func bridgesCarryBothWaysAndEnd() {
+    // Client ↔ [a b] ↔ server, the way a tailnet socket meets a loopback one.
+    var left: [Int32] = [0, 0]
+    var right: [Int32] = [0, 0]
+    #expect(socketpair(AF_UNIX, SOCK_STREAM, 0, &left) == 0)
+    #expect(socketpair(AF_UNIX, SOCK_STREAM, 0, &right) == 0)
+    RemoteSocketBridge.pump(left[1], right[0])
+    let big = [UInt8]((0..<(1 << 20)).map { UInt8($0 & 0xFF) })
+    func send(_ bytes: [UInt8], to fd: Int32) {
+      Thread.detachNewThread {
+        var sent = 0
+        while sent < bytes.count {
+          let count = bytes.withUnsafeBytes { write(fd, $0.baseAddress! + sent, bytes.count - sent) }
+          guard count > 0 else { return }
+          sent += count
+        }
+      }
+    }
+    func receive(_ count: Int, from fd: Int32) -> [UInt8] {
+      var all: [UInt8] = []
+      var buffer = [UInt8](repeating: 0, count: 65536)
+      while all.count < count {
+        let got = read(fd, &buffer, min(buffer.count, count - all.count))
+        guard got > 0 else { break }
+        all += buffer[0..<got]
+      }
+      return all
+    }
+    send(big, to: left[0])
+    #expect(receive(big.count, from: right[1]) == big)
+    send(Array(big.prefix(1000)), to: right[1])
+    #expect(receive(1000, from: left[0]) == Array(big.prefix(1000)))
+    // One side closing reaches the other.
+    close(left[0])
+    var byte: UInt8 = 0
+    #expect(read(right[1], &byte, 1) == 0)
+    close(right[1])
+  }
+
+  @Test func loopbackHelpersConnect() throws {
+    let listening = try #require(RemoteSocketBridge.listenLoopback())
+    #expect(listening.port != 0)
+    let client = try #require(RemoteSocketBridge.connectLoopback(port: listening.port))
+    defer { close(client) }
+    let accepted = try #require(RemoteSocketBridge.acceptOne(listening.fd, timeout: 2000))
+    close(accepted)
+    let quiet = try #require(RemoteSocketBridge.listenLoopback())
+    #expect(RemoteSocketBridge.acceptOne(quiet.fd, timeout: 10) == nil)
+  }
+
+  private let statusJSON = Data("""
+  {"BackendState":"Running","AuthURL":"","TailscaleIPs":["100.100.1.1"],
+   "Self":{"DNSName":"vimes-atelier.tail1234.ts.net.","UserID":1,"TailscaleIPs":["100.100.1.1","fd7a:115c:a1e0::1"]},
+   "CurrentTailnet":{"MagicDNSSuffix":"tail1234.ts.net"},
+   "Peer":{"a":{"TailscaleIPs":["100.100.1.2","fd7a:115c:a1e0::2"],"UserID":1},"b":{"TailscaleIPs":["100.100.1.3"],"UserID":2}},
+   "User":{"1":{"LoginName":"ianiv@github"},"2":{"LoginName":"someone@else"}}}
+  """.utf8)
+
+  @Test func statusReadsTheNode() throws {
+    let status = try #require(RemoteTailnetStatus(json: statusJSON))
+    #expect(status.backendState == "Running" && status.authURL == nil)
+    #expect(status.dnsName == "vimes-atelier.tail1234.ts.net")
+    #expect(status.login == "ianiv@github")
+    #expect(status.peerLogins["100.100.1.3"] == "someone@else")
+    let login = try #require(RemoteTailnetStatus(json: Data(#"{"BackendState":"NeedsLogin","AuthURL":"https://login.tailscale.com/a/x"}"#.utf8)))
+    #expect(login.authURL == "https://login.tailscale.com/a/x")
+    #expect(RemoteTailnetStatus(json: Data("nope".utf8)) == nil)
+  }
+
+  @Test func theAccountLimitChecksTheCaller() throws {
+    let status = try #require(RemoteTailnetStatus(json: statusJSON))
+    #expect(status.admits(caller: "100.100.1.2:5000", limitToAccount: true))
+    #expect(status.admits(caller: "[fd7a:115c:a1e0::2]:5000", limitToAccount: true))
+    #expect(!status.admits(caller: "100.100.1.3:5000", limitToAccount: true), "another account")
+    #expect(!status.admits(caller: "100.100.9.9:5000", limitToAccount: true), "nobody it knows")
+    #expect(!status.admits(caller: "", limitToAccount: true))
+    #expect(status.admits(caller: "100.100.1.3:5000", limitToAccount: false))
+    #expect(!RemoteTailnetStatus().admits(caller: "100.100.1.2:5000", limitToAccount: true), "before it knows who it is")
+  }
+
+  @Test func tailnetHostsGoThroughTheNode() throws {
+    let status = try #require(RemoteTailnetStatus(json: statusJSON))
+    #expect(status.isTailnetHost("vimes.tail1234.ts.net"))
+    #expect(status.isTailnetHost("100.100.1.2"))
+    #expect(status.isTailnetHost("fd7a:115c:a1e0::2"))
+    #expect(!status.isTailnetHost("192.168.1.5"))
+    #expect(!status.isTailnetHost("vimes.local"))
+    var headscale = RemoteTailnetStatus()
+    headscale.magicDNSSuffix = "tail.example.com"
+    #expect(headscale.isTailnetHost("vimes.tail.example.com"))
+    #expect(!headscale.isTailnetHost("tail.example.com.evil.net"))
+  }
+
+  @Test(arguments: [
+    ("Ianiv’s MacBook Pro", "ianivs-macbook-pro-atelier"), ("Crowley", "crowley-atelier"), ("iPad (2)", "ipad-2-atelier"),
+    ("---", "atelier"), ("Café Mac", "caf-mac-atelier"),
+  ])
+  func hostnamesComeFromTheDeviceName(_ device: String, _ expected: String) {
+    #expect(RemoteTailnet.defaultHostname(for: device) == expected)
+  }
+
+  @MainActor @Test func settingsDefaults() {
+    var options = RemoteTailnet.Options()
+    options.persists = false
+    options.folder = FileManager.default.temporaryDirectory.appending(path: "atelier-tests-\(UUID())", directoryHint: .isDirectory)
+    let tailnet = RemoteTailnet(options: options)
+    #expect(tailnet.serves && tailnet.limitsToAccount)
+    #expect(tailnet.controlURL.isEmpty && tailnet.hostname.hasSuffix("-atelier"))
+    #expect(!tailnet.isSignedIn && tailnet.addresses.isEmpty)
+    #expect(tailnet.bridge(to: RemoteAddress(host: "100.100.1.2", port: 7863)) == nil, "not signed in")
+  }
+}
