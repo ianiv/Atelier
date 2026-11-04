@@ -35,9 +35,13 @@ struct QueueView: View {
 
   private var list: some View {
     List(selection: $selection) {
-      if queue.running != nil || !queue.runningRemote.isEmpty {
+      if let running = queue.running {
         Section("Running") {
-          if let running = queue.running { row(running) }
+          row(running)
+        }
+      }
+      if !queue.runningRemote.isEmpty {
+        Section("Running on Servers") {
           ForEach(queue.runningRemote) { row($0) }
         }
       }
