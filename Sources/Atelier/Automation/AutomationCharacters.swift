@@ -163,6 +163,65 @@
           second.makeMain(copy.images[0], of: copy.id)
           second.addSavedImage(pixels, info: info, to: copy.id)
         }
+        // Previews: files in the temp folder, removed one at a time or all together.
+        let previewStore = CharacterStore(persists: false, directory: scratch.appendingPathComponent("previews", isDirectory: true))
+        let previewOwner = previewStore.newCharacter()
+        let kept1 = await previewStore.keepPreview(pixels, info: info, of: previewOwner.id)
+        let kept2 = await previewStore.keepPreview(pixels, info: info, of: previewOwner.id)
+        let kept3 = await previewStore.keepPreview(pixels, info: info, of: previewOwner.id)
+        let keptFiles = [kept1, kept2, kept3].compactMap { $0?.file }
+        check(keptFiles.count == 3 && keptFiles.allSatisfy { $0.path.hasPrefix(PreviewFiles.folder.path) && FileManager.default.fileExists(atPath: $0.path) }, "previews are written to \(PreviewFiles.folder.lastPathComponent)")
+        if let kept1 {
+          let read = await previewStore.fullImage(of: kept1)
+          check(read?.width == pixels.width, "a preview's full image reads back from its file")
+          await previewStore.save(kept1, to: previewOwner.id)
+          check(previewStore.character(id: previewOwner.id)?.images.count == 1, "saving a preview no longer on screen works")
+          let listAfterSave = (try? JSONDecoder().decode([SavedCharacter].self, from: Data(contentsOf: scratch.appendingPathComponent("previews/Characters.json"))))?.first?.images.count
+          check(listAfterSave == 1, "saving an image writes the list straight away")
+          previewStore.removePreview(kept1.id, of: previewOwner.id)
+          check(!FileManager.default.fileExists(atPath: kept1.file.path) && previewStore.previews[previewOwner.id]?.count == 2, "Remove deletes one preview's file")
+          check(previewStore.character(id: previewOwner.id)?.images.count == 1, "the saved copy stays")
+        }
+        previewStore.clearPreviews(of: previewOwner.id)
+        check(keptFiles.allSatisfy { !FileManager.default.fileExists(atPath: $0.path) } && (previewStore.previews[previewOwner.id] ?? []).isEmpty, "Clear Previews deletes their files")
+        let again = await previewStore.keepPreview(pixels, info: info, of: previewOwner.id)
+        previewStore.delete(previewOwner.id)
+        check(again.map { !FileManager.default.fileExists(atPath: $0.file.path) } == true, "deleting a character deletes its previews")
+        // What a crash leaves: another launch's folder goes, a running app's stays, this launch's stays.
+        let previewsRoot = PreviewFiles.folder.deletingLastPathComponent()
+        let crashed = previewsRoot.appendingPathComponent("999999-\(UUID().uuidString)", isDirectory: true)
+        let running = previewsRoot.appendingPathComponent("\(ProcessInfo.processInfo.processIdentifier)-\(UUID().uuidString)", isDirectory: true)
+        let beside = previewsRoot.deletingLastPathComponent().appendingPathComponent("characters-check-\(UUID().uuidString).txt")
+        for folder in [crashed, running, PreviewFiles.folder] { try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true) }
+        try? Data("x".utf8).write(to: beside)
+        PreviewFiles.sweepLeftovers()
+        check(!FileManager.default.fileExists(atPath: crashed.path), "a crashed launch's previews are swept")
+        check(FileManager.default.fileExists(atPath: running.path) && FileManager.default.fileExists(atPath: PreviewFiles.folder.path), "a running app's previews aren't")
+        check(FileManager.default.fileExists(atPath: beside.path), "files beside CharacterPreviews aren't touched")
+        try? FileManager.default.removeItem(at: running)
+        try? FileManager.default.removeItem(at: beside)
+        // Orphaned saved images: old ones go, recent ones and referenced ones stay.
+        let sweepDir = scratch.appendingPathComponent("sweep", isDirectory: true)
+        let sweepFirst = CharacterStore(persists: false, directory: sweepDir)
+        let sweepOwner = sweepFirst.newCharacter()
+        let usedImage = sweepFirst.addSavedImage(pixels, info: info, to: sweepOwner.id)
+        sweepFirst.flush()
+        let imagesDir = sweepDir.appendingPathComponent("CharacterImages", isDirectory: true)
+        let oldOrphan = imagesDir.appendingPathComponent(UUID().uuidString + "-full.png")
+        let newOrphan = imagesDir.appendingPathComponent(UUID().uuidString + ".jpg")
+        let notOurs = imagesDir.appendingPathComponent("notes.txt")
+        for file in [oldOrphan, newOrphan, notOurs] { try? Data("x".utf8).write(to: file) }
+        let longAgo = Date(timeIntervalSinceNow: -7_200)
+        for file in [oldOrphan, notOurs] { try? FileManager.default.setAttributes([.modificationDate: longAgo], ofItemAtPath: file.path) }
+        if let usedImage { try? FileManager.default.setAttributes([.modificationDate: longAgo], ofItemAtPath: imagesDir.appendingPathComponent(usedImage.uuidString + ".jpg").path) }
+        _ = CharacterStore(persists: false, directory: sweepDir)
+        check(!FileManager.default.fileExists(atPath: oldOrphan.path), "an old orphaned image is swept at launch")
+        check(FileManager.default.fileExists(atPath: newOrphan.path) && FileManager.default.fileExists(atPath: notOurs.path), "recent orphans and other files stay")
+        check(usedImage.map { FileManager.default.fileExists(atPath: imagesDir.appendingPathComponent($0.uuidString + ".jpg").path) } == true, "images a character refers to stay")
+        // An unreadable list sweeps nothing.
+        try? Data("not json".utf8).write(to: sweepDir.appendingPathComponent("Characters.json"))
+        _ = CharacterStore(persists: false, directory: sweepDir)
+        check(usedImage.map { FileManager.default.fileExists(atPath: imagesDir.appendingPathComponent($0.uuidString + ".jpg").path) } == true, "an unreadable list sweeps nothing")
         // A character from when there was one saved image, its files under the character's id.
         let legacy = scratch.appendingPathComponent("legacy", isDirectory: true)
         let legacyID = UUID()
@@ -249,6 +308,7 @@
             try? await Task.sleep(for: .milliseconds(200))
           }
           let previews = store.previews[shown.id] ?? []
+          check(previews.allSatisfy { $0.file.path.contains("Atelier/CharacterPreviews/") && FileManager.default.fileExists(atPath: $0.file.path) && $0.thumbnail.width <= 192 }, "previews are files in the temp folder, with small thumbnails in memory")
           check(previews.count == chosen.count + 1, "\(previews.count) previews in \(Int(Date().timeIntervalSince(started)))s\(store.renderError.map { ": \($0)" } ?? "")")
           check(model.history.items.count == historyBefore, "previews aren't saved to the project (\(model.history.items.count - historyBefore) new items)")
           check(model.image === canvasBefore, "a render leaves the canvas alone")
@@ -259,8 +319,8 @@
             check(preview.info.source.prompt.contains(womanWritten), "\(preview.info.styleName) has the description in its prompt")
           }
           if let preview = previews.first {
-            store.save(preview, to: shown.id)
-            store.save(preview, to: shown.id)
+            await store.save(preview, to: shown.id)
+            await store.save(preview, to: shown.id)
             check(store.character(id: shown.id)?.images.count == 1, "Save to Character adds the preview once")
             if let sheetValue = value("--sheet") {
               store.edit(shown.id) { $0.sheet = sheetValue; $0.sheetMegapixels = 1; $0.customSheet = "in three outfits, side by side." }
@@ -273,21 +333,23 @@
               while store.renderRun != nil { try? await Task.sleep(for: .milliseconds(200)) }
               let sheetPreview = store.previews[shown.id]?.first
               check((store.previews[shown.id]?.count ?? 0) == before + 1, "a sheet is one preview\(store.renderError.map { ": \($0)" } ?? "")")
-              check(sheetPreview?.image.width == expected?.width && sheetPreview?.image.height == expected?.height, "the sheet is \(sheetPreview?.image.width ?? 0)×\(sheetPreview?.image.height ?? 0), its own size")
+              let sheetImage: CGImage? = if let sheetPreview { await store.fullImage(of: sheetPreview) } else { nil }
+              check(sheetImage?.width == expected?.width && sheetImage?.height == expected?.height, "the sheet is \(sheetImage?.width ?? 0)×\(sheetImage?.height ?? 0), its own size")
               check(model.settings?.width == createSize?.0 && model.settings?.height == createSize?.1, "Create's size isn't changed")
               check(model.history.items.count == historyBefore, "the sheet isn't saved to the project")
               log("sheet prompt: \(sheetPreview?.info.source.prompt ?? "")")
-              if let snapshotDir, let sheetPreview, let png = ImageTensor.png(sheetPreview.image) {
+              if let snapshotDir, let sheetImage, let png = ImageTensor.png(sheetImage) {
                 try? FileManager.default.createDirectory(at: snapshotDir, withIntermediateDirectories: true)
                 try? png.write(to: snapshotDir.appendingPathComponent("sheet.png"))
               }
             }
-            await store.sendToCreate(preview.image, info: preview.info, create: model, navigation: navigation, undoManager: nil)
+            let previewImage = await store.fullImage(of: preview)!
+            await store.sendToCreate(previewImage, info: preview.info, create: model, navigation: navigation, undoManager: nil)
             check(store.renderError == nil, "Send to Create worked: \(store.renderError ?? "ok")")
             check(navigation.section == .create, "Send to Create goes to Create")
             check(model.history.items.count == historyBefore + 1, "Send to Create adds one step to the project")
             check(model.history.items.first?.sidecar.prompt == preview.info.source.prompt || model.history.items.contains { $0.sidecar.prompt == preview.info.source.prompt }, "the step has the prompt it was made with")
-            check(model.image?.width == preview.image.width, "the image is on the canvas")
+            check(model.image?.width == previewImage.width, "the image is on the canvas")
             check(model.selectedModel == file && model.seed == seed, "the model and seed are loaded")
             if let id = preview.info.styleID {
               check(model.styleID == id && model.prompt == womanWritten, "the style is selected with the description in Subject")

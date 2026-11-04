@@ -262,6 +262,7 @@ private struct CharacterStage: View {
   @Environment(Navigation.self) private var navigation
   @Environment(\.undoManager) private var undoManager
   @State private var pendingRemove: UUID?
+  @State private var confirmingClear = false
   /// Says Send to Moodboard worked, which nothing else here shows, until another image is picked.
   @State private var moodboardNote: String?
 
@@ -279,7 +280,13 @@ private struct CharacterStage: View {
   }
 
   /// The image Send to Create acts on.
-  private var image: CGImage? { shownPreview?.image ?? shownSaved.flatMap { store.savedImages[$0] } }
+  private var image: CGImage? {
+    if let shownPreview {
+      return store.shownPreviewImage?.preview == shownPreview.id ? store.shownPreviewImage?.image : nil
+    }
+    return shownSaved.flatMap { store.savedImages[$0] }
+  }
+
   private var info: CharacterImageInfo? { shownPreview?.info ?? shownSaved.flatMap { store.savedInfo[$0] } }
   /// This character's render is on the engine now.
   private var rendering: Bool {
@@ -305,6 +312,15 @@ private struct CharacterStage: View {
     .task(id: shownSaved) {
       if let shownSaved { await store.loadSaved(shownSaved) }
     }
+    .task(id: shownPreview?.id) {
+      if let shownPreview { await store.showFull(shownPreview) }
+    }
+    .confirmationDialog("Clear this character's previews?", isPresented: $confirmingClear) {
+      Button("Clear Previews", role: .destructive) { store.clearPreviews(of: character.id) }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("Saved images stay. This can't be undone.")
+    }
     .confirmationDialog(
       "Remove this saved image?", isPresented: Binding(get: { pendingRemove != nil }, set: { if !$0 { pendingRemove = nil } })
     ) {
@@ -324,6 +340,9 @@ private struct CharacterStage: View {
         Image(decorative: live, scale: 1).resizable().scaledToFit()
       } else if let image {
         Image(decorative: image, scale: 1).resizable().scaledToFit()
+      } else if let shownPreview {
+        // While its full image is read back from the temp folder.
+        Image(decorative: shownPreview.thumbnail, scale: 1).resizable().scaledToFit()
       } else {
         ContentUnavailableView {
           Label("No Image Yet", systemImage: "person.crop.artframe")
@@ -360,12 +379,19 @@ private struct CharacterStage: View {
     .labelStyle(.iconOnly)
     .disabled(shownSaved == nil || shownSaved == character.mainImageID)
     .help("Make this saved image the character's portrait in the library, and what shows when you come back to it")
-    Button("Remove", systemImage: "trash") { pendingRemove = shownSaved }
-      .labelStyle(.iconOnly)
-      .disabled(shownSaved == nil)
-      .help("Remove this saved image from the character")
+    Button("Remove", systemImage: "trash") {
+      if let shownPreview {
+        store.removePreview(shownPreview.id, of: character.id)
+      } else {
+        pendingRemove = shownSaved
+      }
+    }
+    .labelStyle(.iconOnly)
+    .disabled(shownPreview == nil && shownSaved == nil)
+    .help(shownPreview == nil ? "Remove this saved image from the character" : "Remove this preview. A copy saved to the character stays.")
     Button("Save to Character", systemImage: "square.and.arrow.down") {
-      if let shownPreview { store.save(shownPreview, to: character.id) }
+      guard let shownPreview else { return }
+      Task { await store.save(shownPreview, to: character.id) }
     }
     .disabled(shownPreview == nil || shownPreview.map { store.savedPreviews.contains($0.id) } == true)
     .help(saveHelp)
@@ -425,7 +451,7 @@ private struct CharacterStage: View {
               SavedImageSquare(image: id, side: Self.tileSide)
             }
             // The tile's caption is the style it was made in.
-            .task(id: id) { await store.loadSaved(id) }
+            .task(id: id) { await store.loadInfo(id) }
           }
         }
         Divider()
@@ -434,13 +460,19 @@ private struct CharacterStage: View {
             tile(selected: shownPreview?.id == preview.id, main: false, title: preview.info.styleName, help: "\(preview.info.styleName): not saved until you use Save to Character or Send to Create") {
               store.shownImage[character.id] = preview.id
             } content: {
-              Image(decorative: preview.image, scale: 1)
+              Image(decorative: preview.thumbnail, scale: 1)
                 .resizable()
                 .scaledToFill()
                 .frame(width: Self.tileSide, height: Self.tileSide)
                 .clipShape(.rect(cornerRadius: Self.tileSide / 8))
             }
           }
+        } action: {
+          Button("Clear Previews") { confirmingClear = true }
+            .buttonStyle(.borderless)
+            .font(.caption)
+            .disabled(previews.isEmpty)
+            .help("Remove all of this character's previews. Saved images stay.")
         }
       }
       .padding(10)
@@ -451,9 +483,15 @@ private struct CharacterStage: View {
 
   private static let tileSide: CGFloat = 72
 
-  private func group(_ title: String, empty: Bool, emptyText: String, @ViewBuilder tiles: () -> some View) -> some View {
+  private func group(
+    _ title: String, empty: Bool, emptyText: String, @ViewBuilder tiles: () -> some View,
+    @ViewBuilder action: () -> some View = { EmptyView() }
+  ) -> some View {
     VStack(alignment: .leading, spacing: 4) {
-      Text(title).font(.callout).foregroundStyle(.secondary)
+      HStack(spacing: 8) {
+        Text(title).font(.callout).foregroundStyle(.secondary)
+        action()
+      }
       HStack(alignment: .top, spacing: 8) {
         if empty {
           Text(emptyText)

@@ -70,11 +70,13 @@ The result is a preview like any other. How well the views stay consistent depen
 
 ## Previews and saved images
 
-Renders are previews only. They appear under **Previews**, aren't in any project or in History, and are cleared when you quit.
+Renders are previews only. They appear under **Previews**, aren't in any project or in History, and are deleted when you quit. While you work, their full images are files in the system's temporary folder (`Atelier/CharacterPreviews`), with only small thumbnails in memory; if the app crashes, the next launch deletes what was left.
+
+- **Remove** (the trash button) deletes the preview shown, and **Clear Previews** deletes all of this character's previews. A copy you saved stays.
 
 - **Save to Character** adds the preview shown to the character's saved images, under **Saved**. Saved images keep the settings they were made with.
 - The **main image**, marked with a star, is the character's portrait in the library and what the screen shows when you come back. It's the first one saved until you pick another with **Make Main Image** (the star button) on a saved image.
-- **Remove** (the trash button) removes a saved image. If it was the main image, the first one left takes over.
+- On a saved image, **Remove** asks first, then deletes its files. If it was the main image, the first one left takes over.
 - **Send to Create** adds the preview or saved image shown to the current project, so it shows in History, and loads it on Create's canvas with the model, settings and seed it was made with, a sheet's size included. With a style, that style is selected with the description as its Subject (with a sheet's words around it) and its tag boxes filled. With No Style, the whole prompt it was made with goes in the prompt box.
 
 **Send to Moodboard** adds the preview or saved image shown to Create's moodboard as a reference, and stays on this screen. Create's canvas, prompt and settings stay as they are, and the image isn't added to the project until a run uses it. Only models that take reference images use the moodboard.
@@ -83,7 +85,7 @@ Renders are previews only. They appear under **Previews**, aren't in any project
 
 **Export Selected…** and **Export All…** (the import/export menu under the library, or **Export…** in a character's right-click menu) write a `.json` characters file with the saved images. **Import Characters…** reads one; a character with the same name as one you have replaces it.
 
-Characters are saved in `Characters.json` and each saved image (a square for the library, the full image and its settings) in `CharacterImages` in Atelier's Application Support folder.
+Characters are saved in `Characters.json` and each saved image (a square for the library, the full image and its settings) in `CharacterImages` in Atelier's Application Support folder. Files there that no character refers to, which a crash can leave, are deleted at launch.
 
 ## Adding knobs
 

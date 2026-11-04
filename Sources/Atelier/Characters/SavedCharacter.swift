@@ -98,12 +98,49 @@ struct CharacterImageInfo: Codable {
   var subject: String
 }
 
-/// A render of a character. Previews aren't saved anywhere: they go when the app quits, or sooner
-/// when Save to Character or Send to Create keeps a copy.
+/// A render of a character, not saved anywhere lasting: its full image is a file in `PreviewFiles`'
+/// folder, with only a small thumbnail in memory, so a long session can't fill memory.
 struct CharacterPreview: Identifiable {
-  let id = UUID()
-  let image: CGImage
+  let id: UUID
+  let thumbnail: CGImage
   let info: CharacterImageInfo
+  let file: URL
+}
+
+/// Where previews' full images live: `<temp>/Atelier/CharacterPreviews/<launch id>/`. Normal quits
+/// delete this launch's folder, and each launch deletes what a crash left behind. It touches
+/// nothing outside `CharacterPreviews`: other files live loose in `<temp>/Atelier`.
+enum PreviewFiles {
+  private static let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("Atelier/CharacterPreviews", isDirectory: true)
+  private static let launchID = "\(ProcessInfo.processInfo.processIdentifier)-\(UUID().uuidString)"
+  static let folder = root.appendingPathComponent(launchID, isDirectory: true)
+
+  /// Runs once, whichever store comes first.
+  static let sweptAtLaunch: Void = sweepLeftovers()
+
+  static func removeThisLaunch() {
+    try? FileManager.default.removeItem(at: folder)
+  }
+
+  /// Deletes other launches' folders, unless that app is still running: a development build and
+  /// the installed app can run side by side.
+  static func sweepLeftovers() {
+    let folders = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
+    for leftover in folders where leftover.lastPathComponent != launchID && !isRunning(leftover.lastPathComponent) {
+      try? FileManager.default.removeItem(at: leftover)
+    }
+  }
+
+  private static func isRunning(_ folderName: String) -> Bool {
+    #if os(macOS)
+      guard let pid = folderName.split(separator: "-").first.flatMap({ Int32($0) }) else { return false }
+      return kill(pid, 0) == 0 || errno == EPERM
+    #else
+      // One copy at a time on iPad, in a temp folder of its own.
+      return false
+    #endif
+  }
 }
 
 /// The characters, in `Characters.json` in Application Support, each with its saved images in
@@ -133,7 +170,11 @@ final class CharacterStore {
   private(set) var savedPreviews: Set<UUID> = []
   /// Saved images read so far, by image id (`.some(nil)` is one with no file).
   private(set) var thumbnails: [UUID: CGImage?] = [:]
+  /// A few saved images full size, the most recently shown last in `savedImageOrder`.
   private(set) var savedImages: [UUID: CGImage] = [:]
+  @ObservationIgnored private var savedImageOrder: [UUID] = []
+  /// The preview shown large, read back from its file.
+  private(set) var shownPreviewImage: (preview: UUID, image: CGImage)?
   private(set) var savedInfo: [UUID: CharacterImageInfo] = [:]
 
   /// The renders running: how many are done (and failed) of how many, and the style running.
@@ -159,8 +200,11 @@ final class CharacterStore {
         ? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("Atelier", isDirectory: true)
         : FileManager.default.temporaryDirectory.appendingPathComponent("AtelierCharacters-\(UUID().uuidString)", isDirectory: true))
-    if let data = try? Data(contentsOf: file) {
-      characters = (try? JSONDecoder().decode([SavedCharacter].self, from: data)) ?? []
+    _ = PreviewFiles.sweptAtLaunch
+    var listRead = false
+    if let data = try? Data(contentsOf: file), let read = try? JSONDecoder().decode([SavedCharacter].self, from: data) {
+      characters = read
+      listRead = true
     }
     // The single saved image of an earlier version goes on the list, its files staying put.
     var migrated = false
@@ -173,6 +217,15 @@ final class CharacterStore {
       }
     }
     if migrated { scheduleWrite() }
+    // Only with a list to compare against: an unreadable file mustn't cost anyone their images.
+    if listRead { sweepOrphanedImages() }
+    AppLifecycle.onWillTerminate { [weak self] in
+      self?.flush()
+      PreviewFiles.removeThisLaunch()
+    }
+    // iPad may end the app in the background without saying so. Previews stay for when you come
+    // back; the system or the next launch clears them.
+    AppLifecycle.onResignActive { [weak self] in self?.flush() }
     if !persists { selection = nil }
   }
 
@@ -231,17 +284,20 @@ final class CharacterStore {
       }
     }
     selection = copy.id
-    scheduleWrite()
+    writeNow()
   }
 
   func delete(_ id: UUID) {
     if renderRun?.character == id { stopRendering() }
-    for image in character(id: id)?.images ?? [] { forgetImage(image) }
+    let images = character(id: id)?.images ?? []
+    clearPreviews(of: id)
     characters.removeAll { $0.id == id }
-    previews[id] = nil
     shownImage[id] = nil
     if selection == id { selection = nil }
-    scheduleWrite()
+    // The list first: a crash between the two leaves files the next launch sweeps, not a character
+    // with missing images.
+    writeNow()
+    for image in images { forgetImage(image) }
   }
 
   private func scheduleWrite() {
@@ -250,7 +306,15 @@ final class CharacterStore {
       try? await Task.sleep(for: .milliseconds(400))
       guard !Task.isCancelled else { return }
       self?.write()
+      self?.pendingWrite = nil
     }
+  }
+
+  /// Saves now, for changes that go with files on disk, so the list and the files stay in step.
+  private func writeNow() {
+    pendingWrite?.cancel()
+    pendingWrite = nil
+    write()
   }
 
   /// Writes anything still waiting to be saved.
@@ -283,11 +347,27 @@ final class CharacterStore {
     [".jpg", "-full.png", ".json"].map { imagesDirectory.appendingPathComponent(id.uuidString + $0) }
   }
 
+  /// Deletes files in `CharacterImages` that no character refers to, left by a crash at the wrong
+  /// moment. Recent ones stay: another running copy of the app may have just written them.
+  private func sweepOrphanedImages() {
+    let used = Set(characters.flatMap(\.images))
+    let files = (try? FileManager.default.contentsOfDirectory(
+      at: imagesDirectory, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+    for file in files {
+      guard let id = UUID(uuidString: String(file.lastPathComponent.prefix(36))), !used.contains(id),
+            let modified = try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+            Date().timeIntervalSince(modified) > 3_600
+      else { continue }
+      try? FileManager.default.removeItem(at: file)
+    }
+  }
+
   /// Removes an image's files and what's been read of it.
   private func forgetImage(_ image: UUID) {
     for file in imageFiles(image) { try? FileManager.default.removeItem(at: file) }
     thumbnails[image] = nil
     savedImages[image] = nil
+    savedImageOrder.removeAll { $0 == image }
     savedInfo[image] = nil
   }
 
@@ -299,16 +379,35 @@ final class CharacterStore {
     thumbnails[image] = .some(read)
   }
 
-  /// Reads a saved image full size and how it was made, the first time it's shown large.
+  /// How many saved images stay in memory full size.
+  private static let savedImagesKept = 8
+
+  /// Reads a saved image full size and how it was made, to show it large.
   func loadSaved(_ id: UUID) async {
-    guard savedImages[id] == nil else { return }
+    guard savedImages[id] == nil else {
+      savedImageOrder.removeAll { $0 == id }
+      savedImageOrder.append(id)
+      return
+    }
+    await loadInfo(id)
     let files = imageFiles(id)
-    let (image, info) = await Task.detached { () -> (CGImage?, CharacterImageInfo?) in
-      let image = ImageLoader.image(at: files[1]) ?? ImageLoader.image(at: files[0])
-      let info = (try? Data(contentsOf: files[2])).flatMap { try? JSONDecoder().decode(CharacterImageInfo.self, from: $0) }
-      return (image, info)
+    let image = await Task.detached { ImageLoader.image(at: files[1]) ?? ImageLoader.image(at: files[0]) }.value
+    guard let image else { return }
+    savedImages[id] = image
+    savedImageOrder.removeAll { $0 == id }
+    savedImageOrder.append(id)
+    while savedImageOrder.count > Self.savedImagesKept {
+      savedImages[savedImageOrder.removeFirst()] = nil
+    }
+  }
+
+  /// Reads how a saved image was made, for its tile's caption, without its pixels.
+  func loadInfo(_ id: UUID) async {
+    guard savedInfo[id] == nil else { return }
+    let file = imageFiles(id)[2]
+    let info = await Task.detached {
+      (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode(CharacterImageInfo.self, from: $0) }
     }.value
-    if let image { savedImages[id] = image }
     if let info { savedInfo[id] = info }
   }
 
@@ -329,9 +428,9 @@ final class CharacterStore {
       try png.write(to: files[1], options: .atomic)
       if let info { try JSONEncoder().encode(info).write(to: files[2], options: .atomic) }
       thumbnails[id] = .some(square)
-      savedImages[id] = image
       savedInfo[id] = info
       edit(character) { $0.images.append(id) }
+      writeNow()
       return id
     } catch {
       forgetImage(id)
@@ -341,11 +440,78 @@ final class CharacterStore {
   }
 
   /// Save to Character: adds the preview to the saved images, once.
-  func save(_ preview: CharacterPreview, to character: UUID) {
-    guard !savedPreviews.contains(preview.id),
-          addSavedImage(preview.image, info: preview.info, to: character) != nil
-    else { return }
-    savedPreviews.insert(preview.id)
+  func save(_ preview: CharacterPreview, to character: UUID) async {
+    guard savedPreviews.insert(preview.id).inserted else { return }
+    guard let image = await fullImage(of: preview), addSavedImage(image, info: preview.info, to: character) != nil else {
+      savedPreviews.remove(preview.id)
+      return
+    }
+  }
+
+  // MARK: - Previews
+
+  /// Keeps a render as a preview: its full image in the temp folder, a small thumbnail in memory.
+  /// Returns nil, with `renderError` saying why, when the file can't be written.
+  @discardableResult
+  func keepPreview(_ image: CGImage, info: CharacterImageInfo, of character: UUID) async -> CharacterPreview? {
+    let id = UUID()
+    let file = PreviewFiles.folder.appendingPathComponent(id.uuidString + ".png")
+    let written = await Task.detached { () -> Bool in
+      guard let png = ImageTensor.png(image) else { return false }
+      do {
+        try FileManager.default.createDirectory(at: PreviewFiles.folder, withIntermediateDirectories: true)
+        try png.write(to: file, options: .atomic)
+        return true
+      } catch {
+        return false
+      }
+    }.value
+    guard written, let thumbnail = StyleStore.square(image, side: Self.previewThumbnailSide) else {
+      renderError = "Couldn't keep the preview: is the disk full?"
+      return nil
+    }
+    let preview = CharacterPreview(id: id, thumbnail: thumbnail, info: info, file: file)
+    previews[character, default: []].insert(preview, at: 0)
+    shownPreviewImage = (id, image)
+    shownImage[character] = id
+    return preview
+  }
+
+  /// Sharp in the strip at 2x.
+  private static let previewThumbnailSide = 192
+
+  /// A preview's full image, from memory when it's the one shown.
+  func fullImage(of preview: CharacterPreview) async -> CGImage? {
+    if let shown = shownPreviewImage, shown.preview == preview.id { return shown.image }
+    let file = preview.file
+    return await Task.detached { ImageLoader.image(at: file) }.value
+  }
+
+  /// Reads the preview about to be shown large; only that one stays in memory.
+  func showFull(_ preview: CharacterPreview) async {
+    guard let image = await fullImage(of: preview), !Task.isCancelled else { return }
+    shownPreviewImage = (preview.id, image)
+  }
+
+  func removePreview(_ preview: UUID, of character: UUID) {
+    guard let found = previews[character]?.first(where: { $0.id == preview }) else { return }
+    previews[character]?.removeAll { $0.id == preview }
+    forgetPreview(found)
+    if shownImage[character] == preview { shownImage[character] = nil }
+  }
+
+  func clearPreviews(of character: UUID) {
+    for preview in previews[character] ?? [] {
+      forgetPreview(preview)
+      if shownImage[character] == preview.id { shownImage[character] = nil }
+    }
+    previews[character] = nil
+  }
+
+  private func forgetPreview(_ preview: CharacterPreview) {
+    try? FileManager.default.removeItem(at: preview.file)
+    savedPreviews.remove(preview.id)
+    if shownPreviewImage?.preview == preview.id { shownPreviewImage = nil }
   }
 
   func makeMain(_ image: UUID, of character: UUID) {
@@ -359,6 +525,8 @@ final class CharacterStore {
       if $0.mainImage == image { $0.mainImage = nil }
     }
     if shownImage[character] == image { shownImage[character] = nil }
+    // The list first, as in `delete`.
+    writeNow()
     forgetImage(image)
   }
 
@@ -447,9 +615,7 @@ final class CharacterStore {
               prompt: prompts.prompt, negativePrompt: prompts.negativePrompt, model: model, seed: seed,
               settings: JSONValue.fields(of: used)),
             styleID: item.style?.id, styleName: item.label, tagValues: character.tagValues, subject: item.subject)
-          let preview = CharacterPreview(image: image, info: info)
-          previews[character.id, default: []].insert(preview, at: 0)
-          shownImage[character.id] = preview.id
+          await keepPreview(image, info: info, of: character.id)
         } catch is CancellationError {
           break
         } catch {
@@ -558,7 +724,7 @@ final class CharacterStore {
         if index == entry.main { makeMain(id, of: character.id) }
       }
     }
-    scheduleWrite()
+    writeNow()
     return (added, replaced)
   }
 }
