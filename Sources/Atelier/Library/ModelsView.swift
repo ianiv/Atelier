@@ -63,6 +63,7 @@ struct ModelsView: View {
           .pickerStyle(.segmented)
           .toolbarNaturalWidth()
         }
+        .segmentedToolbarItem()
         #if os(iOS)
           ToolbarSpacer(.fixed)
         #endif

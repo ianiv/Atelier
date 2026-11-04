@@ -200,17 +200,35 @@ extension View {
   }
 }
 
+extension ToolbarContent {
+  /// For a segmented control in the toolbar. On iPad it has its own capsule, and the bar's shared one
+  /// would draw a second outline around it. On the Mac the shared one is the only one.
+  func segmentedToolbarItem() -> some ToolbarContent {
+    #if os(macOS)
+      self
+    #else
+      sharedBackgroundVisibility(.hidden)
+    #endif
+  }
+}
+
 /// A picker in the toolbar as a menu titled with its current choice. A menu takes the toolbar's own
-/// padding; on the Mac a picker there sits its label almost against the capsule's edge.
+/// padding; on the Mac a picker there sits its label almost against the capsule's edge. A fixed
+/// width, so the toolbar doesn't shift as the choice changes; a longer title is truncated.
 struct ToolbarPickerMenu<Picker: View>: View {
   let title: String
+  let width: CGFloat
   @ViewBuilder var picker: Picker
 
   var body: some View {
     Menu {
       picker.pickerStyle(.inline).labelsHidden()
     } label: {
-      Text(title).padding(.leading, 6)
+      Text(title)
+        .lineLimit(1)
+        .truncationMode(.tail)
+        .frame(width: width, alignment: .leading)
+        .padding(.leading, 6)
     }
   }
 }

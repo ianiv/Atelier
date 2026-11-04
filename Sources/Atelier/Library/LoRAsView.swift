@@ -66,7 +66,7 @@ struct LoRAsView: View {
           }
         #else
           ToolbarItem {
-            ToolbarPickerMenu(title: family.map(ModelLibrary.familyName) ?? "All families") { familyPicker }
+            ToolbarPickerMenu(title: family.map(ModelLibrary.familyName) ?? "All families", width: 130) { familyPicker }
           }
         #endif
         ToolbarItem {

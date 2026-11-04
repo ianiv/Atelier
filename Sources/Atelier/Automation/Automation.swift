@@ -52,7 +52,9 @@ enum Automation {
     self.library = library
     let args = CommandLine.arguments
     if let index = args.firstIndex(of: "--show"), index + 1 < args.count,
-      let section = ContentView.Section(rawValue: args[index + 1].capitalized)
+      let section = ContentView.Section.allCases.first(where: {
+        $0.rawValue.caseInsensitiveCompare(args[index + 1]) == .orderedSame
+      })
     {
       navigation.section = section
     }

@@ -93,6 +93,7 @@ struct HistoryView: View {
           .toolbarNaturalWidth()
           .help("Show the images as a grid, or as a graph of their branches")
         }
+        .segmentedToolbarItem()
         #if os(iOS)
           ToolbarSpacer(.fixed)
           // One button: a picker for each would run out of room in anything but a wide window.
@@ -112,10 +113,10 @@ struct HistoryView: View {
           }
         #else
           if history.items.contains(where: \.isVideo) {
-            ToolbarItem { ToolbarPickerMenu(title: kindTitle) { kindPicker } }
+            ToolbarItem { ToolbarPickerMenu(title: kindTitle, width: 120) { kindPicker } }
           }
-          ToolbarItem { ToolbarPickerMenu(title: ratingTitle) { ratingPicker } }
-          ToolbarItem { ToolbarPickerMenu(title: modelFilter ?? "All models") { modelPicker } }
+          ToolbarItem { ToolbarPickerMenu(title: ratingTitle, width: 90) { ratingPicker } }
+          ToolbarItem { ToolbarPickerMenu(title: modelFilter ?? "All models", width: 150) { modelPicker } }
         #endif
       }
       .searchable(text: $search, placement: .toolbar, prompt: "Filter by prompt")

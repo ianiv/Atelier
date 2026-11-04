@@ -82,6 +82,7 @@ struct StylesView: View {
           .toolbarNaturalWidth()
           .help("Show the styles as a list or a grid of thumbnails")
         }
+        .segmentedToolbarItem()
         #if os(iOS)
           ToolbarSpacer(.fixed)
           ToolbarItem {
@@ -97,7 +98,8 @@ struct StylesView: View {
         #else
           ToolbarItem {
             ToolbarPickerMenu(
-              title: styles.screenCategory.map { $0.isEmpty ? "Uncategorized" : $0 } ?? "All categories"
+              title: styles.screenCategory.map { $0.isEmpty ? "Uncategorized" : $0 } ?? "All categories",
+              width: 130
             ) { categoryPicker }
           }
         #endif
