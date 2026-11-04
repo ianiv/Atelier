@@ -34,7 +34,7 @@ enum Automation {
       "--show", "--resize-bench", "--inspector-check", "--library-check", "--project-check",
       "--reuse", "--generate", "--ux-check", "--edit-input-check", "--queue-check",
       "--timeline-check", "--upscale-check", "--timeline-export-check", "--flashvsr-check",
-      "--model-folders-check", "--styles-check", "--cleanup-check", "--engine-check",
+      "--model-folders-check", "--styles-check", "--cleanup-check", "--engine-check", "--playback-check",
     ]
     // The unit tests run inside the app. Like a scripted run, that leaves the user's data alone: no
     // cleanup at launch, no saving the session or queue.
@@ -90,6 +90,10 @@ enum Automation {
     }
     if args.contains("--flashvsr-check") {
       flashVSRCheck()
+      return
+    }
+    if args.contains("--playback-check") {
+      playbackCheck(model, navigation: navigation, layouts: layouts, presets: presets)
       return
     }
     if args.contains("--engine-check") {

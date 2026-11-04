@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A7E1F0C2B3D4A5968778697B /* AutomationPlayback.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1F0C2B3D4A5968778697A /* AutomationPlayback.swift */; };
 		B7A1F0C2B3D4A59687786200 /* ProjectMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A1F0C2B3D4A59687786300 /* ProjectMappingTests.swift */; };
 		B7A1F0C2B3D4A59687786201 /* StyleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A1F0C2B3D4A59687786301 /* StyleTests.swift */; };
 		B7A1F0C2B3D4A59687786202 /* HistoryGraphTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A1F0C2B3D4A59687786302 /* HistoryGraphTests.swift */; };
@@ -159,6 +160,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A7E1F0C2B3D4A5968778697A /* AutomationPlayback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationPlayback.swift; sourceTree = "<group>"; };
 		B7A1F0C2B3D4A59687786300 /* ProjectMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectMappingTests.swift; sourceTree = "<group>"; };
 		B7A1F0C2B3D4A59687786301 /* StyleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StyleTests.swift; sourceTree = "<group>"; };
 		B7A1F0C2B3D4A59687786302 /* HistoryGraphTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryGraphTests.swift; sourceTree = "<group>"; };
@@ -374,6 +376,7 @@
 				E750BAC04D4835E5B2477EB2 /* AutomationProject.swift */,
 				C65576F212CC11B301A189AF /* AutomationQueue.swift */,
 				B2281AF0711BE0FA0D08E56A /* AutomationStyles.swift */,
+				A7E1F0C2B3D4A5968778697A /* AutomationPlayback.swift */,
 				A7E1F0C2B3D4A5968778696C /* AutomationEngine.swift */,
 				A7E1F0C2B3D4A5968778695C /* AutomationCleanup.swift */,
 				D2FF5ECF7B3949AB28ABC1A2 /* AutomationUpscale.swift */,
@@ -739,6 +742,7 @@
 				4549FF9554EB66628271351A /* AutomationProject.swift in Sources */,
 				E03AA58CB9A74D68677591AB /* AutomationQueue.swift in Sources */,
 				735C1F1480A124F947F8E040 /* AutomationStyles.swift in Sources */,
+				A7E1F0C2B3D4A5968778697B /* AutomationPlayback.swift in Sources */,
 				A7E1F0C2B3D4A5968778696D /* AutomationEngine.swift in Sources */,
 				A7E1F0C2B3D4A5968778695D /* AutomationCleanup.swift in Sources */,
 				58D2F5882DA905D40744609C /* AutomationUpscale.swift in Sources */,
