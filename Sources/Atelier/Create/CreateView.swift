@@ -132,7 +132,10 @@ struct RunOnPicker: View {
     }
     .pickerStyle(.menu)
     .help(model.runTargetProblem ?? "Where new jobs run. Add servers in Settings ▸ Compute.")
-    .onAppear { model.remoteServers.loadIfNeeded() }
+    .onAppear {
+      model.remoteServers.loadIfNeeded()
+      if !model.remoteServers.servers.isEmpty { model.remoteServers.startBrowsing() }
+    }
   }
 }
 

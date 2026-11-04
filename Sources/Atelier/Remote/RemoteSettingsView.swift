@@ -112,6 +112,7 @@ struct RemoteSettingsView: View {
         portText = String(server.port)
         server.loadIfNeeded()
         create.remoteServers.loadIfNeeded()
+        if !create.remoteServers.servers.isEmpty { create.remoteServers.startBrowsing() }
       }
       .task { await server.refreshNetworkInfo() }
       .task { await create.remoteServers.checkStatus() }
@@ -220,6 +221,7 @@ private struct PairDeviceSheet: View {
 /// Adds a server from its pairing link, or a host and the code it shows.
 private struct AddServerSheet: View {
   @Environment(CreateModel.self) private var create
+  @Environment(RemoteServer.self) private var server
   @Environment(\.dismiss) private var dismiss
   /// A link opened from outside (a scanned QR code), to confirm.
   var opened: RemotePairingLink?
@@ -238,6 +240,23 @@ private struct AddServerSheet: View {
     VStack(alignment: .leading, spacing: 16) {
       Text("Add Server").font(.headline)
       Form {
+        // This device's own server isn't one to add.
+        let nearby = create.remoteServers.unpairedNearby.filter { $0.id != server.serverID }
+        LabeledContent("Nearby") {
+          if nearby.isEmpty {
+            Text("None found").foregroundStyle(.secondary)
+          } else {
+            VStack(alignment: .trailing) {
+              ForEach(nearby) { found in
+                Button("\(found.name): Pair…") {
+                  link = ""
+                  host = found.address.description
+                }
+                .help("Fills in its address. It needs the code shown on \(found.name), under Pair a Device….")
+              }
+            }
+          }
+        }
         TextField("Pairing link", text: $link, prompt: Text("atelier-pair://…"))
         TextField("Or host", text: $host, prompt: Text("vimes.tail1234.ts.net"))
           .disabled(!link.isEmpty)
@@ -260,7 +279,10 @@ private struct AddServerSheet: View {
     }
     .padding(24)
     .frame(width: 420)
-    .onAppear { if let opened { link = opened.text } }
+    .onAppear {
+      if let opened { link = opened.text }
+      create.remoteServers.startBrowsing()
+    }
   }
 
   private func add() {

@@ -74,6 +74,8 @@ final nonisolated class RemoteListener: Sendable {
     var loopbackOnly: Bool
     var advertises: Bool
     var keys: [String: Data]
+    /// What browsing clients read: this server's id and where to reach it.
+    var serverID = UUID()
   }
 
   private struct State {
@@ -140,7 +142,11 @@ final nonisolated class RemoteListener: Sendable {
       listener = try NWListener(using: parameters, on: nwPort)
     }
     if configuration.advertises, Self.canAdvertise {
-      listener.service = NWListener.Service(type: RemoteProtocol.serviceType)
+      let record = NWTXTRecord([
+        RemoteNearby.idKey: configuration.serverID.uuidString, RemoteNearby.hostKey: ProcessInfo.processInfo.hostName,
+        RemoteNearby.portKey: String(port),
+      ])
+      listener.service = NWListener.Service(type: RemoteProtocol.serviceType, txtRecord: record.data)
     }
     // The peer's address is checked before the connection is started, so nothing, not even the
     // TLS handshake, happens for an address the filter turns away.
@@ -294,7 +300,11 @@ final class RemoteServer {
   private var pairingExpiry: Task<Void, Never>?
   private var purging: Task<Void, Never>?
   private var isLoaded = false
-  private var serverID = UUID()
+  private(set) var serverID = UUID()
+  /// Devices' jobs in the queue, during which the machine doesn't go to sleep by itself: nothing
+  /// could wake it again over the network.
+  private var activeJobs = 0
+  private var awake: (any NSObjectProtocol)?
 
   init(create: CreateModel, library: ModelLibrary?, options: Options = Options()) {
     self.create = create
@@ -350,7 +360,8 @@ final class RemoteServer {
     }
     let listener = listener(creatingIfNeeded: shouldListen)
     let configuration = RemoteListener.Configuration(
-      port: port, loopbackOnly: options.loopbackOnly, advertises: !options.loopbackOnly, keys: currentKeys)
+      port: port, loopbackOnly: options.loopbackOnly, advertises: !options.loopbackOnly, keys: currentKeys,
+      serverID: serverID)
     applying = Task { [weak self] in
       await previous?.value
       guard let listener else { return }
@@ -499,11 +510,16 @@ final class RemoteServer {
   // MARK: - Serving
 
   func catalog() -> RemoteMessage {
-    let models = (create?.models ?? []).map { RemoteModelInfo(file: $0.file, name: $0.name, version: $0.version) }
-    let loras = (library?.loras ?? []).filter(\.isDownloaded).map {
-      RemoteLoRAInfo(file: $0.file, name: $0.name, version: $0.version, prefix: $0.prefix)
+    let models = (create?.models ?? []).map {
+      RemoteModelInfo(file: $0.file, name: $0.name, version: $0.version, traits: RemoteModelTraits(file: $0.file))
     }
-    return .catalog(models: models, loras: loras, files: create?.modelFiles ?? [])
+    let loras = (library?.loras ?? []).filter(\.isDownloaded).map {
+      RemoteLoRAInfo(file: $0.file, name: $0.name, version: $0.version, prefix: $0.prefix, modifier: RemoteModelTraits.modifier(ofLoRA: $0.file).rawValue)
+    }
+    let upscalers = RemoteUpscalers(
+      flashVSR: FlashVSRFiles.Variant.allCases.filter { FlashVSRFiles.installed($0) != nil },
+      superResolution: SystemSuperResolution.isSupported)
+    return .catalog(models: models, loras: loras, files: create?.modelFiles ?? [], upscalers: upscalers)
   }
 
   private func defaults(for model: String) async throws -> PipelineConfiguration {
@@ -525,7 +541,10 @@ final class RemoteServer {
       guard let name = devices.first(where: { $0.id == device })?.name, let create else {
         throw RemoteError.server("This device isn't paired with this server.")
       }
-      var configuration = try await defaults(for: request.model)
+      // Upscaling reads only the size and seed, and its model may be one this server never had.
+      var configuration = request.upscale != nil
+        ? try await RemoteBackend.blankConfiguration(for: request.model)
+        : try await defaults(for: request.model)
       SettingsRegistry.apply(dump: request.settings, to: &configuration)
       let inputs = try await Self.inputs(of: request, device: device, store: store)
       // Cancelled while the model's settings loaded.
@@ -537,11 +556,16 @@ final class RemoteServer {
       engineRequest.canvasIsImported = request.canvasIsImported
       engineRequest.moodboard = inputs.moodboard
       engineRequest.audio = inputs.audio
+      engineRequest.upscale = request.upscale
       let queueID = create.runForDevice(
-        engineRequest, device: name,
+        engineRequest, frames: inputs.frames, device: name,
         progress: { [weak self] progress in self?.note(progress, job: job) },
         completion: { [weak self] result in self?.finish(job, result) })
       await store.setQueueID(queueID, job: job)
+      activeJobs += 1
+      if awake == nil {
+        awake = ProcessInfo.processInfo.beginActivity(options: .idleSystemSleepDisabled, reason: "Running a paired device's job")
+      }
     } catch {
       await store.post(RemoteJobEvent(jobID: job, state: .failed, message: error.localizedDescription))
       throw error
@@ -552,6 +576,7 @@ final class RemoteServer {
     var canvas: CGImage?
     var moodboard: [GenerationEngine.Reference] = []
     var audio: URL?
+    var frames: [CGImage] = []
   }
 
   /// A job's images and audio, from its uploads. The audio gets a copy the queue owns, as a job
@@ -577,6 +602,19 @@ final class RemoteServer {
       let copy = await AudioClip.newSnapshotFile(extension: audio.fileExtension)
       try FileManager.default.copyItem(at: url, to: copy)
       inputs.audio = copy
+    }
+    if let clip = request.sourceClip {
+      guard let url = await store.clip(device: device, job: clip) else {
+        throw RemoteError.server("This server no longer has that clip.")
+      }
+      let reader = try RemoteResultFile.Reader(url: url)
+      let count = min(request.upscale?.frameLimit ?? reader.frameCount, reader.frameCount)
+      for index in 0..<count {
+        guard let image = ImageTensor.cgImage(from: try reader.frame(index)) else { throw RemoteError.corruptResult }
+        inputs.frames.append(image)
+      }
+    } else {
+      for hash in request.frames { inputs.frames.append(try await image(hash)) }
     }
     return inputs
   }
@@ -620,6 +658,11 @@ final class RemoteServer {
   }
 
   private func finish(_ job: UUID, _ result: Result<GenerationEngine.Output, Error>) {
+    activeJobs -= 1
+    if activeJobs == 0, let awake {
+      ProcessInfo.processInfo.endActivity(awake)
+      self.awake = nil
+    }
     let store = store
     Task {
       switch result {
@@ -628,7 +671,7 @@ final class RemoteServer {
         guard let url = await store.resultDestination(job) else { return }
         do {
           let (size, hash) = try await RemoteResultFile.write(output, to: url)
-          await store.post(RemoteJobEvent(jobID: job, state: .ready, resultSize: size, resultHash: hash))
+          await store.post(RemoteJobEvent(jobID: job, state: .ready, resultSize: size, resultHash: hash, resultIsClip: output.isVideo))
         } catch {
           await store.post(RemoteJobEvent(jobID: job, state: .failed, message: error.localizedDescription))
         }
@@ -737,6 +780,8 @@ nonisolated struct RemoteSession: Sendable {
           reply(requestID, .failure(error.localizedDescription))
         }
       }
+    case .clipCheck(let job):
+      reply(requestID, .clipStatus(await store.clip(device: device, job: job) != nil))
     case .blobCheck(let hashes):
       let status = await store.blobStatus(device: device, hashes: hashes)
       reply(requestID, .blobStatus(complete: status.complete, partial: status.partial))

@@ -6,6 +6,7 @@ import Foundation
 ///
 ///     <root>/Blobs/<device>/<sha256>[.part]
 ///     <root>/Results/<device>/<job>.result and .json
+///     <root>/Clips/<device>/<job>.result      clips already collected, kept a while for upscaling
 actor RemoteJobStore {
   private struct Record: Codable {
     var deviceID: UUID
@@ -32,6 +33,19 @@ actor RemoteJobStore {
 
   private nonisolated func resultURL(_ device: UUID, _ job: UUID) -> URL {
     results.appending(path: "\(device.uuidString)/\(job.uuidString).result")
+  }
+
+  private nonisolated var clips: URL { root.appending(path: "Clips", directoryHint: .isDirectory) }
+  private nonisolated func clipURL(_ device: UUID, _ job: UUID) -> URL {
+    clips.appending(path: "\(device.uuidString)/\(job.uuidString).result")
+  }
+
+  /// A clip made for this device that's still here, marked as just used.
+  func clip(device: UUID, job: UUID) -> URL? {
+    let url = clipURL(device, job)
+    guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+    try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
+    return url
   }
 
   private nonisolated func recordURL(_ device: UUID, _ job: UUID) -> URL {
@@ -205,9 +219,17 @@ actor RemoteJobStore {
     return (bytes, total)
   }
 
-  /// The client has its result.
+  /// The client has its result. A clip stays a while: the next thing asked of it may be to upscale
+  /// it, and then its frames needn't come back up.
   func acknowledge(job: UUID, device: UUID) {
-    guard records[job]?.deviceID == device else { return }
+    guard let record = records[job], record.deviceID == device else { return }
+    if record.event.resultIsClip == true {
+      let destination = clipURL(device, job)
+      try? FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+      try? FileManager.default.moveItem(at: resultURL(device, job), to: destination)
+      // A move keeps the file's date; its time here starts now.
+      try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: destination.path)
+    }
     removeJob(job)
   }
 
@@ -234,6 +256,7 @@ actor RemoteJobStore {
     for job in jobs.keys { records[job] = nil }
     let manager = FileManager.default
     try? manager.removeItem(at: results.appending(path: device.uuidString, directoryHint: .isDirectory))
+    try? manager.removeItem(at: clips.appending(path: device.uuidString, directoryHint: .isDirectory))
     try? manager.removeItem(at: blobs(device))
     return queued
   }
@@ -246,12 +269,13 @@ actor RemoteJobStore {
       removeJob(job)
     }
     let manager = FileManager.default
-    let folder = root.appending(path: "Blobs", directoryHint: .isDirectory)
-    for device in (try? manager.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [] {
-      let files = (try? manager.contentsOfDirectory(at: device, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
-      for file in files {
-        let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
-        if let modified, modified < cutoff { try? manager.removeItem(at: file) }
+    for folder in [root.appending(path: "Blobs", directoryHint: .isDirectory), clips] {
+      for device in (try? manager.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [] {
+        let files = (try? manager.contentsOfDirectory(at: device, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        for file in files {
+          let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+          if let modified, modified < cutoff { try? manager.removeItem(at: file) }
+        }
       }
     }
   }

@@ -2,6 +2,7 @@
 import CoreGraphics
 import Foundation
 @preconcurrency import ModelZoo
+import Network
 import Observation
 
 /// A paired server as a `GenerationBackend`: sends a job, streams its progress into the same
@@ -102,9 +103,97 @@ nonisolated struct RemoteBackend: GenerationBackend {
   }
 
   func upscale(
-    _: GenerationEngine.Request, frames _: [CGImage], progress _: @escaping @Sendable (GenerationEngine.Progress) -> Void
+    _ request: GenerationEngine.Request, frames: [CGImage],
+    progress: @escaping @Sendable (GenerationEngine.Progress) -> Void
   ) async throws -> GenerationEngine.Output {
-    throw RemoteError.unsupported("Upscaling")
+    try await upscale(request, frames: frames, sourceClip: nil, job: UUID(), progress: progress)
+  }
+
+  /// Upscales `frames`, or `sourceClip`, a clip the server made and still has (`hasClip`).
+  func upscale(
+    _ request: GenerationEngine.Request, frames: [CGImage], sourceClip: UUID?, job: UUID,
+    progress: @escaping @Sendable (GenerationEngine.Progress) -> Void
+  ) async throws -> GenerationEngine.Output {
+    let client = try paired()
+    let updates = await client.startUpdates(job: job)
+    defer { Task { await client.endUpdates(job: job) } }
+    return try await withTaskCancellationHandler {
+      var hashes: [String] = []
+      for (index, frame) in frames.enumerated() {
+        try Task.checkCancellation()
+        let blob = try await Self.frameBlob(frame)
+        try await uploadFrame(blob)
+        hashes.append(blob.hash)
+        progress(.state(.uploading(bytesSent: index + 1, totalBytes: frames.count)))
+      }
+      var settings = request.configuration
+      settings.seed = request.seed
+      var remote = RemoteJobRequest(
+        model: request.model, prompt: request.prompt, negativePrompt: request.negativePrompt, seed: request.seed,
+        settings: JSONValue.fields(of: settings))
+      remote.upscale = request.upscale
+      remote.frames = hashes
+      remote.sourceClip = sourceClip
+      _ = try await Self.retrying { try await client.request(.submitJob(jobID: job, request: remote)) }
+      let ready = try await waitForResult(job: job, updates: updates, progress: progress)
+      return try await collect(job: job, ready: ready, progress: progress)
+    } onCancel: {
+      Task { try? await client.request(.cancel(jobID: job)) }
+    }
+  }
+
+  @concurrent private static func frameBlob(_ frame: CGImage) async throws -> RemoteBlob {
+    guard let png = ImageTensor.png(frame) else { throw ProjectError.badImage }
+    return RemoteBlob(png)
+  }
+
+  /// Sends one frame of an upscale, if the server doesn't have it.
+  func uploadFrame(_ blob: RemoteBlob) async throws {
+    let client = try paired()
+    try await Self.retrying { try await client.upload(blob) { _ in } }
+  }
+
+  /// Whether the server still has a clip it made for this device.
+  func hasClip(_ job: UUID) async -> Bool {
+    guard let client, case .clipStatus(let has) = try? await client.request(.clipCheck(jobID: job)) else { return false }
+    return has
+  }
+
+  func writeUpscaledVideo(
+    of composition: TimelineComposition, to url: URL, codec: VideoCodec, upscale: TimelineUpscale,
+    progress: @escaping @Sendable (Double) -> Void
+  ) async throws {
+    try await composition.writeUpscaledRemotely(to: url, codec: codec, upscale: upscale, on: self, progress: progress)
+  }
+
+  /// Upscales uploaded frames and downloads the result, for a caller that reads it frame by frame
+  /// and then acknowledges it. `progress` runs from 0 to 1, as far as the server's steps say.
+  func upscaledResult(
+    frames: [String], upscale: TimelineUpscale, width: Int, height: Int, job: UUID,
+    progress: @escaping @Sendable (Double) -> Void
+  ) async throws -> URL {
+    let client = try paired()
+    let updates = await client.startUpdates(job: job)
+    defer { Task { await client.endUpdates(job: job) } }
+    return try await withTaskCancellationHandler {
+      var remote = RemoteJobRequest(
+        model: "", prompt: "", negativePrompt: "", seed: 0,
+        settings: ["width": .number(Double(width)), "height": .number(Double(height))])
+      remote.upscale = ClipUpscale(
+        method: upscale.method, scale: upscale.scale, sourceTensorId: 0,
+        variant: upscale.method == .flashVSR ? upscale.variant : nil)
+      remote.frames = frames
+      _ = try await Self.retrying { try await client.request(.submitJob(jobID: job, request: remote)) }
+      let ready = try await waitForResult(job: job, updates: updates) { update in
+        if case .state(.generating(let step, let total)) = update, total > 0 { progress(Double(step) / Double(total)) }
+      }
+      guard let size = ready.resultSize, let hash = ready.resultHash, let url = try await Self.retrying({ try await client.download(job: job, size: size, hash: hash) { _ in } }) else {
+        throw RemoteError.corruptResult
+      }
+      return url
+    } onCancel: {
+      Task { try? await client.request(.cancel(jobID: job)) }
+    }
   }
 
   /// The model's defaults at the server, on a blank configuration from `blankConfiguration`.
@@ -142,11 +231,15 @@ nonisolated struct RemoteBackend: GenerationBackend {
     }
   }
 
-  func catalog() async throws -> (models: [RemoteModelInfo], loras: [RemoteLoRAInfo], files: [String]) {
-    guard case .catalog(let models, let loras, let files) = try await paired().request(.catalogRequest) else {
+  func catalog() async throws -> (models: [RemoteModelInfo], loras: [RemoteLoRAInfo], files: [String], upscalers: RemoteUpscalers) {
+    guard case .catalog(let models, let loras, let files, let upscalers) = try await paired().request(.catalogRequest) else {
       throw RemoteError.connectionLost
     }
-    return (models, loras, files)
+    // What the rest of the app asks of a model by file name has to know these.
+    RemoteModelTraits.remember(
+      models: models.reduce(into: [:]) { $0[$1.file] = $1.traits },
+      loras: Dictionary(loras.map { ($0.file, $0.modifier) }) { first, _ in first })
+    return (models, loras, files, upscalers)
   }
 
   // MARK: - A job's steps
@@ -158,7 +251,6 @@ nonisolated struct RemoteBackend: GenerationBackend {
 
   /// The request as it travels. Encoding images takes a while, so off the main actor.
   @concurrent private static func prepare(_ request: GenerationEngine.Request) async throws -> Prepared {
-    guard request.upscale == nil else { throw RemoteError.unsupported("Upscaling") }
     var settings = request.configuration
     settings.seed = request.seed
     var remote = RemoteJobRequest(
@@ -276,6 +368,17 @@ nonisolated struct RemoteBackend: GenerationBackend {
   }
 }
 
+/// A server advertising itself on the local network.
+nonisolated struct RemoteNearby: Hashable, Identifiable, Sendable {
+  static let idKey = "id"
+  static let hostKey = "host"
+  static let portKey = "port"
+
+  var id: UUID
+  var name: String
+  var address: RemoteAddress
+}
+
 /// The servers this device is paired with. The Keychain isn't touched until they're asked for,
 /// since it may have to ask you.
 @MainActor
@@ -289,6 +392,9 @@ final class RemoteServerList {
   private(set) var statuses: [UUID: Status] = [:]
   /// A link opened from outside (a scanned QR code), waiting for you to confirm pairing with it.
   var openedLink: RemotePairingLink?
+  /// Servers Bonjour finds on the local network, paired or not.
+  private(set) var nearby: [RemoteNearby] = []
+  private var browser: NWBrowser?
   /// Told when a server is seen to come online.
   @ObservationIgnored var onServerOnline: ((UUID) -> Void)?
 
@@ -323,6 +429,54 @@ final class RemoteServerList {
 
   func status(of id: UUID) -> Status { statuses[id] ?? .unknown }
 
+  /// Those found nearby that this device isn't paired with.
+  var unpairedNearby: [RemoteNearby] {
+    nearby.filter { server in !servers.contains { $0.id == server.id } }
+  }
+
+  /// Starts looking for servers on the local network. On iPad this is what asks for Local Network
+  /// access, so it waits until there's a reason: a paired server, or Add Server… being open.
+  func startBrowsing() {
+    guard browser == nil else { return }
+    let browser = NWBrowser(for: .bonjourWithTXTRecord(type: RemoteProtocol.serviceType, domain: nil), using: .tcp)
+    browser.browseResultsChangedHandler = { [weak self] results, _ in
+      let found = results.compactMap(Self.nearby)
+      Task { @MainActor in self?.update(nearby: found) }
+    }
+    browser.start(queue: .global())
+    self.browser = browser
+  }
+
+  func stopBrowsing() {
+    browser?.cancel()
+    browser = nil
+    update(nearby: [])
+  }
+
+  private nonisolated static func nearby(from result: NWBrowser.Result) -> RemoteNearby? {
+    guard case .service(let name, _, _, _) = result.endpoint, case .bonjour(let record) = result.metadata,
+          let id = record[RemoteNearby.idKey].flatMap(UUID.init(uuidString:)), let host = record[RemoteNearby.hostKey],
+          let port = record[RemoteNearby.portKey].flatMap(UInt16.init), port != 0
+    else { return nil }
+    return RemoteNearby(id: id, name: name, address: RemoteAddress(host: host, port: port))
+  }
+
+  /// A paired server found nearby is online, and reached over the local network from now on. If
+  /// its network filter turns that route away, the next status check says so.
+  private func update(nearby found: [RemoteNearby]) {
+    nearby = found
+    loadIfNeeded()
+    for server in servers {
+      let here = found.first { $0.id == server.id }
+      let client = backend(for: server.id).client
+      Task { await client?.setNearby(here?.address) }
+      if here != nil, statuses[server.id] != .online {
+        statuses[server.id] = .online
+        onServerOnline?(server.id)
+      }
+    }
+  }
+
   /// Asks every server whether it's there.
   func checkStatus() async {
     loadIfNeeded()
@@ -341,6 +495,7 @@ final class RemoteServerList {
     if let client = clients[id] { return RemoteBackend(client: client) }
     guard let server = servers.first(where: { $0.id == id }) else { return RemoteBackend(client: nil) }
     let client = RemoteClient(server: server, device: identity, downloads: downloads)
+    if let here = nearby.first(where: { $0.id == id }) { Task { await client.setNearby(here.address) } }
     clients[id] = client
     return RemoteBackend(client: client)
   }

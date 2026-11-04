@@ -79,7 +79,11 @@ final class JobQueue {
   }
 
   private(set) var waiting: [Job] = []
+  /// The job running on this device: one at a time.
   private(set) var running: Job?
+  /// Jobs running on servers, at most one per server. They don't hold this device's slot, since
+  /// all they use here is the wait: a server runs its own jobs one at a time, whoever they're from.
+  private(set) var runningRemote: [Job] = []
   /// Finished, failed and cancelled jobs, newest first.
   private(set) var recent: [Job] = []
   /// Holds the waiting jobs; the running one finishes.
@@ -96,7 +100,7 @@ final class JobQueue {
 
   private static let recentLimit = 100
 
-  var isEmpty: Bool { waiting.isEmpty && running == nil }
+  var isEmpty: Bool { waiting.isEmpty && running == nil && runningRemote.isEmpty }
 
   /// Whether a waiting or running job uses `model`.
   func uses(_ model: String) -> Bool {
@@ -139,7 +143,8 @@ final class JobQueue {
 
   /// Adds a job sent to a server before this launch, unless it's already here.
   func appendResumed(_ request: GenerationEngine.Request, id: UUID, server: UUID) {
-    guard running?.id != id, !waiting.contains(where: { $0.id == id }), !recent.contains(where: { $0.id == id })
+    guard running?.id != id, !runningRemote.contains(where: { $0.id == id }),
+          !waiting.contains(where: { $0.id == id }), !recent.contains(where: { $0.id == id })
     else { return }
     var job = Job(request: request, target: .remote(serverID: server))
     job.id = id
@@ -149,18 +154,42 @@ final class JobQueue {
 
   /// Adds an export at the end; returns its id.
   @discardableResult
-  func append(_ export: TimelineExportJob) -> UUID {
-    let job = Job(work: .export(export))
+  func append(_ export: TimelineExportJob, target: JobTarget = .local) -> UUID {
+    let job = Job(work: .export(export), target: target)
     waiting.append(job)
     return job.id
   }
 
-  /// Takes the first waiting job and marks it running, unless paused or one is running. Pause
-  /// holds work yet to start; a job resuming at its server has started, so it goes ahead.
+  /// Takes the first job waiting for this device and marks it running, unless paused or one is
+  /// running.
   func startNext() -> Job? {
-    guard running == nil, let index = isPaused ? waiting.firstIndex(where: \.resumesRemoteJob) : waiting.indices.first
-    else { return nil }
-    var job = waiting.remove(at: index)
+    guard running == nil, !isPaused, let index = waiting.firstIndex(where: { $0.target == .local }) else { return nil }
+    let job = started(waiting.remove(at: index))
+    running = job
+    return job
+  }
+
+  /// For each server not running a job of this device's, takes the first one waiting for it. Pause
+  /// holds work yet to start; a job resuming at its server has started, so it goes ahead.
+  func startRemote() -> [Job] {
+    var busy = Set(runningRemote.map(\.target))
+    var jobs: [Job] = []
+    var index = 0
+    while index < waiting.count {
+      let job = waiting[index]
+      if job.target != .local, !busy.contains(job.target), !isPaused || job.resumesRemoteJob {
+        busy.insert(job.target)
+        jobs.append(started(waiting.remove(at: index)))
+      } else {
+        index += 1
+      }
+    }
+    runningRemote += jobs
+    return jobs
+  }
+
+  private func started(_ job: Job) -> Job {
+    var job = job
     if case .generation(var request) = job.work {
       if let line = job.line, let tip = lineTips[line] { request.parentTensorId = tip }
       if request.canvas != nil, request.canvasTensorId == nil, let key = request.canvasKey {
@@ -170,16 +199,19 @@ final class JobQueue {
     }
     job.status = .running
     job.startedAt = Date()
-    running = job
     return job
   }
 
   /// Ends the running job. A finished one's result is its line's latest step (and the input step
   /// it saved is reused by later jobs from the same canvas). A clip's latest step is its last
   /// frame (`tipTensorId`), which the next run follows.
-  func finishRunning(_ status: Job.Status, inputTensorId: Int64? = nil, tipTensorId: Int64? = nil) {
-    guard var job = running else { return }
-    running = nil
+  func finishRunning(_ status: Job.Status, id: UUID, inputTensorId: Int64? = nil, tipTensorId: Int64? = nil) {
+    guard var job = running?.id == id ? running : runningRemote.first(where: { $0.id == id }) else { return }
+    if running?.id == id {
+      running = nil
+    } else {
+      runningRemote.removeAll { $0.id == id }
+    }
     job.status = status
     job.finishedAt = Date()
     if case .finished(let tensorId) = status {
@@ -205,11 +237,12 @@ final class JobQueue {
   }
 
   /// Puts the running generation back at the front of the queue, to run again from the start, for
-  /// when the system stops it. False when it can't be run again later: thumbnails and agents' jobs
-  /// answer a caller, and an export's placeholder file goes when it's stopped.
+  /// when the system stops it. False when it can't be run again later: thumbnails, agents' and
+  /// paired devices' jobs answer a caller, and an export's placeholder file goes when it's stopped.
   @discardableResult
   func returnRunningToFront() -> Bool {
-    guard var job = running, job.request != nil, !job.fromAgent, job.styleThumbnail == nil else { return false }
+    guard var job = running, job.request != nil, !job.fromAgent, job.remoteDevice == nil, job.styleThumbnail == nil
+    else { return false }
     running = nil
     job.status = .waiting
     job.startedAt = nil
@@ -275,7 +308,7 @@ final class JobQueue {
   }
 
   /// Every job here that's yet to end, for what's kept across a quit.
-  var unfinished: [Job] { (running.map { [$0] } ?? []) + waiting }
+  var unfinished: [Job] { (running.map { [$0] } ?? []) + runningRemote + waiting }
 
   /// Removes the audio copies of jobs that left the list, once no job is using them. Finished
   /// jobs keep theirs while they're listed, for Run Again; `Job(work:)` in `retry` shares the copy.

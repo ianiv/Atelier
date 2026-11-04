@@ -1,5 +1,6 @@
 #if os(macOS)
 @preconcurrency import _MediaGenerationKit
+import AVFoundation
 import Foundation
 import Network
 import SwiftUI
@@ -13,10 +14,13 @@ extension Automation {
   /// in a temporary folder, so the user's pairings and results are left alone; nothing is saved to
   /// the project.
   ///
-  /// Then Create's Run on: a real result through the queue into the project (`--project`), Stop,
-  /// collecting a job sent before a quit, a job the server lost, and a server going offline.
+  /// Then Create's Run on: a real result through the queue into the project, Stop, a local job
+  /// running alongside a remote one, collecting a job sent before a quit, a job the server lost, a
+  /// video with references and audio, upscaling and exporting on the server, a server going
+  /// offline, and a device paired with itself. A project named remote-check… is deleted afterwards.
   ///
-  ///   Atelier --remote-check --project NAME [--model M] [--steps N] [--quit]
+  ///   Atelier --remote-check --project remote-check-NAME [--model M] [--steps N]
+  ///           [--video-model M] [--quit]
   static func remoteCheck(_ model: CreateModel, library: ModelLibrary) {
     let args = CommandLine.arguments
     func value(_ name: String) -> String? {
@@ -33,6 +37,7 @@ extension Automation {
       let root = FileManager.default.temporaryDirectory.appending(path: "atelier-remote-check-\(UUID())", directoryHint: .isDirectory)
       @MainActor func finish() {
         try? FileManager.default.removeItem(at: root)
+        removeScratchFiles()
         print(failures == 0 ? "remote check: all passed" : "remote check: \(failures) failed")
         fflush(stdout)
         if args.contains("--quit") { AppLifecycle.quit() }
@@ -46,6 +51,11 @@ extension Automation {
         return true
       }
 
+      // Results get saved, so never into the project you were working in.
+      guard value("--project") != nil else {
+        check(false, "--project NAME is given")
+        return finish()
+      }
       while !model.history.isLoaded || model.models.isEmpty || model.settings == nil || model.isBusy {
         try? await Task.sleep(for: .milliseconds(100))
       }
@@ -298,7 +308,8 @@ extension Automation {
       model.prompt = "a green apple on a table, from a server"
       let parentStep = model.history.currentTensorId
       model.generate()
-      check(model.queue.running?.target == target || model.queue.waiting.first?.target == target, "a job takes Run on's target")
+      check(model.queue.runningRemote.first?.target == target, "a job takes Run on's target, and starts at once")
+      check(model.queue.running == nil, "without taking this device's slot")
       let ranRemotely = await wait(until: { model.queue.isEmpty })
       guard ranRemotely, let remoteJob = model.queue.recent.first else {
         check(false, "the job finishes")
@@ -320,7 +331,7 @@ extension Automation {
       model.settings?.steps = 30
       model.prompt = "stopped from the queue"
       model.generate()
-      let stepping = await wait(until: { model.step >= 1 && model.queue.running != nil })
+      let stepping = await wait(until: { model.step >= 1 && !model.queue.runningRemote.isEmpty })
       check(stepping, "a long job runs")
       model.cancel()
       let clientStopped = await wait(until: { model.queue.isEmpty }, seconds: 120)
@@ -329,6 +340,30 @@ extension Automation {
       check(hostStopped, "Stop cancels on the server")
       check(model.clientJobs.all().isEmpty, "nothing's kept for a stopped job")
       model.settings?.steps = settings.steps
+
+      // Alongside: a job on the server doesn't hold up one on this device, however long it takes.
+      // It's held there, waiting its turn, so this doesn't depend on which finishes first.
+      if let current = model.settings {
+        host.setQueuePaused(true)
+        model.prompt = "a job held at the server"
+        model.generate()
+        let remoteRunning = await wait(until: { !model.queue.runningRemote.isEmpty && !host.queue.waiting.isEmpty }, seconds: 60)
+        check(remoteRunning, "a job waits at the server")
+        var quick = current
+        quick.steps = settings.steps
+        model.queueForCheck(
+          GenerationEngine.Request(model: file, prompt: "a quick local job", negativePrompt: "", seed: 3, configuration: quick),
+          target: .local)
+        check(model.queue.running != nil && !model.queue.runningRemote.isEmpty, "a job on this device runs alongside it")
+        let quickDone = await wait(until: { model.queue.running == nil })
+        check(quickDone && !model.queue.runningRemote.isEmpty, "and finishes while the server's job goes on")
+        check(model.isRunning, "the status bar goes back to the server's job")
+        if let running = model.queue.runningRemote.first { model.cancel(running.id) }
+        let bothDone = await wait(until: { model.queue.isEmpty && host.queue.isEmpty }, seconds: 120)
+        check(bothDone, "cancelling it takes it out of the server's queue too")
+        host.setQueuePaused(false)
+        model.settings?.steps = settings.steps
+      }
 
       // Coming back after a quit: a job sent earlier, still running at the server. Pause holds new
       // work, not this.
@@ -368,6 +403,111 @@ extension Automation {
       model.errorMessage = nil
       check(model.clientJobs.all().isEmpty, "and is no longer kept")
 
+      // Video, on the shortest and smallest the model takes, with a reference image and audio.
+      let blobFolder = hostOptions.root.appending(path: "Blobs/\(deviceID.uuidString)", directoryHint: .isDirectory)
+      func uploads() -> Int { (try? FileManager.default.contentsOfDirectory(atPath: blobFolder.path).count) ?? 0 }
+      let videoFile = value("--video-model") ?? model.availableModels.first { $0.file.hasPrefix("fasth3_omni_") }?.file
+        ?? model.availableModels.first { VideoModel(model: $0.file)?.makesAudio == true }?.file
+      var clipItem: HistoryItem?
+      if let videoFile, let video = VideoModel(model: videoFile) {
+        model.selectedModel = videoFile
+        _ = await wait(until: { !model.isLoadingModel }, seconds: 120)
+        print("video model: \(videoFile), \(video.minimumFrames) frames")
+        fflush(stdout)
+        let served = try? await hostBackend.catalog().models.first { $0.file == videoFile }
+        check(served?.traits == RemoteModelTraits(file: videoFile), "the catalog sends the model's traits")
+        if var configuration = model.settings {
+          configuration.numFrames = video.minimumFrames
+          configuration.width = 256
+          configuration.height = 256
+          configuration.steps = 2
+          var request = GenerationEngine.Request(
+            model: videoFile, prompt: "a small red ball rolling", negativePrompt: "", seed: 11, configuration: configuration)
+          request.parentTensorId = model.history.currentTensorId
+          if video.takesReferences || model.usesReferences { request.moodboard = [GenerationEngine.Reference(image: Self.checkImage(), weight: 1)] }
+          if video.takesAudio {
+            let audio = AudioClip.newSnapshotFile(extension: "wav")
+            try? Self.checkAudio().write(to: audio)
+            request.audio = audio
+          }
+          let before = uploads()
+          model.queueForCheck(request, target: target)
+          _ = await wait(until: { model.queue.isEmpty }, seconds: 1800)
+          if case .finished(let tensorId) = model.queue.recent.first?.status, let item = model.history.item(tensorId: tensorId) {
+            clipItem = item
+            check(item.clip?.frames.count == video.minimumFrames, "a video comes back with its frames (\(item.clip?.frames.count ?? 0))")
+            check(item.clip?.framesPerSecond == video.framesPerSecond, "and its frame rate (\(item.clip?.framesPerSecond ?? 0))")
+            if video.makesAudio {
+              let sound = await model.history.audio(of: item)
+              check(sound != nil, "and its soundtrack")
+            }
+            check((request.moodboard.isEmpty && request.audio == nil) || uploads() > before, "its references and audio went up by hash (\(uploads() - before) uploads)")
+          } else {
+            check(false, "a video comes back: \(String(describing: model.queue.recent.first?.status))")
+          }
+        }
+      } else {
+        print("SKIP no video model here")
+      }
+
+      // Upscaling that clip on the server, without sending its frames, then with.
+      let upscalers = model.runTargetUpscalers?.upscalers ?? RemoteUpscalers()
+      @MainActor func upscaleOnServer(_ item: HistoryItem, method: ClipUpscale.Method, scale: Int = 2, variant: FlashVSRFiles.Variant, label: String) async {
+        let framesBefore = item.clip?.frames.count ?? 0
+        await model.upscale(item, method: method, scale: scale, variant: variant)
+        check(model.queue.runningRemote.first?.target == target, "\(label) runs on the server")
+        _ = await wait(until: { model.queue.isEmpty }, seconds: 1800)
+        if case .finished(let tensorId) = model.queue.recent.first?.status, let result = model.history.item(tensorId: tensorId) {
+          check(result.clip?.frames.count == framesBefore && result.sidecar.width > item.sidecar.width, "\(label) makes a larger clip (\(result.sidecar.width)×\(result.sidecar.height), \(result.clip?.frames.count ?? 0) frames)")
+        } else {
+          check(false, "\(label): \(String(describing: model.queue.recent.first?.status))")
+        }
+      }
+      if let clipItem {
+        if let flashVariant = upscalers.flashVSR.first {
+          let before = uploads()
+          await upscaleOnServer(clipItem, method: .flashVSR, variant: flashVariant, label: "FlashVSR+ \(flashVariant.title)")
+          check(uploads() == before, "the server's own copy of the clip saves sending its frames")
+        } else {
+          print("SKIP the server has no FlashVSR+")
+        }
+        // The scales Apple's model offers depend on the size.
+        let fastScale = SystemSuperResolution.scaleFactors(width: clipItem.sidecar.width, height: clipItem.sidecar.height).first
+        if upscalers.superResolution, let fastScale {
+          // Without that copy, the frames go up.
+          try? FileManager.default.removeItem(at: hostOptions.root.appending(path: "Clips", directoryHint: .isDirectory))
+          let before = uploads()
+          await upscaleOnServer(clipItem, method: .system, scale: fastScale, variant: .turbo, label: "Fast (\(fastScale)×)")
+          check(uploads() > before, "without it, the clip's frames go up (\(uploads() - before))")
+        } else {
+          print("SKIP the server has no Apple Super Resolution")
+        }
+
+        // Export: only the upscaling runs there.
+        if let method = upscalers.superResolution && fastScale != nil ? ClipUpscale.Method.system : upscalers.flashVSR.isEmpty ? nil : .flashVSR,
+           let composition = try? await TimelineComposition.make(clip: clipItem, history: model.history)
+        {
+          let upscale = TimelineUpscale(method: method, scale: method == .system ? fastScale ?? 2 : 2, variant: upscalers.flashVSR.first ?? .turbo)
+          let url = root.appending(path: "export.mp4")
+          try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+          model.queue(TimelineExportJob(composition: composition, upscale: upscale, title: "Check", destination: url))
+          check(model.queue.runningRemote.first?.export != nil, "an upscaled export runs on the server")
+          _ = await wait(until: { model.queue.isEmpty }, seconds: 1800)
+          if case .exported = model.queue.recent.first?.status,
+             let track = try? await AVURLAsset(url: url).loadTracks(withMediaType: .video).first,
+             let size = try? await track.load(.naturalSize)
+          {
+            let expected = upscale.outputSize(width: composition.width, height: composition.height)
+            check(Int(size.width) == expected.width && Int(size.height) == expected.height, "the export is encoded here at the upscaled size (\(Int(size.width))×\(Int(size.height)))")
+          } else {
+            check(false, "the export: \(String(describing: model.queue.recent.first?.status))")
+          }
+        }
+      }
+      model.selectedModel = file
+      _ = await wait(until: { !model.isLoadingModel }, seconds: 120)
+      model.errorMessage = nil
+
       // Offline: Generate holds, and a kept job waits for the server rather than failing.
       hostServer.isEnabled = false
       await hostServer.settled()
@@ -386,7 +526,71 @@ extension Automation {
       let backHere = await wait(until: { !model.isLoadingModel }, seconds: 60)
       check(backHere && model.serverCatalog == nil && model.availableModels.count == model.models.count, "This Mac brings back the local models")
       model.remoteServers.remove(hostRecord.id)
+
+      // A device paired with itself: its own server's job can't wait on its own remote job.
+      server.isEnabled = true
+      await server.settled()
+      server.startPairing()
+      await server.settled()
+      try? await Task.sleep(for: .seconds(RemotePairing.attemptSpacing + 0.1))
+      var selfPairError: RemoteError? = .connectionLost
+      if let selfLink = server.pairing?.link { selfPairError = await pairingError(model.remoteServers, selfLink) }
+      if selfPairError == nil, let selfRecord = model.remoteServers.servers.first {
+        model.runTarget = .remote(serverID: selfRecord.id)
+        _ = await wait(until: { model.serverCatalog != nil && !model.isLoadingModel }, seconds: 60)
+        model.settings?.steps = settings.steps
+        model.settings?.width = 512
+        model.settings?.height = 512
+        model.prompt = "paired with itself"
+        model.generate()
+        let selfDone = await wait(until: { model.queue.isEmpty }, seconds: 600)
+        let jobs = model.queue.recent.prefix(2)
+        check(selfDone && jobs.contains { if case .finished = $0.status { true } else { false } } && jobs.contains { $0.status == .ranForDevice }, "a device paired with itself runs its own job")
+        model.runTarget = .local
+        model.remoteServers.remove(selfRecord.id)
+      } else {
+        check(false, "a device pairs with itself (\(String(describing: selfPairError)))")
+      }
+      server.isEnabled = false
+      await server.settled()
       finish()
+    }
+  }
+
+  /// A small image for a job's inputs.
+  private static func checkImage() -> CGImage {
+    let context = CGContext(
+      data: nil, width: 256, height: 256, bitsPerComponent: 8, bytesPerRow: 0,
+      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    context.setFillColor(CGColor(red: 0.8, green: 0.2, blue: 0.2, alpha: 1))
+    context.fill(CGRect(x: 40, y: 40, width: 176, height: 176))
+    return context.makeImage()!
+  }
+
+  /// A second of a tone, as a WAV file.
+  private static func checkAudio() -> Data {
+    let rate = 44100
+    let samples = (0..<rate).map { Int16(sin(Double($0) * 2 * .pi * 440 / Double(rate)) * 8000) }
+    func bytes<T>(_ value: T) -> Data { withUnsafeBytes(of: value) { Data($0) } }
+    var data = Data("RIFF".utf8)
+    data += bytes(UInt32(36 + samples.count * 2).littleEndian) + Data("WAVEfmt ".utf8)
+    data += bytes(UInt32(16).littleEndian) + bytes(UInt16(1).littleEndian) + bytes(UInt16(1).littleEndian)
+    data += bytes(UInt32(rate).littleEndian) + bytes(UInt32(rate * 2).littleEndian)
+    data += bytes(UInt16(2).littleEndian) + bytes(UInt16(16).littleEndian)
+    data += Data("data".utf8) + bytes(UInt32(samples.count * 2).littleEndian)
+    for sample in samples { data += bytes(sample.littleEndian) }
+    return data
+  }
+
+  /// What a check leaves behind: a scratch project (only one named for these checks, so a mistyped
+  /// `--project` can't take a real one) and the temporary Compute folder.
+  private static func removeScratchFiles() {
+    try? FileManager.default.removeItem(at: RemotePaths.root)
+    let args = CommandLine.arguments
+    guard let index = args.firstIndex(of: "--project"), index + 1 < args.count, args[index + 1].hasPrefix("remote-check") else { return }
+    let project = HistoryStore.projectsDirectory.appendingPathComponent(args[index + 1]).appendingPathExtension("sqlite3")
+    for suffix in ["", "-shm", "-wal"] {
+      try? FileManager.default.removeItem(atPath: project.path + suffix)
     }
   }
 
@@ -448,6 +652,13 @@ extension Automation {
       let clients = RemoteServerList(
         store: MemorySecretStore(), downloads: root.appending(path: "Downloads", directoryHint: .isDirectory),
         identity: RemoteDeviceIdentity(id: UUID(), name: "Net Check Client"))
+      // Nearby. The record names the port only once it's known, after the first listener.
+      clients.startBrowsing()
+      for _ in 0..<100 where !clients.unpairedNearby.contains(where: { $0.id == server.serverID }) {
+        try? await Task.sleep(for: .milliseconds(100))
+      }
+      let found = clients.unpairedNearby.first { $0.id == server.serverID }
+      check(found != nil, "an unpaired server shows under Add Server (\(found?.address.description ?? "not found"))")
       let started = Date()
       do {
         try await clients.pair(link: link)
@@ -458,6 +669,21 @@ extension Automation {
       }
       guard let record = clients.servers.first else { return finish() }
       await server.settled()
+      for _ in 0..<100 where clients.status(of: record.id) != .online || !clients.nearby.contains(where: { $0.id == record.id }) {
+        try? await Task.sleep(for: .milliseconds(100))
+      }
+      check(clients.unpairedNearby.allSatisfy { $0.id != record.id } && clients.status(of: record.id) == .online, "once paired, it shows as online")
+      if local != nil {
+        let client = clients.backend(for: record.id).client
+        try? await Task.sleep(for: .milliseconds(200))
+        let route = await client?.firstRoute
+        check(route?.routeRank == 0, "and the local network is its first route (\(route?.description ?? "none"))")
+        if tailscale == nil {
+          let reachable = await client?.isReachable() ?? false
+          check(reachable, "which works")
+        }
+      }
+      clients.stopBrowsing()
 
       // Only the Tailscale route: the others are what the filter turns away.
       let tailnetOnly = RemoteServerRecord(
@@ -648,7 +874,9 @@ extension Automation {
       server.isEnabled = false
       await hostServer.settled()
       await server.settled()
-      if args.contains("--quit") { AppLifecycle.quit() }
+      removeScratchFiles()
+      // The pairing sheet left open would hold up a normal quit.
+      exit(0)
     }
   }
 }

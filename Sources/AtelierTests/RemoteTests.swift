@@ -2,6 +2,7 @@
 import CryptoKit
 @preconcurrency import Diffusion
 import Foundation
+@preconcurrency import ModelZoo
 import Network
 @preconcurrency import NNC
 import Testing
@@ -363,6 +364,74 @@ struct RemoteClientJobsTests {
       jobs.remove(record.jobID)
       #expect(jobs.all().isEmpty)
       #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty, "its images go too")
+    }
+  }
+}
+
+struct RemoteTraitsTests {
+  /// A community model this device's ModelZoo has never heard of, as a server describes it.
+  @Test func aClientLearnsAModelsTraitsFromItsServer() throws {
+    let file = "check_only_custom_h3_\(UUID().uuidString).ckpt"
+    #expect(VideoModel(model: file) == nil, "unknown here, it looks like an image model")
+    RemoteModelTraits.remember(
+      models: [file: RemoteModelTraits(version: "minimax_h3", modifier: "ref2va", framesPerSecond: 24, audioSampleRate: 48000)],
+      loras: [:])
+    let video = try #require(VideoModel(model: file))
+    #expect(video.framesPerSecond == 24 && video.audioSampleRate == 48000)
+    #expect(video.makesAudio && video.takesAudio && video.takesReferences)
+  }
+
+  @Test func theZooStillAnswersForModelsItKnows() throws {
+    let known = try #require(ModelZoo.availableSpecifications.first?.file)
+    let real = RemoteModelTraits.version(of: known)
+    RemoteModelTraits.remember(
+      models: [known: RemoteModelTraits(version: "minimax_h3", modifier: "ref2va", framesPerSecond: 1, audioSampleRate: 1)],
+      loras: [:])
+    #expect(RemoteModelTraits.version(of: known) == real)
+  }
+
+  @Test func aLoRAsModifierCountsWhenTheModelHasNone() {
+    let lora = "check_only_lora_\(UUID().uuidString).ckpt"
+    RemoteModelTraits.remember(models: [:], loras: [lora: "kontext"])
+    #expect(RemoteModelTraits.modifier(ofLoRA: lora) == .kontext)
+    #expect(RemoteModelTraits.modifier(of: "check_only_nothing.ckpt", loras: [lora]) == .kontext)
+  }
+}
+
+struct RemoteClipTests {
+  @Test func aCollectedClipStaysForUpscalingButOtherResultsGo() async throws {
+    let folder = FileManager.default.temporaryDirectory.appending(path: "atelier-tests-\(UUID())", directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let store = RemoteJobStore(root: folder)
+    let (device, other, clip, image) = (UUID(), UUID(), UUID(), UUID())
+    for (job, isClip) in [(clip, true), (image, false)] {
+      _ = try await store.registerJob(job, device: device)
+      let url = try #require(await store.resultDestination(job))
+      try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+      try Data([1, 2, 3]).write(to: url)
+      await store.post(RemoteJobEvent(jobID: job, state: .ready, resultSize: 3, resultHash: "x", resultIsClip: isClip))
+      await store.acknowledge(job: job, device: device)
+    }
+    #expect(await store.clip(device: device, job: clip) != nil)
+    #expect(await store.clip(device: device, job: image) == nil)
+    #expect(await store.clip(device: other, job: clip) == nil, "only for the device it was made for")
+    #expect(await store.events(device: device).isEmpty)
+    // Kept while used, gone after its time.
+    await store.purge(now: Date().addingTimeInterval(RemoteProtocol.retention - 60))
+    #expect(await store.clip(device: device, job: clip) != nil)
+    await store.purge(now: Date().addingTimeInterval(RemoteProtocol.retention + 60))
+    #expect(await store.clip(device: device, job: clip) == nil)
+  }
+
+  @Test func clipsAreRememberedByServer() throws {
+    try withTestFolder { folder in
+      let jobs = RemoteClientJobs(folder: folder.appending(path: "ClientJobs", directoryHint: .isDirectory))
+      let (server, job) = (UUID(), UUID())
+      #expect(jobs.clip(tensorId: 5, project: "P", server: server) == nil)
+      jobs.rememberClip(tensorId: 5, project: "P", server: server, job: job)
+      #expect(jobs.clip(tensorId: 5, project: "P", server: server) == job)
+      #expect(jobs.clip(tensorId: 5, project: "Q", server: server) == nil)
+      #expect(jobs.clip(tensorId: 5, project: "P", server: UUID()) == nil)
     }
   }
 }

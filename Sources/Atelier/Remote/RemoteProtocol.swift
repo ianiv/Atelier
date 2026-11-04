@@ -22,6 +22,15 @@ nonisolated struct RemoteModelInfo: Codable, Hashable, Sendable {
   var file: String
   var name: String
   var version: String?
+  /// What a client without the file needs to know about it.
+  var traits: RemoteModelTraits?
+}
+
+/// What a server can upscale with.
+nonisolated struct RemoteUpscalers: Codable, Hashable, Sendable {
+  /// The FlashVSR+ variants it has, by raw value.
+  var flashVSR: [FlashVSRFiles.Variant] = []
+  var superResolution = false
 }
 
 nonisolated struct RemoteLoRAInfo: Codable, Hashable, Sendable {
@@ -29,6 +38,7 @@ nonisolated struct RemoteLoRAInfo: Codable, Hashable, Sendable {
   var name: String
   var version: String
   var prefix: String
+  var modifier: String
 }
 
 /// A `GenerationEngine.Request` as it travels: images and audio by SHA-256 of what was uploaded.
@@ -56,6 +66,10 @@ nonisolated struct RemoteJobRequest: Codable, Hashable, Sendable {
   /// Moodboard images as PNGs.
   var moodboard: [Reference] = []
   var audio: Audio?
+  /// An upscale job: how, and its frames, as PNGs, or a clip of this device's the server still has.
+  var upscale: ClipUpscale?
+  var frames: [String] = []
+  var sourceClip: UUID?
 }
 
 nonisolated enum RemoteJobState: String, Codable, Sendable {
@@ -76,9 +90,11 @@ nonisolated struct RemoteJobEvent: Codable, Hashable, Sendable {
   var totalSteps: Int?
   /// JPEGs: one for an image, one per latent frame for a video.
   var previews: [Data]?
-  /// `ready`: the result's size and SHA-256.
+  /// `ready`: the result's size and SHA-256, and whether it's a clip, kept a while after it's
+  /// collected in case it's upscaled next.
   var resultSize: Int?
   var resultHash: String?
+  var resultIsClip: Bool?
   /// `failed`: why.
   var message: String?
 }
@@ -95,7 +111,7 @@ nonisolated enum RemoteMessage: Codable, Sendable {
   // What the server has.
   case catalogRequest
   /// `files`: every file name in the server's models folders, which offer refiners and upscalers.
-  case catalog(models: [RemoteModelInfo], loras: [RemoteLoRAInfo], files: [String])
+  case catalog(models: [RemoteModelInfo], loras: [RemoteLoRAInfo], files: [String], upscalers: RemoteUpscalers)
   case modelDefaultsRequest(model: String)
   case modelDefaults(settings: [String: JSONValue])
 
@@ -103,6 +119,9 @@ nonisolated enum RemoteMessage: Codable, Sendable {
   case blobCheck(hashes: [String])
   case blobStatus(complete: [String], partial: [String: Int])
   case blobAck(hash: String, offset: Int)
+  /// Whether the server still has a clip it made for this device.
+  case clipCheck(jobID: UUID)
+  case clipStatus(Bool)
 
   // Jobs. Only the device that submitted a job can see it.
   case submitJob(jobID: UUID, request: RemoteJobRequest)

@@ -54,11 +54,11 @@ nonisolated struct TimelineExportJob: Sendable {
   }
 
   /// Exports to a temporary file, then puts it at `destination`.
-  @concurrent func run(engine: GenerationEngine, progress: @escaping @Sendable (Double) -> Void) async throws {
+  @concurrent func run(backend: any GenerationBackend, progress: @escaping @Sendable (Double) -> Void) async throws {
     let temporary = TemporaryFiles.newFile(in: .exports, extension: "mp4")
     defer { try? FileManager.default.removeItem(at: temporary) }
     try await composition.exportUpscaled(
-      to: temporary, codec: .current, title: title, upscale: upscale, engine: engine,
+      to: temporary, codec: .current, title: title, upscale: upscale, backend: backend,
       progress: progress)
     let access = destination.startAccessingSecurityScopedResource()
     defer { if access { destination.stopAccessingSecurityScopedResource() } }
@@ -92,32 +92,16 @@ nonisolated extension TimelineComposition {
   /// Writes it as Export does, but upscaled: the composed frames (after trims and crossfades)
   /// go through Apple Super Resolution one by one, or FlashVSR+ as one stream, straight into the
   /// MP4, so no more than a chunk of upscaled frames is held at once. The
-  /// soundtrack is mixed as Export mixes it and put in unchanged. Runs in the engine's turn, so
-  /// not alongside a generation. Cancelling the task stops it.
+  /// soundtrack is mixed as Export mixes it and put in unchanged. Cancelling the task stops it.
   @concurrent func exportUpscaled(
     to url: URL, codec: VideoCodec, title: String, upscale: TimelineUpscale,
-    engine: GenerationEngine, progress: @escaping @Sendable (Double) -> Void
+    backend: any GenerationBackend, progress: @escaping @Sendable (Double) -> Void
   ) async throws {
     let folder = TemporaryFiles.newFolder(in: .exports)
     defer { try? FileManager.default.removeItem(at: folder) }
     let video = folder.appending(path: "video.mp4")
     // Frames are most of the work; the sound and putting the two together, the rest.
-    let frames = Double(max(frameCount, 1))
-    try await engine.inTurn {
-      switch upscale.method {
-      case .system:
-        try await writeWithSystemSuperResolution(
-          to: video, codec: codec, scale: upscale.scale
-        ) { progress(0.95 * Double($0) / frames) }
-      case .flashVSR:
-        let composition = self
-        try await engine.onEngineQueue { shouldContinue in
-          try composition.writeWithFlashVSR(
-            to: video, codec: codec, upscale: upscale, shouldContinue: shouldContinue
-          ) { progress(0.95 * Double($0) / frames) }
-        }
-      }
-    }
+    try await backend.writeUpscaledVideo(of: self, to: video, codec: codec, upscale: upscale) { progress(0.95 * $0) }
     try Task.checkCancellation()
     let sound = folder.appending(path: "sound.m4a")
     let hasSound = try await writeSound(to: sound)
@@ -128,7 +112,7 @@ nonisolated extension TimelineComposition {
   // MARK: - Frames
 
   /// Apple Super Resolution, frame by frame in order, each with the one before.
-  private func writeWithSystemSuperResolution(
+  func writeWithSystemSuperResolution(
     to url: URL, codec: VideoCodec, scale: Int, written: (Int) -> Void
   ) async throws {
     let scaler = try await SystemSuperResolution.Scaler(width: width, height: height, scale: scale)
@@ -156,7 +140,7 @@ nonisolated extension TimelineComposition {
 
   /// FlashVSR+, the whole timeline as one stream, as vpipe runs it, each restored frame written
   /// as it's decoded. Runs on the engine's queue.
-  private func writeWithFlashVSR(
+  func writeWithFlashVSR(
     to url: URL, codec: VideoCodec, upscale: TimelineUpscale, shouldContinue: @escaping () -> Bool,
     written: (Int) -> Void
   ) throws {
@@ -195,6 +179,51 @@ nonisolated extension TimelineComposition {
       writer.cancel()
       throw error
     }
+  }
+
+  /// The timeline upscaled on a server: its composed frames go up, its upscaled frames come back in
+  /// order and are encoded here. The frames all exist at the server at once, as a clip's do when
+  /// it's upscaled, so a long timeline takes memory there.
+  func writeUpscaledRemotely(
+    to url: URL, codec: VideoCodec, upscale: TimelineUpscale, on backend: RemoteBackend,
+    progress: @escaping @Sendable (Double) -> Void
+  ) async throws {
+    let total = Double(max(frameCount, 1))
+    var hashes: [String] = []
+    let reader = try ComposedFrames(self)
+    while let (buffer, _) = try await reader.next() {
+      try Task.checkCancellation()
+      guard let image = buffer.withUnsafeBuffer({ Self.image($0) }), let png = ImageTensor.png(image) else {
+        throw ClipVideoError.cantWrite
+      }
+      let blob = RemoteBlob(png)
+      try await backend.uploadFrame(blob)
+      hashes.append(blob.hash)
+      progress(0.2 * Double(hashes.count) / total)
+    }
+    try reader.finish()
+    let size = upscale.outputSize(width: width, height: height)
+    let job = UUID()
+    let result = try await backend.upscaledResult(
+      frames: hashes, upscale: upscale, width: size.width, height: size.height, job: job
+    ) { fraction in progress(0.2 + 0.6 * fraction) }
+    let frames = try RemoteResultFile.Reader(url: result)
+    let writer = try UpscaledVideoWriter(url: url, codec: codec, width: size.width, height: size.height)
+    do {
+      for index in 0..<frames.frameCount {
+        try Task.checkCancellation()
+        let tensor = try frames.frame(index)
+        let pixels = try writer.makeBuffer()
+        pixels.withUnsafeBuffer { Self.fill($0, with: tensor) }
+        try await writer.append(CVReadOnlyPixelBuffer(pixels), at: Self.frameTime(index, framesPerSecond))
+        progress(0.8 + 0.2 * Double(index + 1) / Double(frames.frameCount))
+      }
+      try await writer.finish()
+    } catch {
+      writer.cancel()
+      throw error
+    }
+    await backend.acknowledge(job: job)
   }
 
   /// Waits for async work from the upscaler, which is synchronous and calls back on the engine's

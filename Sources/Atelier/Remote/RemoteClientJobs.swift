@@ -74,6 +74,38 @@ nonisolated struct RemoteClientJobs: Sendable {
     }
   }
 
+  // Which server made which clip here, so upscaling it there can skip sending its frames.
+
+  private struct ClipRecord: Codable, Hashable {
+    var tensorId: Int64
+    var project: String
+    var server: UUID
+    var job: UUID
+    var savedAt: Date
+  }
+
+  private var clipIndex: URL { folder.deletingLastPathComponent().appending(path: "ClipIndex.json") }
+
+  private func clipRecords() -> [ClipRecord] {
+    (try? Data(contentsOf: clipIndex)).flatMap { try? JSONDecoder().decode([ClipRecord].self, from: $0) } ?? []
+  }
+
+  func rememberClip(tensorId: Int64, project: String, server: UUID, job: UUID) {
+    // Past its retention the server won't have it either.
+    let cutoff = Date().addingTimeInterval(-RemoteProtocol.retention)
+    var records = clipRecords().filter { $0.savedAt > cutoff }
+    records.append(ClipRecord(tensorId: tensorId, project: project, server: server, job: job, savedAt: Date()))
+    Log.attempt(Log.remote, "Remembering a clip's server") {
+      try FileManager.default.createDirectory(at: clipIndex.deletingLastPathComponent(), withIntermediateDirectories: true)
+      try JSONEncoder().encode(records).write(to: clipIndex, options: .atomic)
+    }
+  }
+
+  /// The job that made this clip on `server`, if it did.
+  func clip(tensorId: Int64, project: String, server: UUID) -> UUID? {
+    clipRecords().last { $0.tensorId == tensorId && $0.project == project && $0.server == server }?.job
+  }
+
   func remove(_ job: UUID) {
     let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
     for file in files where file.lastPathComponent.hasPrefix(job.uuidString) {

@@ -39,6 +39,7 @@ final class CreateModel {
     var models: [MediaGenerationResolvedModel]
     var loras: [ModelLibrary.LoRA]
     var files: [String]
+    var upscalers: RemoteUpscalers
   }
 
   /// Where new jobs run (Run on). A job keeps the target it was queued with.
@@ -72,6 +73,12 @@ final class CreateModel {
   var runTargetServerName: String? {
     guard case .remote(let id) = runTarget else { return nil }
     return remoteServers.name(of: id) ?? "The server"
+  }
+
+  /// The selected server and what it can upscale with; nil on this device.
+  var runTargetUpscalers: (name: String, upscalers: RemoteUpscalers)? {
+    guard let name = runTargetServerName else { return nil }
+    return (name, serverCatalog?.upscalers ?? RemoteUpscalers())
   }
 
   /// Why Generate can't go to the selected server right now.
@@ -121,7 +128,7 @@ final class CreateModel {
         // Only its name and family are read here: it lives on the server.
         ModelLibrary.LoRA(name: $0.name, file: $0.file, prefix: $0.prefix, version: $0.version, size: 1, registry: URL(filePath: "/"))
       },
-      files: catalog.files)
+      files: catalog.files, upscalers: catalog.upscalers)
     reconcileModel()
   }
 
@@ -164,6 +171,8 @@ final class CreateModel {
         Task { await self.loadRunTargetCatalog() }
       }
     }
+    remoteServers.loadIfNeeded()
+    if !remoteServers.servers.isEmpty { remoteServers.startBrowsing() }
     Task { [weak self] in
       await self?.remoteServers.checkStatus()
       if let self {
@@ -375,6 +384,8 @@ final class CreateModel {
   /// An agent's progress and result callbacks, by its job.
   private var agentCallbacks:
     [UUID: (progress: (GenerationEngine.Progress) -> Void, completion: (Result<HistoryItem, Error>) -> Void)] = [:]
+  /// The frames a paired device sent to be upscaled, by job.
+  private var deviceFrames: [UUID: [CGImage]] = [:]
   /// Paired devices' jobs (`RemoteServer`), which get the output itself instead of a saved step.
   private var deviceCallbacks:
     [UUID: (progress: (GenerationEngine.Progress) -> Void, completion: (Result<GenerationEngine.Output, Error>) -> Void)] = [:]
@@ -627,10 +638,10 @@ final class CreateModel {
   /// pipeline has loaded.
   var usesReferences: Bool {
     guard let file = selectedModel else { return false }
-    if ModelZoo.versionForModel(file) == .qwenImage2_1 { return true }
+    if RemoteModelTraits.version(of: file) == .qwenImage2_1 { return true }
     let modifiers =
-      [ModelZoo.modifierForModel(file)]
-        + (settings?.loras ?? []).compactMap(\.file).map(LoRAZoo.modifierForModel)
+      [RemoteModelTraits.modifier(of: file)]
+        + (settings?.loras ?? []).compactMap(\.file).map(RemoteModelTraits.modifier(ofLoRA:))
     return modifiers.contains {
       switch $0 {
       case .kontext, .kontextKv, .qwenimageEditPlus, .qwenimageEdit2511, .fl2va, .ref2va: true
@@ -1383,25 +1394,34 @@ final class CreateModel {
   /// the status bar but never on the canvas, and the output goes to `completion` rather than into
   /// the project. Returns the job's id, for `cancel(_:)`.
   func runForDevice(
-    _ request: GenerationEngine.Request, device: String,
+    _ request: GenerationEngine.Request, frames: [CGImage] = [], device: String,
     progress: @escaping (GenerationEngine.Progress) -> Void,
     completion: @escaping (Result<GenerationEngine.Output, Error>) -> Void
   ) -> UUID {
     let id = queue.append(request, remoteDevice: device)
     deviceCallbacks[id] = (progress, completion)
+    deviceFrames[id] = frames
     runNext()
     return id
   }
 
-  /// Starts the next waiting job when none is running.
+  /// Queues `request` for `target`, for scripted checks that need inputs Generate takes from the
+  /// screen.
+  func queueForCheck(_ request: GenerationEngine.Request, target: JobTarget) {
+    queue.append([request], currentTensorId: history.currentTensorId, target: target)
+    runNext()
+  }
+
+  /// Starts what can start: the next job for this device when none is running, and the next for
+  /// each server not running one.
   private func runNext() {
     #if os(iOS)
       // A job can end after the app went to the background: don't bring it back at the next launch.
       defer { if savedForBackground { saveQueue() } }
     #endif
     defer { syncBackgroundTask() }
-    guard generationTask == nil, let job = queue.startNext() else { return }
-    run(job)
+    for job in queue.startRemote() { run(job) }
+    if let job = queue.startNext() { run(job) }
   }
 
   /// Keeps the background task in step with the queue. Called as jobs start and end and as they
@@ -1422,7 +1442,7 @@ final class CreateModel {
         backgroundJob = job.id
       }
       let text = backgroundTaskText(for: job)
-      let jobs = backgroundJobsDone + 1 + (queue.isPaused ? 0 : queue.waiting.count)
+      let jobs = backgroundJobsDone + 1 + (queue.isPaused ? 0 : localJobsWaiting)
       let fraction = Double(step) / Double(max(totalSteps, 1))
       backgroundTask.update(
         completed: (Double(backgroundJobsDone) + min(fraction, 1)) / Double(jobs), title: text.title,
@@ -1431,6 +1451,9 @@ final class CreateModel {
   }
 
   #if os(iOS)
+    /// The background task is about GPU work here; a job on a server needs none.
+    private var localJobsWaiting: Int { queue.waiting.count { $0.target == .local } }
+
     /// What the system's display says about the queue.
     private func backgroundTaskText(for job: JobQueue.Job) -> (title: String, subtitle: String) {
       let title =
@@ -1441,7 +1464,7 @@ final class CreateModel {
         } else {
           "Generating images"
         }
-      let jobs = backgroundJobsDone + 1 + (queue.isPaused ? 0 : queue.waiting.count)
+      let jobs = backgroundJobsDone + 1 + (queue.isPaused ? 0 : localJobsWaiting)
       let subtitle =
         jobs > 1 ? "\(backgroundJobsDone + 1) of \(jobs)" : "Step \(step) of \(max(totalSteps, step))"
       return (title, subtitle)
@@ -1462,40 +1485,163 @@ final class CreateModel {
     private func backgroundTaskExpired() {
       if !AppLifecycle.isActive { pausedForBackground = true }
       queue.isPaused = true
+      // A job on a server has nothing to stop here, and carries on there.
+      guard queue.running != nil else { return }
       queue.returnRunningToFront()
       cancel()
     }
   #endif
 
-  private func run(_ job: JobQueue.Job) {
-    if let export = job.export { return run(export, id: job.id) }
-    guard let request = job.request else { return }
+  /// A running job's progress, for the Queue. The status bar and canvas show one run at a time, the
+  /// foreground one (`foregroundJobID`), which is what the shared state below describes; jobs on
+  /// servers also keep their own here, so one can take over when the foreground run ends.
+  struct RunProgress {
+    var message = "Preparing…"
+    var step = 0
+    var totalSteps = 0
+    var preview: CGImage?
+    var previewFrames: [CGImage] = []
+    var transfer: (title: String, fraction: Double)?
+    var startedAt = Date()
+  }
+
+  private(set) var remoteRuns: [UUID: RunProgress] = [:]
+  /// The run the status bar, canvas and Stop are about: the one on this device, else a server's.
+  private(set) var foregroundJobID: UUID?
+  private var runTasks: [UUID: Task<Void, Never>] = [:]
+
+  func runProgress(of job: JobQueue.Job) -> RunProgress? {
+    if job.id == foregroundJobID {
+      var progress = RunProgress(step: step, totalSteps: totalSteps, preview: livePreview, previewFrames: livePreviewFrames, transfer: transfer)
+      if let runStartedAt { progress.startedAt = runStartedAt }
+      return progress
+    }
+    return remoteRuns[job.id]
+  }
+
+  /// Sets up a run's progress, taking the foreground if it's this device's or nothing else has it.
+  private func beginRun(_ job: JobQueue.Job, message: String, totalSteps: Int, startedAt: Date = Date()) {
+    if job.target != .local {
+      remoteRuns[job.id] = RunProgress(message: message, totalSteps: totalSteps, startedAt: startedAt)
+    }
+    guard job.target == .local || foregroundJobID == nil else { return }
+    foregroundJobID = job.id
     errorMessage = nil
-    phase = .running("Preparing…")
+    phase = .running(message)
+    transfer = nil
     step = 0
-    totalSteps = request.configuration.steps
-    let startedAt = Date()
+    self.totalSteps = totalSteps
     runStartedAt = startedAt
     samplingStart = nil
     lastStepAt = nil
+  }
+
+  private func setRunMessage(_ message: String, _ job: JobQueue.Job) {
+    if job.target != .local { remoteRuns[job.id]?.message = message }
+    if job.id == foregroundJobID { phase = .running(message) }
+  }
+
+  /// A task for `job`, which `cancel` reaches. Assigned before the task's body can run: both are on
+  /// the main actor.
+  private func track(_ task: Task<Void, Never>, for job: JobQueue.Job) {
+    runTasks[job.id] = task
+    if job.id == foregroundJobID { generationTask = task }
+  }
+
+  /// Records a remote run's progress under its own id.
+  private func noteRemoteProgress(_ progress: GenerationEngine.Progress, _ job: JobQueue.Job) {
+    guard job.target != .local, var run = remoteRuns[job.id] else { return }
+    switch progress {
+    case .preview(let preview, let step, let total):
+      run.preview = preview
+      run.previewFrames = []
+      run.step = step
+      run.totalSteps = total
+    case .previewFrames(let frames, let step, let total):
+      run.preview = frames.first
+      run.previewFrames = frames
+      run.step = step
+      run.totalSteps = total
+    case .state(let state):
+      run.message = Self.describe(state)
+      run.transfer = Self.transfer(in: state)
+      if case .generating(let step, let total) = state {
+        run.step = step
+        run.totalSteps = total
+      }
+    }
+    remoteRuns[job.id] = run
+  }
+
+  private static func transfer(in state: MediaGenerationPipeline.State) -> (title: String, fraction: Double)? {
+    switch state {
+    case .uploading(let sent, let total): (title: "Uploading", fraction: total > 0 ? Double(sent) / Double(total) : 0)
+    case .downloading(let received, let total): (title: "Downloading", fraction: total > 0 ? Double(received) / Double(total) : 0)
+    default: nil
+    }
+  }
+
+  /// With nothing in the foreground, the status bar and canvas go to a job still on a server.
+  private func adoptRemoteRun() {
+    guard foregroundJobID == nil, let job = queue.runningRemote.first, let run = remoteRuns[job.id] else { return }
+    foregroundJobID = job.id
+    generationTask = runTasks[job.id]
+    phase = .running(run.message)
+    transfer = run.transfer
+    step = run.step
+    totalSteps = run.totalSteps
+    runStartedAt = run.startedAt
+    samplingStart = nil
+    lastStepAt = nil
+    livePreview = run.preview
+    livePreviewFrames = run.previewFrames
+    if canvasFollowsRun, let preview = run.preview { coverCanvas(with: preview) }
+  }
+
+  /// Saves one result at a time. Results from servers arrive whenever they're ready, alongside a
+  /// local run's, and saving reads and writes the project's steps across several awaits.
+  private var saving: Task<Void, Never>?
+
+  private func oneSaveAtATime<T: Sendable>(_ work: @escaping @MainActor () async throws -> T) async throws -> T {
+    let previous = saving
+    let task = Task { @MainActor in
+      await previous?.value
+      return try await work()
+    }
+    saving = Task { _ = try? await task.value }
+    return try await task.value
+  }
+
+  private func run(_ job: JobQueue.Job) {
+    if let export = job.export { return run(export, job: job) }
+    guard let request = job.request else { return }
+    let startedAt = Date()
+    beginRun(job, message: "Preparing…", totalSteps: request.configuration.steps, startedAt: startedAt)
     let backend = self.backend(for: job.target)
     // Style thumbnails and agents answer callers a quit ends, so there's nothing to come back to.
-    let keepsRemoteJob = job.target != .local && job.styleThumbnail == nil && !job.fromAgent
-    generationTask = Task {
+    // An upscale's output still needs its soundtrack from the source clip here.
+    let keepsRemoteJob = job.target != .local && job.styleThumbnail == nil && !job.fromAgent && request.upscale == nil
+    let task = Task {
       var status = JobQueue.Job.Status.cancelled
       var inputTensorId: Int64?
       var tipTensorId: Int64?
       do {
         let progress: @Sendable (GenerationEngine.Progress) -> Void = { progress in
           Task { @MainActor in
-            self.handle(progress, showsOnCanvas: job.remoteDevice == nil)
+            self.noteRemoteProgress(progress, job)
+            if job.id == self.foregroundJobID {
+              self.handle(progress, showsOnCanvas: job.remoteDevice == nil)
+            }
             self.agentCallbacks[job.id]?.progress(progress)
             self.deviceCallbacks[job.id]?.progress(progress)
           }
         }
         let output: GenerationEngine.Output
-        if let upscale = request.upscale {
-          output = try await upscaled(request, upscale, on: backend, progress: progress)
+        if job.remoteDevice != nil, request.upscale != nil {
+          // A device's frames came with its job; its source clip isn't in any project here.
+          output = try await backend.upscale(request, frames: deviceFrames.removeValue(forKey: job.id) ?? [], progress: progress)
+        } else if let upscale = request.upscale {
+          output = try await upscaled(request, upscale, job: job, on: backend, progress: progress)
         } else if let remote = backend as? RemoteBackend, keepsRemoteJob, case .remote(let server) = job.target {
           // Kept until it's saved below, so a quit in between loses nothing.
           if job.resumesRemoteJob {
@@ -1524,13 +1670,17 @@ final class CreateModel {
           finish(job, status: status)
           return
         }
-        if output.isVideo { phase = .running("Saving \(output.frames.count) frames…") }
-        let item = try await history.save(
-          output, request: request, startedAt: startedAt, finishedAt: Date(),
-          makeCurrent: { self.canvasFollowsRun })
+        if output.isVideo { setRunMessage("Saving \(output.frames.count) frames…", job) }
+        let followsRun = { self.canvasFollowsRun && job.id == self.foregroundJobID }
+        let history = history
+        let item = try await oneSaveAtATime {
+          try await history.save(
+            output, request: request, startedAt: startedAt, finishedAt: Date(),
+            makeCurrent: followsRun)
+        }
         lastSavedTensorId = item.tensorId
-        let finished = output.frames.first.flatMap(ImageTensor.cgImage(from:)) ?? livePreview
-        if canvasFollowsRun {
+        let finished = output.frames.first.flatMap(ImageTensor.cgImage(from:)) ?? runProgress(of: job)?.preview
+        if followsRun() {
           imageStep = (history.project.name, item.tensorId)
           canvasIsImported = false
           if let finished { image = finished }
@@ -1548,6 +1698,10 @@ final class CreateModel {
         agentCallbacks.removeValue(forKey: job.id)?.completion(.success(item))
         if keepsRemoteJob, let remote = backend as? RemoteBackend {
           clientJobs.remove(job.id)
+          // The server keeps a clip's frames a while, so upscaling it there needn't send them back.
+          if output.isVideo, case .remote(let server) = job.target {
+            clientJobs.rememberClip(tensorId: item.tensorId, project: history.project.name, server: server, job: job.id)
+          }
           await remote.acknowledge(job: job.id)
         }
       } catch is CancellationError {
@@ -1567,13 +1721,20 @@ final class CreateModel {
       }
       finish(job, status: status, inputTensorId: inputTensorId, tipTensorId: tipTensorId)
     }
+    track(task, for: job)
   }
 
   /// Ends the running job and starts the next.
   private func finish(
-    _: JobQueue.Job, status: JobQueue.Job.Status, inputTensorId: Int64? = nil, tipTensorId: Int64? = nil
+    _ job: JobQueue.Job, status: JobQueue.Job.Status, inputTensorId: Int64? = nil, tipTensorId: Int64? = nil
   ) {
-    queue.finishRunning(status, inputTensorId: inputTensorId, tipTensorId: tipTensorId)
+    queue.finishRunning(status, id: job.id, inputTensorId: inputTensorId, tipTensorId: tipTensorId)
+    remoteRuns[job.id] = nil
+    runTasks[job.id] = nil
+    deviceFrames[job.id] = nil
+    // Another run's ending doesn't touch what the status bar and canvas are showing.
+    guard job.id == foregroundJobID else { return runNext() }
+    foregroundJobID = nil
     phase = .idle
     transfer = nil
     generationTask = nil
@@ -1583,6 +1744,7 @@ final class CreateModel {
     livePreview = nil
     livePreviewFrames = []
     runNext()
+    adoptRemoteRun()
     // Once the queue is empty, the next run shows on the canvas again.
     if generationTask == nil { canvasFollowsRun = true }
   }
@@ -1604,25 +1766,21 @@ final class CreateModel {
 
   /// Queues an upscaled timeline export, after what's already queued.
   func queue(_ export: TimelineExportJob) {
-    queue.append(export)
+    queue.append(export, target: runTarget)
     runNext()
   }
 
   /// Runs an export job, its progress in the status bar like a generation's.
-  private func run(_ export: TimelineExportJob, id _: UUID) {
-    errorMessage = nil
-    phase = .running("Exporting “\(export.title)” upscaled…")
-    step = 0
-    totalSteps = 1_000
-    runStartedAt = Date()
-    samplingStart = nil
-    lastStepAt = nil
-    generationTask = Task { [engine] in
+  private func run(_ export: TimelineExportJob, job: JobQueue.Job) {
+    beginRun(job, message: "Exporting “\(export.title)” upscaled…", totalSteps: 1_000)
+    let backend = backend(for: job.target)
+    let task = Task {
       var status = JobQueue.Job.Status.cancelled
       do {
-        try await export.run(engine: engine) { fraction in
+        try await export.run(backend: backend) { fraction in
           Task { @MainActor in
-            guard self.generationTask != nil, self.phase != .cancelling else { return }
+            self.remoteRuns[job.id]?.step = Int(fraction * 1_000)
+            guard job.id == self.foregroundJobID, self.phase != .cancelling else { return }
             self.step = Int(fraction * 1_000)
             self.syncBackgroundTask()
           }
@@ -1637,12 +1795,9 @@ final class CreateModel {
           status = .failed(error.localizedDescription)
         }
       }
-      queue.finishRunning(status)
-      phase = .idle
-      generationTask = nil
-      runStartedAt = nil
-      runNext()
+      finish(job, status: status)
     }
+    track(task, for: job)
   }
 
   /// Queues upscaling `item`, a clip, `scale` times with `method` (FlashVSR+ as `variant`). The
@@ -1655,7 +1810,8 @@ final class CreateModel {
     let sidecar = item.sidecar
     let model = sidecar.model
     var configuration: PipelineConfiguration
-    if let loaded = try? await backend(for: .local).loadPipeline(for: model) {
+    let target = runTarget
+    if let loaded = try? await backend(for: target).loadPipeline(for: model) {
       configuration = ModelDefaults.recommended(for: model, configuration: loaded)
     } else if let settings {
       configuration = settings
@@ -1675,31 +1831,46 @@ final class CreateModel {
       method: method, scale: scale, sourceTensorId: item.tensorId, frameLimit: frameLimit,
       variant: method == .flashVSR ? variant : nil)
     statusNote = nil
-    queue.append([request], currentTensorId: history.currentTensorId)
+    queue.append([request], currentTensorId: history.currentTensorId, target: target)
     runNext()
   }
 
   /// Runs an upscale job: the source clip's frames through the engine, with its soundtrack (at
   /// the result model's sample rate) and frame rate.
   private func upscaled(
-    _ request: GenerationEngine.Request, _ upscale: ClipUpscale, on backend: any GenerationBackend,
+    _ request: GenerationEngine.Request, _ upscale: ClipUpscale, job: JobQueue.Job, on backend: any GenerationBackend,
     progress: @escaping @Sendable (GenerationEngine.Progress) -> Void
   ) async throws -> GenerationEngine.Output {
     guard let source = history.item(tensorId: upscale.sourceTensorId), let clip = source.clip else {
       throw UpscaleError.sourceMissing
     }
-    phase = .running("Reading \(clip.frames.count) frames…")
-    var frames = await history.frames(of: source)
-    guard frames.count == clip.frames.count else { throw ProjectError.badImage }
-    if let limit = upscale.frameLimit, limit < frames.count { frames = Array(frames.prefix(limit)) }
-    var output = try await backend.upscale(request, frames: frames, progress: progress)
+    var output: GenerationEngine.Output
+    // A clip made on this server may still be there, which saves sending its frames back.
+    let remote = backend as? RemoteBackend
+    var cachedClip: UUID?
+    if let remote, case .remote(let server) = job.target,
+       let clipJob = clientJobs.clip(tensorId: upscale.sourceTensorId, project: history.project.name, server: server),
+       await remote.hasClip(clipJob)
+    {
+      cachedClip = clipJob
+    }
+    if let remote, let cachedClip {
+      output = try await remote.upscale(request, frames: [], sourceClip: cachedClip, job: job.id, progress: progress)
+    } else {
+      setRunMessage("Reading \(clip.frames.count) frames…", job)
+      var frames = await history.frames(of: source)
+      guard frames.count == clip.frames.count else { throw ProjectError.badImage }
+      if let limit = upscale.frameLimit, limit < frames.count { frames = Array(frames.prefix(limit)) }
+      output = try await backend.upscale(request, frames: frames, progress: progress)
+    }
+    let frameCount = output.frames.count
     output.framesPerSecond = clip.framesPerSecond
     if let audio = await history.audio(of: source) {
-      let rate = ModelZoo.audioSampleRateForModel(request.model)
+      let rate = RemoteModelTraits.audioSampleRate(of: request.model)
       var samples = ClipUpscale.resample(audio.samples, from: audio.sampleRate, to: rate)
-      if frames.count < clip.frames.count {
+      if frameCount < clip.frames.count {
         let length = min(
-          samples.shape[1], Int(Double(frames.count) / clip.framesPerSecond * Double(rate)))
+          samples.shape[1], Int(Double(frameCount) / clip.framesPerSecond * Double(rate)))
         samples = samples[0..<samples.shape[0], 0..<length].copied()
       }
       output.audio = samples
@@ -1840,8 +2011,10 @@ final class CreateModel {
 
   /// Stops a job if it's running, or takes it out of the queue.
   func cancel(_ id: UUID) {
-    if queue.running?.id == id {
+    if foregroundJobID == id {
       cancel()
+    } else if let task = runTasks[id] {
+      task.cancel()
     } else if queue.removeWaiting(id) != nil {
       agentCallbacks.removeValue(forKey: id)?.completion(.failure(CancellationError()))
       thumbnailCallbacks.removeValue(forKey: id)?(.failure(CancellationError()))
@@ -1856,6 +2029,7 @@ final class CreateModel {
       thumbnailCallbacks.removeValue(forKey: id)?(.failure(CancellationError()))
       deviceCallbacks.removeValue(forKey: id)?.completion(.failure(CancellationError()))
     }
+    for (id, task) in runTasks where id != foregroundJobID { task.cancel() }
     cancel()
   }
 
@@ -1875,7 +2049,7 @@ final class CreateModel {
   private(set) var transfer: (title: String, fraction: Double)?
 
   private func handle(_ progress: GenerationEngine.Progress, showsOnCanvas: Bool = true) {
-    guard generationTask != nil, phase != .cancelling else { return }
+    guard phase != .idle, phase != .cancelling else { return }
     switch progress {
     case .preview(let preview, let step, let total):
       livePreview = preview
@@ -1889,14 +2063,7 @@ final class CreateModel {
       noteStep(step, of: total)
     case .state(let state):
       phase = .running(Self.describe(state))
-      switch state {
-      case .uploading(let sent, let total):
-        transfer = (title: "Uploading", fraction: total > 0 ? Double(sent) / Double(total) : 0)
-      case .downloading(let received, let total):
-        transfer = (title: "Downloading", fraction: total > 0 ? Double(received) / Double(total) : 0)
-      default:
-        transfer = nil
-      }
+      transfer = Self.transfer(in: state)
       if case .generating(let step, let total) = state {
         noteStep(step, of: total)
       }

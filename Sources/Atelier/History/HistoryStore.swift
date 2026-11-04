@@ -523,7 +523,7 @@ final class HistoryStore {
     guard let audioId = item.clip?.audioId else { return nil }
     let project = project
     let samples = await project.read { $0.audio(id: audioId) }
-    return samples.map { ($0, ModelZoo.audioSampleRateForModel(item.sidecar.model)) }
+    return samples.map { ($0, RemoteModelTraits.audioSampleRate(of: item.sidecar.model)) }
   }
 
   /// The audio file a video run took, as it was resampled for the model.
@@ -545,7 +545,7 @@ final class HistoryStore {
     let project = project
     let metadata = videoMetadata(item)
     let audioId = clip.audioId
-    let sampleRate = ModelZoo.audioSampleRateForModel(item.sidecar.model)
+    let sampleRate = RemoteModelTraits.audioSampleRate(of: item.sidecar.model)
     // Registered before anything is awaited, so callers asking at once share one write.
     let task = Task.detached {
       let audio = audioId.flatMap { project.audio(id: $0) }.map { (samples: $0, sampleRate: sampleRate) }

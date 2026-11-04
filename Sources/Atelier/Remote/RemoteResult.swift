@@ -9,7 +9,7 @@ nonisolated enum RemoteResultFile {
   private static let magic = Data("ATLR".utf8)
   private static let codec: DynamicGraph.Store.Codec = [.fpzip, .zip]
 
-  private struct Description: Codable {
+  fileprivate struct Description: Codable, Sendable {
     var frameSizes: [Int]
     var audioSize: Int?
     var audioInputSize: Int?
@@ -38,37 +38,53 @@ nonisolated enum RemoteResultFile {
     return (file.count, SHA256.hash(data: file).hexString)
   }
 
-  @concurrent static func read(_ url: URL) async throws -> GenerationEngine.Output {
-    let data = try Data(contentsOf: url, options: .mappedIfSafe)
-    let headerSize = magic.count + 4
-    guard data.count >= headerSize, data.prefix(magic.count) == magic else { throw RemoteError.corruptResult }
-    let length = data[(data.startIndex + magic.count)..<(data.startIndex + headerSize)].reduce(0) { $0 << 8 | Int($1) }
-    var position = data.startIndex + headerSize
-    guard data.endIndex - position >= length else { throw RemoteError.corruptResult }
-    let description = try JSONDecoder().decode(Description.self, from: data[position..<(position + length)])
-    position += length
+  /// A result opened for its parts, decoded one at a time: a long clip's frames needn't all be in
+  /// memory at once.
+  struct Reader: Sendable {
+    private let data: Data
+    private let description: Description
+    private let start: Int
+    var frameCount: Int { description.frameSizes.count }
+    var framesPerSecond: Double? { description.framesPerSecond }
 
-    func next(_ size: Int) throws -> Data {
-      guard size >= 0, data.endIndex - position >= size else { throw RemoteError.corruptResult }
-      defer { position += size }
-      return Data(data[position..<(position + size)])
+    init(url: URL) throws {
+      data = try Data(contentsOf: url, options: .mappedIfSafe)
+      let headerSize = magic.count + 4
+      guard data.count >= headerSize, data.prefix(magic.count) == magic else { throw RemoteError.corruptResult }
+      let length = data[(data.startIndex + magic.count)..<(data.startIndex + headerSize)].reduce(0) { $0 << 8 | Int($1) }
+      let position = data.startIndex + headerSize
+      guard data.endIndex - position >= length else { throw RemoteError.corruptResult }
+      description = try JSONDecoder().decode(Description.self, from: data[position..<(position + length)])
+      start = position + length
+      let total = description.frameSizes.reduce(0, +) + (description.audioSize ?? 0) + (description.audioInputSize ?? 0)
+      guard description.frameSizes.allSatisfy({ $0 >= 0 }), data.endIndex - start >= total else { throw RemoteError.corruptResult }
     }
 
-    var frames: [Tensor<FloatType>] = []
-    for size in description.frameSizes {
-      guard let tensor = Tensor<FloatType>(data: try next(size), using: codec) else { throw RemoteError.corruptResult }
-      frames.append(tensor)
-    }
-    func audio(_ size: Int?) throws -> Tensor<Float>? {
-      guard let size else { return nil }
-      guard let tensor = Tensor<Float>(data: try next(size), using: codec) else { throw RemoteError.corruptResult }
+    func frame(_ index: Int) throws -> Tensor<FloatType> {
+      let offset = start + description.frameSizes.prefix(index).reduce(0, +)
+      guard let tensor = Tensor<FloatType>(data: Data(data[offset..<(offset + description.frameSizes[index])]), using: codec) else {
+        throw RemoteError.corruptResult
+      }
       return tensor
     }
-    let audioTensor = try audio(description.audioSize)
-    let audioInput = try audio(description.audioInputSize)
-    return GenerationEngine.Output(
-      frames: frames, audio: audioTensor, audioSampleRate: description.audioSampleRate,
-      framesPerSecond: description.framesPerSecond, audioInput: audioInput)
+
+    private func audio(at offset: Int, size: Int?) throws -> Tensor<Float>? {
+      guard let size else { return nil }
+      guard let tensor = Tensor<Float>(data: Data(data[offset..<(offset + size)]), using: codec) else { throw RemoteError.corruptResult }
+      return tensor
+    }
+
+    func output() throws -> GenerationEngine.Output {
+      let framesEnd = start + description.frameSizes.reduce(0, +)
+      return try GenerationEngine.Output(
+        frames: (0..<frameCount).map(frame), audio: audio(at: framesEnd, size: description.audioSize),
+        audioSampleRate: description.audioSampleRate, framesPerSecond: description.framesPerSecond,
+        audioInput: audio(at: framesEnd + (description.audioSize ?? 0), size: description.audioInputSize))
+    }
+  }
+
+  @concurrent static func read(_ url: URL) async throws -> GenerationEngine.Output {
+    try Reader(url: url).output()
   }
 }
 

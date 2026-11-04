@@ -15,7 +15,7 @@ struct UpscaleSheet: View {
     let controls = UpscaleControls(
       width: sidecar.width, height: sidecar.height,
       method: Binding(get: { method }, set: { if let new = $0 { method = new } }), scale: $scale,
-      variant: $variant)
+      variant: $variant, server: create.runTargetUpscalers)
     VStack(alignment: .leading, spacing: 12) {
       Text("Upscale Video").font(.headline)
       controls
@@ -47,6 +47,7 @@ struct VideoExportSheet: View {
   let frameCount: Int
   /// Called with how to upscale, or nil to export as it is.
   let export: (TimelineUpscale?) -> Void
+  @Environment(CreateModel.self) private var create
   /// "none" or a `ClipUpscale.Method`.
   @AppStorage("exportUpscale") private var upscaleChoice = "none"
   @AppStorage("exportUpscaleScale") private var scale = 2
@@ -58,7 +59,7 @@ struct VideoExportSheet: View {
     let controls = UpscaleControls(
       width: width, height: height,
       method: Binding(get: { method }, set: { upscaleChoice = $0?.rawValue ?? "none" }),
-      scale: $scale, variant: $variant, offersNone: true)
+      scale: $scale, variant: $variant, offersNone: true, server: create.runTargetUpscalers)
     let upscale = method.map { TimelineUpscale(method: $0, scale: scale, variant: variant) }
     let problem = controls.problem
     VStack(alignment: .leading, spacing: 12) {
@@ -109,12 +110,16 @@ struct UpscaleControls: View {
   @Binding var variant: FlashVSRFiles.Variant
   /// A None choice before Quality and Fast, for exporting as it is.
   let offersNone: Bool
+  /// Where it would run, when that's a server: what it has decides, not what's on this device.
+  let server: (name: String, upscalers: RemoteUpscalers)?
   private var download = FlashVSRDownload.shared
 
   init(
     width: Int, height: Int, method: Binding<ClipUpscale.Method?>, scale: Binding<Int>,
-    variant: Binding<FlashVSRFiles.Variant>, offersNone: Bool = false
+    variant: Binding<FlashVSRFiles.Variant>, offersNone: Bool = false,
+    server: (name: String, upscalers: RemoteUpscalers)? = nil
   ) {
+    self.server = server
     self.width = width
     self.height = height
     _method = method
@@ -125,12 +130,29 @@ struct UpscaleControls: View {
 
   /// The scales the chosen method can do at this size.
   private var scales: [Int] {
-    method.map { ClipUpscale.offeredScales(width: width, height: height, method: $0) } ?? []
+    // What Apple's model offers depends on the device and the size. A server's isn't asked; this
+    // device's is the best guess, and a server that differs fails the job saying so.
+    if server != nil, method == .system {
+      let here = ClipUpscale.offeredScales(width: width, height: height, method: .system)
+      return here.isEmpty ? ClipUpscale.scales : here
+    }
+    return method.map { ClipUpscale.offeredScales(width: width, height: height, method: $0) } ?? []
   }
 
   /// Why it can't upscale with these choices; nil when it can (or isn't upscaling).
   var problem: String? {
     guard let method else { return nil }
+    if let server {
+      switch method {
+      case .flashVSR:
+        guard server.upscalers.flashVSR.contains(variant) else {
+          return "\(server.name) doesn't have FlashVSR+ \(variant.title). Download it there."
+        }
+        return scales.contains(scale) ? nil : "That's too large for FlashVSR+."
+      case .system:
+        return server.upscalers.superResolution ? nil : "\(server.name) doesn't support Apple Super Resolution."
+      }
+    }
     return ClipUpscale.problem(
       width: width, height: height, scale: scale, method: method, variant: variant)
   }
@@ -176,7 +198,7 @@ struct UpscaleControls: View {
           ) {
             download.start(variant)
           }
-          .disabled(method != .flashVSR || !missing || downloading != nil)
+          .disabled(method != .flashVSR || !missing || downloading != nil || server != nil)
           .help("Downloads it into \(FlashVSRFiles.folderName) in the models folder, from Hugging Face")
         }
       }

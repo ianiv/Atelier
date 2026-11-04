@@ -133,13 +133,13 @@ extension Automation {
         let queue = JobQueue()
         queue.append([request], currentTensorId: nil)
         let job = queue.startNext()
-        queue.finishRunning(.cancelled)
+        if let job { queue.finishRunning(.cancelled, id: job.id) }
         check(fileManager.fileExists(atPath: audio.path), "a finished job's audio stays for Run Again")
         if let job { queue.retry(job.id) }
         let retried = queue.startNext()
         if let job { queue.removeRecent(job.id) }
         check(fileManager.fileExists(atPath: audio.path), "removing a job keeps audio another still uses")
-        queue.finishRunning(.cancelled)
+        if let retried { queue.finishRunning(.cancelled, id: retried.id) }
         if let retried { queue.removeRecent(retried.id) }
         check(!fileManager.fileExists(atPath: audio.path), "the audio goes with the last job using it")
         try? fileManager.removeItem(at: audio)

@@ -35,9 +35,10 @@ struct QueueView: View {
 
   private var list: some View {
     List(selection: $selection) {
-      if let running = queue.running {
+      if queue.running != nil || !queue.runningRemote.isEmpty {
         Section("Running") {
-          row(running)
+          if let running = queue.running { row(running) }
+          ForEach(queue.runningRemote) { row($0) }
         }
       }
       if !queue.waiting.isEmpty {
@@ -124,7 +125,8 @@ struct QueueRow: View {
   @ViewBuilder
   private func content(_ request: GenerationEngine.Request) -> some View {
     let configuration = request.configuration
-    let video = configuration.videoModel
+    // Not the configuration's own model: on a server, that's only a blank to hold the settings.
+    let video = VideoModel(model: request.model, loras: configuration.loras.compactMap(\.file))
     HStack(spacing: 10) {
       preview
         .frame(width: 48, height: 48)
@@ -190,7 +192,7 @@ struct QueueRow: View {
       Color.quaternaryLabel
       if case .finished(let tensorId) = job.status, let item = create.history.item(tensorId: tensorId) {
         Thumbnail(item: item)
-      } else if job.status == .running, let image = create.livePreview {
+      } else if job.status == .running, let image = create.runProgress(of: job)?.preview {
         Image(decorative: image, scale: 1).resizable().aspectRatio(contentMode: .fill)
       } else if let canvas = job.request?.canvas {
         Image(decorative: canvas, scale: 1).resizable().aspectRatio(contentMode: .fill)
@@ -204,13 +206,14 @@ struct QueueRow: View {
     case .waiting:
       EmptyView()
     case .running:
-      if let transfer = create.transfer {
+      let progress = create.runProgress(of: job)
+      if let transfer = progress?.transfer {
         // Moving a job's files to or from its server is a phase of its own.
         Text(transfer.title).font(.caption).foregroundStyle(.secondary)
         ProgressView(value: transfer.fraction)
           .frame(width: 80)
-      } else if create.totalSteps > 0 {
-        ProgressView(value: Double(create.step), total: Double(create.totalSteps))
+      } else if let progress, progress.totalSteps > 0 {
+        ProgressView(value: Double(progress.step), total: Double(progress.totalSteps))
           .frame(width: 80)
       } else {
         ProgressView().controlSize(.small)
@@ -298,7 +301,8 @@ struct ExportQueueRow: View {
     case .waiting:
       EmptyView()
     case .running:
-      ProgressView(value: Double(create.step), total: Double(max(create.totalSteps, 1)))
+      let progress = create.runProgress(of: job)
+      ProgressView(value: Double(progress?.step ?? 0), total: Double(max(progress?.totalSteps ?? 1, 1)))
         .frame(width: 80)
     case .finished, .exported, .madeThumbnail, .ranForDevice:
       Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).help("Exported").accessibilityLabel("Exported")

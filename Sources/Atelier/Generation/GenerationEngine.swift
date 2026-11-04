@@ -338,9 +338,31 @@ actor GenerationEngine {
     }
   }
 
-  /// Runs `work` in the engine's turn, so it never runs alongside a generation (an upscaled
-  /// timeline export).
-  func inTurn<T: Sendable>(_ work: @concurrent @Sendable () async throws -> T) async throws -> T {
+  /// Upscales a timeline into a video file as `TimelineComposition.exportUpscaled` wants it, in the
+  /// engine's turn, so never alongside a generation.
+  func writeUpscaledVideo(
+    of composition: TimelineComposition, to url: URL, codec: VideoCodec, upscale: TimelineUpscale,
+    progress: @escaping @Sendable (Double) -> Void
+  ) async throws {
+    let frames = Double(max(composition.frameCount, 1))
+    try await inTurn {
+      switch upscale.method {
+      case .system:
+        try await composition.writeWithSystemSuperResolution(to: url, codec: codec, scale: upscale.scale) {
+          progress(Double($0) / frames)
+        }
+      case .flashVSR:
+        try await self.onEngineQueue { shouldContinue in
+          try composition.writeWithFlashVSR(to: url, codec: codec, upscale: upscale, shouldContinue: shouldContinue) {
+            progress(Double($0) / frames)
+          }
+        }
+      }
+    }
+  }
+
+  /// Runs `work` in the engine's turn, so it never runs alongside a generation.
+  private func inTurn<T: Sendable>(_ work: @concurrent @Sendable () async throws -> T) async throws -> T {
     await waitForTurn()
     defer { endTurn() }
     try Task.checkCancellation()
@@ -350,7 +372,7 @@ actor GenerationEngine {
   /// Runs `work` on the engine's queue after dropping the models the engine keeps loaded, which
   /// FlashVSR+ needs the memory of. Call it in the engine's turn. `work` checks `shouldContinue`,
   /// which turns false when the task is cancelled.
-  func onEngineQueue<T: Sendable>(
+  private func onEngineQueue<T: Sendable>(
     _ work: @escaping @Sendable (_ shouldContinue: @escaping () -> Bool) throws -> T
   ) async throws -> T {
     if var dictionary = Self.engineWorkspace()?.dictionary {

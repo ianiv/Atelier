@@ -18,12 +18,12 @@ nonisolated struct VideoModel: Equatable {
 
   /// nil for image models.
   init?(model: String, loras: [String] = []) {
-    let version = ModelZoo.versionForModel(model)
+    let version = RemoteModelTraits.version(of: model)
     guard ImageGeneratorUtils.isVideoModel(version) else { return nil }
     self.version = version
-    modifier = ImageGeneratorUtils.modifierForModel(model, LoRAs: loras)
-    framesPerSecond = ModelZoo.framesPerSecondForModel(model)
-    audioSampleRate = ModelZoo.audioSampleRateForModel(model)
+    modifier = RemoteModelTraits.modifier(of: model, loras: loras)
+    framesPerSecond = RemoteModelTraits.framesPerSecond(of: model)
+    audioSampleRate = RemoteModelTraits.audioSampleRate(of: model)
   }
 
   /// LTX and MiniMax H3 generate a soundtrack with the video.

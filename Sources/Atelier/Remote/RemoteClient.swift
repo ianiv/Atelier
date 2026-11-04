@@ -20,6 +20,14 @@ actor RemoteClient {
   private var reading: Task<Void, Never>?
   private var pending: [UUID: CheckedContinuation<RemoteFrame, Error>] = [:]
   private var updates: [UUID: AsyncStream<Update>.Continuation] = [:]
+  /// Where Bonjour last found this server: tried first, as the local network is the fastest route.
+  private var nearby: RemoteAddress?
+
+  /// Takes effect on the next connection.
+  func setNearby(_ address: RemoteAddress?) { nearby = address }
+
+  /// The next connection's first route, for checks.
+  var firstRoute: RemoteAddress? { nearby ?? server.addresses.first }
 
   init(server: RemoteServerRecord, device: RemoteDeviceIdentity, downloads: URL) {
     self.server = server
@@ -37,9 +45,11 @@ actor RemoteClient {
   private func connected(rounds: Int = 4, timeout: TimeInterval = 8) async throws -> RemoteConnection {
     if let connection { return connection }
     if let opening { return try await opening.value }
-    let server = server
+    var server = server
+    if let nearby { server.addresses = [nearby] + server.addresses.filter { $0 != nearby } }
+    let route = server
     let device = device
-    let task = Task { try await Self.open(server, device: device, rounds: rounds, timeout: timeout) }
+    let task = Task { try await Self.open(route, device: device, rounds: rounds, timeout: timeout) }
     opening = task
     defer { opening = nil }
     let connection = try await task.value

@@ -12,7 +12,7 @@ nonisolated enum JobTarget: Codable, Hashable, Sendable {
 
 /// What Create, the Queue and agents ask of whatever runs a job. `GenerationEngine` is the local
 /// one. What belongs to the machine rather than the job (its models folders, the engine check,
-/// the turn an upscaled timeline export takes on the engine) stays on `GenerationEngine`.
+/// its turn and queue) stays on `GenerationEngine`.
 nonisolated protocol GenerationBackend: Sendable {
   func generate(
     _ request: GenerationEngine.Request,
@@ -27,6 +27,14 @@ nonisolated protocol GenerationBackend: Sendable {
 
   /// The model's default settings.
   func loadPipeline(for model: String) async throws -> PipelineConfiguration
+
+  /// Writes `composition`'s frames, upscaled, into a video at `url`, without its sound; `progress`
+  /// runs from 0 to 1. Encoding happens on this device wherever the upscaling does. Cancelling the
+  /// task stops it.
+  func writeUpscaledVideo(
+    of composition: TimelineComposition, to url: URL, codec: VideoCodec, upscale: TimelineUpscale,
+    progress: @escaping @Sendable (Double) -> Void
+  ) async throws
 
   /// The models that can run here.
   func downloadedModels() async -> [MediaGenerationResolvedModel]
