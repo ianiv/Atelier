@@ -28,6 +28,8 @@ final class JobQueue {
 
     var id = UUID()
     var work: Work
+    /// Where it runs.
+    var target: JobTarget
     var status = Status.waiting
     let queuedAt = Date()
     /// When it started running; nil while waiting, and for a job cancelled before it ran.
@@ -41,13 +43,14 @@ final class JobQueue {
     /// follows the line's latest result when it starts, whatever order they end up running in.
     var line: UUID?
 
-    init(work: Work, fromAgent: Bool = false) {
+    init(work: Work, target: JobTarget = .local, fromAgent: Bool = false) {
       self.work = work
+      self.target = target
       self.fromAgent = fromAgent
     }
 
-    init(request: GenerationEngine.Request, fromAgent: Bool = false) {
-      self.init(work: .generation(request), fromAgent: fromAgent)
+    init(request: GenerationEngine.Request, target: JobTarget = .local, fromAgent: Bool = false) {
+      self.init(work: .generation(request), target: target, fromAgent: fromAgent)
     }
 
     /// The generation's request; nil for an export.
@@ -97,8 +100,8 @@ final class JobQueue {
   /// a new line after the current step when you picked another step since. Returns their ids.
   @discardableResult
   func append(
-    _ requests: [GenerationEngine.Request], currentTensorId: Int64?, fromAgent: Bool = false,
-    styleThumbnail: String? = nil
+    _ requests: [GenerationEngine.Request], currentTensorId: Int64?, target: JobTarget = .local,
+    fromAgent: Bool = false, styleThumbnail: String? = nil
   ) -> [UUID] {
     let line: UUID
     if let lastLine, !isEmpty, currentTensorId == expectedCurrent {
@@ -110,7 +113,7 @@ final class JobQueue {
     }
     expectedCurrent = currentTensorId
     for request in requests {
-      var job = Job(request: request, fromAgent: fromAgent)
+      var job = Job(request: request, target: target, fromAgent: fromAgent)
       job.styleThumbnail = styleThumbnail
       if request.parentTensorId == nil { job.line = line }
       waiting.append(job)
@@ -212,7 +215,7 @@ final class JobQueue {
   /// same step.
   func retry(_ id: UUID) {
     guard let job = recent.first(where: { $0.id == id }) else { return }
-    waiting.append(Job(work: job.work))
+    waiting.append(Job(work: job.work, target: job.target))
   }
 
   /// Takes every waiting job out of the queue; returns their ids.

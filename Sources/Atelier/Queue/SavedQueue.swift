@@ -26,6 +26,8 @@ nonisolated enum SavedQueue {
     var placement: TimelinePlacement?
     /// An upscale job's method, scale and source clip.
     var upscale: ClipUpscale?
+    /// Where it runs. Optional because queues saved before there was a choice don't have it.
+    var target: JobTarget?
   }
 
   /// A saved job, before its settings are put back on its model's defaults.
@@ -36,6 +38,8 @@ nonisolated enum SavedQueue {
     fileprivate var canvas: CGImage?
     fileprivate var moodboard: [GenerationEngine.Reference]
     fileprivate var sameProject: Bool
+
+    var target: JobTarget { entry.target ?? .local }
 
     /// The job's request, with `configuration` (the model's defaults with `settings` applied).
     func request(configuration: PipelineConfiguration) -> GenerationEngine.Request {
@@ -92,7 +96,7 @@ nonisolated enum SavedQueue {
           parentTensorId: request.parentTensorId, hasCanvas: request.canvas != nil,
           canvasTensorId: request.canvasTensorId, canvasIsImported: request.canvasIsImported,
           moodboardWeights: request.moodboard.map(\.weight), audio: request.audio,
-          placement: request.placement, upscale: request.upscale))
+          placement: request.placement, upscale: request.upscale, target: job.target))
     }
     if let data = try? JSONEncoder().encode(entries) {
       Log.attempt(Log.queue, "Saving the queue") {

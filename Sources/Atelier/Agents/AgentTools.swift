@@ -855,7 +855,7 @@ final class AgentTools {
 
   /// The model's recommended settings with its default preset, as Create starts from.
   private func defaults(for model: String) async throws -> PipelineConfiguration {
-    let template = try await create.engine.loadPipeline(for: model)
+    let template = try await create.backend(for: .local).loadPipeline(for: model)
     var configuration = ModelDefaults.recommended(for: model, configuration: template)
     for (id, value) in presets.defaultPreset(for: model)?.values ?? [:] {
       SettingsRegistry.byID[id]?.set(&configuration, value)

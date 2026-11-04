@@ -24,6 +24,9 @@ final class CreateModel {
   }
 
   let engine = GenerationEngine()
+  /// What runs jobs for `target`. Every target is this device's engine for now.
+  func backend(for _: JobTarget) -> any GenerationBackend { engine }
+
   let history: HistoryStore
   /// Generate adds to it; jobs run one at a time, in order.
   let queue = JobQueue()
@@ -917,7 +920,7 @@ final class CreateModel {
   }
 
   private func loadModelList() async {
-    let models = await engine.downloadedModels()
+    let models = await backend(for: .local).downloadedModels()
     let directories = availableModelsDirectories
     let modelFiles = await Self.fileNames(in: directories)
     // Assigned after the last await, so callers pick a selection before the model picker redraws.
@@ -1265,7 +1268,8 @@ final class CreateModel {
     runStartedAt = startedAt
     samplingStart = nil
     lastStepAt = nil
-    generationTask = Task { [engine] in
+    let backend = self.backend(for: job.target)
+    generationTask = Task {
       var status = JobQueue.Job.Status.cancelled
       var inputTensorId: Int64?
       var tipTensorId: Int64?
@@ -1278,9 +1282,9 @@ final class CreateModel {
         }
         let output: GenerationEngine.Output
         if let upscale = request.upscale {
-          output = try await upscaled(request, upscale, progress: progress)
+          output = try await upscaled(request, upscale, on: backend, progress: progress)
         } else {
-          output = try await engine.generate(request, progress: progress)
+          output = try await backend.generate(request, progress: progress)
         }
         // A style thumbnail goes back to the Styles screen, not into the project.
         if job.styleThumbnail != nil {
@@ -1413,7 +1417,7 @@ final class CreateModel {
     let sidecar = item.sidecar
     let model = sidecar.model
     var configuration: PipelineConfiguration
-    if let loaded = try? await engine.loadPipeline(for: model) {
+    if let loaded = try? await backend(for: .local).loadPipeline(for: model) {
       configuration = ModelDefaults.recommended(for: model, configuration: loaded)
     } else if let settings {
       configuration = settings
@@ -1440,7 +1444,7 @@ final class CreateModel {
   /// Runs an upscale job: the source clip's frames through the engine, with its soundtrack (at
   /// the result model's sample rate) and frame rate.
   private func upscaled(
-    _ request: GenerationEngine.Request, _ upscale: ClipUpscale,
+    _ request: GenerationEngine.Request, _ upscale: ClipUpscale, on backend: any GenerationBackend,
     progress: @escaping @Sendable (GenerationEngine.Progress) -> Void
   ) async throws -> GenerationEngine.Output {
     guard let source = history.item(tensorId: upscale.sourceTensorId), let clip = source.clip else {
@@ -1450,7 +1454,7 @@ final class CreateModel {
     var frames = await history.frames(of: source)
     guard frames.count == clip.frames.count else { throw ProjectError.badImage }
     if let limit = upscale.frameLimit, limit < frames.count { frames = Array(frames.prefix(limit)) }
-    var output = try await engine.upscale(request, frames: frames, progress: progress)
+    var output = try await backend.upscale(request, frames: frames, progress: progress)
     output.framesPerSecond = clip.framesPerSecond
     if let audio = await history.audio(of: source) {
       let rate = ModelZoo.audioSampleRateForModel(request.model)
@@ -1662,9 +1666,10 @@ final class CreateModel {
   private func loadDefaults(for model: String) {
     loadTask?.cancel()
     isLoadingModel = true
-    loadTask = Task { [engine] in
+    let backend = self.backend(for: .local)
+    loadTask = Task {
       do {
-        let configuration = try await engine.loadPipeline(for: model)
+        let configuration = try await backend.loadPipeline(for: model)
         guard !Task.isCancelled, selectedModel == model else { return }
         let modelDefaults = ModelDefaults.recommended(for: model, configuration: configuration)
         self.modelDefaults = modelDefaults

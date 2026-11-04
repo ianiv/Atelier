@@ -8,14 +8,15 @@ import Testing
 struct SavedQueueTests {
   func entry(
     _ id: UUID = UUID(), model: String = "m.ckpt", project: String = "P", hasCanvas: Bool = false,
-    weights: [Float] = [], upscale: String? = nil
+    weights: [Float] = [], upscale: String? = nil, target: String? = nil
   ) -> String {
     let weightList = weights.map { "\($0)" }.joined(separator: ",")
     let upscaleField = upscale.map { #","upscale":\#($0)"# } ?? ""
+    let targetField = target.map { #","target":\#($0)"# } ?? ""
     return """
     {"id":"\(id.uuidString)","model":"\(model)","prompt":"p","negativePrompt":"n","seed":5,\
     "settings":{"steps":{"number":{"_0":4}}},"project":"\(project)","parentTensorId":9,\
-    "hasCanvas":\(hasCanvas),"canvasIsImported":false,"moodboardWeights":[\(weightList)]\(upscaleField)}
+    "hasCanvas":\(hasCanvas),"canvasIsImported":false,"moodboardWeights":[\(weightList)]\(upscaleField)\(targetField)}
     """
   }
 
@@ -45,6 +46,23 @@ struct SavedQueueTests {
       let jobs = SavedQueue.load(project: "P", from: folder)
       #expect(jobs.map(\.model) == ["one.ckpt", "two.ckpt"])
       #expect(jobs.first?.settings["steps"] != nil)
+    }
+  }
+
+  @Test func aQueueSavedWithoutTargetsRunsLocally() throws {
+    try withTestFolder { folder in
+      try write([entry()], to: folder)
+      #expect(SavedQueue.load(project: "P", from: folder).map(\.target) == [.local])
+    }
+  }
+
+  @Test func aJobKeepsItsServer() throws {
+    try withTestFolder { folder in
+      let server = UUID()
+      let data = try JSONEncoder().encode(JobTarget.remote(serverID: server))
+      let target = try #require(String(data: data, encoding: .utf8))
+      try write([entry(target: target)], to: folder)
+      #expect(SavedQueue.load(project: "P", from: folder).map(\.target) == [.remote(serverID: server)])
     }
   }
 
