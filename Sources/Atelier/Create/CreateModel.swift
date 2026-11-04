@@ -628,8 +628,17 @@ final class CreateModel {
     #if os(iOS)
       backgroundTask.onStart = { [weak self] in self?.backgroundTaskStarted() }
       backgroundTask.onExpire = { [weak self] in self?.backgroundTaskExpired() }
+      // The request has to come from the foreground, and the system's display shows from then on, so
+      // it's made at the last moment and the task ends on return. Control Center and the like come
+      // through here too: the display just shows until the app is active again.
+      AppLifecycle.onResignActive { [weak self] in
+        guard let self, let job = queue.running else { return }
+        let text = backgroundTaskText(for: job)
+        backgroundTask.begin(title: text.title, subtitle: text.subtitle)
+      }
+      AppLifecycle.onBecomeActive { [weak self] in self?.backgroundTask.end() }
       // iPadOS stops GPU work in the background, unless a background task is running: hold the
-      // queue there and pick it up on return.
+      // queue there and pick it up on return (or when the task starts, if that's later).
       AppLifecycle.onEnterBackground { [weak self] in
         guard let self else { return }
         // iPadOS can end the app from here on, without warning.
@@ -1193,6 +1202,18 @@ final class CreateModel {
         if backgroundJob != nil { backgroundJobsDone += 1 }
         backgroundJob = job.id
       }
+      let text = backgroundTaskText(for: job)
+      let jobs = backgroundJobsDone + 1 + (queue.isPaused ? 0 : queue.waiting.count)
+      let fraction = Double(step) / Double(max(totalSteps, 1))
+      backgroundTask.update(
+        completed: (Double(backgroundJobsDone) + min(fraction, 1)) / Double(jobs), title: text.title,
+        subtitle: text.subtitle)
+    #endif
+  }
+
+  #if os(iOS)
+    /// What the system's display says about the queue.
+    private func backgroundTaskText(for job: JobQueue.Job) -> (title: String, subtitle: String) {
       let title =
         if job.export != nil {
           "Exporting a video"
@@ -1204,16 +1225,9 @@ final class CreateModel {
       let jobs = backgroundJobsDone + 1 + (queue.isPaused ? 0 : queue.waiting.count)
       let subtitle =
         jobs > 1 ? "\(backgroundJobsDone + 1) of \(jobs)" : "Step \(step) of \(max(totalSteps, step))"
-      // A request can only be made from the foreground; one made then covers the rest of the queue.
-      if AppLifecycle.isActive { backgroundTask.begin(title: title, subtitle: subtitle) }
-      let fraction = Double(step) / Double(max(totalSteps, 1))
-      backgroundTask.update(
-        completed: (Double(backgroundJobsDone) + min(fraction, 1)) / Double(jobs), title: title,
-        subtitle: subtitle)
-    #endif
-  }
+      return (title, subtitle)
+    }
 
-  #if os(iOS)
     /// The task can start after the app already went to the background and held the queue.
     private func backgroundTaskStarted() {
       syncBackgroundTask()

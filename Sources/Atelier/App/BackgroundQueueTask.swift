@@ -7,8 +7,8 @@ import Foundation
 /// time: GPU pressure, the user stopping it from that display, or too little progress. Everything
 /// about BackgroundTasks stays here. `CreateModel` decides when one should run.
 ///
-/// A request can only be submitted from the foreground, so one is made as the queue starts, and
-/// it covers every job until the queue stops.
+/// A request can only be submitted from the foreground, so one is made as the app is leaving it. It
+/// ends when the app comes back, so the display only shows while the app is away.
 @MainActor
 final class BackgroundQueueTask {
   private enum State {
@@ -82,6 +82,7 @@ final class BackgroundQueueTask {
       task.setTaskCompleted(success: true)
       return
     }
+    Log.queue.info("The background task started")
     state = .running(task)
     task.progress.totalUnitCount = 1_000
     task.expirationHandler = { [weak self] in
@@ -92,6 +93,7 @@ final class BackgroundQueueTask {
 
   private func expired() {
     guard case .running(let task) = state else { return }
+    Log.queue.info("The background task expired")
     task.setTaskCompleted(success: false)
     state = .declined
     onExpire?()
@@ -106,7 +108,8 @@ final class BackgroundQueueTask {
     }
   }
 
-  /// The queue stopped: it ran out of jobs, or was paused and the running one ended.
+  /// The app came back, or the queue stopped: it ran out of jobs, or was paused and the running
+  /// one ended.
   func end() {
     if case .running(let task) = state {
       // The work is done, though a job's last step can leave the count short of its total.
