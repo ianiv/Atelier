@@ -1,7 +1,7 @@
 import CoreGraphics
-import Diffusion
+@preconcurrency import Diffusion
 import Foundation
-import NNC
+@preconcurrency import NNC
 
 /// Upscales a clip with FlashVSR+ as one stream: the source stretched to the output size, its
 /// projection, the denoiser a chunk of 16 frames at a time against the windows it keeps, the
@@ -9,7 +9,7 @@ import NNC
 /// as each chunk is decoded, so a long clip needs no more memory than a short one.
 ///
 /// Runs on the calling thread; call it on the engine's queue.
-struct FlashVSRUpscaler {
+nonisolated struct FlashVSRUpscaler {
   enum Phase {
     case loading, upscaling
   }

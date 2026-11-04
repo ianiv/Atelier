@@ -4,7 +4,7 @@ import ImageIO
 import UniformTypeIdentifiers
 
 /// How a thumbnail was made, kept with its full-size image so Open in Create can bring both back.
-struct ThumbnailSource: Codable {
+nonisolated struct ThumbnailSource: Codable {
   var prompt: String
   var negativePrompt: String
   var model: String?
@@ -112,8 +112,12 @@ extension StyleStore {
   /// library's, or one made before full images were kept for every thumbnail).
   func fullThumbnailImage(_ id: UUID) async -> CGImage? {
     let urls = [Self.fullImageURL(id), Self.thumbnailURL(id)]
-    let image = await Task.detached { urls.lazy.compactMap { ImageLoader.image(at: $0) }.first }.value
+    let image = await Self.firstImage(at: urls)
     return image ?? thumbnail(id)
+  }
+
+  @concurrent private nonisolated static func firstImage(at urls: [URL]) async -> CGImage? {
+    urls.lazy.compactMap { ImageLoader.image(at: $0) }.first
   }
 
   /// The style's thumbnail, once `loadThumbnail` has read it.
@@ -125,10 +129,12 @@ extension StyleStore {
   func loadThumbnail(_ id: UUID) async {
     guard thumbnails[id] == nil else { return }
     let url = Self.thumbnailURL(id)
-    let image = await Task.detached {
-      CGImageSourceCreateWithURL(url as CFURL, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
-    }.value
+    let image = await Self.image(at: url)
     thumbnails[id] = .some(image)
+  }
+
+  @concurrent private nonisolated static func image(at url: URL) async -> CGImage? {
+    CGImageSourceCreateWithURL(url as CFURL, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
   }
 
   /// Sets the style's thumbnail from `image`, cropped to its centre square; nil removes it. With

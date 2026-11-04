@@ -1,16 +1,16 @@
-import _MediaGenerationKit
+@preconcurrency import _MediaGenerationKit
 import CoreGraphics
 import CoreTransferable
-import Diffusion
+@preconcurrency import Diffusion
 import Foundation
 import ImageIO
-import ModelZoo
-import NNC
+@preconcurrency import ModelZoo
+@preconcurrency import NNC
 import Observation
 import UniformTypeIdentifiers
 
 /// One generated image: a step in the current project.
-struct HistoryItem: Identifiable, Hashable {
+nonisolated struct HistoryItem: Identifiable, Hashable, Sendable {
   var id: StepID
   var tensorId: Int64
   var previewId: Int64
@@ -41,7 +41,7 @@ final class HistoryStore {
   /// A history item's settings summary. Built from the project's step; also the format of the
   /// JSON sidecars Atelier wrote before projects (imported once, see `importLegacyHistory`) and
   /// of the iTXt chunk in exported PNGs.
-  struct Sidecar: Codable {
+  nonisolated struct Sidecar: Codable, Sendable {
     var app = "Atelier"
     var createdAt: Date
     var durationSeconds: Double
@@ -113,11 +113,11 @@ final class HistoryStore {
 
   func reload() async {
     let project = project
-    let (tree, stored, output, ratings) = await Task.detached {
-      () -> (ProjectTree, StepID?, ProjectOutput, [Int64: Int]) in
+    let (tree, stored, output, ratings) = await project.read {
+      project -> (ProjectTree, StepID?, ProjectOutput, [Int64: Int]) in
       let tree = project.tree()
       return (tree, project.storedCurrentStep(in: tree), project.output, project.ratings)
-    }.value
+    }
     guard project === self.project else { return }
     self.output = output
     self.ratings = ratings
@@ -247,7 +247,7 @@ final class HistoryStore {
       parentTensorId = inputTensorId ?? parentTensorId
     }
     let moodboard = request.moodboard.compactMap { entry in
-      ImageTensor.tensor(from: entry.image).map { (tensor: $0, weight: entry.weight) }
+      ImageTensor.tensor(from: entry.image).map { Project.MoodboardTensor(tensor: $0, weight: entry.weight) }
     }
     let item: HistoryItem
     if let framesPerSecond = output.framesPerSecond {
@@ -286,14 +286,14 @@ final class HistoryStore {
   /// The step holding the image, in `project` (read fresh when it isn't the one loaded).
   private func step(tensorId: Int64, in project: Project) async -> StepID? {
     if project === self.project { return tree.step(tensorId: tensorId) }
-    return await Task.detached { project.tree(items: false).step(tensorId: tensorId) }.value
+    return await project.read { $0.tree(items: false).step(tensorId: tensorId) }
   }
 
   /// A step's moodboard images and weights (empty when it had none).
   func moodboard(at id: StepID, in projectName: String) async -> [(image: CGImage, weight: Float)] {
     guard projectName == project.name else { return [] }
     let project = project
-    return await Task.detached { project.moodboard(at: id) }.value
+    return await project.read { $0.moodboard(at: id) }
   }
 
   /// Removes the steps from the project. Later steps may be renumbered, so each is found by its
@@ -411,7 +411,7 @@ final class HistoryStore {
     let key = "\(project.url.path)#\(item.previewId)#\(half)" as NSString
     if let cached = Self.thumbnails.object(forKey: key) { return cached }
     let project = project
-    let image = await Task.detached { project.thumbnail(previewId: item.previewId, half: half) }.value
+    let image = await project.read { $0.thumbnail(previewId: item.previewId, half: half) }
     if let image { Self.thumbnails.setObject(image, forKey: key) }
     return image
   }
@@ -419,35 +419,35 @@ final class HistoryStore {
   /// The full-resolution image, decoded from the project's tensor.
   func image(for item: HistoryItem) async -> CGImage? {
     let project = project
-    return await Task.detached { project.image(for: item) }.value
+    return await project.read { $0.image(for: item) }
   }
 
   /// An Edit step's input step and image, while that step still exists in `projectName`.
   func input(of item: HistoryItem, in projectName: String) async -> (id: StepID, image: CGImage)? {
     guard projectName == project.name, let tensorId = item.inputTensorId else { return nil }
     let project = project
-    return await Task.detached { project.input(of: item.id, tensorId: tensorId) }.value
+    return await project.read { $0.input(of: item.id, tensorId: tensorId) }
   }
 
   /// The full-resolution image of a step in `projectName` (when that's the current project).
   func image(at id: StepID, in projectName: String) async -> CGImage? {
     guard projectName == project.name else { return nil }
     let project = project
-    return await Task.detached { project.image(at: id) }.value
+    return await project.read { $0.image(at: id) }
   }
 
   /// A step's image tensor in `projectName` (when that's the current project).
   func tensorId(at id: StepID, in projectName: String) async -> Int64? {
     guard projectName == project.name else { return nil }
     let project = project
-    return await Task.detached { project.imageTensorId(at: id) }.value
+    return await project.read { $0.imageTensorId(at: id) }
   }
 
   /// The full-resolution image `tensorId` in `projectName` (when that's the current project).
   func image(tensorId: Int64, in projectName: String) async -> CGImage? {
     guard projectName == project.name else { return nil }
     let project = project
-    return await Task.detached { project.image(tensorId: tensorId) }.value
+    return await project.read { $0.image(tensorId: tensorId) }
   }
 
   /// Writes a newly generated image or clip to the output folder when Settings or the project
@@ -466,24 +466,29 @@ final class HistoryStore {
         guard let image else { throw ProjectError.badImage }
         file = (try Self.pngData(image, sidecar: item.sidecar), nil, "png")
       }
-      try await Task.detached {
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        // Steps can be renumbered when the history branches, so never overwrite a file.
-        var url = folder.appendingPathComponent(name).appendingPathExtension(file.extension)
-        var n = 2
-        while FileManager.default.fileExists(atPath: url.path) {
-          url = folder.appendingPathComponent("\(name) \(n)").appendingPathExtension(file.extension)
-          n += 1
-        }
-        if let video = file.video {
-          try FileManager.default.copyItem(at: video, to: url)
-        } else {
-          try file.data?.write(to: url, options: .withoutOverwriting)
-        }
-      }.value
+      try await Self.write(data: file.data, video: file.video, extension: file.extension, name: name, to: folder)
       return nil
     } catch {
       return "Saved to the project, but not to the output folder: \(error.localizedDescription)"
+    }
+  }
+
+  /// Writes a file into the output folder, under a name no file there has.
+  @concurrent private nonisolated static func write(
+    data: Data?, video: URL?, extension fileExtension: String, name: String, to folder: URL
+  ) async throws {
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    // Steps can be renumbered when the history branches, so never overwrite a file.
+    var url = folder.appendingPathComponent(name).appendingPathExtension(fileExtension)
+    var n = 2
+    while FileManager.default.fileExists(atPath: url.path) {
+      url = folder.appendingPathComponent("\(name) \(n)").appendingPathExtension(fileExtension)
+      n += 1
+    }
+    if let video {
+      try FileManager.default.copyItem(at: video, to: url)
+    } else {
+      try data?.write(to: url, options: .withoutOverwriting)
     }
   }
 
@@ -493,9 +498,7 @@ final class HistoryStore {
   func frames(of item: HistoryItem) async -> [CGImage] {
     guard let clip = item.clip else { return [] }
     let project = project
-    return await Task.detached {
-      clip.frames.compactMap { project.image(tensorId: $0) }
-    }.value
+    return await project.read { project in clip.frames.compactMap { project.image(tensorId: $0) } }
   }
 
   /// One frame of a clip, full size.
@@ -508,7 +511,7 @@ final class HistoryStore {
   func audio(of item: HistoryItem) async -> (samples: Tensor<Float>, sampleRate: Int)? {
     guard let audioId = item.clip?.audioId else { return nil }
     let project = project
-    let samples = await Task.detached { project.audio(id: audioId) }.value
+    let samples = await project.read { $0.audio(id: audioId) }
     return samples.map { ($0, ModelZoo.audioSampleRateForModel(item.sidecar.model)) }
   }
 
@@ -516,7 +519,7 @@ final class HistoryStore {
   func audioInput(of item: HistoryItem) async -> Tensor<Float>? {
     guard let audioId = item.clip?.inputAudioId else { return nil }
     let project = project
-    return await Task.detached { project.audio(id: audioId) }.value
+    return await project.read { $0.audio(id: audioId) }
   }
 
   /// The clip as an MP4 with its soundtrack and settings, written once into the caches folder
@@ -660,7 +663,7 @@ final class HistoryStore {
   func importLegacyHistory() async {
     guard SessionState.isEnabled, !UserDefaults.standard.bool(forKey: Self.legacyImportedKey)
     else { return }
-    let legacy = await Task.detached { Self.scanLegacy(AppSettings.historyDirectory) }.value
+    let legacy = await Self.scanLegacy(AppSettings.historyDirectory)
     guard !legacy.isEmpty else {
       UserDefaults.standard.set(true, forKey: Self.legacyImportedKey)
       return
@@ -669,12 +672,7 @@ final class HistoryStore {
       ? project : Project(url: Self.url(for: Self.defaultProjectName))
     importProgress = (0, legacy.count)
     for (index, entry) in legacy.reversed().enumerated() {
-      let tensor = await Task.detached { () -> Tensor<FloatType>? in
-        guard let source = CGImageSourceCreateWithURL(entry.png as CFURL, nil),
-              let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
-        else { return nil }
-        return ImageTensor.tensor(from: image)
-      }.value
+      let tensor = await Self.legacyTensor(at: entry.png)
       if let tensor {
         let sidecar = entry.sidecar
         _ = try? await target.append(
@@ -690,7 +688,14 @@ final class HistoryStore {
     if target === project { await reload() }
   }
 
-  private nonisolated static func scanLegacy(_ root: URL) -> [(png: URL, sidecar: Sidecar)] {
+  @concurrent private nonisolated static func legacyTensor(at png: URL) async -> Tensor<FloatType>? {
+    guard let source = CGImageSourceCreateWithURL(png as CFURL, nil),
+          let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+    else { return nil }
+    return ImageTensor.tensor(from: image)
+  }
+
+  @concurrent private nonisolated static func scanLegacy(_ root: URL) async -> [(png: URL, sidecar: Sidecar)] {
     let decoder = JSONDecoder()
     decoder.dateDecodingStrategy = .iso8601
     let fileManager = FileManager.default
@@ -714,7 +719,7 @@ final class HistoryStore {
 }
 
 /// Inserts and reads PNG iTXt chunks.
-enum PNGText {
+nonisolated enum PNGText {
   /// Inserts an iTXt chunk right after IHDR.
   static func inserting(keyword: String, text: String, into png: Data) -> Data? {
     let bytes = [UInt8](png)
@@ -771,7 +776,7 @@ enum PNGText {
 }
 
 /// Minimal JSON tree for dumping Configuration, which isn't Codable in MGK.
-enum JSONValue: Codable, Hashable {
+nonisolated enum JSONValue: Codable, Hashable, Sendable {
   case null
   case bool(Bool)
   case number(Double)
@@ -856,7 +861,7 @@ enum JSONValue: Codable, Hashable {
 
 /// A PNG to drag into Finder (as a file) or another app (as image data), encoded on drop; a
 /// clip drags as its MP4.
-struct PNGExport: Transferable, Identifiable {
+nonisolated struct PNGExport: Transferable, Identifiable {
   /// The image tensor.
   var id: Int64
   var name: String

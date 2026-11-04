@@ -1,9 +1,9 @@
 #if os(macOS)
-import _MediaGenerationKit
+@preconcurrency import _MediaGenerationKit
 import AVFoundation
 import ImageIO
-import ModelZoo
-import NNC
+@preconcurrency import ModelZoo
+@preconcurrency import NNC
 import SwiftUI
 
 /// Launch-argument driver for scripted checks: fills the Create screen, presses Generate, logs

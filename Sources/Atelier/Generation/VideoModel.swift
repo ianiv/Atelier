@@ -1,13 +1,13 @@
-import DataModels
-import Diffusion
+@preconcurrency import DataModels
+@preconcurrency import Diffusion
 import Foundation
-import ImageGenerator
-import ModelZoo
+@preconcurrency import ImageGenerator
+@preconcurrency import ModelZoo
 
 /// What Atelier needs to know about a video model: its frame rate, which frame counts it takes,
 /// and which inputs and outputs it has. Read from ModelZoo, which knows a community model once
 /// its pipeline has loaded.
-struct VideoModel: Equatable {
+nonisolated struct VideoModel: Equatable {
   let version: ModelVersion
   /// The model's modifier, or its LoRAs' (`ImageGeneratorUtils.modifierForModel`).
   let modifier: SamplerModifier
@@ -83,7 +83,7 @@ struct VideoModel: Equatable {
   }
 }
 
-extension PipelineConfiguration {
+nonisolated extension PipelineConfiguration {
   /// The video model this configuration runs, if it's one.
   var videoModel: VideoModel? {
     VideoModel(model: self.model, loras: self.loras.compactMap(\.file))

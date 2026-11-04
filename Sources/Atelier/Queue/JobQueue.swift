@@ -7,7 +7,7 @@ import Observation
 @MainActor
 @Observable
 final class JobQueue {
-  struct Job: Identifiable {
+  nonisolated struct Job: Identifiable {
     enum Status: Equatable {
       case waiting, running
       case finished(tensorId: Int64)

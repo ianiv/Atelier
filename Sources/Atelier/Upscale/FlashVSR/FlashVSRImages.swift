@@ -1,12 +1,12 @@
 import CoreGraphics
-import Diffusion
+@preconcurrency import Diffusion
 import Foundation
-import NNC
+@preconcurrency import NNC
 
 /// The pictures around FlashVSR: the source stretched to the output size the way the reference
 /// does (Pillow's bicubic), and the wavelet color fix that gives each restored frame its
 /// source's low frequencies.
-enum FlashVSRImages {
+nonisolated enum FlashVSRImages {
   /// `image` as interleaved u8 RGB at its own size.
   static func rgb(_ image: CGImage) -> (pixels: [UInt8], width: Int, height: Int)? {
     let width = image.width, height = image.height
@@ -156,7 +156,7 @@ enum FlashVSRImages {
 }
 
 /// `tensors` joined along `axis` (a lone tensor as is).
-func concatenated<T: TensorNumeric>(_ tensors: [DynamicGraph.Tensor<T>], axis: Int = 0)
+nonisolated func concatenated<T: TensorNumeric>(_ tensors: [DynamicGraph.Tensor<T>], axis: Int = 0)
   -> DynamicGraph.Tensor<T>
 {
   if tensors.count == 1 { return tensors[0] }

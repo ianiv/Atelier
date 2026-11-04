@@ -3,7 +3,7 @@ import Photos
 
 /// Keeps a security-scoped file or folder open while something needs it, such as a file picked on
 /// iPad waiting in the import sheet. Free on the Mac, where Atelier isn't sandboxed.
-final class ScopedAccess {
+final nonisolated class ScopedAccess {
   let url: URL
   private let started: Bool
 
@@ -21,7 +21,7 @@ final class ScopedAccess {
 /// container only to a folder the user picked, and only through a bookmark after a relaunch. The
 /// settings keep the folder's path; this maps the path back to the bookmark. The Mac uses the
 /// path as it is.
-enum FolderBookmarks {
+nonisolated enum FolderBookmarks {
   private static let key = "folderBookmarks"
 
   /// Remembers a folder the file picker returned.
@@ -35,7 +35,7 @@ enum FolderBookmarks {
     #endif
   }
 
-  private static var held: [String: ScopedAccess] = [:]
+  @MainActor private static var held: [String: ScopedAccess] = [:]
 
   /// Keeps the folders at `paths` open until others are kept open in their place, for the models
   /// folders the engine reads from.
@@ -76,10 +76,10 @@ enum FolderBookmarks {
 }
 
 /// The photo library, for Save to Photos.
-enum PhotoLibrary {
+nonisolated enum PhotoLibrary {
   /// Adds PNGs (and videos, from their files) to the library, asking for permission to add the
   /// first time.
-  static func save(_ pngs: [Data], videos: [URL] = []) async throws {
+  @concurrent static func save(_ pngs: [Data], videos: [URL] = []) async throws {
     guard await PHPhotoLibrary.requestAuthorization(for: .addOnly) == .authorized else {
       throw CocoaError(.fileWriteNoPermission, userInfo: [
         NSLocalizedDescriptionKey:

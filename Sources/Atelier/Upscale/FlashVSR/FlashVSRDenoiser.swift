@@ -1,6 +1,7 @@
-import Diffusion
+@preconcurrency import Diffusion
 import Foundation
-import NNC
+@preconcurrency import NNC
+import Synchronization
 
 /// FlashVSR+'s denoiser: Wan 2.1-T2V-1.3B's transformer driven as FlashVSR drives it. One step
 /// at t = 1000 on noise, with the source projection's rows added to its input and a fixed
@@ -12,7 +13,7 @@ import NNC
 /// 8×8, each query block scored against every key block by their means, and a query block reads
 /// only the key blocks in a spatial band around it whose scores clear a threshold shared by the
 /// chunk. Turbo makes 25 of the 30 layers read a 3×3 band and keep one window.
-final class FlashVSRDenoiser {
+final nonisolated class FlashVSRDenoiser {
   enum Failure: LocalizedError {
     case badCheckpoint(String)
 
@@ -785,19 +786,24 @@ final class FlashVSRDenoiser {
 }
 
 /// Timing for `--flashvsr-check` (FLASHVSR_PROFILE=1): seconds per named step, printed per chunk.
-enum Profile {
-  nonisolated(unsafe) static var enabled = ProcessInfo.processInfo.environment["FLASHVSR_PROFILE"] != nil
-  nonisolated(unsafe) static var last = Date()
-  nonisolated(unsafe) static var totals: [String: Double] = [:]
+nonisolated enum Profile {
+  static let enabled = ProcessInfo.processInfo.environment["FLASHVSR_PROFILE"] != nil
+  private static let state = Mutex((last: Date(), totals: [String: Double]()))
   static func mark(_ name: String, graph _: DynamicGraph? = nil) {
     guard enabled else { return }
     let now = Date()
-    totals[name, default: 0] += now.timeIntervalSince(last)
-    last = now
+    state.withLock {
+      $0.totals[name, default: 0] += now.timeIntervalSince($0.last)
+      $0.last = now
+    }
   }
   static func report() {
     guard enabled else { return }
+    let totals = state.withLock {
+      let totals = $0.totals
+      $0.totals = [:]
+      return totals
+    }
     print("PROFILE", totals.sorted { $0.key < $1.key }.map { "\($0.key)=\(String(format: "%.2f", $0.value))" }.joined(separator: " "))
-    totals = [:]
   }
 }

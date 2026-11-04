@@ -1,6 +1,6 @@
 import AVFoundation
 import Foundation
-import NNC
+@preconcurrency import NNC
 import SwiftUI
 import UniformTypeIdentifiers
 

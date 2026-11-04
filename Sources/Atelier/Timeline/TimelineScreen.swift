@@ -503,7 +503,7 @@ struct TimelineScreen: View {
   }
 }
 
-extension Array {
+nonisolated extension Array {
   subscript(safeIndex index: Int) -> Element? {
     indices.contains(index) ? self[index] : nil
   }

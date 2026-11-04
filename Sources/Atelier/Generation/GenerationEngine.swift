@@ -1,18 +1,19 @@
-import _MediaGenerationKit
-import AudioConverter
+@preconcurrency import _MediaGenerationKit
+@preconcurrency import AudioConverter
 import CoreGraphics
-import DataModels
-import Dflat
-import Diffusion
+@preconcurrency import DataModels
+@preconcurrency import Dflat
+@preconcurrency import Diffusion
 import Foundation
-import ImageGenerator
-import LocalImageGenerator
-import ModelZoo
-import NNC
+@preconcurrency import ImageGenerator
+@preconcurrency import LocalImageGenerator
+@preconcurrency import ModelZoo
+@preconcurrency import NNC
+import Synchronization
 
 /// Owns a cached pipeline for the current model and runs one generation at a time.
 actor GenerationEngine {
-  struct Request: Sendable {
+  nonisolated struct Request: Sendable {
     var model: String
     var prompt: String
     var negativePrompt: String
@@ -45,7 +46,7 @@ actor GenerationEngine {
   }
 
   /// What a run made: one frame for an image, every frame of a clip and its soundtrack for video.
-  struct Output: @unchecked Sendable {
+  nonisolated struct Output: Sendable {
     var frames: [Tensor<FloatType>]
     /// PCM in [channels, samples] order at `audioSampleRate`.
     var audio: Tensor<Float>?
@@ -58,12 +59,12 @@ actor GenerationEngine {
     var isVideo: Bool { framesPerSecond != nil }
   }
 
-  struct Reference: Sendable {
+  nonisolated struct Reference: Sendable {
     var image: CGImage
     var weight: Float
   }
 
-  enum Progress: Sendable {
+  nonisolated enum Progress: Sendable {
     case state(MediaGenerationPipeline.State)
     case preview(CGImage, step: Int, totalSteps: Int)
     /// A video run's preview: one image per latent frame, played as a flip-book.
@@ -229,14 +230,19 @@ actor GenerationEngine {
     let prompt = request.prompt
     let negativePrompt = request.negativePrompt
     progress(.state(.preparing))
-    let result: ([Tensor<FloatType>]?, [Tensor<Float>]?, Int) = try await withTaskCancellationHandler {
+    let engineHints = hints
+    let result: EngineResult = try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
         engine.queue.async {
           let result = engine.generator.generate(
             trace: ImageGeneratorTrace(fromBridge: true), image: image, scaleFactor: 1, mask: nil,
-            hints: hints, text: prompt, negativeText: negativePrompt, configuration: configuration,
+            hints: engineHints, text: prompt, negativeText: negativePrompt, configuration: configuration,
             fileMapping: [:], keywords: [],
-            cancellation: { cancellation.set($0) },
+            cancellation: { cancel in
+              // Made to be called from another thread (MGK's bridge does), but not typed @Sendable.
+              nonisolated(unsafe) let cancel = cancel
+              cancellation.set { cancel() }
+            },
             feedback: { signpost, _, latent in
               guard !cancellation.isCancelled else { return false }
               let state = Self.state(for: signpost, totalSteps: totalSteps)
@@ -252,18 +258,18 @@ actor GenerationEngine {
           if cancellation.isCancelled {
             continuation.resume(throwing: CancellationError())
           } else {
-            continuation.resume(returning: result)
+            continuation.resume(returning: EngineResult(frames: result.0, audio: result.1))
           }
         }
       }
     } onCancel: {
       cancellation.cancel()
     }
-    let frames = (result.0 ?? []).flatMap(Self.frames(of:))
+    let frames = (result.frames ?? []).flatMap(Self.frames(of:))
     guard !frames.isEmpty else {
       throw MediaGenerationKitError.generationFailed("No video was returned")
     }
-    var audio = result.1?.first
+    var audio = result.audio?.first
     let framesPerSecond = Self.framesPerSecond(video, settings)
     // LongCat lip-syncs to the voice it's given and makes no sound: the clip keeps that voice.
     if audio == nil, version == .longcatVideoAvatar1_5, let audioInput {
@@ -282,7 +288,7 @@ actor GenerationEngine {
   func upscale(
     _ request: Request, frames: [CGImage],
     progress: @escaping @Sendable (Progress) -> Void
-  ) async throws -> [Tensor<FloatType>] {
+  ) async throws -> Output {
     guard let upscale = request.upscale, let first = frames.first else { throw ProjectError.badImage }
     await waitForTurn()
     defer { endTurn() }
@@ -300,7 +306,7 @@ actor GenerationEngine {
       }
       let tensors = images.compactMap(ImageTensor.tensor(from:))
       guard tensors.count == frames.count else { throw ProjectError.badImage }
-      return tensors
+      return Output(frames: tensors)
     case .flashVSR:
       guard let files = FlashVSRFiles.installed(upscale.variant ?? .turbo) else {
         throw FlashVSRFiles.Failure.missing
@@ -317,14 +323,14 @@ actor GenerationEngine {
           },
           shouldContinue: shouldContinue
         ) { tensors.append($0) }
-        return tensors
+        return Output(frames: tensors)
       }
     }
   }
 
   /// Runs `work` in the engine's turn, so it never runs alongside a generation (an upscaled
   /// timeline export).
-  func inTurn<T>(_ work: () async throws -> T) async throws -> T {
+  func inTurn<T: Sendable>(_ work: @concurrent @Sendable () async throws -> T) async throws -> T {
     await waitForTurn()
     defer { endTurn() }
     try Task.checkCancellation()
@@ -334,7 +340,7 @@ actor GenerationEngine {
   /// Runs `work` on the engine's queue after dropping the models the engine keeps loaded, which
   /// FlashVSR+ needs the memory of. Call it in the engine's turn. `work` checks `shouldContinue`,
   /// which turns false when the task is cancelled.
-  func onEngineQueue<T>(
+  func onEngineQueue<T: Sendable>(
     _ work: @escaping @Sendable (_ shouldContinue: @escaping () -> Bool) throws -> T
   ) async throws -> T {
     if var dictionary = Self.engineWorkspace()?.dictionary {
@@ -549,36 +555,45 @@ actor GenerationEngine {
   }
 }
 
+/// What a direct engine run returns, carried from the engine's queue back to the actor.
+private nonisolated struct EngineResult: Sendable {
+  var frames: [Tensor<FloatType>]?
+  var audio: [Tensor<Float>]?
+}
+
 /// Cancels a direct engine run (MGK's `MediaGenerationCancellationBridge`): the engine hands over
 /// its cancel function once sampling starts, and the feedback callback stops it at the next step.
-private final class EngineCancellation: @unchecked Sendable {
-  private let lock = NSLock()
-  private var cancelEngine: (() -> Void)?
-  private var cancelled = false
-  private var finished = false
+private final nonisolated class EngineCancellation: Sendable {
+  private struct State {
+    var cancelEngine: (@Sendable () -> Void)?
+    var cancelled = false
+    var finished = false
+  }
 
-  var isCancelled: Bool { lock.withLock { cancelled } }
+  private let state = Mutex(State())
 
-  func set(_ cancel: @escaping () -> Void) {
-    let cancelNow = lock.withLock {
-      cancelEngine = cancel
-      return cancelled && !finished
+  var isCancelled: Bool { state.withLock { $0.cancelled } }
+
+  func set(_ cancel: @escaping @Sendable () -> Void) {
+    let cancelNow = state.withLock {
+      $0.cancelEngine = cancel
+      return $0.cancelled && !$0.finished
     }
     if cancelNow { cancel() }
   }
 
   func cancel() {
-    let cancelEngine = lock.withLock {
-      cancelled = true
-      return finished ? nil : self.cancelEngine
+    let cancelEngine = state.withLock {
+      $0.cancelled = true
+      return $0.finished ? nil : $0.cancelEngine
     }
     cancelEngine?()
   }
 
   func finish() {
-    lock.withLock {
-      finished = true
-      cancelEngine = nil
+    state.withLock {
+      $0.finished = true
+      $0.cancelEngine = nil
     }
   }
 }

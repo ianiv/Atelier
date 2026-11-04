@@ -4,7 +4,7 @@ import Observation
 /// Clips from a project put in order: each entry plays part of a clip (from `start` up to, not
 /// including, `end`). Nothing is copied; entries name their clip by its first frame's image
 /// tensor, which a fork or delete doesn't change.
-struct Timeline: Codable, Identifiable, Hashable {
+nonisolated struct Timeline: Codable, Identifiable, Hashable {
   struct Entry: Codable, Identifiable, Hashable {
     var id = UUID()
     /// The clip, by its first frame's image tensor (`HistoryItem.tensorId`).
@@ -32,7 +32,7 @@ struct Timeline: Codable, Identifiable, Hashable {
 
 /// Where a run started from a timeline frame goes when it finishes: right after that frame (the
 /// rest of the entry is cut off), or for a bridge, between that frame and the next entry.
-struct TimelinePlacement: Codable, Hashable, Sendable {
+nonisolated struct TimelinePlacement: Codable, Hashable, Sendable {
   var id = UUID()
   var project: String
   var timeline: UUID
@@ -47,7 +47,7 @@ struct TimelinePlacement: Codable, Hashable, Sendable {
 
 /// Where each entry plays, in seconds: entries follow one another, overlapping by their
 /// crossfades. Entries whose clip is gone are left out.
-struct TimelineLayout {
+nonisolated struct TimelineLayout {
   struct Segment {
     var entry: Timeline.Entry
     var item: HistoryItem

@@ -1,9 +1,9 @@
-import _MediaGenerationKit
-import DataModels
+@preconcurrency import _MediaGenerationKit
+@preconcurrency import DataModels
 import Foundation
-import ScriptDataModels
+@preconcurrency import ScriptDataModels
 
-extension PipelineConfiguration {
+nonisolated extension PipelineConfiguration {
   /// The engine's own configuration for these settings: MGK's fields as MGK writes them, then the
   /// ones only the app carries. For runs that call the engine directly
   /// (`GenerationEngine.generateVideo`).
@@ -14,7 +14,7 @@ extension PipelineConfiguration {
   }
 }
 
-extension MediaGenerationPipeline.Configuration {
+nonisolated extension MediaGenerationPipeline.Configuration {
   /// The engine's own configuration for these settings, as MGK builds it before a run
   /// (`MediaGenerationPipeline.Configuration.runtimeConfiguration`, internal there): the model's
   /// recommended template with every public field written over it, through the engine's

@@ -3,10 +3,11 @@ import CoreGraphics
 import CoreMedia
 import CoreVideo
 import Foundation
-import NNC
+@preconcurrency import NNC
+import Synchronization
 
 /// The codec clips are written with (Settings ▸ General).
-enum VideoCodec: String, CaseIterable, Identifiable {
+nonisolated enum VideoCodec: String, CaseIterable, Identifiable {
   case h264, hevc
 
   var id: String { rawValue }
@@ -27,7 +28,7 @@ enum VideoCodec: String, CaseIterable, Identifiable {
 /// Writes a clip as an MP4: its frames, its soundtrack as AAC, and its settings as metadata in
 /// the iTunes tags MP4 files carry (QuickTime's own keys are only kept in .mov). After the engine
 /// CLI's `writeVideo` (Apps/DrawThingsCLI).
-enum ClipVideo {
+nonisolated enum ClipVideo {
   struct Metadata {
     /// Draw Things' summary of the prompt and settings, as an image's description.
     var description: String
@@ -37,7 +38,7 @@ enum ClipVideo {
 
   /// Writes `count` frames, each from `frame(i)` (all one size), at `framesPerSecond`, with
   /// `audio` (PCM in [channels, samples] order) at `audioSampleRate`.
-  static func write(
+  @concurrent static func write(
     to url: URL, count: Int, frame: @escaping @Sendable (Int) -> CGImage?, framesPerSecond: Double,
     audio: Tensor<Float>?, audioSampleRate: Int, codec: VideoCodec, metadata: Metadata?
   ) async throws {
@@ -75,45 +76,47 @@ enum ClipVideo {
     let frameDuration = Self.frameDuration(framesPerSecond)
     let queue = DispatchQueue(label: "Atelier.ClipVideo")
     let state = WriteState()
+    let objects = WriterObjects(writer: writer, video: video, sound: sound, adaptor: adaptor)
     try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-      state.onDone = { error in
+      state.setOnDone { error in
         if let error {
-          writer.cancelWriting()
+          objects.writer.cancelWriting()
           continuation.resume(throwing: error)
         } else {
-          writer.finishWriting {
-            if writer.status == .completed {
+          objects.writer.finishWriting {
+            if objects.writer.status == .completed {
               continuation.resume()
             } else {
-              continuation.resume(throwing: writer.error ?? ClipVideoError.cantWrite)
+              continuation.resume(throwing: objects.writer.error ?? ClipVideoError.cantWrite)
             }
           }
         }
       }
-      state.pending = sound == nil ? 1 : 2
-      var index = 0
-      video.requestMediaDataWhenReady(on: queue) {
-        while video.isReadyForMoreMediaData, !state.isDone {
+      state.setPending(objects.sound == nil ? 1 : 2)
+      objects.video.requestMediaDataWhenReady(on: queue) {
+        while objects.video.isReadyForMoreMediaData, !state.isDone {
+          let index = state.nextFrame
           guard index < count else {
-            video.markAsFinished()
+            objects.video.markAsFinished()
             state.finishOne()
             return
           }
-          guard let pool = adaptor.pixelBufferPool, let image = index == 0 ? first : frame(index),
+          guard let pool = objects.adaptor.pixelBufferPool, let image = index == 0 ? first : frame(index),
                 let buffer = pixelBuffer(image, pool: pool),
-                adaptor.append(buffer, withPresentationTime: CMTimeMultiply(frameDuration, multiplier: Int32(index)))
+                objects.adaptor.append(buffer, withPresentationTime: CMTimeMultiply(frameDuration, multiplier: Int32(index)))
           else {
-            state.fail(writer.error ?? ClipVideoError.cantWrite)
+            state.fail(objects.writer.error ?? ClipVideoError.cantWrite)
             return
           }
-          index += 1
+          state.nextFrame = index + 1
         }
       }
-      if let sound, let samples {
+      if objects.sound != nil, let samples {
         let total = samples.shape[1]
-        var offset = 0
-        sound.requestMediaDataWhenReady(on: queue) {
+        objects.sound?.requestMediaDataWhenReady(on: queue) {
+          guard let sound = objects.sound else { return }
           while sound.isReadyForMoreMediaData, !state.isDone {
+            let offset = state.nextSample
             guard offset < total else {
               sound.markAsFinished()
               state.finishOne()
@@ -125,10 +128,10 @@ enum ClipVideo {
                 samples, offset: offset, count: chunk, sampleRate: Double(audioSampleRate)),
               sound.append(buffer)
             else {
-              state.fail(writer.error ?? ClipVideoError.cantWrite)
+              state.fail(objects.writer.error ?? ClipVideoError.cantWrite)
               return
             }
-            offset += chunk
+            state.nextSample = offset + chunk
           }
         }
       }
@@ -137,7 +140,7 @@ enum ClipVideo {
 
   /// The settings an Atelier video carries (its comment, when that's a sidecar), read off the
   /// main actor.
-  static func settings(at url: URL) async -> String? {
+  @concurrent static func settings(at url: URL) async -> String? {
     let asset = AVURLAsset(url: url)
     guard let items = try? await asset.load(.metadata) else { return nil }
     for item in items where item.identifier == .iTunesMetadataUserComment {
@@ -147,7 +150,7 @@ enum ClipVideo {
   }
 
   /// A video's first frame.
-  static func firstFrame(at url: URL) async -> CGImage? {
+  @concurrent static func firstFrame(at url: URL) async -> CGImage? {
     let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
     generator.appliesPreferredTrackTransform = true
     return try? await generator.image(at: .zero).image
@@ -284,28 +287,70 @@ enum ClipVideo {
   }
 }
 
+/// The writer and its inputs, for the callbacks on the writer's queue. `@unchecked` because
+/// AVFoundation doesn't mark them Sendable; only the writer's queue uses them while writing.
+private nonisolated struct WriterObjects: @unchecked Sendable {
+  let writer: AVAssetWriter
+  let video: AVAssetWriterInput
+  let sound: AVAssetWriterInput?
+  let adaptor: AVAssetWriterInputPixelBufferAdaptor
+}
+
 /// Tracks the video and audio inputs finishing, on the writer's queue.
-private final class WriteState: @unchecked Sendable {
-  var pending = 0
-  var isDone = false
-  var onDone: ((Error?) -> Void)?
+private final nonisolated class WriteState: Sendable {
+  private struct Values {
+    var pending = 0
+    var isDone = false
+    var onDone: (@Sendable (Error?) -> Void)?
+    var nextFrame = 0
+    var nextSample = 0
+  }
+
+  private let values = Mutex(Values())
+
+  var isDone: Bool { values.withLock { $0.isDone } }
+
+  /// The next frame to write.
+  var nextFrame: Int {
+    get { values.withLock { $0.nextFrame } }
+    set { values.withLock { $0.nextFrame = newValue } }
+  }
+
+  /// The next audio sample to write.
+  var nextSample: Int {
+    get { values.withLock { $0.nextSample } }
+    set { values.withLock { $0.nextSample = newValue } }
+  }
+
+  func setPending(_ count: Int) {
+    values.withLock { $0.pending = count }
+  }
+
+  func setOnDone(_ onDone: @escaping @Sendable (Error?) -> Void) {
+    values.withLock { $0.onDone = onDone }
+  }
 
   func finishOne() {
-    pending -= 1
-    if pending == 0, !isDone {
-      isDone = true
-      onDone?(nil)
+    let onDone = values.withLock { values -> (@Sendable (Error?) -> Void)? in
+      values.pending -= 1
+      guard values.pending == 0, !values.isDone else { return nil }
+      values.isDone = true
+      return values.onDone
     }
+    onDone?(nil)
   }
 
   func fail(_ error: Error) {
-    guard !isDone else { return }
-    isDone = true
+    let onDone = values.withLock { values -> (@Sendable (Error?) -> Void)? in
+      guard !values.isDone else { return nil }
+      values.isDone = true
+      return values.onDone
+    }
     onDone?(error)
   }
 }
 
-enum ClipVideoError: LocalizedError {
+nonisolated enum ClipVideoError: LocalizedError {
   case noFrames
   case cantWrite
 

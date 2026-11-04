@@ -1,6 +1,6 @@
-import Diffusion
+@preconcurrency import Diffusion
 import Foundation
-import NNC
+@preconcurrency import NNC
 
 /// FlashVSR's tiny conditional decoder (`TCDecoder.ckpt`, a TAEHV-style decoder): turns each
 /// latent frame into 4 frames at 8× its size, reading the source (resized to the output size)
@@ -8,7 +8,7 @@ import NNC
 /// latent frame to the next, so a clip decodes in pieces exactly as in one pass.
 ///
 /// A stream's first latent frame makes 1 frame (its first 3 are dropped); each later one makes 4.
-final class FlashVSRTinyDecoder {
+final nonisolated class FlashVSRTinyDecoder {
   let latentHeight: Int
   let latentWidth: Int
   /// Latent frames 1×: conv, conv, MemBlocks 5–7, then ×2, TGrow (stride 1), conv, MemBlocks 11–13,

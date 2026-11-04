@@ -1,5 +1,5 @@
 #if os(macOS)
-import _MediaGenerationKit
+@preconcurrency import _MediaGenerationKit
 import SwiftUI
 
 extension Automation {

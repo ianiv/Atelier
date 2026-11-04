@@ -1,9 +1,9 @@
-import _MediaGenerationKit
+@preconcurrency import _MediaGenerationKit
 import AVFoundation
 import CoreGraphics
-import Diffusion
+@preconcurrency import Diffusion
 import Foundation
-import ModelZoo
+@preconcurrency import ModelZoo
 import Observation
 import UserNotifications
 
@@ -12,14 +12,14 @@ import UserNotifications
 @Observable
 final class CreateModel {
   /// The running job's progress.
-  enum Phase: Equatable {
+  nonisolated enum Phase: Equatable {
     case idle
     case running(String)
     case cancelling
   }
 
   /// Generate starts from the prompt alone; Edit also sends the canvas to the model.
-  enum CanvasMode: String {
+  nonisolated enum CanvasMode: String {
     case generate, edit
   }
 
@@ -806,9 +806,13 @@ final class CreateModel {
   private func reachableModelsDirectories() async -> [String] {
     let primary = modelsDirectory
     let additional = additionalModelsDirectories
-    return await Task.detached {
-      AppSettings.availableModelsDirectories(primary: primary, additional: additional)
-    }.value
+    return await Self.availableModelsDirectories(primary: primary, additional: additional)
+  }
+
+  @concurrent private nonisolated static func availableModelsDirectories(
+    primary: String, additional: [String]
+  ) async -> [String] {
+    AppSettings.availableModelsDirectories(primary: primary, additional: additional)
   }
 
   /// Rereads the models when a models folder has come or gone since the last read.
@@ -865,13 +869,15 @@ final class CreateModel {
     }
   }
 
+  @concurrent private nonisolated static func fileNames(in directories: [String]) async -> [String] {
+    Set(directories.flatMap { (try? FileManager.default.contentsOfDirectory(atPath: $0)) ?? [] })
+      .sorted()
+  }
+
   private func loadModelList() async {
     let models = await engine.downloadedModels()
     let directories = availableModelsDirectories
-    let modelFiles = await Task.detached {
-      Set(directories.flatMap { (try? FileManager.default.contentsOfDirectory(atPath: $0)) ?? [] })
-        .sorted()
-    }.value
+    let modelFiles = await Self.fileNames(in: directories)
     // Assigned after the last await, so callers pick a selection before the model picker redraws.
     self.models = models
     self.modelFiles = modelFiles
@@ -1329,8 +1335,8 @@ final class CreateModel {
     var frames = await history.frames(of: source)
     guard frames.count == clip.frames.count else { throw ProjectError.badImage }
     if let limit = upscale.frameLimit, limit < frames.count { frames = Array(frames.prefix(limit)) }
-    let tensors = try await engine.upscale(request, frames: frames, progress: progress)
-    var output = GenerationEngine.Output(frames: tensors, framesPerSecond: clip.framesPerSecond)
+    var output = try await engine.upscale(request, frames: frames, progress: progress)
+    output.framesPerSecond = clip.framesPerSecond
     if let audio = await history.audio(of: source) {
       let rate = ModelZoo.audioSampleRateForModel(request.model)
       var samples = ClipUpscale.resample(audio.samples, from: audio.sampleRate, to: rate)
@@ -1345,7 +1351,7 @@ final class CreateModel {
     return output
   }
 
-  enum UpscaleError: LocalizedError {
+  nonisolated enum UpscaleError: LocalizedError {
     case sourceMissing
 
     var errorDescription: String? { "The clip to upscale is no longer in this project." }

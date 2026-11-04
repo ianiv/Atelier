@@ -5,7 +5,7 @@ import Observation
 /// A prompt style: a template the prompt is written into at Generate. Each `{{TAG}}` in it is a
 /// box on the Create screen in place of the prompt box; `{{SUBJECT}}` is the prompt itself.
 /// `{{TAG:text}}` gives the text used when the box is left empty. The format is in docs/styles.md.
-struct Style: Codable, Identifiable, Hashable {
+nonisolated struct Style: Codable, Identifiable, Hashable {
   var id = UUID()
   var name: String
   var category = ""
@@ -128,7 +128,7 @@ struct Style: Codable, Identifiable, Hashable {
 
 /// Reads and writes style files: Markdown with a `#` heading per category, `##` per subcategory
 /// and `###` per style, whose `TEMPLATE:`, `NEGATIVE:` and `NOTES:` sections follow (docs/styles.md).
-enum StyleFile {
+nonisolated enum StyleFile {
   enum Field: String, CaseIterable {
     case template = "TEMPLATE", negative = "NEGATIVE", notes = "NOTES"
   }

@@ -275,7 +275,7 @@ struct HistoryView: View {
     }
   }
 
-  private static let gridSpace = "HistoryGrid"
+  private nonisolated static let gridSpace = "HistoryGrid"
 
   private var gridCells: some View {
     LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 10)], spacing: 10) {

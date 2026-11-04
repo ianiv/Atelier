@@ -4,7 +4,7 @@ import Foundation
 /// A layout prompt: a caption plus boxes, each with what goes in it. The models that read one take
 /// it as prompt text, each in its own format, so the prompt itself is where a layout is kept:
 /// `prompt(_:width:height:)` writes it and `init?(prompt:format:width:height:)` reads it back.
-struct LayoutPrompt: Equatable {
+nonisolated struct LayoutPrompt: Equatable {
   /// The models that read layouts, and how each writes one.
   enum Format: Equatable {
     /// A caption citing `<id>` tags, a space, then `[{"id", "bbox", "desc"}, …]`. Boxes are
@@ -279,7 +279,7 @@ struct LayoutPrompt: Equatable {
   }
 }
 
-private extension Comparable {
+private nonisolated extension Comparable {
   func clamped(to range: ClosedRange<Self>) -> Self {
     min(max(self, range.lowerBound), range.upperBound)
   }

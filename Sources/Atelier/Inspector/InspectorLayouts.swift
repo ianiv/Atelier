@@ -245,7 +245,7 @@ final class LayoutStore {
 }
 
 /// Saved setting values, applied on top of the selected model's defaults.
-struct Preset: Codable, Hashable, Identifiable {
+nonisolated struct Preset: Codable, Hashable, Identifiable {
   var name: String
   /// Registry id → value, in the same encoding as history sidecars.
   var values: [String: JSONValue]

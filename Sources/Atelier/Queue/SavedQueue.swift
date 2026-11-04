@@ -4,7 +4,7 @@ import Foundation
 /// The waiting jobs (and the one running) kept across a quit, in
 /// ~/Library/Application Support/Atelier/Queue/: index.json plus each job's canvas and moodboard
 /// images as PNG. They come back paused. Agents' jobs aren't kept: nobody waits for them anymore.
-enum SavedQueue {
+nonisolated enum SavedQueue {
   fileprivate struct Entry: Codable {
     var id: UUID
     var model: String

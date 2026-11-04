@@ -1,10 +1,10 @@
 #if os(macOS)
-import _MediaGenerationKit
+@preconcurrency import _MediaGenerationKit
 import AppKit
 import CoreGraphics
 import Foundation
 import ImageIO
-import ModelZoo
+@preconcurrency import ModelZoo
 import Observation
 import SwiftUI
 
@@ -16,7 +16,7 @@ import SwiftUI
 @MainActor
 @Observable
 final class AgentTools {
-  struct Progress {
+  nonisolated struct Progress {
     var step: Int
     var total: Int?
     var message: String
@@ -55,7 +55,7 @@ final class AgentTools {
     }
   }
 
-  struct ToolError: LocalizedError {
+  nonisolated struct ToolError: LocalizedError {
     var errorDescription: String?
     init(_ message: String) { errorDescription = message }
   }

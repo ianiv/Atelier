@@ -1,26 +1,27 @@
-import _MediaGenerationKit
+@preconcurrency import _MediaGenerationKit
 import CoreGraphics
-import DataModels
-import Dflat
-import Diffusion
+@preconcurrency import DataModels
+@preconcurrency import Dflat
+@preconcurrency import Diffusion
 import Foundation
 import ImageIO
-import NNC
+@preconcurrency import NNC
 import ProjectFormat
-import SQLiteDflat
+@preconcurrency import SQLiteDflat
+import Synchronization
 import UniformTypeIdentifiers
 
 /// A canvas layer (`tensordata`); the bare name clashes with another module's `TensorData`.
 private typealias Layer = ProjectFormat.TensorData
 
 /// A step in a project's history, keyed like Draw Things: the branch and the step number.
-struct StepID: Hashable, Codable, Sendable {
+nonisolated struct StepID: Hashable, Codable, Sendable {
   var lineage: Int64
   var logicalTime: Int64
 }
 
 /// A project's overrides of the output folder settings; nil follows Settings.
-struct ProjectOutput: Equatable, Sendable {
+nonisolated struct ProjectOutput: Equatable, Sendable {
   var saves: Bool?
   var folder: String?
 
@@ -34,12 +35,14 @@ struct ProjectOutput: Equatable, Sendable {
 ///
 /// A step can follow any earlier one, which branches the history as Draw Things does (see
 /// `append`); `ProjectTree` reads the branches back.
-final class Project: @unchecked Sendable {
+final nonisolated class Project: Sendable {
   let url: URL
   private let workspace: SQLiteWorkspace
   /// Only used to open the tensor store; no computation runs on it.
   private let graph = DynamicGraph()
-  private let lock = NSLock()
+  /// One opening of the tensor store at a time.
+  private let storeAccess = Mutex(())
+  private let isClosed = Mutex(false)
 
   var name: String { url.deletingPathExtension().lastPathComponent }
 
@@ -48,10 +51,8 @@ final class Project: @unchecked Sendable {
     workspace = SQLiteWorkspace(filePath: url.path, fileProtectionLevel: .noProtection)
   }
 
-  private var isClosed = false
-
   deinit {
-    guard !isClosed else { return }
+    guard !isClosed.withLock({ $0 }) else { return }
     // Shutting down drains the connection pool synchronously, waiting on its default-QoS
     // threads. The last release is often on the main thread (switching projects), so shut down
     // from a background queue instead of blocking the UI behind lower-priority work.
@@ -60,10 +61,10 @@ final class Project: @unchecked Sendable {
   }
 
   /// Finishes pending writes and closes the database. The project can't be used afterwards.
-  func close() async {
-    let wasClosed = lock.withLock {
-      let wasClosed = isClosed
-      isClosed = true
+  @concurrent func close() async {
+    let wasClosed = isClosed.withLock {
+      let wasClosed = $0
+      $0 = true
       return wasClosed
     }
     guard !wasClosed else { return }
@@ -73,6 +74,11 @@ final class Project: @unchecked Sendable {
   }
 
   // MARK: - Reading
+
+  /// Runs `body` on this project off the main actor: reads decode images and open the database.
+  @concurrent func read<T: Sendable>(_ body: @Sendable (Project) -> T) async -> T {
+    body(self)
+  }
 
   /// Every generated step on every branch, newest first.
   func items() -> [HistoryItem] {
@@ -211,13 +217,13 @@ final class Project: @unchecked Sendable {
   }
 
   private func tensor(named name: String) -> Tensor<FloatType>? {
-    lock.lock()
-    defer { lock.unlock() }
-    var tensor: Tensor<FloatType>?
-    graph.openStore(url.path, flags: [.readOnly]) {
-      tensor = $0.read(name, codec: [.fpzip, .zip]).map { Tensor<FloatType>(from: $0) }
+    storeAccess.withLock { _ in
+      var tensor: Tensor<FloatType>?
+      graph.openStore(url.path, flags: [.readOnly]) {
+        tensor = $0.read(name, codec: [.fpzip, .zip]).map { Tensor<FloatType>(from: $0) }
+      }
+      return tensor
     }
-    return tensor
   }
 
   /// A step's moodboard images and weights, in order.
@@ -255,13 +261,13 @@ final class Project: @unchecked Sendable {
   /// A clip's soundtrack, or the audio file a run took: an `audio_<id>` tensor, PCM in
   /// [channels, samples] order.
   func audio(id: Int64) -> Tensor<Float>? {
-    lock.lock()
-    defer { lock.unlock() }
-    var audio: Tensor<Float>?
-    graph.openStore(url.path, flags: [.readOnly]) {
-      audio = $0.read("audio_\(id)", codec: [.fpzip, .zip]).map { Tensor<Float>(from: $0) }
+    storeAccess.withLock { _ in
+      var audio: Tensor<Float>?
+      graph.openStore(url.path, flags: [.readOnly]) {
+        audio = $0.read("audio_\(id)", codec: [.fpzip, .zip]).map { Tensor<Float>(from: $0) }
+      }
+      return audio
     }
-    return audio
   }
 
   // MARK: - Writing
@@ -279,11 +285,11 @@ final class Project: @unchecked Sendable {
   /// rest to one above, and the new step goes on the higher one. Draw Things' parent rule no
   /// longer holds after that, so every step records its parent's tensor in `profile_data`, and
   /// the first fork records it for older steps that don't yet. All in one transaction.
-  func append(
+  @concurrent func append(
     tensor: Tensor<FloatType>, model: String, prompt: String, negativePrompt: String,
     seed: UInt32, settings: [String: JSONValue], createdAt: Date, duration: Double,
     reason: ProjectFormat.Reason = .generate, generated: Bool = true,
-    moodboard: [(tensor: Tensor<FloatType>, weight: Float)] = [], inputTensorId: Int64? = nil,
+    moodboard: [MoodboardTensor] = [], inputTensorId: Int64? = nil,
     after parentTensorId: Int64? = nil
   ) async throws -> HistoryItem {
     try await append(
@@ -293,8 +299,14 @@ final class Project: @unchecked Sendable {
       after: parentTensorId)
   }
 
+  /// A moodboard image going into a step.
+  struct MoodboardTensor: Sendable {
+    var tensor: Tensor<FloatType>
+    var weight: Float
+  }
+
   /// A video run's clip, beyond its frames.
-  struct ClipContent {
+  struct ClipContent: Sendable {
     var framesPerSecond: Double
     /// The soundtrack, PCM in [channels, samples] order.
     var audio: Tensor<Float>?
@@ -306,10 +318,10 @@ final class Project: @unchecked Sendable {
   /// one lineage after `parentTensorId` (forking there like `append`), each with its image layer
   /// and thumbnails, all sharing a new `clip` row that holds the frame rate, size and soundtrack
   /// (an `audio_<id>` tensor). Returns the first frame's step, which stands for the clip.
-  func appendClip(
+  @concurrent func appendClip(
     frames: [Tensor<FloatType>], clip: ClipContent, model: String, prompt: String,
     negativePrompt: String, seed: UInt32, settings: [String: JSONValue], createdAt: Date,
-    duration: Double, moodboard: [(tensor: Tensor<FloatType>, weight: Float)] = [],
+    duration: Double, moodboard: [MoodboardTensor] = [],
     inputTensorId: Int64? = nil, after parentTensorId: Int64? = nil
   ) async throws -> HistoryItem {
     try await append(
@@ -322,7 +334,7 @@ final class Project: @unchecked Sendable {
     frames tensors: [Tensor<FloatType>], clip: ClipContent?, model: String, prompt: String,
     negativePrompt: String, seed: UInt32, settings: [String: JSONValue], createdAt: Date,
     duration: Double, reason: ProjectFormat.Reason, generated: Bool,
-    moodboard: [(tensor: Tensor<FloatType>, weight: Float)], inputTensorId: Int64?,
+    moodboard: [MoodboardTensor], inputTensorId: Int64?,
     after parentTensorId: Int64?
   ) async throws -> HistoryItem {
     // Each frame's thumbnails, one frame decoded at a time (a clip's frames together are large).
@@ -470,14 +482,14 @@ final class Project: @unchecked Sendable {
 
   /// Deletes a step, its layers, thumbnails and tensors. Returns its parent's image tensor.
   @discardableResult
-  func delete(_ id: StepID) async throws -> Int64? {
+  @concurrent func delete(_ id: StepID) async throws -> Int64? {
     try await delete { _ in id }
   }
 
   /// Deletes every frame of a clip, last first, as Draw Things deletes them one by one; the last
   /// one takes the clip row and its soundtrack. Returns the first frame's parent's image tensor.
   @discardableResult
-  func deleteClip(frames: [Int64]) async throws -> Int64? {
+  @concurrent func deleteClip(frames: [Int64]) async throws -> Int64? {
     var parent: Int64?
     for tensorId in frames.reversed() {
       parent = try await delete(tensorId: tensorId)
@@ -487,7 +499,7 @@ final class Project: @unchecked Sendable {
 
   /// Deletes the step whose image is `tensorId`. Returns its parent's image tensor.
   @discardableResult
-  func delete(tensorId: Int64) async throws -> Int64? {
+  @concurrent func delete(tensorId: Int64) async throws -> Int64? {
     try await delete { $0.step(tensorId: tensorId) }
   }
 
@@ -578,7 +590,7 @@ final class Project: @unchecked Sendable {
   }
 
   /// For `--project-check`: drops every recorded parent, as in projects written before branching.
-  func forgetParentLinks() async {
+  @concurrent func forgetParentLinks() async {
     let workspace = workspace
     _ = await withCheckedContinuation { continuation in
       workspace.performChanges([TensorHistoryNode.self]) { transaction in
@@ -732,21 +744,23 @@ final class Project: @unchecked Sendable {
   private func writeTensors<Element: TensorNumeric>(_ tensors: [(name: String, tensor: Tensor<Element>)])
     throws
   {
-    lock.lock()
-    defer { lock.unlock() }
-    // Default flags would truncate the file on close; Draw Things opens it with none.
-    let result = graph.openStore(url.path, flags: []) { store in
-      for (name, tensor) in tensors { store.write(name, tensor: tensor, codec: [.fpzip, .zip]) }
+    let failed = storeAccess.withLock { _ in
+      // Default flags would truncate the file on close; Draw Things opens it with none.
+      let result = graph.openStore(url.path, flags: []) { store in
+        for (name, tensor) in tensors { store.write(name, tensor: tensor, codec: [.fpzip, .zip]) }
+      }
+      if case .failure = result { return true }
+      return false
     }
-    if case .failure = result { throw ProjectError.writeFailed }
+    if failed { throw ProjectError.writeFailed }
   }
 
   private func removeTensors(_ names: [String]) {
     guard !names.isEmpty else { return }
-    lock.lock()
-    defer { lock.unlock() }
-    graph.openStore(url.path, flags: []) { store in
-      for name in names { store.remove(name) }
+    storeAccess.withLock { _ in
+      _ = graph.openStore(url.path, flags: []) { store in
+        for name in names { store.remove(name) }
+      }
     }
   }
 }
@@ -758,7 +772,7 @@ final class Project: @unchecked Sendable {
 /// A step's image is its top canvas layer. Draw Things places a generation over part of a larger
 /// canvas as a new layer, so the layers below repeat the earlier image on every step that builds
 /// on it.
-struct ProjectTree: @unchecked Sendable {
+nonisolated struct ProjectTree: Sendable {
   struct Step {
     var id: StepID
     /// The image layer's tensor.
@@ -937,7 +951,7 @@ struct ProjectTree: @unchecked Sendable {
 }
 
 /// A clip's frames and sound, as Draw Things records them: a step per frame and a `clip` row.
-struct ClipInfo: Hashable, Sendable {
+nonisolated struct ClipInfo: Hashable, Sendable {
   var clipId: Int64
   /// Each frame's image tensor, in order.
   var frames: [Int64]
@@ -956,7 +970,7 @@ struct ClipInfo: Hashable, Sendable {
   var duration: Double { framesPerSecond > 0 ? Double(frames.count) / framesPerSecond : 0 }
 }
 
-enum ProjectError: LocalizedError {
+nonisolated enum ProjectError: LocalizedError {
   case badImage
   case writeFailed
 
@@ -969,7 +983,7 @@ enum ProjectError: LocalizedError {
 }
 
 /// Conversion between Draw Things' image tensors (`[1, H, W, 3]` in [-1, 1]) and CGImages.
-enum ImageTensor {
+nonisolated enum ImageTensor {
   /// The RGB channels of a decoded image. Some decoders (Qwen Image 2.1) return ARGB with alpha
   /// first; Draw Things keeps only the RGB part (`ImageConverter.imageAndMask`).
   static func rgb(_ tensor: Tensor<FloatType>) -> Tensor<FloatType> {

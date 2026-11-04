@@ -1,4 +1,4 @@
-import _MediaGenerationKit
+@preconcurrency import _MediaGenerationKit
 import Foundation
 
 /// App-side defaults for models the community config catalog doesn't cover yet.
@@ -7,7 +7,7 @@ import Foundation
 /// entry. Values here come from each model's catalog description. A fallback that
 /// `replacesCatalog` applies even when MGK found an entry, for models whose catalog entry only
 /// matches some of their files.
-enum ModelDefaults {
+nonisolated enum ModelDefaults {
   struct Fallback {
     var prefix: String
     var steps: Int

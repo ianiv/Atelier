@@ -1,15 +1,15 @@
-import Diffusion
-import DiffusionMappings
+@preconcurrency import Diffusion
+@preconcurrency import DiffusionMappings
 import Foundation
-import ModelZoo
-import NNC
+@preconcurrency import ModelZoo
+@preconcurrency import NNC
 
 /// Converts a MOSS Image checkpoint in OpenMOSS' safetensors layout (what fine-tunes ship) into
 /// Draw Things' MOSS weights. ModelImporter can't: it traps on MOSS. The tensor names follow the
 /// engine's own weight mappers, `MOSSImage` and `MOSSImageFixed` in
 /// SwiftDiffusion/Sources/Models/MOSSImage.swift, and the store keys the official
 /// `moss_image_sft_*.ckpt` files use (`__dit__[t-<name>-<layer>-<0 weight, 1 bias>]`).
-enum MOSSImporter {
+nonisolated enum MOSSImporter {
   /// The built-in model whose specification (text encoder, VAE, objective, scales) an import
   /// copies: a fine-tune is a drop-in replacement for it.
   static let baseModel = "moss_image_sft_q8p.ckpt"

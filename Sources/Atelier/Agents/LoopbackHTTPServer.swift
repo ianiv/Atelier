@@ -1,10 +1,11 @@
 #if os(macOS)
 import Foundation
 import Network
+import Synchronization
 
 /// A minimal HTTP/1.1 server on the loopback interface, for the MCP endpoint. One request per
 /// connection: the response (a plain body, or an event stream) ends with the connection closed.
-final class LoopbackHTTPServer: @unchecked Sendable {
+final nonisolated class LoopbackHTTPServer: Sendable {
   struct Request {
     var method: String
     var path: String
@@ -20,7 +21,7 @@ final class LoopbackHTTPServer: @unchecked Sendable {
   let port: UInt16
   private let handler: Handler
   private let queue = DispatchQueue(label: "Atelier.LoopbackHTTPServer")
-  private var listeners: [NWListener] = []
+  private let listeners = Mutex<[NWListener]>([])
 
   /// Bodies past this are refused; images sent inline as base64 fit well under it.
   static let maxBodySize = 64 << 20
@@ -54,15 +55,17 @@ final class LoopbackHTTPServer: @unchecked Sendable {
         }
         listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
         listener.start(queue: queue)
-        listeners.append(listener)
+        listeners.withLock { $0.append(listener) }
       }
     }
   }
 
   func stop() {
     queue.async { [self] in
-      listeners.forEach { $0.cancel() }
-      listeners = []
+      listeners.withLock {
+        $0.forEach { $0.cancel() }
+        $0 = []
+      }
     }
   }
 
@@ -147,11 +150,14 @@ final class LoopbackHTTPServer: @unchecked Sendable {
 
   /// Answers one request: a whole response with `send`, or an event stream with `startEvents`,
   /// `sendEvent` and `finish`.
-  final class Responder: @unchecked Sendable {
+  final class Responder: Sendable {
+    private struct State {
+      var closeHandler: (@Sendable () -> Void)?
+      var isClosed = false
+    }
+
     private let connection: NWConnection
-    private let lock = NSLock()
-    private var closeHandler: (@Sendable () -> Void)?
-    private var isClosed = false
+    private let state = Mutex(State())
 
     fileprivate init(connection: NWConnection) {
       self.connection = connection
@@ -159,13 +165,13 @@ final class LoopbackHTTPServer: @unchecked Sendable {
 
     /// Called once if the client hangs up before the response is finished.
     func onClientClose(_ handler: @escaping @Sendable () -> Void) {
-      lock.withLock { closeHandler = handler }
+      state.withLock { $0.closeHandler = handler }
     }
 
     fileprivate func clientDidClose() {
-      let handler = lock.withLock {
-        defer { closeHandler = nil }
-        return isClosed ? nil : closeHandler
+      let handler = state.withLock {
+        defer { $0.closeHandler = nil }
+        return $0.isClosed ? nil : $0.closeHandler
       }
       handler?()
     }
@@ -198,9 +204,9 @@ final class LoopbackHTTPServer: @unchecked Sendable {
     }
 
     private func write(_ data: Data, final: Bool) {
-      let proceed = lock.withLock {
-        guard !isClosed else { return false }
-        if final { isClosed = true }
+      let proceed = state.withLock {
+        guard !$0.isClosed else { return false }
+        if final { $0.isClosed = true }
         return true
       }
       guard proceed else { return }

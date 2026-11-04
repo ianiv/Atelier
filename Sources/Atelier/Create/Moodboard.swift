@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 
 /// One reference image on the moodboard. Weight 0 keeps it on the board but leaves it out of the
 /// next run, as the engine does.
-struct MoodboardItem: Identifiable {
+nonisolated struct MoodboardItem: Identifiable {
   var id = UUID()
   var image: CGImage
   var weight: Float = 1
@@ -23,7 +23,7 @@ final class Moodboard {
   /// the output's pixel count anyway, and full-size photos would bloat project files.
   static let maxSide = 1536
 
-  private struct Entry: Codable {
+  private nonisolated struct Entry: Codable {
     var id: UUID
     var weight: Float
   }
@@ -104,7 +104,7 @@ final class Moodboard {
 }
 
 /// Reads images from files and pasteboard data, applying EXIF orientation.
-enum ImageLoader {
+nonisolated enum ImageLoader {
   static func image(at url: URL, maxSide: Int? = nil) -> CGImage? {
     CGImageSourceCreateWithURL(url as CFURL, nil).flatMap { image(from: $0, maxSide: maxSide) }
   }
@@ -148,7 +148,7 @@ enum ImageLoader {
 }
 
 /// An image dropped from Finder, another app, or Atelier's own thumbnails (which export PNG).
-struct DroppedImage: Transferable {
+nonisolated struct DroppedImage: Transferable {
   var image: CGImage
   /// Generation settings the file carries.
   var metadata: ImageMetadata.Embedded?

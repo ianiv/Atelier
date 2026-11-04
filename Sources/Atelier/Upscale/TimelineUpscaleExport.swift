@@ -1,13 +1,13 @@
 import AVFoundation
 import CoreGraphics
 import CoreVideo
-import DataModels
-import Diffusion
+@preconcurrency import DataModels
+@preconcurrency import Diffusion
 import Foundation
-import NNC
+@preconcurrency import NNC
 
 /// How Export Upscaled… makes a timeline larger.
-struct TimelineUpscale: Sendable, Hashable {
+nonisolated struct TimelineUpscale: Sendable, Hashable {
   var method: ClipUpscale.Method
   var scale: Int
   /// FlashVSR+'s variant, for Quality.
@@ -35,7 +35,7 @@ struct TimelineUpscale: Sendable, Hashable {
 
 /// An upscaled timeline export waiting in the Queue: what to export, how, and the file the save
 /// panel allowed it to write (for this session).
-struct TimelineExportJob: @unchecked Sendable {
+nonisolated struct TimelineExportJob: Sendable {
   let composition: TimelineComposition
   let upscale: TimelineUpscale
   /// The timeline's name.
@@ -52,7 +52,7 @@ struct TimelineExportJob: @unchecked Sendable {
   }
 
   /// Exports to a temporary file, then puts it at `destination`.
-  func run(engine: GenerationEngine, progress: @escaping @Sendable (Double) -> Void) async throws {
+  @concurrent func run(engine: GenerationEngine, progress: @escaping @Sendable (Double) -> Void) async throws {
     let temporary = URL.temporaryDirectory.appending(path: "\(UUID().uuidString).mp4")
     defer { try? FileManager.default.removeItem(at: temporary) }
     try await composition.exportUpscaled(
@@ -73,7 +73,7 @@ struct TimelineExportJob: @unchecked Sendable {
   }
 }
 
-extension TimelineComposition {
+nonisolated extension TimelineComposition {
   /// A History video as a composition of its own (the whole clip, its sound), so it exports
   /// the way a timeline does.
   @MainActor
@@ -92,7 +92,7 @@ extension TimelineComposition {
   /// MP4, so no more than a chunk of upscaled frames is held at once. The
   /// soundtrack is mixed as Export mixes it and put in unchanged. Runs in the engine's turn, so
   /// not alongside a generation. Cancelling the task stops it.
-  func exportUpscaled(
+  @concurrent func exportUpscaled(
     to url: URL, codec: VideoCodec, title: String, upscale: TimelineUpscale,
     engine: GenerationEngine, progress: @escaping @Sendable (Double) -> Void
   ) async throws {
@@ -284,7 +284,7 @@ extension TimelineComposition {
 }
 
 /// The timeline's frames as it plays them, in order, as BGRA at its size.
-private final class ComposedFrames {
+private final nonisolated class ComposedFrames {
   private let reader: AVAssetReader
   private let output: AVAssetReaderVideoCompositionOutput
 
@@ -314,7 +314,7 @@ private final class ComposedFrames {
 }
 
 /// A silent MP4 at the upscaled size, written a frame at a time.
-private final class UpscaledVideoWriter {
+private final nonisolated class UpscaledVideoWriter {
   private let writer: AVAssetWriter
   private let input: AVAssetWriterInput
   private let adaptor: AVAssetWriterInputPixelBufferAdaptor

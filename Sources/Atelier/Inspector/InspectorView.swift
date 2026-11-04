@@ -1,4 +1,4 @@
-import _MediaGenerationKit
+@preconcurrency import _MediaGenerationKit
 import SwiftUI
 
 /// The settings inspector: model, search, the current layout's sections, the Changed group and a

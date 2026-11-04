@@ -1,7 +1,7 @@
-import Diffusion
-import Fickling
+@preconcurrency import Diffusion
+@preconcurrency import Fickling
 import Foundation
-import NNC
+@preconcurrency import NNC
 import ZIPFoundation
 
 /// FlashVSR+'s files, as the model page publishes them, in a "FlashVSR+" folder of the models
@@ -11,7 +11,7 @@ import ZIPFoundation
 ///
 /// The network follows vpipe's Metal port (github.com/tgo-app-dev/vpipe, Apache-2.0, T-Go LLC),
 /// which follows the reference (github.com/OpenImagingLab/FlashVSR_Plus).
-struct FlashVSRFiles {
+nonisolated struct FlashVSRFiles {
   enum Variant: String, CaseIterable, Codable, Sendable {
     /// 25 of the 30 layers attend a small neighborhood and remember one step: fast.
     case turbo
@@ -76,7 +76,7 @@ struct FlashVSRFiles {
 }
 
 /// A checkpoint's tensors by name, as CPU tensors of float32.
-final class FlashVSRCheckpoint {
+final nonisolated class FlashVSRCheckpoint {
   enum Failure: LocalizedError {
     case unreadable(String), missing(String)
 

@@ -1,4 +1,4 @@
-import _MediaGenerationKit
+@preconcurrency import _MediaGenerationKit
 import ImageIO
 import SwiftUI
 
@@ -376,7 +376,7 @@ extension DrawThingsJSON.Pasted {
 /// of Copy Settings), with a readable summary as the image description. Older builds put the same
 /// JSON in the PNG Comment. Atelier's exports carry the same plus their sidecar in an `Atelier`
 /// iTXt chunk.
-enum ImageMetadata {
+nonisolated enum ImageMetadata {
   /// What an image file embeds, read off the main actor; `settings(from:)` interprets it.
   struct Embedded: Sendable {
     /// EXIF UserComment and PNG Comment, in that order.
