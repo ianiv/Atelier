@@ -44,6 +44,7 @@ Start with the [user guide](docs/README.md).
 - [Making videos](docs/video.md): video models, length, first and last frames, audio, upscaling (and getting FlashVSR+), and exporting videos.
 - [Putting videos together](docs/video-editor.md): assembling clips on a timeline, trimming, splitting and crossfades, continuing from any frame, and exporting.
 - [The queue](docs/queue.md): queuing, pausing and reordering images, and upscaled exports.
+- [Running jobs on another device](docs/remote.md): pairing, Tailscale or any network, video and upscaling on a server.
 - [History and projects](docs/history.md)
 - [Models and LoRAs](docs/models-and-loras.md): downloading, importing, Make 8-bit Copy.
 - [Settings](docs/settings.md): models folder, output folder and performance.

@@ -9,7 +9,8 @@
 7. [History and projects](history.md): browsing what you made, reusing settings, exporting and deleting, and switching projects.
 8. [Models and LoRAs](models-and-loras.md): downloading models, importing checkpoints and LoRAs, and making 8-bit copies of MOSS models.
 9. [Settings](settings.md): the models folder, the output folder and the performance options.
-10. [Atelier for agents (MCP)](../MCP.md): letting Claude Code and other agents generate images and videos with your models, and work on the Create screen with you (Mac only).
+10. [Running jobs on another device](remote.md): pairing your devices, sending images, videos, upscales and exports to another Mac or iPad over Tailscale or any network, and what a paired device can see.
+11. [Atelier for agents (MCP)](../MCP.md): letting Claude Code and other agents generate images and videos with your models, and work on the Create screen with you (Mac only).
 
 The iPad version works the same way, with a few differences noted under "On iPad" in each page; see [Atelier on iPad](getting-started.md#atelier-on-ipad) to build and install it.
 

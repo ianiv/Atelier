@@ -2,7 +2,7 @@
 
 Open **Atelier ▸ Settings** (⌘,).
 
-**On iPad**, Settings is the gear button at the top of the sidebar (or ⌘, with a keyboard), and opens as a sheet. It has the Models, Images and Performance tabs; Agents is Mac only.
+**On iPad**, Settings is the gear button at the top of the sidebar (or ⌘, with a keyboard), and opens as a sheet. It has the Models, Images, Performance and Compute tabs; Agents is Mac only.
 
 ## Models
 
@@ -52,6 +52,10 @@ These match Draw Things' Machine Settings. **Automatic** uses what the engine pi
 | Use Apple Neural Engine for 8-bit S Models | Runs 8-bit S models on the Neural Engine. Usually faster on M4; on M5 often slower but more power efficient. |
 | Merge LoRA | Merging LoRA weights into the model is 10–30% faster. Running them separately keeps quantized weights and uses less memory. |
 | Use High Resolution Preview When Possible | Sharper step previews, decoded on the Neural Engine when it can, so it rarely slows generation. Off shows a quicker low-resolution preview. |
+
+## Compute
+
+Lets paired devices run jobs on this one, and lists the servers this one can use. Set which networks to accept connections from, pair and remove devices, and add servers here. See [Running jobs on another device](remote.md).
 
 ## Agents
 
