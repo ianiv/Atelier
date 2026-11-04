@@ -3,6 +3,7 @@ import SwiftUI
 
 struct LayoutMenu: View {
   @Binding var customizing: Bool
+  @Environment(CreateModel.self) private var model
   @Environment(LayoutStore.self) private var layouts
   @Environment(FileDialogs.self) private var fileDialogs
   @Environment(\.openURL) private var openURL
@@ -40,7 +41,8 @@ struct LayoutMenu: View {
           guard let url = urls.first else { return }
           let access = url.startAccessingSecurityScopedResource()
           defer { if access { url.stopAccessingSecurityScopedResource() } }
-          _ = try? layouts.importLayout(from: url)
+          let failure = Log.attempt(Log.inspector, "Importing a layout") { _ = try layouts.importLayout(from: url) }
+          if let failure { model.errorMessage = "Couldn't import the layout: \(failure.localizedDescription)" }
         }
       }
       Button("Delete “\(layouts.current.name)”") { layouts.delete(layouts.current) }

@@ -82,7 +82,8 @@ struct PresetMenu: View {
           guard let url = urls.first else { return }
           let access = url.startAccessingSecurityScopedResource()
           defer { if access { url.stopAccessingSecurityScopedResource() } }
-          _ = try? presets.importPreset(from: url)
+          let failure = Log.attempt(Log.inspector, "Importing a preset") { _ = try presets.importPreset(from: url) }
+          if let failure { model.errorMessage = "Couldn't import the preset: \(failure.localizedDescription)" }
         }
       }
       if !presets.presets.isEmpty {

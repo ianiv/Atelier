@@ -800,7 +800,9 @@ final class ModelLibrary {
     let backup = directory.appendingPathComponent(name + ".bak-atelier")
     guard FileManager.default.fileExists(atPath: registry.path) else { return }
     try? FileManager.default.removeItem(at: backup)
-    try? FileManager.default.copyItem(at: registry, to: backup)
+    Log.attempt(Log.library, "Backing up \(name)") {
+      try FileManager.default.copyItem(at: registry, to: backup)
+    }
   }
 
   // MARK: - Files

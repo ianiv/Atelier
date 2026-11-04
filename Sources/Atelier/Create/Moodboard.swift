@@ -18,6 +18,8 @@ nonisolated struct MoodboardItem: Identifiable {
 @Observable
 final class Moodboard {
   private(set) var items: [MoodboardItem] = []
+  /// Tells the user a change wasn't saved. Set by `CreateModel`, whose status bar shows it.
+  @ObservationIgnored var reportFailure: ((String) -> Void)?
 
   /// Reference images are scaled down to this long side: the engine resizes references to about
   /// the output's pixel count anyway, and full-size photos would bloat project files.
@@ -107,12 +109,20 @@ final class Moodboard {
     guard SessionState.isEnabled else { return }
     let folder = Self.folder
     try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    var failure: Error?
     if let item, let png = ImageTensor.png(item.image) {
-      try? png.write(to: folder.appending(path: "\(item.id).png"))
+      failure = Log.attempt(Log.create, "Saving a moodboard image") {
+        try png.write(to: folder.appending(path: "\(item.id).png"))
+      }
     }
     let entries = items.map { Entry(id: $0.id, weight: $0.weight) }
     if let data = try? JSONEncoder().encode(entries) {
-      try? data.write(to: folder.appending(path: "index.json"))
+      failure = Log.attempt(Log.create, "Saving the moodboard") {
+        try data.write(to: folder.appending(path: "index.json"))
+      } ?? failure
+    }
+    if let failure {
+      reportFailure?("Couldn't save the moodboard, so it may not be here next time: \(failure.localizedDescription)")
     }
   }
 }

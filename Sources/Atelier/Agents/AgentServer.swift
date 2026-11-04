@@ -94,8 +94,11 @@ final class AgentServer {
         guard let self, self.server === server else { return }
         self.isListening = error == nil
         self.listenError = error
-        if let error { print("Agents: MCP server on port \(port) failed: \(error)") }
-        else { print("Agents: MCP server listening on \(self.endpoint)") }
+        if let error {
+          Log.agents.error("MCP server on port \(port, privacy: .public) failed: \(error, privacy: .public)")
+        } else {
+          Log.agents.info("MCP server listening on \(self.endpoint, privacy: .public)")
+        }
       }
     }
   }

@@ -276,6 +276,8 @@ final class StyleStore {
   @ObservationIgnored var thumbnailTask: Task<Void, Never>?
   /// The style whose thumbnail is shown full size (`ThumbnailViewer`), from the list or the editor.
   var viewingThumbnail: UUID?
+  /// Tells the user a change wasn't saved. Set by `CreateModel`, whose status bar shows it.
+  @ObservationIgnored var reportFailure: ((String) -> Void)?
   /// Off for scripted runs: they read the user's styles but don't change them.
   @ObservationIgnored let persists: Bool
 
@@ -361,7 +363,8 @@ final class StyleStore {
       encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
       try encoder.encode(styles).write(to: Self.file, options: .atomic)
     } catch {
-      print("Couldn't save styles: \(error)")
+      Log.styles.error("Couldn't save styles: \(error.localizedDescription, privacy: .public)")
+      reportFailure?("Couldn't save your styles: \(error.localizedDescription)")
     }
   }
 }

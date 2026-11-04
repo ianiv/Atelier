@@ -71,7 +71,9 @@ final class CreateModel {
   @ObservationIgnored private var writingLayout = false
   var negativePrompt = ""
   /// The user's styles (set by the app).
-  var styles: StyleStore?
+  var styles: StyleStore? {
+    didSet { styles?.reportFailure = { [weak self] in self?.errorMessage = $0 } }
+  }
   /// The style Generate writes the prompt into; nil for the prompt as typed. Remembered across
   /// launches, except for what scripted runs set.
   var styleID: UUID? = UserDefaults.standard.string(forKey: "style").flatMap(UUID.init(uuidString:)) {
@@ -590,6 +592,7 @@ final class CreateModel {
   init(history: HistoryStore) {
     self.history = history
     timelines = TimelineStore(history: history)
+    defer { moodboard.reportFailure = { [weak self] in self?.errorMessage = $0 } }
     if let session = SessionState.load() {
       restored = session
       prompt = session.prompt
@@ -752,7 +755,10 @@ final class CreateModel {
       if let samples = await history.audioInput(of: item),
          let rate = VideoModel(model: item.sidecar.model)?.audioSampleRate
       {
-        try? audio.set(samples: samples, sampleRate: rate, name: "Audio from \(history.fileName(for: item)).wav")
+        let failure = Log.attempt(Log.create, "Bringing back a run's audio") {
+          try audio.set(samples: samples, sampleRate: rate, name: "Audio from \(history.fileName(for: item)).wav")
+        }
+        if let failure { errorMessage = "Couldn't bring back the audio: \(failure.localizedDescription)" }
       }
     }
     if selectedModel == sidecar.model, !isLoadingModel, var settings = recommended {
@@ -1096,6 +1102,10 @@ final class CreateModel {
     }
     queue.append(requests, currentTensorId: history.currentTensorId)
     runNext()
+    // After `runNext`, which clears the message as a job starts.
+    if takesAudio, requests.contains(where: { $0.audio == nil }) {
+      errorMessage = "Couldn't copy the audio file, so a queued video runs without it."
+    }
   }
 
   /// The canvas as a run would take it.

@@ -66,7 +66,10 @@ final class AudioClip {
   func snapshot() -> URL? {
     guard let url else { return nil }
     let copy = Self.newSnapshotFile(extension: url.pathExtension)
-    return (try? FileManager.default.copyItem(at: url, to: copy)) != nil ? copy : nil
+    let failure = Log.attempt(Log.queue, "Copying the audio file for a job") {
+      try FileManager.default.copyItem(at: url, to: copy)
+    }
+    return failure == nil ? copy : nil
   }
 
   private static var snapshots: URL {

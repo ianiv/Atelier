@@ -202,7 +202,9 @@ final class HistoryStore {
     for suffix in ["-wal", "-shm"] {
       let side = URL(fileURLWithPath: old.path + suffix)
       if FileManager.default.fileExists(atPath: side.path) {
-        try? FileManager.default.moveItem(at: side, to: URL(fileURLWithPath: target.path + suffix))
+        Log.attempt(Log.project, "Renaming a project's \(suffix) file") {
+          try FileManager.default.moveItem(at: side, to: URL(fileURLWithPath: target.path + suffix))
+        }
       }
     }
     project = Project(url: target)
@@ -735,11 +737,16 @@ final class HistoryStore {
       let tensor = await Self.legacyTensor(at: entry.png)
       if let tensor {
         let sidecar = entry.sidecar
-        _ = try? await target.append(
-          tensor: tensor, model: sidecar.model, prompt: sidecar.prompt,
-          negativePrompt: sidecar.negativePrompt, seed: sidecar.seed,
-          settings: sidecar.configuration, createdAt: sidecar.createdAt,
-          duration: sidecar.durationSeconds)
+        do {
+          _ = try await target.append(
+            tensor: tensor, model: sidecar.model, prompt: sidecar.prompt,
+            negativePrompt: sidecar.negativePrompt, seed: sidecar.seed,
+            settings: sidecar.configuration, createdAt: sidecar.createdAt,
+            duration: sidecar.durationSeconds)
+        } catch {
+          // The old file stays where it is.
+          Log.history.error("Couldn't import \(entry.png.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
       }
       importProgress = (index + 1, legacy.count)
     }

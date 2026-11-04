@@ -168,17 +168,29 @@ extension StyleStore {
     // own thumbnail), and with its settings for Open in Create.
     let cropped = image.width != square.width || image.height != square.height
     if source != nil || cropped, let png = ImageTensor.png(image) {
-      try? png.write(to: Self.fullImageURL(id), options: .atomic)
+      Log.attempt(Log.styles, "Saving a thumbnail's full image") {
+        try png.write(to: Self.fullImageURL(id), options: .atomic)
+      }
       if let source, let json = try? JSONEncoder().encode(source) {
-        try? json.write(to: Self.sourceURL(id), options: .atomic)
+        Log.attempt(Log.styles, "Saving a thumbnail's settings") {
+          try json.write(to: Self.sourceURL(id), options: .atomic)
+        }
       }
     }
     // Set after the files, so views reading `canOpenThumbnail` see them.
     defer { thumbnails[id] = .some(square) }
     guard let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.jpeg.identifier as CFString, 1, nil)
-    else { return }
+    else {
+      thumbnailNotSaved()
+      return
+    }
     CGImageDestinationAddImage(destination, square, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
-    CGImageDestinationFinalize(destination)
+    if !CGImageDestinationFinalize(destination) { thumbnailNotSaved() }
+  }
+
+  private func thumbnailNotSaved() {
+    Log.styles.error("Couldn't write a style's thumbnail")
+    reportFailure?("Couldn't save the style's thumbnail.")
   }
 
   /// Sets the thumbnail from an image file (security-scoped access is the caller's), keeping its

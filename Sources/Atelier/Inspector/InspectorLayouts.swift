@@ -172,7 +172,9 @@ final class LayoutStore {
 
   func delete(_ layout: InspectorLayout) {
     guard !isBuiltIn(layout) else { return }
-    try? FileManager.default.trashItem(at: Self.url(for: layout.name), resultingItemURL: nil)
+    Log.attempt(Log.inspector, "Deleting a layout's file") {
+      try FileManager.default.trashItem(at: Self.url(for: layout.name), resultingItemURL: nil)
+    }
     custom.removeAll { $0.name == layout.name }
     if current.name == layout.name { select(.standard) }
   }
@@ -211,7 +213,7 @@ final class LayoutStore {
       try FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true)
       try Self.encoder.encode(layout).write(to: Self.url(for: layout.name))
     } catch {
-      NSLog("Atelier: couldn't save layout \(layout.name): \(error)")
+      Log.inspector.error("Couldn't save layout \(layout.name, privacy: .public): \(error.localizedDescription, privacy: .public)")
     }
     if let index = custom.firstIndex(where: { $0.name == layout.name }) {
       custom[index] = layout
@@ -297,7 +299,9 @@ final class PresetStore {
   }
 
   func delete(_ preset: Preset) {
-    try? FileManager.default.trashItem(at: Self.url(for: preset.name), resultingItemURL: nil)
+    Log.attempt(Log.inspector, "Deleting a preset's file") {
+      try FileManager.default.trashItem(at: Self.url(for: preset.name), resultingItemURL: nil)
+    }
     presets.removeAll { $0.name == preset.name }
     for (model, name) in defaults where name == preset.name { setDefault(nil, for: model) }
   }

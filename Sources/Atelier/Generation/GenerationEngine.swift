@@ -195,8 +195,8 @@ actor GenerationEngine {
   ) async throws -> Output? {
     guard let engine = Self.engineResources(),
           let template = Self.reflectedChild(pipeline, "storage").flatMap({
-            Self.reflectedChild($0, "recommendedTemplate")
-          }) as? GenerationConfiguration
+            Self.reflected($0, "recommendedTemplate", as: GenerationConfiguration.self)
+          })
     else { return nil }
     var settings = request.configuration
     settings.seed = request.seed
@@ -413,8 +413,8 @@ actor GenerationEngine {
   private static func engineResources() -> (generator: LocalImageGenerator, queue: DispatchQueue)? {
     let storage = reflectedChild(MediaGenerationEnvironment.default, "storage")
     let resources = storage.flatMap { reflectedChild($0, "cachedLocalResources") }
-    guard let generator = resources.flatMap({ reflectedChild($0, "generator") }) as? LocalImageGenerator,
-          let queue = resources.flatMap({ reflectedChild($0, "queue") }) as? DispatchQueue
+    guard let generator = resources.flatMap({ reflected($0, "generator", as: LocalImageGenerator.self) }),
+          let queue = resources.flatMap({ reflected($0, "queue", as: DispatchQueue.self) })
     else { return nil }
     return (generator, queue)
   }
@@ -424,7 +424,7 @@ actor GenerationEngine {
   nonisolated static var temporaryDirectory: URL? {
     let storage = reflectedChild(MediaGenerationEnvironment.default, "storage")
     let resources = storage.flatMap { reflectedChild($0, "cachedLocalResources") }
-    guard let path = resources.flatMap({ reflectedChild($0, "tempDir") }) as? String else { return nil }
+    guard let path = resources.flatMap({ reflected($0, "tempDir", as: String.self) }) else { return nil }
     return URL(fileURLWithPath: path, isDirectory: true)
   }
 
@@ -480,10 +480,85 @@ actor GenerationEngine {
   /// (`MediaGenerationEnvironment.Storage.cachedLocalResources.generator`), so it's read by
   /// reflection; nil until the engine exists.
   private static func engineWorkspace() -> Workspace? {
-    engineResources().flatMap { reflectedChild($0.generator.modelPreloader, "workspace") } as? Workspace
+    engineResources().flatMap { reflected($0.generator.modelPreloader, "workspace", as: Workspace.self) }
+  }
+
+  /// Engine fields reported missing so far, so each is logged once.
+  private nonisolated static let reportedFields = Mutex<Set<String>>([])
+
+  /// Logs once that a field read by reflection isn't what the engine has any more: previews,
+  /// sound or Performance settings stop working without an error, until the code here is updated.
+  private nonisolated static func reportMissing(_ field: String) {
+    guard reportedFields.withLock({ $0.insert(field).inserted }) else { return }
+    Log.engine.fault("Engine field \(field, privacy: .public) is missing or changed type. Run --engine-check.")
+  }
+
+  /// `reflectedChild` as a `T`. A value of another type is reported as missing.
+  private nonisolated static func reflected<T>(_ value: Any, _ label: String, as _: T.Type) -> T? {
+    guard let child = reflectedChild(value, label) else { return nil }
+    if let typed = child as? T { return typed }
+    reportMissing("\(type(of: value)).\(label) as \(T.self)")
+    return nil
+  }
+
+  /// One reflected field, for `--engine-check`.
+  struct ReflectedField: Sendable {
+    var name: String
+    var found: Bool
+  }
+
+  /// Runs `steps` steps of `model` and tries every field read by reflection, for `--engine-check`.
+  func checkReflectedFields(model: String, steps: Int) async throws -> [ReflectedField] {
+    await waitForTurn()
+    defer { endTurn() }
+    var pipeline = try await pipeline(for: model)
+    await applyPerformanceSettings(using: pipeline)
+    pipeline.configuration.steps = steps
+    pipeline.configuration.seed = 1
+    pipeline.configuration.batchCount = 1
+    pipeline.configuration.batchSize = 1
+    pipeline.configuration.width = 512
+    pipeline.configuration.height = 512
+    let previewFields = Mutex<[ReflectedField]?>(nil)
+    _ = try await pipeline.generate(
+      prompt: "a dot", negativePrompt: "", inputs: [],
+      stateHandler: { _, preview in
+        guard let preview else { return }
+        let fields = [
+          ReflectedField(
+            name: "Preview.tensor", found: Self.reflected(preview, "tensor", as: Tensor<FloatType>.self) != nil),
+          ReflectedField(
+            name: "Preview.version", found: Self.reflected(preview, "version", as: ModelVersion.self) != nil),
+        ]
+        previewFields.withLock { if $0 == nil { $0 = fields } }
+      })
+    let storage = Self.reflectedChild(MediaGenerationEnvironment.default, "storage")
+    let resources = storage.flatMap { Self.reflectedChild($0, "cachedLocalResources") }
+    let generator = resources.flatMap { Self.reflected($0, "generator", as: LocalImageGenerator.self) }
+    var fields = [
+      ReflectedField(name: "MediaGenerationEnvironment.storage", found: storage != nil),
+      ReflectedField(name: "storage.cachedLocalResources", found: resources != nil),
+      ReflectedField(name: "resources.generator", found: generator != nil),
+      ReflectedField(
+        name: "resources.queue",
+        found: resources.flatMap { Self.reflected($0, "queue", as: DispatchQueue.self) } != nil),
+      ReflectedField(
+        name: "resources.tempDir",
+        found: resources.flatMap { Self.reflected($0, "tempDir", as: String.self) } != nil),
+      ReflectedField(name: "modelPreloader.workspace", found: Self.engineWorkspace() != nil),
+      ReflectedField(
+        name: "pipeline.storage.recommendedTemplate",
+        found: Self.reflectedChild(pipeline, "storage").flatMap {
+          Self.reflected($0, "recommendedTemplate", as: GenerationConfiguration.self)
+        } != nil),
+    ]
+    fields += previewFields.withLock { $0 } ?? [ReflectedField(name: "a preview arrived", found: false)]
+    return fields
   }
 
   /// The stored property `label` of `value`, with an Optional unwrapped (nil when it's .none).
+  /// A label that isn't there is reported; an Optional that's nil isn't: the engine's resources
+  /// are nil until the first run.
   private nonisolated static func reflectedChild(_ value: Any, _ label: String) -> Any? {
     var mirror: Mirror? = Mirror(reflecting: value)
     while let current = mirror {
@@ -493,6 +568,7 @@ actor GenerationEngine {
       }
       mirror = current.superclassMirror
     }
+    reportMissing("\(type(of: value)).\(label)")
     return nil
   }
 
@@ -533,8 +609,8 @@ actor GenerationEngine {
   private nonisolated static func lowResolutionPreview(
     _ preview: MediaGenerationPipeline.Preview, size: CGSize
   ) -> CGImage? {
-    guard let tensor = reflectedChild(preview, "tensor") as? Tensor<FloatType>,
-          let version = reflectedChild(preview, "version") as? ModelVersion,
+    guard let tensor = reflected(preview, "tensor", as: Tensor<FloatType>.self),
+          let version = reflected(preview, "version", as: ModelVersion.self),
           let image = ImageConverter.cgImages(fromLatent: tensor, canUseTAESD: false, version: version)
             .0.first
     else { return nil }

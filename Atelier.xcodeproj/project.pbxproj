@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A7E1F0C2B3D4A5968778696D /* AutomationEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1F0C2B3D4A5968778696C /* AutomationEngine.swift */; };
+		A7E1F0C2B3D4A5968778696B /* Log.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1F0C2B3D4A5968778696A /* Log.swift */; };
 		A7E1F0C2B3D4A5968778695D /* AutomationCleanup.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1F0C2B3D4A5968778695C /* AutomationCleanup.swift */; };
 		A7E1F0C2B3D4A5968778695B /* TemporaryFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1F0C2B3D4A5968778695A /* TemporaryFiles.swift */; };
 		C442D7B6FB6852DA4CD2C251 /* AgentServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 859B3EF300FEC1C99AACF6D2 /* AgentServer.swift */; };
@@ -144,6 +146,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A7E1F0C2B3D4A5968778696C /* AutomationEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationEngine.swift; sourceTree = "<group>"; };
+		A7E1F0C2B3D4A5968778696A /* Log.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Log.swift; sourceTree = "<group>"; };
 		A7E1F0C2B3D4A5968778695C /* AutomationCleanup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationCleanup.swift; sourceTree = "<group>"; };
 		A7E1F0C2B3D4A5968778695A /* TemporaryFiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemporaryFiles.swift; sourceTree = "<group>"; };
 		859B3EF300FEC1C99AACF6D2 /* AgentServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentServer.swift; sourceTree = "<group>"; };
@@ -328,6 +332,7 @@
 				5A9C1E0B2D7F4A6E8B3C1D06 /* Updater.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1FC /* SampleData.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1FA /* FolderAccess.swift */,
+				A7E1F0C2B3D4A5968778696A /* Log.swift */,
 				A7E1F0C2B3D4A5968778695A /* TemporaryFiles.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1F8 /* PlatformViews.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1F6 /* iPadPlatform.swift */,
@@ -342,6 +347,7 @@
 				E750BAC04D4835E5B2477EB2 /* AutomationProject.swift */,
 				C65576F212CC11B301A189AF /* AutomationQueue.swift */,
 				B2281AF0711BE0FA0D08E56A /* AutomationStyles.swift */,
+				A7E1F0C2B3D4A5968778696C /* AutomationEngine.swift */,
 				A7E1F0C2B3D4A5968778695C /* AutomationCleanup.swift */,
 				D2FF5ECF7B3949AB28ABC1A2 /* AutomationUpscale.swift */,
 				E5D760BDEB2FA5F04BDAF779 /* AutomationTimeline.swift */,
@@ -673,6 +679,7 @@
 				4549FF9554EB66628271351A /* AutomationProject.swift in Sources */,
 				E03AA58CB9A74D68677591AB /* AutomationQueue.swift in Sources */,
 				735C1F1480A124F947F8E040 /* AutomationStyles.swift in Sources */,
+				A7E1F0C2B3D4A5968778696D /* AutomationEngine.swift in Sources */,
 				A7E1F0C2B3D4A5968778695D /* AutomationCleanup.swift in Sources */,
 				58D2F5882DA905D40744609C /* AutomationUpscale.swift in Sources */,
 				70E8E18439D847EA73F0D5DD /* AutomationTimeline.swift in Sources */,
@@ -713,6 +720,7 @@
 				5A9C1E0B2D7F4A6E8B3C1D05 /* Updater.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1FB /* SampleData.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1F9 /* FolderAccess.swift in Sources */,
+				A7E1F0C2B3D4A5968778696B /* Log.swift in Sources */,
 				A7E1F0C2B3D4A5968778695B /* TemporaryFiles.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1F7 /* PlatformViews.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1F5 /* iPadPlatform.swift in Sources */,
