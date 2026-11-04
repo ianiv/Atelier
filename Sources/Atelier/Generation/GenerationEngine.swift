@@ -197,11 +197,21 @@ actor GenerationEngine {
             Self.reflectedChild($0, "recommendedTemplate")
           }) as? GenerationConfiguration
     else { return nil }
+    let version = video.version
     var settings = request.configuration
     settings.seed = request.seed
     settings.batchCount = 1
     settings.batchSize = 1
     settings.numFrames = video.snapped(settings.numFrames)
+    // The engine returns nothing, with no reason, when LongCat is missing any of these: only its
+    // no-CFG path is wired (`isCfgEnabled`), and it needs an image and a voice to animate.
+    if version == .longcatVideoAvatar1_5 {
+      settings.guidanceScale = 1
+      guard request.canvas != nil, request.audio != nil else {
+        throw MediaGenerationKitError.generationFailed(
+          "LongCat needs a portrait on the canvas and an audio file to lip-sync to.")
+      }
+    }
     let configuration = settings.engineConfiguration(template: template)
 
     // As MGK: the canvas is the image at the output size. Its transparency isn't a mask here:
@@ -219,11 +229,11 @@ actor GenerationEngine {
       let waveform = try AudioInput(contentsOf: url.path, sampleRate: video.audioSampleRate).waveform
       audioInput = waveform
       hints.append((.audio, [(waveform as AnyTensor, 1)]))
+      try await ModelLibrary.downloadAudioEncoder(for: request.model) { _, _, _ in }
     }
 
     let highResolution = Self.previewsAvailable && PerformanceSetting.highResolutionPreview
     let size = CGSize(width: settings.width, height: settings.height)
-    let version = video.version
     let totalSteps = settings.steps
     let cancellation = EngineCancellation()
     let prompt = request.prompt

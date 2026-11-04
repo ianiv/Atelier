@@ -15,6 +15,8 @@ Pick a video model in Create and the same screen makes videos: the prompt, inspe
 
 FastH3 Omni is a fast MiniMax H3 Ref2VA: it starts at 1280×768, 8 steps and guidance 1.
 
+LongCat starts at 832×512, 8 steps, guidance 1 and 93 frames (3.7 seconds at 25 fps). It always runs at guidance 1, and the audio is cut or padded to the clip's length. It also needs the 1.3 GB Whisper voice encoder, which downloads with it.
+
 Download them from **Models** like any other model. They're large, and a video takes minutes, not seconds.
 
 ## Length

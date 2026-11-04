@@ -443,9 +443,13 @@ final class CreateModel {
 
   /// Whether Edit means anything: the model reads the canvas as a reference, or Strength is below
   /// 100% so any model starts from it.
-  var canEdit: Bool { usesReferences || (settings?.strength ?? 1) < 1 }
+  var canEdit: Bool { usesReferences || videoModel?.needsImage == true || (settings?.strength ?? 1) < 1 }
   /// The mode runs use: Generate while Edit means nothing, keeping the chosen mode for when it does.
-  var effectiveCanvasMode: CanvasMode { canEdit ? canvasMode : .generate }
+  /// A model that only animates an image (LongCat, Stable Video) has no Generate to fall back to.
+  var effectiveCanvasMode: CanvasMode {
+    if videoModel?.needsImage == true { return .edit }
+    return canEdit ? canvasMode : .generate
+  }
 
   /// Puts an image from outside the project on the canvas, fitted to the frame, and switches to
   /// Edit so the next run starts from it. Settings it carries (`metadata`) can then be loaded.

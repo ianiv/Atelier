@@ -185,6 +185,14 @@ final class ModelLibrary {
             self.downloads[file] = progress
           }
         }
+        try await Self.downloadAudioEncoder(for: file) { name, written, expected in
+          let progress = Download(
+            file: name, fileIndex: 1, totalFiles: 1, bytesWritten: written, totalBytes: expected)
+          Task { @MainActor in
+            guard self.downloadTasks[file] != nil else { return }
+            self.downloads[file] = progress
+          }
+        }
       } catch is CancellationError {
         // Cancelled; the partial file stays so a later download resumes.
       } catch {
@@ -195,6 +203,66 @@ final class ModelLibrary {
       downloads[file] = nil
       downloadTasks[file] = nil
     }
+  }
+
+  /// Downloads the audio encoder `model` needs if no models folder has it. LongCat's Whisper isn't
+  /// in `ModelZoo.filesToDownload`, so MGK's `ensure` skips it (draw-things-cli adds it to its own
+  /// file list), and none of the specification's file fields can carry it: the engine loads those
+  /// or rewrites them for external data. MGK's own downloader is internal; the URL is the one it
+  /// uses (`Storage.downloadFile`). Also runs before a generation, for a model downloaded earlier.
+  nonisolated static func downloadAudioEncoder(
+    for model: String,
+    progress: @escaping @Sendable (_ file: String, _ written: Int64, _ expected: Int64) -> Void
+  ) async throws {
+    let directories = MediaGenerationEnvironment.default.externalUrls
+    guard let file = ModelZoo.audioEncoderForModel(model), let directory = directories.first,
+          !directories.contains(where: {
+            FileManager.default.fileExists(atPath: $0.appendingPathComponent(file).path)
+          }),
+          let url = URL(string: "https://static.libnnc.org/\(file)")
+    else { return }
+    let destination = directory.appendingPathComponent(file)
+    // Beside the destination: the system's temporary folder may be on another disk, and a move
+    // across disks is a copy that a quit could leave half done under the real name.
+    let partial = directory.appendingPathComponent(file + ".part")
+    let holder = ObservationHolder()
+    let box = DownloadTaskBox()
+    try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        let task = URLSession.shared.downloadTask(with: url) { location, response, error in
+          do {
+            if let error { throw error }
+            guard let location, (response as? HTTPURLResponse)?.statusCode == 200 else {
+              throw URLError(.badServerResponse)
+            }
+            try? FileManager.default.removeItem(at: partial)
+            try FileManager.default.moveItem(at: location, to: partial)
+            // URLSession's temporary files are private to the user; the other models aren't.
+            try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: partial.path)
+            try FileManager.default.moveItem(at: partial, to: destination)
+            continuation.resume()
+          } catch {
+            continuation.resume(throwing: error)
+          }
+        }
+        holder.observation = task.progress.observe(\.completedUnitCount) { value, _ in
+          progress(file, value.completedUnitCount, value.totalUnitCount)
+        }
+        box.task = task
+        task.resume()
+      }
+    } onCancel: {
+      box.task?.cancel()
+    }
+    _ = holder
+  }
+
+  private final class ObservationHolder: @unchecked Sendable {
+    var observation: NSKeyValueObservation?
+  }
+
+  private final class DownloadTaskBox: @unchecked Sendable {
+    var task: URLSessionDownloadTask?
   }
 
   func cancelDownload(_ file: String) {
@@ -804,10 +872,14 @@ final class ModelLibrary {
       decodeRegistry(ModelZoo.Specification.self, "custom.json", in: directory)
     }, file: \.file)
     let files = Set(custom.map(\.file))
-    ModelZoo.availableSpecifications =
-      ModelZoo.builtinSpecifications.filter { !files.contains($0.file) } + custom
+    let builtin = ModelZoo.builtinSpecifications.filter { !files.contains($0.file) }
+    let builtinFiles = Set(builtin.map(\.file))
+    let uncataloged = ModelDefaults.uncatalogedSpecifications.filter {
+      !files.contains($0.file) && !builtinFiles.contains($0.file)
+    }
+    ModelZoo.availableSpecifications = builtin + uncataloged + custom
     // ModelZoo looks a model up in a table it fills once; one it doesn't have is looked up here.
-    ModelZoo.fallbackMapping = Dictionary(custom.map { ($0.file, $0) }) { first, _ in first }
+    ModelZoo.fallbackMapping = Dictionary((custom + uncataloged).map { ($0.file, $0) }) { first, _ in first }
     loadCustomLoRAs(in: directories)
   }
 

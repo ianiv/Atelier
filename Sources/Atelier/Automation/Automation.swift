@@ -11,7 +11,7 @@ import SwiftUI
 ///
 ///   Atelier --generate --model moss_image_sft_i8x.ckpt --prompt "…" --width 1152 --height 896
 ///           [--seed N] [--steps N] [--num-frames N] [--hires-fix true|false] [--audio FILE]
-///           [--cancel-at-step N]
+///           [--cancel-at-step N] [--download]
 ///           [--snapshot-dir DIR] [--quit]
 ///
 /// `--show history` opens that sidebar section at launch. `--project NAME` saves to (and reads
@@ -124,6 +124,27 @@ enum Automation {
       }
       log("models: \(model.models.count) downloaded")
       if let file = value("--model") {
+        // `--download`: fetch a model that's missing through the Models screen's own download.
+        if args.contains("--download"), !model.models.contains(where: { $0.file == file }) {
+          await library.refresh()
+          guard let entry = library.catalog.first(where: { $0.file == file }) else {
+            log("model \(file) not in the catalog")
+            if args.contains("--quit") { AppLifecycle.quit() }
+            return
+          }
+          log("downloading \(entry.name)")
+          library.download(entry)
+          var lastLog = Date.distantPast
+          while let download = library.downloads[file] {
+            if Date().timeIntervalSince(lastLog) > 60 {
+              lastLog = Date()
+              log("  \(download.file): \(download.bytesWritten / 1_000_000) of \(download.totalBytes / 1_000_000) MB")
+            }
+            try? await Task.sleep(for: .seconds(1))
+          }
+          if let error = library.errorMessage { log("download failed: \(error)") }
+          await model.refreshModelList()
+        }
         guard model.models.contains(where: { $0.file == file }) else {
           log("model \(file) not in downloaded list")
           if args.contains("--quit") { AppLifecycle.quit() }

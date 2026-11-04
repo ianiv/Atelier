@@ -19,8 +19,11 @@ final class AudioClip {
   /// Loudness in 48 bins, 0 to 1, for the waveform.
   private(set) var waveform: [Float] = []
 
+  /// Scripted runs keep their own, so they leave the user's audio and queued jobs alone.
   private static var folder: URL {
-    URL.applicationSupportDirectory.appending(path: "Atelier/Audio", directoryHint: .isDirectory)
+    SessionState.isEnabled
+      ? URL.applicationSupportDirectory.appending(path: "Atelier/Audio", directoryHint: .isDirectory)
+      : URL.temporaryDirectory.appending(path: "Atelier-Automation-Audio", directoryHint: .isDirectory)
   }
 
   init() {
@@ -39,9 +42,11 @@ final class AudioClip {
     let target = Self.folder.appending(path: "current").appendingPathExtension(source.pathExtension)
     try? FileManager.default.createDirectory(at: Self.folder, withIntermediateDirectories: true)
     removeFile()
+    // A scripted run starts with no clip, so a previous run's copy isn't `url` and is still here.
+    try? FileManager.default.removeItem(at: target)
     try FileManager.default.copyItem(at: source, to: target)
     load(target, name: source.lastPathComponent)
-    UserDefaults.standard.set(name, forKey: "audioClipName")
+    if SessionState.isEnabled { UserDefaults.standard.set(name, forKey: "audioClipName") }
   }
 
   /// Puts back the audio a run took (as the project keeps it: PCM in [channels, samples] order).
@@ -51,7 +56,7 @@ final class AudioClip {
     let target = Self.folder.appending(path: "current.wav")
     try Self.writeWAV(samples, sampleRate: sampleRate, to: target)
     load(target, name: name)
-    UserDefaults.standard.set(name, forKey: "audioClipName")
+    if SessionState.isEnabled { UserDefaults.standard.set(name, forKey: "audioClipName") }
   }
 
   func clear() {
