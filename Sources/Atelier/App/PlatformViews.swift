@@ -189,7 +189,7 @@ let inspectorPopoverEdge: Edge? = {
 #if os(iOS)
   /// The narrowest iPad window area that fits a screen beside its inspector; narrower, the
   /// inspector would cover the screen.
-  let iPadInspectorMinimumWidth: CGFloat = 800
+  nonisolated let iPadInspectorMinimumWidth: CGFloat = 800
 #endif
 
 #if !(os(iOS) && DEBUG)
