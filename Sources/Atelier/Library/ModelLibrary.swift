@@ -374,10 +374,32 @@ final class ModelLibrary {
     ).specification
   }
 
+  /// Removes what an import that failed left in `directory`: files it made, which aren't in
+  /// `before`. The prefix alone isn't enough: another model's name can start the same way.
+  nonisolated static func removeNewFiles(in directory: URL, before: Set<String>, prefix: String) {
+    let fileManager = FileManager.default
+    for file in (try? fileManager.contentsOfDirectory(atPath: directory.path)) ?? []
+      where file.hasPrefix(prefix) && !before.contains(file)
+    {
+      try? fileManager.removeItem(at: directory.appendingPathComponent(file))
+    }
+  }
+
+  private nonisolated static func fileNames(in directory: URL) -> Set<String> {
+    Set((try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? [])
+  }
+
   /// Imports one checkpoint and returns the model file it registered.
   private func importModel(_ item: ModelImport) async throws -> String {
     let stem = item.source.deletingPathExtension().lastPathComponent
     let modelName = Self.availableModelName(for: stem, in: directories)
+    let directory = directory
+    // The main file and the text encoders and autoencoder that come out of it share this prefix.
+    let before = Self.fileNames(in: directory)
+    var succeeded = false
+    defer {
+      if !succeeded { Self.removeNewFiles(in: directory, before: before, prefix: modelName + "_") }
+    }
     let trimmedName = item.name.trimmingCharacters(in: .whitespacesAndNewlines)
     let displayName = trimmedName.isEmpty ? stem : trimmedName
     let source = item.source
@@ -411,6 +433,7 @@ final class ModelLibrary {
     ModelZoo.isExternalUrlsPreferred = true
     ModelZoo.appendCustomSpecification(specification)
     ModelZoo.isExternalUrlsPreferred = preferred
+    succeeded = true
     return specification.file
   }
 
@@ -681,6 +704,11 @@ final class ModelLibrary {
     let directory = directory
     let stem = item.source.deletingPathExtension().lastPathComponent
     let file = Self.availableLoRAFileName(for: stem, in: directories)
+    let before = Self.fileNames(in: directory)
+    var succeeded = false
+    defer {
+      if !succeeded { Self.removeNewFiles(in: directory, before: before, prefix: file) }
+    }
     let source = item.source
     let id = item.id
     let progress: @Sendable (Float) -> Void = { [weak self] value in
@@ -707,6 +735,7 @@ final class ModelLibrary {
       LoRAZoo.Specification(
         name: name, file: file, prefix: item.prefix, version: detected,
         isLoHa: isLoHa), in: directory)
+    succeeded = true
   }
 
   /// Renames a LoRA or changes its trigger words; other fields in custom_lora.json are kept.

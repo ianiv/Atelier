@@ -210,15 +210,35 @@ final class JobQueue {
   }
 
   func clearRecent() {
+    let removed = recent
     recent = []
+    releaseAudio(of: removed)
   }
 
   func removeRecent(_ id: UUID) {
+    let removed = recent.filter { $0.id == id }
     recent.removeAll { $0.id == id }
+    releaseAudio(of: removed)
   }
 
   private func record(_ job: Job) {
     recent.insert(job, at: 0)
-    if recent.count > Self.recentLimit { recent.removeLast(recent.count - Self.recentLimit) }
+    if recent.count > Self.recentLimit {
+      let removed = Array(recent.suffix(recent.count - Self.recentLimit))
+      recent.removeLast(recent.count - Self.recentLimit)
+      releaseAudio(of: removed)
+    }
+  }
+
+  /// Every job here that's yet to end, for what's kept across a quit.
+  var unfinished: [Job] { (running.map { [$0] } ?? []) + waiting }
+
+  /// Removes the audio copies of jobs that left the list, once no job is using them. Finished
+  /// jobs keep theirs while they're listed, for Run Again; `Job(work:)` in `retry` shares the copy.
+  private func releaseAudio(of removed: [Job]) {
+    let inUse = Set((unfinished + recent).compactMap { $0.request?.audio })
+    for url in Set(removed.compactMap { $0.request?.audio }) where !inUse.contains(url) {
+      AudioClip.removeSnapshot(url)
+    }
   }
 }

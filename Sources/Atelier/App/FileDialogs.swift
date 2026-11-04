@@ -25,6 +25,8 @@ final class FileDialogs {
     var name: String
     /// Where it was written, or why it wasn't; not called on cancel.
     var completion: @MainActor (Result<URL, Error>) -> Void = { _ in }
+    /// Called instead of `completion` when the panel is cancelled.
+    var cancelled: @MainActor () -> Void = {}
   }
 
   /// A pick from the photo library. The picker runs outside the app, so it needs no permission
@@ -97,6 +99,10 @@ private struct FileDialogsModifier: ViewModifier {
         let request = dialogs.presentedSave
         dialogs.save = nil
         request?.completion(result)
+      } onCancellation: {
+        let request = dialogs.presentedSave
+        dialogs.save = nil
+        request?.cancelled()
       }
       .fileImporter(
         isPresented: Binding(get: { dialogs.open != nil }, set: { if !$0 { dialogs.open = nil } }),

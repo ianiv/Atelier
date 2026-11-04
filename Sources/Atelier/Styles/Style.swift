@@ -286,8 +286,12 @@ final class StyleStore {
 
   init(persists: Bool = true) {
     self.persists = persists
-    guard let data = try? Data(contentsOf: Self.file) else { return }
-    styles = (try? JSONDecoder().decode([Style].self, from: data)) ?? []
+    guard let data = try? Data(contentsOf: Self.file), let saved = try? JSONDecoder().decode([Style].self, from: data) else { return }
+    styles = saved
+    // Only with styles read: a file that didn't decode says nothing about which thumbnails are used.
+    if persists, !saved.isEmpty {
+      Self.removeOrphanedThumbnails(in: Self.thumbnailsDirectory, keeping: Set(saved.map(\.id)))
+    }
   }
 
   func style(id: UUID?) -> Style? {

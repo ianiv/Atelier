@@ -41,6 +41,20 @@ final class Moodboard {
       ImageLoader.image(at: Self.folder.appending(path: "\(entry.id).png"), maxSide: Self.maxSide)
         .map { MoodboardItem(id: entry.id, image: $0, weight: entry.weight) }
     }
+    // Only after reading the index: without it there's no telling which images are in use.
+    Self.removeOrphans(in: Self.folder, keeping: Set(entries.map(\.id)))
+  }
+
+  /// Removes the images in `folder` that aren't on the board, such as ones a crash left behind.
+  static func removeOrphans(in folder: URL, keeping ids: Set<UUID>) {
+    let fileManager = FileManager.default
+    for file in (try? fileManager.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+      where file.pathExtension == "png"
+    {
+      guard let id = UUID(uuidString: file.deletingPathExtension().lastPathComponent), !ids.contains(id)
+      else { continue }
+      try? fileManager.removeItem(at: file)
+    }
   }
 
   func add(_ image: CGImage) {

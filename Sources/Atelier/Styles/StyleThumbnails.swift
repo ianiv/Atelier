@@ -64,6 +64,16 @@ extension StyleStore {
     thumbnailsDirectory.appendingPathComponent(id.uuidString + ".json")
   }
 
+  /// Removes the thumbnails, full images and settings in `folder` of styles that aren't in `ids`.
+  /// Their names start with the style's id; any other file stays.
+  static func removeOrphanedThumbnails(in folder: URL, keeping ids: Set<UUID>) {
+    let fileManager = FileManager.default
+    for file in (try? fileManager.contentsOfDirectory(atPath: folder.path)) ?? [] {
+      guard let id = UUID(uuidString: String(file.prefix(36))), !ids.contains(id) else { continue }
+      try? fileManager.removeItem(at: folder.appendingPathComponent(file))
+    }
+  }
+
   /// The style's thumbnail as JPEG, for a library file.
   func thumbnailJPEG(_ id: UUID) -> Data? {
     if let data = try? Data(contentsOf: Self.thumbnailURL(id)) { return data }

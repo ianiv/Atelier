@@ -270,6 +270,13 @@ struct HistoryView: View {
           return .handled
         }
         .quickLookPreview($quickLookURL)
+        .onChange(of: quickLookURL) { old, new in
+          if let old, old != new { Self.removeQuickLookFile(old) }
+        }
+        .onDisappear {
+          if let quickLookURL { Self.removeQuickLookFile(quickLookURL) }
+          quickLookURL = nil
+        }
         .background(Color.underPageBackground)
       }
     }
@@ -536,10 +543,8 @@ struct HistoryView: View {
     guard let item = history.items.first(where: { $0.tensorId == anchor && selection.contains($0.tensorId) })
     else { return }
     Task {
-      let url = FileManager.default.temporaryDirectory
-        .appendingPathComponent("Atelier Quick Look", isDirectory: true)
-      try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-      let file = url.appendingPathComponent(history.fileName(for: item))
+      // A folder of its own: the file keeps its name, and removing it can't hit a later preview.
+      let file = TemporaryFiles.newFolder(in: .quickLook).appendingPathComponent(history.fileName(for: item))
         .appendingPathExtension(item.isVideo ? "mp4" : "png")
       if item.isVideo {
         guard (try? await history.exportVideo(item, to: file)) != nil else { return }
@@ -547,9 +552,13 @@ struct HistoryView: View {
         guard let data = try? await history.pngData(item), (try? data.write(to: file)) != nil
         else { return }
       }
-      guard anchor == item.tensorId else { return }
+      guard anchor == item.tensorId else { return Self.removeQuickLookFile(file) }
       quickLookURL = file
     }
+  }
+
+  private static func removeQuickLookFile(_ file: URL) {
+    try? FileManager.default.removeItem(at: file.deletingLastPathComponent())
   }
 
   private func copy(_ text: String) {

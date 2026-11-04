@@ -34,7 +34,7 @@ enum Automation {
       "--show", "--resize-bench", "--inspector-check", "--library-check", "--project-check",
       "--reuse", "--generate", "--ux-check", "--edit-input-check", "--queue-check",
       "--timeline-check", "--upscale-check", "--timeline-export-check", "--flashvsr-check",
-      "--model-folders-check", "--styles-check",
+      "--model-folders-check", "--styles-check", "--cleanup-check",
     ]
     return CommandLine.arguments.contains { flags.contains($0) }
   }
@@ -84,6 +84,10 @@ enum Automation {
     }
     if args.contains("--flashvsr-check") {
       flashVSRCheck()
+      return
+    }
+    if args.contains("--cleanup-check") {
+      cleanupCheck(model)
       return
     }
     if args.contains("--styles-check") {

@@ -910,7 +910,7 @@ final class AgentTools {
 
   private static func outputURL(_ saveTo: String?, name: String, extension ext: String) throws -> URL {
     let fileManager = FileManager.default
-    var folder = fileManager.temporaryDirectory.appending(path: "Atelier", directoryHint: .isDirectory)
+    var folder = TemporaryFiles.folder(.agent)
     if let saveTo, !saveTo.isEmpty {
       let url = URL(fileURLWithPath: (saveTo as NSString).expandingTildeInPath)
       var isDirectory: ObjCBool = false

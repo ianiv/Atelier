@@ -648,7 +648,9 @@ final class CreateModel {
   /// Keeps the running and waiting jobs for the next launch (not for scripted runs).
   private func saveQueue() {
     guard SessionState.isEnabled else { return }
-    SavedQueue.save((queue.running.map { [$0] } ?? []) + queue.waiting, project: history.project.name)
+    SavedQueue.save(queue.unfinished, project: history.project.name)
+    // Finished jobs' copies only served Run Again, which doesn't outlast the app.
+    AudioClip.removeSnapshots(keeping: queue.unfinished.compactMap { $0.request?.audio })
   }
 
   /// Brings back the jobs kept at the last quit, paused. Jobs for models no longer downloaded

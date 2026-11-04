@@ -53,7 +53,7 @@ nonisolated struct TimelineExportJob: Sendable {
 
   /// Exports to a temporary file, then puts it at `destination`.
   @concurrent func run(engine: GenerationEngine, progress: @escaping @Sendable (Double) -> Void) async throws {
-    let temporary = URL.temporaryDirectory.appending(path: "\(UUID().uuidString).mp4")
+    let temporary = TemporaryFiles.newFile(in: .exports, extension: "mp4")
     defer { try? FileManager.default.removeItem(at: temporary) }
     try await composition.exportUpscaled(
       to: temporary, codec: .current, title: title, upscale: upscale, engine: engine,
@@ -96,8 +96,7 @@ nonisolated extension TimelineComposition {
     to url: URL, codec: VideoCodec, title: String, upscale: TimelineUpscale,
     engine: GenerationEngine, progress: @escaping @Sendable (Double) -> Void
   ) async throws {
-    let folder = URL.temporaryDirectory.appending(path: "upscale-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    let folder = TemporaryFiles.newFolder(in: .exports)
     defer { try? FileManager.default.removeItem(at: folder) }
     let video = folder.appending(path: "video.mp4")
     // Frames are most of the work; the sound and putting the two together, the rest.

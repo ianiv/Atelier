@@ -46,6 +46,14 @@ struct AtelierApp: App {
     _presets = State(initialValue: presets)
     let library = ModelLibrary(create: create)
     _library = State(initialValue: library)
+    if SessionState.isEnabled {
+      let current = history.project.name
+      Task {
+        await TemporaryFiles.cleanAtLaunch()
+        await HistoryStore.pruneClipCache(keepingProject: current)
+      }
+      AppLifecycle.onWillTerminate { TemporaryFiles.cleanAtQuit() }
+    }
     #if os(macOS)
       _agents = State(initialValue: AgentServer(create: create, presets: presets))
       AppLifecycle.workUnderway = { create.workUnderway }

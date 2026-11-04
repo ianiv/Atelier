@@ -202,7 +202,7 @@ final class HistoryStore {
     await reload()
   }
 
-  private nonisolated static func scanProjectNames() -> [String] {
+  nonisolated static func scanProjectNames() -> [String] {
     let files = (try? FileManager.default.contentsOfDirectory(
       at: projectsDirectory, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? []
     return files.filter { $0.pathExtension == "sqlite3" }
@@ -304,6 +304,7 @@ final class HistoryStore {
       for item in items {
         if let clip = item.clip {
           let parent = try await project.deleteClip(frames: clip.frames)
+          Self.removeClipFiles(project: project.name, clipId: clip.clipId, tensorId: item.tensorId)
           if let current = currentTensorId, clip.frames.contains(current) { currentTensorId = parent }
         } else {
           let parent = try await project.delete(tensorId: item.tensorId)
@@ -528,7 +529,7 @@ final class HistoryStore {
     guard let clip = item.clip else { throw ClipVideoError.noFrames }
     let codec = VideoCodec.current
     let url = Self.clipCache.appendingPathComponent(
-      "\(project.name)-\(clip.clipId)-\(item.tensorId)-\(codec.rawValue).mp4")
+      Self.clipFileName(project: project.name, clipId: clip.clipId, tensorId: item.tensorId, codec: codec))
     if FileManager.default.fileExists(atPath: url.path) { return url }
     if let pending = videoFiles[url] { return try await pending.value }
     let project = project
@@ -540,14 +541,19 @@ final class HistoryStore {
       let audio = audioId.flatMap { project.audio(id: $0) }.map { (samples: $0, sampleRate: sampleRate) }
       try FileManager.default.createDirectory(at: Self.clipCache, withIntermediateDirectories: true)
       // Written beside its final name, so a half-written file is never taken as done.
-      let partial = url.deletingPathExtension().appendingPathExtension("partial.mp4")
-      try await ClipVideo.write(
-        to: partial, count: clip.frames.count,
-        frame: { project.image(tensorId: clip.frames[$0]) },
-        framesPerSecond: clip.framesPerSecond, audio: audio?.samples,
-        audioSampleRate: audio?.sampleRate ?? 0, codec: codec, metadata: metadata)
-      try? FileManager.default.removeItem(at: url)
-      try FileManager.default.moveItem(at: partial, to: url)
+      let partial = url.deletingPathExtension().appendingPathExtension(Self.partialExtension)
+      do {
+        try await ClipVideo.write(
+          to: partial, count: clip.frames.count,
+          frame: { project.image(tensorId: clip.frames[$0]) },
+          framesPerSecond: clip.framesPerSecond, audio: audio?.samples,
+          audioSampleRate: audio?.sampleRate ?? 0, codec: codec, metadata: metadata)
+        try? FileManager.default.removeItem(at: url)
+        try FileManager.default.moveItem(at: partial, to: url)
+      } catch {
+        try? FileManager.default.removeItem(at: partial)
+        throw error
+      }
       return url
     }
     videoFiles[url] = task
@@ -560,6 +566,52 @@ final class HistoryStore {
 
   private nonisolated static var clipCache: URL {
     URL.cachesDirectory.appending(path: "Atelier/Clips", directoryHint: .isDirectory)
+  }
+
+  private nonisolated static let partialExtension = "partial.mp4"
+
+  private nonisolated static func clipFileName(
+    project: String, clipId: Int64, tensorId: Int64, codec: VideoCodec
+  ) -> String {
+    "\(project)-\(clipId)-\(tensorId)-\(codec.rawValue).mp4"
+  }
+
+  /// Removes a deleted clip's cached videos, in every codec.
+  nonisolated static func removeClipFiles(
+    in folder: URL = clipCache, project: String, clipId: Int64, tensorId: Int64
+  ) {
+    for codec in VideoCodec.allCases {
+      let name = clipFileName(project: project, clipId: clipId, tensorId: tensorId, codec: codec)
+      try? FileManager.default.removeItem(at: folder.appendingPathComponent(name))
+    }
+  }
+
+  /// Drops what the clip cache can't use at launch: videos cut off by a quit or a crash, videos in
+  /// a codec no longer chosen, and videos of projects that are gone or renamed.
+  @concurrent nonisolated static func pruneClipCache(keepingProject current: String) async {
+    let projects = Set(scanProjectNames() + [current])
+    pruneClipCache(in: clipCache, projects: projects, codec: .current)
+  }
+
+  nonisolated static func pruneClipCache(in folder: URL, projects: Set<String>, codec: VideoCodec) {
+    let fileManager = FileManager.default
+    for file in (try? fileManager.contentsOfDirectory(atPath: folder.path)) ?? [] {
+      let url = folder.appendingPathComponent(file)
+      if file.hasSuffix("." + partialExtension) {
+        try? fileManager.removeItem(at: url)
+        continue
+      }
+      guard file.hasSuffix(".mp4") else { continue }
+      // "<project>-<clip>-<tensor>-<codec>"; a project's name can hold dashes itself.
+      let parts = file.dropLast(4).split(separator: "-", omittingEmptySubsequences: false)
+      guard parts.count >= 4, Int64(parts[parts.count - 2]) != nil, Int64(parts[parts.count - 3]) != nil,
+            let fileCodec = VideoCodec(rawValue: String(parts[parts.count - 1]))
+      else { continue }
+      let project = parts.dropLast(3).joined(separator: "-")
+      if fileCodec != codec || !projects.contains(project) {
+        try? fileManager.removeItem(at: url)
+      }
+    }
   }
 
   /// What an exported video says about itself: Draw Things' summary as its description, the
@@ -871,9 +923,7 @@ nonisolated struct PNGExport: Transferable, Identifiable {
 
   static var transferRepresentation: some TransferRepresentation {
     FileRepresentation(exportedContentType: .mpeg4Movie) { export in
-      let folder = FileManager.default.temporaryDirectory
-        .appendingPathComponent(UUID().uuidString, isDirectory: true)
-      try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+      let folder = TemporaryFiles.newDragFolder()
       let file = folder.appendingPathComponent(export.name).appendingPathExtension("mp4")
       guard let video = export.video else { throw ClipVideoError.noFrames }
       try FileManager.default.copyItem(at: try await video(), to: file)
@@ -882,9 +932,7 @@ nonisolated struct PNGExport: Transferable, Identifiable {
     .exportingCondition { $0.video != nil }
     .suggestedFileName { $0.name + ".mp4" }
     FileRepresentation(exportedContentType: .png) { export in
-      let folder = FileManager.default.temporaryDirectory
-        .appendingPathComponent(UUID().uuidString, isDirectory: true)
-      try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+      let folder = TemporaryFiles.newDragFolder()
       let file = folder.appendingPathComponent(export.name).appendingPathExtension("png")
       try await export.data().write(to: file)
       return SentTransferredFile(file)

@@ -467,7 +467,7 @@ struct TimelineScreen: View {
   private func export(toPhotos: Bool) {
     guard let composition, let timeline = store.selected, exportProgress == nil else { return }
     playback.pause()
-    let url = URL.temporaryDirectory.appending(path: "\(UUID().uuidString).mp4")
+    let url = TemporaryFiles.newFile(in: .exports, extension: "mp4")
     let name = "\(history.project.name) \(timeline.name)"
     exportProgress = 0
     store.isExporting = true
@@ -489,8 +489,9 @@ struct TimelineScreen: View {
         #endif
         fileDialogs.save = FileDialogs.Save(
           file: ExportedFile(type: .mpeg4Movie) { try Data(contentsOf: url) },
-          name: name + ".mp4"
-        ) { _ in try? FileManager.default.removeItem(at: url) }
+          name: name + ".mp4",
+          completion: { _ in try? FileManager.default.removeItem(at: url) },
+          cancelled: { try? FileManager.default.removeItem(at: url) })
       } catch {
         exportProgress = nil
         store.isExporting = false

@@ -419,6 +419,15 @@ actor GenerationEngine {
     return (generator, queue)
   }
 
+  /// The folder MGK made for this run's engine (`MediaGenerationLocalResources.tempDir`), once
+  /// there is one.
+  nonisolated static var temporaryDirectory: URL? {
+    let storage = reflectedChild(MediaGenerationEnvironment.default, "storage")
+    let resources = storage.flatMap { reflectedChild($0, "cachedLocalResources") }
+    guard let path = resources.flatMap({ reflectedChild($0, "tempDir") }) as? String else { return nil }
+    return URL(fileURLWithPath: path, isDirectory: true)
+  }
+
   /// Hands the Performance settings to the engine through the same workspace dictionary Draw
   /// Things writes them to. Its model preloader subscribes to those keys and applies a change
   /// (dropping cached weights when needed) on the generation queue, ahead of the next run.
