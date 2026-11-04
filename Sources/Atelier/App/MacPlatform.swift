@@ -185,6 +185,18 @@ enum AutomationWindows {
 
   static var mainWindowNumber: Int { visibleWindow?.windowNumber ?? 0 }
 
+  /// The Settings window's number, for `screencapture -l`.
+  static var otherWindowNumber: Int {
+    NSApp.windows.first { $0.isVisible && !$0.isSheet && $0.canBecomeKey && $0.title != "Atelier" }?.windowNumber ?? 0
+  }
+
+  /// The number of the window showing a sheet (a sheet is captured with its window).
+  static var sheetWindowNumber: Int {
+    NSApp.windows.first { $0.isSheet && $0.isVisible }?.windowNumber ?? 0
+  }
+
+  static var isSheetUp: Bool { NSApp.windows.contains { $0.isSheet && $0.isVisible } }
+
   /// How many windows are up, sheets aside.
   static var windowCount: Int { NSApp.windows.filter { $0.isVisible && !$0.isSheet && $0.canBecomeKey }.count }
 

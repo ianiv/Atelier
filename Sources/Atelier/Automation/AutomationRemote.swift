@@ -772,7 +772,8 @@ extension Automation {
     }
   }
 
-  /// Screenshots of the Compute UI, into DIR. Launch with `-AtelierSettingsTab Compute
+  /// Screenshots of the Compute UI, into DIR. Each also prints `capture NAME WINDOW` and holds for
+  /// a moment, for `screencapture -l WINDOW`, which shows materials the renders here can't. Launch with `-AtelierSettingsTab Compute
   /// -AtelierShowPairing YES` for Settings and its pairing sheet. Nothing's kept: keys stay in
   /// memory, and jobs run against a second engine in this process.
   ///
@@ -786,6 +787,11 @@ extension Automation {
       @MainActor func wait(until condition: () -> Bool, seconds: Double = 300) async {
         let deadline = Date().addingTimeInterval(seconds)
         while !condition(), Date() < deadline { try? await Task.sleep(for: .milliseconds(100)) }
+      }
+      @MainActor func capture(_ name: String, window: Int) async {
+        print("capture \(name) \(window)")
+        fflush(stdout)
+        try? await Task.sleep(for: .seconds(2))
       }
       @MainActor func shot(_ name: String) { AutomationWindows.snapshot(to: folder.appending(path: name)) }
       await wait(until: { model.history.isLoaded && !model.models.isEmpty && model.settings != nil && !model.isBusy })
@@ -816,16 +822,14 @@ extension Automation {
       model.prompt = "a green apple on a table"
       try? await Task.sleep(for: .seconds(1))
       shot("create-run-on.png")
-      // The window's number, for `screencapture -l`, which shows what the window really looks like.
-      print("main window: \(AutomationWindows.mainWindowNumber)")
-      fflush(stdout)
-      try? await Task.sleep(for: .seconds(6))
+      await capture("create-window", window: AutomationWindows.mainWindowNumber)
 
       // A link opened from outside.
       model.remoteServers.openedLink = RemotePairingLink(
         addresses: [RemoteAddress(host: "vimes.tail1234.ts.net", port: 7863)], serverID: UUID(), secret: RemotePairing.newCode())
       try? await Task.sleep(for: .seconds(1))
       _ = AutomationWindows.snapshotSheet(to: folder.appending(path: "add-server-from-link.png"))
+      await capture("add-server-window", window: AutomationWindows.sheetWindowNumber)
       model.remoteServers.openedLink = nil
       try? await Task.sleep(for: .seconds(1))
 
@@ -848,6 +852,7 @@ extension Automation {
       await wait(until: { model.queue.isEmpty })
       try? await Task.sleep(for: .seconds(1))
       shot("queue-finished.png")
+      await capture("queue-window", window: AutomationWindows.mainWindowNumber)
 
       // Settings ▸ Compute.
       server.isEnabled = true
@@ -866,9 +871,11 @@ extension Automation {
       try? await Task.sleep(for: .seconds(2))
       let settingsShown = AutomationWindows.snapshotOtherWindow(to: folder.appending(path: "settings-compute.png"))
       print("settings shot: \(settingsShown)")
+      if !AutomationWindows.isSheetUp { await capture("settings-window", window: AutomationWindows.otherWindowNumber) }
       try? await Task.sleep(for: .seconds(2))
       let sheetShown = AutomationWindows.snapshotSheet(to: folder.appending(path: "pair-a-device.png"))
       print("pairing sheet shot: \(sheetShown)")
+      await capture("pair-a-device-window", window: AutomationWindows.sheetWindowNumber)
       fflush(stdout)
       hostServer.isEnabled = false
       server.isEnabled = false
