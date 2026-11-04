@@ -44,6 +44,17 @@ DEVELOPMENT_TEAM = YOURTEAMID
 
 Replace `YOURTEAMID` with your team ID, which is shown in Xcode under **Settings ▸ Accounts** and on the Membership page of your Apple Developer account. `Config/Local.xcconfig` is ignored by git, so your team ID stays out of the repository. Use this file rather than the Signing & Capabilities tab in Xcode, which writes the team into the project file.
 
+## Tailscale in your own build
+
+Atelier can join your tailnet by itself ([Running jobs on another device](remote.md#tailscale-without-the-tailscale-app)) using Tailscale's library, which is built separately so a plain build doesn't need Go. To include it, install Go and run the script once, then build as usual:
+
+```bash
+brew install go
+Scripts/build-tailscale.sh
+```
+
+It takes a few minutes and adds about 25 MB to the app. Run it again after `Scripts/clean-builds.sh --all`, which removes it. Without it, Atelier builds and runs the same, and Settings ▸ Compute says Tailscale isn't in this build.
+
 ## Atelier on iPad
 
 An iPad version is in development, built from the same code as the Mac app; there's no download yet, so you build and install it from Xcode. It needs an iPad with an M1 chip or newer running iPadOS 27; how fast it generates depends on the chip and its memory.

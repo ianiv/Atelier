@@ -33,19 +33,35 @@ Upscale and Export use what's on the server: FlashVSR+ has to be downloaded ther
 
 Video results are large, up to hundreds of megabytes, and over a slow connection a download can take minutes. It resumes where it stopped if the connection drops.
 
+## Tailscale, without the Tailscale app
+
+Atelier can join your [tailnet](https://tailscale.com) by itself: no Tailscale app, no VPN. This is the easy way to reach your Mac from anywhere, and it works alongside the Tailscale app if you have that too. On each device, open Settings ▸ Compute and under **Tailscale**:
+
+1. Choose **Sign In…**. Your browser opens Tailscale's sign-in page. Sign in there, and Settings then shows **Signed in as** you. Atelier shows up as a device of its own in your Tailscale admin console.
+2. Leave **Serve over Tailscale** on, on the device doing the work. Paired devices can then reach it over your tailnet. Serving also needs **Let paired devices run jobs here** on.
+3. Pair as usual. A pairing link and QR code made while signed in start with this device's tailnet name, so the other device reaches it from anywhere once it's signed in as well.
+
+**Limit access to your Tailscale account** (on by default) only lets in devices signed in to the same Tailscale account as this one, on top of being paired. It matters if you've shared this device with someone else's tailnet.
+
+**Control Server** is for [Headscale](https://headscale.net): enter its address before signing in, or leave it empty for Tailscale's own. **Preferred Hostname** is the name this device asks for on your tailnet. Tailscale may add a number if it's taken.
+
+**Sign Out…** takes this device off your tailnet and forgets its sign-in. Atelier keeps that sign-in in its own folder, separate from the Tailscale app's.
+
+Builds from source need one extra step to include this: see [Getting started](getting-started.md#tailscale-in-your-own-build). Without it, Settings says so and a Tailscale app still works.
+
 ## Networks
 
-Atelier encrypts and authenticates every connection itself, so this works over any route: [Tailscale](https://tailscale.com), Headscale, your local network, or any network you can reach the server on. Pairing gives each device its own key, kept in the Keychain, and neither side can talk to the other without it. There are no accounts or passwords, and no outside service is involved.
+Atelier encrypts and authenticates every connection itself, so this works over any route: Atelier's own Tailscale sign-in, the Tailscale app, Headscale, your local network, or any network you can reach the server on. Pairing gives each device its own key, kept in the Keychain, and neither side can talk to the other without it. Tailscale only carries encrypted bytes it can't read. Outside of Tailscale's sign-in, there are no accounts or passwords, and no outside service is involved.
 
 The server's **Accept connections from** setting is a second layer on top of those keys:
 
-- **Tailscale only** (the default) accepts Tailscale addresses (100.64.0.0/10 and fd7a:115c:a1e0::/48).
+- **Tailscale only** (the default) accepts what comes over Atelier's own Tailscale sign-in, and from Tailscale addresses (100.64.0.0/10 and fd7a:115c:a1e0::/48) through the Tailscale app.
 - **Tailscale and local network** also accepts private addresses on your own network.
 - **Any network** accepts all addresses. Paired keys are still required.
 
 A pairing link holds all the server's addresses, and the client tries the local network first, then Tailscale. Tailscale doesn't carry Bonjour between machines, so a server is found through the addresses remembered from pairing. On the same network, servers also find each other: a paired one shows as online and is reached directly.
 
-Settings ▸ Compute shows this device's Tailscale address and name when it has one. The default port is 7863.
+Settings ▸ Compute shows this device's name on your tailnet when Atelier is signed in, and its address when it has the Tailscale app. The default port is 7863.
 
 ## What a paired device can do
 
@@ -61,4 +77,4 @@ The server has to be running Atelier, and awake. Atelier keeps the Mac from goin
 
 ## On iPad
 
-An iPad can be a client or a server. As a server it only accepts jobs while Atelier is in the foreground, because iPadOS stops apps from listening in the background. iPadOS asks for Local Network access the first time Atelier looks for servers or advertises itself.
+An iPad can be a client or a server. As a server it only accepts jobs while Atelier is in the foreground, because iPadOS stops apps from listening in the background, and Atelier's Tailscale sign-in reconnects when you come back to it. It doesn't use the iPad's VPN slot, so it works beside another VPN. iPadOS asks for Local Network access the first time Atelier looks for servers or advertises itself.

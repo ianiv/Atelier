@@ -55,7 +55,7 @@ These match Draw Things' Machine Settings. **Automatic** uses what the engine pi
 
 ## Compute
 
-Lets paired devices run jobs on this one, and lists the servers this one can use. Set which networks to accept connections from, pair and remove devices, and add servers here. See [Running jobs on another device](remote.md).
+Lets paired devices run jobs on this one, and lists the servers this one can use. Sign in to Tailscale, set which networks to accept connections from, pair and remove devices, and add servers here. See [Running jobs on another device](remote.md).
 
 ## Agents
 
