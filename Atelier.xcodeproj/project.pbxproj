@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		B7A1F0C2B3D4A59687786206 /* WaitUntilTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A1F0C2B3D4A59687786306 /* WaitUntilTests.swift */; };
+		A7E1F0C2B3D4A5968778699B /* WaitUntil.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1F0C2B3D4A5968778699A /* WaitUntil.swift */; };
 		A7E1F0C2B3D4A5968778697B /* AutomationPlayback.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1F0C2B3D4A5968778697A /* AutomationPlayback.swift */; };
 		B7A1F0C2B3D4A59687786200 /* ProjectMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A1F0C2B3D4A59687786300 /* ProjectMappingTests.swift */; };
 		B7A1F0C2B3D4A59687786201 /* StyleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A1F0C2B3D4A59687786301 /* StyleTests.swift */; };
@@ -160,6 +162,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		B7A1F0C2B3D4A59687786306 /* WaitUntilTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaitUntilTests.swift; sourceTree = "<group>"; };
+		A7E1F0C2B3D4A5968778699A /* WaitUntil.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaitUntil.swift; sourceTree = "<group>"; };
 		A7E1F0C2B3D4A5968778697A /* AutomationPlayback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationPlayback.swift; sourceTree = "<group>"; };
 		B7A1F0C2B3D4A59687786300 /* ProjectMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectMappingTests.swift; sourceTree = "<group>"; };
 		B7A1F0C2B3D4A59687786301 /* StyleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StyleTests.swift; sourceTree = "<group>"; };
@@ -361,6 +365,7 @@
 				5A9C1E0B2D7F4A6E8B3C1D06 /* Updater.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1FC /* SampleData.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1FA /* FolderAccess.swift */,
+				A7E1F0C2B3D4A5968778699A /* WaitUntil.swift */,
 				A7E1F0C2B3D4A5968778696A /* Log.swift */,
 				A7E1F0C2B3D4A5968778695A /* TemporaryFiles.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1F8 /* PlatformViews.swift */,
@@ -579,6 +584,7 @@
 				B7A1F0C2B3D4A59687786303 /* FileCleanupTests.swift */,
 				B7A1F0C2B3D4A59687786304 /* QueueTests.swift */,
 				B7A1F0C2B3D4A59687786305 /* ValueTests.swift */,
+				B7A1F0C2B3D4A59687786306 /* WaitUntilTests.swift */,
 			);
 			path = AtelierTests;
 			sourceTree = "<group>";
@@ -784,6 +790,7 @@
 				5A9C1E0B2D7F4A6E8B3C1D05 /* Updater.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1FB /* SampleData.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1F9 /* FolderAccess.swift in Sources */,
+				A7E1F0C2B3D4A5968778699B /* WaitUntil.swift in Sources */,
 				A7E1F0C2B3D4A5968778696B /* Log.swift in Sources */,
 				A7E1F0C2B3D4A5968778695B /* TemporaryFiles.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1F7 /* PlatformViews.swift in Sources */,
@@ -847,6 +854,7 @@
 				B7A1F0C2B3D4A59687786203 /* FileCleanupTests.swift in Sources */,
 				B7A1F0C2B3D4A59687786204 /* QueueTests.swift in Sources */,
 				B7A1F0C2B3D4A59687786205 /* ValueTests.swift in Sources */,
+				B7A1F0C2B3D4A59687786206 /* WaitUntilTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

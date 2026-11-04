@@ -27,6 +27,7 @@ final class AgentTools {
   /// One `generate` run. A run outlives the call that started it: `background` returns its id
   /// at once, and a waiting call whose client hangs up leaves it running for `get_job`.
   @MainActor
+  @Observable
   final class Job {
     let id: String
     let prompt: String
@@ -38,9 +39,9 @@ final class AgentTools {
     var error: String?
     var wasCancelled = false
     var finishedAt: Date?
-    var task: Task<Void, Never>?
+    @ObservationIgnored var task: Task<Void, Never>?
     /// The waiting call's progress stream, while there is one.
-    var onProgress: ((Progress) -> Void)?
+    @ObservationIgnored var onProgress: ((Progress) -> Void)?
 
     init(id: String, prompt: String) {
       self.id = id
@@ -53,6 +54,13 @@ final class AgentTools {
       if error != nil { return "failed" }
       return progress.isQueued ? "waiting" : "running"
     }
+  }
+
+  /// Wakes a wait for a job when its time is up.
+  @MainActor
+  @Observable
+  final class Deadline {
+    var hasPassed = false
   }
 
   nonisolated struct ToolError: LocalizedError {
@@ -548,7 +556,7 @@ final class AgentTools {
 
     if background {
       // Bad arguments fail here rather than in the first get_job.
-      while !job.accepted { try? await Task.sleep(for: .milliseconds(50)) }
+      await waitUntil { job.accepted }
       if let error = job.error { throw ToolError(error) }
       var summary = Self.summary(job)
       summary["note"] = "Running in the background. Call get_job with this job_id to wait for it."
@@ -556,9 +564,7 @@ final class AgentTools {
     }
     // A cancelled call only stops waiting: clients cancel calls they give up on (Claude's
     // bridge does at three minutes), so only cancel_job and the Queue stop the run itself.
-    while job.finishedAt == nil, !Task.isCancelled {
-      try? await Task.sleep(for: .milliseconds(250))
-    }
+    await waitUntil { job.finishedAt != nil }
     job.onProgress = nil
     guard job.finishedAt != nil else {
       throw ToolError("Stopped waiting; \(job.id) is still running. Call get_job to collect it.")
@@ -569,14 +575,23 @@ final class AgentTools {
   private func getJob(_ arguments: [String: Any], progress: @escaping (Progress) -> Void) async throws -> [String: Any] {
     let job = try job(arguments)
     let wait = Double(min(max(Self.int(arguments["wait_seconds"]) ?? 30, 0), 60))
-    let deadline = Date().addingTimeInterval(wait)
-    var reported = -1
-    while job.finishedAt == nil, Date() < deadline, !Task.isCancelled {
-      if job.progress.step != reported {
-        reported = job.progress.step
-        progress(job.progress)
+    if wait > 0 {
+      let deadline = Deadline()
+      let timer = Task {
+        try? await Task.sleep(for: .seconds(wait))
+        deadline.hasPassed = true
       }
-      try? await Task.sleep(for: .milliseconds(250))
+      defer { timer.cancel() }
+      var reported = -1
+      for await (step, isOver) in Observations({ @MainActor in
+        (job.progress.step, job.finishedAt != nil || deadline.hasPassed)
+      }) {
+        if isOver { break }
+        if step != reported {
+          reported = step
+          progress(job.progress)
+        }
+      }
     }
     guard job.finishedAt != nil else { return try Self.textResult(json: Self.summary(job)) }
     return try Self.outcome(of: job)

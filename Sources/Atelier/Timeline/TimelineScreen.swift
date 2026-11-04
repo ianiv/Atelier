@@ -530,7 +530,7 @@ final class TimelinePlayback {
   @ObservationIgnored private(set) var framesShown = 0
   @ObservationIgnored weak static var latest: TimelinePlayback?
   @ObservationIgnored private var timeObserver: Any?
-  @ObservationIgnored private var endObserver: NSObjectProtocol?
+  @ObservationIgnored private var endWatcher: Task<Void, Never>?
   @ObservationIgnored private var output: AVPlayerItemVideoOutput?
   /// Waits for the frame after a seek.
   @ObservationIgnored private var frameTask: Task<Void, Never>?
@@ -554,11 +554,15 @@ final class TimelinePlayback {
     }
   }
 
+  isolated deinit {
+    endWatcher?.cancel()
+  }
+
   /// Plays `composition` from where the playhead was (nil empties the player).
   func load(_ composition: TimelineComposition?) {
     generation += 1
-    if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
-    endObserver = nil
+    endWatcher?.cancel()
+    endWatcher = nil
     guard let composition else {
       player.replaceCurrentItem(with: nil)
       output = nil
@@ -577,10 +581,10 @@ final class TimelinePlayback {
     self.output = output
     duration = composition.duration
     player.replaceCurrentItem(with: item)
-    endObserver = NotificationCenter.default.addObserver(
-      forName: AVPlayerItem.didPlayToEndTimeNotification, object: item, queue: .main
-    ) { [weak self] _ in
-      MainActor.assumeIsolated { self?.reachedEnd() }
+    let ends = NotificationCenter.default.notifications(
+      named: AVPlayerItem.didPlayToEndTimeNotification, object: item)
+    endWatcher = Task { [weak self] in
+      for await _ in ends.map({ _ in }) { self?.reachedEnd() }
     }
     seek(to: min(time, duration))
     if isPlaying { player.play() }

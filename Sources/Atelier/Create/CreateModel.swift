@@ -660,7 +660,7 @@ final class CreateModel {
   /// are dropped.
   private func restoreQueue() async {
     guard SessionState.isEnabled else { return }
-    while !history.isLoaded { try? await Task.sleep(for: .milliseconds(100)) }
+    await waitUntil { [history] in history.isLoaded }
     let requests = await savedRequests(SavedQueue.load(project: history.project.name))
     AudioClip.removeSnapshots(keeping: requests.compactMap(\.audio))
     guard !requests.isEmpty else { return }

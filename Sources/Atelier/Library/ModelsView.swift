@@ -100,7 +100,7 @@ struct ModelsView: View {
         // is in, and logs its progress and any error.
         .task {
           guard let file = UserDefaults.standard.string(forKey: "AtelierDownload") else { return }
-          while library.catalog.isEmpty { try? await Task.sleep(for: .milliseconds(200)) }
+          await waitUntil { [library] in !library.catalog.isEmpty }
           guard let model = library.catalog.first(where: { $0.file == file }) else {
             return NSLog("AtelierDownload: %@ isn't in the catalog", file)
           }
