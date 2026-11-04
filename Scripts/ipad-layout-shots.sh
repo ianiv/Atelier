@@ -25,7 +25,7 @@ xcrun simctl install "$DEVICE" "$APP"
 
 # name width height: full-screen 13" and 11" in both orientations, Split View halves and thirds,
 # Stage Manager style windows, and about the smallest window iPadOS allows.
-SIZES="13-landscape 1376 1032
+SIZES="${SIZES:-13-landscape 1376 1032
 13-portrait 1032 1376
 11-landscape 1210 834
 11-portrait 834 1210
@@ -35,7 +35,7 @@ window-1100x800 1100 800
 window-900x700 900 700
 window-600x800 600 800
 window-400x600 400 600
-smallest 360 480"
+smallest 360 480}"
 # The screens, then sheets and popovers opened over them with -AtelierShow (Debug only). The
 # inspector's own sheets and popovers need a model in the simulator's Documents/Models, and the
 # inspector open (wide enough windows).

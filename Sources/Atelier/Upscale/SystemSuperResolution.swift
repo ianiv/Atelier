@@ -32,12 +32,22 @@ nonisolated enum SystemSuperResolution {
     #endif
   }
 
-  static var isSupported: Bool { VTSuperResolutionScalerConfiguration.isSupported }
+  static var isSupported: Bool {
+    #if targetEnvironment(simulator)
+      false  // The simulator's SDK doesn't have the scaler.
+    #else
+      VTSuperResolutionScalerConfiguration.isSupported
+    #endif
+  }
 
   /// Scale factors the model offers for a `width`×`height` input; empty when it can't take it.
   static func scaleFactors(width: Int, height: Int) -> [Int] {
     guard isSupported, fits(width: width, height: height) else { return [] }
-    return VTSuperResolutionScalerConfiguration.supportedScaleFactors
+    #if targetEnvironment(simulator)
+      return []
+    #else
+      return VTSuperResolutionScalerConfiguration.supportedScaleFactors
+    #endif
   }
 
   static func fits(width: Int, height: Int) -> Bool {
@@ -67,6 +77,21 @@ nonisolated enum SystemSuperResolution {
     return results
   }
 
+  #if targetEnvironment(simulator)
+    /// Never made: the simulator's SDK doesn't have the scaler, and `isSupported` says so.
+    final class Scaler {
+      let outputWidth = 0
+      let outputHeight = 0
+
+      init(width _: Int, height _: Int, scale _: Int, downloading _: () -> Void = {}) async throws {
+        throw Failure.unsupported
+      }
+
+      func next(_: CVReadOnlyPixelBuffer) async throws -> CVPixelBuffer { throw Failure.unsupported }
+      func next(_: CGImage) async throws -> CGImage { throw Failure.unsupported }
+      func copy(_: CVPixelBuffer, into _: CVPixelBuffer) throws { throw Failure.unsupported }
+    }
+  #else
   /// Upscales frames one at a time, in order: each goes in with the frame before it and that
   /// frame's result, so detail stays steady. Holds only those two besides the one in hand.
   final class Scaler {
@@ -161,6 +186,7 @@ nonisolated enum SystemSuperResolution {
       return destination
     }
   }
+  #endif
 
   // MARK: - Pixel buffers
 
