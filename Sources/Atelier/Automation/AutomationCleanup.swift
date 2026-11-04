@@ -147,6 +147,23 @@ extension Automation {
         check(false, "no settings loaded, so the audio copy wasn't checked")
       }
 
+      // What saves the session and the queue. The app is gone right after, so this line is the
+      // proof: it has to be printed after "cleanup check", as the app quits.
+      AppLifecycle.onWillTerminate {
+        print("PASS quitting runs the work registered for it")
+        fflush(stdout)
+      }
+      var resigned = false
+      var activated = false
+      AppLifecycle.onResignActive { resigned = true }
+      AppLifecycle.onBecomeActive { activated = true }
+      if await AppLifecycle.hideAndShowForCheck() {
+        check(resigned, "hiding the app runs the work registered for going to the back")
+        check(activated, "showing the app runs the work registered for coming to the front")
+      } else {
+        print("skipped the front and back checks: the app couldn't come to the front")
+      }
+
       print(failures == 0 ? "cleanup check: all passed" : "cleanup check: \(failures) failed")
       fflush(stdout)
       if args.contains("--quit") { AppLifecycle.quit() }
