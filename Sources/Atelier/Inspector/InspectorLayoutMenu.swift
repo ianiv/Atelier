@@ -134,7 +134,7 @@ struct CustomizeInspectorSheet: View {
           .keyboardShortcut(.defaultAction)
           .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
       }
-      .padding()
+      .sheetFooterPadding()
     }
     .sheetFrame(width: 620, height: 560)
     .onAppear(perform: load)

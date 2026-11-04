@@ -209,7 +209,7 @@ struct SavePresetSheet: View {
         .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || included.isEmpty)
       }
     }
-    .padding(20)
+    .sheetPadding()
     .sheetFrame(width: 420, height: 500)
     .onAppear {
       included = Set(candidates.map(\.id))

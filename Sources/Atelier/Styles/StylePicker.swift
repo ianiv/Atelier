@@ -67,7 +67,8 @@ struct StylePicker: View {
       }
     let categories = model.styles?.categories ?? []
     VStack(spacing: 0) {
-      SearchField(text: $query, prompt: "Search styles").padding(8)
+      // Far enough in to clear the popover's rounded corners.
+      SearchField(text: $query, prompt: "Search styles").padding(.horizontal, 14).padding(.vertical, 10)
       Divider()
       List {
         if query.isEmpty { row(name: "No Style", detail: "The prompt as typed", id: nil) }
@@ -103,7 +104,8 @@ struct StylePicker: View {
         }
         .controlSize(.small)
       }
-      .padding(8)
+      .padding(.horizontal, 14)
+      .padding(.vertical, 10)
     }
     .frame(width: 360, height: 440)
   }

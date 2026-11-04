@@ -65,7 +65,9 @@ struct LoRAsView: View {
             .help("Show only one family")
           }
         #else
-          ToolbarItem { familyPicker.frame(minWidth: 160) }
+          ToolbarItem {
+            ToolbarPickerMenu(title: family.map(ModelLibrary.familyName) ?? "All families") { familyPicker }
+          }
         #endif
         ToolbarItem {
           Button("Import…", systemImage: "plus") { chooseFiles() }
@@ -278,7 +280,7 @@ struct LoRAImportSheet: View {
         .disabled(library.isImporting)
       }
     }
-    .padding(20)
+    .sheetPadding()
     .sheetFrame(width: 520)
   }
 

@@ -95,7 +95,11 @@ struct StylesView: View {
             .help("Show only one category")
           }
         #else
-          ToolbarItem { categoryPicker.frame(minWidth: 160) }
+          ToolbarItem {
+            ToolbarPickerMenu(
+              title: styles.screenCategory.map { $0.isEmpty ? "Uncategorized" : $0 } ?? "All categories"
+            ) { categoryPicker }
+          }
         #endif
         ToolbarItem {
           Menu {
@@ -870,7 +874,7 @@ private struct ExportStylesSheet: View {
         .keyboardShortcut(.defaultAction)
         .disabled((selectedOnly ? selectedCount : shownCount) == 0)
       }
-      .padding()
+      .sheetFooterPadding()
     }
     .sheetFrame(width: 460)
     .onAppear { selectedOnly = selectedCount > 0 }

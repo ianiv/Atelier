@@ -112,10 +112,10 @@ struct HistoryView: View {
           }
         #else
           if history.items.contains(where: \.isVideo) {
-            ToolbarItem { kindPicker }
+            ToolbarItem { ToolbarPickerMenu(title: kindTitle) { kindPicker } }
           }
-          ToolbarItem { ratingPicker }
-          ToolbarItem { modelPicker.frame(minWidth: 180) }
+          ToolbarItem { ToolbarPickerMenu(title: ratingTitle) { ratingPicker } }
+          ToolbarItem { ToolbarPickerMenu(title: modelFilter ?? "All models") { modelPicker } }
         #endif
       }
       .searchable(text: $search, placement: .toolbar, prompt: "Filter by prompt")
@@ -392,6 +392,22 @@ struct HistoryView: View {
             gridFocused = true
           })
     #endif
+  }
+
+  private var kindTitle: String {
+    switch kindFilter {
+    case .all: "Images and Videos"
+    case .images: "Images"
+    case .videos: "Videos"
+    }
+  }
+
+  private var ratingTitle: String {
+    switch ratingFilter {
+    case .any: "Any rating"
+    case .atLeast(let stars): StarRating.text(stars) + (stars < 5 ? " or more" : "")
+    case .unrated: "Unrated"
+    }
   }
 
   private var kindPicker: some View {
@@ -1134,7 +1150,7 @@ private struct ProjectOutputSheet: View {
           .disabled(hasFolder && trimmedFolder.isEmpty)
       }
     }
-    .padding(20)
+    .sheetPadding()
     .sheetFrame(width: 520)
     .onAppear {
       saves = output.saves
@@ -1179,7 +1195,7 @@ private struct ProjectNameSheet: View {
           .disabled(!HistoryStore.isValidName(name))
       }
     }
-    .padding(20)
+    .sheetPadding()
     .sheetFrame(width: 320)
     .onAppear {
       name = naming.initialName

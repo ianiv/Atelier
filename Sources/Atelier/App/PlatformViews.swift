@@ -78,6 +78,25 @@ extension View {
     #endif
   }
 
+  /// A sheet's margins. An iPad sheet's corners are much rounder, and would crowd the buttons in its
+  /// corner at the Mac's margins.
+  func sheetPadding() -> some View {
+    #if os(macOS)
+      padding(20)
+    #else
+      padding(28)
+    #endif
+  }
+
+  /// The margins of a footer along a sheet's bottom edge, as `sheetPadding` for the whole sheet.
+  func sheetFooterPadding() -> some View {
+    #if os(macOS)
+      padding()
+    #else
+      padding(.horizontal, 28).padding(.vertical, 20)
+    #endif
+  }
+
   /// A sheet's size: fixed on the Mac. On iPad it's the size the sheet asks for, fitted to the
   /// content, and a narrow window can make it smaller.
   func sheetFrame(width: CGFloat, height: CGFloat? = nil) -> some View {
@@ -178,6 +197,21 @@ extension View {
       .accessibilityValue(value ?? "")
       .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
       .accessibilityAction { action() }
+  }
+}
+
+/// A picker in the toolbar as a menu titled with its current choice. A menu takes the toolbar's own
+/// padding; on the Mac a picker there sits its label almost against the capsule's edge.
+struct ToolbarPickerMenu<Picker: View>: View {
+  let title: String
+  @ViewBuilder var picker: Picker
+
+  var body: some View {
+    Menu {
+      picker.pickerStyle(.inline).labelsHidden()
+    } label: {
+      Text(title).padding(.leading, 6)
+    }
   }
 }
 

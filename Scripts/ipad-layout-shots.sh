@@ -48,7 +48,7 @@ while read -r name width height; do
     screen="$section" settings=NO show=none
     case "$section" in
       Settings) screen=Create settings=YES ;;
-      customizeInspector | savePreset | sizePopover | loraPicker | moodboardWeight)
+      customizeInspector | savePreset | sizePopover | loraPicker | moodboardWeight | stylePicker)
         screen=Create show="$section" ;;
       modelImport) screen=Models show="$section" ;;
       loraImport) screen=LoRAs show="$section" ;;

@@ -405,7 +405,7 @@ struct ModelImportSheet: View {
         .disabled(library.isImportingModels || importable == 0)
       }
     }
-    .padding(20)
+    .sheetPadding()
     .sheetFrame(width: 520)
   }
 

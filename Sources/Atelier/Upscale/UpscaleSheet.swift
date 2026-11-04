@@ -32,7 +32,7 @@ struct UpscaleSheet: View {
         .disabled(controls.problem != nil)
       }
     }
-    .padding(20)
+    .sheetPadding()
     .sheetFrame(width: 440, height: 360)
   }
 }
@@ -87,7 +87,7 @@ struct VideoExportSheet: View {
         .disabled(problem != nil)
       }
     }
-    .padding(20)
+    .sheetPadding()
     .sheetFrame(width: 440, height: 430)
   }
 
