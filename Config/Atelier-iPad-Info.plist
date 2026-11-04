@@ -8,6 +8,23 @@
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Atelier uses your local network to find and connect to your paired devices, and to let them run jobs here.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_atelier._tcp</string>
+	</array>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Atelier pairing link</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>atelier-pair</string>
+			</array>
+		</dict>
+	</array>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Save to Photos adds your generated images to your photo library.</string>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
