@@ -8,7 +8,7 @@ import VideoToolbox
 /// `VTSuperResolutionScaler`), the Fast method. It runs on the Neural Engine and takes each frame
 /// with the one before it and that frame's result, so detail stays steady from frame to frame.
 /// macOS downloads the model the first time it's used.
-enum SystemSuperResolution {
+nonisolated enum SystemSuperResolution {
   enum Failure: LocalizedError {
     case unsupported, scale(Int), tooLarge(Int, Int), noBuffer
 
@@ -49,9 +49,9 @@ enum SystemSuperResolution {
 
   /// Upscales `count` frames of `width`×`height`, each read with `frame(i)`, by `scale`.
   /// `progress(done, total, image)` follows each frame (`done` 0 while the model downloads).
-  static func run(
-    count: Int, width: Int, height: Int, scale: Int, frame: (Int) -> CGImage?,
-    progress: @escaping (Int, Int, CGImage?) -> Void
+  @concurrent static func run(
+    count: Int, width: Int, height: Int, scale: Int, frame: @Sendable (Int) -> CGImage?,
+    progress: @escaping @Sendable (Int, Int, CGImage?) -> Void
   ) async throws -> [CGImage] {
     let scaler = try await Scaler(width: width, height: height, scale: scale) {
       progress(0, count, nil)
@@ -117,9 +117,10 @@ enum SystemSuperResolution {
 
     /// The next frame's result, in the model's pixel format. `frame` is any format the system
     /// converts from (the model's size); its alpha comes out NaN.
-    func next(_ frame: CVPixelBuffer) async throws -> CVPixelBuffer {
+    func next(_ frame: CVReadOnlyPixelBuffer) async throws -> CVPixelBuffer {
       let source = try buffer(from: sourcePool)
-      guard VTPixelTransferSessionTransferImage(transfer, from: frame, to: source) == noErr else {
+      let status = frame.withUnsafeBuffer { VTPixelTransferSessionTransferImage(transfer, from: $0, to: source) }
+      guard status == noErr else {
         throw Failure.noBuffer
       }
       return try await process(source)

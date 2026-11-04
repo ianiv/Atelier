@@ -4,7 +4,7 @@ import Foundation
 /// The waiting jobs (and the one running) kept across a quit, in
 /// ~/Library/Application Support/Atelier/Queue/: index.json plus each job's canvas and moodboard
 /// images as PNG. They come back paused. Agents' jobs aren't kept: nobody waits for them anymore.
-enum SavedQueue {
+nonisolated enum SavedQueue {
   fileprivate struct Entry: Codable {
     var id: UUID
     var model: String
@@ -75,10 +75,14 @@ enum SavedQueue {
       settings.seed = request.seed
       if let canvas = request.canvas {
         guard let png = ImageTensor.png(canvas) else { continue }
-        try? png.write(to: folder.appending(path: "\(job.id)-canvas.png"))
+        Log.attempt(Log.queue, "Saving a queued job's canvas") {
+          try png.write(to: folder.appending(path: "\(job.id)-canvas.png"))
+        }
       }
       for (index, reference) in request.moodboard.enumerated() {
-        try? ImageTensor.png(reference.image)?.write(to: folder.appending(path: "\(job.id)-moodboard-\(index).png"))
+        Log.attempt(Log.queue, "Saving a queued job's moodboard") {
+          try ImageTensor.png(reference.image)?.write(to: folder.appending(path: "\(job.id)-moodboard-\(index).png"))
+        }
       }
       entries.append(
         Entry(
@@ -91,7 +95,9 @@ enum SavedQueue {
           placement: request.placement, upscale: request.upscale))
     }
     if let data = try? JSONEncoder().encode(entries) {
-      try? data.write(to: folder.appending(path: "index.json"))
+      Log.attempt(Log.queue, "Saving the queue") {
+        try data.write(to: folder.appending(path: "index.json"))
+      }
     }
   }
 

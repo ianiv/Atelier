@@ -1,4 +1,4 @@
-import _MediaGenerationKit
+@preconcurrency import _MediaGenerationKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -168,6 +168,9 @@ struct CanvasView: View {
               Image(decorative: image, scale: 1)
                 .resizable()
                 .interpolation(zoom * points > 2 ? .none : .high)
+                .accessibilityElement()
+                .accessibilityLabel("Canvas image")
+                .accessibilityAddTraits(.isImage)
             }
           }
           .frame(width: size.width, height: size.height)
@@ -542,6 +545,8 @@ struct LiveThumbnail: View {
     }
     .buttonStyle(.plain)
     .help("The image being generated. Click to show it on the canvas.")
+    .accessibilityLabel("The image being generated")
+    .accessibilityHint("Shows it on the canvas")
   }
 }
 
@@ -626,6 +631,14 @@ struct RecentStrip: View {
     }
   }
 
+  private func pickUp(_ item: HistoryItem) {
+    if model.canUse(item) {
+      model.use(item, restoreInput: false)
+    } else {
+      model.showWithPrompt(item, undoManager: undoManager)
+    }
+  }
+
   private func thumbnail(_ item: HistoryItem, isCurrent: Bool) -> some View {
     Thumbnail(item: item)
       .frame(width: 44, height: 44)
@@ -664,13 +677,8 @@ struct RecentStrip: View {
       .contentShape(.rect)
       // Picks up from this image, itself on the canvas (not an Edit step's input). While a
       // run is going, or without its model, only the prompt and size come back.
-      .onTapGesture {
-        if model.canUse(item) {
-          model.use(item, restoreInput: false)
-        } else {
-          model.showWithPrompt(item, undoManager: undoManager)
-        }
-      }
+      .onTapGesture { pickUp(item) }
+      .accessibleButton(item.accessibilityDescription, isSelected: isCurrent) { pickUp(item) }
       .draggable(history.dragExport(item))
       .help("\(item.sidecar.prompt)\n\(GenerationTime.text(item.sidecar.durationSeconds)). Click to use its settings; the next image follows it.")
       .contextMenu {
@@ -990,6 +998,7 @@ struct SeedControls: View {
         .buttonStyle(.borderless)
         .disabled(!model.seedLocked)
         .help("New random seed (⌘R)")
+        .accessibilityLabel("New random seed")
         Toggle("Random", isOn: Binding(get: { !model.seedLocked }, set: { model.seedLocked = !$0 }))
           .checkboxToggleStyle()
           .help(
@@ -1105,6 +1114,7 @@ private struct AdditionalModelFoldersSection: View {
     return HStack {
       Image(systemName: "folder")
         .foregroundStyle(.secondary)
+        .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 2) {
         Text(displayName(path))
           .lineLimit(1)

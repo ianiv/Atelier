@@ -1,6 +1,6 @@
-import Diffusion
+@preconcurrency import Diffusion
 import Foundation
-import NNC
+@preconcurrency import NNC
 
 /// FlashVSR's source projection: reads the source, already resized to the output size, in
 /// pixels and turns each four frames into one frame of rows on the denoiser's token grid, which
@@ -10,7 +10,7 @@ import NNC
 ///
 /// The first call takes frame 0 alone and makes no rows (it fills the carries as the reference
 /// pads the start with that frame); every later call takes 4 frames and makes one row frame.
-final class FlashVSRSourceProjection {
+final nonisolated class FlashVSRSourceProjection {
   /// The token grid: the output size over 16.
   let gridHeight: Int
   let gridWidth: Int

@@ -1,4 +1,4 @@
-import _MediaGenerationKit
+@preconcurrency import _MediaGenerationKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -122,6 +122,7 @@ struct LoRAsView: View {
             if !lora.isDownloaded {
               Image(systemName: "exclamationmark.triangle").foregroundStyle(.yellow)
                 .help("\(lora.file) isn't in the models folder")
+                .accessibilityLabel("\(lora.file) isn't in the models folder")
             }
           }
           .help(lora.file)
@@ -282,6 +283,7 @@ struct LoRAImportSheet: View {
           }
           .buttonStyle(.borderless)
           .help("Don't import this file")
+          .accessibilityLabel("Don't import this file")
         }
       }
       HStack {

@@ -1,6 +1,6 @@
 import AVFoundation
 import Foundation
-import NNC
+@preconcurrency import NNC
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -70,17 +70,33 @@ final class AudioClip {
   /// A copy of the file for a queued job, so changing the audio later doesn't change the job.
   func snapshot() -> URL? {
     guard let url else { return nil }
-    let jobs = Self.folder.appending(path: "Jobs", directoryHint: .isDirectory)
-    try? FileManager.default.createDirectory(at: jobs, withIntermediateDirectories: true)
-    let copy = jobs.appending(path: UUID().uuidString).appendingPathExtension(url.pathExtension)
-    return (try? FileManager.default.copyItem(at: url, to: copy)) != nil ? copy : nil
+    let copy = Self.newSnapshotFile(extension: url.pathExtension)
+    let failure = Log.attempt(Log.queue, "Copying the audio file for a job") {
+      try FileManager.default.copyItem(at: url, to: copy)
+    }
+    return failure == nil ? copy : nil
+  }
+
+  private static var snapshots: URL {
+    folder.appending(path: "Jobs", directoryHint: .isDirectory)
+  }
+
+  /// Where a new copy for a job goes.
+  static func newSnapshotFile(extension fileExtension: String) -> URL {
+    try? FileManager.default.createDirectory(at: snapshots, withIntermediateDirectories: true)
+    return snapshots.appending(path: UUID().uuidString).appendingPathExtension(fileExtension)
+  }
+
+  /// Removes a job's copy. Any other file (a saved job's audio can be elsewhere) stays.
+  static func removeSnapshot(_ url: URL) {
+    guard url.deletingLastPathComponent().standardizedFileURL == snapshots.standardizedFileURL else { return }
+    try? FileManager.default.removeItem(at: url)
   }
 
   /// Removes the copies queued jobs took, except `keeping`'s.
   static func removeSnapshots(keeping: [URL]) {
-    let jobs = folder.appending(path: "Jobs", directoryHint: .isDirectory)
     let kept = Set(keeping.map(\.standardizedFileURL))
-    for file in (try? FileManager.default.contentsOfDirectory(at: jobs, includingPropertiesForKeys: nil)) ?? []
+    for file in (try? FileManager.default.contentsOfDirectory(at: snapshots, includingPropertiesForKeys: nil)) ?? []
       where !kept.contains(file.standardizedFileURL)
     {
       try? FileManager.default.removeItem(at: file)
@@ -155,7 +171,7 @@ struct AudioClipChip: View {
     let audio = model.audio
     VStack(alignment: .leading, spacing: 4) {
       HStack(spacing: 4) {
-        Image(systemName: "waveform")
+        Image(systemName: "waveform").accessibilityHidden(true)
         Text("Audio").font(.caption.weight(.semibold))
         Spacer(minLength: 0)
         if audio.url != nil {

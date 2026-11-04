@@ -7,5 +7,8 @@
 	<true/>
 	<key>com.apple.developer.kernel.extended-virtual-addressing</key>
 	<true/>
+	<!-- The queue keeps running in the background (App/BackgroundQueueTask.swift). -->
+	<key>com.apple.developer.background-tasks.continued-processing.gpu</key>
+	<true/>
 </dict>
 </plist>

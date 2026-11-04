@@ -1,9 +1,9 @@
 #if os(macOS)
-import _MediaGenerationKit
+@preconcurrency import _MediaGenerationKit
 import AVFoundation
 import ImageIO
-import ModelZoo
-import NNC
+@preconcurrency import ModelZoo
+@preconcurrency import NNC
 import SwiftUI
 
 /// Launch-argument driver for scripted checks: fills the Create screen, presses Generate, logs
@@ -34,8 +34,14 @@ enum Automation {
       "--show", "--resize-bench", "--inspector-check", "--library-check", "--project-check",
       "--reuse", "--generate", "--ux-check", "--edit-input-check", "--queue-check",
       "--timeline-check", "--upscale-check", "--timeline-export-check", "--flashvsr-check",
-      "--model-folders-check", "--styles-check",
+      "--model-folders-check", "--styles-check", "--cleanup-check", "--engine-check", "--playback-check",
     ]
+    // The unit tests run inside the app. Like a scripted run, that leaves the user's data alone: no
+    // cleanup at launch, no saving the session or queue.
+    let environment = ProcessInfo.processInfo.environment
+    if ["ATELIER_UNIT_TESTS", "XCTestConfigurationFilePath", "XCTestBundlePath"].contains(where: { environment[$0] != nil }) {
+      return true
+    }
     return CommandLine.arguments.contains { flags.contains($0) }
   }
 
@@ -84,6 +90,18 @@ enum Automation {
     }
     if args.contains("--flashvsr-check") {
       flashVSRCheck()
+      return
+    }
+    if args.contains("--playback-check") {
+      playbackCheck(model, navigation: navigation, layouts: layouts, presets: presets)
+      return
+    }
+    if args.contains("--engine-check") {
+      engineCheck(model)
+      return
+    }
+    if args.contains("--cleanup-check") {
+      cleanupCheck(model)
       return
     }
     if args.contains("--styles-check") {

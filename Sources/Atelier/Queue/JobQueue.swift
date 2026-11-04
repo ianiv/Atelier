@@ -7,7 +7,7 @@ import Observation
 @MainActor
 @Observable
 final class JobQueue {
-  struct Job: Identifiable {
+  nonisolated struct Job: Identifiable {
     enum Status: Equatable {
       case waiting, running
       case finished(tensorId: Int64)
@@ -173,6 +173,19 @@ final class JobQueue {
     lastLine = nil
   }
 
+  /// Puts the running generation back at the front of the queue, to run again from the start, for
+  /// when the system stops it. False when it can't be run again later: thumbnails and agents' jobs
+  /// answer a caller, and an export's placeholder file goes when it's stopped.
+  @discardableResult
+  func returnRunningToFront() -> Bool {
+    guard var job = running, job.request != nil, !job.fromAgent, job.styleThumbnail == nil else { return false }
+    running = nil
+    job.status = .waiting
+    job.startedAt = nil
+    waiting.insert(job, at: 0)
+    return true
+  }
+
   /// Takes a waiting job out of the queue; returns it if it was there.
   @discardableResult
   func removeWaiting(_ id: UUID) -> Job? {
@@ -210,15 +223,35 @@ final class JobQueue {
   }
 
   func clearRecent() {
+    let removed = recent
     recent = []
+    releaseAudio(of: removed)
   }
 
   func removeRecent(_ id: UUID) {
+    let removed = recent.filter { $0.id == id }
     recent.removeAll { $0.id == id }
+    releaseAudio(of: removed)
   }
 
   private func record(_ job: Job) {
     recent.insert(job, at: 0)
-    if recent.count > Self.recentLimit { recent.removeLast(recent.count - Self.recentLimit) }
+    if recent.count > Self.recentLimit {
+      let removed = Array(recent.suffix(recent.count - Self.recentLimit))
+      recent.removeLast(recent.count - Self.recentLimit)
+      releaseAudio(of: removed)
+    }
+  }
+
+  /// Every job here that's yet to end, for what's kept across a quit.
+  var unfinished: [Job] { (running.map { [$0] } ?? []) + waiting }
+
+  /// Removes the audio copies of jobs that left the list, once no job is using them. Finished
+  /// jobs keep theirs while they're listed, for Run Again; `Job(work:)` in `retry` shares the copy.
+  private func releaseAudio(of removed: [Job]) {
+    let inUse = Set((unfinished + recent).compactMap { $0.request?.audio })
+    for url in Set(removed.compactMap { $0.request?.audio }) where !inUse.contains(url) {
+      AudioClip.removeSnapshot(url)
+    }
   }
 }

@@ -1,4 +1,4 @@
-import _MediaGenerationKit
+@preconcurrency import _MediaGenerationKit
 import ImageIO
 import SwiftUI
 
@@ -82,7 +82,8 @@ struct PresetMenu: View {
           guard let url = urls.first else { return }
           let access = url.startAccessingSecurityScopedResource()
           defer { if access { url.stopAccessingSecurityScopedResource() } }
-          _ = try? presets.importPreset(from: url)
+          let failure = Log.attempt(Log.inspector, "Importing a preset") { _ = try presets.importPreset(from: url) }
+          if let failure { model.errorMessage = "Couldn't import the preset: \(failure.localizedDescription)" }
         }
       }
       if !presets.presets.isEmpty {
@@ -229,6 +230,7 @@ struct SearchField: View {
     HStack(spacing: 4) {
       Image(systemName: "magnifyingglass")
         .foregroundStyle(.secondary)
+        .accessibilityHidden(true)
       TextField(prompt, text: $text)
         .textFieldStyle(.plain)
       // Hidden rather than removed while empty, so the text doesn't shift.
@@ -376,7 +378,7 @@ extension DrawThingsJSON.Pasted {
 /// of Copy Settings), with a readable summary as the image description. Older builds put the same
 /// JSON in the PNG Comment. Atelier's exports carry the same plus their sidecar in an `Atelier`
 /// iTXt chunk.
-enum ImageMetadata {
+nonisolated enum ImageMetadata {
   /// What an image file embeds, read off the main actor; `settings(from:)` interprets it.
   struct Embedded: Sendable {
     /// EXIF UserComment and PNG Comment, in that order.

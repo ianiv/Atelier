@@ -1,4 +1,4 @@
-import _MediaGenerationKit
+@preconcurrency import _MediaGenerationKit
 import Diffusion
 import Foundation
 import ModelZoo
@@ -9,7 +9,7 @@ import ModelZoo
 /// entry. Values here come from each model's catalog description. A fallback that
 /// `replacesCatalog` applies even when MGK found an entry, for models whose catalog entry only
 /// matches some of their files.
-enum ModelDefaults {
+nonisolated enum ModelDefaults {
   struct Fallback {
     var prefix: String
     var steps: Int
@@ -28,10 +28,12 @@ enum ModelDefaults {
   /// ModelZoo's built-in list nor models.drawthings.ai has them, and draw-things-cli can't resolve
   /// them without an entry of its own either. Added to `ModelZoo.availableSpecifications` by
   /// `ModelLibrary.loadCustomSpecifications(in:)`, unless a catalog or custom.json has the file.
-  static let uncatalogedSpecifications: [ModelZoo.Specification] = [
-    longCatSpecification(name: "LongCat-Video Avatar 1.5 DMD (8-bit S)", file: "longcat_video_avatar_1.5_dmd_i8x.ckpt"),
-    longCatSpecification(name: "LongCat-Video Avatar 1.5 DMD", file: "longcat_video_avatar_1.5_dmd_q8p.ckpt"),
-  ]
+  static var uncatalogedSpecifications: [ModelZoo.Specification] {
+    [
+      longCatSpecification(name: "LongCat-Video Avatar 1.5 DMD (8-bit S)", file: "longcat_video_avatar_1.5_dmd_i8x.ckpt"),
+      longCatSpecification(name: "LongCat-Video Avatar 1.5 DMD", file: "longcat_video_avatar_1.5_dmd_q8p.ckpt"),
+    ]
+  }
 
   /// The dependencies the engine's run-longcat-avatar-video skill lists. Its third, Whisper, has no
   /// field here: see `ModelLibrary.downloadAudioEncoder(for:progress:)`. `.kontext` is what makes

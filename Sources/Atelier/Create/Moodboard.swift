@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 
 /// One reference image on the moodboard. Weight 0 keeps it on the board but leaves it out of the
 /// next run, as the engine does.
-struct MoodboardItem: Identifiable {
+nonisolated struct MoodboardItem: Identifiable {
   var id = UUID()
   var image: CGImage
   var weight: Float = 1
@@ -18,12 +18,14 @@ struct MoodboardItem: Identifiable {
 @Observable
 final class Moodboard {
   private(set) var items: [MoodboardItem] = []
+  /// Tells the user a change wasn't saved. Set by `CreateModel`, whose status bar shows it.
+  @ObservationIgnored var reportFailure: ((String) -> Void)?
 
   /// Reference images are scaled down to this long side: the engine resizes references to about
   /// the output's pixel count anyway, and full-size photos would bloat project files.
   static let maxSide = 1536
 
-  private struct Entry: Codable {
+  private nonisolated struct Entry: Codable {
     var id: UUID
     var weight: Float
   }
@@ -40,6 +42,20 @@ final class Moodboard {
     items = entries.compactMap { entry in
       ImageLoader.image(at: Self.folder.appending(path: "\(entry.id).png"), maxSide: Self.maxSide)
         .map { MoodboardItem(id: entry.id, image: $0, weight: entry.weight) }
+    }
+    // Only after reading the index: without it there's no telling which images are in use.
+    Self.removeOrphans(in: Self.folder, keeping: Set(entries.map(\.id)))
+  }
+
+  /// Removes the images in `folder` that aren't on the board, such as ones a crash left behind.
+  static func removeOrphans(in folder: URL, keeping ids: Set<UUID>) {
+    let fileManager = FileManager.default
+    for file in (try? fileManager.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+      where file.pathExtension == "png"
+    {
+      guard let id = UUID(uuidString: file.deletingPathExtension().lastPathComponent), !ids.contains(id)
+      else { continue }
+      try? fileManager.removeItem(at: file)
     }
   }
 
@@ -93,18 +109,26 @@ final class Moodboard {
     guard SessionState.isEnabled else { return }
     let folder = Self.folder
     try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    var failure: Error?
     if let item, let png = ImageTensor.png(item.image) {
-      try? png.write(to: folder.appending(path: "\(item.id).png"))
+      failure = Log.attempt(Log.create, "Saving a moodboard image") {
+        try png.write(to: folder.appending(path: "\(item.id).png"))
+      }
     }
     let entries = items.map { Entry(id: $0.id, weight: $0.weight) }
     if let data = try? JSONEncoder().encode(entries) {
-      try? data.write(to: folder.appending(path: "index.json"))
+      failure = Log.attempt(Log.create, "Saving the moodboard") {
+        try data.write(to: folder.appending(path: "index.json"))
+      } ?? failure
+    }
+    if let failure {
+      reportFailure?("Couldn't save the moodboard, so it may not be here next time: \(failure.localizedDescription)")
     }
   }
 }
 
 /// Reads images from files and pasteboard data, applying EXIF orientation.
-enum ImageLoader {
+nonisolated enum ImageLoader {
   static func image(at url: URL, maxSide: Int? = nil) -> CGImage? {
     CGImageSourceCreateWithURL(url as CFURL, nil).flatMap { image(from: $0, maxSide: maxSide) }
   }
@@ -148,7 +172,7 @@ enum ImageLoader {
 }
 
 /// An image dropped from Finder, another app, or Atelier's own thumbnails (which export PNG).
-struct DroppedImage: Transferable {
+nonisolated struct DroppedImage: Transferable {
   var image: CGImage
   /// Generation settings the file carries.
   var metadata: ImageMetadata.Embedded?
@@ -328,6 +352,15 @@ private struct MoodboardThumbnail: View {
         .contentShape(.rect)
         .onTapGesture { editing = true }
         .onHover { hovering = $0 }
+        .accessibleButton(
+          "Moodboard image", value: Double(item.weight).formatted(.percent.precision(.fractionLength(0)))
+        ) {
+          editing = true
+        }
+        // The Remove button above only appears on hover.
+        .accessibilityActions {
+          Button("Remove") { moodboard.remove(item.id) }
+        }
       Text(
         [role, Double(item.weight).formatted(.percent.precision(.fractionLength(0)))]
           .compactMap(\.self).joined(separator: " · ")

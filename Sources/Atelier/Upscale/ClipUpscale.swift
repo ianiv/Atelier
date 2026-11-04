@@ -1,11 +1,11 @@
 import AVFoundation
 import Foundation
-import NNC
+@preconcurrency import NNC
 
 /// A queued job that upscales a clip instead of generating: the request's size and seed are
 /// the result's (its model stays the source's), and the frames come from the source clip when
 /// the job runs.
-struct ClipUpscale: Codable, Sendable, Hashable {
+nonisolated struct ClipUpscale: Codable, Sendable, Hashable {
   enum Method: String, Codable, Sendable, CaseIterable {
     /// FlashVSR+, restoring the clip as one stream (`FlashVSRUpscaler`).
     case flashVSR

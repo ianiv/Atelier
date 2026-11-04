@@ -2,7 +2,7 @@ import SwiftUI
 
 /// What the Create screen was showing at quit, so a relaunch comes back the same.
 /// Scripted runs (Automation) neither read nor write it, so they don't clobber the user's session.
-struct SessionState: Codable {
+nonisolated struct SessionState: Codable {
   var model: String?
   var prompt = ""
   var negativePrompt = ""

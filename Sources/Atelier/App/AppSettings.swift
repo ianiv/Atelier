@@ -1,8 +1,9 @@
-import _MediaGenerationKit
+@preconcurrency import _MediaGenerationKit
+@preconcurrency import DataModels
 import Foundation
 
 /// User-facing settings persisted in UserDefaults.
-enum AppSettings {
+nonisolated enum AppSettings {
   private static let modelsDirectoryKey = "modelsDirectory"
 
   /// Models directory: the saved setting, else `DRAWTHINGS_MODELS_DIR`, else ~/Documents/Models
@@ -109,7 +110,7 @@ enum AppSettings {
 /// Engine settings from Draw Things' Machine Settings. Each is stored in UserDefaults and handed to
 /// the engine under the dictionary key and raw values Draw Things uses (`ModelPreloader.swift`).
 /// No value means Automatic: the engine picks from the device, as Draw Things does.
-enum PerformanceSetting: String, CaseIterable, Identifiable {
+nonisolated enum PerformanceSetting: String, CaseIterable, Identifiable {
   case jitWeightsLoading = "external_store_v2"
   case weightsCacheSize = "total_weights_cache"
   case metalFlashAttention = "use_mfa_v4"

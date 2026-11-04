@@ -171,7 +171,7 @@ struct ContentView: View {
 #if os(iOS)
   extension ContentView {
     /// The narrowest window that keeps the sidebar beside a screen and its inspector.
-    static let sidebarMinimumWidth: CGFloat = 1000
+    nonisolated static let sidebarMinimumWidth: CGFloat = 1000
   }
 #endif
 

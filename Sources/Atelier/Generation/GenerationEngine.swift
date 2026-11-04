@@ -1,18 +1,19 @@
-import _MediaGenerationKit
-import AudioConverter
+@preconcurrency import _MediaGenerationKit
+@preconcurrency import AudioConverter
 import CoreGraphics
-import DataModels
-import Dflat
-import Diffusion
+@preconcurrency import DataModels
+@preconcurrency import Dflat
+@preconcurrency import Diffusion
 import Foundation
-import ImageGenerator
-import LocalImageGenerator
-import ModelZoo
-import NNC
+@preconcurrency import ImageGenerator
+@preconcurrency import LocalImageGenerator
+@preconcurrency import ModelZoo
+@preconcurrency import NNC
+import Synchronization
 
 /// Owns a cached pipeline for the current model and runs one generation at a time.
 actor GenerationEngine {
-  struct Request: Sendable {
+  nonisolated struct Request: Sendable {
     var model: String
     var prompt: String
     var negativePrompt: String
@@ -45,7 +46,7 @@ actor GenerationEngine {
   }
 
   /// What a run made: one frame for an image, every frame of a clip and its soundtrack for video.
-  struct Output: @unchecked Sendable {
+  nonisolated struct Output: Sendable {
     var frames: [Tensor<FloatType>]
     /// PCM in [channels, samples] order at `audioSampleRate`.
     var audio: Tensor<Float>?
@@ -58,12 +59,12 @@ actor GenerationEngine {
     var isVideo: Bool { framesPerSecond != nil }
   }
 
-  struct Reference: Sendable {
+  nonisolated struct Reference: Sendable {
     var image: CGImage
     var weight: Float
   }
 
-  enum Progress: Sendable {
+  nonisolated enum Progress: Sendable {
     case state(MediaGenerationPipeline.State)
     case preview(CGImage, step: Int, totalSteps: Int)
     /// A video run's preview: one image per latent frame, played as a flip-book.
@@ -194,8 +195,8 @@ actor GenerationEngine {
   ) async throws -> Output? {
     guard let engine = Self.engineResources(),
           let template = Self.reflectedChild(pipeline, "storage").flatMap({
-            Self.reflectedChild($0, "recommendedTemplate")
-          }) as? GenerationConfiguration
+            Self.reflected($0, "recommendedTemplate", as: GenerationConfiguration.self)
+          })
     else { return nil }
     let version = video.version
     var settings = request.configuration
@@ -239,14 +240,19 @@ actor GenerationEngine {
     let prompt = request.prompt
     let negativePrompt = request.negativePrompt
     progress(.state(.preparing))
-    let result: ([Tensor<FloatType>]?, [Tensor<Float>]?, Int) = try await withTaskCancellationHandler {
+    let engineHints = hints
+    let result: EngineResult = try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
         engine.queue.async {
           let result = engine.generator.generate(
             trace: ImageGeneratorTrace(fromBridge: true), image: image, scaleFactor: 1, mask: nil,
-            hints: hints, text: prompt, negativeText: negativePrompt, configuration: configuration,
+            hints: engineHints, text: prompt, negativeText: negativePrompt, configuration: configuration,
             fileMapping: [:], keywords: [],
-            cancellation: { cancellation.set($0) },
+            cancellation: { cancel in
+              // Made to be called from another thread (MGK's bridge does), but not typed @Sendable.
+              nonisolated(unsafe) let cancel = cancel
+              cancellation.set { cancel() }
+            },
             feedback: { signpost, _, latent in
               guard !cancellation.isCancelled else { return false }
               let state = Self.state(for: signpost, totalSteps: totalSteps)
@@ -262,18 +268,18 @@ actor GenerationEngine {
           if cancellation.isCancelled {
             continuation.resume(throwing: CancellationError())
           } else {
-            continuation.resume(returning: result)
+            continuation.resume(returning: EngineResult(frames: result.0, audio: result.1))
           }
         }
       }
     } onCancel: {
       cancellation.cancel()
     }
-    let frames = (result.0 ?? []).flatMap(Self.frames(of:))
+    let frames = (result.frames ?? []).flatMap(Self.frames(of:))
     guard !frames.isEmpty else {
       throw MediaGenerationKitError.generationFailed("No video was returned")
     }
-    var audio = result.1?.first
+    var audio = result.audio?.first
     let framesPerSecond = Self.framesPerSecond(video, settings)
     // LongCat lip-syncs to the voice it's given and makes no sound: the clip keeps that voice.
     if audio == nil, version == .longcatVideoAvatar1_5, let audioInput {
@@ -292,7 +298,7 @@ actor GenerationEngine {
   func upscale(
     _ request: Request, frames: [CGImage],
     progress: @escaping @Sendable (Progress) -> Void
-  ) async throws -> [Tensor<FloatType>] {
+  ) async throws -> Output {
     guard let upscale = request.upscale, let first = frames.first else { throw ProjectError.badImage }
     await waitForTurn()
     defer { endTurn() }
@@ -310,7 +316,7 @@ actor GenerationEngine {
       }
       let tensors = images.compactMap(ImageTensor.tensor(from:))
       guard tensors.count == frames.count else { throw ProjectError.badImage }
-      return tensors
+      return Output(frames: tensors)
     case .flashVSR:
       guard let files = FlashVSRFiles.installed(upscale.variant ?? .turbo) else {
         throw FlashVSRFiles.Failure.missing
@@ -327,14 +333,14 @@ actor GenerationEngine {
           },
           shouldContinue: shouldContinue
         ) { tensors.append($0) }
-        return tensors
+        return Output(frames: tensors)
       }
     }
   }
 
   /// Runs `work` in the engine's turn, so it never runs alongside a generation (an upscaled
   /// timeline export).
-  func inTurn<T>(_ work: () async throws -> T) async throws -> T {
+  func inTurn<T: Sendable>(_ work: @concurrent @Sendable () async throws -> T) async throws -> T {
     await waitForTurn()
     defer { endTurn() }
     try Task.checkCancellation()
@@ -344,7 +350,7 @@ actor GenerationEngine {
   /// Runs `work` on the engine's queue after dropping the models the engine keeps loaded, which
   /// FlashVSR+ needs the memory of. Call it in the engine's turn. `work` checks `shouldContinue`,
   /// which turns false when the task is cancelled.
-  func onEngineQueue<T>(
+  func onEngineQueue<T: Sendable>(
     _ work: @escaping @Sendable (_ shouldContinue: @escaping () -> Bool) throws -> T
   ) async throws -> T {
     if var dictionary = Self.engineWorkspace()?.dictionary {
@@ -417,11 +423,32 @@ actor GenerationEngine {
   private static func engineResources() -> (generator: LocalImageGenerator, queue: DispatchQueue)? {
     let storage = reflectedChild(MediaGenerationEnvironment.default, "storage")
     let resources = storage.flatMap { reflectedChild($0, "cachedLocalResources") }
-    guard let generator = resources.flatMap({ reflectedChild($0, "generator") }) as? LocalImageGenerator,
-          let queue = resources.flatMap({ reflectedChild($0, "queue") }) as? DispatchQueue
+    guard let generator = resources.flatMap({ reflected($0, "generator", as: LocalImageGenerator.self) }),
+          let queue = resources.flatMap({ reflected($0, "queue", as: DispatchQueue.self) })
     else { return nil }
     return (generator, queue)
   }
+
+  /// The folder MGK made for this run's engine (`MediaGenerationLocalResources.tempDir`), once
+  /// there is one.
+  nonisolated static var temporaryDirectory: URL? {
+    let storage = reflectedChild(MediaGenerationEnvironment.default, "storage")
+    let resources = storage.flatMap { reflectedChild($0, "cachedLocalResources") }
+    guard let path = resources.flatMap({ reflected($0, "tempDir", as: String.self) }) else { return nil }
+    return URL(fileURLWithPath: path, isDirectory: true)
+  }
+
+  #if os(iOS)
+    /// Tells the engine a run is under way. MGK doesn't, and without it `ModelPreloader` answers
+    /// going to the background by starting a UIKit background task that waits for the generation
+    /// queue: with a run on that queue the task can't end, so iPadOS ends the app about 30 seconds
+    /// later. False until the engine exists (MGK creates it on the first run).
+    @MainActor static func setEngineGenerating(_ isGenerating: Bool) -> Bool {
+      guard let generator = engineResources()?.generator else { return false }
+      if isGenerating { generator.startGenerating() } else { generator.stopGenerating() }
+      return true
+    }
+  #endif
 
   /// Hands the Performance settings to the engine through the same workspace dictionary Draw
   /// Things writes them to. Its model preloader subscribes to those keys and applies a change
@@ -475,10 +502,85 @@ actor GenerationEngine {
   /// (`MediaGenerationEnvironment.Storage.cachedLocalResources.generator`), so it's read by
   /// reflection; nil until the engine exists.
   private static func engineWorkspace() -> Workspace? {
-    engineResources().flatMap { reflectedChild($0.generator.modelPreloader, "workspace") } as? Workspace
+    engineResources().flatMap { reflected($0.generator.modelPreloader, "workspace", as: Workspace.self) }
+  }
+
+  /// Engine fields reported missing so far, so each is logged once.
+  private nonisolated static let reportedFields = Mutex<Set<String>>([])
+
+  /// Logs once that a field read by reflection isn't what the engine has any more: previews,
+  /// sound or Performance settings stop working without an error, until the code here is updated.
+  private nonisolated static func reportMissing(_ field: String) {
+    guard reportedFields.withLock({ $0.insert(field).inserted }) else { return }
+    Log.engine.fault("Engine field \(field, privacy: .public) is missing or changed type. Run --engine-check.")
+  }
+
+  /// `reflectedChild` as a `T`. A value of another type is reported as missing.
+  private nonisolated static func reflected<T>(_ value: Any, _ label: String, as _: T.Type) -> T? {
+    guard let child = reflectedChild(value, label) else { return nil }
+    if let typed = child as? T { return typed }
+    reportMissing("\(type(of: value)).\(label) as \(T.self)")
+    return nil
+  }
+
+  /// One reflected field, for `--engine-check`.
+  struct ReflectedField: Sendable {
+    var name: String
+    var found: Bool
+  }
+
+  /// Runs `steps` steps of `model` and tries every field read by reflection, for `--engine-check`.
+  func checkReflectedFields(model: String, steps: Int) async throws -> [ReflectedField] {
+    await waitForTurn()
+    defer { endTurn() }
+    var pipeline = try await pipeline(for: model)
+    await applyPerformanceSettings(using: pipeline)
+    pipeline.configuration.steps = steps
+    pipeline.configuration.seed = 1
+    pipeline.configuration.batchCount = 1
+    pipeline.configuration.batchSize = 1
+    pipeline.configuration.width = 512
+    pipeline.configuration.height = 512
+    let previewFields = Mutex<[ReflectedField]?>(nil)
+    _ = try await pipeline.generate(
+      prompt: "a dot", negativePrompt: "", inputs: [],
+      stateHandler: { _, preview in
+        guard let preview else { return }
+        let fields = [
+          ReflectedField(
+            name: "Preview.tensor", found: Self.reflected(preview, "tensor", as: Tensor<FloatType>.self) != nil),
+          ReflectedField(
+            name: "Preview.version", found: Self.reflected(preview, "version", as: ModelVersion.self) != nil),
+        ]
+        previewFields.withLock { if $0 == nil { $0 = fields } }
+      })
+    let storage = Self.reflectedChild(MediaGenerationEnvironment.default, "storage")
+    let resources = storage.flatMap { Self.reflectedChild($0, "cachedLocalResources") }
+    let generator = resources.flatMap { Self.reflected($0, "generator", as: LocalImageGenerator.self) }
+    var fields = [
+      ReflectedField(name: "MediaGenerationEnvironment.storage", found: storage != nil),
+      ReflectedField(name: "storage.cachedLocalResources", found: resources != nil),
+      ReflectedField(name: "resources.generator", found: generator != nil),
+      ReflectedField(
+        name: "resources.queue",
+        found: resources.flatMap { Self.reflected($0, "queue", as: DispatchQueue.self) } != nil),
+      ReflectedField(
+        name: "resources.tempDir",
+        found: resources.flatMap { Self.reflected($0, "tempDir", as: String.self) } != nil),
+      ReflectedField(name: "modelPreloader.workspace", found: Self.engineWorkspace() != nil),
+      ReflectedField(
+        name: "pipeline.storage.recommendedTemplate",
+        found: Self.reflectedChild(pipeline, "storage").flatMap {
+          Self.reflected($0, "recommendedTemplate", as: GenerationConfiguration.self)
+        } != nil),
+    ]
+    fields += previewFields.withLock { $0 } ?? [ReflectedField(name: "a preview arrived", found: false)]
+    return fields
   }
 
   /// The stored property `label` of `value`, with an Optional unwrapped (nil when it's .none).
+  /// A label that isn't there is reported; an Optional that's nil isn't: the engine's resources
+  /// are nil until the first run.
   private nonisolated static func reflectedChild(_ value: Any, _ label: String) -> Any? {
     var mirror: Mirror? = Mirror(reflecting: value)
     while let current = mirror {
@@ -488,6 +590,7 @@ actor GenerationEngine {
       }
       mirror = current.superclassMirror
     }
+    reportMissing("\(type(of: value)).\(label)")
     return nil
   }
 
@@ -528,8 +631,8 @@ actor GenerationEngine {
   private nonisolated static func lowResolutionPreview(
     _ preview: MediaGenerationPipeline.Preview, size: CGSize
   ) -> CGImage? {
-    guard let tensor = reflectedChild(preview, "tensor") as? Tensor<FloatType>,
-          let version = reflectedChild(preview, "version") as? ModelVersion,
+    guard let tensor = reflected(preview, "tensor", as: Tensor<FloatType>.self),
+          let version = reflected(preview, "version", as: ModelVersion.self),
           let image = ImageConverter.cgImages(fromLatent: tensor, canUseTAESD: false, version: version)
             .0.first
     else { return nil }
@@ -559,36 +662,45 @@ actor GenerationEngine {
   }
 }
 
+/// What a direct engine run returns, carried from the engine's queue back to the actor.
+private nonisolated struct EngineResult: Sendable {
+  var frames: [Tensor<FloatType>]?
+  var audio: [Tensor<Float>]?
+}
+
 /// Cancels a direct engine run (MGK's `MediaGenerationCancellationBridge`): the engine hands over
 /// its cancel function once sampling starts, and the feedback callback stops it at the next step.
-private final class EngineCancellation: @unchecked Sendable {
-  private let lock = NSLock()
-  private var cancelEngine: (() -> Void)?
-  private var cancelled = false
-  private var finished = false
+private final nonisolated class EngineCancellation: Sendable {
+  private struct State {
+    var cancelEngine: (@Sendable () -> Void)?
+    var cancelled = false
+    var finished = false
+  }
 
-  var isCancelled: Bool { lock.withLock { cancelled } }
+  private let state = Mutex(State())
 
-  func set(_ cancel: @escaping () -> Void) {
-    let cancelNow = lock.withLock {
-      cancelEngine = cancel
-      return cancelled && !finished
+  var isCancelled: Bool { state.withLock { $0.cancelled } }
+
+  func set(_ cancel: @escaping @Sendable () -> Void) {
+    let cancelNow = state.withLock {
+      $0.cancelEngine = cancel
+      return $0.cancelled && !$0.finished
     }
     if cancelNow { cancel() }
   }
 
   func cancel() {
-    let cancelEngine = lock.withLock {
-      cancelled = true
-      return finished ? nil : self.cancelEngine
+    let cancelEngine = state.withLock {
+      $0.cancelled = true
+      return $0.finished ? nil : $0.cancelEngine
     }
     cancelEngine?()
   }
 
   func finish() {
-    lock.withLock {
-      finished = true
-      cancelEngine = nil
+    state.withLock {
+      $0.finished = true
+      $0.cancelEngine = nil
     }
   }
 }

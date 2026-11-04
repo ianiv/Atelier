@@ -1,4 +1,4 @@
-import _MediaGenerationKit
+@preconcurrency import _MediaGenerationKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -100,7 +100,7 @@ struct ModelsView: View {
         // is in, and logs its progress and any error.
         .task {
           guard let file = UserDefaults.standard.string(forKey: "AtelierDownload") else { return }
-          while library.catalog.isEmpty { try? await Task.sleep(for: .milliseconds(200)) }
+          await waitUntil { [library] in !library.catalog.isEmpty }
           guard let model = library.catalog.first(where: { $0.file == file }) else {
             return NSLog("AtelierDownload: %@ isn't in the catalog", file)
           }
@@ -267,6 +267,7 @@ struct ModelStatus: View {
         }
         .buttonStyle(.borderless)
         .help("Cancel download")
+        .accessibilityLabel("Cancel download")
       }
       .help(Self.describe(download))
     } else if model.isDownloaded {
@@ -419,6 +420,7 @@ struct ModelImportSheet: View {
           }
           .buttonStyle(.borderless)
           .help("Don't import this file")
+          .accessibilityLabel("Don't import this file")
         }
       }
       Group {

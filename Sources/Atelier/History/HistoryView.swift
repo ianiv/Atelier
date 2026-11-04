@@ -270,12 +270,19 @@ struct HistoryView: View {
           return .handled
         }
         .quickLookPreview($quickLookURL)
+        .onChange(of: quickLookURL) { old, new in
+          if let old, old != new { Self.removeQuickLookFile(old) }
+        }
+        .onDisappear {
+          if let quickLookURL { Self.removeQuickLookFile(quickLookURL) }
+          quickLookURL = nil
+        }
         .background(Color.underPageBackground)
       }
     }
   }
 
-  private static let gridSpace = "HistoryGrid"
+  private nonisolated static let gridSpace = "HistoryGrid"
 
   private var gridCells: some View {
     LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 10)], spacing: 10) {
@@ -403,6 +410,15 @@ struct HistoryView: View {
       .contentShape(.rect)
       .gesture(tapGesture(item))
       .help(item.sidecar.prompt)
+      .accessibleButton(
+        item.accessibilityDescription, isSelected: selection.contains(item.tensorId)
+      ) {
+        pick(item)
+        gridFocused = true
+      }
+      .accessibilityActions {
+        Button("Use") { use(item, newSeed: false) }
+      }
       .draggable(containerItemID: item.tensorId)
       .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.gridSpace)) } action: {
         frames[item.tensorId] = $0
@@ -536,10 +552,8 @@ struct HistoryView: View {
     guard let item = history.items.first(where: { $0.tensorId == anchor && selection.contains($0.tensorId) })
     else { return }
     Task {
-      let url = FileManager.default.temporaryDirectory
-        .appendingPathComponent("Atelier Quick Look", isDirectory: true)
-      try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-      let file = url.appendingPathComponent(history.fileName(for: item))
+      // A folder of its own: the file keeps its name, and removing it can't hit a later preview.
+      let file = TemporaryFiles.newFolder(in: .quickLook).appendingPathComponent(history.fileName(for: item))
         .appendingPathExtension(item.isVideo ? "mp4" : "png")
       if item.isVideo {
         guard (try? await history.exportVideo(item, to: file)) != nil else { return }
@@ -547,9 +561,13 @@ struct HistoryView: View {
         guard let data = try? await history.pngData(item), (try? data.write(to: file)) != nil
         else { return }
       }
-      guard anchor == item.tensorId else { return }
+      guard anchor == item.tensorId else { return Self.removeQuickLookFile(file) }
       quickLookURL = file
     }
+  }
+
+  private static func removeQuickLookFile(_ file: URL) {
+    try? FileManager.default.removeItem(at: file.deletingLastPathComponent())
   }
 
   private func copy(_ text: String) {
@@ -864,6 +882,7 @@ struct RatingBadge: View {
       .font(.caption2)
       .foregroundStyle(.yellow)
       .help(stars == 1 ? "Rated 1 star" : "Rated \(stars) stars")
+      .accessibilityLabel(stars == 1 ? "Rated 1 star" : "Rated \(stars) stars")
     if plain {
       label
     } else {
@@ -891,6 +910,8 @@ struct ClipBadge: View {
     .background(.black.opacity(0.55), in: .capsule)
     .foregroundStyle(.white)
     .help(Self.length(clip))
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(Self.length(clip))
   }
 
   /// "5.0 seconds, 121 frames at 24 fps, with sound".
@@ -949,6 +970,9 @@ struct Thumbnail: View {
           .aspectRatio(contentMode: fill ? .fill : .fit)
       }
     }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(item.accessibilityDescription)
+    .accessibilityAddTraits(.isImage)
     .task(id: "\(item.previewId)#\(half)") {
       image = await history.thumbnail(for: item, half: half)
     }

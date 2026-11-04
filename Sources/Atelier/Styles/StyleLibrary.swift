@@ -3,7 +3,7 @@ import Foundation
 /// Style library files: a self-contained HTML page that browses the styles and writes prompts
 /// from them in any browser, with the styles as JSON in a `<script type="application/json"
 /// id="atelier-styles">` block that Atelier imports (docs/styles.md).
-enum StyleLibrary {
+nonisolated enum StyleLibrary {
   /// The data block: the styles, with each one's thumbnail as a JPEG data URL when it has one.
   struct Document: Codable {
     var format = "atelier-styles"
@@ -303,6 +303,6 @@ enum StyleLibrary {
   """#
 }
 
-private extension String {
+private nonisolated extension String {
   var nilIfEmpty: String? { isEmpty ? nil : self }
 }

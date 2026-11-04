@@ -467,7 +467,7 @@ struct TimelineScreen: View {
   private func export(toPhotos: Bool) {
     guard let composition, let timeline = store.selected, exportProgress == nil else { return }
     playback.pause()
-    let url = URL.temporaryDirectory.appending(path: "\(UUID().uuidString).mp4")
+    let url = TemporaryFiles.newFile(in: .exports, extension: "mp4")
     let name = "\(history.project.name) \(timeline.name)"
     exportProgress = 0
     store.isExporting = true
@@ -489,8 +489,9 @@ struct TimelineScreen: View {
         #endif
         fileDialogs.save = FileDialogs.Save(
           file: ExportedFile(type: .mpeg4Movie) { try Data(contentsOf: url) },
-          name: name + ".mp4"
-        ) { _ in try? FileManager.default.removeItem(at: url) }
+          name: name + ".mp4",
+          completion: { _ in try? FileManager.default.removeItem(at: url) },
+          cancelled: { try? FileManager.default.removeItem(at: url) })
       } catch {
         exportProgress = nil
         store.isExporting = false
@@ -503,7 +504,7 @@ struct TimelineScreen: View {
   }
 }
 
-extension Array {
+nonisolated extension Array {
   subscript(safeIndex index: Int) -> Element? {
     indices.contains(index) ? self[index] : nil
   }
@@ -525,13 +526,23 @@ final class TimelinePlayback {
   /// The frame on screen. Drawn here rather than by the system player, whose own controls
   /// would show over the video and not work.
   private(set) var frame: CGImage?
+  /// How many frames have gone on screen, and the player last made, for `--playback-check`.
+  @ObservationIgnored private(set) var framesShown = 0
+  @ObservationIgnored weak static var latest: TimelinePlayback?
   @ObservationIgnored private var timeObserver: Any?
-  @ObservationIgnored private var endObserver: NSObjectProtocol?
+  @ObservationIgnored private var endWatcher: Task<Void, Never>?
   @ObservationIgnored private var output: AVPlayerItemVideoOutput?
+  /// Waits for the frame after a seek.
   @ObservationIgnored private var frameTask: Task<Void, Never>?
-  @ObservationIgnored private let context = CIContext()
+  @ObservationIgnored private let renderer = FrameRenderer()
+  /// One frame at a time: the output keeps the newest until the renderer is free again, so a slow
+  /// frame skips ones rather than queueing them.
+  @ObservationIgnored private var isRendering = false
+  /// Goes up when the player's video changes, so a frame of the old one isn't shown.
+  @ObservationIgnored private var generation = 0
 
   init() {
+    Self.latest = self
     player.actionAtItemEnd = .pause
     timeObserver = player.addPeriodicTimeObserver(
       forInterval: CMTime(value: 1, timescale: 30), queue: .main
@@ -543,10 +554,15 @@ final class TimelinePlayback {
     }
   }
 
+  isolated deinit {
+    endWatcher?.cancel()
+  }
+
   /// Plays `composition` from where the playhead was (nil empties the player).
   func load(_ composition: TimelineComposition?) {
-    if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
-    endObserver = nil
+    generation += 1
+    endWatcher?.cancel()
+    endWatcher = nil
     guard let composition else {
       player.replaceCurrentItem(with: nil)
       output = nil
@@ -558,46 +574,44 @@ final class TimelinePlayback {
       return
     }
     let item = composition.playerItem()
-    let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
-      kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
-    ])
+    let output = AVPlayerItemVideoOutput(
+      pixelBufferAttributes: CVPixelBufferAttributes(
+        pixelFormatTypes: [CVPixelFormatType(rawValue: kCVPixelFormatType_32BGRA)]))
     item.add(output)
     self.output = output
     duration = composition.duration
     player.replaceCurrentItem(with: item)
-    endObserver = NotificationCenter.default.addObserver(
-      forName: AVPlayerItem.didPlayToEndTimeNotification, object: item, queue: .main
-    ) { [weak self] _ in
-      MainActor.assumeIsolated { self?.reachedEnd() }
+    let ends = NotificationCenter.default.notifications(
+      named: AVPlayerItem.didPlayToEndTimeNotification, object: item)
+    endWatcher = Task { [weak self] in
+      for await _ in ends.map({ _ in }) { self?.reachedEnd() }
     }
     seek(to: min(time, duration))
-    if isPlaying {
-      player.play()
-      followFrames()
-    }
+    if isPlaying { player.play() }
   }
 
-  /// Copies the frame for `time` from the video output, when there's a new one.
+  /// Takes the frame for `time` from the video output, when there's a new one, and shows it once
+  /// it's rendered. False when there was none to show.
   @discardableResult
-  private func takeFrame(at time: CMTime) -> Bool {
-    guard let output, output.hasNewPixelBuffer(forItemTime: time),
-          let buffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil)
+  private func takeFrame(at time: CMTime) async -> Bool {
+    guard !isRendering, let output, output.hasNewPixelBuffer(forItemTime: time),
+          let buffer = output.pixelBufferAndDisplayTime(forItemTime: time).pixelBuffer
     else { return false }
-    let image = CIImage(cvPixelBuffer: buffer)
-    guard let cgImage = context.createCGImage(image, from: image.extent) else { return false }
-    frame = cgImage
+    isRendering = true
+    let current = generation
+    let image = await renderer.image(of: buffer)
+    isRendering = false
+    guard current == generation, let image else { return false }
+    frame = image
+    framesShown += 1
     return true
   }
 
-  /// Keeps `frame` current while playing, at the screen's pace.
-  private func followFrames() {
-    frameTask?.cancel()
-    frameTask = Task { [weak self] in
-      while let self, self.isPlaying, !Task.isCancelled {
-        self.takeFrame(at: self.player.currentTime())
-        try? await Task.sleep(for: .milliseconds(15))
-      }
-    }
+  /// Keeps `frame` current while playing: `TimelineVideo` calls this for each frame of the display,
+  /// and stops when it isn't on screen.
+  func displayDidTick() {
+    guard isPlaying else { return }
+    Task { await takeFrame(at: player.currentTime()) }
   }
 
   /// Shows the frame at the playhead once a seek lands (decoding it can take a moment).
@@ -607,7 +621,7 @@ final class TimelinePlayback {
     frameTask = Task { [weak self] in
       for _ in 0..<60 {
         guard let self, !Task.isCancelled, !self.isPlaying else { return }
-        if self.takeFrame(at: self.player.currentTime()) { return }
+        if await self.takeFrame(at: self.player.currentTime()) { return }
         try? await Task.sleep(for: .milliseconds(16))
       }
     }
@@ -617,7 +631,6 @@ final class TimelinePlayback {
     if isLooping {
       seek(to: 0)
       player.play()
-      followFrames()
     } else {
       isPlaying = false
       time = duration
@@ -629,7 +642,6 @@ final class TimelinePlayback {
     if time >= duration - 0.01 { seek(to: 0) }
     player.rate = 1
     isPlaying = true
-    followFrames()
   }
 
   /// Plays backwards (J).
@@ -637,7 +649,6 @@ final class TimelinePlayback {
     guard player.currentItem?.canPlayReverse == true else { return }
     player.rate = -1
     isPlaying = true
-    followFrames()
   }
 
   func pause() {
@@ -661,17 +672,35 @@ final class TimelinePlayback {
   }
 }
 
+/// Turns the video output's frames into images, off the main actor.
+private actor FrameRenderer {
+  private let context = CIContext()
+
+  func image(of buffer: CVReadOnlyPixelBuffer) -> CGImage? {
+    buffer.withUnsafeBuffer { buffer in
+      let image = CIImage(cvPixelBuffer: buffer)
+      return context.createCGImage(image, from: image.extent)
+    }
+  }
+}
+
 /// The timeline's video: the player's frames, fitted, on black.
 private struct TimelineVideo: View {
   let playback: TimelinePlayback
 
   var body: some View {
-    if let frame = playback.frame {
-      Image(decorative: frame, scale: 1)
-        .resizable()
-        .interpolation(.high)
-    } else {
-      Color.black
+    // Paced by the display, and paused by SwiftUI while the view isn't on screen.
+    TimelineView(.animation(paused: !playback.isPlaying)) { timeline in
+      Group {
+        if let frame = playback.frame {
+          Image(decorative: frame, scale: 1)
+            .resizable()
+            .interpolation(.high)
+        } else {
+          Color.black
+        }
+      }
+      .onChange(of: timeline.date) { playback.displayDidTick() }
     }
   }
 }
@@ -817,6 +846,11 @@ private struct TimelineBin: View {
             .contentShape(.rect)
             .help(item.sidecar.prompt)
             .onTapGesture(count: 2) { append(item) }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(item.accessibilityDescription)
+            .accessibilityActions {
+              Button("Add to Timeline") { append(item) }
+            }
             .draggable(TimelineClipDrag.text(item))
             .contextMenu {
               Button("Add to Timeline") { append(item) }

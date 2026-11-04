@@ -1,7 +1,7 @@
 import Foundation
 
 /// Aspect ratio × megapixel presets, snapped to the 64px grid the engine works in.
-enum SizePreset {
+nonisolated enum SizePreset {
   struct AspectRatio: Hashable, Identifiable {
     var width: Int
     var height: Int

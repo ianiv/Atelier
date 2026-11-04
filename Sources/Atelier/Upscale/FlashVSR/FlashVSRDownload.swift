@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import Synchronization
 
 /// Downloads a FlashVSR+ variant's files from Hugging Face into the models folder's "FlashVSR+",
 /// one at a time, skipping ones already there. One download at a time for the app.
@@ -72,7 +73,7 @@ final class FlashVSRDownload {
     let task = session.downloadTask(with: url)
     try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-        delegate.continuation = continuation
+        delegate.state.withLock { $0.continuation = continuation }
         task.resume()
       }
     } onCancel: {
@@ -80,11 +81,15 @@ final class FlashVSRDownload {
     }
   }
 
-  private final class Delegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+  private final nonisolated class Delegate: NSObject, URLSessionDownloadDelegate, Sendable {
+    struct State {
+      var continuation: CheckedContinuation<Void, Error>?
+      var moveError: Error?
+    }
+
     let destination: URL
     let progress: @MainActor (Int64) -> Void
-    var continuation: CheckedContinuation<Void, Error>?
-    private var moveError: Error?
+    let state = Mutex(State())
 
     init(destination: URL, progress: @escaping @MainActor (Int64) -> Void) {
       self.destination = destination
@@ -110,17 +115,20 @@ final class FlashVSRDownload {
         try? FileManager.default.removeItem(at: destination)
         try FileManager.default.moveItem(at: location, to: destination)
       } catch {
-        moveError = error
+        state.withLock { $0.moveError = error }
       }
     }
 
     func urlSession(_: URLSession, task _: URLSessionTask, didCompleteWithError error: Error?) {
+      let (continuation, moveError) = state.withLock {
+        defer { $0.continuation = nil }
+        return ($0.continuation, $0.moveError)
+      }
       if let error = error ?? moveError {
         continuation?.resume(throwing: error)
       } else {
         continuation?.resume()
       }
-      continuation = nil
     }
   }
 }

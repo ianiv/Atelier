@@ -26,18 +26,16 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
   }
 
   func applicationShouldTerminate(_: NSApplication) -> NSApplication.TerminateReply {
-    MainActor.assumeIsolated {
-      guard !AppLifecycle.isQuittingWithoutAsking, let work = AppLifecycle.workUnderway?() else {
-        return .terminateNow
-      }
-      let alert = NSAlert()
-      alert.messageText = "Quit while Atelier is working?"
-      alert.informativeText =
-        "\(work) Quitting stops it. Queued generations come back paused next time you open Atelier; exports don't."
-      alert.addButton(withTitle: "Quit")
-      alert.addButton(withTitle: "Cancel")
-      return alert.runModal() == .alertFirstButtonReturn ? .terminateNow : .terminateCancel
+    guard !AppLifecycle.isQuittingWithoutAsking, let work = AppLifecycle.workUnderway?() else {
+      return .terminateNow
     }
+    let alert = NSAlert()
+    alert.messageText = "Quit while Atelier is working?"
+    alert.informativeText =
+      "\(work) Quitting stops it. Queued generations come back paused next time you open Atelier; exports don't."
+    alert.addButton(withTitle: "Quit")
+    alert.addButton(withTitle: "Cancel")
+    return alert.runModal() == .alertFirstButtonReturn ? .terminateNow : .terminateCancel
   }
 }
 
@@ -99,16 +97,23 @@ enum AppLifecycle {
   /// What quitting now would stop, in a sentence, or nil to quit without asking.
   static var workUnderway: (@MainActor () -> String?)?
 
+  private static var observations: [NotificationCenter.ObservationToken] = []
+
+  /// Runs before the app exits, delivered on the main actor as it posts, unlike anything that hops
+  /// to a task: this is what saves the session and the queue.
   static func onWillTerminate(_ action: @escaping @MainActor () -> Void) {
-    observe(NSApplication.willTerminateNotification, action)
+    observations.append(
+      NotificationCenter.default.addObserver(of: NSApplication.self, for: .willTerminate) { _ in action() })
   }
 
   static func onResignActive(_ action: @escaping @MainActor () -> Void) {
-    observe(NSApplication.didResignActiveNotification, action)
+    observations.append(
+      NotificationCenter.default.addObserver(of: NSApplication.self, for: .didResignActive) { _ in action() })
   }
 
   static func onBecomeActive(_ action: @escaping @MainActor () -> Void) {
-    observe(NSApplication.didBecomeActiveNotification, action)
+    observations.append(
+      NotificationCenter.default.addObserver(of: NSApplication.self, for: .didBecomeActive) { _ in action() })
   }
 
   /// Set by `quit()`, which scripted runs call, so they don't stop to ask.
@@ -121,10 +126,17 @@ enum AppLifecycle {
     NSApp.terminate(nil)
   }
 
-  private static func observe(_ name: Notification.Name, _ action: @escaping @MainActor () -> Void) {
-    NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
-      MainActor.assumeIsolated { action() }
-    }
+  /// Hides the app, then shows it again, for `--cleanup-check`. True when it was at the front.
+  static func hideAndShowForCheck() async -> Bool {
+    NSApp.activate()
+    try? await Task.sleep(for: .seconds(1))
+    guard NSApp.isActive else { return false }
+    NSApp.hide(nil)
+    try? await Task.sleep(for: .seconds(1))
+    NSApp.unhide(nil)
+    NSApp.activate()
+    try? await Task.sleep(for: .seconds(1))
+    return true
   }
 }
 

@@ -66,6 +66,10 @@ struct LayoutCanvas: View {
       .frame(width: rect.width * size.width, height: rect.height * size.height)
       .gesture(moveGesture(item))
       .onTapGesture { select(item) }
+      .accessibilityElement(children: .contain)
+      .accessibilityLabel(LayoutPanel.title(item, index: index))
+      .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+      .accessibilityAction { select(item) }
       .contextMenu {
         Button("Delete Box", systemImage: "trash", role: .destructive) { delete(item.id) }
       }
@@ -313,5 +317,11 @@ private struct LayoutItemRow: View {
     )
     .contentShape(.rect)
     .onTapGesture { model.selectedLayoutItem = item.id }
+    // It holds text fields and a picker, so it stays a group, with selecting as an action.
+    .accessibilityElement(children: .contain)
+    .accessibilityAddTraits(selected ? .isSelected : [])
+    .accessibilityActions {
+      Button("Select") { model.selectedLayoutItem = item.id }
+    }
   }
 }

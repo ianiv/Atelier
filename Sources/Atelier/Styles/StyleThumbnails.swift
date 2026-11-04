@@ -4,7 +4,7 @@ import ImageIO
 import UniformTypeIdentifiers
 
 /// How a thumbnail was made, kept with its full-size image so Open in Create can bring both back.
-struct ThumbnailSource: Codable {
+nonisolated struct ThumbnailSource: Codable {
   var prompt: String
   var negativePrompt: String
   var model: String?
@@ -64,6 +64,16 @@ extension StyleStore {
     thumbnailsDirectory.appendingPathComponent(id.uuidString + ".json")
   }
 
+  /// Removes the thumbnails, full images and settings in `folder` of styles that aren't in `ids`.
+  /// Their names start with the style's id; any other file stays.
+  static func removeOrphanedThumbnails(in folder: URL, keeping ids: Set<UUID>) {
+    let fileManager = FileManager.default
+    for file in (try? fileManager.contentsOfDirectory(atPath: folder.path)) ?? [] {
+      guard let id = UUID(uuidString: String(file.prefix(36))), !ids.contains(id) else { continue }
+      try? fileManager.removeItem(at: folder.appendingPathComponent(file))
+    }
+  }
+
   /// The style's thumbnail as JPEG, for a library file.
   func thumbnailJPEG(_ id: UUID) -> Data? {
     if let data = try? Data(contentsOf: Self.thumbnailURL(id)) { return data }
@@ -112,8 +122,12 @@ extension StyleStore {
   /// library's, or one made before full images were kept for every thumbnail).
   func fullThumbnailImage(_ id: UUID) async -> CGImage? {
     let urls = [Self.fullImageURL(id), Self.thumbnailURL(id)]
-    let image = await Task.detached { urls.lazy.compactMap { ImageLoader.image(at: $0) }.first }.value
+    let image = await Self.firstImage(at: urls)
     return image ?? thumbnail(id)
+  }
+
+  @concurrent private nonisolated static func firstImage(at urls: [URL]) async -> CGImage? {
+    urls.lazy.compactMap { ImageLoader.image(at: $0) }.first
   }
 
   /// The style's thumbnail, once `loadThumbnail` has read it.
@@ -125,10 +139,12 @@ extension StyleStore {
   func loadThumbnail(_ id: UUID) async {
     guard thumbnails[id] == nil else { return }
     let url = Self.thumbnailURL(id)
-    let image = await Task.detached {
-      CGImageSourceCreateWithURL(url as CFURL, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
-    }.value
+    let image = await Self.image(at: url)
     thumbnails[id] = .some(image)
+  }
+
+  @concurrent private nonisolated static func image(at url: URL) async -> CGImage? {
+    CGImageSourceCreateWithURL(url as CFURL, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
   }
 
   /// Sets the style's thumbnail from `image`, cropped to its centre square; nil removes it. With
@@ -152,17 +168,29 @@ extension StyleStore {
     // own thumbnail), and with its settings for Open in Create.
     let cropped = image.width != square.width || image.height != square.height
     if source != nil || cropped, let png = ImageTensor.png(image) {
-      try? png.write(to: Self.fullImageURL(id), options: .atomic)
+      Log.attempt(Log.styles, "Saving a thumbnail's full image") {
+        try png.write(to: Self.fullImageURL(id), options: .atomic)
+      }
       if let source, let json = try? JSONEncoder().encode(source) {
-        try? json.write(to: Self.sourceURL(id), options: .atomic)
+        Log.attempt(Log.styles, "Saving a thumbnail's settings") {
+          try json.write(to: Self.sourceURL(id), options: .atomic)
+        }
       }
     }
     // Set after the files, so views reading `canOpenThumbnail` see them.
     defer { thumbnails[id] = .some(square) }
     guard let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.jpeg.identifier as CFString, 1, nil)
-    else { return }
+    else {
+      thumbnailNotSaved()
+      return
+    }
     CGImageDestinationAddImage(destination, square, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
-    CGImageDestinationFinalize(destination)
+    if !CGImageDestinationFinalize(destination) { thumbnailNotSaved() }
+  }
+
+  private func thumbnailNotSaved() {
+    Log.styles.error("Couldn't write a style's thumbnail")
+    reportFailure?("Couldn't save the style's thumbnail.")
   }
 
   /// Sets the thumbnail from an image file (security-scoped access is the caller's), keeping its

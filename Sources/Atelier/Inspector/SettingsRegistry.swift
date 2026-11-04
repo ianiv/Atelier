@@ -1,11 +1,11 @@
-import _MediaGenerationKit
+@preconcurrency import _MediaGenerationKit
 import Foundation
 
 /// MGK's configuration plus the engine settings MGK doesn't expose, which runs that call the
 /// engine directly write over the template (`engineConfiguration(template:)`). MGK's fields read
 /// and write through it as if it were MGK's own.
 @dynamicMemberLookup
-struct PipelineConfiguration: Sendable {
+nonisolated struct PipelineConfiguration: Sendable {
   var base: MediaGenerationPipeline.Configuration
   /// MiniMax H3's shift for its audio latents.
   var shiftForAudio: Float = 3
@@ -23,7 +23,7 @@ struct PipelineConfiguration: Sendable {
 }
 
 /// What the inspector knows about the selected model, for hiding settings it doesn't use.
-struct ModelTraits: Equatable {
+nonisolated struct ModelTraits: Equatable {
   /// MGK's human-readable version name, e.g. "MOSS Image" or "Stable Diffusion XL Base".
   var version: String
   /// The selected sampler, for settings only some samplers read.
@@ -60,7 +60,7 @@ struct ModelTraits: Equatable {
   var usesTCD: Bool { sampler == .TCD || sampler == .tCDTrailing }
 }
 
-enum SettingSection: String, CaseIterable, Identifiable, Codable {
+nonisolated enum SettingSection: String, CaseIterable, Identifiable, Codable {
   case essentials, sampling, loras, hiresFix, refiner, upscaler, video, textEncoders, sdxl,
        imageToImage, tiledDecoding, tiledDiffusion, teaCache, cfgZero, output, kandinsky
 
@@ -109,7 +109,7 @@ enum SettingSection: String, CaseIterable, Identifiable, Codable {
   }
 }
 
-struct SettingOption: Hashable {
+nonisolated struct SettingOption: Hashable {
   var value: JSONValue
   var title: String
 }
@@ -653,7 +653,7 @@ enum SettingsRegistry {
   }
 }
 
-extension JSONValue {
+nonisolated extension JSONValue {
   var doubleValue: Double? {
     if case .number(let value) = self { return value }
     return nil

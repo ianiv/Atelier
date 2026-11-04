@@ -1,8 +1,8 @@
-import _MediaGenerationKit
-import Diffusion
+@preconcurrency import _MediaGenerationKit
+@preconcurrency import Diffusion
 import Foundation
-import ModelOp
-import ModelZoo
+@preconcurrency import ModelOp
+@preconcurrency import ModelZoo
 import Observation
 
 /// Models and LoRAs in the models folders: the download catalog, downloads, model and LoRA
@@ -17,7 +17,7 @@ import Observation
 @MainActor
 @Observable
 final class ModelLibrary {
-  struct LoRA: Identifiable, Hashable {
+  nonisolated struct LoRA: Identifiable, Hashable {
     var name: String
     var file: String
     var prefix: String
@@ -32,7 +32,7 @@ final class ModelLibrary {
     var family: String { ModelLibrary.familyName(version) }
   }
 
-  struct Download: Equatable {
+  nonisolated struct Download: Equatable {
     var file: String
     var fileIndex: Int
     var totalFiles: Int
@@ -145,18 +145,22 @@ final class ModelLibrary {
     let directory = directory
     let directories = directories
     let files = catalog.filter(\.isDownloaded).map(\.file)
-    let (sizes, free) = await Task.detached {
-      var sizes: [String: Int64] = [:]
-      for file in files {
-        sizes[file] = Self.size(of: file, in: directories)
-      }
-      let free = try? directory.resourceValues(
-        forKeys: [.volumeAvailableCapacityForImportantUsageKey]
-      ).volumeAvailableCapacityForImportantUsage
-      return (sizes, free)
-    }.value
+    let (sizes, free) = await Self.measure(files: files, in: directories, volume: directory)
     self.sizes = sizes
     freeSpace = free
+  }
+
+  @concurrent private nonisolated static func measure(
+    files: [String], in directories: [URL], volume: URL
+  ) async -> (sizes: [String: Int64], free: Int64?) {
+    var sizes: [String: Int64] = [:]
+    for file in files {
+      sizes[file] = size(of: file, in: directories)
+    }
+    let free = try? volume.resourceValues(
+      forKeys: [.volumeAvailableCapacityForImportantUsageKey]
+    ).volumeAvailableCapacityForImportantUsage
+    return (sizes, free)
   }
 
   var downloadedCount: Int { catalog.filter(\.isDownloaded).count }
@@ -257,11 +261,11 @@ final class ModelLibrary {
     _ = holder
   }
 
-  private final class ObservationHolder: @unchecked Sendable {
+  private final nonisolated class ObservationHolder: @unchecked Sendable {
     var observation: NSKeyValueObservation?
   }
 
-  private final class DownloadTaskBox: @unchecked Sendable {
+  private final nonisolated class DownloadTaskBox: @unchecked Sendable {
     var task: URLSessionDownloadTask?
   }
 
@@ -335,17 +339,19 @@ final class ModelLibrary {
     }
   }
 
+  @concurrent private nonisolated static func inspectedVersion(of source: URL) async -> Result<ModelVersion, Error> {
+    Result {
+      // ModelImporter doesn't know MOSS; MOSSImporter converts it.
+      if MOSSImporter.isMOSS(source) { return .mossImage }
+      return try ModelImporter(
+        filePath: source.path, modelName: "", isTextEncoderCustomized: false,
+        autoencoderFilePath: nil, textEncoderFilePath: nil, textEncoder2FilePath: nil
+      ).inspect().version
+    }
+  }
+
   private func inspect(_ id: UUID, source: URL) async {
-    let result: Result<ModelVersion, Error> = await Task.detached {
-      Result {
-        // ModelImporter doesn't know MOSS; MOSSImporter converts it.
-        if MOSSImporter.isMOSS(source) { return .mossImage }
-        return try ModelImporter(
-          filePath: source.path, modelName: "", isTextEncoderCustomized: false,
-          autoencoderFilePath: nil, textEncoderFilePath: nil, textEncoder2FilePath: nil
-        ).inspect().version
-      }
-    }.value
+    let result = await Self.inspectedVersion(of: source)
     guard let index = importingModels.firstIndex(where: { $0.id == id }) else { return }
     importingModels[index].isInspecting = false
     switch result {
@@ -404,10 +410,64 @@ final class ModelLibrary {
     }
   }
 
+  /// Converts a checkpoint to the engine's format at `output`.
+  @concurrent private nonisolated static func convert(
+    _ source: URL, modelName: String, displayName: String, output: String,
+    progress: @escaping @Sendable (Float) -> Void
+  ) async throws -> ModelZoo.Specification {
+    if MOSSImporter.isMOSS(source) {
+      try MOSSImporter.convert(source, to: output, progress: progress)
+      guard
+        let specification = MOSSImporter.specification(
+          file: modelName + "_f16.ckpt", name: displayName)
+      else { throw ImportError.unconvertible("MOSS Image") }
+      return specification
+    }
+    let importer = ModelImporter(
+      filePath: source.path, modelName: modelName, isTextEncoderCustomized: false,
+      autoencoderFilePath: nil, textEncoderFilePath: nil, textEncoder2FilePath: nil)
+    // Inspect first: the importer traps on families it can't convert.
+    let detected = try importer.inspect().version
+    guard !unconvertibleVersions.contains(detected) else {
+      throw ImportError.unconvertible(ModelZoo.humanReadableNameForVersion(detected))
+    }
+    let (files, version, modifier, inspection) = try importer.import(
+      versionCheck: { _ in }, progress: progress)
+    return ModelImporter.inferModelSpecification(
+      modelName: displayName, fileName: modelName,
+      fileNames: files.map { URL(fileURLWithPath: $0).lastPathComponent },
+      modelVersion: version, modifier: modifier, inspectionResult: inspection, prefix: "",
+      objective: nil, conditioning: nil, noiseDiscretization: nil, upcastAttention: false,
+      finetuneScale: defaultImportScale(for: version, fileName: source.lastPathComponent)
+    ).specification
+  }
+
+  /// Removes what an import that failed left in `directory`: files it made, which aren't in
+  /// `before`. The prefix alone isn't enough: another model's name can start the same way.
+  nonisolated static func removeNewFiles(in directory: URL, before: Set<String>, prefix: String) {
+    let fileManager = FileManager.default
+    for file in (try? fileManager.contentsOfDirectory(atPath: directory.path)) ?? []
+      where file.hasPrefix(prefix) && !before.contains(file)
+    {
+      try? fileManager.removeItem(at: directory.appendingPathComponent(file))
+    }
+  }
+
+  private nonisolated static func fileNames(in directory: URL) -> Set<String> {
+    Set((try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? [])
+  }
+
   /// Imports one checkpoint and returns the model file it registered.
   private func importModel(_ item: ModelImport) async throws -> String {
     let stem = item.source.deletingPathExtension().lastPathComponent
     let modelName = Self.availableModelName(for: stem, in: directories)
+    let directory = directory
+    // The main file and the text encoders and autoencoder that come out of it share this prefix.
+    let before = Self.fileNames(in: directory)
+    var succeeded = false
+    defer {
+      if !succeeded { Self.removeNewFiles(in: directory, before: before, prefix: modelName + "_") }
+    }
     let trimmedName = item.name.trimmingCharacters(in: .whitespacesAndNewlines)
     let displayName = trimmedName.isEmpty ? stem : trimmedName
     let source = item.source
@@ -426,33 +486,8 @@ final class ModelLibrary {
     // ModelImporter writes `<modelName>_f16.ckpt` to ModelZoo.filePathForModelDownloaded, which
     // resolves against the models directory the engine set (as LoRA import does).
     let output = directory.appendingPathComponent(modelName + "_f16.ckpt").path
-    let specification = try await Task.detached {
-      if MOSSImporter.isMOSS(source) {
-        try MOSSImporter.convert(source, to: output, progress: progress)
-        guard
-          let specification = MOSSImporter.specification(
-            file: modelName + "_f16.ckpt", name: displayName)
-        else { throw ImportError.unconvertible("MOSS Image") }
-        return specification
-      }
-      let importer = ModelImporter(
-        filePath: source.path, modelName: modelName, isTextEncoderCustomized: false,
-        autoencoderFilePath: nil, textEncoderFilePath: nil, textEncoder2FilePath: nil)
-      // Inspect first: the importer traps on families it can't convert.
-      let detected = try importer.inspect().version
-      guard !Self.unconvertibleVersions.contains(detected) else {
-        throw ImportError.unconvertible(ModelZoo.humanReadableNameForVersion(detected))
-      }
-      let (files, version, modifier, inspection) = try importer.import(
-        versionCheck: { _ in }, progress: progress)
-      return ModelImporter.inferModelSpecification(
-        modelName: displayName, fileName: modelName,
-        fileNames: files.map { URL(fileURLWithPath: $0).lastPathComponent },
-        modelVersion: version, modifier: modifier, inspectionResult: inspection, prefix: "",
-        objective: nil, conditioning: nil, noiseDiscretization: nil, upcastAttention: false,
-        finetuneScale: Self.defaultImportScale(for: version, fileName: source.lastPathComponent)
-      ).specification
-    }.value
+    let specification = try await Self.convert(
+      source, modelName: modelName, displayName: displayName, output: output, progress: progress)
     guard
       FileManager.default.fileExists(
         atPath: directory.appendingPathComponent(specification.file).path)
@@ -466,6 +501,7 @@ final class ModelLibrary {
     ModelZoo.isExternalUrlsPreferred = true
     ModelZoo.appendCustomSpecification(specification)
     ModelZoo.isExternalUrlsPreferred = preferred
+    succeeded = true
     return specification.file
   }
 
@@ -483,6 +519,13 @@ final class ModelLibrary {
 
   static func eightBitFile(for file: String, _ format: MOSSImporter.EightBit) -> String {
     String(file.dropLast("f16.ckpt".count)) + format.fileSuffix
+  }
+
+  @concurrent private nonisolated static func quantize(
+    _ source: String, to destination: String, format: MOSSImporter.EightBit,
+    progress: @escaping @Sendable (Float) -> Void
+  ) async {
+    MOSSImporter.quantize(source, to: destination, format: format, progress: progress)
   }
 
   /// Writes `<name>_q8p.ckpt` or `<name>_i8x.ckpt` next to the model, about half its size, and
@@ -504,9 +547,7 @@ final class ModelLibrary {
       }
     }
     Task {
-      await Task.detached {
-        MOSSImporter.quantize(source, to: destination, format: format, progress: progress)
-      }.value
+      await Self.quantize(source, to: destination, format: format, progress: progress)
       if FileManager.default.fileExists(atPath: destination) {
         specification.file = output
         specification.name = "\(model.name) (\(format.title))"
@@ -523,7 +564,7 @@ final class ModelLibrary {
     }
   }
 
-  enum ImportError: LocalizedError {
+  nonisolated enum ImportError: LocalizedError {
     case unconvertible(String)
     var errorDescription: String? {
       switch self {
@@ -717,10 +758,25 @@ final class ModelLibrary {
     importing.removeAll()
   }
 
+  @concurrent private nonisolated static func importLoRAFile(
+    _ source: URL, name: String, file: String, version: String?,
+    progress: @escaping @Sendable (Float) -> Void
+  ) async throws -> (ModelVersion, Bool) {
+    let result = try ModelOp.LoRAImporter.import(
+      downloadedFile: source.path, name: name, filename: file, scaleFactor: 1,
+      forceVersion: version.flatMap(ModelVersion.init(rawValue:)), progress: progress)
+    return (result.0, result.3)
+  }
+
   private func importLoRA(_ item: LoRAImport, version: ModelVersion?) async throws {
     let directory = directory
     let stem = item.source.deletingPathExtension().lastPathComponent
     let file = Self.availableLoRAFileName(for: stem, in: directories)
+    let before = Self.fileNames(in: directory)
+    var succeeded = false
+    defer {
+      if !succeeded { Self.removeNewFiles(in: directory, before: before, prefix: file) }
+    }
     let source = item.source
     let id = item.id
     let progress: @Sendable (Float) -> Void = { [weak self] value in
@@ -733,12 +789,8 @@ final class ModelLibrary {
     // ModelOp writes to LoRAZoo.filePathForModelDownloaded(file), which resolves against
     // ModelZoo.externalUrls: the models directory the engine set. MGK's LoRAImporter swaps
     // externalUrls to a temp folder instead, which would race a running generation.
-    let (detected, isLoHa) = try await Task.detached {
-      let result = try ModelOp.LoRAImporter.import(
-        downloadedFile: source.path, name: stem, filename: file, scaleFactor: 1,
-        forceVersion: version, progress: progress)
-      return (result.0, result.3)
-    }.value
+    let (detected, isLoHa) = try await Self.importLoRAFile(
+      source, name: stem, file: file, version: version?.rawValue, progress: progress)
     guard FileManager.default.fileExists(atPath: directory.appendingPathComponent(file).path)
     else {
       throw CocoaError(.fileNoSuchFile)
@@ -751,6 +803,7 @@ final class ModelLibrary {
       LoRAZoo.Specification(
         name: name, file: file, prefix: item.prefix, version: detected,
         isLoHa: isLoHa), in: directory)
+    succeeded = true
   }
 
   /// Renames a LoRA or changes its trigger words; other fields in custom_lora.json are kept.
@@ -815,7 +868,9 @@ final class ModelLibrary {
     let backup = directory.appendingPathComponent(name + ".bak-atelier")
     guard FileManager.default.fileExists(atPath: registry.path) else { return }
     try? FileManager.default.removeItem(at: backup)
-    try? FileManager.default.copyItem(at: registry, to: backup)
+    Log.attempt(Log.library, "Backing up \(name)") {
+      try FileManager.default.copyItem(at: registry, to: backup)
+    }
   }
 
   // MARK: - Files
@@ -928,12 +983,12 @@ final class ModelLibrary {
   }
 }
 
-extension MediaGenerationResolvedModel: @retroactive Identifiable {
+nonisolated extension MediaGenerationResolvedModel: @retroactive Identifiable {
   public var id: String { file }
 }
 
 /// Decodes an array element as nil instead of failing the whole array.
-private struct Lenient<Value: Decodable>: Decodable {
+private nonisolated struct Lenient<Value: Decodable>: Decodable {
   var value: Value?
   init(from decoder: Decoder) throws {
     value = try? Value(from: decoder)

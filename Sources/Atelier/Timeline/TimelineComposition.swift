@@ -5,7 +5,10 @@ import CoreGraphics
 /// clip comes from its MP4 (`HistoryStore.videoFile`), on two alternating tracks so a crossfade
 /// can overlap two clips; clips of another size are scaled to fit, on black; sound ramps across
 /// crossfades, and muted clips and clips without sound leave silence.
-struct TimelineComposition: @unchecked Sendable {
+///
+/// `@unchecked` because AVFoundation doesn't mark these objects Sendable; nothing changes them
+/// once `make` returns.
+nonisolated struct TimelineComposition: @unchecked Sendable {
   let composition: AVComposition
   let videoComposition: AVVideoComposition
   let audioMix: AVAudioMix
@@ -20,7 +23,7 @@ struct TimelineComposition: @unchecked Sendable {
   var frameCount: Int { runs.last?.upperBound ?? 0 }
 
   /// nil when the layout has nothing to play.
-  static func make(_ layout: TimelineLayout, files: [URL]) async throws -> TimelineComposition? {
+  @concurrent static func make(_ layout: TimelineLayout, files: [URL]) async throws -> TimelineComposition? {
     guard !layout.segments.isEmpty, files.count == layout.segments.count else { return nil }
     let composition = AVMutableComposition()
     let videoTracks = (0..<2).compactMap { _ in
@@ -123,7 +126,7 @@ struct TimelineComposition: @unchecked Sendable {
       framesPerSecond: fps, runs: runs)
   }
 
-  func playerItem() -> AVPlayerItem {
+  @MainActor func playerItem() -> AVPlayerItem {
     let item = AVPlayerItem(asset: composition)
     item.videoComposition = videoComposition
     item.audioMix = audioMix
@@ -131,7 +134,7 @@ struct TimelineComposition: @unchecked Sendable {
   }
 
   /// Writes it as one MP4 in `codec`, with AAC sound, titled `title`. Cancelling the task stops it.
-  func export(
+  @concurrent func export(
     to url: URL, codec: VideoCodec, title: String, progress: @escaping @Sendable (Double) -> Void
   ) async throws {
     let preset = codec == .hevc ? AVAssetExportPresetHEVCHighestQuality : AVAssetExportPresetHighestQuality
@@ -144,8 +147,9 @@ struct TimelineComposition: @unchecked Sendable {
     name.identifier = .iTunesMetadataSongName
     name.value = title as NSString
     session.metadata = [name]
+    let states = session.states(updateInterval: 0.2)
     let monitor = Task {
-      for await state in session.states(updateInterval: 0.2) {
+      for await state in states {
         if case .exporting(let fraction) = state { progress(fraction.fractionCompleted) }
       }
     }

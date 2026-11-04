@@ -122,6 +122,7 @@ struct StylePicker: View {
         Image(systemName: "chevron.right")
           .font(.caption.weight(.semibold))
           .rotationEffect(.degrees(open ? 90 : 0))
+          .accessibilityHidden(true)
         Text(category.isEmpty ? "Uncategorized" : category)
         Spacer()
         Text("\(count)").monospacedDigit().foregroundStyle(.tertiary)
@@ -130,6 +131,7 @@ struct StylePicker: View {
     }
     .buttonStyle(.plain)
     .disabled(!query.isEmpty)
+    .accessibilityValue(open ? "Expanded" : "Collapsed")
   }
 
   private func row(name: String, detail: String, id: UUID?) -> some View {
@@ -147,11 +149,13 @@ struct StylePicker: View {
         Image(systemName: "checkmark")
           .foregroundStyle(.tint)
           .opacity(selection == id ? 1 : 0)
+          .accessibilityHidden(true)
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       .contentShape(.rect)
     }
     .buttonStyle(.plain)
+    .accessibilityAddTraits(selection == id ? .isSelected : [])
   }
 }
 

@@ -1,4 +1,4 @@
-import _MediaGenerationKit
+@preconcurrency import _MediaGenerationKit
 import SwiftUI
 
 struct SizeButton: View {
@@ -14,7 +14,7 @@ struct SizeButton: View {
     } label: {
       HStack(spacing: 4) {
         Text(verbatim: "\(size.0) × \(size.1)").monospacedDigit()
-        Image(systemName: "chevron.down").font(.caption2)
+        Image(systemName: "chevron.down").font(.caption2).accessibilityHidden(true)
       }
     }
     .debugPresents("sizePopover", $showing)
@@ -121,6 +121,7 @@ struct SizePopover: View {
     }
     .buttonStyle(.borderless)
     .help("Swap width and height")
+    .accessibilityLabel("Swap width and height")
   }
 
   private func dimension(_ title: String, value: Int, set: @escaping (Int) -> Void) -> some View {

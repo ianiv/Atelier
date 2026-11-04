@@ -1,9 +1,9 @@
-import _MediaGenerationKit
+@preconcurrency import _MediaGenerationKit
 import AVFoundation
 import CoreGraphics
-import Diffusion
+@preconcurrency import Diffusion
 import Foundation
-import ModelZoo
+@preconcurrency import ModelZoo
 import Observation
 import UserNotifications
 
@@ -12,14 +12,14 @@ import UserNotifications
 @Observable
 final class CreateModel {
   /// The running job's progress.
-  enum Phase: Equatable {
+  nonisolated enum Phase: Equatable {
     case idle
     case running(String)
     case cancelling
   }
 
   /// Generate starts from the prompt alone; Edit also sends the canvas to the model.
-  enum CanvasMode: String {
+  nonisolated enum CanvasMode: String {
     case generate, edit
   }
 
@@ -56,6 +56,13 @@ final class CreateModel {
   #if os(iOS)
     /// The queue was paused for going to the background, not by the user.
     @ObservationIgnored private var pausedForBackground = false
+    @ObservationIgnored private var savedForBackground = false
+    @ObservationIgnored private let backgroundTask = BackgroundQueueTask()
+    /// The job the background task last reported on, and how many it has finished.
+    @ObservationIgnored private var backgroundJob: UUID?
+    @ObservationIgnored private var backgroundJobsDone = 0
+    /// What the engine was last told about a run being under way (`setEngineGenerating`).
+    @ObservationIgnored private var engineIsGenerating = false
   #endif
 
   var prompt = "" {
@@ -71,7 +78,9 @@ final class CreateModel {
   @ObservationIgnored private var writingLayout = false
   var negativePrompt = ""
   /// The user's styles (set by the app).
-  var styles: StyleStore?
+  var styles: StyleStore? {
+    didSet { styles?.reportFailure = { [weak self] in self?.errorMessage = $0 } }
+  }
   /// The style Generate writes the prompt into; nil for the prompt as typed. Remembered across
   /// launches, except for what scripted runs set.
   var styleID: UUID? = UserDefaults.standard.string(forKey: "style").flatMap(UUID.init(uuidString:)) {
@@ -594,6 +603,7 @@ final class CreateModel {
   init(history: HistoryStore) {
     self.history = history
     timelines = TimelineStore(history: history)
+    defer { moodboard.reportFailure = { [weak self] in self?.errorMessage = $0 } }
     if let session = SessionState.load() {
       restored = session
       prompt = session.prompt
@@ -620,14 +630,35 @@ final class CreateModel {
     AppLifecycle.onResignActive { [weak self] in self?.saveSession() }
     AppLifecycle.onWillTerminate { [weak self] in self?.saveQueue() }
     #if os(iOS)
-      // iPadOS stops GPU work in the background: hold the queue there and pick it up on return.
+      backgroundTask.onStart = { [weak self] in self?.backgroundTaskStarted() }
+      backgroundTask.onExpire = { [weak self] in self?.backgroundTaskExpired() }
+      // The request has to come from the foreground, and the system's display shows from then on, so
+      // it's made at the last moment and the task ends on return. Control Center and the like come
+      // through here too: the display just shows until the app is active again.
+      AppLifecycle.onResignActive { [weak self] in
+        guard let self, let job = queue.running else { return }
+        let text = backgroundTaskText(for: job)
+        backgroundTask.begin(title: text.title, subtitle: text.subtitle)
+      }
+      AppLifecycle.onBecomeActive { [weak self] in self?.backgroundTask.end() }
+      // iPadOS stops GPU work in the background, unless a background task is running: hold the
+      // queue there and pick it up on return (or when the task starts, if that's later).
       AppLifecycle.onEnterBackground { [weak self] in
-        guard let self, !queue.isPaused else { return }
+        guard let self else { return }
+        // iPadOS can end the app from here on, without warning.
+        saveQueue()
+        savedForBackground = true
+        guard !queue.isPaused, !backgroundTask.isRunning else { return }
         pausedForBackground = true
         setQueuePaused(true)
       }
       AppLifecycle.onEnterForeground { [weak self] in
-        guard let self, pausedForBackground else { return }
+        guard let self else { return }
+        // Still running: what was saved would come back at the next launch as well. Not at launch,
+        // which also comes through here, when what was saved is yet to be restored.
+        if savedForBackground, SessionState.isEnabled { SavedQueue.save([], project: history.project.name) }
+        savedForBackground = false
+        guard pausedForBackground else { return }
         pausedForBackground = false
         setQueuePaused(false)
       }
@@ -652,14 +683,16 @@ final class CreateModel {
   /// Keeps the running and waiting jobs for the next launch (not for scripted runs).
   private func saveQueue() {
     guard SessionState.isEnabled else { return }
-    SavedQueue.save((queue.running.map { [$0] } ?? []) + queue.waiting, project: history.project.name)
+    SavedQueue.save(queue.unfinished, project: history.project.name)
+    // Finished jobs' copies only served Run Again, which doesn't outlast the app.
+    AudioClip.removeSnapshots(keeping: queue.unfinished.compactMap { $0.request?.audio })
   }
 
   /// Brings back the jobs kept at the last quit, paused. Jobs for models no longer downloaded
   /// are dropped.
   private func restoreQueue() async {
     guard SessionState.isEnabled else { return }
-    while !history.isLoaded { try? await Task.sleep(for: .milliseconds(100)) }
+    await waitUntil { [history] in history.isLoaded }
     let requests = await savedRequests(SavedQueue.load(project: history.project.name))
     AudioClip.removeSnapshots(keeping: requests.compactMap(\.audio))
     guard !requests.isEmpty else { return }
@@ -754,7 +787,10 @@ final class CreateModel {
       if let samples = await history.audioInput(of: item),
          let rate = VideoModel(model: item.sidecar.model)?.audioSampleRate
       {
-        try? audio.set(samples: samples, sampleRate: rate, name: "Audio from \(history.fileName(for: item)).wav")
+        let failure = Log.attempt(Log.create, "Bringing back a run's audio") {
+          try audio.set(samples: samples, sampleRate: rate, name: "Audio from \(history.fileName(for: item)).wav")
+        }
+        if let failure { errorMessage = "Couldn't bring back the audio: \(failure.localizedDescription)" }
       }
     }
     if selectedModel == sidecar.model, !isLoadingModel, var settings = recommended {
@@ -810,9 +846,13 @@ final class CreateModel {
   private func reachableModelsDirectories() async -> [String] {
     let primary = modelsDirectory
     let additional = additionalModelsDirectories
-    return await Task.detached {
-      AppSettings.availableModelsDirectories(primary: primary, additional: additional)
-    }.value
+    return await Self.availableModelsDirectories(primary: primary, additional: additional)
+  }
+
+  @concurrent private nonisolated static func availableModelsDirectories(
+    primary: String, additional: [String]
+  ) async -> [String] {
+    AppSettings.availableModelsDirectories(primary: primary, additional: additional)
   }
 
   /// Rereads the models when a models folder has come or gone since the last read.
@@ -869,13 +909,15 @@ final class CreateModel {
     }
   }
 
+  @concurrent private nonisolated static func fileNames(in directories: [String]) async -> [String] {
+    Set(directories.flatMap { (try? FileManager.default.contentsOfDirectory(atPath: $0)) ?? [] })
+      .sorted()
+  }
+
   private func loadModelList() async {
     let models = await engine.downloadedModels()
     let directories = availableModelsDirectories
-    let modelFiles = await Task.detached {
-      Set(directories.flatMap { (try? FileManager.default.contentsOfDirectory(atPath: $0)) ?? [] })
-        .sorted()
-    }.value
+    let modelFiles = await Self.fileNames(in: directories)
     // Assigned after the last await, so callers pick a selection before the model picker redraws.
     self.models = models
     self.modelFiles = modelFiles
@@ -1092,6 +1134,10 @@ final class CreateModel {
     }
     queue.append(requests, currentTensorId: history.currentTensorId)
     runNext()
+    // After `runNext`, which clears the message as a job starts.
+    if takesAudio, requests.contains(where: { $0.audio == nil }) {
+      errorMessage = "Couldn't copy the audio file, so a queued video runs without it."
+    }
   }
 
   /// The canvas as a run would take it.
@@ -1134,9 +1180,77 @@ final class CreateModel {
 
   /// Starts the next waiting job when none is running.
   private func runNext() {
+    #if os(iOS)
+      // A job can end after the app went to the background: don't bring it back at the next launch.
+      defer { if savedForBackground { saveQueue() } }
+    #endif
+    defer { syncBackgroundTask() }
     guard generationTask == nil, let job = queue.startNext() else { return }
     run(job)
   }
+
+  /// Keeps the background task in step with the queue. Called as jobs start and end and as they
+  /// make progress.
+  private func syncBackgroundTask() {
+    #if os(iOS)
+      if (queue.running != nil) != engineIsGenerating, GenerationEngine.setEngineGenerating(!engineIsGenerating) {
+        engineIsGenerating.toggle()
+      }
+      guard let job = queue.running else {
+        backgroundTask.end()
+        backgroundJob = nil
+        backgroundJobsDone = 0
+        return
+      }
+      if job.id != backgroundJob {
+        if backgroundJob != nil { backgroundJobsDone += 1 }
+        backgroundJob = job.id
+      }
+      let text = backgroundTaskText(for: job)
+      let jobs = backgroundJobsDone + 1 + (queue.isPaused ? 0 : queue.waiting.count)
+      let fraction = Double(step) / Double(max(totalSteps, 1))
+      backgroundTask.update(
+        completed: (Double(backgroundJobsDone) + min(fraction, 1)) / Double(jobs), title: text.title,
+        subtitle: text.subtitle)
+    #endif
+  }
+
+  #if os(iOS)
+    /// What the system's display says about the queue.
+    private func backgroundTaskText(for job: JobQueue.Job) -> (title: String, subtitle: String) {
+      let title =
+        if job.export != nil {
+          "Exporting a video"
+        } else if job.request?.configuration.videoModel != nil {
+          "Generating a video"
+        } else {
+          "Generating images"
+        }
+      let jobs = backgroundJobsDone + 1 + (queue.isPaused ? 0 : queue.waiting.count)
+      let subtitle =
+        jobs > 1 ? "\(backgroundJobsDone + 1) of \(jobs)" : "Step \(step) of \(max(totalSteps, step))"
+      return (title, subtitle)
+    }
+
+    /// The task can start after the app already went to the background and held the queue.
+    private func backgroundTaskStarted() {
+      syncBackgroundTask()
+      guard pausedForBackground else { return }
+      pausedForBackground = false
+      setQueuePaused(false)
+    }
+
+    /// The system ended the background task: hold the queue as if the app had gone to the
+    /// background without one, with the running generation back in front to run again. In the
+    /// foreground the user may have stopped it from the system's display, so it stays paused
+    /// until they resume it.
+    private func backgroundTaskExpired() {
+      if !AppLifecycle.isActive { pausedForBackground = true }
+      queue.isPaused = true
+      queue.returnRunningToFront()
+      cancel()
+    }
+  #endif
 
   private func run(_ job: JobQueue.Job) {
     if let export = job.export { return run(export, id: job.id) }
@@ -1266,6 +1380,7 @@ final class CreateModel {
           Task { @MainActor in
             guard self.generationTask != nil, self.phase != .cancelling else { return }
             self.step = Int(fraction * 1_000)
+            self.syncBackgroundTask()
           }
         }
         status = .exported(export.destination)
@@ -1333,8 +1448,8 @@ final class CreateModel {
     var frames = await history.frames(of: source)
     guard frames.count == clip.frames.count else { throw ProjectError.badImage }
     if let limit = upscale.frameLimit, limit < frames.count { frames = Array(frames.prefix(limit)) }
-    let tensors = try await engine.upscale(request, frames: frames, progress: progress)
-    var output = GenerationEngine.Output(frames: tensors, framesPerSecond: clip.framesPerSecond)
+    var output = try await engine.upscale(request, frames: frames, progress: progress)
+    output.framesPerSecond = clip.framesPerSecond
     if let audio = await history.audio(of: source) {
       let rate = ModelZoo.audioSampleRateForModel(request.model)
       var samples = ClipUpscale.resample(audio.samples, from: audio.sampleRate, to: rate)
@@ -1349,7 +1464,7 @@ final class CreateModel {
     return output
   }
 
-  enum UpscaleError: LocalizedError {
+  nonisolated enum UpscaleError: LocalizedError {
     case sourceMissing
 
     var errorDescription: String? { "The clip to upscale is no longer in this project." }
@@ -1529,6 +1644,7 @@ final class CreateModel {
         noteStep(step, of: total)
       }
     }
+    syncBackgroundTask()
   }
 
   private func noteStep(_ step: Int, of total: Int) {

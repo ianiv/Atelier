@@ -10,6 +10,7 @@ Build only through the script; outputs land in `build/` (gitignored), never Xcod
 
 ```bash
 Scripts/build.sh [Debug|Release] [mac|ipad|ipad-sim]   # default: Release mac → build/Atelier.app
+Scripts/test.sh                                        # unit tests (Sources/AtelierTests), Mac only; needs no models
 Scripts/clean-builds.sh [--all]                        # unregister stray builds from Launch Services; --all wipes build caches
 swiftformat .                                          # format (config in .swiftformat)
 Scripts/install-hooks.sh                               # once per clone: pre-commit hook formats staged Swift files
@@ -25,14 +26,14 @@ Scripts/release.sh [version]                           # signed/notarized zip + 
 
 ### Tests
 
-There is no XCTest target. Verification is done by launching the built Mac app with scripted-run flags (`Sources/Atelier/Automation/`), which drive the real UI and engine and print progress / `PASS`/`FAIL` lines:
+`Scripts/test.sh` runs the Swift Testing unit tests in `Sources/AtelierTests`, for pure logic that needs no models. They run inside the app as a scripted run does, so the user's data is left alone; files go in a test-only folder. Everything else is verified by launching the built Mac app with scripted-run flags (`Sources/Atelier/Automation/`), which drive the real UI and engine and print progress / `PASS`/`FAIL` lines:
 
 ```bash
 build/Atelier.app/Contents/MacOS/Atelier --generate --model <file.ckpt> --prompt "…" --width 1024 --height 1024 [--steps N] [--snapshot-dir DIR] --quit
 build/Atelier.app/Contents/MacOS/Atelier --queue-check --project <scratch project> [--model M] [--steps N] --quit
 ```
 
-Other checks: `--project-check`, `--edit-input-check`, `--inspector-check`, `--library-check`, `--ux-check`, `--timeline-check`, `--timeline-export-check`, `--upscale-check`, `--flashvsr-check`, `--model-folders-check`, `--styles-check`, `--reuse latest|STEP`, `--resize-bench`, `--show <section>`. Usage for each is in the doc comment at the top of its `Automation*.swift` file. Always pass `--project NAME` for checks that write, so the user's current project isn't touched; scripted runs also skip saving `SessionState`. These need real models in the user's models folder — never hardcode its path. Automation is Mac-only (`#if os(macOS)`).
+Other checks: `--project-check`, `--edit-input-check`, `--inspector-check`, `--library-check`, `--ux-check`, `--timeline-check`, `--timeline-export-check`, `--upscale-check`, `--flashvsr-check`, `--model-folders-check`, `--styles-check`, `--cleanup-check`, `--engine-check`, `--playback-check`, `--reuse latest|STEP`, `--resize-bench`, `--show <section>`. Usage for each is in the doc comment at the top of its `Automation*.swift` file. Always pass `--project NAME` for checks that write, so the user's current project isn't touched; scripted runs also skip saving `SessionState`. These need real models in the user's models folder — never hardcode its path. Automation is Mac-only (`#if os(macOS)`).
 
 ## Architecture
 

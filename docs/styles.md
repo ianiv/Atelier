@@ -91,7 +91,7 @@ photorealistic, 3D render
 ```
 
 - `# Heading`: the category for the styles under it, until the next `#`.
-- `## Heading`: the subcategory (optional), until the next `##` or `#`.
+- `## Heading`: the subcategory (optional), until the next `##` or `#`. A `##` with nothing after it ends the subcategory.
 - `### Heading`: a style's name. Its sections follow, each a label on its own line (or with text after it on the same line) and text that runs until the next label, heading or `---` rule:
   - `TEMPLATE:` (required): the prompt template, with `{{SUBJECT}}` where the prompt goes. Any other `{{TAG}}` (letters, digits and `_`, such as `{{SETTING}}` or `{{CAMERA_ANGLE}}`) becomes a box of its own on the Create screen, labelled from its name ("Camera angle"). Write `{{TAG:default text}}` to give a tag a default, used when its box is left empty, for example `{{SETTING:a quiet street at dusk}}` or `{{SUBJECT:a woman reading by a window}}`. A default can't contain `}`. If a tag appears more than once, the first default counts.
   - `NEGATIVE:` (optional): added to the negative prompt.

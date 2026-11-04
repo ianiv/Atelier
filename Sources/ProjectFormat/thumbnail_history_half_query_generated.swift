@@ -1,4 +1,4 @@
-import Dflat
+@preconcurrency import Dflat
 import FlatBuffers
 
 public extension ThumbnailHistoryHalfNode {

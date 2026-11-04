@@ -5,7 +5,7 @@ import Observation
 /// A prompt style: a template the prompt is written into at Generate. Each `{{TAG}}` in it is a
 /// box on the Create screen in place of the prompt box; `{{SUBJECT}}` is the prompt itself.
 /// `{{TAG:text}}` gives the text used when the box is left empty. The format is in docs/styles.md.
-struct Style: Codable, Identifiable, Hashable {
+nonisolated struct Style: Codable, Identifiable, Hashable {
   var id = UUID()
   var name: String
   var category = ""
@@ -128,7 +128,7 @@ struct Style: Codable, Identifiable, Hashable {
 
 /// Reads and writes style files: Markdown with a `#` heading per category, `##` per subcategory
 /// and `###` per style, whose `TEMPLATE:`, `NEGATIVE:` and `NOTES:` sections follow (docs/styles.md).
-enum StyleFile {
+nonisolated enum StyleFile {
   enum Field: String, CaseIterable {
     case template = "TEMPLATE", negative = "NEGATIVE", notes = "NOTES"
   }
@@ -203,8 +203,13 @@ enum StyleFile {
         out += "\n# \(style.category.isEmpty ? "Uncategorized" : style.category)\n"
       }
       if style.subcategory != subcategory {
+        // A bare `##` ends the subcategory before it, for a style that has none.
+        if !style.subcategory.isEmpty {
+          out += "\n## \(style.subcategory)\n"
+        } else if subcategory?.isEmpty == false {
+          out += "\n##\n"
+        }
         subcategory = style.subcategory
-        if !style.subcategory.isEmpty { out += "\n## \(style.subcategory)\n" }
       }
       out += "\n### \(style.name)\nTEMPLATE:\n\(style.template)\n"
       if !style.negative.isEmpty { out += "NEGATIVE:\n\(style.negative)\n" }
@@ -215,6 +220,7 @@ enum StyleFile {
 
   private static func heading(_ line: String) -> (level: Int, title: String)? {
     let hashes = line.prefix { $0 == "#" }.count
+    if line == "##" { return (2, "") }
     guard (1...3).contains(hashes), line.dropFirst(hashes).first == " " else { return nil }
     return (hashes, line.dropFirst(hashes).trimmingCharacters(in: .whitespaces))
   }
@@ -276,6 +282,8 @@ final class StyleStore {
   @ObservationIgnored var thumbnailTask: Task<Void, Never>?
   /// The style whose thumbnail is shown full size (`ThumbnailViewer`), from the list or the editor.
   var viewingThumbnail: UUID?
+  /// Tells the user a change wasn't saved. Set by `CreateModel`, whose status bar shows it.
+  @ObservationIgnored var reportFailure: ((String) -> Void)?
   /// Off for scripted runs: they read the user's styles but don't change them.
   @ObservationIgnored let persists: Bool
 
@@ -286,8 +294,12 @@ final class StyleStore {
 
   init(persists: Bool = true) {
     self.persists = persists
-    guard let data = try? Data(contentsOf: Self.file) else { return }
-    styles = (try? JSONDecoder().decode([Style].self, from: data)) ?? []
+    guard let data = try? Data(contentsOf: Self.file), let saved = try? JSONDecoder().decode([Style].self, from: data) else { return }
+    styles = saved
+    // Only with styles read: a file that didn't decode says nothing about which thumbnails are used.
+    if persists, !saved.isEmpty {
+      Self.removeOrphanedThumbnails(in: Self.thumbnailsDirectory, keeping: Set(saved.map(\.id)))
+    }
   }
 
   func style(id: UUID?) -> Style? {
@@ -357,7 +369,8 @@ final class StyleStore {
       encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
       try encoder.encode(styles).write(to: Self.file, options: .atomic)
     } catch {
-      print("Couldn't save styles: \(error)")
+      Log.styles.error("Couldn't save styles: \(error.localizedDescription, privacy: .public)")
+      reportFailure?("Couldn't save your styles: \(error.localizedDescription)")
     }
   }
 }

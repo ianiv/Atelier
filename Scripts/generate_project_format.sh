@@ -25,6 +25,9 @@ for schema in clip script_session tensor_data tensor_history tensor_moodboard_da
   "$TOOLS/dflatc" -o "$WORK/gen" "$WORK/gen/${schema}_generated.json"
 done
 rm -f "$WORK"/gen/*.json
+# The query files keep FieldExprs in static lets. Dflat doesn't declare that class Sendable, though
+# it's immutable once made, so Swift 6 needs this to accept them.
+sed -i '' 's/^import Dflat$/@preconcurrency import Dflat/' "$WORK"/gen/*_query_generated.swift
 rm -f "$OUT"/*_generated.swift
 mkdir -p "$OUT"
 cp "$WORK"/gen/*_generated.swift "$OUT/"

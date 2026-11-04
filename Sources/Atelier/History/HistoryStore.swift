@@ -1,16 +1,16 @@
-import _MediaGenerationKit
+@preconcurrency import _MediaGenerationKit
 import CoreGraphics
 import CoreTransferable
-import Diffusion
+@preconcurrency import Diffusion
 import Foundation
 import ImageIO
-import ModelZoo
-import NNC
+@preconcurrency import ModelZoo
+@preconcurrency import NNC
 import Observation
 import UniformTypeIdentifiers
 
 /// One generated image: a step in the current project.
-struct HistoryItem: Identifiable, Hashable {
+nonisolated struct HistoryItem: Identifiable, Hashable, Sendable {
   var id: StepID
   var tensorId: Int64
   var previewId: Int64
@@ -22,6 +22,14 @@ struct HistoryItem: Identifiable, Hashable {
   var clip: ClipInfo?
 
   var isVideo: Bool { clip != nil }
+
+  /// What VoiceOver says for the image or video: the start of its prompt.
+  var accessibilityDescription: String {
+    let prompt = sidecar.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    let kind = isVideo ? "Video" : "Image"
+    if prompt.isEmpty { return kind }
+    return "\(kind): \(prompt.count > 80 ? prompt.prefix(80) + "…" : prompt)"
+  }
 
   // Step ids change when a fork or a delete renumbers steps; the image tensor doesn't.
   static func == (lhs: HistoryItem, rhs: HistoryItem) -> Bool { lhs.tensorId == rhs.tensorId }
@@ -41,7 +49,7 @@ final class HistoryStore {
   /// A history item's settings summary. Built from the project's step; also the format of the
   /// JSON sidecars Atelier wrote before projects (imported once, see `importLegacyHistory`) and
   /// of the iTXt chunk in exported PNGs.
-  struct Sidecar: Codable {
+  nonisolated struct Sidecar: Codable, Sendable {
     var app = "Atelier"
     var createdAt: Date
     var durationSeconds: Double
@@ -113,11 +121,11 @@ final class HistoryStore {
 
   func reload() async {
     let project = project
-    let (tree, stored, output, ratings) = await Task.detached {
-      () -> (ProjectTree, StepID?, ProjectOutput, [Int64: Int]) in
+    let (tree, stored, output, ratings) = await project.read {
+      project -> (ProjectTree, StepID?, ProjectOutput, [Int64: Int]) in
       let tree = project.tree()
       return (tree, project.storedCurrentStep(in: tree), project.output, project.ratings)
-    }.value
+    }
     guard project === self.project else { return }
     self.output = output
     self.ratings = ratings
@@ -194,7 +202,9 @@ final class HistoryStore {
     for suffix in ["-wal", "-shm"] {
       let side = URL(fileURLWithPath: old.path + suffix)
       if FileManager.default.fileExists(atPath: side.path) {
-        try? FileManager.default.moveItem(at: side, to: URL(fileURLWithPath: target.path + suffix))
+        Log.attempt(Log.project, "Renaming a project's \(suffix) file") {
+          try FileManager.default.moveItem(at: side, to: URL(fileURLWithPath: target.path + suffix))
+        }
       }
     }
     project = Project(url: target)
@@ -202,7 +212,7 @@ final class HistoryStore {
     await reload()
   }
 
-  private nonisolated static func scanProjectNames() -> [String] {
+  nonisolated static func scanProjectNames() -> [String] {
     let files = (try? FileManager.default.contentsOfDirectory(
       at: projectsDirectory, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? []
     return files.filter { $0.pathExtension == "sqlite3" }
@@ -247,7 +257,7 @@ final class HistoryStore {
       parentTensorId = inputTensorId ?? parentTensorId
     }
     let moodboard = request.moodboard.compactMap { entry in
-      ImageTensor.tensor(from: entry.image).map { (tensor: $0, weight: entry.weight) }
+      ImageTensor.tensor(from: entry.image).map { Project.MoodboardTensor(tensor: $0, weight: entry.weight) }
     }
     let item: HistoryItem
     if let framesPerSecond = output.framesPerSecond {
@@ -286,14 +296,14 @@ final class HistoryStore {
   /// The step holding the image, in `project` (read fresh when it isn't the one loaded).
   private func step(tensorId: Int64, in project: Project) async -> StepID? {
     if project === self.project { return tree.step(tensorId: tensorId) }
-    return await Task.detached { project.tree(items: false).step(tensorId: tensorId) }.value
+    return await project.read { $0.tree(items: false).step(tensorId: tensorId) }
   }
 
   /// A step's moodboard images and weights (empty when it had none).
   func moodboard(at id: StepID, in projectName: String) async -> [(image: CGImage, weight: Float)] {
     guard projectName == project.name else { return [] }
     let project = project
-    return await Task.detached { project.moodboard(at: id) }.value
+    return await project.read { $0.moodboard(at: id) }
   }
 
   /// Removes the steps from the project. Later steps may be renumbered, so each is found by its
@@ -304,6 +314,7 @@ final class HistoryStore {
       for item in items {
         if let clip = item.clip {
           let parent = try await project.deleteClip(frames: clip.frames)
+          Self.removeClipFiles(project: project.name, clipId: clip.clipId, tensorId: item.tensorId)
           if let current = currentTensorId, clip.frames.contains(current) { currentTensorId = parent }
         } else {
           let parent = try await project.delete(tensorId: item.tensorId)
@@ -411,7 +422,7 @@ final class HistoryStore {
     let key = "\(project.url.path)#\(item.previewId)#\(half)" as NSString
     if let cached = Self.thumbnails.object(forKey: key) { return cached }
     let project = project
-    let image = await Task.detached { project.thumbnail(previewId: item.previewId, half: half) }.value
+    let image = await project.read { $0.thumbnail(previewId: item.previewId, half: half) }
     if let image { Self.thumbnails.setObject(image, forKey: key) }
     return image
   }
@@ -419,35 +430,35 @@ final class HistoryStore {
   /// The full-resolution image, decoded from the project's tensor.
   func image(for item: HistoryItem) async -> CGImage? {
     let project = project
-    return await Task.detached { project.image(for: item) }.value
+    return await project.read { $0.image(for: item) }
   }
 
   /// An Edit step's input step and image, while that step still exists in `projectName`.
   func input(of item: HistoryItem, in projectName: String) async -> (id: StepID, image: CGImage)? {
     guard projectName == project.name, let tensorId = item.inputTensorId else { return nil }
     let project = project
-    return await Task.detached { project.input(of: item.id, tensorId: tensorId) }.value
+    return await project.read { $0.input(of: item.id, tensorId: tensorId) }
   }
 
   /// The full-resolution image of a step in `projectName` (when that's the current project).
   func image(at id: StepID, in projectName: String) async -> CGImage? {
     guard projectName == project.name else { return nil }
     let project = project
-    return await Task.detached { project.image(at: id) }.value
+    return await project.read { $0.image(at: id) }
   }
 
   /// A step's image tensor in `projectName` (when that's the current project).
   func tensorId(at id: StepID, in projectName: String) async -> Int64? {
     guard projectName == project.name else { return nil }
     let project = project
-    return await Task.detached { project.imageTensorId(at: id) }.value
+    return await project.read { $0.imageTensorId(at: id) }
   }
 
   /// The full-resolution image `tensorId` in `projectName` (when that's the current project).
   func image(tensorId: Int64, in projectName: String) async -> CGImage? {
     guard projectName == project.name else { return nil }
     let project = project
-    return await Task.detached { project.image(tensorId: tensorId) }.value
+    return await project.read { $0.image(tensorId: tensorId) }
   }
 
   /// Writes a newly generated image or clip to the output folder when Settings or the project
@@ -466,24 +477,29 @@ final class HistoryStore {
         guard let image else { throw ProjectError.badImage }
         file = (try Self.pngData(image, sidecar: item.sidecar), nil, "png")
       }
-      try await Task.detached {
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        // Steps can be renumbered when the history branches, so never overwrite a file.
-        var url = folder.appendingPathComponent(name).appendingPathExtension(file.extension)
-        var n = 2
-        while FileManager.default.fileExists(atPath: url.path) {
-          url = folder.appendingPathComponent("\(name) \(n)").appendingPathExtension(file.extension)
-          n += 1
-        }
-        if let video = file.video {
-          try FileManager.default.copyItem(at: video, to: url)
-        } else {
-          try file.data?.write(to: url, options: .withoutOverwriting)
-        }
-      }.value
+      try await Self.write(data: file.data, video: file.video, extension: file.extension, name: name, to: folder)
       return nil
     } catch {
       return "Saved to the project, but not to the output folder: \(error.localizedDescription)"
+    }
+  }
+
+  /// Writes a file into the output folder, under a name no file there has.
+  @concurrent private nonisolated static func write(
+    data: Data?, video: URL?, extension fileExtension: String, name: String, to folder: URL
+  ) async throws {
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    // Steps can be renumbered when the history branches, so never overwrite a file.
+    var url = folder.appendingPathComponent(name).appendingPathExtension(fileExtension)
+    var n = 2
+    while FileManager.default.fileExists(atPath: url.path) {
+      url = folder.appendingPathComponent("\(name) \(n)").appendingPathExtension(fileExtension)
+      n += 1
+    }
+    if let video {
+      try FileManager.default.copyItem(at: video, to: url)
+    } else {
+      try data?.write(to: url, options: .withoutOverwriting)
     }
   }
 
@@ -493,9 +509,7 @@ final class HistoryStore {
   func frames(of item: HistoryItem) async -> [CGImage] {
     guard let clip = item.clip else { return [] }
     let project = project
-    return await Task.detached {
-      clip.frames.compactMap { project.image(tensorId: $0) }
-    }.value
+    return await project.read { project in clip.frames.compactMap { project.image(tensorId: $0) } }
   }
 
   /// One frame of a clip, full size.
@@ -508,7 +522,7 @@ final class HistoryStore {
   func audio(of item: HistoryItem) async -> (samples: Tensor<Float>, sampleRate: Int)? {
     guard let audioId = item.clip?.audioId else { return nil }
     let project = project
-    let samples = await Task.detached { project.audio(id: audioId) }.value
+    let samples = await project.read { $0.audio(id: audioId) }
     return samples.map { ($0, ModelZoo.audioSampleRateForModel(item.sidecar.model)) }
   }
 
@@ -516,7 +530,7 @@ final class HistoryStore {
   func audioInput(of item: HistoryItem) async -> Tensor<Float>? {
     guard let audioId = item.clip?.inputAudioId else { return nil }
     let project = project
-    return await Task.detached { project.audio(id: audioId) }.value
+    return await project.read { $0.audio(id: audioId) }
   }
 
   /// The clip as an MP4 with its soundtrack and settings, written once into the caches folder
@@ -525,7 +539,7 @@ final class HistoryStore {
     guard let clip = item.clip else { throw ClipVideoError.noFrames }
     let codec = VideoCodec.current
     let url = Self.clipCache.appendingPathComponent(
-      "\(project.name)-\(clip.clipId)-\(item.tensorId)-\(codec.rawValue).mp4")
+      Self.clipFileName(project: project.name, clipId: clip.clipId, tensorId: item.tensorId, codec: codec))
     if FileManager.default.fileExists(atPath: url.path) { return url }
     if let pending = videoFiles[url] { return try await pending.value }
     let project = project
@@ -537,14 +551,19 @@ final class HistoryStore {
       let audio = audioId.flatMap { project.audio(id: $0) }.map { (samples: $0, sampleRate: sampleRate) }
       try FileManager.default.createDirectory(at: Self.clipCache, withIntermediateDirectories: true)
       // Written beside its final name, so a half-written file is never taken as done.
-      let partial = url.deletingPathExtension().appendingPathExtension("partial.mp4")
-      try await ClipVideo.write(
-        to: partial, count: clip.frames.count,
-        frame: { project.image(tensorId: clip.frames[$0]) },
-        framesPerSecond: clip.framesPerSecond, audio: audio?.samples,
-        audioSampleRate: audio?.sampleRate ?? 0, codec: codec, metadata: metadata)
-      try? FileManager.default.removeItem(at: url)
-      try FileManager.default.moveItem(at: partial, to: url)
+      let partial = url.deletingPathExtension().appendingPathExtension(Self.partialExtension)
+      do {
+        try await ClipVideo.write(
+          to: partial, count: clip.frames.count,
+          frame: { project.image(tensorId: clip.frames[$0]) },
+          framesPerSecond: clip.framesPerSecond, audio: audio?.samples,
+          audioSampleRate: audio?.sampleRate ?? 0, codec: codec, metadata: metadata)
+        try? FileManager.default.removeItem(at: url)
+        try FileManager.default.moveItem(at: partial, to: url)
+      } catch {
+        try? FileManager.default.removeItem(at: partial)
+        throw error
+      }
       return url
     }
     videoFiles[url] = task
@@ -557,6 +576,52 @@ final class HistoryStore {
 
   private nonisolated static var clipCache: URL {
     URL.cachesDirectory.appending(path: "Atelier/Clips", directoryHint: .isDirectory)
+  }
+
+  private nonisolated static let partialExtension = "partial.mp4"
+
+  private nonisolated static func clipFileName(
+    project: String, clipId: Int64, tensorId: Int64, codec: VideoCodec
+  ) -> String {
+    "\(project)-\(clipId)-\(tensorId)-\(codec.rawValue).mp4"
+  }
+
+  /// Removes a deleted clip's cached videos, in every codec.
+  nonisolated static func removeClipFiles(
+    in folder: URL = clipCache, project: String, clipId: Int64, tensorId: Int64
+  ) {
+    for codec in VideoCodec.allCases {
+      let name = clipFileName(project: project, clipId: clipId, tensorId: tensorId, codec: codec)
+      try? FileManager.default.removeItem(at: folder.appendingPathComponent(name))
+    }
+  }
+
+  /// Drops what the clip cache can't use at launch: videos cut off by a quit or a crash, videos in
+  /// a codec no longer chosen, and videos of projects that are gone or renamed.
+  @concurrent nonisolated static func pruneClipCache(keepingProject current: String) async {
+    let projects = Set(scanProjectNames() + [current])
+    pruneClipCache(in: clipCache, projects: projects, codec: .current)
+  }
+
+  nonisolated static func pruneClipCache(in folder: URL, projects: Set<String>, codec: VideoCodec) {
+    let fileManager = FileManager.default
+    for file in (try? fileManager.contentsOfDirectory(atPath: folder.path)) ?? [] {
+      let url = folder.appendingPathComponent(file)
+      if file.hasSuffix("." + partialExtension) {
+        try? fileManager.removeItem(at: url)
+        continue
+      }
+      guard file.hasSuffix(".mp4") else { continue }
+      // "<project>-<clip>-<tensor>-<codec>"; a project's name can hold dashes itself.
+      let parts = file.dropLast(4).split(separator: "-", omittingEmptySubsequences: false)
+      guard parts.count >= 4, Int64(parts[parts.count - 2]) != nil, Int64(parts[parts.count - 3]) != nil,
+            let fileCodec = VideoCodec(rawValue: String(parts[parts.count - 1]))
+      else { continue }
+      let project = parts.dropLast(3).joined(separator: "-")
+      if fileCodec != codec || !projects.contains(project) {
+        try? fileManager.removeItem(at: url)
+      }
+    }
   }
 
   /// What an exported video says about itself: Draw Things' summary as its description, the
@@ -660,7 +725,7 @@ final class HistoryStore {
   func importLegacyHistory() async {
     guard SessionState.isEnabled, !UserDefaults.standard.bool(forKey: Self.legacyImportedKey)
     else { return }
-    let legacy = await Task.detached { Self.scanLegacy(AppSettings.historyDirectory) }.value
+    let legacy = await Self.scanLegacy(AppSettings.historyDirectory)
     guard !legacy.isEmpty else {
       UserDefaults.standard.set(true, forKey: Self.legacyImportedKey)
       return
@@ -669,19 +734,19 @@ final class HistoryStore {
       ? project : Project(url: Self.url(for: Self.defaultProjectName))
     importProgress = (0, legacy.count)
     for (index, entry) in legacy.reversed().enumerated() {
-      let tensor = await Task.detached { () -> Tensor<FloatType>? in
-        guard let source = CGImageSourceCreateWithURL(entry.png as CFURL, nil),
-              let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
-        else { return nil }
-        return ImageTensor.tensor(from: image)
-      }.value
+      let tensor = await Self.legacyTensor(at: entry.png)
       if let tensor {
         let sidecar = entry.sidecar
-        _ = try? await target.append(
-          tensor: tensor, model: sidecar.model, prompt: sidecar.prompt,
-          negativePrompt: sidecar.negativePrompt, seed: sidecar.seed,
-          settings: sidecar.configuration, createdAt: sidecar.createdAt,
-          duration: sidecar.durationSeconds)
+        do {
+          _ = try await target.append(
+            tensor: tensor, model: sidecar.model, prompt: sidecar.prompt,
+            negativePrompt: sidecar.negativePrompt, seed: sidecar.seed,
+            settings: sidecar.configuration, createdAt: sidecar.createdAt,
+            duration: sidecar.durationSeconds)
+        } catch {
+          // The old file stays where it is.
+          Log.history.error("Couldn't import \(entry.png.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
       }
       importProgress = (index + 1, legacy.count)
     }
@@ -690,7 +755,14 @@ final class HistoryStore {
     if target === project { await reload() }
   }
 
-  private nonisolated static func scanLegacy(_ root: URL) -> [(png: URL, sidecar: Sidecar)] {
+  @concurrent private nonisolated static func legacyTensor(at png: URL) async -> Tensor<FloatType>? {
+    guard let source = CGImageSourceCreateWithURL(png as CFURL, nil),
+          let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+    else { return nil }
+    return ImageTensor.tensor(from: image)
+  }
+
+  @concurrent private nonisolated static func scanLegacy(_ root: URL) async -> [(png: URL, sidecar: Sidecar)] {
     let decoder = JSONDecoder()
     decoder.dateDecodingStrategy = .iso8601
     let fileManager = FileManager.default
@@ -714,7 +786,7 @@ final class HistoryStore {
 }
 
 /// Inserts and reads PNG iTXt chunks.
-enum PNGText {
+nonisolated enum PNGText {
   /// Inserts an iTXt chunk right after IHDR.
   static func inserting(keyword: String, text: String, into png: Data) -> Data? {
     let bytes = [UInt8](png)
@@ -771,7 +843,7 @@ enum PNGText {
 }
 
 /// Minimal JSON tree for dumping Configuration, which isn't Codable in MGK.
-enum JSONValue: Codable, Hashable {
+nonisolated enum JSONValue: Codable, Hashable, Sendable {
   case null
   case bool(Bool)
   case number(Double)
@@ -856,7 +928,7 @@ enum JSONValue: Codable, Hashable {
 
 /// A PNG to drag into Finder (as a file) or another app (as image data), encoded on drop; a
 /// clip drags as its MP4.
-struct PNGExport: Transferable, Identifiable {
+nonisolated struct PNGExport: Transferable, Identifiable {
   /// The image tensor.
   var id: Int64
   var name: String
@@ -866,9 +938,7 @@ struct PNGExport: Transferable, Identifiable {
 
   static var transferRepresentation: some TransferRepresentation {
     FileRepresentation(exportedContentType: .mpeg4Movie) { export in
-      let folder = FileManager.default.temporaryDirectory
-        .appendingPathComponent(UUID().uuidString, isDirectory: true)
-      try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+      let folder = TemporaryFiles.newDragFolder()
       let file = folder.appendingPathComponent(export.name).appendingPathExtension("mp4")
       guard let video = export.video else { throw ClipVideoError.noFrames }
       try FileManager.default.copyItem(at: try await video(), to: file)
@@ -877,9 +947,7 @@ struct PNGExport: Transferable, Identifiable {
     .exportingCondition { $0.video != nil }
     .suggestedFileName { $0.name + ".mp4" }
     FileRepresentation(exportedContentType: .png) { export in
-      let folder = FileManager.default.temporaryDirectory
-        .appendingPathComponent(UUID().uuidString, isDirectory: true)
-      try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+      let folder = TemporaryFiles.newDragFolder()
       let file = folder.appendingPathComponent(export.name).appendingPathExtension("png")
       try await export.data().write(to: file)
       return SentTransferredFile(file)

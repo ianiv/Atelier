@@ -1,4 +1,4 @@
-import _MediaGenerationKit
+@preconcurrency import _MediaGenerationKit
 import SwiftUI
 
 struct LoRAEditor: View {
@@ -58,6 +58,7 @@ struct LoRAEditor: View {
             {
               Image(systemName: "exclamationmark.triangle").foregroundStyle(.yellow)
                 .help("Made for \(lora.family), so it's skipped with this model.")
+                .accessibilityLabel("Made for \(lora.family), so it's skipped with this model.")
             }
             Spacer()
             Button {
@@ -69,6 +70,7 @@ struct LoRAEditor: View {
             }
             .buttonStyle(.borderless)
             .help("Remove this LoRA")
+            .accessibilityLabel("Remove this LoRA")
           }
           HStack(spacing: 6) {
             Slider(

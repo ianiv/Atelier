@@ -9,6 +9,10 @@
 CODE_SIGN_IDENTITY = -
 DEVELOPMENT_TEAM =
 
+// Empty for the app. Scripts/test.sh sets it so the unit tests' copy of the app is a different app to
+// macOS: it runs beside an open Atelier, and has its own settings rather than the user's.
+ATELIER_BUNDLE_SUFFIX =
+
 // SwiftUI's VideoPlayer (the clip player) needs AVKit itself, which Swift doesn't link for it.
 OTHER_LDFLAGS = $(inherited) -framework AVKit
 

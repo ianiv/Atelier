@@ -1,5 +1,5 @@
-import _MediaGenerationKit
-import DataModels
+@preconcurrency import _MediaGenerationKit
+@preconcurrency import DataModels
 import Foundation
 import ProjectFormat
 
@@ -9,7 +9,7 @@ import ProjectFormat
 /// causal inference is "enabled" when its value is above zero.
 ///
 /// The two schemas declare their enums in the same order, so enums convert by raw value.
-enum ProjectMapping {
+nonisolated enum ProjectMapping {
   struct Step {
     var lineage: Int64
     var logicalTime: Int64
