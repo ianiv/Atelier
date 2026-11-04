@@ -57,6 +57,12 @@ final class CreateModel {
     /// The queue was paused for going to the background, not by the user.
     @ObservationIgnored private var pausedForBackground = false
     @ObservationIgnored private var savedForBackground = false
+    @ObservationIgnored private let backgroundTask = BackgroundQueueTask()
+    /// The job the background task last reported on, and how many it has finished.
+    @ObservationIgnored private var backgroundJob: UUID?
+    @ObservationIgnored private var backgroundJobsDone = 0
+    /// What the engine was last told about a run being under way (`setEngineGenerating`).
+    @ObservationIgnored private var engineIsGenerating = false
   #endif
 
   var prompt = "" {
@@ -620,13 +626,16 @@ final class CreateModel {
     AppLifecycle.onResignActive { [weak self] in self?.saveSession() }
     AppLifecycle.onWillTerminate { [weak self] in self?.saveQueue() }
     #if os(iOS)
-      // iPadOS stops GPU work in the background: hold the queue there and pick it up on return.
+      backgroundTask.onStart = { [weak self] in self?.backgroundTaskStarted() }
+      backgroundTask.onExpire = { [weak self] in self?.backgroundTaskExpired() }
+      // iPadOS stops GPU work in the background, unless a background task is running: hold the
+      // queue there and pick it up on return.
       AppLifecycle.onEnterBackground { [weak self] in
         guard let self else { return }
         // iPadOS can end the app from here on, without warning.
         saveQueue()
         savedForBackground = true
-        guard !queue.isPaused else { return }
+        guard !queue.isPaused, !backgroundTask.isRunning else { return }
         pausedForBackground = true
         setQueuePaused(true)
       }
@@ -1162,9 +1171,68 @@ final class CreateModel {
       // A job can end after the app went to the background: don't bring it back at the next launch.
       defer { if savedForBackground { saveQueue() } }
     #endif
+    defer { syncBackgroundTask() }
     guard generationTask == nil, let job = queue.startNext() else { return }
     run(job)
   }
+
+  /// Keeps the background task in step with the queue. Called as jobs start and end and as they
+  /// make progress.
+  private func syncBackgroundTask() {
+    #if os(iOS)
+      if (queue.running != nil) != engineIsGenerating, GenerationEngine.setEngineGenerating(!engineIsGenerating) {
+        engineIsGenerating.toggle()
+      }
+      guard let job = queue.running else {
+        backgroundTask.end()
+        backgroundJob = nil
+        backgroundJobsDone = 0
+        return
+      }
+      if job.id != backgroundJob {
+        if backgroundJob != nil { backgroundJobsDone += 1 }
+        backgroundJob = job.id
+      }
+      let title =
+        if job.export != nil {
+          "Exporting a video"
+        } else if job.request?.configuration.videoModel != nil {
+          "Generating a video"
+        } else {
+          "Generating images"
+        }
+      let jobs = backgroundJobsDone + 1 + (queue.isPaused ? 0 : queue.waiting.count)
+      let subtitle =
+        jobs > 1 ? "\(backgroundJobsDone + 1) of \(jobs)" : "Step \(step) of \(max(totalSteps, step))"
+      // A request can only be made from the foreground; one made then covers the rest of the queue.
+      if AppLifecycle.isActive { backgroundTask.begin(title: title, subtitle: subtitle) }
+      let fraction = Double(step) / Double(max(totalSteps, 1))
+      backgroundTask.update(
+        completed: (Double(backgroundJobsDone) + min(fraction, 1)) / Double(jobs), title: title,
+        subtitle: subtitle)
+    #endif
+  }
+
+  #if os(iOS)
+    /// The task can start after the app already went to the background and held the queue.
+    private func backgroundTaskStarted() {
+      syncBackgroundTask()
+      guard pausedForBackground else { return }
+      pausedForBackground = false
+      setQueuePaused(false)
+    }
+
+    /// The system ended the background task: hold the queue as if the app had gone to the
+    /// background without one, with the running generation back in front to run again. In the
+    /// foreground the user may have stopped it from the system's display, so it stays paused
+    /// until they resume it.
+    private func backgroundTaskExpired() {
+      if !AppLifecycle.isActive { pausedForBackground = true }
+      queue.isPaused = true
+      queue.returnRunningToFront()
+      cancel()
+    }
+  #endif
 
   private func run(_ job: JobQueue.Job) {
     if let export = job.export { return run(export, id: job.id) }
@@ -1294,6 +1362,7 @@ final class CreateModel {
           Task { @MainActor in
             guard self.generationTask != nil, self.phase != .cancelling else { return }
             self.step = Int(fraction * 1_000)
+            self.syncBackgroundTask()
           }
         }
         status = .exported(export.destination)
@@ -1557,6 +1626,7 @@ final class CreateModel {
         noteStep(step, of: total)
       }
     }
+    syncBackgroundTask()
   }
 
   private func noteStep(_ step: Int, of total: Int) {

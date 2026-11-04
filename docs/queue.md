@@ -43,7 +43,9 @@ Waiting images, and the one being made, are kept when you quit and come back pau
 
 ## On iPad
 
-The queue pauses when you switch away from Atelier, because iPadOS doesn't let apps use the GPU in the background, and resumes when you come back (unless you paused it yourself). An image that was being made when you switched away may fail; Retry runs it again. The screen stays awake while an image is being made.
+The queue keeps running when you switch away from Atelier, on iPads that can use the GPU in the background, with its progress in the system's display. You can stop it from that display, and iPadOS can stop it too: the queue pauses, the generation that was running goes back to the front to start again, and the queue resumes when you come back (if you stopped it while in Atelier, it stays paused until you resume it).
+
+On an iPad that can't do this, or when iPadOS turns it down, the queue pauses when you switch away and resumes when you come back (unless you paused it yourself). An image that was being made when you switched away may fail; Retry runs it again. The screen stays awake while an image is being made.
 
 ## Agents
 

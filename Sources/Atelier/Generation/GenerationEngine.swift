@@ -428,6 +428,18 @@ actor GenerationEngine {
     return URL(fileURLWithPath: path, isDirectory: true)
   }
 
+  #if os(iOS)
+    /// Tells the engine a run is under way. MGK doesn't, and without it `ModelPreloader` answers
+    /// going to the background by starting a UIKit background task that waits for the generation
+    /// queue: with a run on that queue the task can't end, so iPadOS ends the app about 30 seconds
+    /// later. False until the engine exists (MGK creates it on the first run).
+    @MainActor static func setEngineGenerating(_ isGenerating: Bool) -> Bool {
+      guard let generator = engineResources()?.generator else { return false }
+      if isGenerating { generator.startGenerating() } else { generator.stopGenerating() }
+      return true
+    }
+  #endif
+
   /// Hands the Performance settings to the engine through the same workspace dictionary Draw
   /// Things writes them to. Its model preloader subscribes to those keys and applies a change
   /// (dropping cached weights when needed) on the generation queue, ahead of the next run.

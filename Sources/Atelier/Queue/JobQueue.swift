@@ -173,6 +173,19 @@ final class JobQueue {
     lastLine = nil
   }
 
+  /// Puts the running generation back at the front of the queue, to run again from the start, for
+  /// when the system stops it. False when it can't be run again later: thumbnails and agents' jobs
+  /// answer a caller, and an export's placeholder file goes when it's stopped.
+  @discardableResult
+  func returnRunningToFront() -> Bool {
+    guard var job = running, job.request != nil, !job.fromAgent, job.styleThumbnail == nil else { return false }
+    running = nil
+    job.status = .waiting
+    job.startedAt = nil
+    waiting.insert(job, at: 0)
+    return true
+  }
+
   /// Takes a waiting job out of the queue; returns it if it was there.
   @discardableResult
   func removeWaiting(_ id: UUID) -> Job? {

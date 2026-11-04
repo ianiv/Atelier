@@ -48,7 +48,14 @@ final nonisolated class Project: Sendable {
 
   init(url: URL) {
     self.url = url
-    workspace = SQLiteWorkspace(filePath: url.path, fileProtectionLevel: .noProtection)
+    #if os(iOS)
+      // Readable while the iPad is locked, once it's been unlocked since starting, as the queue
+      // needs when it runs in the background. Applies to files as they're created.
+      let protection = SQLiteWorkspace.FileProtectionLevel.completeFileProtectionUntilFirstUserAuthentication
+    #else
+      let protection = SQLiteWorkspace.FileProtectionLevel.noProtection
+    #endif
+    workspace = SQLiteWorkspace(filePath: url.path, fileProtectionLevel: protection)
   }
 
   deinit {
