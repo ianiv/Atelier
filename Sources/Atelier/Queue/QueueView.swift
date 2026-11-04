@@ -153,21 +153,25 @@ struct QueueRow: View {
         Image(systemName: "film")
           .foregroundStyle(.secondary)
           .help(request.audio != nil ? "Video, with an audio file" : "Video")
+          .accessibilityLabel(request.audio != nil ? "Video, with an audio file" : "Video")
       }
       if request.canvas != nil {
         Image(systemName: "photo")
           .foregroundStyle(.secondary)
           .help("Edit: starts from the canvas as it was when queued")
+          .accessibilityLabel("Edit: starts from the canvas as it was when queued")
       }
       if job.fromAgent {
         Image(systemName: "network")
           .foregroundStyle(.secondary)
           .help("Queued by an agent")
+          .accessibilityLabel("Queued by an agent")
       }
       if let style = job.styleThumbnail {
         Image(systemName: "paintpalette")
           .foregroundStyle(.secondary)
           .help("Thumbnail for the style “\(style)”")
+          .accessibilityLabel("Thumbnail for the style “\(style)”")
       }
       status
     }
@@ -200,11 +204,11 @@ struct QueueRow: View {
         ProgressView().controlSize(.small)
       }
     case .finished, .exported, .madeThumbnail:
-      Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).help("Finished")
+      Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).help("Finished").accessibilityLabel("Finished")
     case .failed:
-      Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red).help("Failed")
+      Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red).help("Failed").accessibilityLabel("Failed")
     case .cancelled:
-      Image(systemName: "xmark.circle").foregroundStyle(.secondary).help("Cancelled")
+      Image(systemName: "xmark.circle").foregroundStyle(.secondary).help("Cancelled").accessibilityLabel("Cancelled")
     }
   }
 
@@ -234,7 +238,7 @@ struct ExportQueueRow: View {
     HStack(spacing: 10) {
       ZStack {
         Color.quaternaryLabel
-        Image(systemName: "square.and.arrow.up").foregroundStyle(.secondary)
+        Image(systemName: "square.and.arrow.up").foregroundStyle(.secondary).accessibilityHidden(true)
       }
       .frame(width: 48, height: 48)
       .clipShape(.rect(cornerRadius: 4))
@@ -262,6 +266,7 @@ struct ExportQueueRow: View {
       Image(systemName: "film.stack")
         .foregroundStyle(.secondary)
         .help("Timeline export")
+        .accessibilityLabel("Timeline export")
       status
     }
     .padding(.vertical, 2)
@@ -284,11 +289,11 @@ struct ExportQueueRow: View {
       ProgressView(value: Double(create.step), total: Double(max(create.totalSteps, 1)))
         .frame(width: 80)
     case .finished, .exported, .madeThumbnail:
-      Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).help("Exported")
+      Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).help("Exported").accessibilityLabel("Exported")
     case .failed:
-      Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red).help("Failed")
+      Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red).help("Failed").accessibilityLabel("Failed")
     case .cancelled:
-      Image(systemName: "xmark.circle").foregroundStyle(.secondary).help("Cancelled")
+      Image(systemName: "xmark.circle").foregroundStyle(.secondary).help("Cancelled").accessibilityLabel("Cancelled")
     }
   }
 

@@ -818,6 +818,11 @@ private struct TimelineBin: View {
             .contentShape(.rect)
             .help(item.sidecar.prompt)
             .onTapGesture(count: 2) { append(item) }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(item.accessibilityDescription)
+            .accessibilityActions {
+              Button("Add to Timeline") { append(item) }
+            }
             .draggable(TimelineClipDrag.text(item))
             .contextMenu {
               Button("Add to Timeline") { append(item) }

@@ -69,6 +69,9 @@ struct InspectorView: View {
         }
         .contentShape(.rect)
         .onTapGesture { changedExpanded.toggle() }
+        .accessibleButton("Changed: \(changed.count)", value: changedExpanded ? "Expanded" : "Collapsed") {
+          changedExpanded.toggle()
+        }
       } content: {
         ForEach(changed) { descriptor in
           SettingRow(descriptor: descriptor).opacity(descriptor.applies(traits) ? 1 : 0.5)
@@ -190,6 +193,9 @@ struct InspectorSection: View {
             .frame(minHeight: 26)
             .contentShape(.rect)
             .onTapGesture { moreExpanded.toggle() }
+            .accessibleButton("More: \(tucked.count)", value: moreExpanded ? "Expanded" : "Collapsed") {
+              moreExpanded.toggle()
+            }
             if moreExpanded {
               ForEach(tucked) { SettingRow(descriptor: $0) }
             }
@@ -210,6 +216,7 @@ struct InspectorSection: View {
         .font(.caption2.weight(.bold))
         .rotationEffect(.degrees(expanded ? 90 : 0))
         .frame(width: 10)
+        .accessibilityHidden(true)
       if let toggle {
         Toggle(section.title, isOn: SettingBindings(descriptor: toggle, model: model, undoManager: undoManager).bool)
           .checkboxToggleStyle()
@@ -223,7 +230,11 @@ struct InspectorSection: View {
           .disabled(model.enableFile(for: enable) == nil)
           .help("Use the \(section.title.lowercased()). Remembers the model you last picked.")
       }
+      // The header holds a checkbox and a reset button, so it can't be one button as a whole.
       Text(section.title)
+        .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { layouts.setExpanded(section, !expanded) }
       Spacer()
       if !changed.isEmpty {
         Button {
@@ -233,6 +244,7 @@ struct InspectorSection: View {
         }
         .buttonStyle(.borderless)
         .help("Reset \(section.title) to the model defaults")
+        .accessibilityLabel("Reset \(section.title) to the model defaults")
       }
     }
     // The whole header (except the checkbox and reset button) expands and collapses the section.
@@ -266,6 +278,9 @@ struct ClickableLabel: View {
       .frame(maxWidth: .infinity, alignment: .leading)
       .contentShape(.rect)
       .onTapGesture { withAnimation { isExpanded.toggle() } }
+      .accessibleButton(title, value: isExpanded ? "Expanded" : "Collapsed") {
+        withAnimation { isExpanded.toggle() }
+      }
   }
 }
 
@@ -343,6 +358,7 @@ struct SettingRow: View {
             .foregroundStyle(Color.accentColor)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Reset \(descriptor.title) to the model default")
         .help(
           "Changed from the model default (\(SettingFormat.display(model.defaultValue(descriptor), for: descriptor))). Click to reset."
         )

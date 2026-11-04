@@ -163,7 +163,7 @@ struct AudioClipChip: View {
     let audio = model.audio
     VStack(alignment: .leading, spacing: 4) {
       HStack(spacing: 4) {
-        Image(systemName: "waveform")
+        Image(systemName: "waveform").accessibilityHidden(true)
         Text("Audio").font(.caption.weight(.semibold))
         Spacer(minLength: 0)
         if audio.url != nil {

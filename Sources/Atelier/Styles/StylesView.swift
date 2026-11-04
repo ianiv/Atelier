@@ -289,6 +289,14 @@ struct StylesView: View {
         TapGesture(count: 2).onEnded {
           if styles.thumbnail(style.id) != nil { styles.viewingThumbnail = style.id }
         })
+      .accessibilityElement(children: .combine)
+      .accessibilityAddTraits(selection.contains(style.id) ? [.isButton, .isSelected] : .isButton)
+      .accessibilityAction { click(style.id) }
+      .accessibilityActions {
+        if styles.thumbnail(style.id) != nil {
+          Button("Show Thumbnail Full Size") { styles.viewingThumbnail = style.id }
+        }
+      }
       .contextMenu { menu(for: selection.contains(style.id) ? selection : [style.id]) }
       .id(style.id)
   }
@@ -406,6 +414,8 @@ struct StylesView: View {
           .foregroundStyle(.tint)
           .opacity(create.styleID == style.id ? 1 : 0)
           .help("Used on Create")
+          .accessibilityLabel("Used on Create")
+          .accessibilityHidden(create.styleID != style.id)
       }
       .frame(width: gridSide)
     }
@@ -425,6 +435,8 @@ struct StylesView: View {
           .foregroundStyle(.tint)
           .opacity(create.styleID == style.id ? 1 : 0)
           .help("Used on Create")
+          .accessibilityLabel("Used on Create")
+          .accessibilityHidden(create.styleID != style.id)
       }
       Text(style.template)
         .font(.callout)
@@ -638,6 +650,12 @@ struct StyleThumbnail: View {
     // Off for the placeholder, so a click there reaches the row beneath and selects it.
     .gesture(TapGesture().onEnded { open?() }, including: opens ? .all : .subviews)
     .help(opens ? "Show full size" : "")
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(styles.thumbnail(id) == nil ? "No thumbnail" : "Thumbnail")
+    .accessibilityAddTraits(opens ? [.isImage, .isButton] : .isImage)
+    .accessibilityAction { if opens { open?() } }
+    // In a grid cell the cell itself is the control, and it says the style's name.
+    .accessibilityHidden(open == nil)
     .task(id: id) { await styles.loadThumbnail(id) }
   }
 }
@@ -929,6 +947,9 @@ struct ThumbnailViewer: View {
             // Pixels stay sharp when zoomed well in, for a close look at the detail.
             .interpolation(scale > 2 ? .none : .high)
             .frame(width: pixels.width * scale, height: pixels.height * scale)
+            .accessibilityElement()
+            .accessibilityLabel("Thumbnail, full size")
+            .accessibilityAddTraits(.isImage)
             .offset(offset)
         } else if loaded {
           ContentUnavailableView("No Thumbnail", systemImage: "photo")

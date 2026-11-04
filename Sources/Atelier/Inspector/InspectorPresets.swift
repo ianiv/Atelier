@@ -229,6 +229,7 @@ struct SearchField: View {
     HStack(spacing: 4) {
       Image(systemName: "magnifyingglass")
         .foregroundStyle(.secondary)
+        .accessibilityHidden(true)
       TextField(prompt, text: $text)
         .textFieldStyle(.plain)
       // Hidden rather than removed while empty, so the text doesn't shift.

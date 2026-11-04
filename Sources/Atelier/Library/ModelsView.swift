@@ -267,6 +267,7 @@ struct ModelStatus: View {
         }
         .buttonStyle(.borderless)
         .help("Cancel download")
+        .accessibilityLabel("Cancel download")
       }
       .help(Self.describe(download))
     } else if model.isDownloaded {
@@ -419,6 +420,7 @@ struct ModelImportSheet: View {
           }
           .buttonStyle(.borderless)
           .help("Don't import this file")
+          .accessibilityLabel("Don't import this file")
         }
       }
       Group {

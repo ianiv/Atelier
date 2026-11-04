@@ -410,6 +410,15 @@ struct HistoryView: View {
       .contentShape(.rect)
       .gesture(tapGesture(item))
       .help(item.sidecar.prompt)
+      .accessibleButton(
+        item.accessibilityDescription, isSelected: selection.contains(item.tensorId)
+      ) {
+        pick(item)
+        gridFocused = true
+      }
+      .accessibilityActions {
+        Button("Use") { use(item, newSeed: false) }
+      }
       .draggable(containerItemID: item.tensorId)
       .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.gridSpace)) } action: {
         frames[item.tensorId] = $0
@@ -873,6 +882,7 @@ struct RatingBadge: View {
       .font(.caption2)
       .foregroundStyle(.yellow)
       .help(stars == 1 ? "Rated 1 star" : "Rated \(stars) stars")
+      .accessibilityLabel(stars == 1 ? "Rated 1 star" : "Rated \(stars) stars")
     if plain {
       label
     } else {
@@ -900,6 +910,8 @@ struct ClipBadge: View {
     .background(.black.opacity(0.55), in: .capsule)
     .foregroundStyle(.white)
     .help(Self.length(clip))
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(Self.length(clip))
   }
 
   /// "5.0 seconds, 121 frames at 24 fps, with sound".
@@ -958,6 +970,9 @@ struct Thumbnail: View {
           .aspectRatio(contentMode: fill ? .fill : .fit)
       }
     }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(item.accessibilityDescription)
+    .accessibilityAddTraits(.isImage)
     .task(id: "\(item.previewId)#\(half)") {
       image = await history.thumbnail(for: item, half: half)
     }

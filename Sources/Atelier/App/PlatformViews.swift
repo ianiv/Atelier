@@ -157,6 +157,20 @@ private struct DetailInspector<Selection: Equatable, Detail: View>: ViewModifier
   }
 }
 
+extension View {
+  /// Exposes something that only responds to a tap as one button to VoiceOver and Full Keyboard
+  /// Access, leaving how it looks alone. For views with no controls of their own inside.
+  func accessibleButton(
+    _ label: String, value: String? = nil, isSelected: Bool = false, action: @escaping () -> Void
+  ) -> some View {
+    accessibilityElement(children: .ignore)
+      .accessibilityLabel(label)
+      .accessibilityValue(value ?? "")
+      .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+      .accessibilityAction { action() }
+  }
+}
+
 /// A row of buttons in a detail pane's Form. On iPad, where buttons take more room, they go one
 /// per line when the row doesn't fit; the Mac keeps the row.
 struct ButtonRow<Content: View>: View {

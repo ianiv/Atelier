@@ -23,6 +23,14 @@ nonisolated struct HistoryItem: Identifiable, Hashable, Sendable {
 
   var isVideo: Bool { clip != nil }
 
+  /// What VoiceOver says for the image or video: the start of its prompt.
+  var accessibilityDescription: String {
+    let prompt = sidecar.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    let kind = isVideo ? "Video" : "Image"
+    if prompt.isEmpty { return kind }
+    return "\(kind): \(prompt.count > 80 ? prompt.prefix(80) + "…" : prompt)"
+  }
+
   // Step ids change when a fork or a delete renumbers steps; the image tensor doesn't.
   static func == (lhs: HistoryItem, rhs: HistoryItem) -> Bool { lhs.tensorId == rhs.tensorId }
   func hash(into hasher: inout Hasher) { hasher.combine(tensorId) }

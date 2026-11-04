@@ -158,6 +158,8 @@ struct TimelineTrack<Menu: View>: View {
       .gesture(clipGesture(segment, index: index))
       .contextMenu { menu(segment.entry) }
       .help(segment.item.sidecar.prompt)
+      .accessibilityElement(children: .contain)
+      .accessibilityLabel(segment.item.accessibilityDescription)
   }
 
   /// A muted or sound mark over a clip's corner.
@@ -172,6 +174,7 @@ struct TimelineTrack<Menu: View>: View {
         .foregroundStyle(.white)
         .padding(4)
         .allowsHitTesting(false)
+        .accessibilityLabel(segment.entry.muted ? "Muted" : "Has sound")
     }
   }
 
@@ -305,6 +308,7 @@ private struct Filmstrip: View {
       }
     }
     .frame(width: width, height: height)
+    .accessibilityHidden(true)
   }
 
   /// The clip's item showing frame `index`'s thumbnail.
@@ -344,6 +348,8 @@ private struct CrossfadeMark: View {
           .strokeBorder(.white.opacity(0.85), lineWidth: 1)
       }
     }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel("Crossfade")
   }
 }
 

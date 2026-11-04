@@ -342,6 +342,15 @@ private struct MoodboardThumbnail: View {
         .contentShape(.rect)
         .onTapGesture { editing = true }
         .onHover { hovering = $0 }
+        .accessibleButton(
+          "Moodboard image", value: Double(item.weight).formatted(.percent.precision(.fractionLength(0)))
+        ) {
+          editing = true
+        }
+        // The Remove button above only appears on hover.
+        .accessibilityActions {
+          Button("Remove") { moodboard.remove(item.id) }
+        }
       Text(
         [role, Double(item.weight).formatted(.percent.precision(.fractionLength(0)))]
           .compactMap(\.self).joined(separator: " · ")
