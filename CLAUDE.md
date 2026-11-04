@@ -33,7 +33,7 @@ build/Atelier.app/Contents/MacOS/Atelier --generate --model <file.ckpt> --prompt
 build/Atelier.app/Contents/MacOS/Atelier --queue-check --project <scratch project> [--model M] [--steps N] --quit
 ```
 
-Other checks: `--project-check`, `--edit-input-check`, `--inspector-check`, `--library-check`, `--ux-check`, `--timeline-check`, `--timeline-export-check`, `--upscale-check`, `--flashvsr-check`, `--model-folders-check`, `--styles-check`, `--cleanup-check`, `--engine-check`, `--playback-check`, `--reuse latest|STEP`, `--resize-bench`, `--show <section>`. Usage for each is in the doc comment at the top of its `Automation*.swift` file. Always pass `--project NAME` for checks that write, so the user's current project isn't touched; scripted runs also skip saving `SessionState`. These need real models in the user's models folder — never hardcode its path. Automation is Mac-only (`#if os(macOS)`).
+Other checks: `--project-check`, `--edit-input-check`, `--inspector-check`, `--library-check`, `--ux-check`, `--timeline-check`, `--timeline-export-check`, `--upscale-check`, `--flashvsr-check`, `--model-folders-check`, `--styles-check`, `--cleanup-check`, `--engine-check`, `--playback-check`, `--remote-check`, `--reuse latest|STEP`, `--resize-bench`, `--show <section>`. Usage for each is in the doc comment at the top of its `Automation*.swift` file. Always pass `--project NAME` for checks that write, so the user's current project isn't touched; scripted runs also skip saving `SessionState`. These need real models in the user's models folder — never hardcode its path. Automation is Mac-only (`#if os(macOS)`).
 
 ## Architecture
 
@@ -51,6 +51,7 @@ Core flow:
 - **Library** — `ModelLibrary`: download catalog, downloads, checkpoint/LoRA import (registered with the running engine via `ModelZoo`/`LoRAZoo`), MOSS 8-bit copies.
 - **Timeline / Upscale** — the Video Editor composes clips (by first-frame tensor id) with AVFoundation; upscaling uses Apple Super Resolution or FlashVSR+ (`Upscale/FlashVSR`).
 - **Agents** (Mac only) — `AgentServer` is an MCP server (Streamable HTTP, JSON-RPC over POST) on `127.0.0.1:7862` via `LoopbackHTTPServer`; `AgentTools` defines tools. Agent runs join the same `JobQueue` and can read/change the Create screen. User docs in `MCP.md`.
+- **Compute** (`Remote/`) — any copy can serve jobs to paired devices (`RemoteServer`) and run jobs on a paired server (`RemoteBackend`, a `GenerationBackend`, reached through `CreateModel.backend(for:)`), over Network.framework with TLS-PSK and per-device keys in the Keychain. A device's job joins this machine's `JobQueue`; the client's project is the only copy of the work.
 - **App** — `AtelierApp` wires the stores; `AppSettings` holds paths (models dir defaults to `~/Documents/Models` or `DRAWTHINGS_MODELS_DIR`); `Updater` is Sparkle (Mac only).
 
 ## Conventions

@@ -88,12 +88,13 @@ struct QueueView: View {
       Button(Finder.showTitle) { Finder.reveal([url]) }
       Button("Export Again") { create.retry(job.id) }
       Button("Remove from List") { queue.removeRecent(job.id) }
-    case .madeThumbnail:
+    case .madeThumbnail, .ranForDevice:
       Button("Remove from List") { queue.removeRecent(job.id) }
     case .failed, .cancelled:
-      // A thumbnail job's result goes back to the Styles screen that queued it, so it isn't rerun here.
+      // A thumbnail's result goes back to the Styles screen that queued it, and a paired device's to
+      // that device, so they aren't rerun here.
       Button("Retry") { create.retry(job.id) }
-        .disabled(job.styleThumbnail != nil)
+        .disabled(job.styleThumbnail != nil || job.remoteDevice != nil)
       Button("Remove from List") { queue.removeRecent(job.id) }
     }
   }
@@ -167,6 +168,12 @@ struct QueueRow: View {
           .help("Queued by an agent")
           .accessibilityLabel("Queued by an agent")
       }
+      if let device = job.remoteDevice {
+        Image(systemName: "laptopcomputer.and.ipad")
+          .foregroundStyle(.secondary)
+          .help("Running for \(device)")
+          .accessibilityLabel("Running for \(device)")
+      }
       if let style = job.styleThumbnail {
         Image(systemName: "paintpalette")
           .foregroundStyle(.secondary)
@@ -203,7 +210,7 @@ struct QueueRow: View {
       } else {
         ProgressView().controlSize(.small)
       }
-    case .finished, .exported, .madeThumbnail:
+    case .finished, .exported, .madeThumbnail, .ranForDevice:
       Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).help("Finished").accessibilityLabel("Finished")
     case .failed:
       Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red).help("Failed").accessibilityLabel("Failed")
@@ -288,7 +295,7 @@ struct ExportQueueRow: View {
     case .running:
       ProgressView(value: Double(create.step), total: Double(max(create.totalSteps, 1)))
         .frame(width: 80)
-    case .finished, .exported, .madeThumbnail:
+    case .finished, .exported, .madeThumbnail, .ranForDevice:
       Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).help("Exported").accessibilityLabel("Exported")
     case .failed:
       Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red).help("Failed").accessibilityLabel("Failed")

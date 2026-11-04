@@ -17,6 +17,7 @@ nonisolated enum Log {
   static let export = Logger(subsystem: subsystem, category: "export")
   static let create = Logger(subsystem: subsystem, category: "create")
   static let inspector = Logger(subsystem: subsystem, category: "inspector")
+  static let remote = Logger(subsystem: subsystem, category: "remote")
 
   /// Runs `body`, logging its error as what failed. Returns the error for callers that also tell
   /// the user; `@discardableResult` for the rest.

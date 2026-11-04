@@ -13,6 +13,7 @@ struct AtelierApp: App {
   @State private var presets: PresetStore
   @State private var styles: StyleStore
   @State private var library: ModelLibrary
+  @State private var remoteServer: RemoteServer
   #if os(macOS)
     @State private var agents: AgentServer
     @State private var updater = Updater()
@@ -46,6 +47,7 @@ struct AtelierApp: App {
     _presets = State(initialValue: presets)
     let library = ModelLibrary(create: create)
     _library = State(initialValue: library)
+    _remoteServer = State(initialValue: RemoteServer(create: create, library: library))
     if SessionState.isEnabled {
       let current = history.project.name
       Task {
@@ -80,6 +82,7 @@ struct AtelierApp: App {
           .environment(presets)
           .environment(styles)
           .environment(library)
+          .environment(remoteServer)
           .environment(fileDialogs)
       }
       #if os(macOS)
@@ -164,6 +167,7 @@ struct AtelierApp: App {
     Settings {
       SettingsTabs(agents: agents)
         .environment(create)
+        .environment(remoteServer)
     }
     #endif
   }
@@ -195,6 +199,9 @@ struct SettingsTabs: View {
       }
       Tab("Performance", systemImage: "gauge.with.dots.needle.67percent", value: "Performance") {
         PerformanceSettingsView()
+      }
+      Tab("Compute", systemImage: "cpu", value: "Compute") {
+        RemoteSettingsView()
       }
       #if os(macOS)
         Tab("Agents", systemImage: "sparkles", value: "Agents") {

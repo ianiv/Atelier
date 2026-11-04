@@ -24,8 +24,15 @@ final class CreateModel {
   }
 
   let engine = GenerationEngine()
-  /// What runs jobs for `target`. Every target is this device's engine for now.
-  func backend(for _: JobTarget) -> any GenerationBackend { engine }
+  /// The servers this device can run jobs on.
+  let remoteServers = RemoteServerList()
+  /// What runs jobs for `target`.
+  func backend(for target: JobTarget) -> any GenerationBackend {
+    switch target {
+    case .local: engine
+    case .remote(let serverID): remoteServers.backend(for: serverID)
+    }
+  }
 
   let history: HistoryStore
   /// Generate adds to it; jobs run one at a time, in order.
@@ -194,6 +201,9 @@ final class CreateModel {
   /// An agent's progress and result callbacks, by its job.
   private var agentCallbacks:
     [UUID: (progress: (GenerationEngine.Progress) -> Void, completion: (Result<HistoryItem, Error>) -> Void)] = [:]
+  /// Paired devices' jobs (`RemoteServer`), which get the output itself instead of a saved step.
+  private var deviceCallbacks:
+    [UUID: (progress: (GenerationEngine.Progress) -> Void, completion: (Result<GenerationEngine.Output, Error>) -> Void)] = [:]
   /// Where each style thumbnail job's image goes, by its job.
   private var thumbnailCallbacks: [UUID: (Result<CGImage, Error>) -> Void] = [:]
   /// What the canvas held when the running job's first preview covered it, with its placement:
@@ -1183,6 +1193,20 @@ final class CreateModel {
     }
   }
 
+  /// Queues a paired device's request (`RemoteServer`), labelled with its name. Progress shows in
+  /// the status bar but never on the canvas, and the output goes to `completion` rather than into
+  /// the project. Returns the job's id, for `cancel(_:)`.
+  func runForDevice(
+    _ request: GenerationEngine.Request, device: String,
+    progress: @escaping (GenerationEngine.Progress) -> Void,
+    completion: @escaping (Result<GenerationEngine.Output, Error>) -> Void
+  ) -> UUID {
+    let id = queue.append(request, remoteDevice: device)
+    deviceCallbacks[id] = (progress, completion)
+    runNext()
+    return id
+  }
+
   /// Starts the next waiting job when none is running.
   private func runNext() {
     #if os(iOS)
@@ -1276,8 +1300,9 @@ final class CreateModel {
       do {
         let progress: @Sendable (GenerationEngine.Progress) -> Void = { progress in
           Task { @MainActor in
-            self.handle(progress)
+            self.handle(progress, showsOnCanvas: job.remoteDevice == nil)
             self.agentCallbacks[job.id]?.progress(progress)
+            self.deviceCallbacks[job.id]?.progress(progress)
           }
         }
         let output: GenerationEngine.Output
@@ -1285,6 +1310,13 @@ final class CreateModel {
           output = try await upscaled(request, upscale, on: backend, progress: progress)
         } else {
           output = try await backend.generate(request, progress: progress)
+        }
+        // A paired device's job goes back to it, not into the project.
+        if job.remoteDevice != nil {
+          status = .ranForDevice
+          deviceCallbacks.removeValue(forKey: job.id)?.completion(.success(output))
+          finish(job, status: status)
+          return
         }
         // A style thumbnail goes back to the Styles screen, not into the project.
         if job.styleThumbnail != nil {
@@ -1322,11 +1354,14 @@ final class CreateModel {
         // Stopped; keep the last preview on the canvas (when it's showing the run).
         agentCallbacks.removeValue(forKey: job.id)?.completion(.failure(CancellationError()))
         thumbnailCallbacks.removeValue(forKey: job.id)?(.failure(CancellationError()))
+        deviceCallbacks.removeValue(forKey: job.id)?.completion(.failure(CancellationError()))
       } catch {
-        errorMessage = error.localizedDescription
+        // A paired device's failure is reported to it, not as an error on this screen.
+        if job.remoteDevice == nil { errorMessage = error.localizedDescription }
         status = .failed(error.localizedDescription)
         agentCallbacks.removeValue(forKey: job.id)?.completion(.failure(error))
         thumbnailCallbacks.removeValue(forKey: job.id)?(.failure(error))
+        deviceCallbacks.removeValue(forKey: job.id)?.completion(.failure(error))
       }
       finish(job, status: status, inputTensorId: inputTensorId, tipTensorId: tipTensorId)
     }
@@ -1607,6 +1642,7 @@ final class CreateModel {
     } else if queue.removeWaiting(id) != nil {
       agentCallbacks.removeValue(forKey: id)?.completion(.failure(CancellationError()))
       thumbnailCallbacks.removeValue(forKey: id)?(.failure(CancellationError()))
+      deviceCallbacks.removeValue(forKey: id)?.completion(.failure(CancellationError()))
     }
   }
 
@@ -1615,6 +1651,7 @@ final class CreateModel {
     for id in queue.removeAllWaiting() {
       agentCallbacks.removeValue(forKey: id)?.completion(.failure(CancellationError()))
       thumbnailCallbacks.removeValue(forKey: id)?(.failure(CancellationError()))
+      deviceCallbacks.removeValue(forKey: id)?.completion(.failure(CancellationError()))
     }
     cancel()
   }
@@ -1631,18 +1668,18 @@ final class CreateModel {
     runNext()
   }
 
-  private func handle(_ progress: GenerationEngine.Progress) {
+  private func handle(_ progress: GenerationEngine.Progress, showsOnCanvas: Bool = true) {
     guard generationTask != nil, phase != .cancelling else { return }
     switch progress {
     case .preview(let preview, let step, let total):
       livePreview = preview
-      if canvasFollowsRun { coverCanvas(with: preview) }
+      if canvasFollowsRun, showsOnCanvas { coverCanvas(with: preview) }
       noteStep(step, of: total)
     case .previewFrames(let frames, let step, let total):
       guard let first = frames.first else { return }
       livePreview = first
       livePreviewFrames = frames
-      if canvasFollowsRun { coverCanvas(with: first) }
+      if canvasFollowsRun, showsOnCanvas { coverCanvas(with: first) }
       noteStep(step, of: total)
     case .state(let state):
       phase = .running(Self.describe(state))

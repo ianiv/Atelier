@@ -15,6 +15,8 @@ final class JobQueue {
       case madeThumbnail
       /// An export written to this file.
       case exported(URL)
+      /// Ran for a paired device (`remoteDevice`); the result waits for it, not in the project.
+      case ranForDevice
       case failed(String)
       case cancelled
     }
@@ -37,6 +39,8 @@ final class JobQueue {
     var finishedAt: Date?
     /// Queued by an agent over MCP.
     var fromAgent = false
+    /// The name of the paired device this runs for (`RemoteServer`).
+    var remoteDevice: String?
     /// Makes the thumbnail of the style with this name (Styles screen); not kept across quits.
     var styleThumbnail: String?
     /// Jobs queued one after another, while you didn't pick another step, form a line: each
@@ -119,6 +123,15 @@ final class JobQueue {
       waiting.append(job)
     }
     return waiting.suffix(requests.count).map(\.id)
+  }
+
+  /// Adds a paired device's job at the end; returns its id. It isn't on a line: its result goes
+  /// back to the device and never becomes a step here.
+  func append(_ request: GenerationEngine.Request, remoteDevice: String) -> UUID {
+    var job = Job(request: request)
+    job.remoteDevice = remoteDevice
+    waiting.append(job)
+    return job.id
   }
 
   /// Adds an export at the end; returns its id.

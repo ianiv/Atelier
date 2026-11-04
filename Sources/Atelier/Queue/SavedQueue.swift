@@ -68,8 +68,8 @@ nonisolated enum SavedQueue {
     let manager = FileManager.default
     try? manager.removeItem(at: folder)
     // Exports write where a save panel allowed for this session only, so they aren't kept, and
-    // agent and style thumbnail jobs answer a caller that's gone after a quit.
-    let jobs = jobs.filter { !$0.fromAgent && $0.styleThumbnail == nil && $0.request != nil }
+    // agent, paired device and style thumbnail jobs answer a caller that's gone after a quit.
+    let jobs = jobs.filter { !$0.fromAgent && $0.remoteDevice == nil && $0.styleThumbnail == nil && $0.request != nil }
     guard !jobs.isEmpty, (try? manager.createDirectory(at: folder, withIntermediateDirectories: true)) != nil
     else { return }
     var entries: [Entry] = []
