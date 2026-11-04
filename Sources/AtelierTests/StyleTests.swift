@@ -116,16 +116,12 @@ struct StyleTests {
     #expect(styles[1].category == "Art" && styles[1].subcategory == "")
   }
 
-  /// `StyleFile.write` leaves out the `##` heading for a style with no subcategory, so it's read
-  /// back under the one before it. Remove `withKnownIssue` once that's fixed.
   @Test func aStyleWithoutASubcategoryAfterOneWithIsReadBackTheSame() {
     let styles = [
       Style(name: "A", category: "One", subcategory: "Sub", template: "{{SUBJECT}}"),
       Style(name: "B", category: "One", template: "{{SUBJECT}}"),
     ]
-    withKnownIssue("A style file loses the end of a subcategory") {
-      #expect(StyleFile.parse(StyleFile.write(styles)).map(\.subcategory) == ["Sub", ""])
-    }
+    #expect(StyleFile.parse(StyleFile.write(styles)).map(\.subcategory) == ["Sub", ""])
   }
 
   @Test func writingAStyleFileReadsBackTheSame() {

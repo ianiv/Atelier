@@ -203,8 +203,13 @@ nonisolated enum StyleFile {
         out += "\n# \(style.category.isEmpty ? "Uncategorized" : style.category)\n"
       }
       if style.subcategory != subcategory {
+        // A bare `##` ends the subcategory before it, for a style that has none.
+        if !style.subcategory.isEmpty {
+          out += "\n## \(style.subcategory)\n"
+        } else if subcategory?.isEmpty == false {
+          out += "\n##\n"
+        }
         subcategory = style.subcategory
-        if !style.subcategory.isEmpty { out += "\n## \(style.subcategory)\n" }
       }
       out += "\n### \(style.name)\nTEMPLATE:\n\(style.template)\n"
       if !style.negative.isEmpty { out += "NEGATIVE:\n\(style.negative)\n" }
@@ -215,6 +220,7 @@ nonisolated enum StyleFile {
 
   private static func heading(_ line: String) -> (level: Int, title: String)? {
     let hashes = line.prefix { $0 == "#" }.count
+    if line == "##" { return (2, "") }
     guard (1...3).contains(hashes), line.dropFirst(hashes).first == " " else { return nil }
     return (hashes, line.dropFirst(hashes).trimmingCharacters(in: .whitespaces))
   }
