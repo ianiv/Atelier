@@ -77,6 +77,8 @@ Renders are previews only. They appear under **Previews**, aren't in any project
 - **Remove** (the trash button) removes a saved image. If it was the main image, the first one left takes over.
 - **Send to Create** adds the preview or saved image shown to the current project, so it shows in History, and loads it on Create's canvas with the model, settings and seed it was made with, a sheet's size included. With a style, that style is selected with the description as its Subject (with a sheet's words around it) and its tag boxes filled. With No Style, the whole prompt it was made with goes in the prompt box.
 
+**Send to Moodboard** adds the preview or saved image shown to Create's moodboard as a reference, and stays on this screen. Create's canvas, prompt and settings stay as they are, and the image isn't added to the project until a run uses it. Only models that take reference images use the moodboard.
+
 ## Files
 
 **Export Selected…** and **Export All…** (the import/export menu under the library, or **Export…** in a character's right-click menu) write a `.json` characters file with the saved images. **Import Characters…** reads one; a character with the same name as one you have replaces it.

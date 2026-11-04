@@ -262,6 +262,8 @@ private struct CharacterStage: View {
   @Environment(Navigation.self) private var navigation
   @Environment(\.undoManager) private var undoManager
   @State private var pendingRemove: UUID?
+  /// Says Send to Moodboard worked, which nothing else here shows, until another image is picked.
+  @State private var moodboardNote: String?
 
   private var previews: [CharacterPreview] { store.previews[character.id] ?? [] }
   private var chosen: UUID? { store.shownImage[character.id] }
@@ -334,37 +336,57 @@ private struct CharacterStage: View {
   }
 
   private var actions: some View {
-    HStack(spacing: 10) {
+    VStack(alignment: .leading, spacing: 6) {
       Text(caption)
         .font(.callout)
         .foregroundStyle(store.renderError == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.red))
-        .lineLimit(2, reservesSpace: true)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .lineLimit(1, reservesSpace: true)
+        .truncationMode(.middle)
         .help(caption)
-      Button("Make Main Image", systemImage: "star") {
-        if let shownSaved { store.makeMain(shownSaved, of: character.id) }
+      // Titles when they fit; the centre can be narrow beside the library and the knobs.
+      ViewThatFits(in: .horizontal) {
+        HStack(spacing: 10) { buttons }.fixedSize()
+        HStack(spacing: 10) { buttons }.labelStyle(.iconOnly)
       }
-      .labelStyle(.iconOnly)
-      .disabled(shownSaved == nil || shownSaved == character.mainImageID)
-      .help("Make this saved image the character's portrait in the library, and what shows when you come back to it")
-      Button("Remove", systemImage: "trash") { pendingRemove = shownSaved }
-        .labelStyle(.iconOnly)
-        .disabled(shownSaved == nil)
-        .help("Remove this saved image from the character")
-      Button("Save to Character", systemImage: "square.and.arrow.down") {
-        if let shownPreview { store.save(shownPreview, to: character.id) }
-      }
-      .disabled(shownPreview == nil || shownPreview.map { store.savedPreviews.contains($0.id) } == true)
-      .help(saveHelp)
-      Button("Send to Create", systemImage: "arrow.up.forward.app") {
-        guard let image, let info else { return }
-        Task {
-          await store.sendToCreate(image, info: info, create: create, navigation: navigation, undoManager: undoManager)
-        }
-      }
-      .disabled(image == nil || info == nil)
-      .help("Add this image to the current project and load it on Create with its model, settings, seed, style and tag boxes")
+      .frame(maxWidth: .infinity, alignment: .trailing)
     }
+    .onChange(of: chosen) { moodboardNote = nil }
+  }
+
+  @ViewBuilder
+  private var buttons: some View {
+    Button("Make Main Image", systemImage: "star") {
+      if let shownSaved { store.makeMain(shownSaved, of: character.id) }
+    }
+    .labelStyle(.iconOnly)
+    .disabled(shownSaved == nil || shownSaved == character.mainImageID)
+    .help("Make this saved image the character's portrait in the library, and what shows when you come back to it")
+    Button("Remove", systemImage: "trash") { pendingRemove = shownSaved }
+      .labelStyle(.iconOnly)
+      .disabled(shownSaved == nil)
+      .help("Remove this saved image from the character")
+    Button("Save to Character", systemImage: "square.and.arrow.down") {
+      if let shownPreview { store.save(shownPreview, to: character.id) }
+    }
+    .disabled(shownPreview == nil || shownPreview.map { store.savedPreviews.contains($0.id) } == true)
+    .help(saveHelp)
+    Button("Send to Moodboard", systemImage: "photo.on.rectangle.angled") {
+      guard let image else { return }
+      create.moodboard.add(image)
+      moodboardNote = create.usesReferences
+        ? "Added to Create's moodboard"
+        : "Added to Create's moodboard, which the model on Create doesn't use"
+    }
+    .disabled(image == nil)
+    .help("Add this image to Create's moodboard as a reference. Create's canvas, prompt and settings stay as they are, and the image isn't added to the project.")
+    Button("Send to Create", systemImage: "arrow.up.forward.app") {
+      guard let image, let info else { return }
+      Task {
+        await store.sendToCreate(image, info: info, create: create, navigation: navigation, undoManager: undoManager)
+      }
+    }
+    .disabled(image == nil || info == nil)
+    .help("Add this image to the current project and load it on Create with its model, settings, seed, style and tag boxes")
   }
 
   private var saveHelp: String {
@@ -375,6 +397,7 @@ private struct CharacterStage: View {
   /// What's shown large, or why the last run failed.
   private var caption: String {
     if let error = store.renderError { return error }
+    if let moodboardNote { return moodboardNote }
     if let shownPreview {
       return "Preview: \(shownPreview.info.styleName) · \(madeWith(shownPreview.info))"
     }
