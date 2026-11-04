@@ -45,18 +45,60 @@ nonisolated struct RemoteBackend: GenerationBackend {
   func generate(
     _ request: GenerationEngine.Request, progress: @escaping @Sendable (GenerationEngine.Progress) -> Void
   ) async throws -> GenerationEngine.Output {
+    try await generate(request, job: UUID(), acknowledges: true, progress: progress)
+  }
+
+  /// Runs `request` as `job`. With `acknowledges` false the server keeps its copy of the result
+  /// until `acknowledge`, for a caller that first has to save it somewhere safe.
+  func generate(
+    _ request: GenerationEngine.Request, job: UUID, acknowledges: Bool,
+    progress: @escaping @Sendable (GenerationEngine.Progress) -> Void
+  ) async throws -> GenerationEngine.Output {
     let client = try paired()
-    let job = UUID()
     let updates = await client.startUpdates(job: job)
     defer { Task { await client.endUpdates(job: job) } }
     return try await withTaskCancellationHandler {
       try await submit(request, job: job, progress: progress)
       let ready = try await waitForResult(job: job, updates: updates, progress: progress)
-      return try await collect(job: job, ready: ready, progress: progress)
+      return try await collect(job: job, ready: ready, acknowledges: acknowledges, progress: progress)
     } onCancel: {
       // Goes out on its own: this task is what's being cancelled.
       Task { try? await client.request(.cancel(jobID: job)) }
     }
+  }
+
+  /// Picks up a job submitted before this launch: follows it if it's still running, and collects
+  /// its result. A job the server no longer has fails, saying so.
+  func resume(
+    job: UUID, progress: @escaping @Sendable (GenerationEngine.Progress) -> Void
+  ) async throws -> GenerationEngine.Output {
+    let client = try paired()
+    let updates = await client.startUpdates(job: job)
+    defer { Task { await client.endUpdates(job: job) } }
+    return try await withTaskCancellationHandler {
+      var ready: RemoteJobEvent
+      do {
+        ready = try await Self.retrying { try await client.latest(job: job) }
+      } catch RemoteError.server {
+        throw RemoteError.server("The server no longer has this job.")
+      }
+      switch ready.state {
+      case .ready: break
+      case .failed: throw RemoteError.server(ready.message ?? "The job failed on the server.")
+      case .cancelled: throw CancellationError()
+      default: ready = try await waitForResult(job: job, updates: updates, progress: progress)
+      }
+      return try await collect(job: job, ready: ready, acknowledges: false, progress: progress)
+    } onCancel: {
+      Task { try? await client.request(.cancel(jobID: job)) }
+    }
+  }
+
+  /// Tells the server it can delete a result, and drops the downloaded copy.
+  func acknowledge(job: UUID) async {
+    guard let client else { return }
+    _ = try? await client.request(.ackResult(jobID: job))
+    await client.removeDownload(job: job)
   }
 
   func upscale(
@@ -100,11 +142,11 @@ nonisolated struct RemoteBackend: GenerationBackend {
     }
   }
 
-  func catalog() async throws -> (models: [RemoteModelInfo], loras: [RemoteLoRAInfo]) {
-    guard case .catalog(let models, let loras) = try await paired().request(.catalogRequest) else {
+  func catalog() async throws -> (models: [RemoteModelInfo], loras: [RemoteLoRAInfo], files: [String]) {
+    guard case .catalog(let models, let loras, let files) = try await paired().request(.catalogRequest) else {
       throw RemoteError.connectionLost
     }
-    return (models, loras)
+    return (models, loras, files)
   }
 
   // MARK: - A job's steps
@@ -195,7 +237,8 @@ nonisolated struct RemoteBackend: GenerationBackend {
 
   /// Downloads a finished job's result and tells the server to delete its copy.
   func collect(
-    job: UUID, ready: RemoteJobEvent, progress: @escaping @Sendable (GenerationEngine.Progress) -> Void
+    job: UUID, ready: RemoteJobEvent, acknowledges: Bool = true,
+    progress: @escaping @Sendable (GenerationEngine.Progress) -> Void
   ) async throws -> GenerationEngine.Output {
     let client = try paired()
     guard let size = ready.resultSize, let hash = ready.resultHash else { throw RemoteError.corruptResult }
@@ -205,8 +248,7 @@ nonisolated struct RemoteBackend: GenerationBackend {
     }
     guard let downloaded else { throw RemoteError.corruptResult }
     let output = try await RemoteResultFile.read(downloaded)
-    _ = try? await client.request(.ackResult(jobID: job))
-    await client.removeDownload(job: job)
+    if acknowledges { await acknowledge(job: job) }
     return output
   }
 
@@ -239,7 +281,16 @@ nonisolated struct RemoteBackend: GenerationBackend {
 @MainActor
 @Observable
 final class RemoteServerList {
+  enum Status: Equatable {
+    case unknown, online, offline
+  }
+
   private(set) var servers: [RemoteServerRecord] = []
+  private(set) var statuses: [UUID: Status] = [:]
+  /// A link opened from outside (a scanned QR code), waiting for you to confirm pairing with it.
+  var openedLink: RemotePairingLink?
+  /// Told when a server is seen to come online.
+  @ObservationIgnored var onServerOnline: ((UUID) -> Void)?
 
   private let store: any RemoteSecretStore
   private let downloads: URL
@@ -248,8 +299,8 @@ final class RemoteServerList {
   private var clients: [UUID: RemoteClient] = [:]
 
   init(
-    store: any RemoteSecretStore = KeychainSecretStore(),
-    downloads: URL = URL.applicationSupportDirectory.appending(path: "Atelier/Compute/Downloads", directoryHint: .isDirectory),
+    store: any RemoteSecretStore = RemotePaths.defaultStore,
+    downloads: URL = RemotePaths.root.appending(path: "Downloads", directoryHint: .isDirectory),
     identity: RemoteDeviceIdentity? = nil
   ) {
     self.store = store
@@ -263,6 +314,25 @@ final class RemoteServerList {
     guard !isLoaded else { return }
     isLoaded = true
     servers = store.loadList(RemoteAccounts.servers)
+  }
+
+  func name(of id: UUID) -> String? {
+    loadIfNeeded()
+    return servers.first { $0.id == id }?.name
+  }
+
+  func status(of id: UUID) -> Status { statuses[id] ?? .unknown }
+
+  /// Asks every server whether it's there.
+  func checkStatus() async {
+    loadIfNeeded()
+    for server in servers {
+      let reachable = await backend(for: server.id).client?.isReachable() ?? false
+      guard servers.contains(where: { $0.id == server.id }) else { continue }
+      let wasOnline = statuses[server.id] == .online
+      statuses[server.id] = reachable ? .online : .offline
+      if reachable, !wasOnline { onServerOnline?(server.id) }
+    }
   }
 
   /// The backend for a paired server; for one that isn't, one whose calls say so.
@@ -294,12 +364,18 @@ final class RemoteServerList {
     servers.append(server)
     store.saveList(servers, account: RemoteAccounts.servers)
     forgetClient(server.id)
+    statuses[server.id] = .online
+    onServerOnline?(server.id)
   }
+
+  /// A server on the list without pairing, for the screenshots and checks of scripted runs.
+  func addForCheck(_ server: RemoteServerRecord) { add(server) }
 
   /// Forgets a server here. Its list of devices is its own: Remove there revokes this one.
   func remove(_ id: UUID) {
     servers.removeAll { $0.id == id }
     store.saveList(servers, account: RemoteAccounts.servers)
+    statuses[id] = nil
     forgetClient(id)
   }
 

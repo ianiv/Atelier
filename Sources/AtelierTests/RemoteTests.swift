@@ -342,3 +342,27 @@ struct RemoteStoreTests {
     #expect(RemoteProtocol.retention == 7 * 24 * 60 * 60)
   }
 }
+
+struct RemoteClientJobsTests {
+  @Test func keptJobsComeBackUntilRemoved() throws {
+    try withTestFolder { folder in
+      let jobs = RemoteClientJobs(folder: folder)
+      #expect(jobs.all().isEmpty)
+      let record = RemoteClientJob(
+        jobID: UUID(), serverID: UUID(), project: "P", model: "m.ckpt", prompt: "p", negativePrompt: "n", seed: 3,
+        settings: ["steps": .number(4)], parentTensorId: 9, hasCanvas: true, canvasTensorId: 8,
+        moodboardWeights: [0.5], placement: nil)
+      try JSONEncoder().encode(record).write(to: folder.appending(path: "\(record.jobID.uuidString).json"))
+      try #require(ImageTensor.png(smallImage())).write(to: folder.appending(path: "\(record.jobID.uuidString)-canvas.png"))
+      try #require(ImageTensor.png(smallImage())).write(to: folder.appending(path: "\(record.jobID.uuidString)-moodboard-0.png"))
+      #expect(jobs.all() == [record])
+      #expect(jobs.canvas(of: record)?.width == 4)
+      #expect(jobs.moodboard(of: record).map(\.weight) == [0.5])
+      let other = RemoteClientJob(jobID: UUID(), serverID: UUID(), project: "P", model: "m", prompt: "", negativePrompt: "", seed: 0, settings: [:])
+      #expect(jobs.canvas(of: other) == nil, "no canvas was sent")
+      jobs.remove(record.jobID)
+      #expect(jobs.all().isEmpty)
+      #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty, "its images go too")
+    }
+  }
+}

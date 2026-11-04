@@ -28,6 +28,7 @@ nonisolated struct RemoteLoRAInfo: Codable, Hashable, Sendable {
   var file: String
   var name: String
   var version: String
+  var prefix: String
 }
 
 /// A `GenerationEngine.Request` as it travels: images and audio by SHA-256 of what was uploaded.
@@ -93,7 +94,8 @@ nonisolated enum RemoteMessage: Codable, Sendable {
 
   // What the server has.
   case catalogRequest
-  case catalog(models: [RemoteModelInfo], loras: [RemoteLoRAInfo])
+  /// `files`: every file name in the server's models folders, which offer refiners and upscalers.
+  case catalog(models: [RemoteModelInfo], loras: [RemoteLoRAInfo], files: [String])
   case modelDefaultsRequest(model: String)
   case modelDefaults(settings: [String: JSONValue])
 

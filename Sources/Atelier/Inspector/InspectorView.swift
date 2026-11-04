@@ -17,9 +17,18 @@ struct InspectorView: View {
     @Bindable var layouts = layouts
     VStack(spacing: 0) {
       // The model sits above search: it decides every default below and which settings apply.
-      ModelPicker()
-        .padding(.horizontal, 10)
-        .padding(.top, 10)
+      Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 6) {
+        GridRow {
+          Text("Run on").gridColumnAlignment(.trailing)
+          RunOnPicker().labelsHidden().frame(maxWidth: .infinity, alignment: .leading)
+        }
+        GridRow {
+          Text("Model")
+          ModelPicker().labelsHidden().frame(maxWidth: .infinity, alignment: .leading)
+        }
+      }
+      .padding(.horizontal, 10)
+      .padding(.top, 10)
       HStack(spacing: 6) {
         SearchField(text: $layouts.searchText, prompt: "Search Settings")
         LayoutMenu(customizing: $layouts.customizing)

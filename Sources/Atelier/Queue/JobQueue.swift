@@ -41,6 +41,9 @@ final class JobQueue {
     var fromAgent = false
     /// The name of the paired device this runs for (`RemoteServer`).
     var remoteDevice: String?
+    /// Sent to its server before this launch: it picks up from there instead of being sent again.
+    /// Its id is the id the server knows it by.
+    var resumesRemoteJob = false
     /// Makes the thumbnail of the style with this name (Styles screen); not kept across quits.
     var styleThumbnail: String?
     /// Jobs queued one after another, while you didn't pick another step, form a line: each
@@ -134,6 +137,16 @@ final class JobQueue {
     return job.id
   }
 
+  /// Adds a job sent to a server before this launch, unless it's already here.
+  func appendResumed(_ request: GenerationEngine.Request, id: UUID, server: UUID) {
+    guard running?.id != id, !waiting.contains(where: { $0.id == id }), !recent.contains(where: { $0.id == id })
+    else { return }
+    var job = Job(request: request, target: .remote(serverID: server))
+    job.id = id
+    job.resumesRemoteJob = true
+    waiting.append(job)
+  }
+
   /// Adds an export at the end; returns its id.
   @discardableResult
   func append(_ export: TimelineExportJob) -> UUID {
@@ -142,10 +155,12 @@ final class JobQueue {
     return job.id
   }
 
-  /// Takes the first waiting job and marks it running, unless paused or one is running.
+  /// Takes the first waiting job and marks it running, unless paused or one is running. Pause
+  /// holds work yet to start; a job resuming at its server has started, so it goes ahead.
   func startNext() -> Job? {
-    guard running == nil, !isPaused, !waiting.isEmpty else { return nil }
-    var job = waiting.removeFirst()
+    guard running == nil, let index = isPaused ? waiting.firstIndex(where: \.resumesRemoteJob) : waiting.indices.first
+    else { return nil }
+    var job = waiting.remove(at: index)
     if case .generation(var request) = job.work {
       if let line = job.line, let tip = lineTips[line] { request.parentTensorId = tip }
       if request.canvas != nil, request.canvasTensorId == nil, let key = request.canvasKey {

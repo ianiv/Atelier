@@ -10,6 +10,17 @@
 	<string>ezs3okxIgkPwyf+GLRNCaOaessELrI8UCduF6yp43wo=</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Atelier pairing link</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>atelier-pair</string>
+			</array>
+		</dict>
+	</array>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Save to Photos adds your generated images to your photo library.</string>
 </dict>

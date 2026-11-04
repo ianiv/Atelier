@@ -47,7 +47,8 @@ struct AtelierApp: App {
     _presets = State(initialValue: presets)
     let library = ModelLibrary(create: create)
     _library = State(initialValue: library)
-    _remoteServer = State(initialValue: RemoteServer(create: create, library: library))
+    let remoteServer = RemoteServer(create: create, library: library)
+    _remoteServer = State(initialValue: remoteServer)
     if SessionState.isEnabled {
       let current = history.project.name
       Task {
@@ -59,6 +60,7 @@ struct AtelierApp: App {
     #if os(macOS)
       _agents = State(initialValue: AgentServer(create: create, presets: presets))
       AppLifecycle.workUnderway = { create.workUnderway }
+      Automation.remoteServer = remoteServer
       // Started here rather than from a view's .task: SwiftUI doesn't put windows up while the
       // screen is locked, and scripted checks still need to run then.
       Task { @MainActor in
@@ -74,6 +76,7 @@ struct AtelierApp: App {
     WindowGroup("Atelier", id: "main") {
       LayoutCheckFrame {
         ContentView()
+          .remotePairingLinks()
           .environment(create)
           .environment(create.timelines)
           .environment(history)

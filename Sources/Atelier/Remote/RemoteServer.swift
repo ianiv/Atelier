@@ -230,13 +230,13 @@ final nonisolated class RemoteListener: Sendable {
 final class RemoteServer {
   /// What differs in a scripted check, which leaves the user's pairings and files alone.
   struct Options {
-    var store: any RemoteSecretStore = KeychainSecretStore()
-    var root = URL.applicationSupportDirectory.appending(path: "Atelier/Compute", directoryHint: .isDirectory)
+    var store: any RemoteSecretStore = RemotePaths.defaultStore
+    var root = RemotePaths.root
     /// Reads and saves settings, and starts by itself at launch if on.
-    var isApp = true
-    var loopbackOnly = false
-    var filter: RemoteAddressFilter?
-    var port: UInt16?
+    var isApp = SessionState.isEnabled
+    var loopbackOnly = !SessionState.isEnabled
+    var filter: RemoteAddressFilter? = SessionState.isEnabled ? nil : .any
+    var port: UInt16? = SessionState.isEnabled ? nil : 0
   }
 
   struct Pairing: Equatable {
@@ -501,9 +501,9 @@ final class RemoteServer {
   func catalog() -> RemoteMessage {
     let models = (create?.models ?? []).map { RemoteModelInfo(file: $0.file, name: $0.name, version: $0.version) }
     let loras = (library?.loras ?? []).filter(\.isDownloaded).map {
-      RemoteLoRAInfo(file: $0.file, name: $0.name, version: $0.version)
+      RemoteLoRAInfo(file: $0.file, name: $0.name, version: $0.version, prefix: $0.prefix)
     }
-    return .catalog(models: models, loras: loras)
+    return .catalog(models: models, loras: loras, files: create?.modelFiles ?? [])
   }
 
   private func defaults(for model: String) async throws -> PipelineConfiguration {

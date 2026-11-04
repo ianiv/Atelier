@@ -52,8 +52,10 @@ nonisolated struct RemoteAddress: Codable, Hashable, Sendable, CustomStringConve
 
 /// `atelier-pair://<host>:<port>?id=<serverID>&s=<secret>&a=<other addresses>`, what a QR code
 /// carries: everything a client needs to find a server and pair with it once.
-nonisolated struct RemotePairingLink: Hashable, Sendable {
+nonisolated struct RemotePairingLink: Hashable, Identifiable, Sendable {
   static let scheme = "atelier-pair"
+
+  var id: String { text }
 
   /// The first is the one in the link's host; the rest go in `a`.
   var addresses: [RemoteAddress]

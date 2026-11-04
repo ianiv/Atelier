@@ -29,7 +29,7 @@ struct LoRAEditor: View {
   /// LoRA families the engine applies with the selected model (and refiner); it skips others.
   private var compatibleFamilies: Set<String> {
     let refiner = model.settings?.refinerModel.flatMap { file in
-      model.models.first { $0.file == file }?.version
+      model.availableModels.first { $0.file == file }?.version
     }
     return ModelLibrary.loraFamilies(forModel: model.selectedModelInfo?.version, refiner: refiner)
   }
@@ -53,7 +53,7 @@ struct LoRAEditor: View {
           HStack {
             Text(name(item.file)).lineLimit(1).truncationMode(.middle)
               .help(item.file)
-            if let lora = library.loras.first(where: { $0.file == item.file }),
+            if let lora = model.availableLoRAs(in: library).first(where: { $0.file == item.file }),
                !compatible.contains(lora.family)
             {
               Image(systemName: "exclamationmark.triangle").foregroundStyle(.yellow)
@@ -108,7 +108,7 @@ struct LoRAEditor: View {
         .debugPresents("loraPicker", $picking)
         .popover(isPresented: $picking, arrowEdge: inspectorPopoverEdge) {
           LoRAPicker(
-            catalog: library.loras.filter(\.isDownloaded), compatible: compatible,
+            catalog: model.availableLoRAs(in: library).filter(\.isDownloaded), compatible: compatible,
             modelFamily: model.selectedModelInfo?.version
           ) { lora in
             write(items + [Item(file: lora.file, weight: 1, mode: .string("all"))])
@@ -120,7 +120,7 @@ struct LoRAEditor: View {
   }
 
   private func name(_ file: String) -> String {
-    library.loras.first { $0.file == file }?.name ?? file
+    model.availableLoRAs(in: library).first { $0.file == file }?.name ?? file
   }
 }
 

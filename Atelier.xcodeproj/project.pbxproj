@@ -102,6 +102,7 @@
 		C11A66972841D8A4C8CFB634 /* RemoteResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBAEBB8393A05EF2A3E59F5A /* RemoteResult.swift */; };
 		594D7E12303AB59AE5A113BF /* RemoteJobStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0464C521A5D45CA899A6DB67 /* RemoteJobStore.swift */; };
 		4B278338DEF1D0509202E71E /* RemoteServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB251238B6BCF939C5328AF6 /* RemoteServer.swift */; };
+		F857A85DE1A3694B4504BFA4 /* RemoteClientJobs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EABEA55ABD9BFF48A8713ED /* RemoteClientJobs.swift */; };
 		7060AD57D307C33DC2ACBFFC /* RemoteClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28443D25EBF3EC91EBD67C90 /* RemoteClient.swift */; };
 		55A745F31851D5E33E2CC555 /* RemoteBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9211207D07160A0089405ADF /* RemoteBackend.swift */; };
 		9186DAFD68C9D5852CC86B54 /* RemoteSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD4D257BDA223BFDF1CBA410 /* RemoteSettingsView.swift */; };
@@ -216,6 +217,7 @@
 		DBAEBB8393A05EF2A3E59F5A /* RemoteResult.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteResult.swift; sourceTree = "<group>"; };
 		0464C521A5D45CA899A6DB67 /* RemoteJobStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteJobStore.swift; sourceTree = "<group>"; };
 		EB251238B6BCF939C5328AF6 /* RemoteServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteServer.swift; sourceTree = "<group>"; };
+		5EABEA55ABD9BFF48A8713ED /* RemoteClientJobs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteClientJobs.swift; sourceTree = "<group>"; };
 		28443D25EBF3EC91EBD67C90 /* RemoteClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteClient.swift; sourceTree = "<group>"; };
 		9211207D07160A0089405ADF /* RemoteBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteBackend.swift; sourceTree = "<group>"; };
 		CD4D257BDA223BFDF1CBA410 /* RemoteSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSettingsView.swift; sourceTree = "<group>"; };
@@ -474,6 +476,7 @@
 				0464C521A5D45CA899A6DB67 /* RemoteJobStore.swift */,
 				EB251238B6BCF939C5328AF6 /* RemoteServer.swift */,
 				28443D25EBF3EC91EBD67C90 /* RemoteClient.swift */,
+				5EABEA55ABD9BFF48A8713ED /* RemoteClientJobs.swift */,
 				9211207D07160A0089405ADF /* RemoteBackend.swift */,
 				CD4D257BDA223BFDF1CBA410 /* RemoteSettingsView.swift */,
 			);
@@ -833,6 +836,7 @@
 				594D7E12303AB59AE5A113BF /* RemoteJobStore.swift in Sources */,
 				4B278338DEF1D0509202E71E /* RemoteServer.swift in Sources */,
 				7060AD57D307C33DC2ACBFFC /* RemoteClient.swift in Sources */,
+				F857A85DE1A3694B4504BFA4 /* RemoteClientJobs.swift in Sources */,
 				55A745F31851D5E33E2CC555 /* RemoteBackend.swift in Sources */,
 				9186DAFD68C9D5852CC86B54 /* RemoteSettingsView.swift in Sources */,
 				F9B7B4D35D7382085C916688 /* GenerationEngine.swift in Sources */,

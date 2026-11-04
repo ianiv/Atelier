@@ -76,14 +76,17 @@ nonisolated struct RemoteServerRecord: Codable, Hashable, Identifiable, Sendable
 /// This device, as it introduces itself to servers.
 nonisolated struct RemoteDeviceIdentity: Hashable, Sendable {
   private static let idKey = "remote.deviceID"
+  private static let scriptedID = UUID()
 
   var id: UUID
   var name: String
 
-  /// This device's id, made once.
+  /// This device's id, made once. A scripted run gets one of its own, and saves nothing.
   static var current: RemoteDeviceIdentity {
     let id: UUID
-    if let saved = UserDefaults.standard.string(forKey: idKey).flatMap(UUID.init(uuidString:)) {
+    if !SessionState.isEnabled {
+      id = scriptedID
+    } else if let saved = UserDefaults.standard.string(forKey: idKey).flatMap(UUID.init(uuidString:)) {
       id = saved
     } else {
       id = UUID()
@@ -102,6 +105,20 @@ nonisolated extension RemoteSecretStore {
   func saveList(_ list: [some Codable], account: String) {
     save(try? JSONEncoder().encode(list), account: account)
   }
+}
+
+nonisolated enum RemotePaths {
+  /// Where Compute keeps its files. A scripted run keeps them in a temporary folder.
+  static let root: URL = SessionState.isEnabled
+    ? URL.applicationSupportDirectory.appending(path: "Atelier/Compute", directoryHint: .isDirectory)
+    : FileManager.default.temporaryDirectory.appending(path: "atelier-compute-\(UUID())", directoryHint: .isDirectory)
+
+  /// Where pairings are kept. A scripted run leaves the user's alone.
+  static var defaultStore: any RemoteSecretStore {
+    SessionState.isEnabled ? KeychainSecretStore() : scriptedStore
+  }
+
+  private static let scriptedStore = MemorySecretStore()
 }
 
 nonisolated enum RemoteAccounts {

@@ -183,10 +183,27 @@ enum AutomationWindows {
     try? png(of: view)?.write(to: url)
   }
 
+  static var mainWindowNumber: Int { visibleWindow?.windowNumber ?? 0 }
+
+  /// How many windows are up, sheets aside.
+  static var windowCount: Int { NSApp.windows.filter { $0.isVisible && !$0.isSheet && $0.canBecomeKey }.count }
+
+  /// Renders the visible window that isn't the main one (Settings) into a PNG; false when there's
+  /// none.
+  static func snapshotOtherWindow(to url: URL) -> Bool {
+    guard let window = NSApp.windows.first(where: { $0.isVisible && !$0.isSheet && $0.canBecomeKey && $0.title != "Atelier" }),
+      let view = window.contentView?.superview ?? window.contentView, let png = png(of: view)
+    else { return false }
+    try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try? png.write(to: url)
+    return true
+  }
+
   /// Renders the sheet on screen into a PNG; false when there's none.
   static func snapshotSheet(to url: URL) -> Bool {
     guard let sheet = NSApp.windows.first(where: { $0.isSheet && $0.isVisible }),
-      let view = sheet.contentView, let png = png(of: view)
+      // The frame view, for the sheet's background: light text on no background doesn't show.
+      let view = sheet.contentView?.superview ?? sheet.contentView, let png = png(of: view)
     else { return false }
     try? png.write(to: url)
     return true

@@ -134,7 +134,7 @@ struct QueueRow: View {
           .lineLimit(2)
         Text(
           [
-            modelName(request.model), "\(configuration.width)×\(configuration.height)",
+            create.runLocationName(of: job), modelName(request.model), "\(configuration.width)×\(configuration.height)",
             video.map { length($0, configuration) }, "seed \(request.seed)",
             "\(configuration.steps) steps", job.elapsed.map { "took \(GenerationTime.text($0))" },
           ].compactMap(\.self).joined(separator: " · ")
@@ -204,7 +204,12 @@ struct QueueRow: View {
     case .waiting:
       EmptyView()
     case .running:
-      if create.totalSteps > 0 {
+      if let transfer = create.transfer {
+        // Moving a job's files to or from its server is a phase of its own.
+        Text(transfer.title).font(.caption).foregroundStyle(.secondary)
+        ProgressView(value: transfer.fraction)
+          .frame(width: 80)
+      } else if create.totalSteps > 0 {
         ProgressView(value: Double(create.step), total: Double(create.totalSteps))
           .frame(width: 80)
       } else {
@@ -220,7 +225,7 @@ struct QueueRow: View {
   }
 
   private func modelName(_ file: String) -> String {
-    create.models.first { $0.file == file }?.name ?? file
+    create.availableModels.first { $0.file == file }?.name ?? create.models.first { $0.file == file }?.name ?? file
   }
 
   /// "5.0 s, 121 frames".

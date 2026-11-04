@@ -14,6 +14,8 @@ nonisolated struct SessionState: Codable {
   var imageProject: String?
   var imageStep: StepID?
   var imageTensorId: Int64?
+  /// Where new jobs were set to run (Run on); nil in sessions saved before there was a choice.
+  var runTarget: JobTarget?
 
   private static let key = "sessionState"
   static var isEnabled: Bool { !Automation.isRequested }

@@ -89,7 +89,7 @@ struct RemoteSettingsView: View {
             Button("Remove") { create.remoteServers.remove(record.id) }
           } label: {
             Text(record.name)
-            Text(record.addresses.first?.description ?? "")
+            Text(serverDetail(record))
           }
         }
         if create.remoteServers.servers.isEmpty {
@@ -104,23 +104,46 @@ struct RemoteSettingsView: View {
       }
     }
     .formStyle(.grouped)
-    .onAppear {
-      portText = String(server.port)
-      server.loadIfNeeded()
-      create.remoteServers.loadIfNeeded()
-    }
-    .task { await server.refreshNetworkInfo() }
-    .sheet(isPresented: $showingPairing, onDismiss: { server.closePairing() }) {
-      PairDeviceSheet()
-    }
-    .sheet(isPresented: $showingAddServer) {
-      AddServerSheet()
-    }
+    #if os(macOS)
+      // Tall enough to show the three sections without scrolling while the lists are short.
+      .frame(minHeight: 640)
+    #endif
+      .onAppear {
+        portText = String(server.port)
+        server.loadIfNeeded()
+        create.remoteServers.loadIfNeeded()
+      }
+      .task { await server.refreshNetworkInfo() }
+      .task { await create.remoteServers.checkStatus() }
+    #if DEBUG
+      // For layout checks: -AtelierShowPairing YES.
+      .onChange(of: server.isListening, initial: true) {
+        if server.isListening, UserDefaults.standard.bool(forKey: "AtelierShowPairing"), !showingPairing {
+          server.startPairing()
+          showingPairing = true
+        }
+      }
+    #endif
+      .sheet(isPresented: $showingPairing, onDismiss: { server.closePairing() }) {
+        PairDeviceSheet()
+      }
+      .sheet(isPresented: $showingAddServer) {
+        AddServerSheet()
+      }
   }
 
   private var tailscaleText: String {
     guard let address = server.tailscaleAddress else { return "Not found on this device" }
     return server.tailscaleName.map { "\($0) (\(address))" } ?? address
+  }
+
+  private func serverDetail(_ record: RemoteServerRecord) -> String {
+    let address = record.addresses.first?.description ?? ""
+    switch create.remoteServers.status(of: record.id) {
+    case .online: return "Online · \(address)"
+    case .offline: return "Offline · \(address)"
+    case .unknown: return address
+    }
   }
 
   private func lastSeen(_ device: RemotePairedDevice) -> String {
@@ -164,7 +187,7 @@ private struct PairDeviceSheet: View {
       TimelineView(.periodic(from: .now, by: 1)) { context in
         Text(remaining(at: context.date)).foregroundStyle(.secondary)
       }
-      Text("On the other device, open Settings ▸ Compute ▸ Add Server… and paste the link or type the code. The code works once.")
+      Text("On an iPad, scan this with the Camera app. Or on the other device, open Settings ▸ Compute ▸ Add Server… and paste the link or type the code. The code works once.")
         .font(.callout)
         .foregroundStyle(.secondary)
         .multilineTextAlignment(.center)
@@ -198,6 +221,8 @@ private struct PairDeviceSheet: View {
 private struct AddServerSheet: View {
   @Environment(CreateModel.self) private var create
   @Environment(\.dismiss) private var dismiss
+  /// A link opened from outside (a scanned QR code), to confirm.
+  var opened: RemotePairingLink?
   @State private var link = ""
   @State private var host = ""
   @State private var code = ""
@@ -235,6 +260,7 @@ private struct AddServerSheet: View {
     }
     .padding(24)
     .frame(width: 420)
+    .onAppear { if let opened { link = opened.text } }
   }
 
   private func add() {
@@ -253,5 +279,39 @@ private struct AddServerSheet: View {
         self.error = error.localizedDescription
       }
     }
+  }
+}
+
+extension View {
+  /// Opens `atelier-pair://` links, as a scanned QR code does, asking first: a link can come from
+  /// anywhere, and the server it names would receive the jobs you send it.
+  func remotePairingLinks() -> some View { modifier(RemotePairingLinks()) }
+}
+
+private struct RemotePairingLinks: ViewModifier {
+  @Environment(CreateModel.self) private var create
+  #if os(macOS)
+    @Environment(\.openSettings) private var openSettings
+  #endif
+
+  func body(content: Content) -> some View {
+    @Bindable var servers = create.remoteServers
+    content
+      .onOpenURL { url in
+        guard url.scheme == RemotePairingLink.scheme else { return }
+        if let link = RemotePairingLink(url.absoluteString) {
+          servers.openedLink = link
+        } else {
+          create.errorMessage = RemoteError.invalidPairingLink.errorDescription
+        }
+      }
+      // A link goes to the window already open, instead of making another.
+      .handlesExternalEvents(preferring: [RemotePairingLink.scheme], allowing: ["*"])
+      .sheet(item: $servers.openedLink) { link in
+        AddServerSheet(opened: link)
+      }
+    #if os(macOS)
+      .onAppear { Automation.openSettingsWindow = { openSettings() } }
+    #endif
   }
 }

@@ -28,6 +28,11 @@ import SwiftUI
 /// (AutomationQueue.swift).
 @MainActor
 enum Automation {
+  /// The app's Compute server, for the checks that look at its Settings.
+  static var remoteServer: RemoteServer?
+  /// Opens the Settings window, set once a window is up (`openSettings` comes from a view).
+  static var openSettingsWindow: (() -> Void)?
+
   /// Whether this launch is a scripted run (any of the flags `runIfRequested` acts on).
   nonisolated static var isRequested: Bool {
     let flags = [
@@ -35,7 +40,7 @@ enum Automation {
       "--reuse", "--generate", "--ux-check", "--edit-input-check", "--queue-check",
       "--timeline-check", "--upscale-check", "--timeline-export-check", "--flashvsr-check",
       "--model-folders-check", "--styles-check", "--cleanup-check", "--engine-check", "--playback-check",
-      "--remote-check",
+      "--remote-check", "--remote-net-check", "--remote-shots", "--remote-url-check",
     ]
     // The unit tests run inside the app. Like a scripted run, that leaves the user's data alone: no
     // cleanup at launch, no saving the session or queue.
@@ -105,6 +110,18 @@ enum Automation {
     }
     if args.contains("--remote-check") {
       remoteCheck(model, library: library)
+      return
+    }
+    if args.contains("--remote-net-check") {
+      remoteNetCheck(model, library: library)
+      return
+    }
+    if args.contains("--remote-url-check") {
+      remoteURLCheck(model)
+      return
+    }
+    if args.contains("--remote-shots") {
+      remoteShots(model, navigation: navigation, library: library)
       return
     }
     if args.contains("--cleanup-check") {

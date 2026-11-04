@@ -102,15 +102,37 @@ struct ModelPicker: View {
   var body: some View {
     @Bindable var model = model
     Picker("Model", selection: $model.selectedModel) {
-      if model.models.isEmpty {
-        Text("No downloaded models").tag(String?.none)
+      if model.availableModels.isEmpty {
+        Text(model.runTargetServerName.map { "No models on \($0)" } ?? "No downloaded models").tag(String?.none)
       }
-      ForEach(model.models, id: \.file) { entry in
+      ForEach(model.availableModels, id: \.file) { entry in
         Text(entry.name).tag(Optional(entry.file))
       }
     }
     .pickerStyle(.menu)
     .help(model.selectedModelInfo.map { "\($0.name) (\($0.version ?? "unknown family"))" } ?? "Model")
+  }
+}
+
+/// Where new jobs run: this device, or a paired server, whose models and LoRAs the pickers then
+/// offer. A server that doesn't answer stays listed, disabled.
+struct RunOnPicker: View {
+  @Environment(CreateModel.self) private var model
+
+  var body: some View {
+    @Bindable var model = model
+    Picker("Run on", selection: $model.runTarget) {
+      Text(CreateModel.thisDeviceName).tag(JobTarget.local)
+      ForEach(model.remoteServers.servers) { server in
+        let isOffline = model.remoteServers.status(of: server.id) == .offline
+        Text(isOffline ? "\(server.name) (Offline)" : server.name)
+          .tag(JobTarget.remote(serverID: server.id))
+          .disabled(isOffline)
+      }
+    }
+    .pickerStyle(.menu)
+    .help(model.runTargetProblem ?? "Where new jobs run. Add servers in Settings ▸ Compute.")
+    .onAppear { model.remoteServers.loadIfNeeded() }
   }
 }
 

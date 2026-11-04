@@ -29,12 +29,17 @@ actor RemoteClient {
 
   // MARK: - Connecting
 
-  private func connected() async throws -> RemoteConnection {
+  /// Whether the server answers right now, without the patience a job gets.
+  func isReachable() async -> Bool {
+    (try? await connected(rounds: 1, timeout: 3)) != nil
+  }
+
+  private func connected(rounds: Int = 4, timeout: TimeInterval = 8) async throws -> RemoteConnection {
     if let connection { return connection }
     if let opening { return try await opening.value }
     let server = server
     let device = device
-    let task = Task { try await Self.open(server, device: device) }
+    let task = Task { try await Self.open(server, device: device, rounds: rounds, timeout: timeout) }
     opening = task
     defer { opening = nil }
     let connection = try await task.value
@@ -45,13 +50,15 @@ actor RemoteClient {
 
   /// Tries each address, a few rounds with short backoff: a server replacing its listener refuses
   /// connections for a moment. A server that turned the key down isn't asked again.
-  private static func open(_ server: RemoteServerRecord, device: RemoteDeviceIdentity) async throws -> RemoteConnection {
-    for round in 0..<4 {
+  private static func open(
+    _ server: RemoteServerRecord, device: RemoteDeviceIdentity, rounds: Int, timeout: TimeInterval
+  ) async throws -> RemoteConnection {
+    for round in 0..<rounds {
       if round > 0 { try await Task.sleep(for: .milliseconds(250 << (round - 1))) }
       for address in server.addresses {
         let connection = RemoteConnection(to: address, identity: device.id.uuidString, key: server.key)
         do {
-          try await connection.start()
+          try await connection.start(timeout: timeout)
           let proof = RemotePairing.proof(key: server.key, deviceID: device.id, purpose: "hello")
           connection.sendNow(.message(RemoteEnvelope(
             message: .hello(version: RemoteProtocol.version, deviceID: device.id, deviceName: device.name, proof: proof))))

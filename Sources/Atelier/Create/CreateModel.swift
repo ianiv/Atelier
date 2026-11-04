@@ -34,6 +34,180 @@ final class CreateModel {
     }
   }
 
+  /// A server's models, LoRAs and model folder listing, as the pickers want them.
+  struct ServerCatalog {
+    var models: [MediaGenerationResolvedModel]
+    var loras: [ModelLibrary.LoRA]
+    var files: [String]
+  }
+
+  /// Where new jobs run (Run on). A job keeps the target it was queued with.
+  var runTarget = JobTarget.local {
+    didSet {
+      guard runTarget != oldValue else { return }
+      serverCatalog = nil
+      saveSession()
+      Task { await loadRunTargetCatalog() }
+    }
+  }
+
+  /// What the selected server has; nil on this device, or until it answers.
+  private(set) var serverCatalog: ServerCatalog?
+  /// The models the pickers offer: `models`, which are always this device's, or the server's.
+  var availableModels: [MediaGenerationResolvedModel] {
+    runTarget == .local ? models : serverCatalog?.models ?? []
+  }
+
+  /// The file names the settings offer refiners and upscalers from.
+  private var availableFiles: [String] {
+    runTarget == .local ? modelFiles : serverCatalog?.files ?? []
+  }
+
+  /// The LoRAs the pickers offer: `library`'s, or the selected server's.
+  func availableLoRAs(in library: ModelLibrary) -> [ModelLibrary.LoRA] {
+    runTarget == .local ? library.loras : serverCatalog?.loras ?? []
+  }
+
+  /// The name of the selected server; nil on this device.
+  var runTargetServerName: String? {
+    guard case .remote(let id) = runTarget else { return nil }
+    return remoteServers.name(of: id) ?? "The server"
+  }
+
+  /// Why Generate can't go to the selected server right now.
+  var runTargetProblem: String? {
+    guard case .remote(let id) = runTarget, let name = runTargetServerName else { return nil }
+    if remoteServers.status(of: id) == .offline { return "\(name) is offline." }
+    if serverCatalog == nil { return "Connecting to \(name)…" }
+    if let selectedModel, !availableModels.contains(where: { $0.file == selectedModel }) {
+      return "\(name) doesn't have this model."
+    }
+    return nil
+  }
+
+  /// This device, as Run on and the Queue call it.
+  static var thisDeviceName: String {
+    #if os(macOS)
+      "This Mac"
+    #else
+      "This iPad"
+    #endif
+  }
+
+  /// Where a job runs, for the Queue: its server's name, or this device once there's a choice.
+  func runLocationName(of job: JobQueue.Job) -> String? {
+    switch job.target {
+    case .remote(let id): remoteServers.name(of: id) ?? "Removed server"
+    case .local: remoteServers.servers.isEmpty ? nil : Self.thisDeviceName
+    }
+  }
+
+  /// Rereads the selected server's catalog and puts the pickers on it, keeping the selected model
+  /// and its settings if the server has it. Back on this device, the same with local models.
+  func loadRunTargetCatalog() async {
+    let target = runTarget
+    guard case .remote(let id) = target else {
+      serverCatalog = nil
+      reconcileModel()
+      return
+    }
+    serverCatalog = nil
+    guard let catalog = try? await remoteServers.backend(for: id).catalog(), target == runTarget else { return }
+    serverCatalog = ServerCatalog(
+      models: catalog.models.map {
+        MediaGenerationResolvedModel(file: $0.file, name: $0.name, description: "", version: $0.version, isDownloaded: true)
+      },
+      loras: catalog.loras.map {
+        // Only its name and family are read here: it lives on the server.
+        ModelLibrary.LoRA(name: $0.name, file: $0.file, prefix: $0.prefix, version: $0.version, size: 1, registry: URL(filePath: "/"))
+      },
+      files: catalog.files)
+    reconcileModel()
+  }
+
+  /// After Run on changes: the model the last session had on that server if it's there, the
+  /// selected one if it's still offered (its defaults now come from where it'll run), else the first.
+  private func reconcileModel() {
+    let available = availableModels
+    if let restoring = restoringRemoteSession, available.contains(where: { $0.file == restoring.model }) {
+      restoringRemoteSession = nil
+      pendingSettings = restoring.settings
+      if selectedModel == restoring.model, let model = restoring.model {
+        loadDefaults(for: model)
+      } else {
+        selectedModel = restoring.model
+      }
+    } else if let selectedModel, available.contains(where: { $0.file == selectedModel }) {
+      loadDefaults(for: selectedModel)
+    } else {
+      selectedModel = available.first?.file
+    }
+  }
+
+  /// A session that ended on a server, until that server has answered.
+  @ObservationIgnored private var restoringRemoteSession: SessionState?
+
+  /// Back on the server the last session ended on.
+  private func restoreRunTarget(from session: SessionState) {
+    guard let target = session.runTarget, case .remote(let id) = target, remoteServers.name(of: id) != nil else { return }
+    restoringRemoteSession = session
+    runTarget = target
+  }
+
+  /// Watches paired servers: whether each is there (Run on disables one that isn't), and when one
+  /// comes back, what's waiting for it. Only asks once there are servers on the list.
+  private func watchServers() {
+    remoteServers.onServerOnline = { [weak self] id in
+      guard let self else { return }
+      Task { await self.recoverRemoteJobs() }
+      if runTarget == .remote(serverID: id), serverCatalog == nil {
+        Task { await self.loadRunTargetCatalog() }
+      }
+    }
+    Task { [weak self] in
+      await self?.remoteServers.checkStatus()
+      if let self {
+        await waitUntil { [history] in history.isLoaded }
+        await recoverRemoteJobs()
+      }
+      while !Task.isCancelled {
+        try? await Task.sleep(for: .seconds(20))
+        guard let self else { return }
+        await remoteServers.checkStatus()
+      }
+    }
+  }
+
+  /// Puts jobs sent before this launch back in the queue to be collected: those whose server
+  /// answers now, and those whose server isn't paired anymore, which then fail saying so. One
+  /// that's merely offline waits for it to come back rather than holding the queue.
+  func recoverRemoteJobs() async {
+    remoteServers.loadIfNeeded()
+    for record in clientJobs.all() {
+      let isPaired = remoteServers.name(of: record.serverID) != nil
+      guard !isPaired || remoteServers.status(of: record.serverID) == .online, let blank = try? await RemoteBackend.blankConfiguration(for: record.model) else { continue }
+      var configuration = ModelDefaults.recommended(for: record.model, configuration: blank)
+      SettingsRegistry.apply(dump: record.settings, to: &configuration)
+      let sameProject = record.project == history.project.name
+      var request = GenerationEngine.Request(
+        model: record.model, prompt: record.prompt, negativePrompt: record.negativePrompt, seed: record.seed,
+        configuration: configuration)
+      request.parentTensorId = sameProject ? record.parentTensorId : nil
+      request.canvas = clientJobs.canvas(of: record)
+      if request.canvas != nil {
+        request.canvasTensorId = sameProject ? record.canvasTensorId : nil
+        request.canvasIsImported = record.canvasIsImported
+      }
+      request.moodboard = clientJobs.moodboard(of: record)
+      request.placement = sameProject ? record.placement : nil
+      queue.appendResumed(request, id: record.jobID, server: record.serverID)
+    }
+    runNext()
+  }
+
+  /// Jobs sent to servers and not yet saved here.
+  @ObservationIgnored var clientJobs = RemoteClientJobs()
+
   let history: HistoryStore
   /// Generate adds to it; jobs run one at a time, in order.
   let queue = JobQueue()
@@ -324,7 +498,7 @@ final class CreateModel {
 
   /// Generate works while a job runs: it queues the next one.
   var canGenerate: Bool {
-    !isLoadingModel && selectedModel != nil && settings != nil
+    !isLoadingModel && selectedModel != nil && settings != nil && runTargetProblem == nil
       // An empty prompt is fine when the style has a default subject.
       && (!prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || style?.defaults[Style.subject] != nil)
   }
@@ -376,7 +550,7 @@ final class CreateModel {
   }
 
   var selectedModelInfo: MediaGenerationResolvedModel? {
-    models.first { $0.file == selectedModel }
+    availableModels.first { $0.file == selectedModel }
   }
 
   /// The selected model's layout prompt format; nil when it doesn't read layouts.
@@ -600,7 +774,7 @@ final class CreateModel {
   private(set) var modelFiles: [String] = []
 
   var settingContext: SettingContext {
-    SettingContext(models: models, files: modelFiles)
+    SettingContext(models: availableModels, files: availableFiles)
   }
 
   /// The file a refiner/upscaler checkbox turns on: the one last picked if still offered, else the
@@ -685,6 +859,11 @@ final class CreateModel {
     AppLifecycle.onBecomeActive { [weak self] in
       Task { await self?.checkModelsDirectories() }
     }
+    if SessionState.isEnabled {
+      let session = restored
+      watchServers()
+      if let session { restoreRunTarget(from: session) }
+    }
     // Notices a drive with a models folder being connected or disconnected.
     Task { [weak self] in
       while !Task.isCancelled {
@@ -739,14 +918,15 @@ final class CreateModel {
       settings: settings.map(JSONValue.fields(of:)) ?? pendingSettings,
       imageProject: imageStep?.project,
       imageStep: imageStep.flatMap { history.tree.step(tensorId: $0.tensorId) },
-      imageTensorId: imageStep?.tensorId
+      imageTensorId: imageStep?.tensorId,
+      runTarget: runTarget
     ).save()
   }
 
   /// Whether `item`'s model is downloaded, so its settings can be loaded here.
   func canUse(_ item: HistoryItem) -> Bool {
     !isBusy && !item.sidecar.configuration.isEmpty
-      && models.contains { $0.file == item.sidecar.model }
+      && availableModels.contains { $0.file == item.sidecar.model }
   }
 
   /// Loads a history item's prompt, model, seed and settings into Create, and with `loadImage` its
@@ -888,6 +1068,8 @@ final class CreateModel {
     await engine.setModelsDirectories(directories)
     await loadModelList()
     onModelsReloaded?()
+    // The pickers are on a server's models: this device's changing doesn't touch them.
+    guard runTarget == .local else { return }
     if let restored, let model = restored.model, models.contains(where: { $0.file == model }) {
       self.restored = nil
       pendingSettings = restored.settings
@@ -919,6 +1101,7 @@ final class CreateModel {
   /// unless the selected model is gone.
   func refreshModelList() async {
     await loadModelList()
+    guard runTarget == .local else { return }
     if selectedModel == nil || !models.contains(where: { $0.file == selectedModel }) {
       selectedModel = models.first?.file
     }
@@ -1009,7 +1192,7 @@ final class CreateModel {
   /// A preset for another downloaded model switches to that model first, then applies on top of
   /// its defaults (and its default preset) once they load.
   func apply(_ preset: Preset, undoManager: UndoManager?) {
-    if let model = preset.model, model != selectedModel, models.contains(where: { $0.file == model }) {
+    if let model = preset.model, model != selectedModel, availableModels.contains(where: { $0.file == model }) {
       pendingSettings = DrawThingsJSON.Pasted(preset).dump
       selectedModel = model
       return
@@ -1033,7 +1216,7 @@ final class CreateModel {
   /// downloaded is switched to first; a pasted seed is kept for the following generations.
   func paste(_ pasted: DrawThingsJSON.Pasted, undoManager: UndoManager?) {
     if let seed = pasted.seed { self.seed = seed }
-    if let model = pasted.model, model != selectedModel, models.contains(where: { $0.file == model }) {
+    if let model = pasted.model, model != selectedModel, availableModels.contains(where: { $0.file == model }) {
       pendingSettings = pasted.dump
       selectedModel = model
       return
@@ -1147,7 +1330,7 @@ final class CreateModel {
       if takesAudio { request.audio = audio.snapshot() }
       return request
     }
-    queue.append(requests, currentTensorId: history.currentTensorId)
+    queue.append(requests, currentTensorId: history.currentTensorId, target: runTarget)
     runNext()
     // After `runNext`, which clears the message as a job starts.
     if takesAudio, requests.contains(where: { $0.audio == nil }) {
@@ -1182,7 +1365,10 @@ final class CreateModel {
     forAgent request: GenerationEngine.Request,
     progress: @escaping (GenerationEngine.Progress) -> Void
   ) async throws -> HistoryItem {
-    let id = queue.append([request], currentTensorId: history.currentTensorId, fromAgent: true)[0]
+    // A model only the selected server has runs there; any other runs on this device, as agents
+    // choose among this device's models.
+    let target = models.contains(where: { $0.file == request.model }) ? JobTarget.local : runTarget
+    let id = queue.append([request], currentTensorId: history.currentTensorId, target: target, fromAgent: true)[0]
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
         agentCallbacks[id] = (progress, { continuation.resume(with: $0) })
@@ -1293,6 +1479,8 @@ final class CreateModel {
     samplingStart = nil
     lastStepAt = nil
     let backend = self.backend(for: job.target)
+    // Style thumbnails and agents answer callers a quit ends, so there's nothing to come back to.
+    let keepsRemoteJob = job.target != .local && job.styleThumbnail == nil && !job.fromAgent
     generationTask = Task {
       var status = JobQueue.Job.Status.cancelled
       var inputTensorId: Int64?
@@ -1308,6 +1496,14 @@ final class CreateModel {
         let output: GenerationEngine.Output
         if let upscale = request.upscale {
           output = try await upscaled(request, upscale, on: backend, progress: progress)
+        } else if let remote = backend as? RemoteBackend, keepsRemoteJob, case .remote(let server) = job.target {
+          // Kept until it's saved below, so a quit in between loses nothing.
+          if job.resumesRemoteJob {
+            output = try await remote.resume(job: job.id, progress: progress)
+          } else {
+            await clientJobs.add(request, job: job.id, server: server, project: history.project.name)
+            output = try await remote.generate(request, job: job.id, acknowledges: false, progress: progress)
+          }
         } else {
           output = try await backend.generate(request, progress: progress)
         }
@@ -1350,15 +1546,21 @@ final class CreateModel {
         inputTensorId = item.inputTensorId
         tipTensorId = item.clip?.frames.last
         agentCallbacks.removeValue(forKey: job.id)?.completion(.success(item))
+        if keepsRemoteJob, let remote = backend as? RemoteBackend {
+          clientJobs.remove(job.id)
+          await remote.acknowledge(job: job.id)
+        }
       } catch is CancellationError {
         // Stopped; keep the last preview on the canvas (when it's showing the run).
         agentCallbacks.removeValue(forKey: job.id)?.completion(.failure(CancellationError()))
         thumbnailCallbacks.removeValue(forKey: job.id)?(.failure(CancellationError()))
         deviceCallbacks.removeValue(forKey: job.id)?.completion(.failure(CancellationError()))
+        if keepsRemoteJob { clientJobs.remove(job.id) }
       } catch {
         // A paired device's failure is reported to it, not as an error on this screen.
         if job.remoteDevice == nil { errorMessage = error.localizedDescription }
         status = .failed(error.localizedDescription)
+        if keepsRemoteJob { clientJobs.remove(job.id) }
         agentCallbacks.removeValue(forKey: job.id)?.completion(.failure(error))
         thumbnailCallbacks.removeValue(forKey: job.id)?(.failure(error))
         deviceCallbacks.removeValue(forKey: job.id)?.completion(.failure(error))
@@ -1373,6 +1575,7 @@ final class CreateModel {
   ) {
     queue.finishRunning(status, inputTensorId: inputTensorId, tipTensorId: tipTensorId)
     phase = .idle
+    transfer = nil
     generationTask = nil
     runStartedAt = nil
     canvasBeforePreview = nil
@@ -1388,7 +1591,7 @@ final class CreateModel {
   /// bar, and returns its image. It isn't saved to the project. Cancelling the caller cancels
   /// the job.
   func generateStyleThumbnail(_ request: GenerationEngine.Request, style: String) async throws -> CGImage {
-    let id = queue.append([request], currentTensorId: history.currentTensorId, styleThumbnail: style)[0]
+    let id = queue.append([request], currentTensorId: history.currentTensorId, target: runTarget, styleThumbnail: style)[0]
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
         thumbnailCallbacks[id] = { continuation.resume(with: $0) }
@@ -1668,6 +1871,9 @@ final class CreateModel {
     runNext()
   }
 
+  /// A running job's files moving to or from its server, while they are.
+  private(set) var transfer: (title: String, fraction: Double)?
+
   private func handle(_ progress: GenerationEngine.Progress, showsOnCanvas: Bool = true) {
     guard generationTask != nil, phase != .cancelling else { return }
     switch progress {
@@ -1683,6 +1889,14 @@ final class CreateModel {
       noteStep(step, of: total)
     case .state(let state):
       phase = .running(Self.describe(state))
+      switch state {
+      case .uploading(let sent, let total):
+        transfer = (title: "Uploading", fraction: total > 0 ? Double(sent) / Double(total) : 0)
+      case .downloading(let received, let total):
+        transfer = (title: "Downloading", fraction: total > 0 ? Double(received) / Double(total) : 0)
+      default:
+        transfer = nil
+      }
       if case .generating(let step, let total) = state {
         noteStep(step, of: total)
       }
@@ -1703,7 +1917,7 @@ final class CreateModel {
   private func loadDefaults(for model: String) {
     loadTask?.cancel()
     isLoadingModel = true
-    let backend = self.backend(for: .local)
+    let backend = self.backend(for: runTarget)
     loadTask = Task {
       do {
         let configuration = try await backend.loadPipeline(for: model)
@@ -1735,7 +1949,8 @@ final class CreateModel {
   private static func describe(_ state: MediaGenerationPipeline.State) -> String {
     switch state {
     case .resolvingBackend, .resolvingModel, .preparing, .ensuringResources: return "Preparing…"
-    case .uploading: return "Uploading…"
+    case .uploading(let sent, let total):
+      return total > 0 ? "Uploading \(sent * 100 / total)%…" : "Uploading…"
     case .downloading(let received, let total):
       return total > 0 ? "Downloading \(received * 100 / total)%…" : "Downloading…"
     case .encodingText: return "Encoding prompt…"
