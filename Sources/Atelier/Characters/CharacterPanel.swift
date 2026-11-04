@@ -215,7 +215,7 @@ struct CharacterPanel: View {
           // As Generate has on Create; it works from a knob's text box too.
           .keyboardShortcut(.return, modifiers: .command)
           .disabled(blocker != nil || running)
-          .help(blocker ?? "Render a preview with the model, settings and seed on Create. It isn't saved to the project.")
+          .help("Render (⌘↩). \(blocker ?? "Makes a preview with the model, settings and seed on Create. It isn't saved to the project.")")
       }
       .frame(height: 26)
       sheetControls(running: running)
@@ -257,7 +257,7 @@ struct CharacterPanel: View {
         }
         .keyboardShortcut(.return, modifiers: [.command, .shift])
         .disabled(blocker != nil || running)
-        .help(blocker ?? "Render one image showing the character several ways. It comes out as a preview.")
+        .help("Render Sheet (⇧⌘↩). \(blocker ?? "Makes one image showing the character several ways. It comes out as a preview.")")
       }
       .frame(height: 26)
       TextField(
