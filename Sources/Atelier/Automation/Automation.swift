@@ -36,6 +36,12 @@ enum Automation {
       "--timeline-check", "--upscale-check", "--timeline-export-check", "--flashvsr-check",
       "--model-folders-check", "--styles-check", "--cleanup-check", "--engine-check",
     ]
+    // The unit tests run inside the app. Like a scripted run, that leaves the user's data alone: no
+    // cleanup at launch, no saving the session or queue.
+    let environment = ProcessInfo.processInfo.environment
+    if ["ATELIER_UNIT_TESTS", "XCTestConfigurationFilePath", "XCTestBundlePath"].contains(where: { environment[$0] != nil }) {
+      return true
+    }
     return CommandLine.arguments.contains { flags.contains($0) }
   }
 
