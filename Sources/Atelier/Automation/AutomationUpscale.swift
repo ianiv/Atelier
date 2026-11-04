@@ -126,7 +126,10 @@ extension Automation {
   /// `--method none` exports as it is, as Export Video… does without upscaling.
   ///
   ///   Atelier --timeline-export-check --project NAME [--method none|system|flashVSR] [--scale 4]
-  ///           [--variant turbo|base] [--clip ID] [--crossfade N] [--trim N] --export DIR [--quit]
+  ///           [--variant turbo|base] [--clip ID] [--crossfade N] [--trim N] [--cancel-at PERCENT]
+  ///           --export DIR [--quit]
+  ///
+  /// `--cancel-at` stops the export once it's that far along and checks that nothing was written.
   static func timelineExportCheck(_ model: CreateModel) {
     let args = CommandLine.arguments
     func value(_ name: String) -> String? {
@@ -211,6 +214,7 @@ extension Automation {
             composition: composition, upscale: upscale, title: timeline.name, destination: url))
         log("queued: \(model.queue.running.map { _ in "running" } ?? "waiting"), \(model.queue.waiting.count) waiting")
         var lastTenth = -1
+        var cancelled = false
         while !model.queue.isEmpty {
           if model.queue.running?.export != nil, model.totalSteps > 0 {
             let tenth = model.step * 10 / model.totalSteps
@@ -218,8 +222,20 @@ extension Automation {
               lastTenth = tenth
               log("\(tenth * 10)% (status bar: \(model.phase))")
             }
+            if let cancelAt = value("--cancel-at").flatMap(Int.init), !cancelled, tenth * 10 >= cancelAt {
+              cancelled = true
+              model.cancel()
+            }
           }
           try? await Task.sleep(for: .milliseconds(200))
+        }
+        if cancelled {
+          let status = model.queue.recent.first?.status
+          log(
+            status == .cancelled && !FileManager.default.fileExists(atPath: url.path)
+              ? "PASS cancelling stopped the export and wrote nothing"
+              : "FAIL after cancelling: \(status.map { "\($0)" } ?? "no job")")
+          return finish()
         }
         guard let job = model.queue.recent.first, case .exported(let written) = job.status,
           written == url

@@ -1,10 +1,12 @@
 import AVFoundation
 import CoreGraphics
+import CoreMedia
 import CoreVideo
 @preconcurrency import DataModels
 @preconcurrency import Diffusion
 import Foundation
 @preconcurrency import NNC
+import Synchronization
 
 /// How Export Upscaled… makes a timeline larger.
 nonisolated struct TimelineUpscale: Sendable, Hashable {
@@ -135,17 +137,17 @@ nonisolated extension TimelineComposition {
       url: url, codec: codec, width: scaler.outputWidth, height: scaler.outputHeight)
     var count = 0
     do {
-      while let (frame, time) = reader.next() {
+      while let (frame, time) = try await reader.next() {
         try Task.checkCancellation()
         let result = try await scaler.next(frame)
-        let buffer = try writer.buffer()
-        try scaler.copy(result, into: buffer)
-        try writer.append(buffer, at: time)
+        let buffer = try writer.makeBuffer()
+        try buffer.withUnsafeBuffer { try scaler.copy(result, into: $0) }
+        try await writer.append(CVReadOnlyPixelBuffer(buffer), at: time)
         count += 1
         written(count)
       }
       try reader.finish()
-      try writer.finish()
+      try await writer.finish()
     } catch {
       writer.cancel()
       throw error
@@ -167,8 +169,8 @@ nonisolated extension TimelineComposition {
     // The frame last read; past the end, the last frame repeats.
     var last: (index: Int, image: CGImage)?
     func frame(_ index: Int) -> CGImage? {
-      while (last?.index ?? -1) < index, let (buffer, _) = reader.next() {
-        guard let image = Self.image(buffer) else { return nil }
+      while (last?.index ?? -1) < index, let (buffer, _) = try? Self.waitFor({ try await reader.next() }) {
+        guard let image = buffer.withUnsafeBuffer({ Self.image($0) }) else { return nil }
         last = ((last?.index ?? -1) + 1, image)
       }
       return last?.image
@@ -179,18 +181,37 @@ nonisolated extension TimelineComposition {
       try upscaler.run(
         count: frameCount, frame: frame, progress: { _, _, _ in }, shouldContinue: shouldContinue
       ) { tensor in
-        let buffer = try writer.buffer()
-        Self.fill(buffer, with: tensor)
-        try writer.append(buffer, at: Self.frameTime(count, framesPerSecond))
+        let buffer = try writer.makeBuffer()
+        buffer.withUnsafeBuffer { Self.fill($0, with: tensor) }
+        let ready = CVReadOnlyPixelBuffer(buffer)
+        let time = Self.frameTime(count, framesPerSecond)
+        try Self.waitFor { try await writer.append(ready, at: time) }
         count += 1
         written(count)
       }
       try reader.finish()
-      try writer.finish()
+      try Self.waitFor { try await writer.finish() }
     } catch {
       writer.cancel()
       throw error
     }
+  }
+
+  /// Waits for async work from the upscaler, which is synchronous and calls back on the engine's
+  /// queue. That queue is the engine's alone, so blocking it holds up no other work. Never call
+  /// this from async code: there it would block one of the threads Swift tasks share.
+  private static func waitFor<T: Sendable>(_ work: @escaping @Sendable () async throws -> T) throws -> T {
+    let done = DispatchSemaphore(value: 0)
+    let result = Mutex<Result<T, Error>?>(nil)
+    Task(priority: .userInitiated) {
+      let outcome: Result<T, Error>
+      do { outcome = try .success(await work()) } catch { outcome = .failure(error) }
+      result.withLock { $0 = outcome }
+      done.signal()
+    }
+    done.wait()
+    guard let outcome = result.withLock({ $0 }) else { throw ClipVideoError.cantWrite }
+    return try outcome.get()
   }
 
   /// A composed frame as an image of its own (the reader reuses its buffers).
@@ -283,28 +304,32 @@ nonisolated extension TimelineComposition {
 }
 
 /// The timeline's frames as it plays them, in order, as BGRA at its size.
-private final nonisolated class ComposedFrames {
+///
+/// `@unchecked` because AVFoundation's objects aren't Sendable; one export uses it, a call at a time.
+private final nonisolated class ComposedFrames: @unchecked Sendable {
+  private typealias Provider = AVAssetReaderOutput.Provider<CMReadySampleBuffer<CMSampleBuffer.DynamicContent>>
+
   private let reader: AVAssetReader
-  private let output: AVAssetReaderVideoCompositionOutput
+  private let provider: Provider
 
   init(_ timeline: TimelineComposition) throws {
     reader = try AVAssetReader(asset: timeline.composition)
     let tracks = timeline.composition.tracks(withMediaType: .video)
-    output = AVAssetReaderVideoCompositionOutput(
+    let output = AVAssetReaderVideoCompositionOutput(
       videoTracks: tracks,
       videoSettings: [kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)])
     output.videoComposition = timeline.videoComposition
     guard reader.canAdd(output) else { throw ClipVideoError.cantWrite }
-    reader.add(output)
-    guard reader.startReading() else { throw reader.error ?? ClipVideoError.cantWrite }
+    provider = reader.outputProvider(for: output)
+    try reader.start()
   }
 
   /// The next frame and when it plays; nil at the end.
-  func next() -> (CVPixelBuffer, CMTime)? {
-    guard let sample = output.copyNextSampleBuffer(), let buffer = sample.imageBuffer else {
-      return nil
-    }
-    return (buffer, sample.presentationTimeStamp)
+  func next() async throws -> (CVReadOnlyPixelBuffer, CMTime)? {
+    guard let sample = try await provider.next(),
+          let frame = CMReadySampleBuffer<CVReadOnlyPixelBuffer>(sample)
+    else { return nil }
+    return (frame.content, frame.presentationTimeStamp)
   }
 
   func finish() throws {
@@ -313,56 +338,41 @@ private final nonisolated class ComposedFrames {
 }
 
 /// A silent MP4 at the upscaled size, written a frame at a time.
-private final nonisolated class UpscaledVideoWriter {
+///
+/// `@unchecked` because AVFoundation's objects aren't Sendable; one export uses it, a call at a time.
+private final nonisolated class UpscaledVideoWriter: @unchecked Sendable {
   private let writer: AVAssetWriter
-  private let input: AVAssetWriterInput
-  private let adaptor: AVAssetWriterInputPixelBufferAdaptor
+  private let receiver: AVAssetWriterInput.PixelBufferReceiver
 
   init(url: URL, codec: VideoCodec, width: Int, height: Int) throws {
     writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
-    input = AVAssetWriterInput(
+    let input = AVAssetWriterInput(
       mediaType: .video,
       outputSettings: ClipVideo.videoSettings(codec, width: width, height: height))
-    input.expectsMediaDataInRealTime = false
-    adaptor = AVAssetWriterInputPixelBufferAdaptor(
-      assetWriterInput: input,
-      sourcePixelBufferAttributes: [
-        kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA),
-        kCVPixelBufferWidthKey as String: width,
-        kCVPixelBufferHeightKey as String: height,
-        kCVPixelBufferIOSurfacePropertiesKey as String: [:] as [String: Any],
-      ])
     guard writer.canAdd(input) else { throw ClipVideoError.cantWrite }
-    writer.add(input)
-    guard writer.startWriting() else { throw writer.error ?? ClipVideoError.cantWrite }
+    var attributes = CVPixelBufferCreationAttributes(
+      pixelFormatType: CVPixelFormatType(rawValue: kCVPixelFormatType_32BGRA),
+      size: CVImageSize(width: width, height: height))
+    attributes.backing = .ioSurface
+    receiver = writer.inputPixelBufferReceiver(for: input, pixelBufferAttributes: attributes)
+    try writer.start()
     writer.startSession(atSourceTime: .zero)
   }
 
   /// A BGRA buffer to fill with the next frame.
-  func buffer() throws -> CVPixelBuffer {
-    var buffer: CVPixelBuffer?
-    guard let pool = adaptor.pixelBufferPool,
-          CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer) == kCVReturnSuccess, let buffer
-    else { throw writer.error ?? ClipVideoError.cantWrite }
-    return buffer
+  func makeBuffer() throws -> CVMutablePixelBuffer {
+    guard let pool = receiver.pixelBufferPool else { throw writer.error ?? ClipVideoError.cantWrite }
+    return try pool.makeMutablePixelBuffer()
   }
 
-  /// Appends a frame, waiting for the encoder to take it.
-  func append(_ buffer: CVPixelBuffer, at time: CMTime) throws {
-    while !input.isReadyForMoreMediaData {
-      guard writer.status == .writing else { throw writer.error ?? ClipVideoError.cantWrite }
-      usleep(2_000)
-    }
-    guard adaptor.append(buffer, withPresentationTime: time) else {
-      throw writer.error ?? ClipVideoError.cantWrite
-    }
+  /// Appends a frame, suspending until the encoder takes it.
+  func append(_ buffer: CVReadOnlyPixelBuffer, at time: CMTime) async throws {
+    try await receiver.append(buffer, with: time)
   }
 
-  func finish() throws {
-    input.markAsFinished()
-    let done = DispatchSemaphore(value: 0)
-    writer.finishWriting { done.signal() }
-    done.wait()
+  func finish() async throws {
+    receiver.finish()
+    await writer.finishWriting()
     if writer.status != .completed { throw writer.error ?? ClipVideoError.cantWrite }
   }
 

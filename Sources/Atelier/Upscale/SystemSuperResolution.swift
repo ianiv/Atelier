@@ -117,9 +117,10 @@ nonisolated enum SystemSuperResolution {
 
     /// The next frame's result, in the model's pixel format. `frame` is any format the system
     /// converts from (the model's size); its alpha comes out NaN.
-    func next(_ frame: CVPixelBuffer) async throws -> CVPixelBuffer {
+    func next(_ frame: CVReadOnlyPixelBuffer) async throws -> CVPixelBuffer {
       let source = try buffer(from: sourcePool)
-      guard VTPixelTransferSessionTransferImage(transfer, from: frame, to: source) == noErr else {
+      let status = frame.withUnsafeBuffer { VTPixelTransferSessionTransferImage(transfer, from: $0, to: source) }
+      guard status == noErr else {
         throw Failure.noBuffer
       }
       return try await process(source)
