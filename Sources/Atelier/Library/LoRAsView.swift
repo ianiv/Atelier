@@ -32,6 +32,13 @@ struct LoRAsView: View {
     library.loras.first { $0.file == selection }
   }
 
+  private var familyPicker: some View {
+    Picker("Family", selection: $family) {
+      Text("All families").tag(String?.none)
+      ForEach(families, id: \.self) { Text(ModelLibrary.familyName($0)).tag(Optional($0)) }
+    }
+  }
+
   var body: some View {
     content
       .overlay {
@@ -46,13 +53,20 @@ struct LoRAsView: View {
         return true
       } isTargeted: { dropTargeted = $0 }
       .toolbar {
-        ToolbarItem {
-          Picker("Family", selection: $family) {
-            Text("All families").tag(String?.none)
-            ForEach(families, id: \.self) { Text(ModelLibrary.familyName($0)).tag(Optional($0)) }
+        #if os(iOS)
+          ToolbarItem {
+            Menu {
+              familyPicker.pickerStyle(.inline)
+            } label: {
+              Label(
+                "Family",
+                systemImage: family == nil ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+            }
+            .help("Show only one family")
           }
-          .frame(minWidth: 160)
-        }
+        #else
+          ToolbarItem { familyPicker.frame(minWidth: 160) }
+        #endif
         ToolbarItem {
           Button("Import…", systemImage: "plus") { chooseFiles() }
             .help("Import .safetensors LoRA files (or drop them here)")

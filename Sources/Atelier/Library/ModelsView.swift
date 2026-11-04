@@ -61,7 +61,11 @@ struct ModelsView: View {
             ForEach(Filter.allCases) { Text($0.rawValue).tag($0) }
           }
           .pickerStyle(.segmented)
+          .toolbarNaturalWidth()
         }
+        #if os(iOS)
+          ToolbarSpacer(.fixed)
+        #endif
         ToolbarItem {
           Button("Refresh", systemImage: "arrow.clockwise") {
             Task { await library.refresh() }

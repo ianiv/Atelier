@@ -90,42 +90,32 @@ struct HistoryView: View {
             Label("Graph", systemImage: "arrow.triangle.branch").tag(Layout.graph)
           }
           .pickerStyle(.segmented)
+          .toolbarNaturalWidth()
           .help("Show the images as a grid, or as a graph of their branches")
         }
-        if history.items.contains(where: \.isVideo) {
-          ToolbarItem {
-            Picker("Kind", selection: $kindFilter) {
-              Text("Images and Videos").tag(Kind.all)
-              Text("Images").tag(Kind.images)
-              Text("Videos").tag(Kind.videos)
-            }
-            .help("Show images, videos or both")
-          }
-        }
-        ToolbarItem {
-          Picker("Rating", selection: $ratingFilter) {
-            Text("Any rating").tag(RatingFilter.any)
-            Divider()
-            ForEach((1...5).reversed(), id: \.self) { stars in
-              Text(StarRating.text(stars) + (stars < 5 ? " or more" : "")).tag(RatingFilter.atLeast(stars))
-            }
-            Divider()
-            Text("Unrated").tag(RatingFilter.unrated)
-          }
-          .help("Show only images with at least this many stars, or only unrated ones")
-        }
-        ToolbarItem {
-          Picker("Model", selection: $modelFilter) {
-            Text("All models").tag(String?.none)
-            ForEach(modelNames, id: \.self) { Text($0).tag(Optional($0)) }
-          }
-          .frame(minWidth: 180)
-        }
         #if os(iOS)
+          ToolbarSpacer(.fixed)
+          // One button: a picker for each would run out of room in anything but a wide window.
+          ToolbarItem {
+            Menu {
+              kindPicker.pickerStyle(.menu).disabled(!history.items.contains(where: \.isVideo))
+              ratingPicker.pickerStyle(.menu)
+              modelPicker.pickerStyle(.menu)
+            } label: {
+              Label("Filter", systemImage: isFiltering ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+            }
+            .help("Show only some kinds, ratings or models")
+          }
           ToolbarItem {
             Button(selecting ? "Done" : "Select") { selecting.toggle() }
               .help("Select several images to copy, export, save or delete together")
           }
+        #else
+          if history.items.contains(where: \.isVideo) {
+            ToolbarItem { kindPicker }
+          }
+          ToolbarItem { ratingPicker }
+          ToolbarItem { modelPicker.frame(minWidth: 180) }
         #endif
       }
       .searchable(text: $search, placement: .toolbar, prompt: "Filter by prompt")
@@ -403,6 +393,41 @@ struct HistoryView: View {
           })
     #endif
   }
+
+  private var kindPicker: some View {
+    Picker("Kind", selection: $kindFilter) {
+      Text("Images and Videos").tag(Kind.all)
+      Text("Images").tag(Kind.images)
+      Text("Videos").tag(Kind.videos)
+    }
+    .help("Show images, videos or both")
+  }
+
+  private var ratingPicker: some View {
+    Picker("Rating", selection: $ratingFilter) {
+      Text("Any rating").tag(RatingFilter.any)
+      Divider()
+      ForEach((1...5).reversed(), id: \.self) { stars in
+        Text(StarRating.text(stars) + (stars < 5 ? " or more" : "")).tag(RatingFilter.atLeast(stars))
+      }
+      Divider()
+      Text("Unrated").tag(RatingFilter.unrated)
+    }
+    .help("Show only images with at least this many stars, or only unrated ones")
+  }
+
+  private var modelPicker: some View {
+    Picker("Model", selection: $modelFilter) {
+      Text("All models").tag(String?.none)
+      ForEach(modelNames, id: \.self) { Text($0).tag(Optional($0)) }
+    }
+  }
+
+  #if os(iOS)
+    private var isFiltering: Bool {
+      kindFilter != .all || ratingFilter != .any || modelFilter != nil
+    }
+  #endif
 
   /// Selection, use, drag and the context menu, shared by grid cells and graph rows.
   private func cell(_ content: some View, item: HistoryItem) -> some View {

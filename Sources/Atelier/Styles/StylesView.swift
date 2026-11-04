@@ -79,15 +79,24 @@ struct StylesView: View {
             Label("Grid", systemImage: "square.grid.2x2").tag(true)
           }
           .pickerStyle(.segmented)
+          .toolbarNaturalWidth()
           .help("Show the styles as a list or a grid of thumbnails")
         }
-        ToolbarItem {
-          Picker("Category", selection: $styles.screenCategory) {
-            Text("All categories").tag(String?.none)
-            ForEach(styles.categories, id: \.self) { Text($0.isEmpty ? "Uncategorized" : $0).tag(Optional($0)) }
+        #if os(iOS)
+          ToolbarSpacer(.fixed)
+          ToolbarItem {
+            Menu {
+              categoryPicker.pickerStyle(.inline)
+            } label: {
+              Label(
+                "Category",
+                systemImage: styles.screenCategory == nil ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+            }
+            .help("Show only one category")
           }
-          .frame(minWidth: 160)
-        }
+        #else
+          ToolbarItem { categoryPicker.frame(minWidth: 160) }
+        #endif
         ToolbarItem {
           Menu {
             Button("Import Styles…", systemImage: "square.and.arrow.down") { chooseFiles() }
@@ -272,6 +281,14 @@ struct StylesView: View {
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.top, 12)
       .padding(.bottom, 4)
+  }
+
+  private var categoryPicker: some View {
+    @Bindable var styles = styles
+    return Picker("Category", selection: $styles.screenCategory) {
+      Text("All categories").tag(String?.none)
+      ForEach(styles.categories, id: \.self) { Text($0.isEmpty ? "Uncategorized" : $0).tag(Optional($0)) }
+    }
   }
 
   /// A row or grid cell: selected by clicks, highlighted when selected, with the context menu.

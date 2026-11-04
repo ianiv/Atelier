@@ -59,6 +59,16 @@ extension View {
     #endif
   }
 
+  /// A segmented control or menu in the toolbar at its own width. iPadOS would otherwise stretch it
+  /// to take the bar's spare room.
+  func toolbarNaturalWidth() -> some View {
+    #if os(macOS)
+      self
+    #else
+      fixedSize()
+    #endif
+  }
+
   /// A small segmented control on the Mac; on iPad the large size, which a finger can hit.
   func compactPickerSize() -> some View {
     #if os(macOS)
