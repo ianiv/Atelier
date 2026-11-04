@@ -62,7 +62,7 @@ A sheet is one image, from one prompt, showing the same character several ways. 
 - **Turnaround**: front, three-quarter, side and back views, side by side on a 2:1 canvas.
 - **Expressions**: six expressions in a grid, on a 3:2 canvas.
 - **Poses**: standing, walking, sitting and running, on a 7:4 canvas.
-- **Custom**: say what it shows in the box underneath ("in three outfits, side by side"), on a 3:2 canvas.
+- **Custom**: says what you type, on a 3:2 canvas. Pick **Custom** and the box under the menu opens (it stays greyed out for the other sheets, and Render Sheet waits until it has text). Your text continues the sentence "A character sheet: the same character shown several ways on one canvas, …", so write something like "in three outfits, side by side" or "from four camera angles, in a row". The prompt then says only that it's the same character in every view, so your text decides what else stays the same or changes. The text is kept with the character.
 
 A sheet sets its own size from its shape and the **1 MP** or **2 MP** picker; the line above **Render** shows that size. Everything else comes from Create, whose own size isn't changed. The sheet's words wrap the description and fill the selected style's subject; with No Style it keeps the plain backdrop and deep focus, without the reference look's single full-body framing.
 

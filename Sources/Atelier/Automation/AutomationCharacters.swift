@@ -263,7 +263,7 @@
             store.save(preview, to: shown.id)
             check(store.character(id: shown.id)?.images.count == 1, "Save to Character adds the preview once")
             if let sheetValue = value("--sheet") {
-              store.edit(shown.id) { $0.sheet = sheetValue; $0.sheetMegapixels = 1 }
+              store.edit(shown.id) { $0.sheet = sheetValue; $0.sheetMegapixels = 1; $0.customSheet = "in three outfits, side by side." }
               let before = store.previews[shown.id]?.count ?? 0
               let createSize = model.settings.map { ($0.width, $0.height) }
               let sheetCharacter = store.character(id: shown.id)!

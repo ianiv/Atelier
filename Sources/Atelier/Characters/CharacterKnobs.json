@@ -28,7 +28,7 @@
       "title": "Custom",
       "aspect": 1.5,
       "takesText": true,
-      "template": "A character sheet: the same character shown several ways on one canvas, {{CUSTOM}}. The same character and outfit in every view. The character: {{SUBJECT}}"
+      "template": "A character sheet: the same character shown several ways on one canvas, {{CUSTOM}}. The same character in every view. The character: {{SUBJECT}}"
     }
   ],
   "sections": [
