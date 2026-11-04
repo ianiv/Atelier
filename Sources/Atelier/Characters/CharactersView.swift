@@ -291,6 +291,11 @@ private struct CharacterStage: View {
       canvas
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(12)
+      // Under the image, not over it. Always laid out, so nothing moves when a render starts.
+      ProgressView(value: Double(rendering ? create.step : 0), total: Double(max(create.totalSteps, 1)))
+        .opacity(rendering ? 1 : 0)
+        .padding(.horizontal, 12)
+        .padding(.bottom, 6)
       actions
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
@@ -326,12 +331,6 @@ private struct CharacterStage: View {
           Text("Set some knobs and press Render. Renders use the model, settings and seed on Create.")
         }
       }
-    }
-    .overlay(alignment: .bottom) {
-      // Always laid out, so nothing moves when a render starts.
-      ProgressView(value: Double(rendering ? create.step : 0), total: Double(max(create.totalSteps, 1)))
-        .opacity(rendering ? 1 : 0)
-        .padding(8)
     }
   }
 
