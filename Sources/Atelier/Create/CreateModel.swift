@@ -56,6 +56,7 @@ final class CreateModel {
   #if os(iOS)
     /// The queue was paused for going to the background, not by the user.
     @ObservationIgnored private var pausedForBackground = false
+    @ObservationIgnored private var savedForBackground = false
   #endif
 
   var prompt = "" {
@@ -621,12 +622,21 @@ final class CreateModel {
     #if os(iOS)
       // iPadOS stops GPU work in the background: hold the queue there and pick it up on return.
       AppLifecycle.onEnterBackground { [weak self] in
-        guard let self, !queue.isPaused else { return }
+        guard let self else { return }
+        // iPadOS can end the app from here on, without warning.
+        saveQueue()
+        savedForBackground = true
+        guard !queue.isPaused else { return }
         pausedForBackground = true
         setQueuePaused(true)
       }
       AppLifecycle.onEnterForeground { [weak self] in
-        guard let self, pausedForBackground else { return }
+        guard let self else { return }
+        // Still running: what was saved would come back at the next launch as well. Not at launch,
+        // which also comes through here, when what was saved is yet to be restored.
+        if savedForBackground, SessionState.isEnabled { SavedQueue.save([], project: history.project.name) }
+        savedForBackground = false
+        guard pausedForBackground else { return }
         pausedForBackground = false
         setQueuePaused(false)
       }
@@ -1148,6 +1158,10 @@ final class CreateModel {
 
   /// Starts the next waiting job when none is running.
   private func runNext() {
+    #if os(iOS)
+      // A job can end after the app went to the background: don't bring it back at the next launch.
+      defer { if savedForBackground { saveQueue() } }
+    #endif
     guard generationTask == nil, let job = queue.startNext() else { return }
     run(job)
   }
