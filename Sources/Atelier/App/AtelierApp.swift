@@ -95,8 +95,9 @@ struct AtelierApp: App {
         if navigation.section == .videoEditor {
           TimelineZoomMenuItems(store: create.timelines, history: history)
         } else {
+          // The full-size viewer takes the same shortcuts for its own zoom.
           ZoomMenuItems(canvas: create.canvas)
-            .disabled(navigation.section != .create)
+            .disabled(navigation.section != .create || create.viewingCanvasImage)
         }
       }
       CommandMenu("Image") {
@@ -142,6 +143,9 @@ struct AtelierApp: App {
           create.loadCanvasImageSettings(undoManager: undoManager)
         }
         .disabled(create.canvasImageSettings == nil)
+        Button("Show Image Full Size") { create.viewingCanvasImage = true }
+          .keyboardShortcut("y", modifiers: .command)
+          .disabled(navigation.section != .create || create.image == nil || create.canvasClip != nil)
         Button("Clear Canvas") { create.clearCanvas() }
           .disabled(navigation.section != .create)
         Divider()

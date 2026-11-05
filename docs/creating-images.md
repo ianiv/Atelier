@@ -97,7 +97,8 @@ Open the **Presets** menu in the toolbar:
 ## The canvas
 
 - Pinch, or use ⌘+ and ⌘−, to zoom. Drag to move. Double-click to switch between fit and actual size. The zoom controls are also under **View**.
-- Right-click the canvas for **Copy Image**, **Save Image…**, **Save to Photos**, **Open Image…**, **Open from Photos…**, **Paste Image**, **Load Settings from Image**, **Add to Moodboard**, **Match Size to Image** and **Clear Canvas**.
+- Right-click the canvas for **Show Image Full Size**, **Copy Image**, **Save Image…**, **Save to Photos**, **Open Image…**, **Open from Photos…**, **Paste Image**, **Load Settings from Image**, **Add to Moodboard**, **Match Size to Image** and **Clear Canvas**.
+- **Show Image Full Size** (⌘Y, also in the **Image** menu) opens the image at full resolution in a popup. Pinch, use its buttons or press ⌘+ / ⌘- to zoom, drag to pan, and double-click to switch between fit and actual size. Space, Esc or **Done** closes it.
 
 ### Recent images
 

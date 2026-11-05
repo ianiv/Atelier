@@ -245,6 +245,12 @@ struct CanvasView: View {
       isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } }),
       actions: { Button("OK") { saveError = nil } },
       message: { Text(saveError ?? "") })
+    // The canvas's image as it is now: a run that finishes while it's open shows its result here.
+    .sheet(isPresented: Bindable(model).viewingCanvasImage) {
+      ImageViewer(
+        image: model.image, imageID: model.imageItem?.tensorId, accessibilityLabel: "Canvas image, full size",
+        emptyTitle: "No Image")
+    }
   }
 
   /// The configured output size in pixels, else the image's.
@@ -288,6 +294,9 @@ struct CanvasView: View {
   }
 
   @ViewBuilder private func contextMenu(_ canvas: CanvasState) -> some View {
+    Button("Show Image Full Size") { model.viewingCanvasImage = true }
+      .disabled(model.image == nil)
+    Divider()
     Button("Copy Image") { if let image = model.image { HistoryStore.copy(image) } }
       .disabled(model.image == nil)
     Button("Save Image…") { save() }

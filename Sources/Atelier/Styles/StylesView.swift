@@ -883,16 +883,46 @@ private struct ExportStylesSheet: View {
   }
 }
 
-/// A style's thumbnail full size, in a sheet sized to the image: fitted to start, then zoomed with
-/// a pinch, the buttons or ⌘+ / ⌘- (⌘0 actual size, ⌘9 fit), and panned by dragging. A double
-/// click switches between fit and actual size there. Space, Escape or Done closes it. It shows
-/// `StyleStore.viewingThumbnail`; the arrow keys go to `arrow`, which moves that to another style.
+/// A style's thumbnail full size in `ImageViewer`. It shows `StyleStore.viewingThumbnail`; the
+/// arrow keys go to `arrow`, which moves that to another style.
 struct ThumbnailViewer: View {
   let arrow: (KeyEquivalent) -> KeyPress.Result
   @Environment(StyleStore.self) private var styles
-  @Environment(\.dismiss) private var dismiss
   @State private var image: CGImage?
+  @State private var shown: UUID?
   @State private var loaded = false
+
+  var body: some View {
+    ImageViewer(
+      image: image, imageID: shown, loaded: loaded, accessibilityLabel: "Thumbnail, full size",
+      emptyTitle: "No Thumbnail", arrow: arrow
+    )
+    // Kept from the last style while closing, so the sheet doesn't empty as it goes.
+    .task(id: styles.viewingThumbnail) {
+      guard let id = styles.viewingThumbnail else { return }
+      let full = await styles.fullThumbnailImage(id)
+      guard !Task.isCancelled else { return }
+      image = full
+      shown = id
+      loaded = true
+    }
+  }
+}
+
+/// An image full size, in a sheet sized to the image: fitted to start, then zoomed with a pinch,
+/// the buttons or ⌘+ / ⌘- (⌘0 actual size, ⌘9 fit), and panned by dragging. A double click switches
+/// between fit and actual size there. Space, Escape or Done closes it. A new `imageID` fits the
+/// image again; a new `image` with the same id keeps the zoom. For a style's thumbnail
+/// (`ThumbnailViewer`) and the canvas image (`CanvasView`).
+struct ImageViewer: View {
+  let image: CGImage?
+  let imageID: AnyHashable
+  /// Whether loading is over: with no `image`, says `emptyTitle` rather than showing a spinner.
+  var loaded = true
+  let accessibilityLabel: String
+  let emptyTitle: String
+  var arrow: (KeyEquivalent) -> KeyPress.Result = { _ in .ignored }
+  @Environment(\.dismiss) private var dismiss
   /// Points per image pixel; nil while fitted, so the image keeps fitting as the sheet resizes.
   @State private var zoom: CGFloat?
   /// The image's centre from the view's, in points.
@@ -923,15 +953,9 @@ struct ThumbnailViewer: View {
     .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow], phases: .down) { press in
       arrow(press.key)
     }
-    // Kept from the last style while closing, so the sheet doesn't empty as it goes.
-    .task(id: styles.viewingThumbnail) {
-      guard let id = styles.viewingThumbnail else { return }
-      let full = await styles.fullThumbnailImage(id)
-      guard !Task.isCancelled else { return }
-      image = full
+    .task(id: imageID) {
       zoom = nil
       offset = .zero
-      loaded = true
       focused = true
     }
   }
@@ -971,11 +995,11 @@ struct ThumbnailViewer: View {
             .interpolation(scale > 2 ? .none : .high)
             .frame(width: pixels.width * scale, height: pixels.height * scale)
             .accessibilityElement()
-            .accessibilityLabel("Thumbnail, full size")
+            .accessibilityLabel(accessibilityLabel)
             .accessibilityAddTraits(.isImage)
             .offset(offset)
         } else if loaded {
-          ContentUnavailableView("No Thumbnail", systemImage: "photo")
+          ContentUnavailableView(emptyTitle, systemImage: "photo")
         } else {
           ProgressView()
         }

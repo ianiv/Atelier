@@ -158,6 +158,8 @@ final class CreateModel {
   private(set) var step = 0
   private(set) var totalSteps = 0
   private(set) var image: CGImage?
+  /// The canvas image is open full size (`ImageViewer`).
+  var viewingCanvasImage = false
   /// The image of the step the last run saved.
   private var lastSavedTensorId: Int64?
   /// The step the last run saved (its number may change when a fork or delete renumbers steps).

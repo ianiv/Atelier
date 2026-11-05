@@ -1076,6 +1076,16 @@ enum Automation {
       if let latest = model.history.items.first, model.canUse(latest) { model.use(latest) }
       while model.isBusy || model.image == nil { try? await Task.sleep(for: .milliseconds(100)) }
       await shot("ux-fit.png")
+      // The canvas image full size, as Show Image Full Size opens it.
+      if let snapshotDir {
+        model.viewingCanvasImage = true
+        try? await Task.sleep(for: .seconds(2))
+        check(
+          AutomationWindows.snapshotSheet(to: snapshotDir.appendingPathComponent("ux-full-size.png")),
+          "the canvas image opens full size")
+        model.viewingCanvasImage = false
+        try? await Task.sleep(for: .seconds(1))
+      }
       model.canvas.zoomIn()
       model.canvas.zoomIn()
       check(model.canvas.scale != nil, "zoom in leaves fit: \(model.canvas.effectiveScale)")
