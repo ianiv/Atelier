@@ -96,6 +96,9 @@ struct ImageUpscaleSheet: View {
         }
         .pickerStyle(.segmented)
         LabeledContent("Size", value: "\(width) × \(height) → \(size.width) × \(size.height)")
+        if let problem = upscale.problem(width: width, height: height) {
+          Text(problem).font(.caption).foregroundStyle(.secondary)
+        }
       }
       Spacer(minLength: 0)
       HStack {
@@ -107,7 +110,8 @@ struct ImageUpscaleSheet: View {
           dismiss()
         }
         .keyboardShortcut(.defaultAction)
-        .disabled(method != nil && controls.problem != nil)
+        .disabled(
+          method != nil ? controls.problem != nil : upscale.problem(width: width, height: height) != nil)
       }
     }
     .sheetPadding()

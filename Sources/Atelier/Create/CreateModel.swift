@@ -1924,6 +1924,10 @@ final class CreateModel {
       guard let frame = output.frames.first else { throw ProjectError.badImage }
       return GenerationEngine.Output(frames: [frame])
     case .seedVR2(let file):
+      // The sheet already says so; a queued job may come from a saved queue or a script.
+      if let problem = upscale.problem(width: image.width, height: image.height) {
+        throw ImageUpscaleError(message: problem)
+      }
       // One step at the new size with the model's own defaults, as the catalog runs it.
       let size = upscale.outputSize(width: image.width, height: image.height)
       guard let stretched = ImageUpscale.stretched(image, width: size.width, height: size.height) else {
@@ -1987,6 +1991,11 @@ final class CreateModel {
       output.audioSampleRate = rate
     }
     return output
+  }
+
+  nonisolated struct ImageUpscaleError: LocalizedError {
+    var message: String
+    var errorDescription: String? { message }
   }
 
   nonisolated enum UpscaleError: LocalizedError {

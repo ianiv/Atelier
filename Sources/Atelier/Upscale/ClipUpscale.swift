@@ -34,6 +34,19 @@ nonisolated struct ImageUpscale: Codable, Sendable, Hashable {
     }
   }
 
+  /// SeedVR2's largest result, in pixels: 2944×2944 has worked, and 5888×5888 passed 76 GB of
+  /// memory on a real run, or asserted while building its decoder.
+  static let seedVR2PixelLimit = 2944 * 2944
+
+  /// Why this can't upscale a `width`×`height` image; nil when it can. The video upscalers' own
+  /// limits are `ClipUpscale.problem`'s.
+  func problem(width: Int, height: Int) -> String? {
+    guard case .seedVR2 = upscaler else { return nil }
+    let size = outputSize(width: width, height: height)
+    return size.width * size.height > Self.seedVR2PixelLimit
+      ? "That's too large for SeedVR2, which goes up to 2944 × 2944." : nil
+  }
+
   /// `image` stretched to exactly `width`×`height`: SeedVR2 restores what it's given at its size.
   static func stretched(_ image: CGImage, width: Int, height: Int) -> CGImage? {
     guard let context = CGContext(

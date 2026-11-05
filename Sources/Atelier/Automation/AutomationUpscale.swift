@@ -32,9 +32,18 @@ extension Automation {
       // `--image`: the smallest image instead, with `--method`, `--upscaler FILE` or the first
       // model installed.
       if args.contains("--image") {
+        // `--input-image FILE`: that file, as an imported image on the canvas.
         let images = model.history.items.filter { !$0.isVideo }
-        guard let source = images.min(by: { $0.sidecar.width * $0.sidecar.height < $1.sidecar.width * $1.sidecar.height }),
-              let image = await model.history.image(tensorId: source.tensorId, in: model.history.project.name),
+        let source = value("--input-image") == nil
+          ? images.min(by: { $0.sidecar.width * $0.sidecar.height < $1.sidecar.width * $1.sidecar.height })
+          : nil
+        var picked: CGImage?
+        if let input = value("--input-image") {
+          picked = ImageLoader.image(at: URL(fileURLWithPath: input))
+        } else if let source {
+          picked = await model.history.image(tensorId: source.tensorId, in: model.history.project.name)
+        }
+        guard let image = picked,
               let upscaler = value("--seedvr").map(ImageUpscale.Upscaler.seedVR2) ?? value("--method").flatMap(ClipUpscale.Method.init(rawValue:)).map({ ImageUpscale.Upscaler.video($0, $0 == .flashVSR ? .turbo : nil) })
               ?? (value("--upscaler") ?? ImageUpscale.installed.first?.file).map(ImageUpscale.Upscaler.model)
         else {
@@ -42,7 +51,7 @@ extension Automation {
           return finish()
         }
         let scale = value("--scale").flatMap(Int.init) ?? 4
-        log("source \(source.tensorId): \(image.width)x\(image.height), \(upscaler) \(scale)x")
+        log("source \(source?.tensorId ?? 0): \(image.width)x\(image.height), \(upscaler) \(scale)x")
         let before = model.queue.recent.count
         let upscaleStarted = Date()
         let upscale = ImageUpscale(upscaler: upscaler, scale: scale)
@@ -60,12 +69,12 @@ extension Automation {
         let size = upscale.outputSize(width: image.width, height: image.height)
         let right = made.width == size.width && made.height == size.height
         log(
-          "\(right ? "PASS" : "FAIL") image \(result.tensorId): \(made.width)x\(made.height) (sidecar \(result.sidecar.width)x\(result.sidecar.height)) in \(String(format: "%.1f", Date().timeIntervalSince(upscaleStarted)))s, prompt kept: \(result.sidecar.prompt == source.sidecar.prompt), input \(result.inputTensorId.map(String.init) ?? "none"), \(model.history.items.count) items")
+          "\(right ? "PASS" : "FAIL") image \(result.tensorId): \(made.width)x\(made.height) (sidecar \(result.sidecar.width)x\(result.sidecar.height)) in \(String(format: "%.1f", Date().timeIntervalSince(upscaleStarted)))s, prompt kept: \(result.sidecar.prompt == source?.sidecar.prompt), input \(result.inputTensorId.map(String.init) ?? "none"), \(model.history.items.count) items")
         if let directory = value("--export") {
           let url = URL(fileURLWithPath: directory).appendingPathComponent("image-\(value("--seedvr") == nil ? value("--method") ?? "model" : "seedvr")-\(scale)x.png")
           try? await model.history.exportPNG(result, to: url)
           let sourceURL = URL(fileURLWithPath: directory).appendingPathComponent("source.png")
-          try? await model.history.exportPNG(source, to: sourceURL)
+          if let source { try? await model.history.exportPNG(source, to: sourceURL) }
         }
         return finish()
       }
