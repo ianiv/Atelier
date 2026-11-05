@@ -14,6 +14,7 @@
 		D70A11000000000000000003 /* DrawThingsImport.swift in Sources */ = {isa = PBXBuildFile; fileRef = D70A11000000000000000004 /* DrawThingsImport.swift */; };
 		D70A11000000000000000001 /* CommunityCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = D70A11000000000000000002 /* CommunityCatalog.swift */; };
 		B7A1F0C2B3D4A59687786206 /* WaitUntilTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A1F0C2B3D4A59687786306 /* WaitUntilTests.swift */; };
+		C7A1F0C2B3D4A59687786206 /* CanvasDropTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A1F0C2B3D4A59687786306 /* CanvasDropTests.swift */; };
 		A7E1F0C2B3D4A5968778699B /* WaitUntil.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1F0C2B3D4A5968778699A /* WaitUntil.swift */; };
 		A7E1F0C2B3D4A5968778698B /* BackgroundQueueTask.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1F0C2B3D4A5968778698A /* BackgroundQueueTask.swift */; };
 		A7E1F0C2B3D4A5968778697B /* AutomationPlayback.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1F0C2B3D4A5968778697A /* AutomationPlayback.swift */; };
@@ -195,6 +196,7 @@
 		D70A11000000000000000004 /* DrawThingsImport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawThingsImport.swift; sourceTree = "<group>"; };
 		D70A11000000000000000002 /* CommunityCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommunityCatalog.swift; sourceTree = "<group>"; };
 		B7A1F0C2B3D4A59687786306 /* WaitUntilTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaitUntilTests.swift; sourceTree = "<group>"; };
+		C7A1F0C2B3D4A59687786306 /* CanvasDropTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasDropTests.swift; sourceTree = "<group>"; };
 		A7E1F0C2B3D4A5968778699A /* WaitUntil.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaitUntil.swift; sourceTree = "<group>"; };
 		A7E1F0C2B3D4A5968778698A /* BackgroundQueueTask.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundQueueTask.swift; sourceTree = "<group>"; };
 		A7E1F0C2B3D4A5968778697A /* AutomationPlayback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationPlayback.swift; sourceTree = "<group>"; };
@@ -671,6 +673,7 @@
 				AF232DA4CD210F5B739657F4 /* RemoteTests.swift */,
 				B7A1F0C2B3D4A59687786305 /* ValueTests.swift */,
 				B7A1F0C2B3D4A59687786306 /* WaitUntilTests.swift */,
+				C7A1F0C2B3D4A59687786306 /* CanvasDropTests.swift */,
 			);
 			path = AtelierTests;
 			sourceTree = "<group>";
@@ -1007,6 +1010,7 @@
 				C1C8FF826A372CCCEC268435 /* RemoteTests.swift in Sources */,
 				B7A1F0C2B3D4A59687786205 /* ValueTests.swift in Sources */,
 				B7A1F0C2B3D4A59687786206 /* WaitUntilTests.swift in Sources */,
+				C7A1F0C2B3D4A59687786206 /* CanvasDropTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

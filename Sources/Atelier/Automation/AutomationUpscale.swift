@@ -123,11 +123,12 @@ extension Automation {
   /// as it is.
   ///
   /// `--clip ID` exports that History video instead (the first `--trim` frames when given), and
-  /// `--method none` exports as it is, as Export Video… does without upscaling.
+  /// `--method none` exports as it is, as Export Video… does without upscaling. `--input FILE`
+  /// upscales a video file as dropping it on the canvas does, with no timeline needed.
   ///
   ///   Atelier --timeline-export-check --project NAME [--method none|system|flashVSR] [--scale 4]
-  ///           [--variant turbo|base] [--clip ID] [--crossfade N] [--trim N] [--cancel-at PERCENT]
-  ///           --export DIR [--quit]
+  ///           [--variant turbo|base] [--clip ID] [--input FILE] [--crossfade N] [--trim N]
+  ///           [--cancel-at PERCENT] --export DIR [--quit]
   ///
   /// `--cancel-at` stops the export once it's that far along and checks that nothing was written.
   static func timelineExportCheck(_ model: CreateModel) {
@@ -149,6 +150,42 @@ extension Automation {
         try? await Task.sleep(for: .milliseconds(100))
       }
       model.timelines.load()
+      if let input = value("--input"), let directory = value("--export") {
+        // A file as the canvas takes it when dropped: its name and frames, then the Queue.
+        do {
+          let file = URL(fileURLWithPath: input)
+          let composition = try await TimelineComposition.make(file: file)
+          let method = value("--method").flatMap(ClipUpscale.Method.init(rawValue:)) ?? .system
+          let upscale = TimelineUpscale(
+            method: method, scale: value("--scale").flatMap(Int.init) ?? 2,
+            variant: value("--variant").flatMap(FlashVSRFiles.Variant.init(rawValue:)) ?? .turbo)
+          log("file: \(composition.frameCount) frames at \(composition.width)x\(composition.height), \(composition.framesPerSecond) fps")
+          if let problem = ClipUpscale.problem(
+            width: composition.width, height: composition.height, scale: upscale.scale,
+            method: method, variant: upscale.variant)
+          {
+            log("FAIL \(problem)")
+            return finish()
+          }
+          let url = URL(fileURLWithPath: directory).appending(path: "file-\(method.rawValue)-\(upscale.scale)x.mp4")
+          let exportStarted = Date()
+          model.queue(
+            TimelineExportJob(
+              composition: composition, upscale: upscale,
+              title: file.deletingPathExtension().lastPathComponent, destination: url))
+          while !model.queue.isEmpty {
+            try? await Task.sleep(for: .milliseconds(200))
+          }
+          guard let job = model.queue.recent.first, case .exported(let written) = job.status, written == url else {
+            log("FAIL \(model.queue.recent.first.map { "\($0.status)" } ?? "no job") \(model.errorMessage ?? "")")
+            return finish()
+          }
+          log(String(format: "PASS exported %@ in %.1fs", url.path, Date().timeIntervalSince(exportStarted)))
+        } catch {
+          log("FAIL \(error as NSError)")
+        }
+        return finish()
+      }
       let clip = value("--clip").flatMap(Int64.init).flatMap(model.history.item(tensorId:))
       guard var timeline = model.timelines.timelines.first, let directory = value("--export") else {
         log("FAIL no timeline in \(model.history.project.name), or no --export")

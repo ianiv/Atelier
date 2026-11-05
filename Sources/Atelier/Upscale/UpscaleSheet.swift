@@ -45,6 +45,9 @@ struct VideoExportSheet: View {
   let width: Int
   let height: Int
   let frameCount: Int
+  /// A video from outside the project, which is only here to be upscaled: there's no None, and
+  /// the sheet names it.
+  var name: String?
   /// Called with how to upscale, or nil to export as it is.
   let export: (TimelineUpscale?) -> Void
   @Environment(CreateModel.self) private var create
@@ -53,17 +56,21 @@ struct VideoExportSheet: View {
   @AppStorage("exportUpscaleScale") private var scale = 2
   @AppStorage("upscaleFlashVSRVariant") private var variant = FlashVSRFiles.Variant.turbo
 
-  private var method: ClipUpscale.Method? { ClipUpscale.Method(rawValue: upscaleChoice) }
+  private var method: ClipUpscale.Method? {
+    // Without None, a saved None falls to the method that needs no download.
+    ClipUpscale.Method(rawValue: upscaleChoice) ?? (name == nil ? nil : .system)
+  }
 
   var body: some View {
     let controls = UpscaleControls(
       width: width, height: height,
       method: Binding(get: { method }, set: { upscaleChoice = $0?.rawValue ?? "none" }),
-      scale: $scale, variant: $variant, offersNone: true, server: create.runTargetUpscalers)
+      scale: $scale, variant: $variant, offersNone: name == nil, server: create.runTargetUpscalers)
     let upscale = method.map { TimelineUpscale(method: $0, scale: scale, variant: variant) }
     let problem = controls.problem
     VStack(alignment: .leading, spacing: 12) {
-      Text("Export Video").font(.headline)
+      Text(name.map { "Upscale “\($0)”" } ?? "Export Video").font(.headline)
+        .lineLimit(1).truncationMode(.middle)
       controls
       LabeledContent(
         "Takes about",
@@ -96,6 +103,14 @@ struct VideoExportSheet: View {
     Duration.seconds(max(seconds, 60).rounded(.up))
       .formatted(.units(allowed: [.hours, .minutes], width: .wide, maximumUnitCount: 2))
   }
+}
+
+/// A video dropped on the canvas, ready for `VideoExportSheet`.
+struct DroppedVideo: Identifiable {
+  let id = UUID()
+  /// The file's name, without its extension.
+  let name: String
+  let composition: TimelineComposition
 }
 
 /// Method, FlashVSR+ variant and scale for upscaling a `width`×`height` video, with the size it

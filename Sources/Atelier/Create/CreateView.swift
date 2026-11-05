@@ -151,6 +151,9 @@ struct CanvasView: View {
   @Environment(FileDialogs.self) private var fileDialogs
   @State private var saveError: String?
   @State private var isTargeted = false
+  /// A video dropped on the canvas, choosing how to upscale it.
+  @State private var droppedVideo: DroppedVideo?
+  @State private var videoError: String?
   @Environment(\.undoManager) private var undoManager
 
   private static let margin: Double = 24
@@ -255,11 +258,11 @@ struct CanvasView: View {
           contextMenu(canvas)
         }
       }
-      .dropDestination(for: DroppedImage.self) { images, _ in
-        guard let image = images.first else { return false }
-        model.setCanvasImage(image.image, metadata: image.metadata)
+      .onDrop(of: CanvasDrop.types, isTargeted: $isTargeted) { providers in
+        guard let provider = providers.first else { return false }
+        open(dropped: provider)
         return true
-      } isTargeted: { isTargeted = $0 }
+      }
       .onChange(of: imageFit, initial: true) { canvas.fitScale = imageFit }
     }
     .background(Color.underPageBackground.ignoresSafeArea())
@@ -270,6 +273,19 @@ struct CanvasView: View {
       isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } }),
       actions: { Button("OK") { saveError = nil } },
       message: { Text(saveError ?? "") })
+    .alert(
+      "Couldn't open the video",
+      isPresented: Binding(get: { videoError != nil }, set: { if !$0 { videoError = nil } }),
+      actions: { Button("OK") { videoError = nil } },
+      message: { Text(videoError ?? "") })
+    .sheet(item: $droppedVideo) { video in
+      VideoExportSheet(
+        width: video.composition.width, height: video.composition.height,
+        frameCount: video.composition.frameCount, name: video.name
+      ) { upscale in
+        if let upscale { queueUpscaledExport(video, upscale) }
+      }
+    }
     // The canvas's image as it is now: a run that finishes while it's open shows its result here.
     .sheet(isPresented: Bindable(model).viewingCanvasImage) {
       ImageViewer(
@@ -355,6 +371,38 @@ struct CanvasView: View {
       } catch {
         saveError = error.localizedDescription
       }
+    }
+  }
+
+  /// Puts a dropped image on the canvas, or reads a dropped video and offers to upscale it. The
+  /// video doesn't join the project.
+  private func open(dropped provider: NSItemProvider) {
+    Task {
+      do {
+        switch try await CanvasDrop.load(provider) {
+        case .image(let image):
+          model.setCanvasImage(image.image, metadata: image.metadata)
+        case .video(let url, let name):
+          droppedVideo = DroppedVideo(name: name, composition: try await TimelineComposition.make(file: url))
+        case nil: break
+        }
+      } catch {
+        videoError = error.localizedDescription
+      }
+    }
+  }
+
+  /// Asks where to save the dropped video upscaled, then queues the export.
+  private func queueUpscaledExport(_ video: DroppedVideo, _ upscale: TimelineUpscale) {
+    let create = model
+    fileDialogs.save = FileDialogs.Save(
+      // An empty file holds the place until the export replaces it.
+      file: ExportedFile(type: .mpeg4Movie) { Data() }, name: "\(video.name) \(upscale.scale)x.mp4"
+    ) { result in
+      guard case .success(let url) = result else { return }
+      create.queue(
+        TimelineExportJob(
+          composition: video.composition, upscale: upscale, title: video.name, destination: url))
     }
   }
 

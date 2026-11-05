@@ -189,6 +189,52 @@ nonisolated struct DroppedImage: Transferable {
   }
 }
 
+/// What the canvas takes: an image goes on it, a video opens Export Video to upscale it.
+///
+/// Read from the item provider because a Transferable alone gets a file named for its type
+/// ("MPEG-4 movie.mp4"); only the provider knows the video's name.
+nonisolated enum CanvasDrop {
+  case image(DroppedImage)
+  /// A copy of the file, under the temporary exports, so the job doesn't depend on the original;
+  /// it stays until the app quits, for Export Again.
+  case video(URL, name: String)
+
+  static let types: [UTType] = [.image, .movie]
+
+  private struct Movie: Transferable {
+    var file: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+      FileRepresentation(importedContentType: .movie) { received in
+        let copy = TemporaryFiles.newFile(in: .exports, extension: received.file.pathExtension)
+        try FileManager.default.copyItem(at: received.file, to: copy)
+        return Movie(file: copy)
+      }
+    }
+  }
+
+  /// What `provider` holds; nil when it's neither. An image comes first, so what offers both (a
+  /// Live Photo) still lands as a picture.
+  static func load(_ provider: NSItemProvider) async throws -> CanvasDrop? {
+    if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
+      return .image(try await load(DroppedImage.self, from: provider))
+    }
+    guard provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) else { return nil }
+    let movie = try await load(Movie.self, from: provider)
+    // A file's address names it best; other apps may only suggest a name, with its extension or not.
+    let address = try? await load(URL.self, from: provider)
+    let name = (address?.isFileURL == true ? address?.lastPathComponent : provider.suggestedName) ?? "Video"
+    let hasExtension = UTType(filenameExtension: (name as NSString).pathExtension)?.conforms(to: .movie) == true
+    return .video(movie.file, name: hasExtension ? (name as NSString).deletingPathExtension : name)
+  }
+
+  private static func load<T: Transferable>(_ type: T.Type, from provider: NSItemProvider) async throws -> T {
+    try await withCheckedThrowingContinuation { continuation in
+      _ = provider.loadTransferable(type: type) { continuation.resume(with: $0) }
+    }
+  }
+}
+
 extension CanvasState {
   /// The canvas frame as the next Edit run sees it: `size` pixels with `image` placed by the
   /// canvas zoom and offset, transparent where it doesn't reach (the engine inpaints there).

@@ -126,6 +126,59 @@ nonisolated struct TimelineComposition: @unchecked Sendable {
       framesPerSecond: fps, runs: runs)
   }
 
+  /// A video file from outside the project as a composition of its own: all of it, upright, with
+  /// its sound, so it upscales the way a timeline does. A file can be turned (a phone's is), which
+  /// a generated clip never is, and can vary its frame rate; the composition's frame duration
+  /// makes that steady.
+  @concurrent static func make(file: URL) async throws -> TimelineComposition {
+    let asset = AVURLAsset(url: file)
+    guard let source = try await asset.loadTracks(withMediaType: .video).first else {
+      throw ClipVideoError.noFrames
+    }
+    let range = try await source.load(.timeRange)
+    guard range.duration > .zero else { throw ClipVideoError.noFrames }
+    let composition = AVMutableComposition()
+    guard let videoTrack = composition.addMutableTrack(
+      withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid)
+    else { throw ClipVideoError.cantWrite }
+    try videoTrack.insertTimeRange(range, of: source, at: .zero)
+
+    let audioMix = AVMutableAudioMix()
+    if let sound = try await asset.loadTracks(withMediaType: .audio).first {
+      let soundRange = range.intersection(try await sound.load(.timeRange))
+      if soundRange.duration > .zero, let audioTrack = composition.addMutableTrack(
+        withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
+      {
+        try audioTrack.insertTimeRange(soundRange, of: sound, at: soundRange.start - range.start)
+      }
+    }
+
+    // The turned picture's box, moved to the origin. Encoders want even sizes.
+    let turn = try await source.load(.preferredTransform)
+    let box = CGRect(origin: .zero, size: try await source.load(.naturalSize)).applying(turn)
+    let transform = turn.concatenating(CGAffineTransform(translationX: -box.minX, y: -box.minY))
+    let width = Int(box.width.rounded()) & ~1
+    let height = Int(box.height.rounded()) & ~1
+    guard width > 0, height > 0 else { throw ClipVideoError.noFrames }
+
+    let nominal = Double(try await source.load(.nominalFrameRate))
+    let fps = nominal > 0 ? nominal : 30
+    let videoComposition = AVVideoComposition(
+      configuration: AVVideoComposition.Configuration(
+        frameDuration: frameTime(1, fps),
+        instructions: [
+          instruction(
+            CMTimeRange(start: .zero, duration: range.duration),
+            layers: [layer(videoTrack, transform: transform)]),
+        ],
+        renderSize: CGSize(width: width, height: height)))
+    let frames = max(Int((range.duration.seconds * fps).rounded()), 1)
+    return TimelineComposition(
+      composition: composition.copy() as! AVComposition, videoComposition: videoComposition,
+      audioMix: audioMix, duration: range.duration.seconds, width: width, height: height,
+      framesPerSecond: fps, runs: [0..<frames])
+  }
+
   @MainActor func playerItem() -> AVPlayerItem {
     let item = AVPlayerItem(asset: composition)
     item.videoComposition = videoComposition

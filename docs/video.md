@@ -104,6 +104,8 @@ The upscale runs in the Queue like any other job. The result is a new video afte
 
 Then you choose where to save it. As it is, it exports right away. Upscaled, it's a job in the [Queue](queue.md#exports): it waits its turn after what's already queued, shows its progress in the status bar and the Queue, and writes the file when it's done. The video in History (or the timeline) is left as it is.
 
+To upscale a video from outside Atelier, drop its file on the Create canvas. The same sheet opens, without None, and the result is only the file you save: nothing is added to the project or the canvas. Atelier works from a copy of the file, so you can move the original, and HDR video comes out as SDR.
+
 ## On another device
 
 Videos, upscales and exports can run on a [paired server](remote.md), chosen with **Run on** in the inspector. A video sends its reference images and audio file and brings back every frame, the soundtrack and the frame rate, and is saved like one made here. **Upscale…** uses the server's FlashVSR+ or Apple Super Resolution rather than this device's: a clip made on that server doesn't need its frames sent back while the server still has them, for up to 7 days. **Export Video…** with an upscale sends the frames there and encodes the file on this device. Upscales and exports aren't picked up again after a quit.
