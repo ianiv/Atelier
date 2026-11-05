@@ -118,8 +118,7 @@ actor GenerationEngine {
   /// Includes the community catalog (fetched once, then cached): the offline list alone misses
   /// downloaded community models such as Krea 2 and Ideogram 4.
   func downloadedModels() async -> [MediaGenerationResolvedModel] {
-    let models = await MediaGenerationEnvironment.default.downloadableModels(
-      includeDownloaded: true, offline: false)
+    let models = await CommunityCatalog.models()
     return models.filter(\.isDownloaded).sorted {
       $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
     }

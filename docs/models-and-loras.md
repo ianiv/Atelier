@@ -7,7 +7,7 @@ Atelier keeps models and LoRAs in your models folder (see [Settings](settings.md
 Click **Models** in the sidebar.
 
 - **Show**: Downloaded, Available or All. The catalog is the Draw Things community list plus models you imported.
-- **Refresh** reloads the catalog and rescans the models folder.
+- **Refresh** reloads the catalog and rescans the models folder. If the community list couldn't be fetched when Atelier opened, for example with no network, Refresh tries again, and its models come back without a relaunch.
 - Select a model to see its file, family, size on disk and description, and a link to its Hugging Face page when it has one.
 
 ### Downloading
@@ -35,6 +35,17 @@ The converted model is saved in the models folder as `<name>_f16.ckpt`, marked *
 **MOSS Image fine-tunes** in OpenMOSS' layout (for example Kromoss) are converted by a dedicated importer and work like the official MOSS Image model.
 
 Some families can't be imported yet: MiniMax H3, HiDream O1, Qwen Image 2.1, LTX-2, SeedVR2, Kandinsky, Würstchen and LongCat. Atelier tells you after inspecting the file.
+
+### Model files Atelier can't match
+
+Atelier only lists a model it can find in a catalog or a `custom.json`, because the file alone doesn't say which family it is. [Import from Draw Things](getting-started.md#import-from-draw-things) lists the other files in a folder, each with one of these reasons:
+
+- **Not converted yet.** The file is an original checkpoint or LoRA, which the engine can't run as it is. **Import as Model…** or **Import as LoRA…** converts a copy.
+- **Converted, but not registered.** Draw Things converted the file, but no `custom.json` in the chosen folders lists it. Draw Things usually keeps that list in its Documents folder, even for files on another drive, so add that folder first. If the file still isn't explained, choose its **Model Family**. When you click **Import**, Atelier adds it to the `custom.json` in the file's folder, taking its encoders and default settings from a catalog model of that family.
+
+The file itself doesn't say what it is, so Atelier can't check your choice. If it's wrong, the model won't load or will produce noise. To change it, edit the file's entry in `custom.json`; don't use **Move to Trash**, which also trashes the model file.
+
+If the community catalog couldn't be reached, the list says so, because it may then include models the catalog would have recognized.
 
 ### Make 8-bit Copy (MOSS models)
 

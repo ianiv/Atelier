@@ -31,6 +31,9 @@ struct AtelierApp: App {
       // Models folders picked outside the app stay readable while Atelier runs.
       FolderBookmarks.keepOpen([AppSettings.modelsDirectory] + AppSettings.additionalModelsDirectories)
     #endif
+    #if os(macOS)
+      if Automation.failsFirstCatalogFetch { URLProtocol.registerClass(FailingCatalogProtocol.self) }
+    #endif
     let history = HistoryStore()
     _history = State(initialValue: history)
     let create = CreateModel(history: history)
@@ -171,6 +174,11 @@ struct AtelierApp: App {
       SettingsTabs(agents: agents)
         .environment(create)
         .environment(remoteServer)
+        // For Import from Draw Things.
+        .environment(presets)
+        .environment(history)
+        .environment(library)
+        .environment(navigation)
     }
     #endif
   }

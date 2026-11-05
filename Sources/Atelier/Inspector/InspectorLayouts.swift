@@ -257,6 +257,14 @@ nonisolated struct Preset: Codable, Hashable, Identifiable {
   var id: String { name }
 }
 
+nonisolated enum PresetImportError: LocalizedError {
+  case noSettings
+
+  var errorDescription: String? {
+    "The file has no settings Atelier can read."
+  }
+}
+
 /// Presets stored as JSON next to the layouts.
 @MainActor
 @Observable
@@ -310,19 +318,34 @@ final class PresetStore {
     try LayoutStore.encoder.encode(preset)
   }
 
+  /// Imports every preset in a file: an Atelier preset, or Draw Things' custom_configs.json.
   @discardableResult
-  func importPreset(from url: URL) throws -> Preset {
-    var preset = try JSONDecoder().decode(Preset.self, from: Data(contentsOf: url))
-    preset.values = preset.values.filter { SettingsRegistry.byID[$0.key] != nil }
-    var name = preset.name
-    var n = 2
-    while presets.contains(where: { $0.name == name }) {
-      name = "\(preset.name) \(n)"
-      n += 1
+  func importPresets(from url: URL) throws -> [Preset] {
+    let name = url.deletingPathExtension().lastPathComponent
+    return try importPresets(DrawThingsJSON.presets(fromFile: Data(contentsOf: url), named: name))
+  }
+
+  /// Saves `imported`, numbering a name that's taken. One that's already here unchanged is skipped,
+  /// so importing the same file again doesn't fill the menu with copies. Throws if there was
+  /// nothing to read; an empty result means everything was already here.
+  @discardableResult
+  func importPresets(_ imported: [Preset]) throws -> [Preset] {
+    guard !imported.isEmpty else { throw PresetImportError.noSettings }
+    var saved: [Preset] = []
+    for var preset in imported {
+      preset.values = preset.values.filter { SettingsRegistry.byID[$0.key] != nil }
+      guard !presets.contains(preset) else { continue }
+      var name = preset.name
+      var n = 2
+      while presets.contains(where: { $0.name == name }) {
+        name = "\(preset.name) \(n)"
+        n += 1
+      }
+      preset.name = name
+      try save(preset)
+      saved.append(preset)
     }
-    preset.name = name
-    try save(preset)
-    return preset
+    return saved
   }
 
   static func url(for name: String) -> URL {

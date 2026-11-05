@@ -76,7 +76,7 @@ On iPad:
 
 Atelier uses the same model files as Draw Things. By default it looks in `~/Documents/Models` (or the folder in the `DRAWTHINGS_MODELS_DIR` environment variable, if set).
 
-To use another folder, for example one on an external drive or the folder Draw Things already uses:
+To use another folder, for example one on an external drive (for the folder Draw Things already uses, see [Import from Draw Things](#import-from-draw-things)):
 
 1. Open **Atelier ▸ Settings** (⌘,) and click the **Models** tab.
 2. Next to **Models directory**, click **Choose…** and pick the folder, or type its path.
@@ -85,6 +85,21 @@ To use another folder, for example one on an external drive or the folder Draw T
 Models you already downloaded in Draw Things show up right away, along with your imported models (`custom.json`) and LoRAs (`custom_lora.json`).
 
 If the folder is empty, go to **Models** in the sidebar and download one. See [Models and LoRAs](models-and-loras.md).
+
+## Import from Draw Things
+
+If Draw Things has run on this Mac, Atelier offers to import from it the first time it opens. You can also do it any time from **Settings ▸ Models ▸ Import from Draw Things…**. On iPad there's no first-launch offer, since apps can't see each other, but the Settings button works there too, with any folder Files can reach.
+
+1. Click **Choose Folder…**. macOS doesn't let Atelier read Draw Things' folder until you choose it yourself, and it doesn't ask, so this step can't be skipped. The panel may open somewhere else: press ⌘⇧G and paste `~/Library/Containers/com.liuliu.draw-things/Data/Documents`, then click **Open**. You only need to do this once. You can also drop the folder on the sheet.
+2. Atelier looks through the folder and shows what it found. Nothing has changed yet. If Draw Things keeps its models on another drive, its own Models folder will look almost empty: click **Add Another Folder…** and choose that drive's folder, so everything imports together. Keep Draw Things' Documents folder in the list either way, because that's where it lists the models you imported (`custom.json`), even when their files are on the other drive. Without that list, Atelier can't tell what those files are.
+3. Tick what you want, then click **Import**:
+   - **Models Folders** are shared, not copied, along with your imported models and LoRAs. A folder that only lists models is shared too. The first with model files becomes Atelier's models folder if you hadn't downloaded anything yet; otherwise they're added as [additional folders](settings.md#additional-model-folders).
+   - **Saved Configurations** become [presets](creating-images.md). Importing them again doesn't make copies. Their negative prompts stay behind, since presets hold settings only.
+   - **Projects** are copied into Atelier's projects folder and the originals stay where they are. Quit Draw Things first so they copy complete. A large project can take a while to copy to another drive.
+
+Control nets, textual inversions and scripts aren't imported yet.
+
+**Model Files Atelier Can't Match** lists anything in the models folder that no catalog or `custom.json` explains, with the reason and a way to import it. See [Models and LoRAs](models-and-loras.md#model-files-atelier-cant-match).
 
 ## Make your first image
 

@@ -1050,6 +1050,7 @@ struct ModelsSettingsView: View {
   @Environment(CreateModel.self) private var model
   @State private var directory = ""
   @State private var choosing = false
+  @State private var importingDrawThings = false
   @FocusState private var directoryFocused: Bool
 
   var body: some View {
@@ -1073,9 +1074,21 @@ struct ModelsSettingsView: View {
           Text("Models you download are saved here. The default is in Atelier's folder in Files.")
         }
         AdditionalModelFoldersSection()
+        drawThingsSection
       }
       .settingsForm()
+      .sheet(isPresented: $importingDrawThings) { DrawThingsImportSheet() }
     #endif
+  }
+
+  private var drawThingsSection: some View {
+    Section {
+      Button("Import from Draw Things…") { importingDrawThings = true }
+    } header: {
+      Text("Draw Things")
+    } footer: {
+      Text("Shares its models folder and brings over saved configurations and projects. You choose what, and nothing changes until you confirm.")
+    }
   }
 
   private var macBody: some View {
@@ -1097,8 +1110,10 @@ struct ModelsSettingsView: View {
         }
       }
       AdditionalModelFoldersSection()
+      drawThingsSection
     }
     .settingsForm()
+    .sheet(isPresented: $importingDrawThings) { DrawThingsImportSheet() }
     .fileImporter(isPresented: $choosing, allowedContentTypes: [.folder]) { result in
       if case .success(let url) = result {
         FolderBookmarks.remember(url)

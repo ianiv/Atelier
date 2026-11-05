@@ -41,6 +41,7 @@ enum Automation {
       "--timeline-check", "--upscale-check", "--timeline-export-check", "--flashvsr-check",
       "--model-folders-check", "--styles-check", "--cleanup-check", "--engine-check", "--playback-check",
       "--remote-check", "--remote-net-check", "--remote-shots", "--remote-url-check", "--remote-tailnet-check",
+      "--catalog-retry-check",
     ]
     // The unit tests run inside the app. Like a scripted run, that leaves the user's data alone: no
     // cleanup at launch, no saving the session or queue.
@@ -134,6 +135,10 @@ enum Automation {
     }
     if args.contains("--styles-check") {
       stylesCheck(model, navigation: navigation, layouts: layouts, presets: presets)
+      return
+    }
+    if args.contains("--catalog-retry-check") {
+      catalogRetryCheck(model, library: library)
       return
     }
     if args.contains("--model-folders-check") {

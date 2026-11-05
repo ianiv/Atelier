@@ -51,6 +51,7 @@ struct ContentView: View {
   @Environment(FileDialogs.self) private var fileDialogs
   @Environment(\.undoManager) private var undoManager
   @State private var showingSettings = false
+  @State private var offeringDrawThingsImport = false
   @State private var columns = NavigationSplitViewVisibility.automatic
 
   /// Images running or waiting in the queue.
@@ -163,6 +164,9 @@ struct ContentView: View {
         }
       }
     #endif
+      .sheet(isPresented: $offeringDrawThingsImport) { DrawThingsImportSheet() }
+      .debugPresents("drawThingsImport", $offeringDrawThingsImport)
+      .onAppear { if DrawThingsApp.takeFirstRunOffer() { offeringDrawThingsImport = true } }
       // For menu commands, which act on the key window's undo stack.
       .focusedSceneValue(\.windowUndoManager, undoManager)
   }

@@ -86,7 +86,7 @@ struct PresetMenu: View {
           guard let url = urls.first else { return }
           let access = url.startAccessingSecurityScopedResource()
           defer { if access { url.stopAccessingSecurityScopedResource() } }
-          let failure = Log.attempt(Log.inspector, "Importing a preset") { _ = try presets.importPreset(from: url) }
+          let failure = Log.attempt(Log.inspector, "Importing presets") { _ = try presets.importPresets(from: url) }
           if let failure { model.errorMessage = "Couldn't import the preset: \(failure.localizedDescription)" }
         }
       }
@@ -120,7 +120,7 @@ struct PresetMenu: View {
     .alert("The clipboard has no settings", isPresented: $pasteFailed) {
       Button("OK") {}
     } message: {
-      Text("Copy a configuration in Draw Things, or settings in Atelier, then paste again.")
+      Text("Copy a configuration in Draw Things, or settings in Atelier, then paste again. For a file with several configurations, use Import Preset.")
     }
   }
 
@@ -307,9 +307,11 @@ enum DrawThingsJSON {
     if let preset = try? JSONDecoder().decode(Preset.self, from: data) {
       return Pasted(preset)
     }
-    guard case .object(var json)? = try? JSONDecoder().decode(JSONValue.self, from: data) else {
-      return nil
-    }
+    var decoded = try? JSONDecoder().decode(JSONValue.self, from: data)
+    // A custom_configs.json with one entry is still that entry. With several there's no telling
+    // which was meant: `presets(fromFile:named:)` brings in all of them.
+    if case .array(let entries)? = decoded, entries.count == 1 { decoded = entries[0] }
+    guard case .object(var json)? = decoded else { return nil }
     if case .object(let configuration)? = json["configuration"] { json = configuration }
     var dump: [String: JSONValue] = [:]
     for (key, value) in json {
@@ -338,6 +340,32 @@ enum DrawThingsJSON {
     var model: String?
     if case .string(let file)? = json["model"], !file.isEmpty { model = file }
     return Pasted(dump: known, model: model, seed: seed)
+  }
+
+  /// Presets from a file: an Atelier preset, or what Draw Things exports and keeps in
+  /// custom_configs.json, an array of `{name, configuration}` (`ConfigurationZoo.availableSpecifications`).
+  /// A lone configuration has no name of its own, so it takes `fallbackName`. Entries with no
+  /// setting Atelier knows are left out.
+  static func presets(fromFile data: Data, named fallbackName: String) -> [Preset] {
+    if let preset = try? JSONDecoder().decode(Preset.self, from: data) { return [preset] }
+    guard let json = try? JSONDecoder().decode(JSONValue.self, from: data) else { return [] }
+    let entries: [JSONValue]
+    if case .array(let list) = json { entries = list } else { entries = [json] }
+    return entries.compactMap { entry in
+      guard let entryData = try? JSONEncoder().encode(entry),
+            let pasted = decode(entryData)
+      else { return nil }
+      var values: [String: JSONValue] = [:]
+      for descriptor in SettingsRegistry.all {
+        if let value = descriptor.read(pasted.dump) { values[descriptor.id] = value }
+      }
+      guard !values.isEmpty else { return nil }
+      var name = fallbackName
+      if case .object(let fields) = entry, case .string(let given)? = fields["name"], !given.isEmpty {
+        name = given
+      }
+      return Preset(name: name, values: values, model: pasted.model)
+    }
   }
 
   private static func rawValue<E: CaseIterable & RawRepresentable>(of _: E.Type, named name: String)

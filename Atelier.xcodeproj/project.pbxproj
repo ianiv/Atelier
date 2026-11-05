@@ -7,6 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		D70A1100000000000000000A /* AutomationDrawThings.swift in Sources */ = {isa = PBXBuildFile; fileRef = D70A1100000000000000000B /* AutomationDrawThings.swift */; };
+		D70A11000000000000000007 /* DrawThingsImportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D70A11000000000000000008 /* DrawThingsImportTests.swift */; };
+		D70A11000000000000000005 /* DrawThingsImportSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = D70A11000000000000000006 /* DrawThingsImportSheet.swift */; };
+		D70A11000000000000000003 /* DrawThingsImport.swift in Sources */ = {isa = PBXBuildFile; fileRef = D70A11000000000000000004 /* DrawThingsImport.swift */; };
+		D70A11000000000000000001 /* CommunityCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = D70A11000000000000000002 /* CommunityCatalog.swift */; };
 		B7A1F0C2B3D4A59687786206 /* WaitUntilTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A1F0C2B3D4A59687786306 /* WaitUntilTests.swift */; };
 		A7E1F0C2B3D4A5968778699B /* WaitUntil.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1F0C2B3D4A5968778699A /* WaitUntil.swift */; };
 		A7E1F0C2B3D4A5968778698B /* BackgroundQueueTask.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1F0C2B3D4A5968778698A /* BackgroundQueueTask.swift */; };
@@ -182,6 +187,11 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		D70A1100000000000000000B /* AutomationDrawThings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationDrawThings.swift; sourceTree = "<group>"; };
+		D70A11000000000000000008 /* DrawThingsImportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawThingsImportTests.swift; sourceTree = "<group>"; };
+		D70A11000000000000000006 /* DrawThingsImportSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawThingsImportSheet.swift; sourceTree = "<group>"; };
+		D70A11000000000000000004 /* DrawThingsImport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawThingsImport.swift; sourceTree = "<group>"; };
+		D70A11000000000000000002 /* CommunityCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommunityCatalog.swift; sourceTree = "<group>"; };
 		B7A1F0C2B3D4A59687786306 /* WaitUntilTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaitUntilTests.swift; sourceTree = "<group>"; };
 		A7E1F0C2B3D4A5968778699A /* WaitUntil.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaitUntil.swift; sourceTree = "<group>"; };
 		A7E1F0C2B3D4A5968778698A /* BackgroundQueueTask.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundQueueTask.swift; sourceTree = "<group>"; };
@@ -427,6 +437,7 @@
 				A7E1F0C2B3D4A5968778697A /* AutomationPlayback.swift */,
 				A7E1F0C2B3D4A5968778696C /* AutomationEngine.swift */,
 				A7E1F0C2B3D4A5968778695C /* AutomationCleanup.swift */,
+				D70A1100000000000000000B /* AutomationDrawThings.swift */,
 				D2FF5ECF7B3949AB28ABC1A2 /* AutomationUpscale.swift */,
 				E5D760BDEB2FA5F04BDAF779 /* AutomationTimeline.swift */,
 			);
@@ -545,6 +556,9 @@
 			children = (
 				DAFF310E4AA538AA8C02FC77 /* LibraryErrorAlert.swift */,
 				434F7495899302690802E139 /* LoRAsView.swift */,
+				D70A11000000000000000002 /* CommunityCatalog.swift */,
+				D70A11000000000000000004 /* DrawThingsImport.swift */,
+				D70A11000000000000000006 /* DrawThingsImportSheet.swift */,
 				248FF150659188D7C4B12A12 /* ModelLibrary.swift */,
 				B8D4FA204E3C7B9F102D6EA4 /* MOSSImporter.swift */,
 				C4CBE9BE880BD55127FC9066 /* ModelsView.swift */,
@@ -648,6 +662,7 @@
 				B7A1F0C2B3D4A59687786300 /* ProjectMappingTests.swift */,
 				B7A1F0C2B3D4A59687786301 /* StyleTests.swift */,
 				B7A1F0C2B3D4A59687786302 /* HistoryGraphTests.swift */,
+				D70A11000000000000000008 /* DrawThingsImportTests.swift */,
 				B7A1F0C2B3D4A59687786303 /* FileCleanupTests.swift */,
 				B7A1F0C2B3D4A59687786304 /* QueueTests.swift */,
 				AF232DA4CD210F5B739657F4 /* RemoteTests.swift */,
@@ -690,6 +705,7 @@
 				A7E11C0A1C0A7E11C0A7E103 /* Resources */,
 				3C1F9027ACE508F70F1D6A69 /* Embed Frameworks */,
 				886CAAD4AAB7CC8A179150DA /* Copy tiny autoencoders from Draw Things.app */,
+				D70A11000000000000000009 /* Copy the engine's model catalog */,
 				6607317B3FD228516C08C535 /* Embed TailscaleKit if built */,
 			);
 			buildRules = (
@@ -809,6 +825,25 @@
 			shellPath = /bin/sh;
 			shellScript = "FRAMEWORK=\"${SRCROOT}/build/Tailscale/TailscaleKit.xcframework\"\ncase \"$PLATFORM_NAME\" in\n  macosx) SLICE=macos-arm64 ;;\n  iphoneos) SLICE=ios-arm64 ;;\n  iphonesimulator) SLICE=ios-arm64_x86_64-simulator ;;\n  *) exit 0 ;;\nesac\nSOURCE=\"$FRAMEWORK/$SLICE/TailscaleKit.framework\"\n[ -d \"$SOURCE\" ] || exit 0\nDEST=\"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}\"\nmkdir -p \"$DEST\"\nrm -rf \"$DEST/TailscaleKit.framework\"\nditto \"$SOURCE\" \"$DEST/TailscaleKit.framework\"\nif [ \"${CODE_SIGNING_ALLOWED}\" != \"NO\" ]; then\n  codesign --force --options runtime --sign \"${EXPANDED_CODE_SIGN_IDENTITY:--}\" \"$DEST/TailscaleKit.framework\"\nfi\n";
 		};
+		D70A11000000000000000009 /* Copy the engine's model catalog */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Copy the engine's model catalog";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# MGK reads models.json from the app bundle, else from its own source path, which exists only on the machine that built it.\nSOURCE=\"${BUILD_DIR%/Build/*}/SourcePackages/checkouts/draw-things-community/Libraries/MediaGenerationKit/Resources/models.json\"\n[ -f \"$SOURCE\" ] || SOURCE=\"${SRCROOT}/build/SourcePackages/checkouts/draw-things-community/Libraries/MediaGenerationKit/Resources/models.json\"\nif [ ! -f \"$SOURCE\" ]; then\n  echo \"error: MGK's models.json not found; the app would ship without its bundled model catalog\"\n  exit 1\nfi\nDEST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\nmkdir -p \"$DEST\"\n# The checkout is read-only, and cp would keep that and then fail on the next build.\ninstall -m 644 \"$SOURCE\" \"$DEST/models.json\"\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -840,6 +875,7 @@
 				A7E1F0C2B3D4A5968778697B /* AutomationPlayback.swift in Sources */,
 				A7E1F0C2B3D4A5968778696D /* AutomationEngine.swift in Sources */,
 				A7E1F0C2B3D4A5968778695D /* AutomationCleanup.swift in Sources */,
+				D70A1100000000000000000A /* AutomationDrawThings.swift in Sources */,
 				58D2F5882DA905D40744609C /* AutomationUpscale.swift in Sources */,
 				70E8E18439D847EA73F0D5DD /* AutomationTimeline.swift in Sources */,
 				02980CB68834C5E6EA77013B /* ContentView.swift in Sources */,
@@ -886,6 +922,9 @@
 				5388E27993E9EF8D03383B06 /* InspectorView.swift in Sources */,
 				E5ABFC205D6903135AC06DCE /* ModelsView.swift in Sources */,
 				5684CBB37AB771B0294C16AD /* ModelDefaults.swift in Sources */,
+				D70A11000000000000000001 /* CommunityCatalog.swift in Sources */,
+				D70A11000000000000000003 /* DrawThingsImport.swift in Sources */,
+				D70A11000000000000000005 /* DrawThingsImportSheet.swift in Sources */,
 				019DECB5A1E70541745FDF70 /* ModelLibrary.swift in Sources */,
 				A7C3E91F4D2B6A8E0F1C5D93 /* MOSSImporter.swift in Sources */,
 				D42B1F3B6CDD906D20BB8275 /* Project.swift in Sources */,
@@ -958,6 +997,7 @@
 				B7A1F0C2B3D4A59687786200 /* ProjectMappingTests.swift in Sources */,
 				B7A1F0C2B3D4A59687786201 /* StyleTests.swift in Sources */,
 				B7A1F0C2B3D4A59687786202 /* HistoryGraphTests.swift in Sources */,
+				D70A11000000000000000007 /* DrawThingsImportTests.swift in Sources */,
 				B7A1F0C2B3D4A59687786203 /* FileCleanupTests.swift in Sources */,
 				B7A1F0C2B3D4A59687786204 /* QueueTests.swift in Sources */,
 				C1C8FF826A372CCCEC268435 /* RemoteTests.swift in Sources */,

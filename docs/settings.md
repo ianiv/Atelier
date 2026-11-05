@@ -8,7 +8,7 @@ Open **Atelier ▸ Settings** (⌘,).
 
 ### Models directory
 
-The folder Atelier reads models and LoRAs from, and downloads and imports into. Click **Choose…** or type a path, then **Apply**. When it's never been set, Atelier uses `~/Documents/Models`, or the folder in the `DRAWTHINGS_MODELS_DIR` environment variable. You can point it at Draw Things' models folder to share models between the two apps.
+The folder Atelier reads models and LoRAs from, and downloads and imports into. Click **Choose…** or type a path, then **Apply**. When it's never been set, Atelier uses `~/Documents/Models`, or the folder in the `DRAWTHINGS_MODELS_DIR` environment variable. To share models with Draw Things, use [Import from Draw Things](#import-from-draw-things), since macOS only lets Atelier read Draw Things' own folder once you've chosen it there or with **Choose…**.
 
 **On iPad** there's no path to type. Settings shows the folder as the Files app names it, such as **On My iPad ▸ Atelier ▸ Models (Default)**. **Choose…** picks any folder Files can reach (iCloud Drive, another app's folder, an external drive), and **Use Default** goes back to the Models folder in Atelier's own folder. If a chosen folder can't be reached, for example on a disconnected drive, Settings says so.
 
@@ -17,6 +17,10 @@ The folder Atelier reads models and LoRAs from, and downloads and imports into. 
 More folders Atelier reads models and LoRAs from, such as a second drive or another app's models folder. Click **Add Folder…** to add one and the minus button to stop using it (its files stay where they are). Models and LoRAs from every folder can be picked in Create, and LoRAs listed in any folder's `custom_lora.json` show up in the LoRAs screen. Downloads and imports still go to the models directory above.
 
 When the same file name is in more than one folder, Atelier uses the one in the models directory first, then the additional folders in the order listed. A folder that can't be reached, for example on a disconnected drive, is marked **Not available** and skipped; Atelier picks it up again within a few seconds of the drive being reconnected. If the model you had picked was on that drive, it's picked again when the drive comes back.
+
+### Import from Draw Things
+
+**Import from Draw Things…** shares Draw Things' models folder and brings over its saved configurations and projects. It shows what it found with a checkbox for each, and nothing changes until you click **Import**. Control nets, textual inversions and scripts stay behind for now. See [Getting started](getting-started.md#import-from-draw-things).
 
 ## Images
 

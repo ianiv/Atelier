@@ -124,17 +124,20 @@ final class ModelLibrary {
   // MARK: - Models
 
   /// Reloads the catalog, LoRAs and disk usage. The community list is fetched once per process
-  /// and cached by MGK; an offline listing would leave out every community model.
+  /// and cached by MGK, or if that failed, tried again here (`CommunityCatalog`); an offline
+  /// listing would leave out every community model.
   func refresh() async {
     isLoadingCatalog = true
     defer { isLoadingCatalog = false }
     // The engine points MGK at the models folders; wait until it has.
     await create.engine.useModelsDirectories(create.availableModelsDirectories)
-    let models = await MediaGenerationEnvironment.default.downloadableModels(
-      includeDownloaded: true, offline: false)
+    let generation = CommunityCatalog.generation
+    let models = await CommunityCatalog.models()
     catalog = models.sorted {
       $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
     }
+    // The retry just brought community models in: Create's picker hasn't seen them yet.
+    if CommunityCatalog.generation != generation { await create.refreshModelList() }
     customModels = Set(directories.flatMap { Self.readCustomModels(in: $0) })
     reloadLoRAs()
     await measure()
@@ -312,7 +315,7 @@ final class ModelLibrary {
 
   // MARK: - Model import
 
-  static let checkpointExtensions: Set<String> = ["safetensors", "ckpt", "pt", "pth"]
+  nonisolated static let checkpointExtensions: Set<String> = ["safetensors", "ckpt", "pt", "pth"]
 
   /// Families ModelImporter detects but can't convert: it traps on them (`fatalError`) instead
   /// of throwing, so they're turned away after inspection. MOSS goes through MOSSImporter.
@@ -641,6 +644,46 @@ final class ModelLibrary {
     ModelZoo.fallbackMapping[file] = nil
   }
 
+  /// Lists a model file already in `directory` that nothing explains, from what its owner says it
+  /// is. The file can't say: `template`, a catalog model of the same family, supplies the text
+  /// encoders, VAE and defaults. Goes in the file's own folder, like everything else about it.
+  func registerConverted(file: String, in directory: URL, template: ModelZoo.Specification) throws {
+    backUpModelRegistryOnce(in: directory)
+    try Self.addToCustomJSON(Self.specification(for: file, template: template), in: directory)
+  }
+
+  /// Lists a LoRA file already in `directory` under the family its owner says it's for.
+  func registerConverted(loRA file: String, in directory: URL, version: ModelVersion) throws {
+    let name = (file as NSString).deletingPathExtension
+    try register(LoRAZoo.Specification(name: name, file: file, prefix: "", version: version, isLoHa: false), in: directory)
+  }
+
+  /// `template` as the entry for `file`, without what describes only the template's own model.
+  nonisolated static func specification(for file: String, template: ModelZoo.Specification) -> ModelZoo.Specification {
+    var specification = template
+    specification.name = (file as NSString).deletingPathExtension
+    specification.file = file
+    specification.note = nil
+    specification.huggingFaceLink = nil
+    specification.deprecated = nil
+    // Some checkpoints carry their own encoder (LTX's Gemma features, for one).
+    if template.clipEncoder == template.file { specification.clipEncoder = file }
+    return specification
+  }
+
+  /// Adds an entry to a folder's custom.json as raw JSON, so the entries already there keep fields
+  /// this engine doesn't know, and an entry for the same file is replaced.
+  nonisolated static func addToCustomJSON(_ specification: ModelZoo.Specification, in directory: URL) throws {
+    let url = directory.appendingPathComponent("custom.json")
+    let existing = (try? Data(contentsOf: url)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [[String: Any]] } ?? []
+    let encoder = JSONEncoder()
+    encoder.keyEncodingStrategy = .convertToSnakeCase
+    let entry = try JSONSerialization.jsonObject(with: encoder.encode(specification))
+    let entries = existing.filter { $0["file"] as? String != specification.file } + [entry]
+    try JSONSerialization.data(withJSONObject: entries, options: [.prettyPrinted, .withoutEscapingSlashes])
+      .write(to: url, options: .atomic)
+  }
+
   /// Copies a folder's custom.json aside before the app first changes it in a session.
   private var backedUpModelFolders: Set<URL> = []
   private func backUpModelRegistryOnce(in directory: URL? = nil) {
@@ -918,6 +961,42 @@ final class ModelLibrary {
     return entries.compactMap(\.value?.file)
   }
 
+  /// Every file a folder's custom*.json files name, with the files its models depend on. Reads them
+  /// for any folder, whether it's in use or not, and for kinds Atelier doesn't import yet (control
+  /// nets, textual inversions), since those files aren't strays either.
+  nonisolated static func registeredFiles(in directory: URL) -> Set<String> {
+    struct Entry: Decodable { var file: String }
+    var files = Set(decodeRegistry(ModelZoo.Specification.self, "custom.json", in: directory).flatMap(Self.files(of:)))
+    let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+    for name in names where name.hasPrefix("custom") && name.hasSuffix(".json") {
+      files.formUnion(decodeRegistry(Entry.self, name, in: directory).map(\.file))
+    }
+    return files
+  }
+
+  /// How many models and LoRAs a folder's custom.json and custom_lora.json list.
+  nonisolated static func registeredCount(in directory: URL) -> Int {
+    struct Entry: Decodable { var file: String }
+    return ["custom.json", "custom_lora.json"].reduce(0) { $0 + decodeRegistry(Entry.self, $1, in: directory).count }
+  }
+
+  /// A model's file and the files it needs, as `ModelZoo.availableFiles(excluding:)` lists them.
+  nonisolated static func files(of specification: ModelZoo.Specification) -> Set<String> {
+    var files: Set<String> = [
+      specification.file, specification.textEncoder ?? "clip_vit_l14_f16.ckpt",
+      specification.autoencoder ?? "vae_ft_mse_840000_f16.ckpt",
+    ]
+    for file in [specification.imageEncoder, specification.clipEncoder, specification.t5Encoder, specification.diffusionMapping] {
+      if let file { files.insert(file) }
+    }
+    files.formUnion(specification.additionalClipEncoders ?? [])
+    files.formUnion(specification.stageModels ?? [])
+    files.formUnion((specification.latentsUpscalers ?? []).map(\.file))
+    // Not one of the specification's fields: see `downloadAudioEncoder(for:progress:)`.
+    if let audioEncoder = ModelZoo.audioEncoderForModel(specification.file) { files.insert(audioEncoder) }
+    return files
+  }
+
   /// Rebuilds the engine's model and LoRA lists from the built-in ones and every models folder's
   /// custom.json and custom_lora.json, as ModelZoo and LoRAZoo do at first use. They read those
   /// only once, from the one folder they pointed at then, so models imported in Draw Things
@@ -932,9 +1011,13 @@ final class ModelLibrary {
     let uncataloged = ModelDefaults.uncatalogedSpecifications.filter {
       !files.contains($0.file) && !builtinFiles.contains($0.file)
     }
-    ModelZoo.availableSpecifications = builtin + uncataloged + custom
+    let uncatalogedFiles = Set(uncataloged.map(\.file))
+    let community = CommunityCatalog.fallback.filter {
+      !files.contains($0.file) && !builtinFiles.contains($0.file) && !uncatalogedFiles.contains($0.file)
+    }
+    ModelZoo.availableSpecifications = builtin + community + uncataloged + custom
     // ModelZoo looks a model up in a table it fills once; one it doesn't have is looked up here.
-    ModelZoo.fallbackMapping = Dictionary((custom + uncataloged).map { ($0.file, $0) }) { first, _ in first }
+    ModelZoo.fallbackMapping = Dictionary((custom + uncataloged + community).map { ($0.file, $0) }) { first, _ in first }
     loadCustomLoRAs(in: directories)
   }
 
@@ -956,7 +1039,7 @@ final class ModelLibrary {
     return values.filter { seen.insert(file($0)).inserted }
   }
 
-  private static func decodeRegistry<Value: Decodable>(
+  private nonisolated static func decodeRegistry<Value: Decodable>(
     _: Value.Type, _ name: String, in directory: URL
   ) -> [Value] {
     let decoder = JSONDecoder()

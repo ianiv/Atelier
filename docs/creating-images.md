@@ -96,7 +96,7 @@ Open the **Presets** menu in the toolbar:
 - Pick a preset from the list to apply it. Presets for other models are under **Other Models**; picking one switches to its model. To use those settings on another model, switch back to it afterwards: your settings carry over.
 - **Default for [model]**: choose which preset (or **Model Defaults Only**) Reset uses for a model.
 - **Copy Settings as JSON** copies every setting, the model and the seed in Draw Things' configuration format. **Paste Settings** applies settings copied from Draw Things or Atelier.
-- **Import Preset…**, **Export**, **Delete** and **Show Presets Folder** manage presets as files.
+- **Import Preset…**, **Export**, **Delete** and **Show Presets Folder** manage presets as files. Import Preset also takes a `custom_configs.json` exported from Draw Things, and adds each configuration in it as a preset.
 
 ## The canvas
 
