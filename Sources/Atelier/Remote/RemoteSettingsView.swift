@@ -65,6 +65,7 @@ struct RemoteSettingsView: View {
         ForEach(server.devices) { device in
           LabeledContent {
             Button("Remove") { server.remove(device.id) }
+              .rowButton()
           } label: {
             Text(device.name)
             Text(lastSeen(device))
@@ -79,6 +80,7 @@ struct RemoteSettingsView: View {
             server.startPairing()
             showingPairing = true
           }
+          .rowButton()
           .disabled(!server.isEnabled || !server.isListening)
         }
       } header: {
@@ -88,6 +90,7 @@ struct RemoteSettingsView: View {
         ForEach(create.remoteServers.servers) { record in
           LabeledContent {
             Button("Remove") { create.remoteServers.remove(record.id) }
+              .rowButton()
           } label: {
             Text(record.name)
             Text(serverDetail(record))
@@ -99,6 +102,7 @@ struct RemoteSettingsView: View {
         HStack {
           Spacer()
           Button("Add Server…") { showingAddServer = true }
+            .rowButton()
         }
       } header: {
         Text("Servers This Device Can Use")
@@ -177,12 +181,15 @@ private struct RemoteTailscaleSection: View {
           EmptyView()
         case .signedOut, .failed:
           Button("Sign In…") { tailnet.signIn() }
+            .rowButton()
         case .starting:
           ProgressView().controlSize(.small)
         case .needsLogin(let url):
           Button("Open Sign-In Page") { openURL(url) }
+            .rowButton()
         case .running:
           Button("Sign Out…") { Task { await tailnet.signOut() } }
+            .rowButton()
         }
       } label: {
         Text(title)
@@ -346,6 +353,7 @@ private struct AddServerSheet: View {
                   link = ""
                   host = found.address.description
                 }
+                .rowButton()
                 .help("Fills in its address. It needs the code shown on \(found.name), under Pair a Device….")
               }
             }
@@ -399,6 +407,10 @@ private struct AddServerSheet: View {
 }
 
 extension View {
+  /// A button in a Form row. On iPad a plain one makes the whole row its tap target, so a tap
+  /// anywhere on a server's row would remove it; a style of its own keeps it to the button.
+  func rowButton() -> some View { buttonStyle(.bordered) }
+
   /// Opens `atelier-pair://` links, as a scanned QR code does, asking first: a link can come from
   /// anywhere, and the server it names would receive the jobs you send it.
   func remotePairingLinks() -> some View { modifier(RemotePairingLinks()) }
