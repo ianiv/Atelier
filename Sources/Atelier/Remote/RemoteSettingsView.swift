@@ -133,6 +133,7 @@ struct RemoteSettingsView: View {
       .sheet(isPresented: $showingPairing, onDismiss: { server.closePairing() }) {
         PairDeviceSheet()
       }
+      .debugPresents("addServer", $showingAddServer)
       .sheet(isPresented: $showingAddServer) {
         AddServerSheet()
       }
@@ -337,55 +338,144 @@ private struct AddServerSheet: View {
     !isPairing && (parsedLink != nil || (RemoteAddress(host) != nil && RemotePairing.normalizedCode(code) != nil))
   }
 
+  /// This device's own server isn't one to add.
+  private var nearby: [RemoteNearby] {
+    create.remoteServers.unpairedNearby.filter { $0.id != server.serverID }
+  }
+
+  private func use(_ found: RemoteNearby) {
+    link = ""
+    host = found.address.description
+  }
+
   var body: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      Text("Add Server").font(.headline)
-      Form {
-        // This device's own server isn't one to add.
-        let nearby = create.remoteServers.unpairedNearby.filter { $0.id != server.serverID }
-        LabeledContent("Nearby") {
-          if nearby.isEmpty {
-            Text("None found").foregroundStyle(.secondary)
-          } else {
-            VStack(alignment: .trailing) {
-              ForEach(nearby) { found in
-                Button("\(found.name): Pair…") {
-                  link = ""
-                  host = found.address.description
+    content
+      .onAppear {
+        if let opened { link = opened.text }
+        create.remoteServers.startBrowsing()
+      }
+  }
+
+  #if os(macOS)
+    private var content: some View {
+      VStack(alignment: .leading, spacing: 16) {
+        Text("Add Server").font(.headline)
+        Form {
+          LabeledContent("Nearby") {
+            if nearby.isEmpty {
+              Text("None found").foregroundStyle(.secondary)
+            } else {
+              VStack(alignment: .trailing) {
+                ForEach(nearby) { found in
+                  Button("\(found.name): Pair…") { use(found) }
+                    .rowButton()
+                    .help("Fills in its address. It needs the code shown on \(found.name), under Pair a Device….")
                 }
-                .rowButton()
-                .help("Fills in its address. It needs the code shown on \(found.name), under Pair a Device….")
               }
             }
           }
+          TextField("Pairing link", text: $link, prompt: Text("atelier-pair://…"))
+          TextField("Or host", text: $host, prompt: Text("vimes.tail1234.ts.net"))
+            .disabled(!link.isEmpty)
+          TextField("Code", text: $code, prompt: Text("ABCDE-12345"))
+            .disabled(!link.isEmpty)
         }
-        TextField("Pairing link", text: $link, prompt: Text("atelier-pair://…"))
-        TextField("Or host", text: $host, prompt: Text("vimes.tail1234.ts.net"))
-          .disabled(!link.isEmpty)
-        TextField("Code", text: $code, prompt: Text("ABCDE-12345"))
-          .disabled(!link.isEmpty)
+        .disableAutocorrection(true)
+        Text(error ?? " ")
+          .foregroundStyle(.red)
+          .font(.callout)
+        HStack {
+          if isPairing { ProgressView().controlSize(.small) }
+          Spacer()
+          Button("Cancel") { dismiss() }
+            .keyboardShortcut(.cancelAction)
+          Button("Add") { add() }
+            .keyboardShortcut(.defaultAction)
+            .disabled(!canAdd)
+        }
       }
-      .disableAutocorrection(true)
-      Text(error ?? " ")
-        .foregroundStyle(.red)
-        .font(.callout)
-      HStack {
-        if isPairing { ProgressView().controlSize(.small) }
-        Spacer()
-        Button("Cancel") { dismiss() }
-          .keyboardShortcut(.cancelAction)
-        Button("Add") { add() }
-          .keyboardShortcut(.defaultAction)
-          .disabled(!canAdd)
+      .padding(24)
+      .frame(width: 420)
+    }
+  #else
+    private var content: some View {
+      NavigationStack {
+        Form {
+          Section {
+            if nearby.isEmpty {
+              Text("None found").foregroundStyle(.secondary)
+            }
+            ForEach(nearby) { found in
+              LabeledContent(found.name) {
+                Button("Pair…") { use(found) }
+                  .rowButton()
+              }
+            }
+          } header: {
+            Text("Nearby")
+          } footer: {
+            Text("Pair… fills in its address. You'll need the code shown under Pair a Device… on that device.")
+          }
+          Section {
+            HStack {
+              TextField("atelier-pair://…", text: $link)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.URL)
+              PasteButton(payloadType: String.self) { strings in
+                if let text = strings.first { link = text.trimmingCharacters(in: .whitespacesAndNewlines) }
+              }
+              .labelStyle(.iconOnly)
+              .buttonBorderShape(.capsule)
+            }
+          } header: {
+            Text("Pairing Link")
+          } footer: {
+            Text("Copy Link on the server gives you this. Scanning its QR code with the Camera app opens here with it filled in.")
+          }
+          Section {
+            LabeledContent("Host") {
+              TextField("vimes.tail1234.ts.net", text: $host)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.URL)
+                .multilineTextAlignment(.trailing)
+            }
+            LabeledContent("Code") {
+              TextField("ABCDE-12345", text: $code)
+                .textInputAutocapitalization(.characters)
+                .autocorrectionDisabled()
+                .keyboardType(.asciiCapable)
+                .font(.body.monospaced())
+                .multilineTextAlignment(.trailing)
+            }
+          } header: {
+            Text("Or Enter Its Address")
+          } footer: {
+            if let error {
+              Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
+            } else if isPairing {
+              Label { Text("Pairing…") } icon: { ProgressView().controlSize(.small) }
+            }
+          }
+          .disabled(!link.isEmpty)
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Add Server")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+          ToolbarItem(placement: .cancellationAction) {
+            Button("Cancel") { dismiss() }
+          }
+          ToolbarItem(placement: .confirmationAction) {
+            Button("Add") { add() }
+              .disabled(!canAdd)
+          }
+        }
       }
+      .presentationSizing(.form)
     }
-    .padding(24)
-    .frame(width: 420)
-    .onAppear {
-      if let opened { link = opened.text }
-      create.remoteServers.startBrowsing()
-    }
-  }
+  #endif
 
   private func add() {
     isPairing = true
