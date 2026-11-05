@@ -75,6 +75,10 @@ nonisolated struct ImageUpscale: Codable, Sendable, Hashable {
         return "Download FlashVSR+ \((variant ?? .turbo).title) to use it."
       }
       if method == .system {
+        if SystemSuperResolution.isSupported, !SystemSuperResolution.fits(width: width, height: height) {
+          let limit = SystemSuperResolution.maximumInput
+          return "Apple Super Resolution takes images up to \(limit.width) × \(limit.height)."
+        }
         return ClipUpscale.problem(width: width, height: height, scale: scale, method: method)
       }
     }

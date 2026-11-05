@@ -96,13 +96,16 @@ struct ImageUpscaleSheet: View {
           width: width, height: height, method: .constant(method), scale: $scale, variant: $variant,
           showsAll: false)
       }
-      Picker("Scale", selection: Binding(get: { upscale.scale }, set: { scale = $0 })) {
-        ForEach(upscale.scales(width: width, height: height), id: \.self) {
-          Text($0 == ImageUpscale.maxScale ? "Max" : "\($0)×").tag($0)
+      // Apple's offers no scale at all for an image too large for it: there's no size to show.
+      if !upscale.scales(width: width, height: height).isEmpty {
+        Picker("Scale", selection: Binding(get: { upscale.scale }, set: { scale = $0 })) {
+          ForEach(upscale.scales(width: width, height: height), id: \.self) {
+            Text($0 == ImageUpscale.maxScale ? "Max" : "\($0)×").tag($0)
+          }
         }
+        .pickerStyle(.segmented)
+        LabeledContent("Size", value: "\(width) × \(height) → \(size.width) × \(size.height)")
       }
-      .pickerStyle(.segmented)
-      LabeledContent("Size", value: "\(width) × \(height) → \(size.width) × \(size.height)")
       if let problem {
         Text(problem).font(.caption).foregroundStyle(.secondary)
       }
