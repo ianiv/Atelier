@@ -1678,7 +1678,7 @@ final class CreateModel {
         let output: GenerationEngine.Output
         if let imageUpscale = request.imageUpscale, let image = request.canvas {
           setRunMessage("Upscaling…", job)
-          output = try await engine.upscale(image: image, as: imageUpscale, progress: progress)
+          output = try await upscaled(image: image, as: imageUpscale, request: request, progress: progress)
         } else if job.remoteDevice != nil, request.upscale != nil {
           // A device's frames came with its job; its source clip isn't in any project here.
           output = try await backend.upscale(request, frames: deviceFrames.removeValue(forKey: job.id) ?? [], progress: progress)
@@ -1892,8 +1892,9 @@ final class CreateModel {
     let source = item?.isVideo == true ? nil : item
     guard var configuration = settings, let model = source?.sidecar.model ?? selectedModel else { return }
     if let source { SettingsRegistry.apply(dump: source.sidecar.configuration, to: &configuration) }
-    configuration.width = image.width * upscale.scale
-    configuration.height = image.height * upscale.scale
+    let size = upscale.outputSize(width: image.width, height: image.height)
+    configuration.width = size.width
+    configuration.height = size.height
     var request = GenerationEngine.Request(
       model: model, prompt: source?.sidecar.prompt ?? "", negativePrompt: source?.sidecar.negativePrompt ?? "",
       seed: source?.sidecar.seed ?? seed, configuration: configuration)
@@ -1905,6 +1906,24 @@ final class CreateModel {
     statusNote = nil
     queue.append([request], currentTensorId: history.currentTensorId, target: .local)
     runNext()
+  }
+
+  /// Runs an image upscale job on this device: with a model, or as a video upscaler's one-frame clip.
+  private func upscaled(
+    image: CGImage, as upscale: ImageUpscale, request: GenerationEngine.Request,
+    progress: @escaping @Sendable (GenerationEngine.Progress) -> Void
+  ) async throws -> GenerationEngine.Output {
+    switch upscale.upscaler {
+    case .model(let file):
+      return try await engine.upscale(image: image, model: file, scale: upscale.scale, progress: progress)
+    case .video(let method, let variant):
+      var clip = request
+      // The image comes as the frame; a clip's source isn't read here.
+      clip.upscale = ClipUpscale(method: method, scale: upscale.scale, sourceTensorId: 0, variant: variant)
+      let output = try await engine.upscale(clip, frames: [image], progress: progress)
+      guard let frame = output.frames.first else { throw ProjectError.badImage }
+      return GenerationEngine.Output(frames: [frame])
+    }
   }
 
   /// Runs an upscale job: the source clip's frames through the engine, with its soundtrack (at

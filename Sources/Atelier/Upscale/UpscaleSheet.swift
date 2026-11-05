@@ -37,31 +37,55 @@ struct UpscaleSheet: View {
   }
 }
 
-/// Upscale… on the canvas image: pick an upscaler model and a scale, then queue it. The result is
-/// a new image in History.
+/// Upscale… on the canvas image: an upscaler model, or the video upscalers' Quality or Fast, and
+/// a scale, then queue it. The result is a new image in History.
 struct ImageUpscaleSheet: View {
   @Environment(CreateModel.self) private var create
   @Environment(\.dismiss) private var dismiss
   let width: Int
   let height: Int
+  /// "model" or a `ClipUpscale.Method`.
+  @AppStorage("imageUpscaleKind") private var kind = "model"
   @AppStorage("imageUpscaler") private var chosen = ""
   @AppStorage("imageUpscaleScale") private var scale = 4
+  @AppStorage("upscaleFlashVSRVariant") private var variant = FlashVSRFiles.Variant.turbo
   private let upscalers = ImageUpscale.installed
 
-  /// The one last picked while it's there, else the first.
+  /// The model last picked while it's there, else the first.
   private var file: String? {
     upscalers.contains { $0.file == chosen } ? chosen : upscalers.first?.file
   }
 
+  private var method: ClipUpscale.Method? { ClipUpscale.Method(rawValue: kind) }
+
+  private var upscale: ImageUpscale? {
+    if let method {
+      return ImageUpscale(upscaler: .video(method, method == .flashVSR ? variant : nil), scale: scale)
+    }
+    return file.map { ImageUpscale(upscaler: .model($0), scale: scale) }
+  }
+
   var body: some View {
+    let controls = UpscaleControls(
+      width: width, height: height,
+      method: Binding(get: { method }, set: { kind = $0?.rawValue ?? "model" }), scale: $scale,
+      variant: $variant, showsMethod: false)
     VStack(alignment: .leading, spacing: 12) {
       Text("Upscale Image").font(.headline)
-      if upscalers.isEmpty {
+      Picker("Upscaler", selection: $kind) {
+        Text("Model").tag("model")
+        Text("Quality").tag(ClipUpscale.Method.flashVSR.rawValue)
+        Text("Fast").tag(ClipUpscale.Method.system.rawValue)
+      }
+      .pickerStyle(.segmented)
+      if method != nil {
+        controls
+      } else if upscalers.isEmpty {
         Text("There's no upscaler model in your models folder. Add one, such as Real-ESRGAN X4+ or 4x UltraSharp.")
           .font(.caption).foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
       } else {
-        Picker("Upscaler", selection: Binding(get: { file ?? "" }, set: { chosen = $0 })) {
+        Picker("Model", selection: Binding(get: { file ?? "" }, set: { chosen = $0 })) {
           ForEach(upscalers, id: \.file) { Text($0.name).tag($0.file) }
         }
         Picker("Scale", selection: $scale) {
@@ -76,15 +100,15 @@ struct ImageUpscaleSheet: View {
         Button("Cancel", role: .cancel) { dismiss() }
           .keyboardShortcut(.cancelAction)
         Button("Upscale") {
-          if let file { create.upscaleCanvasImage(ImageUpscale(file: file, scale: scale)) }
+          if let upscale { create.upscaleCanvasImage(upscale) }
           dismiss()
         }
         .keyboardShortcut(.defaultAction)
-        .disabled(file == nil)
+        .disabled(upscale == nil || (method != nil && controls.problem != nil))
       }
     }
     .sheetPadding()
-    .sheetFrame(width: 440, height: 220)
+    .sheetFrame(width: 440, height: 380)
   }
 }
 
@@ -178,14 +202,17 @@ struct UpscaleControls: View {
   let offersNone: Bool
   /// Where it would run, when that's a server: what it has decides, not what's on this device.
   let server: (name: String, upscalers: RemoteUpscalers)?
+  /// False when the sheet chooses the method itself.
+  let showsMethod: Bool
   private var download = FlashVSRDownload.shared
 
   init(
     width: Int, height: Int, method: Binding<ClipUpscale.Method?>, scale: Binding<Int>,
     variant: Binding<FlashVSRFiles.Variant>, offersNone: Bool = false,
-    server: (name: String, upscalers: RemoteUpscalers)? = nil
+    server: (name: String, upscalers: RemoteUpscalers)? = nil, showsMethod: Bool = true
   ) {
     self.server = server
+    self.showsMethod = showsMethod
     self.width = width
     self.height = height
     _method = method
@@ -231,12 +258,14 @@ struct UpscaleControls: View {
     let downloading = download.variant
     let missing = FlashVSRFiles.installed(variant) == nil
     Group {
-      Picker(offersNone ? "Upscale" : "Method", selection: $method) {
-        if offersNone { Text("None").tag(ClipUpscale.Method?.none) }
-        Text("Quality").tag(ClipUpscale.Method?.some(.flashVSR))
-        Text("Fast").tag(ClipUpscale.Method?.some(.system))
+      if showsMethod {
+        Picker(offersNone ? "Upscale" : "Method", selection: $method) {
+          if offersNone { Text("None").tag(ClipUpscale.Method?.none) }
+          Text("Quality").tag(ClipUpscale.Method?.some(.flashVSR))
+          Text("Fast").tag(ClipUpscale.Method?.some(.system))
+        }
+        .pickerStyle(.segmented)
       }
-      .pickerStyle(.segmented)
       Text(
         method == .flashVSR
           ? "FlashVSR+ restores detail as one stream, steady from frame to frame. It takes a few seconds a frame."

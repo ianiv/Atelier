@@ -44,7 +44,7 @@ actor GenerationEngine {
     var placement: TimelinePlacement?
     /// Upscales a clip instead of generating (see `upscale(_:frames:progress:)`).
     var upscale: ClipUpscale?
-    /// Upscales `canvas` instead of generating (see `upscale(image:as:progress:)`).
+    /// Upscales `canvas` instead of generating (`CreateModel`'s `upscaled(image:as:request:progress:)`).
     var imageUpscale: ImageUpscale?
   }
 
@@ -298,20 +298,20 @@ actor GenerationEngine {
   /// Upscales an image with an ESRGAN model alone, as a strength 0 run does once it has loaded its
   /// model and encoded its prompt (`LocalImageGenerator.upscaleImageAndToCPU`), so it needs neither.
   func upscale(
-    image: CGImage, as upscale: ImageUpscale, progress: @escaping @Sendable (Progress) -> Void
+    image: CGImage, model file: String, scale: Int, progress: @escaping @Sendable (Progress) -> Void
   ) async throws -> Output {
     await waitForTurn()
     defer { endTurn() }
     try Task.checkCancellation()
     progress(.state(.preparing))
-    guard UpscalerZoo.isModelDownloaded(upscale.file), let tensor = ImageTensor.tensor(from: image) else {
+    guard UpscalerZoo.isModelDownloaded(file), let tensor = ImageTensor.tensor(from: image) else {
       throw ProjectError.badImage
     }
     let upscaler = RealESRGANer<FloatType>(
-      filePath: UpscalerZoo.filePathForModelDownloaded(upscale.file),
-      nativeScaleFactor: UpscalerZoo.scaleFactorForModel(upscale.file),
-      forcedScaleFactor: upscale.scale == 2 ? .x2 : .x4,
-      numberOfBlocks: UpscalerZoo.numberOfBlocksForModel(upscale.file),
+      filePath: UpscalerZoo.filePathForModelDownloaded(file),
+      nativeScaleFactor: UpscalerZoo.scaleFactorForModel(file),
+      forcedScaleFactor: scale == 2 ? .x2 : .x4,
+      numberOfBlocks: UpscalerZoo.numberOfBlocksForModel(file),
       isNHWCPreferred: DeviceCapability.isNHWCPreferred,
       tileSize: DeviceCapability.RealESRGANerTileSize)
     return try await onEngineQueue { _ in

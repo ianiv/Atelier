@@ -3,15 +3,26 @@ import Foundation
 @preconcurrency import ModelZoo
 @preconcurrency import NNC
 
-/// A queued job that upscales an image instead of generating, with one of the engine's ESRGAN
-/// models. The request's canvas is the image, and its size the result's. It always runs on this
-/// device: the upscaler models are this device's.
+/// A queued job that upscales an image instead of generating: the request's canvas is the image,
+/// and its size the result's. It always runs on this device, whose models these are.
 nonisolated struct ImageUpscale: Codable, Sendable, Hashable {
-  /// The upscaler model's file.
-  var file: String
-  /// 2 or 4, whatever the model's own scale; the engine scales the result to fit
-  /// (`RealESRGANer`'s forced scale factor).
+  enum Upscaler: Codable, Sendable, Hashable {
+    /// One of the engine's ESRGAN models, by file.
+    case model(String)
+    /// A video upscaler, with the image as a clip of one frame.
+    case video(ClipUpscale.Method, FlashVSRFiles.Variant?)
+  }
+
+  var upscaler: Upscaler
+  /// 2 or 4. A model scales its result to fit, whatever its own scale is (`RealESRGANer`'s forced
+  /// scale factor).
   var scale: Int
+
+  /// The result's size for a `width`×`height` image.
+  func outputSize(width: Int, height: Int) -> (width: Int, height: Int) {
+    guard case .video(let method, _) = upscaler else { return (width * scale, height * scale) }
+    return ClipUpscale.outputSize(width: width, height: height, scale: scale, method: method)
+  }
 
   static let scales = [4, 2]
 
