@@ -338,6 +338,7 @@ actor GenerationEngine {
     case .system:
       let images = try await SystemSuperResolution.run(
         count: frames.count, width: first.width, height: first.height, scale: upscale.scale,
+        input: upscale.isImage == true ? .image : .video,
         frame: { frames[$0] }
       ) { done, total, image in
         guard let image else { return progress(.state(.preparing)) }

@@ -23,12 +23,18 @@ nonisolated enum SystemSuperResolution {
     }
   }
 
-  /// The largest input frame the model takes for video.
-  static var maximumInput: (width: Int, height: Int) {
+  /// What the model is told it's upscaling, which sets the largest size it takes.
+  enum Input {
+    case video, image
+  }
+
+  /// The largest input frame the model takes, from `VTSuperResolutionScalerConfiguration`'s
+  /// initializer, which documents them and has no property for them.
+  static func maximumInput(_ input: Input = .video) -> (width: Int, height: Int) {
     #if os(macOS)
-      (1920, 1080)
+      input == .image ? (1920, 1920) : (1920, 1080)
     #else
-      (1440, 1080)
+      input == .image ? (1920, 1080) : (1440, 1080)
     #endif
   }
 
@@ -41,8 +47,8 @@ nonisolated enum SystemSuperResolution {
   }
 
   /// Scale factors the model offers for a `width`×`height` input; empty when it can't take it.
-  static func scaleFactors(width: Int, height: Int) -> [Int] {
-    guard isSupported, fits(width: width, height: height) else { return [] }
+  static func scaleFactors(width: Int, height: Int, input: Input = .video) -> [Int] {
+    guard isSupported, fits(width: width, height: height, input: input) else { return [] }
     #if targetEnvironment(simulator)
       return []
     #else
@@ -50,8 +56,8 @@ nonisolated enum SystemSuperResolution {
     #endif
   }
 
-  static func fits(width: Int, height: Int) -> Bool {
-    let limit = maximumInput
+  static func fits(width: Int, height: Int, input: Input = .video) -> Bool {
+    let limit = maximumInput(input)
     // Either orientation.
     return (width <= limit.width && height <= limit.height)
       || (width <= limit.height && height <= limit.width)
@@ -60,10 +66,11 @@ nonisolated enum SystemSuperResolution {
   /// Upscales `count` frames of `width`×`height`, each read with `frame(i)`, by `scale`.
   /// `progress(done, total, image)` follows each frame (`done` 0 while the model downloads).
   @concurrent static func run(
-    count: Int, width: Int, height: Int, scale: Int, frame: @Sendable (Int) -> CGImage?,
+    count: Int, width: Int, height: Int, scale: Int, input: Input = .video,
+    frame: @Sendable (Int) -> CGImage?,
     progress: @escaping @Sendable (Int, Int, CGImage?) -> Void
   ) async throws -> [CGImage] {
-    let scaler = try await Scaler(width: width, height: height, scale: scale) {
+    let scaler = try await Scaler(width: width, height: height, scale: scale, input: input) {
       progress(0, count, nil)
     }
     var results: [CGImage] = []
@@ -83,7 +90,9 @@ nonisolated enum SystemSuperResolution {
       let outputWidth = 0
       let outputHeight = 0
 
-      init(width _: Int, height _: Int, scale _: Int, downloading _: () -> Void = {}) async throws {
+      init(
+        width _: Int, height _: Int, scale _: Int, input _: Input = .video, downloading _: () -> Void = {}
+      ) async throws {
         throw Failure.unsupported
       }
 
@@ -106,17 +115,21 @@ nonisolated enum SystemSuperResolution {
     private var index = 0
 
     /// `downloading` is called before macOS downloads the model, the first time it's used.
-    init(width: Int, height: Int, scale: Int, downloading: () -> Void = {}) async throws {
+    init(
+      width: Int, height: Int, scale: Int, input: Input = .video, downloading: () -> Void = {}
+    ) async throws {
       guard SystemSuperResolution.isSupported else { throw Failure.unsupported }
-      guard SystemSuperResolution.fits(width: width, height: height) else {
-        throw Failure.tooLarge(maximumInput.width, maximumInput.height)
+      guard SystemSuperResolution.fits(width: width, height: height, input: input) else {
+        let limit = maximumInput(input)
+        throw Failure.tooLarge(limit.width, limit.height)
       }
       guard VTSuperResolutionScalerConfiguration.supportedScaleFactors.contains(scale) else {
         throw Failure.scale(scale)
       }
       guard
         let configuration = VTSuperResolutionScalerConfiguration(
-          frameWidth: width, frameHeight: height, scaleFactor: scale, inputType: .video,
+          frameWidth: width, frameHeight: height, scaleFactor: scale,
+          inputType: input == .image ? .image : .video,
           usePrecomputedFlow: false, qualityPrioritization: .normal,
           revision: VTSuperResolutionScalerConfiguration.defaultRevision)
       else { throw Failure.unsupported }

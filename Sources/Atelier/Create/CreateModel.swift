@@ -1919,7 +1919,8 @@ final class CreateModel {
     case .video(let method, let variant):
       var clip = request
       // The image comes as the frame; a clip's source isn't read here.
-      clip.upscale = ClipUpscale(method: method, scale: upscale.scale, sourceTensorId: 0, variant: variant)
+      clip.upscale = ClipUpscale(
+        method: method, scale: upscale.scale, sourceTensorId: 0, variant: variant, isImage: true)
       let output = try await engine.upscale(clip, frames: [image], progress: progress)
       guard let frame = output.frames.first else { throw ProjectError.badImage }
       return GenerationEngine.Output(frames: [frame])

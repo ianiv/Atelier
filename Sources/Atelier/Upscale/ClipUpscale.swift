@@ -56,7 +56,7 @@ nonisolated struct ImageUpscale: Codable, Sendable, Hashable {
   /// The scales to offer for a `width`×`height` image, Max last.
   func scales(width: Int, height: Int) -> [Int] {
     if case .video(.system, _) = upscaler {
-      return ClipUpscale.offeredScales(width: width, height: height, method: .system)
+      return SystemSuperResolution.scaleFactors(width: width, height: height, input: .image)
     }
     return Self.scales + (sizeLimit == nil ? [] : [Self.maxScale])
   }
@@ -75,11 +75,13 @@ nonisolated struct ImageUpscale: Codable, Sendable, Hashable {
         return "Download FlashVSR+ \((variant ?? .turbo).title) to use it."
       }
       if method == .system {
-        if SystemSuperResolution.isSupported, !SystemSuperResolution.fits(width: width, height: height) {
-          let limit = SystemSuperResolution.maximumInput
+        guard SystemSuperResolution.isSupported else { return "This device doesn't support Apple Super Resolution." }
+        guard SystemSuperResolution.fits(width: width, height: height, input: .image) else {
+          let limit = SystemSuperResolution.maximumInput(.image)
           return "Apple Super Resolution takes images up to \(limit.width) × \(limit.height)."
         }
-        return ClipUpscale.problem(width: width, height: height, scale: scale, method: method)
+        return SystemSuperResolution.scaleFactors(width: width, height: height, input: .image).contains(scale)
+          ? nil : "Apple Super Resolution can't scale by \(scale)×."
       }
     }
     guard let limit = sizeLimit else { return nil }
@@ -138,6 +140,8 @@ nonisolated struct ClipUpscale: Codable, Sendable, Hashable {
   var frameLimit: Int?
   /// FlashVSR+'s variant; nil for Turbo.
   var variant: FlashVSRFiles.Variant?
+  /// A still image as one frame, which Apple Super Resolution takes at larger sizes than video.
+  var isImage: Bool?
 
   static let scales = [2, 4]
   /// FlashVSR+'s largest output, in pixels per frame: 1920×1152. Its wide layers' attention grows
@@ -174,7 +178,7 @@ nonisolated struct ClipUpscale: Codable, Sendable, Hashable {
     case .system:
       guard SystemSuperResolution.isSupported else { return "This device doesn't support Apple Super Resolution." }
       guard SystemSuperResolution.fits(width: width, height: height) else {
-        let limit = SystemSuperResolution.maximumInput
+        let limit = SystemSuperResolution.maximumInput()
         return "Apple Super Resolution takes clips up to \(limit.width)×\(limit.height)."
       }
       guard SystemSuperResolution.scaleFactors(width: width, height: height).contains(scale) else {
