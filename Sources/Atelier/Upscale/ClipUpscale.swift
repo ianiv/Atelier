@@ -1,6 +1,28 @@
 import AVFoundation
 import Foundation
+@preconcurrency import ModelZoo
 @preconcurrency import NNC
+
+/// A queued job that upscales an image instead of generating, with one of the engine's ESRGAN
+/// models. The request's canvas is the image, and its size the result's. It always runs on this
+/// device: the upscaler models are this device's.
+nonisolated struct ImageUpscale: Codable, Sendable, Hashable {
+  /// The upscaler model's file.
+  var file: String
+  /// 2 or 4, whatever the model's own scale; the engine scales the result to fit
+  /// (`RealESRGANer`'s forced scale factor).
+  var scale: Int
+
+  static let scales = [4, 2]
+
+  /// The upscaler models in the models folder. Not the settings' file-name match: that also finds
+  /// LTX's spatial upscalers, which aren't for images.
+  static var installed: [(file: String, name: String)] {
+    UpscalerZoo.availableSpecifications
+      .filter { UpscalerZoo.isModelDownloaded($0.file) }
+      .map { ($0.file, $0.name) }
+  }
+}
 
 /// A queued job that upscales a clip instead of generating: the request's size and seed are
 /// the result's (its model stays the source's), and the frames come from the source clip when

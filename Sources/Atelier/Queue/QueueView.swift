@@ -136,7 +136,7 @@ struct QueueRow: View {
         .frame(width: 48, height: 48)
         .clipShape(.rect(cornerRadius: 4))
       VStack(alignment: .leading, spacing: 2) {
-        Text(request.prompt.isEmpty ? "No prompt" : request.prompt)
+        Text(request.imageUpscale.map { "Upscale \($0.scale)×" } ?? (request.prompt.isEmpty ? "No prompt" : request.prompt))
           .lineLimit(2)
         Text(
           [

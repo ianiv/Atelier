@@ -1676,7 +1676,10 @@ final class CreateModel {
           }
         }
         let output: GenerationEngine.Output
-        if job.remoteDevice != nil, request.upscale != nil {
+        if let imageUpscale = request.imageUpscale, let image = request.canvas {
+          setRunMessage("Upscaling…", job)
+          output = try await engine.upscale(image: image, as: imageUpscale, progress: progress)
+        } else if job.remoteDevice != nil, request.upscale != nil {
           // A device's frames came with its job; its source clip isn't in any project here.
           output = try await backend.upscale(request, frames: deviceFrames.removeValue(forKey: job.id) ?? [], progress: progress)
         } else if let upscale = request.upscale {
@@ -1871,6 +1874,36 @@ final class CreateModel {
       variant: method == .flashVSR ? variant : nil)
     statusNote = nil
     queue.append([request], currentTensorId: history.currentTensorId, target: target)
+    runNext()
+  }
+
+  /// Whether the canvas holds an image Upscale… can take: a finished one, not a playing video.
+  var canUpscaleCanvasImage: Bool { image != nil && !imageIsPreview && canvasClip == nil }
+
+  /// Queues upscaling the canvas image. The result is a new History entry after it.
+  func upscaleCanvasImage(_ upscale: ImageUpscale) {
+    guard canUpscaleCanvasImage, let image else { return }
+    self.upscale(image: image, item: imageItem, as: upscale)
+  }
+
+  /// Queues upscaling `image`, which is `item` when it's a saved image; a frame of a video or an
+  /// imported image has no settings of its own to carry, and goes after the current step.
+  func upscale(image: CGImage, item: HistoryItem?, as upscale: ImageUpscale) {
+    let source = item?.isVideo == true ? nil : item
+    guard var configuration = settings, let model = source?.sidecar.model ?? selectedModel else { return }
+    if let source { SettingsRegistry.apply(dump: source.sidecar.configuration, to: &configuration) }
+    configuration.width = image.width * upscale.scale
+    configuration.height = image.height * upscale.scale
+    var request = GenerationEngine.Request(
+      model: model, prompt: source?.sidecar.prompt ?? "", negativePrompt: source?.sidecar.negativePrompt ?? "",
+      seed: source?.sidecar.seed ?? seed, configuration: configuration)
+    request.canvas = image
+    request.canvasIsImported = source == nil
+    request.canvasTensorId = source?.tensorId
+    request.parentTensorId = source.map(HistoryStore.tip(of:))
+    request.imageUpscale = upscale
+    statusNote = nil
+    queue.append([request], currentTensorId: history.currentTensorId, target: .local)
     runNext()
   }
 

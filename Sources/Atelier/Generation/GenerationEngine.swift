@@ -10,6 +10,7 @@ import Foundation
 @preconcurrency import ModelZoo
 @preconcurrency import NNC
 import Synchronization
+@preconcurrency import Upscaler
 
 /// Owns a cached pipeline for the current model and runs one generation at a time.
 actor GenerationEngine {
@@ -43,6 +44,8 @@ actor GenerationEngine {
     var placement: TimelinePlacement?
     /// Upscales a clip instead of generating (see `upscale(_:frames:progress:)`).
     var upscale: ClipUpscale?
+    /// Upscales `canvas` instead of generating (see `upscale(image:as:progress:)`).
+    var imageUpscale: ImageUpscale?
   }
 
   /// What a run made: one frame for an image, every frame of a clip and its soundtrack for video.
@@ -291,6 +294,34 @@ actor GenerationEngine {
   }
 
   // MARK: - Upscale
+
+  /// Upscales an image with an ESRGAN model alone, as a strength 0 run does once it has loaded its
+  /// model and encoded its prompt (`LocalImageGenerator.upscaleImageAndToCPU`), so it needs neither.
+  func upscale(
+    image: CGImage, as upscale: ImageUpscale, progress: @escaping @Sendable (Progress) -> Void
+  ) async throws -> Output {
+    await waitForTurn()
+    defer { endTurn() }
+    try Task.checkCancellation()
+    progress(.state(.preparing))
+    guard UpscalerZoo.isModelDownloaded(upscale.file), let tensor = ImageTensor.tensor(from: image) else {
+      throw ProjectError.badImage
+    }
+    let upscaler = RealESRGANer<FloatType>(
+      filePath: UpscalerZoo.filePathForModelDownloaded(upscale.file),
+      nativeScaleFactor: UpscalerZoo.scaleFactorForModel(upscale.file),
+      forcedScaleFactor: upscale.scale == 2 ? .x2 : .x4,
+      numberOfBlocks: UpscalerZoo.numberOfBlocksForModel(upscale.file),
+      isNHWCPreferred: DeviceCapability.isNHWCPreferred,
+      tileSize: DeviceCapability.RealESRGANerTileSize)
+    return try await onEngineQueue { _ in
+      let graph = DynamicGraph()
+      let result = graph.withNoGrad {
+        upscaler.upscale(graph.variable(tensor.toGPU(0))).0.rawValue.toCPU()
+      }
+      return Output(frames: [result])
+    }
+  }
 
   /// Upscales a clip's `frames` as `request.upscale` says, to `request.configuration`'s size
   /// (FlashVSR+, with the request's seed) or by its scale (Apple Super Resolution).

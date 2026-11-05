@@ -10,7 +10,7 @@ extension Automation {
   ///
   ///   Atelier --upscale-check --project NAME [--method flashVSR|system] [--scale 2]
   ///           [--variant turbo|base] [--clip ID] [--frames N] [--export DIR]
-  ///           [--export-clip ID|latest] [--quit]
+  ///           [--export-clip ID|latest] [--image] [--upscaler FILE] [--quit]
   static func upscaleCheck(_ model: CreateModel) {
     let args = CommandLine.arguments
     func value(_ name: String) -> String? {
@@ -28,6 +28,42 @@ extension Automation {
       }
       while !model.history.isLoaded || model.models.isEmpty || model.isBusy {
         try? await Task.sleep(for: .milliseconds(100))
+      }
+      // `--image`: the smallest image instead, with `--upscaler FILE` or the first one installed.
+      if args.contains("--image") {
+        let images = model.history.items.filter { !$0.isVideo }
+        guard let source = images.min(by: { $0.sidecar.width * $0.sidecar.height < $1.sidecar.width * $1.sidecar.height }),
+              let image = await model.history.image(tensorId: source.tensorId, in: model.history.project.name),
+              let file = value("--upscaler") ?? ImageUpscale.installed.first?.file
+        else {
+          log("FAIL no image in \(model.history.project.name), or no upscaler")
+          return finish()
+        }
+        let scale = value("--scale").flatMap(Int.init) ?? 4
+        log("source \(source.tensorId): \(image.width)x\(image.height), \(file) \(scale)x")
+        let before = model.queue.recent.count
+        let upscaleStarted = Date()
+        model.upscale(image: image, item: source, as: ImageUpscale(file: file, scale: scale))
+        while model.queue.recent.count == before || !model.queue.isEmpty {
+          try? await Task.sleep(for: .milliseconds(100))
+        }
+        guard let job = model.queue.recent.first, case .finished(let tensorId) = job.status,
+              let result = model.history.item(tensorId: tensorId),
+              let made = await model.history.image(tensorId: tensorId, in: model.history.project.name)
+        else {
+          log("FAIL \(model.queue.recent.first.map { "\($0.status)" } ?? "no job") \(model.errorMessage ?? "")")
+          return finish()
+        }
+        let right = made.width == image.width * scale && made.height == image.height * scale
+        log(
+          "\(right ? "PASS" : "FAIL") image \(result.tensorId): \(made.width)x\(made.height) (sidecar \(result.sidecar.width)x\(result.sidecar.height)) in \(String(format: "%.1f", Date().timeIntervalSince(upscaleStarted)))s, prompt kept: \(result.sidecar.prompt == source.sidecar.prompt), input \(result.inputTensorId.map(String.init) ?? "none"), \(model.history.items.count) items")
+        if let directory = value("--export") {
+          let url = URL(fileURLWithPath: directory).appendingPathComponent("image-\(scale)x.png")
+          try? await model.history.exportPNG(result, to: url)
+          let sourceURL = URL(fileURLWithPath: directory).appendingPathComponent("source.png")
+          try? await model.history.exportPNG(source, to: sourceURL)
+        }
+        return finish()
       }
       let clips = model.history.items.filter(\.isVideo)
       // `--export-clip ID`: only export that clip (to `--export DIR`), to retry a failed export.

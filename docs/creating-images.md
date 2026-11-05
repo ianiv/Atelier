@@ -110,6 +110,8 @@ The strip under the canvas shows your latest images from the current project. Cl
 
 The two buttons at the strip's left switch what it shows: **Chronological** (clock) shows the newest images on every branch; **Current Lineage** (branch) shows the current image's line: the images it came from, and the newest images made after it. An image that more than one image follows has a small branch badge with their count. Right-click for **Use Settings**, **Use as Input**, **Add to Moodboard** and **Copy Image**. You can also drag an image from the strip into another app.
 
+To make the canvas image larger, Control-click it and choose **Upscale…**. Pick an upscaler model from your models folder and **2×** or **4×**. It runs in the [Queue](queue.md) on this device, and the result is a new image in History after the original, with the same settings. It only enlarges the image, so no diffusion model is needed. The inspector's **Upscaler** setting is different: it upscales each new image as part of generating it.
+
 ## Image to image
 
 The **Generate / Edit** switch beside the prompt, above the Generate button, decides whether the canvas is sent to the model.

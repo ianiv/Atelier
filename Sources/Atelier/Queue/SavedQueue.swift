@@ -26,6 +26,8 @@ nonisolated enum SavedQueue {
     var placement: TimelinePlacement?
     /// An upscale job's method, scale and source clip.
     var upscale: ClipUpscale?
+    /// An image upscale job's model and scale; its image is the canvas.
+    var imageUpscale: ImageUpscale?
     /// Where it runs. Optional because queues saved before there was a choice don't have it.
     var target: JobTarget?
   }
@@ -56,6 +58,7 @@ nonisolated enum SavedQueue {
       request.audio = entry.audio.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
       request.placement = sameProject ? entry.placement : nil
       request.upscale = entry.upscale
+      request.imageUpscale = entry.imageUpscale
       return request
     }
   }
@@ -100,7 +103,8 @@ nonisolated enum SavedQueue {
           parentTensorId: request.parentTensorId, hasCanvas: request.canvas != nil,
           canvasTensorId: request.canvasTensorId, canvasIsImported: request.canvasIsImported,
           moodboardWeights: request.moodboard.map(\.weight), audio: request.audio,
-          placement: request.placement, upscale: request.upscale, target: job.target))
+          placement: request.placement, upscale: request.upscale, imageUpscale: request.imageUpscale,
+          target: job.target))
     }
     if let data = try? JSONEncoder().encode(entries) {
       Log.attempt(Log.queue, "Saving the queue") {

@@ -37,6 +37,57 @@ struct UpscaleSheet: View {
   }
 }
 
+/// Upscale… on the canvas image: pick an upscaler model and a scale, then queue it. The result is
+/// a new image in History.
+struct ImageUpscaleSheet: View {
+  @Environment(CreateModel.self) private var create
+  @Environment(\.dismiss) private var dismiss
+  let width: Int
+  let height: Int
+  @AppStorage("imageUpscaler") private var chosen = ""
+  @AppStorage("imageUpscaleScale") private var scale = 4
+  private let upscalers = ImageUpscale.installed
+
+  /// The one last picked while it's there, else the first.
+  private var file: String? {
+    upscalers.contains { $0.file == chosen } ? chosen : upscalers.first?.file
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Text("Upscale Image").font(.headline)
+      if upscalers.isEmpty {
+        Text("There's no upscaler model in your models folder. Add one, such as Real-ESRGAN X4+ or 4x UltraSharp.")
+          .font(.caption).foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      } else {
+        Picker("Upscaler", selection: Binding(get: { file ?? "" }, set: { chosen = $0 })) {
+          ForEach(upscalers, id: \.file) { Text($0.name).tag($0.file) }
+        }
+        Picker("Scale", selection: $scale) {
+          ForEach(ImageUpscale.scales, id: \.self) { Text("\($0)×").tag($0) }
+        }
+        .pickerStyle(.segmented)
+        LabeledContent("Size", value: "\(width) × \(height) → \(width * scale) × \(height * scale)")
+      }
+      Spacer(minLength: 0)
+      HStack {
+        Spacer()
+        Button("Cancel", role: .cancel) { dismiss() }
+          .keyboardShortcut(.cancelAction)
+        Button("Upscale") {
+          if let file { create.upscaleCanvasImage(ImageUpscale(file: file, scale: scale)) }
+          dismiss()
+        }
+        .keyboardShortcut(.defaultAction)
+        .disabled(file == nil)
+      }
+    }
+    .sheetPadding()
+    .sheetFrame(width: 440, height: 220)
+  }
+}
+
 /// Export Video… for a timeline or a video in History: as it is, or upscaled (Fast or Quality,
 /// at a scale), with the size it makes and, when upscaling, about how long it takes. As it is
 /// exports right away; upscaled, it's a Queue job.
