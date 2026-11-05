@@ -231,6 +231,27 @@ nonisolated struct RemoteBackend: GenerationBackend {
     }
   }
 
+  func styles() async throws -> [RemoteStyle] {
+    guard case .styles(let list) = try await paired().request(.stylesRequest) else { throw RemoteError.connectionLost }
+    return list
+  }
+
+  func styleThumbnail(_ id: UUID) async throws -> Data? {
+    guard case .styleThumbnail(let data) = try await paired().request(.styleThumbnailRequest(styleID: id)) else {
+      throw RemoteError.connectionLost
+    }
+    return data
+  }
+
+  /// How a style's thumbnail was made, and its full-size image.
+  func styleSource(_ id: UUID) async throws -> (source: ThumbnailSource, image: CGImage)? {
+    guard case .styleSource(let source, let data) = try await paired().request(.styleSourceRequest(styleID: id)) else {
+      throw RemoteError.connectionLost
+    }
+    guard let source, let data, let image = ImageLoader.image(from: data) else { return nil }
+    return (source, image)
+  }
+
   func catalog() async throws -> (models: [RemoteModelInfo], loras: [RemoteLoRAInfo], files: [String], upscalers: RemoteUpscalers) {
     guard case .catalog(let models, let loras, let files, let upscalers) = try await paired().request(.catalogRequest) else {
       throw RemoteError.connectionLost
@@ -395,6 +416,8 @@ final class RemoteServerList {
   /// Servers Bonjour finds on the local network, paired or not.
   private(set) var nearby: [RemoteNearby] = []
   private var browser: NWBrowser?
+  /// Told when a server is taken off the list.
+  @ObservationIgnored var onServerRemoved: ((UUID) -> Void)?
   /// Routes through Atelier's own tailnet node.
   @ObservationIgnored var router: RemoteRouter?
   /// Told when a server is seen to come online.
@@ -534,6 +557,7 @@ final class RemoteServerList {
     store.saveList(servers, account: RemoteAccounts.servers)
     statuses[id] = nil
     forgetClient(id)
+    onServerRemoved?(id)
   }
 
   private func forgetClient(_ id: UUID) {

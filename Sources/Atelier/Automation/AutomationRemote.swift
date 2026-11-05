@@ -508,6 +508,40 @@ extension Automation {
       _ = await wait(until: { !model.isLoadingModel }, seconds: 120)
       model.errorMessage = nil
 
+      // The server's styles.
+      let serverStyles = StyleStore(persists: false)
+      let serverStyle = Style(name: "Check Style", category: "Checks", template: "{{SUBJECT}}, in the style of {{ARTIST:nobody}}", negative: "blurry")
+      serverStyles.save(serverStyle)
+      serverStyles.setThumbnail(Self.checkImage(), for: serverStyle.id, source: ThumbnailSource(prompt: "p", negativePrompt: "", model: "no_such_model.ckpt", seed: 1, settings: [:]))
+      host.styles = serverStyles
+      let localStylesBefore = model.styles?.styles ?? []
+      model.remoteStyles.remove(server: hostRecord.id)
+      await model.refreshRemoteStyles(server: hostRecord.id)
+      let fetched = model.remoteStyles.styles(of: hostRecord.id).first { $0.id == serverStyle.id }
+      check(fetched?.style.template == serverStyle.template, "a server's styles come over")
+      check(model.styles?.styles == localStylesBefore, "and don't touch this device's own")
+      if let fetched {
+        let thumbnail = await model.remoteStyles.thumbnail(of: fetched, server: hostRecord.id, backend: hostBackend)
+        check(thumbnail != nil, "its thumbnail comes by hash (\(fetched.thumbnailHash?.prefix(8) ?? "none"))")
+        let again = await model.remoteStyles.thumbnail(of: fetched, server: hostRecord.id, backend: RemoteBackend(client: nil))
+        check(again != nil, "and is kept, with no server needed")
+        model.styleID = fetched.id
+        model.prompt = "a fox"
+        check(model.style?.id == fetched.id, "one can be used like a local one")
+        check(model.styledPrompts.prompt == "a fox, in the style of nobody" && model.styledPrompts.negativePrompt.contains("blurry"), "and writes the prompt (\(model.styledPrompts.prompt))")
+        // A scripted run keeps thumbnails in memory, without what they were made with, so this one's
+        // model is set here.
+        var missing = fetched
+        missing.thumbnailModel = "no_such_model.ckpt"
+        check(model.remoteStyleProblem(missing) != nil, "a thumbnail whose model isn't there can't open (\(model.remoteStyleProblem(missing) ?? ""))")
+        missing.thumbnailModel = file
+        check(model.remoteStyleProblem(missing) == nil, "one whose model is there can")
+        let copy = await model.copyRemoteStyle(fetched, server: hostRecord.id)
+        check(copy != nil && copy?.id != fetched.id && model.styles?.style(id: copy?.id) != nil, "copying keeps it here, under a new id")
+        if let copy { model.styles?.delete([copy.id]) }
+        model.styleID = nil
+      }
+
       // Offline: Generate holds, and a kept job waits for the server rather than failing.
       hostServer.isEnabled = false
       await hostServer.settled()
@@ -519,6 +553,8 @@ extension Automation {
       await model.clientJobs.add(leftRequest, job: waitingJob, server: hostRecord.id, project: model.history.project.name)
       await model.recoverRemoteJobs()
       check(model.queue.isEmpty && model.clientJobs.all().count == 1, "a kept job waits for its offline server")
+      await model.refreshRemoteStyles(server: hostRecord.id)
+      check(model.remoteStyles.styles(of: hostRecord.id).contains { $0.id == serverStyle.id }, "an offline server's styles stay")
       model.clientJobs.remove(waitingJob)
 
       // Back here.
@@ -526,6 +562,7 @@ extension Automation {
       let backHere = await wait(until: { !model.isLoadingModel }, seconds: 60)
       check(backHere && model.serverCatalog == nil && model.availableModels.count == model.models.count, "This Mac brings back the local models")
       model.remoteServers.remove(hostRecord.id)
+      model.remoteStyles.remove(server: hostRecord.id)
 
       // A device paired with itself: its own server's job can't wait on its own remote job.
       server.isEnabled = true
@@ -1022,6 +1059,27 @@ extension Automation {
       try? await Task.sleep(for: .seconds(1))
       shot("queue-finished.png")
       await capture("queue-window", window: AutomationWindows.mainWindowNumber)
+
+      // The Styles screen, on the server's styles. The picker's choice is a real setting, so it's
+      // put back afterwards.
+      if let record = model.remoteServers.servers.first(where: { $0.id != gone.id }) {
+        let hostStyles = StyleStore(persists: false)
+        for (name, category) in [("Oil Painting", "Painting"), ("Watercolor", "Painting"), ("Film Noir", "Photo")] {
+          let style = Style(name: name, category: category, template: "{{SUBJECT}}, in the manner of \(name), {{MOOD:quiet}}", negative: "blurry")
+          hostStyles.save(style)
+          hostStyles.setThumbnail(Self.checkImage(), for: style.id)
+        }
+        host.styles = hostStyles
+        let saved = UserDefaults.standard.string(forKey: "stylesSource")
+        await model.refreshRemoteStyles(server: record.id)
+        UserDefaults.standard.set(record.id.uuidString, forKey: "stylesSource")
+        navigation.section = .styles
+        try? await Task.sleep(for: .seconds(2))
+        shot("styles-server.png")
+        await capture("styles-server-window", window: AutomationWindows.mainWindowNumber)
+        UserDefaults.standard.set(saved, forKey: "stylesSource")
+        navigation.section = .create
+      }
 
       // Settings ▸ Compute.
       server.isEnabled = true

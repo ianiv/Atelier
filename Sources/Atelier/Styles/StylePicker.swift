@@ -87,7 +87,26 @@ struct StylePicker: View {
             }
           }
         }
-        if styles.isEmpty {
+        ForEach(model.remoteServers.servers) { server in
+          let remote = model.remoteStyles.styles(of: server.id).map(\.style).filter { style in
+            query.isEmpty || style.name.localizedCaseInsensitiveContains(query) || style.category.localizedCaseInsensitiveContains(query)
+              || style.subcategory.localizedCaseInsensitiveContains(query)
+          }
+          if !remote.isEmpty {
+            let title = "From \(server.name)"
+            let open = !query.isEmpty || !collapsed.contains(title)
+            Section {
+              if open {
+                ForEach(remote) { style in
+                  row(name: style.name, detail: style.subcategory, id: style.id)
+                }
+              }
+            } header: {
+              header(title, count: remote.count, open: open)
+            }
+          }
+        }
+        if styles.isEmpty, model.remoteStyles.all.isEmpty {
           Text("No styles yet. Add or import them in the Styles section.")
             .foregroundStyle(.secondary)
         } else if matching.isEmpty {

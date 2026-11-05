@@ -37,6 +37,15 @@ struct StylesView: View {
   @State private var revealed: UUID?
   /// The grid's width, for its column count and thumbnail size.
   @State private var gridWidth: CGFloat = 0
+  /// The paired server whose styles are shown; nil for this device's.
+  @AppStorage("stylesSource") private var sourceStorage = ""
+  @State private var serverSelection: UUID?
+
+  private var source: UUID? { UUID(uuidString: sourceStorage) }
+
+  private var selectedRemote: RemoteStyle? {
+    source.flatMap { server in create.remoteStyles.styles(of: server).first { $0.id == serverSelection } }
+  }
 
   /// The grid's cells: at least this wide, this far apart.
   private static let gridMinimum: CGFloat = 140
@@ -74,6 +83,9 @@ struct StylesView: View {
       } isTargeted: { dropTargeted = $0 }
       .toolbar {
         ToolbarItem {
+          sourcePicker
+        }
+        ToolbarItem {
           Picker("View", selection: $styles.screenGrid) {
             Label("List", systemImage: "list.bullet").tag(false)
             Label("Grid", systemImage: "square.grid.2x2").tag(true)
@@ -81,6 +93,7 @@ struct StylesView: View {
           .pickerStyle(.segmented)
           .toolbarNaturalWidth()
           .help("Show the styles as a list or a grid of thumbnails")
+          .disabled(source != nil)
         }
         .segmentedToolbarItem()
         #if os(iOS)
@@ -94,6 +107,7 @@ struct StylesView: View {
                 systemImage: styles.screenCategory == nil ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
             }
             .help("Show only one category")
+            .disabled(source != nil)
           }
         #else
           ToolbarItem {
@@ -101,6 +115,7 @@ struct StylesView: View {
               title: styles.screenCategory.map { $0.isEmpty ? "Uncategorized" : $0 } ?? "All categories",
               width: 130
             ) { categoryPicker }
+              .disabled(source != nil)
           }
         #endif
         ToolbarItem {
@@ -111,30 +126,46 @@ struct StylesView: View {
           } label: {
             Label("Import or Export", systemImage: "square.and.arrow.down.on.square")
           }
+          .disabled(source != nil)
           .help("Import a style library or Markdown style file, or export these styles as a library page that works in any browser")
         }
         ToolbarItem {
           Button("New Style", systemImage: "plus") { newStyle() }
             .help("Add a style")
+            .disabled(source != nil)
         }
       }
       .searchable(text: $styles.screenSearch, placement: .toolbar, prompt: "Filter styles")
       .safeAreaBar(edge: .bottom, spacing: 0) {
-        ThumbnailBar(selected: styles.styles.filter { selection.contains($0.id) })
+        // Thumbnails are for this device's styles; a server's are made there.
+        ThumbnailBar(selected: source == nil ? styles.styles.filter { selection.contains($0.id) } : [])
       }
-      .detailInspector(selection: selection, isEmpty: selected == nil, clearSelection: { selection = [] }) {
-        Group {
-          if let selected {
-            StyleEditor(style: selected, delete: { pendingDelete = [selected.id] })
-              .id(selected.id)
-          } else {
-            ContentUnavailableView(
-              selection.count > 1 ? "\(selection.count) styles selected" : "No selection",
-              systemImage: "paintpalette",
-              description: Text("Select a style to edit it or use it on Create."))
+      .detailInspector(
+        selection: source == nil ? selection : Set(serverSelection.map { [$0] } ?? []),
+        isEmpty: source == nil ? selected == nil : selectedRemote == nil,
+        clearSelection: {
+          selection = []
+          serverSelection = nil
+        }) {
+          Group {
+            if let source, let selectedRemote {
+              ServerStyleDetail(remote: selectedRemote, server: source)
+                .id(selectedRemote.id)
+            } else if source != nil {
+              ContentUnavailableView(
+                "No selection", systemImage: "paintpalette",
+                description: Text("Select a style to use it on Create or copy it to this device."))
+            } else if let selected {
+              StyleEditor(style: selected, delete: { pendingDelete = [selected.id] })
+                .id(selected.id)
+            } else {
+              ContentUnavailableView(
+                selection.count > 1 ? "\(selection.count) styles selected" : "No selection",
+                systemImage: "paintpalette",
+                description: Text("Select a style to edit it or use it on Create."))
+            }
           }
-        }
-        .inspectorColumnWidth(min: 300, ideal: 360, max: 520)
+          .inspectorColumnWidth(min: 300, ideal: 360, max: 520)
       }
       .confirmationDialog(
         pendingDelete.count == 1
@@ -182,9 +213,27 @@ struct StylesView: View {
       }
   }
 
+  /// Whose styles the screen shows. A server that's away stays listed: its styles are kept here.
+  private var sourcePicker: some View {
+    Picker("Styles From", selection: $sourceStorage) {
+      Text(CreateModel.thisDeviceName).tag("")
+      ForEach(create.remoteServers.servers) { server in
+        Text(create.remoteServers.status(of: server.id) == .offline ? "\(server.name) (Offline)" : server.name)
+          .tag(server.id.uuidString)
+      }
+    }
+    .pickerStyle(.menu)
+    .disabled(create.remoteServers.servers.isEmpty)
+    .help(create.remoteServers.servers.isEmpty ? "Pair a server in Settings ▸ Compute to use its styles" : "Whose styles to show")
+    .onAppear { create.remoteServers.loadIfNeeded() }
+    .task(id: sourceStorage) { if let source { await create.refreshRemoteStyles(server: source) } }
+  }
+
   @ViewBuilder
   private var content: some View {
-    if styles.styles.isEmpty {
+    if let source, create.remoteServers.name(of: source) != nil {
+      ServerStylesList(server: source, search: search, selection: $serverSelection)
+    } else if styles.styles.isEmpty {
       ContentUnavailableView {
         Label("No Styles", systemImage: "paintpalette")
       } description: {
@@ -680,6 +729,173 @@ struct StyleThumbnail: View {
     // In a grid cell the cell itself is the control, and it says the style's name.
     .accessibilityHidden(open == nil)
     .task(id: id) { await styles.loadThumbnail(id) }
+  }
+}
+
+/// A paired server's styles: read-only, and usable like this device's own.
+private struct ServerStylesList: View {
+  let server: UUID
+  let search: String
+  @Binding var selection: UUID?
+  @Environment(CreateModel.self) private var create
+  @Environment(Navigation.self) private var navigation
+
+  private var filtered: [RemoteStyle] {
+    let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+    return create.remoteStyles.styles(of: server).filter { remote in
+      query.isEmpty || remote.style.name.localizedCaseInsensitiveContains(query)
+        || remote.style.category.localizedCaseInsensitiveContains(query)
+        || remote.style.subcategory.localizedCaseInsensitiveContains(query)
+        || remote.style.template.localizedCaseInsensitiveContains(query)
+    }
+  }
+
+  var body: some View {
+    let name = create.remoteServers.name(of: server) ?? "This server"
+    let categories = Array(Set(filtered.map(\.style.category))).sorted()
+    VStack(spacing: 0) {
+      if create.remoteServers.status(of: server) == .offline {
+        Label("\(name) is offline. These are its styles as last seen.", systemImage: "wifi.slash")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(10)
+      }
+      if create.remoteStyles.styles(of: server).isEmpty {
+        ContentUnavailableView("No Styles", systemImage: "paintpalette", description: Text("\(name) has no styles to share, or hasn't been reached yet."))
+      } else if filtered.isEmpty {
+        ContentUnavailableView.search(text: search)
+      } else {
+        List(selection: $selection) {
+          ForEach(categories, id: \.self) { category in
+            Section(category.isEmpty ? "Uncategorized" : category) {
+              ForEach(filtered.filter { $0.style.category == category }) { remote in
+                row(remote).tag(remote.id)
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private func row(_ remote: RemoteStyle) -> some View {
+    HStack(spacing: 10) {
+      ServerStyleThumbnail(remote: remote, server: server, side: 44)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(remote.style.name).lineLimit(1)
+        Text(remote.style.template).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+      }
+    }
+    .contextMenu {
+      Button("Use on Create") {
+        create.styleID = remote.id
+        navigation.section = .create
+      }
+      Button("Copy to \(CreateModel.thisDeviceName)") {
+        Task { await create.copyRemoteStyle(remote, server: server) }
+      }
+      .disabled(create.styles == nil)
+    }
+  }
+}
+
+private struct ServerStyleThumbnail: View {
+  let remote: RemoteStyle
+  let server: UUID
+  let side: CGFloat
+  @Environment(CreateModel.self) private var create
+  @State private var image: CGImage?
+
+  var body: some View {
+    Group {
+      if let image {
+        Image(decorative: image, scale: 1).resizable().scaledToFill()
+      } else {
+        Image(systemName: "paintpalette")
+          .font(.system(size: side / 3))
+          .foregroundStyle(.tertiary)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .background(.quaternary)
+      }
+    }
+    .frame(width: side, height: side)
+    .clipShape(RoundedRectangle(cornerRadius: side / 8))
+    .accessibilityHidden(true)
+    .task(id: remote.thumbnailHash) {
+      image = await create.remoteStyles.thumbnail(of: remote, server: server, backend: create.remoteServers.backend(for: server))
+    }
+  }
+}
+
+/// A server's style, in place of the editor: all there to read, and nothing to change.
+private struct ServerStyleDetail: View {
+  let remote: RemoteStyle
+  let server: UUID
+  @Environment(CreateModel.self) private var create
+  @Environment(Navigation.self) private var navigation
+  @Environment(\.undoManager) private var undoManager
+  @State private var copied = false
+
+  var body: some View {
+    let style = remote.style
+    let problem = create.remoteStyleProblem(remote)
+    Form {
+      Section {
+        HStack {
+          Spacer()
+          ServerStyleThumbnail(remote: remote, server: server, side: 180)
+          Spacer()
+        }
+      }
+      Section {
+        LabeledContent("Name", value: style.name)
+        LabeledContent("Category", value: style.category.isEmpty ? "Uncategorized" : style.category)
+        if !style.subcategory.isEmpty { LabeledContent("Subcategory", value: style.subcategory) }
+        LabeledContent("From", value: create.remoteServers.name(of: server) ?? "")
+      }
+      Section("Template") {
+        Text(style.template).textSelection(.enabled)
+      }
+      if !style.negative.isEmpty {
+        Section("Negative Prompt") { Text(style.negative).textSelection(.enabled) }
+      }
+      if !style.notes.isEmpty {
+        Section("Notes") { Text(style.notes).textSelection(.enabled) }
+      }
+      Section {
+        Button("Use on Create") {
+          create.styleID = style.id
+          navigation.section = .create
+        }
+        .rowButton()
+        Button("Open Thumbnail in Create") { open() }
+          .rowButton()
+          .disabled(remote.thumbnailModel == nil || problem != nil)
+          .help(problem ?? "The thumbnail's image and settings")
+        if let problem {
+          Text(problem).font(.caption).foregroundStyle(.secondary)
+        }
+        Button(copied ? "Copied to \(CreateModel.thisDeviceName)" : "Copy to \(CreateModel.thisDeviceName)") {
+          Task {
+            await create.copyRemoteStyle(remote, server: server)
+            copied = true
+          }
+        }
+        .rowButton()
+        .disabled(copied || create.styles == nil)
+        .help("Keep a copy here that you can edit. The server's stays as it is.")
+      }
+    }
+    .formStyle(.grouped)
+  }
+
+  private func open() {
+    Task {
+      guard let full = try? await create.remoteServers.backend(for: server).styleSource(remote.id) else { return }
+      create.openThumbnail(full.image, source: full.source, undoManager: undoManager)
+      navigation.section = .create
+    }
   }
 }
 

@@ -114,6 +114,14 @@ nonisolated enum RemoteMessage: Codable, Sendable {
   case catalog(models: [RemoteModelInfo], loras: [RemoteLoRAInfo], files: [String], upscalers: RemoteUpscalers)
   case modelDefaultsRequest(model: String)
   case modelDefaults(settings: [String: JSONValue])
+  case stylesRequest
+  case styles([RemoteStyle])
+  /// A style's thumbnail, as JPEG; nil for none.
+  case styleThumbnailRequest(styleID: UUID)
+  case styleThumbnail(Data?)
+  /// What Open in Create needs: how the thumbnail was made, and its full-size image as PNG.
+  case styleSourceRequest(styleID: UUID)
+  case styleSource(ThumbnailSource?, image: Data?)
 
   // Uploads, by SHA-256. `partial` is how much of an interrupted upload the server has.
   case blobCheck(hashes: [String])

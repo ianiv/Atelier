@@ -549,3 +549,53 @@ struct RemoteTailnetTests {
     #expect(tailnet.bridge(to: RemoteAddress(host: "100.100.1.2", port: 7863)) == nil, "not signed in")
   }
 }
+
+@MainActor
+struct RemoteStyleLibraryTests {
+  private func remote(_ name: String, hash: String? = nil, model: String? = nil) -> RemoteStyle {
+    RemoteStyle(style: Style(name: name, template: "{{SUBJECT}}, \(name)"), thumbnailHash: hash, thumbnailModel: model)
+  }
+
+  @Test func stylesStayAcrossLaunchesPerServer() throws {
+    try withTestFolder { folder in
+      let (one, two) = (UUID(), UUID())
+      let library = RemoteStyleLibrary(folder: folder)
+      let first = remote("first")
+      library.update([first], server: one)
+      library.update([remote("second")], server: two)
+      let reopened = RemoteStyleLibrary(folder: folder)
+      #expect(reopened.styles(of: one) == [first])
+      #expect(reopened.style(id: first.id)?.name == "first")
+      #expect(reopened.server(ofStyle: first.id) == one)
+      #expect(reopened.all.count == 2)
+      #expect(reopened.style(id: UUID()) == nil && reopened.style(id: nil) == nil)
+      reopened.remove(server: one)
+      #expect(RemoteStyleLibrary(folder: folder).styles(of: one).isEmpty, "removing a server forgets them")
+      #expect(RemoteStyleLibrary(folder: folder).styles(of: two).count == 1)
+    }
+  }
+
+  @Test func thumbnailsNothingUsesGo() throws {
+    try withTestFolder { folder in
+      let server = UUID()
+      let library = RemoteStyleLibrary(folder: folder)
+      let keep = remote("keep", hash: "aaaa")
+      library.update([keep, remote("old", hash: "bbbb")], server: server)
+      let directory = folder.appending(path: server.uuidString, directoryHint: .isDirectory)
+      for name in ["aaaa", "bbbb"] { touch(directory.appending(path: "\(name).jpg")) }
+      library.update([keep], server: server)
+      let files = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+      #expect(files.contains("aaaa.jpg") && !files.contains("bbbb.jpg") && files.contains("styles.json"))
+    }
+  }
+
+  @Test func aStyleFromAServerRoundTrips() throws {
+    let original = remote("x", hash: "h", model: "m.ckpt")
+    let data = try JSONEncoder().encode(RemoteEnvelope(requestID: nil, message: .styles([original])))
+    guard case .styles(let decoded) = try JSONDecoder().decode(RemoteEnvelope.self, from: data).message else {
+      Issue.record("wrong message")
+      return
+    }
+    #expect(decoded == [original])
+  }
+}

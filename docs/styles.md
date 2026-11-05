@@ -25,6 +25,10 @@ The boxes keep only what you typed. History saves the full prompt the model got.
 - **Import Styles…** (the toolbar's import/export menu) reads one or more style libraries (`.html`) or Markdown style files, or drop them on the screen. A style with the same category and name as one you have replaces it; a library's thumbnails come in with its styles.
 - **Export Styles…** asks which styles to export (the selected ones, or all the filter shows), a title, and a format: a style library, one `.html` file with thumbnails that also works on its own in any browser (see below), or a Markdown style file without thumbnails. The title is the library page's heading and the file's name.
 
+## Styles from another device
+
+With a server paired, **Styles From** on the Styles screen shows its styles, and Create's style picker lists them under its name. They work like your own but are read-only; **Copy to This Mac** or **Copy to This iPad** keeps one you can edit. See [Running jobs on another device](remote.md#using-a-servers-styles).
+
 ## Thumbnails
 
 Each style can have a square thumbnail, shown in the list and the editor.

@@ -605,6 +605,27 @@ final class RemoteServer {
     return .catalog(models: models, loras: loras, files: create?.modelFiles ?? [], upscalers: upscalers)
   }
 
+  /// This device's styles, with their thumbnails' hashes.
+  func styleCatalog() -> RemoteMessage {
+    guard let store = create?.styles else { return .styles([]) }
+    return .styles(store.styles.map { style in
+      RemoteStyle(
+        style: style, thumbnailHash: store.thumbnailJPEG(style.id).map { RemoteBlob($0).hash },
+        thumbnailModel: store.thumbnailModel(style.id))
+    })
+  }
+
+  func styleThumbnail(_ id: UUID) -> RemoteMessage {
+    .styleThumbnail(create?.styles?.thumbnailJPEG(id))
+  }
+
+  func styleSource(_ id: UUID) -> RemoteMessage {
+    guard let found = create?.styles?.thumbnailSource(id), let png = ImageTensor.png(found.image) else {
+      return .styleSource(nil, image: nil)
+    }
+    return .styleSource(found.source, image: png)
+  }
+
   private func defaults(for model: String) async throws -> PipelineConfiguration {
     guard let create, create.models.contains(where: { $0.file == model }) else {
       throw RemoteError.server("This server doesn't have \(model).")
@@ -854,6 +875,12 @@ nonisolated struct RemoteSession: Sendable {
     switch envelope.message {
     case .catalogRequest:
       reply(requestID, await server.catalog())
+    case .stylesRequest:
+      reply(requestID, await server.styleCatalog())
+    case .styleThumbnailRequest(let id):
+      reply(requestID, await server.styleThumbnail(id))
+    case .styleSourceRequest(let id):
+      reply(requestID, await server.styleSource(id))
     case .modelDefaultsRequest(let model):
       // Loading a model's settings can take a while: other requests go on meanwhile.
       Task {

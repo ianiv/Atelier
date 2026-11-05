@@ -4,7 +4,7 @@ import ImageIO
 import UniformTypeIdentifiers
 
 /// How a thumbnail was made, kept with its full-size image so Open in Create can bring both back.
-nonisolated struct ThumbnailSource: Codable {
+nonisolated struct ThumbnailSource: Codable, Sendable {
   var prompt: String
   var negativePrompt: String
   var model: String?
@@ -110,6 +110,11 @@ extension StyleStore {
   }
 
   /// The full-size image and settings of the style's thumbnail.
+  /// The model a style's thumbnail was made with, without reading its image.
+  func thumbnailModel(_ id: UUID) -> String? {
+    (try? Data(contentsOf: Self.sourceURL(id))).flatMap { try? JSONDecoder().decode(ThumbnailSource.self, from: $0) }?.model
+  }
+
   func thumbnailSource(_ id: UUID) -> (image: CGImage, source: ThumbnailSource)? {
     guard let data = try? Data(contentsOf: Self.sourceURL(id)),
           let source = try? JSONDecoder().decode(ThumbnailSource.self, from: data),

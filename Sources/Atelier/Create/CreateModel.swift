@@ -26,6 +26,8 @@ final class CreateModel {
   let engine = GenerationEngine()
   /// The servers this device can run jobs on.
   let remoteServers = RemoteServerList()
+  /// What the paired servers' styles were when last seen.
+  let remoteStyles = RemoteStyleLibrary()
   /// Atelier's own place on your tailnet.
   let tailnet = RemoteTailnet()
   /// What runs jobs for `target`.
@@ -167,9 +169,11 @@ final class CreateModel {
   /// comes back, what's waiting for it. Only asks once there are servers on the list.
   private func watchServers() {
     remoteServers.router = { [tailnet] in tailnet.bridge(to: $0) }
+    remoteServers.onServerRemoved = { [weak self] id in self?.remoteStyles.remove(server: id) }
     remoteServers.onServerOnline = { [weak self] id in
       guard let self else { return }
       Task { await self.recoverRemoteJobs() }
+      Task { await self.refreshRemoteStyles(server: id) }
       if runTarget == .remote(serverID: id), serverCatalog == nil {
         Task { await self.loadRunTargetCatalog() }
       }
@@ -517,7 +521,39 @@ final class CreateModel {
       && (!prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || style?.defaults[Style.subject] != nil)
   }
 
-  var style: Style? { styles?.style(id: styleID) }
+  var style: Style? { styles?.style(id: styleID) ?? remoteStyles.style(id: styleID) }
+
+  /// Refreshes a server's styles, or every server's.
+  func refreshRemoteStyles(server: UUID? = nil) async {
+    remoteServers.loadIfNeeded()
+    for id in server.map({ [$0] }) ?? remoteServers.servers.map(\.id) {
+      await remoteStyles.refresh(server: id, backend: remoteServers.backend(for: id))
+    }
+  }
+
+  /// Keeps a server's style as this device's own, with a new id so the two stay separate, and its
+  /// thumbnail. Returns the copy.
+  @discardableResult
+  func copyRemoteStyle(_ remote: RemoteStyle, server: UUID) async -> Style? {
+    guard let styles else { return nil }
+    var copy = remote.style
+    copy.id = UUID()
+    styles.save(copy)
+    let backend = remoteServers.backend(for: server)
+    if let full = try? await backend.styleSource(remote.id) {
+      styles.setThumbnail(full.image, for: copy.id, source: full.source)
+    } else if let image = await remoteStyles.thumbnail(of: remote, server: server, backend: backend) {
+      styles.setThumbnail(image, for: copy.id)
+    }
+    return copy
+  }
+
+  /// Why a server's style can't open its thumbnail in Create: its model isn't where jobs go now.
+  /// The style itself works with any model, so this is all a missing one affects.
+  func remoteStyleProblem(_ remote: RemoteStyle) -> String? {
+    guard let model = remote.thumbnailModel, !availableModels.contains(where: { $0.file == model }) else { return nil }
+    return "\(model) isn't on \(runTargetServerName ?? Self.thisDeviceName)."
+  }
 
   /// The prompt and negative prompt a run sends: written into the selected style, if any.
   var styledPrompts: (prompt: String, negativePrompt: String) {
@@ -549,7 +585,7 @@ final class CreateModel {
   /// back as its subject with that style selected; any other clears the style, so the prompt
   /// isn't styled twice.
   private func restorePrompts(_ savedPrompt: String, _ savedNegative: String) {
-    for style in styles?.styles ?? [] {
+    for style in (styles?.styles ?? []) + remoteStyles.all.map(\.style) {
       if let matched = style.match(prompt: savedPrompt, negativePrompt: savedNegative) {
         prompt = matched.values[Style.subject] ?? ""
         negativePrompt = matched.negativePrompt

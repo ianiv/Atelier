@@ -14,6 +14,12 @@ On the device that will do the work (the server), open Settings ▸ Compute and 
 
 In Create, **Run on** at the top of the inspector picks where new jobs go: this device or a paired server. A server that doesn't answer stays in the list, disabled. With a server chosen, the model and LoRA pickers list what the server has, including its own custom models, and this device needs none of those files. A preset for a model the server doesn't have shows as not available there.
 
+## Using a server's styles
+
+A paired server's [styles](styles.md) can be used on this device. On the Styles screen, **Styles From** picks whose to show: this device's or a server's. In Create, the style picker lists each server's after your own, under its name. A server's style works just like your own, with the same tag boxes, and it works wherever the job runs, even on this device.
+
+They're read-only here, and nothing the server does changes your own styles. To keep one and change it, choose **Copy to This iPad** or **Copy to This Mac**. If a server goes offline, its styles stay usable as last seen, marked as offline there. **Open Thumbnail in Create** brings back how a style's thumbnail was made, so it's unavailable when that thumbnail's model isn't where jobs are set to run. It needs the server online.
+
 Then generate as usual. In the [Queue](queue.md), each job shows where it runs, with Uploading and Downloading as phases of their own, and Stop cancels it on the server.
 
 Jobs on a server don't hold up this device: one can run here while another runs there, and each server runs jobs one at a time. On the server, a paired device's job joins its own queue with the device's name beside it, and appears only there. It's never saved to the server's projects.
@@ -65,7 +71,7 @@ Settings ▸ Compute shows this device's name on your tailnet when Atelier is si
 
 ## What a paired device can do
 
-A paired device can run and cancel its own jobs, list the server's models, LoRAs and the file names in its models folders, and download its own results. It can't read the server's projects, history, other files or settings, can't use its agent tools, and can't see another device's jobs. The images and audio it sends stay on the server for up to 7 days, as does a clip it made there, so it can be upscaled without sending it back. Those are stored separately for each device.
+A paired device can run and cancel its own jobs, list the server's models, LoRAs and the file names in its models folders, read its styles and their thumbnails (with the settings each thumbnail was made with), and download its own results. It can't read the server's projects, history, other files or settings, can't use its agent tools, and can't see another device's jobs. The images and audio it sends stay on the server for up to 7 days, as does a clip it made there, so it can be upscaled without sending it back. Those are stored separately for each device.
 
 **Remove** in Settings ▸ Compute takes a device off at once: its connection closes, its key stops working, and its jobs and files on the server are deleted. To use it again, pair it again. Removing a server on the client only forgets it there; the server still lists the device until you remove it there too.
 
