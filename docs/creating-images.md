@@ -27,6 +27,10 @@ FLUX.3, Ideogram 4 and MOSS Image can place things where you put them. With one 
 
 Pick a model from the **Model** menu in the toolbar. Only downloaded models are listed (see [Models and LoRAs](models-and-loras.md)). Switching models keeps your current settings. To start from the new model's recommended settings (and its default preset, if it has one), use **Reset All to Model Defaults** at the bottom of the inspector. Picking a video model makes videos on the same screen; see [Making videos](video.md).
 
+## Run on
+
+**Run on**, above the model at the top of the inspector, picks where new jobs go: this device, or a [paired server](remote.md). A server that doesn't answer stays listed, disabled. With a server chosen, the Model menu and LoRA picker list what that server has, so this device doesn't need the files, and a preset for a model it doesn't have shows as not available there. Generate is disabled while the server is offline or doesn't have the selected model. Results still land in this device's project, in the same place a local run would put them.
+
 ## Seed
 
 The **Seed** row is at the top of the inspector.

@@ -95,6 +95,10 @@ To see results, including images you generated yourself with Generate, an agent 
 
 For example: "Look at what I have in Atelier's Create screen, make the lighting moodier, and generate it."
 
+## With a server chosen
+
+Agents work with this Mac's models, and their jobs run on this Mac even when Create's **Run on** is set to a [paired server](docs/remote.md): `list_models` lists this Mac's. The exception is a model only the selected server has, as with `use_app_settings` while Create is on such a model: that job runs on the server, and its result still comes back to the current project. Agents can't reach a server's tools, and paired devices can't reach these.
+
 ## Progress and cancelling
 
 Runs stream progress (`notifications/progress`) to clients that send a progress token. Cancelling or dropping the call doesn't stop the generation, because clients also cancel calls they give up on. The run carries on as a job, and `cancel_job` (or Cancel in the Queue) stops it.

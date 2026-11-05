@@ -1,6 +1,6 @@
 # The queue
 
-Atelier makes one image at a time. Everything you ask for while an image is being made waits its turn in the **Queue**.
+On each device, Atelier makes one image at a time. Everything you ask for while an image is being made waits its turn in the **Queue**. A job sent to [another device](remote.md) doesn't hold up this one's: it runs there alongside whatever's running here, one job at a time per server.
 
 ## Queuing images
 
@@ -27,6 +27,12 @@ The list has three parts: the image being made, the waiting images and recent on
 - **Retry** (on failed or cancelled images) and **Run Again** (on finished ones) queue the image again with the same settings and seed.
 - **Show in History** opens a finished image in History. **Clear Finished** empties the recent list; the images stay in History.
 
+## Jobs on another device
+
+With a server chosen under **Run on**, a job shows here too, with the server's name beside it. Once it starts it's listed under **Running on Servers**, with **Uploading** and **Downloading** as phases of their own while its files move. Stop or Cancel stops it on the server. The status bar and canvas follow the job running on this device if there is one, then a job on a server. See [Running jobs on another device](remote.md).
+
+On a server, a paired device's job joins the queue with that device's name beside it, and its result goes back to the device rather than into a project here. It can't be retried from here.
+
 ## Exports
 
 An upscaled **Export Video…** (from History or the Video Editor; see [Exporting videos](video.md#exporting-videos)) is a job in the queue too, after the images already waiting. Its row shows the timeline or video's name, the method, scale, size, frames, about how long it takes (how long it took, once done), and the file it writes; while it runs, the status bar shows its progress like an image's. You can reorder it, Cancel it or Stop it like any job; a stopped export leaves no file. When it's done, **Show in Finder** (**Show in Files** on iPad) shows the file, and **Export Again** runs it again. Exports aren't kept when you quit: the file you chose is only open to Atelier until then.
@@ -40,6 +46,8 @@ An upscaled **Export Video…** (from History or the Video Editor; see [Exportin
 If an image is being made, jobs are waiting or a video is exporting, Atelier asks before quitting on the Mac. A paused queue doesn't count: its jobs are kept anyway.
 
 Waiting images, and the one being made, are kept when you quit and come back paused at the next launch. Press Resume Queue to run them. Images for a model you've since deleted are dropped.
+
+A job that has started on a server carries on there when you quit, and Atelier collects its result the next time it can reach the server. A job still waiting here for a server, or an upscale or export running on one, isn't kept across a quit.
 
 ## On iPad
 
