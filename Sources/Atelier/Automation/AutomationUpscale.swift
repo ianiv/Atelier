@@ -10,7 +10,7 @@ extension Automation {
   ///
   ///   Atelier --upscale-check --project NAME [--method flashVSR|system] [--scale 2]
   ///           [--variant turbo|base] [--clip ID] [--frames N] [--export DIR]
-  ///           [--export-clip ID|latest] [--image] [--upscaler FILE] [--seedvr FILE] [--quit]
+  ///           [--export-clip ID|latest] [--image] [--upscaler FILE] [--seedvr FILE] [--limit-pixels N] [--quit]
   static func upscaleCheck(_ model: CreateModel) {
     let args = CommandLine.arguments
     func value(_ name: String) -> String? {
@@ -32,6 +32,7 @@ extension Automation {
       // `--image`: the smallest image instead, with `--method`, `--upscaler FILE` or the first
       // model installed.
       if args.contains("--image") {
+        ImageUpscale.pixelLimitForChecks = value("--limit-pixels").flatMap(Int.init)
         // `--input-image FILE`: that file, as an imported image on the canvas.
         let images = model.history.items.filter { !$0.isVideo }
         let source = value("--input-image") == nil

@@ -82,7 +82,7 @@ struct ImageUpscaleTests {
 
   @Test func maxFillsSeedVR2sLimitInItsGrid() {
     let square = ImageUpscale(upscaler: seedVR2, scale: ImageUpscale.maxScale).outputSize(width: 512, height: 512)
-    #expect(square.width == 2944 && square.height == 2944)
+    #expect(square.width == 4096 && square.height == 4096)
     let wide = ImageUpscale(upscaler: seedVR2, scale: ImageUpscale.maxScale).outputSize(width: 1216, height: 832)
     #expect(wide.width % 64 == 0 && wide.height % 64 == 0)
     #expect(wide.width * wide.height <= ImageUpscale.seedVR2PixelLimit)
@@ -92,7 +92,7 @@ struct ImageUpscaleTests {
   @Test func maxFillsFlashVSRsLimitInItsGrid() {
     let size = ImageUpscale(upscaler: .video(.flashVSR, .turbo), scale: ImageUpscale.maxScale)
       .outputSize(width: 1024, height: 1024)
-    #expect(size.width == 1408 && size.height == 1408)
+    #expect(size.width == 1920 && size.height == 1920)
   }
 
   @Test func aScalePastTheLimitPointsAtMax() throws {
@@ -103,7 +103,7 @@ struct ImageUpscaleTests {
   }
 
   @Test func maxNeverShrinks() {
-    #expect(ImageUpscale(upscaler: seedVR2, scale: ImageUpscale.maxScale).problem(width: 2944, height: 2944) != nil)
+    #expect(ImageUpscale(upscaler: seedVR2, scale: ImageUpscale.maxScale).problem(width: 4096, height: 4096) != nil)
   }
 
   @Test func onlyLimitedUpscalersOfferMax() {

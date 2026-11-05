@@ -40,15 +40,23 @@ nonisolated struct ImageUpscale: Codable, Sendable, Hashable {
     }
   }
 
-  /// SeedVR2's largest result, in pixels: 5888×5888 passed 76 GB of memory on a real run.
-  static let seedVR2PixelLimit = 2944 * 2944
+  /// Replaces the limits below for `--upscale-check --limit-pixels`, which measures them.
+  nonisolated(unsafe) static var pixelLimitForChecks: Int?
+
+  /// SeedVR2's largest result, in pixels, measured on a 48 GB M5 Max: 4096×4096 peaks about 14 GB,
+  /// and 5888×5888 passes 44 GB within two minutes and kept going to 76 GB.
+  static let seedVR2PixelLimit = 4096 * 4096
+
+  /// FlashVSR+'s largest image, in pixels, measured the same way: 1920×1920 peaks about 34 GB and
+  /// 2048×2048 passes 37 GB. Larger than its video limit, which is about time per frame.
+  static let flashVSRPixelLimit = 1920 * 1920
 
   /// The upscaler's limit on its result and the grid its sizes keep to; nil when it has no limit
   /// or, for Apple's, only takes fixed scales.
   var sizeLimit: (pixels: Int, grid: Int, description: String)? {
     switch upscaler {
-    case .seedVR2: (Self.seedVR2PixelLimit, 64, "SeedVR2 goes up to 2944 × 2944")
-    case .video(.flashVSR, _): (ClipUpscale.flashVSRPixelLimit, 128, "FlashVSR+ goes up to 1920 × 1152")
+    case .seedVR2: (Self.pixelLimitForChecks ?? Self.seedVR2PixelLimit, 64, "SeedVR2 goes up to 4096 × 4096")
+    case .video(.flashVSR, _): (Self.pixelLimitForChecks ?? Self.flashVSRPixelLimit, 128, "FlashVSR+ goes up to 1920 × 1920")
     case .model, .video(.system, _): nil
     }
   }
