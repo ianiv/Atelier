@@ -17,12 +17,18 @@ nonisolated struct ImageUpscale: Codable, Sendable, Hashable {
   }
 
   var upscaler: Upscaler
-  /// 2 or 4. A model scales its result to fit, whatever its own scale is (`RealESRGANer`'s forced
-  /// scale factor).
+  /// 2 or 4, or `maxScale`. A model scales its result to fit, whatever its own scale is
+  /// (`RealESRGANer`'s forced scale factor).
   var scale: Int
+
+  /// The largest size the upscaler allows at the image's shape, for those with a limit.
+  static let maxScale = 0
 
   /// The result's size for a `width`×`height` image.
   func outputSize(width: Int, height: Int) -> (width: Int, height: Int) {
+    if scale == Self.maxScale, let limit = sizeLimit {
+      return Self.fitted(width: width, height: height, pixels: limit.pixels, grid: limit.grid)
+    }
     switch upscaler {
     case .model: return (width * scale, height * scale)
     case .video(let method, _):
@@ -34,17 +40,50 @@ nonisolated struct ImageUpscale: Codable, Sendable, Hashable {
     }
   }
 
-  /// SeedVR2's largest result, in pixels: 2944×2944 has worked, and 5888×5888 passed 76 GB of
-  /// memory on a real run, or asserted while building its decoder.
+  /// SeedVR2's largest result, in pixels: 5888×5888 passed 76 GB of memory on a real run.
   static let seedVR2PixelLimit = 2944 * 2944
 
-  /// Why this can't upscale a `width`×`height` image; nil when it can. The video upscalers' own
-  /// limits are `ClipUpscale.problem`'s.
+  /// The upscaler's limit on its result and the grid its sizes keep to; nil when it has no limit
+  /// or, for Apple's, only takes fixed scales.
+  var sizeLimit: (pixels: Int, grid: Int, description: String)? {
+    switch upscaler {
+    case .seedVR2: (Self.seedVR2PixelLimit, 64, "SeedVR2 goes up to 2944 × 2944")
+    case .video(.flashVSR, _): (ClipUpscale.flashVSRPixelLimit, 128, "FlashVSR+ goes up to 1920 × 1152")
+    case .model, .video(.system, _): nil
+    }
+  }
+
+  /// The scales to offer for a `width`×`height` image, Max last.
+  func scales(width: Int, height: Int) -> [Int] {
+    if case .video(.system, _) = upscaler {
+      return ClipUpscale.offeredScales(width: width, height: height, method: .system)
+    }
+    return Self.scales + (sizeLimit == nil ? [] : [Self.maxScale])
+  }
+
+  /// The largest size of `width`×`height`'s shape within `pixels`, in multiples of `grid`.
+  static func fitted(width: Int, height: Int, pixels: Int, grid: Int) -> (width: Int, height: Int) {
+    let fit = (Double(pixels) / Double(max(width * height, 1))).squareRoot()
+    func side(_ value: Int) -> Int { max(Int(Double(value) * fit / Double(grid)), 1) * grid }
+    return (side(width), side(height))
+  }
+
+  /// Why this can't upscale a `width`×`height` image; nil when it can.
   func problem(width: Int, height: Int) -> String? {
-    guard case .seedVR2 = upscaler else { return nil }
+    if case .video(let method, let variant) = upscaler {
+      if method == .flashVSR, FlashVSRFiles.installed(variant ?? .turbo) == nil {
+        return "Download FlashVSR+ \((variant ?? .turbo).title) to use it."
+      }
+      if method == .system {
+        return ClipUpscale.problem(width: width, height: height, scale: scale, method: method)
+      }
+    }
+    guard let limit = sizeLimit else { return nil }
     let size = outputSize(width: width, height: height)
-    return size.width * size.height > Self.seedVR2PixelLimit
-      ? "That's too large for SeedVR2, which goes up to 2944 × 2944." : nil
+    if scale == Self.maxScale {
+      return size.width * size.height > width * height ? nil : "This image is already at \(limit.description)'s limit."
+    }
+    return size.width * size.height > limit.pixels ? "\(limit.description). Choose Max for the largest it can make." : nil
   }
 
   /// `image` stretched to exactly `width`×`height`: SeedVR2 restores what it's given at its size.

@@ -62,22 +62,25 @@ struct ImageUpscaleSheet: View {
   private var method: ClipUpscale.Method? { ClipUpscale.Method(rawValue: selection) }
 
   private var upscale: ImageUpscale {
-    let upscaler: ImageUpscale.Upscaler
+    let chosenScale = ImageUpscale(upscaler: upscaler, scale: scale)
+    let offered = chosenScale.scales(width: width, height: height)
+    return ImageUpscale(upscaler: upscaler, scale: offered.contains(scale) ? scale : offered.first ?? scale)
+  }
+
+  private var upscaler: ImageUpscale.Upscaler {
     if let method {
-      upscaler = .video(method, method == .flashVSR ? variant : nil)
-    } else if selection.hasPrefix("seedVR2:") {
-      upscaler = .seedVR2(String(selection.dropFirst("seedVR2:".count)))
-    } else {
-      upscaler = .model(String(selection.dropFirst("model:".count)))
+      return .video(method, method == .flashVSR ? variant : nil)
     }
-    return ImageUpscale(upscaler: upscaler, scale: scale)
+    if selection.hasPrefix("seedVR2:") {
+      return .seedVR2(String(selection.dropFirst("seedVR2:".count)))
+    }
+    return .model(String(selection.dropFirst("model:".count)))
   }
 
   var body: some View {
-    let controls = UpscaleControls(
-      width: width, height: height, method: .constant(method), scale: $scale, variant: $variant,
-      showsMethod: false)
+    let upscale = self.upscale
     let size = upscale.outputSize(width: width, height: height)
+    let problem = upscale.problem(width: width, height: height)
     VStack(alignment: .leading, spacing: 12) {
       Text("Upscale Image").font(.headline)
       Picker("Upscaler", selection: Binding(get: { selection }, set: { chosen = $0 })) {
@@ -89,16 +92,19 @@ struct ImageUpscaleSheet: View {
         ForEach(seedVR2, id: \.file) { Text($0.name).tag("seedVR2:\($0.file)") }
       }
       if method != nil {
-        controls
-      } else {
-        Picker("Scale", selection: $scale) {
-          ForEach(ImageUpscale.scales, id: \.self) { Text("\($0)×").tag($0) }
+        UpscaleControls(
+          width: width, height: height, method: .constant(method), scale: $scale, variant: $variant,
+          showsAll: false)
+      }
+      Picker("Scale", selection: Binding(get: { upscale.scale }, set: { scale = $0 })) {
+        ForEach(upscale.scales(width: width, height: height), id: \.self) {
+          Text($0 == ImageUpscale.maxScale ? "Max" : "\($0)×").tag($0)
         }
-        .pickerStyle(.segmented)
-        LabeledContent("Size", value: "\(width) × \(height) → \(size.width) × \(size.height)")
-        if let problem = upscale.problem(width: width, height: height) {
-          Text(problem).font(.caption).foregroundStyle(.secondary)
-        }
+      }
+      .pickerStyle(.segmented)
+      LabeledContent("Size", value: "\(width) × \(height) → \(size.width) × \(size.height)")
+      if let problem {
+        Text(problem).font(.caption).foregroundStyle(.secondary)
       }
       Spacer(minLength: 0)
       HStack {
@@ -110,8 +116,7 @@ struct ImageUpscaleSheet: View {
           dismiss()
         }
         .keyboardShortcut(.defaultAction)
-        .disabled(
-          method != nil ? controls.problem != nil : upscale.problem(width: width, height: height) != nil)
+        .disabled(problem != nil)
       }
     }
     .sheetPadding()
@@ -209,17 +214,17 @@ struct UpscaleControls: View {
   let offersNone: Bool
   /// Where it would run, when that's a server: what it has decides, not what's on this device.
   let server: (name: String, upscalers: RemoteUpscalers)?
-  /// False when the sheet chooses the method itself.
-  let showsMethod: Bool
+  /// False for the image sheet, which has its own scales: only what's FlashVSR+'s stays.
+  let showsAll: Bool
   private var download = FlashVSRDownload.shared
 
   init(
     width: Int, height: Int, method: Binding<ClipUpscale.Method?>, scale: Binding<Int>,
     variant: Binding<FlashVSRFiles.Variant>, offersNone: Bool = false,
-    server: (name: String, upscalers: RemoteUpscalers)? = nil, showsMethod: Bool = true
+    server: (name: String, upscalers: RemoteUpscalers)? = nil, showsAll: Bool = true
   ) {
     self.server = server
-    self.showsMethod = showsMethod
+    self.showsAll = showsAll
     self.width = width
     self.height = height
     _method = method
@@ -265,7 +270,7 @@ struct UpscaleControls: View {
     let downloading = download.variant
     let missing = FlashVSRFiles.installed(variant) == nil
     Group {
-      if showsMethod {
+      if showsAll {
         Picker(offersNone ? "Upscale" : "Method", selection: $method) {
           if offersNone { Text("None").tag(ClipUpscale.Method?.none) }
           Text("Quality").tag(ClipUpscale.Method?.some(.flashVSR))
@@ -282,41 +287,45 @@ struct UpscaleControls: View {
       )
       .font(.caption).foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)
-      Picker("Version", selection: $variant) {
-        ForEach(FlashVSRFiles.Variant.allCases, id: \.self) { Text($0.title).tag($0) }
-      }
-      .pickerStyle(.segmented)
-      .disabled(method != .flashVSR)
-      .help("Turbo is fast; Base searches wider for a little more detail")
-      HStack {
-        if let downloading, downloading == variant {
-          ProgressView(value: download.fraction) {
-            Text("Downloading FlashVSR+ \(variant.title)…").font(.caption)
+      if showsAll || method == .flashVSR {
+        Picker("Version", selection: $variant) {
+          ForEach(FlashVSRFiles.Variant.allCases, id: \.self) { Text($0.title).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .disabled(method != .flashVSR)
+        .help("Turbo is fast; Base searches wider for a little more detail")
+        HStack {
+          if let downloading, downloading == variant {
+            ProgressView(value: download.fraction) {
+              Text("Downloading FlashVSR+ \(variant.title)…").font(.caption)
+            }
+            Button("Cancel") { download.cancel() }
+          } else {
+            Button(
+              "Download FlashVSR+ \(variant.title) (\(Self.bytes(FlashVSRDownload.remainingBytes(variant))))"
+            ) {
+              download.start(variant)
+            }
+            .disabled(method != .flashVSR || !missing || downloading != nil || server != nil)
+            .help("Downloads it into \(FlashVSRFiles.folderName) in the models folder, from Hugging Face")
           }
-          Button("Cancel") { download.cancel() }
-        } else {
-          Button(
-            "Download FlashVSR+ \(variant.title) (\(Self.bytes(FlashVSRDownload.remainingBytes(variant))))"
-          ) {
-            download.start(variant)
-          }
-          .disabled(method != .flashVSR || !missing || downloading != nil || server != nil)
-          .help("Downloads it into \(FlashVSRFiles.folderName) in the models folder, from Hugging Face")
+        }
+        if let failure = download.failure {
+          Text(failure).font(.caption).foregroundStyle(.red)
         }
       }
-      if let failure = download.failure {
-        Text(failure).font(.caption).foregroundStyle(.red)
-      }
-      Picker("Scale", selection: $scale) {
-        ForEach(scales.isEmpty ? ClipUpscale.scales : scales, id: \.self) {
-          Text("\($0)×").tag($0)
+      if showsAll {
+        Picker("Scale", selection: $scale) {
+          ForEach(scales.isEmpty ? ClipUpscale.scales : scales, id: \.self) {
+            Text("\($0)×").tag($0)
+          }
         }
-      }
-      .pickerStyle(.segmented)
-      .disabled(method == nil || scales.isEmpty)
-      LabeledContent("Size", value: "\(width) × \(height) → \(size.width) × \(size.height)")
-      if let problem {
-        Text(problem).font(.caption).foregroundStyle(.secondary)
+        .pickerStyle(.segmented)
+        .disabled(method == nil || scales.isEmpty)
+        LabeledContent("Size", value: "\(width) × \(height) → \(size.width) × \(size.height)")
+        if let problem {
+          Text(problem).font(.caption).foregroundStyle(.secondary)
+        }
       }
     }
     // On each control, which is harmless: the first sets things right.
@@ -326,6 +335,7 @@ struct UpscaleControls: View {
 
   /// Keeps the scale to one the method offers at this size.
   private func offerScale() {
+    guard showsAll else { return }
     if let first = scales.first, !scales.contains(scale) { scale = first }
   }
 

@@ -1939,6 +1939,15 @@ final class CreateModel {
       configuration.height = size.height
       configuration.steps = 1
       configuration.strength = 1
+      // Whole, past about 2896×2896 the decoder's attention is too large to reshape, and the engine
+      // asserts building it (`SeedVR2AttentionBlock2D`, until flash attention takes over at
+      // `FirstStage.decode`'s 256×176 latents). Tiles stay well under that.
+      if max(size.width, size.height) > 2048 {
+        configuration.tiledDecoding = true
+        configuration.decodingTileWidth = 1024
+        configuration.decodingTileHeight = 1024
+        configuration.decodingTileOverlap = 128
+      }
       var run = GenerationEngine.Request(
         model: file, prompt: "", negativePrompt: "", seed: request.seed, configuration: configuration)
       run.canvas = stretched
