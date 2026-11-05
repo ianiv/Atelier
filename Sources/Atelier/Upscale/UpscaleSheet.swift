@@ -81,6 +81,7 @@ struct ImageUpscaleSheet: View {
     let upscale = self.upscale
     let size = upscale.outputSize(width: width, height: height)
     let problem = upscale.problem(width: width, height: height)
+    let offered = upscale.scales(width: width, height: height)
     VStack(alignment: .leading, spacing: 12) {
       Text("Upscale Image").font(.headline)
       Picker("Upscaler", selection: Binding(get: { selection }, set: { chosen = $0 })) {
@@ -91,21 +92,21 @@ struct ImageUpscaleSheet: View {
         if !seedVR2.isEmpty { Divider() }
         ForEach(seedVR2, id: \.file) { Text($0.name).tag("seedVR2:\($0.file)") }
       }
-      if method != nil {
-        UpscaleControls(
-          width: width, height: height, method: .constant(method), scale: $scale, variant: $variant,
-          showsAll: false)
-      }
-      // Apple's offers no scale at all for an image too large for it: there's no size to show.
-      if !upscale.scales(width: width, height: height).isEmpty {
-        Picker("Scale", selection: Binding(get: { upscale.scale }, set: { scale = $0 })) {
-          ForEach(upscale.scales(width: width, height: height), id: \.self) {
-            Text($0 == ImageUpscale.maxScale ? "Max" : "\($0)×").tag($0)
-          }
+      UpscaleControls(
+        width: width, height: height, method: .constant(method), scale: $scale, variant: $variant,
+        showsAll: false, withoutMethod: selection.hasPrefix("seedVR2:")
+          ? "SeedVR2 restores the image with a diffusion model in one step. It uses a lot of memory."
+          : "This upscaler model sharpens the image alone, without a diffusion model.")
+      // Every scale stays; what this upscaler can't do is disabled.
+      Picker("Scale", selection: Binding(get: { upscale.scale }, set: { scale = $0 })) {
+        ForEach(ImageUpscale.scales + [ImageUpscale.maxScale], id: \.self) {
+          Text($0 == ImageUpscale.maxScale ? "Max" : "\($0)×").tag($0)
+            .disabled(!offered.contains($0))
         }
-        .pickerStyle(.segmented)
-        LabeledContent("Size", value: "\(width) × \(height) → \(size.width) × \(size.height)")
       }
+      .pickerStyle(.segmented)
+      .disabled(offered.isEmpty)
+      LabeledContent("Size", value: "\(width) × \(height) → " + (offered.isEmpty ? "—" : "\(size.width) × \(size.height)"))
       if let problem {
         Text(problem).font(.caption).foregroundStyle(.secondary)
       }
@@ -123,7 +124,7 @@ struct ImageUpscaleSheet: View {
       }
     }
     .sheetPadding()
-    .sheetFrame(width: 440, height: 380)
+    .sheetFrame(width: 440, height: 420)
   }
 }
 
@@ -217,17 +218,20 @@ struct UpscaleControls: View {
   let offersNone: Bool
   /// Where it would run, when that's a server: what it has decides, not what's on this device.
   let server: (name: String, upscalers: RemoteUpscalers)?
-  /// False for the image sheet, which has its own scales: only what's FlashVSR+'s stays.
+  /// False for the image sheet, which has its own method and scales.
   let showsAll: Bool
+  /// What the caption says with no method.
+  let withoutMethod: String
   private var download = FlashVSRDownload.shared
 
   init(
     width: Int, height: Int, method: Binding<ClipUpscale.Method?>, scale: Binding<Int>,
     variant: Binding<FlashVSRFiles.Variant>, offersNone: Bool = false,
-    server: (name: String, upscalers: RemoteUpscalers)? = nil, showsAll: Bool = true
+    server: (name: String, upscalers: RemoteUpscalers)? = nil, showsAll: Bool = true, withoutMethod: String = "At its own size."
   ) {
     self.server = server
     self.showsAll = showsAll
+    self.withoutMethod = withoutMethod
     self.width = width
     self.height = height
     _method = method
@@ -286,36 +290,34 @@ struct UpscaleControls: View {
           ? "FlashVSR+ restores detail as one stream, steady from frame to frame. It takes a few seconds a frame."
           : method == .system
           ? "Apple Super Resolution runs on the Neural Engine in seconds. macOS downloads its model the first time."
-          : "At its own size."
+          : withoutMethod
       )
       .font(.caption).foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)
-      if showsAll || method == .flashVSR {
-        Picker("Version", selection: $variant) {
-          ForEach(FlashVSRFiles.Variant.allCases, id: \.self) { Text($0.title).tag($0) }
-        }
-        .pickerStyle(.segmented)
-        .disabled(method != .flashVSR)
-        .help("Turbo is fast; Base searches wider for a little more detail")
-        HStack {
-          if let downloading, downloading == variant {
-            ProgressView(value: download.fraction) {
-              Text("Downloading FlashVSR+ \(variant.title)…").font(.caption)
-            }
-            Button("Cancel") { download.cancel() }
-          } else {
-            Button(
-              "Download FlashVSR+ \(variant.title) (\(Self.bytes(FlashVSRDownload.remainingBytes(variant))))"
-            ) {
-              download.start(variant)
-            }
-            .disabled(method != .flashVSR || !missing || downloading != nil || server != nil)
-            .help("Downloads it into \(FlashVSRFiles.folderName) in the models folder, from Hugging Face")
+      Picker("Version", selection: $variant) {
+        ForEach(FlashVSRFiles.Variant.allCases, id: \.self) { Text($0.title).tag($0) }
+      }
+      .pickerStyle(.segmented)
+      .disabled(method != .flashVSR)
+      .help("Turbo is fast; Base searches wider for a little more detail")
+      HStack {
+        if let downloading, downloading == variant {
+          ProgressView(value: download.fraction) {
+            Text("Downloading FlashVSR+ \(variant.title)…").font(.caption)
           }
+          Button("Cancel") { download.cancel() }
+        } else {
+          Button(
+            "Download FlashVSR+ \(variant.title) (\(Self.bytes(FlashVSRDownload.remainingBytes(variant))))"
+          ) {
+            download.start(variant)
+          }
+          .disabled(method != .flashVSR || !missing || downloading != nil || server != nil)
+          .help("Downloads it into \(FlashVSRFiles.folderName) in the models folder, from Hugging Face")
         }
-        if let failure = download.failure {
-          Text(failure).font(.caption).foregroundStyle(.red)
-        }
+      }
+      if let failure = download.failure {
+        Text(failure).font(.caption).foregroundStyle(.red)
       }
       if showsAll {
         Picker("Scale", selection: $scale) {
