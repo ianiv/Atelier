@@ -37,62 +37,65 @@ struct UpscaleSheet: View {
   }
 }
 
-/// Upscale… on the canvas image: an upscaler model, or the video upscalers' Quality or Fast, and
-/// a scale, then queue it. The result is a new image in History.
+/// Upscale… on the canvas image: any upscaler, named for its model, and a scale, then queue it.
+/// The result is a new image in History.
 struct ImageUpscaleSheet: View {
   @Environment(CreateModel.self) private var create
   @Environment(\.dismiss) private var dismiss
   let width: Int
   let height: Int
-  /// "model" or a `ClipUpscale.Method`.
-  @AppStorage("imageUpscaleKind") private var kind = "model"
+  /// An option's tag.
   @AppStorage("imageUpscaler") private var chosen = ""
   @AppStorage("imageUpscaleScale") private var scale = 4
   @AppStorage("upscaleFlashVSRVariant") private var variant = FlashVSRFiles.Variant.turbo
-  private let upscalers = ImageUpscale.installed
+  private let models = ImageUpscale.installed
 
-  /// The model last picked while it's there, else the first.
-  private var file: String? {
-    upscalers.contains { $0.file == chosen } ? chosen : upscalers.first?.file
+  private var seedVR2: [(file: String, name: String)] { ImageUpscale.seedVR2Models(in: create.modelFiles) }
+
+  private var tags: [String] {
+    models.map { "model:\($0.file)" } + ["flashVSR", "system"] + seedVR2.map { "seedVR2:\($0.file)" }
   }
 
-  private var method: ClipUpscale.Method? { ClipUpscale.Method(rawValue: kind) }
+  /// The one last picked while it's there, else the first.
+  private var selection: String { tags.contains(chosen) ? chosen : tags[0] }
 
-  private var upscale: ImageUpscale? {
+  private var method: ClipUpscale.Method? { ClipUpscale.Method(rawValue: selection) }
+
+  private var upscale: ImageUpscale {
+    let upscaler: ImageUpscale.Upscaler
     if let method {
-      return ImageUpscale(upscaler: .video(method, method == .flashVSR ? variant : nil), scale: scale)
+      upscaler = .video(method, method == .flashVSR ? variant : nil)
+    } else if selection.hasPrefix("seedVR2:") {
+      upscaler = .seedVR2(String(selection.dropFirst("seedVR2:".count)))
+    } else {
+      upscaler = .model(String(selection.dropFirst("model:".count)))
     }
-    return file.map { ImageUpscale(upscaler: .model($0), scale: scale) }
+    return ImageUpscale(upscaler: upscaler, scale: scale)
   }
 
   var body: some View {
     let controls = UpscaleControls(
-      width: width, height: height,
-      method: Binding(get: { method }, set: { kind = $0?.rawValue ?? "model" }), scale: $scale,
-      variant: $variant, showsMethod: false)
+      width: width, height: height, method: .constant(method), scale: $scale, variant: $variant,
+      showsMethod: false)
+    let size = upscale.outputSize(width: width, height: height)
     VStack(alignment: .leading, spacing: 12) {
       Text("Upscale Image").font(.headline)
-      Picker("Upscaler", selection: $kind) {
-        Text("Model").tag("model")
-        Text("Quality").tag(ClipUpscale.Method.flashVSR.rawValue)
-        Text("Fast").tag(ClipUpscale.Method.system.rawValue)
+      Picker("Upscaler", selection: Binding(get: { selection }, set: { chosen = $0 })) {
+        ForEach(models, id: \.file) { Text($0.name).tag("model:\($0.file)") }
+        if !models.isEmpty { Divider() }
+        Text("FlashVSR+").tag("flashVSR")
+        Text("Apple Super Resolution").tag("system")
+        if !seedVR2.isEmpty { Divider() }
+        ForEach(seedVR2, id: \.file) { Text($0.name).tag("seedVR2:\($0.file)") }
       }
-      .pickerStyle(.segmented)
       if method != nil {
         controls
-      } else if upscalers.isEmpty {
-        Text("There's no upscaler model in your models folder. Add one, such as Real-ESRGAN X4+ or 4x UltraSharp.")
-          .font(.caption).foregroundStyle(.secondary)
-          .fixedSize(horizontal: false, vertical: true)
       } else {
-        Picker("Model", selection: Binding(get: { file ?? "" }, set: { chosen = $0 })) {
-          ForEach(upscalers, id: \.file) { Text($0.name).tag($0.file) }
-        }
         Picker("Scale", selection: $scale) {
           ForEach(ImageUpscale.scales, id: \.self) { Text("\($0)×").tag($0) }
         }
         .pickerStyle(.segmented)
-        LabeledContent("Size", value: "\(width) × \(height) → \(width * scale) × \(height * scale)")
+        LabeledContent("Size", value: "\(width) × \(height) → \(size.width) × \(size.height)")
       }
       Spacer(minLength: 0)
       HStack {
@@ -100,11 +103,11 @@ struct ImageUpscaleSheet: View {
         Button("Cancel", role: .cancel) { dismiss() }
           .keyboardShortcut(.cancelAction)
         Button("Upscale") {
-          if let upscale { create.upscaleCanvasImage(upscale) }
+          create.upscaleCanvasImage(upscale)
           dismiss()
         }
         .keyboardShortcut(.defaultAction)
-        .disabled(upscale == nil || (method != nil && controls.problem != nil))
+        .disabled(method != nil && controls.problem != nil)
       }
     }
     .sheetPadding()

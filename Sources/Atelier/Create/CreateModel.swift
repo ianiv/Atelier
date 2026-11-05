@@ -1923,6 +1923,25 @@ final class CreateModel {
       let output = try await engine.upscale(clip, frames: [image], progress: progress)
       guard let frame = output.frames.first else { throw ProjectError.badImage }
       return GenerationEngine.Output(frames: [frame])
+    case .seedVR2(let file):
+      // One step at the new size with the model's own defaults, as the catalog runs it.
+      let size = upscale.outputSize(width: image.width, height: image.height)
+      guard let stretched = ImageUpscale.stretched(image, width: size.width, height: size.height) else {
+        throw ProjectError.badImage
+      }
+      var configuration = ModelDefaults.recommended(
+        for: file, configuration: try await engine.loadPipeline(for: file))
+      configuration.width = size.width
+      configuration.height = size.height
+      configuration.steps = 1
+      configuration.strength = 1
+      var run = GenerationEngine.Request(
+        model: file, prompt: "", negativePrompt: "", seed: request.seed, configuration: configuration)
+      run.canvas = stretched
+      run.canvasIsImported = true
+      let output = try await engine.generate(run, progress: progress)
+      guard let frame = output.frames.first else { throw ProjectError.badImage }
+      return GenerationEngine.Output(frames: [frame])
     }
   }
 

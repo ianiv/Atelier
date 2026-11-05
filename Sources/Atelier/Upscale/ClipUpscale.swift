@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreGraphics
 import Foundation
 @preconcurrency import ModelZoo
 @preconcurrency import NNC
@@ -11,6 +12,8 @@ nonisolated struct ImageUpscale: Codable, Sendable, Hashable {
     case model(String)
     /// A video upscaler, with the image as a clip of one frame.
     case video(ClipUpscale.Method, FlashVSRFiles.Variant?)
+    /// A SeedVR2 model, by file: a one-step run of the engine on the image stretched to size.
+    case seedVR2(String)
   }
 
   var upscaler: Upscaler
@@ -20,8 +23,33 @@ nonisolated struct ImageUpscale: Codable, Sendable, Hashable {
 
   /// The result's size for a `width`×`height` image.
   func outputSize(width: Int, height: Int) -> (width: Int, height: Int) {
-    guard case .video(let method, _) = upscaler else { return (width * scale, height * scale) }
-    return ClipUpscale.outputSize(width: width, height: height, scale: scale, method: method)
+    switch upscaler {
+    case .model: return (width * scale, height * scale)
+    case .video(let method, _):
+      return ClipUpscale.outputSize(width: width, height: height, scale: scale, method: method)
+    case .seedVR2:
+      // The engine generates in multiples of 64.
+      func snapped(_ side: Int) -> Int { max(Int((Double(side * scale) / 64).rounded()), 1) * 64 }
+      return (snapped(width), snapped(height))
+    }
+  }
+
+  /// `image` stretched to exactly `width`×`height`: SeedVR2 restores what it's given at its size.
+  static func stretched(_ image: CGImage, width: Int, height: Int) -> CGImage? {
+    guard let context = CGContext(
+      data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+      space: CGColorSpace(name: CGColorSpace.sRGB)!,
+      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    else { return nil }
+    context.interpolationQuality = .high
+    context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+    return context.makeImage()
+  }
+
+  /// The SeedVR2 models among `files`, which are the model folder's.
+  static func seedVR2Models(in files: [String]) -> [(file: String, name: String)] {
+    files.filter { $0.hasPrefix("seedvr2_") && !$0.contains("_vae") }.sorted()
+      .map { ($0, ModelZoo.humanReadableNameForModel($0)) }
   }
 
   static let scales = [4, 2]

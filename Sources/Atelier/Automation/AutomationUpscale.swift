@@ -10,7 +10,7 @@ extension Automation {
   ///
   ///   Atelier --upscale-check --project NAME [--method flashVSR|system] [--scale 2]
   ///           [--variant turbo|base] [--clip ID] [--frames N] [--export DIR]
-  ///           [--export-clip ID|latest] [--image] [--upscaler FILE] [--quit]
+  ///           [--export-clip ID|latest] [--image] [--upscaler FILE] [--seedvr FILE] [--quit]
   static func upscaleCheck(_ model: CreateModel) {
     let args = CommandLine.arguments
     func value(_ name: String) -> String? {
@@ -35,7 +35,7 @@ extension Automation {
         let images = model.history.items.filter { !$0.isVideo }
         guard let source = images.min(by: { $0.sidecar.width * $0.sidecar.height < $1.sidecar.width * $1.sidecar.height }),
               let image = await model.history.image(tensorId: source.tensorId, in: model.history.project.name),
-              let upscaler = value("--method").flatMap(ClipUpscale.Method.init(rawValue:)).map({ ImageUpscale.Upscaler.video($0, $0 == .flashVSR ? .turbo : nil) })
+              let upscaler = value("--seedvr").map(ImageUpscale.Upscaler.seedVR2) ?? value("--method").flatMap(ClipUpscale.Method.init(rawValue:)).map({ ImageUpscale.Upscaler.video($0, $0 == .flashVSR ? .turbo : nil) })
               ?? (value("--upscaler") ?? ImageUpscale.installed.first?.file).map(ImageUpscale.Upscaler.model)
         else {
           log("FAIL no image in \(model.history.project.name), or no upscaler")
@@ -62,7 +62,7 @@ extension Automation {
         log(
           "\(right ? "PASS" : "FAIL") image \(result.tensorId): \(made.width)x\(made.height) (sidecar \(result.sidecar.width)x\(result.sidecar.height)) in \(String(format: "%.1f", Date().timeIntervalSince(upscaleStarted)))s, prompt kept: \(result.sidecar.prompt == source.sidecar.prompt), input \(result.inputTensorId.map(String.init) ?? "none"), \(model.history.items.count) items")
         if let directory = value("--export") {
-          let url = URL(fileURLWithPath: directory).appendingPathComponent("image-\(value("--method") ?? "model")-\(scale)x.png")
+          let url = URL(fileURLWithPath: directory).appendingPathComponent("image-\(value("--seedvr") == nil ? value("--method") ?? "model" : "seedvr")-\(scale)x.png")
           try? await model.history.exportPNG(result, to: url)
           let sourceURL = URL(fileURLWithPath: directory).appendingPathComponent("source.png")
           try? await model.history.exportPNG(source, to: sourceURL)
