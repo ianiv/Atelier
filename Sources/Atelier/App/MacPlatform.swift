@@ -97,23 +97,30 @@ enum AppLifecycle {
   /// What quitting now would stop, in a sentence, or nil to quit without asking.
   static var workUnderway: (@MainActor () -> String?)?
 
-  private static var observations: [NotificationCenter.ObservationToken] = []
+  private static var observations: [any NSObjectProtocol] = []
+
+  /// The block-based observer rather than `addObserver(of:for:)`, whose NSApplication messages need
+  /// macOS 27. A nil queue runs it as the notification posts, and NSApplication posts these on the
+  /// main thread, so will-terminate work finishes before the app exits.
+  private static func observe(_ name: Notification.Name, _ action: @escaping @MainActor () -> Void) {
+    observations.append(
+      NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil) { _ in
+        MainActor.assumeIsolated { action() }
+      })
+  }
 
   /// Runs before the app exits, delivered on the main actor as it posts, unlike anything that hops
   /// to a task: this is what saves the session and the queue.
   static func onWillTerminate(_ action: @escaping @MainActor () -> Void) {
-    observations.append(
-      NotificationCenter.default.addObserver(of: NSApplication.self, for: .willTerminate) { _ in action() })
+    observe(NSApplication.willTerminateNotification, action)
   }
 
   static func onResignActive(_ action: @escaping @MainActor () -> Void) {
-    observations.append(
-      NotificationCenter.default.addObserver(of: NSApplication.self, for: .didResignActive) { _ in action() })
+    observe(NSApplication.didResignActiveNotification, action)
   }
 
   static func onBecomeActive(_ action: @escaping @MainActor () -> Void) {
-    observations.append(
-      NotificationCenter.default.addObserver(of: NSApplication.self, for: .didBecomeActive) { _ in action() })
+    observe(NSApplication.didBecomeActiveNotification, action)
   }
 
   /// Set by `quit()`, which scripted runs call, so they don't stop to ask.

@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Atelier is a native SwiftUI app (macOS 27 + iPadOS 27, Apple silicon) that generates images and video with local models. It embeds the Draw Things engine ([draw-things-community](https://github.com/drawthingsai/draw-things-community)) in-process — no server — and reads/writes Draw Things' model folder and project file format. GPL-3.0.
+Atelier is a native SwiftUI app (macOS 26 + iPadOS 27, Apple silicon) that generates images and video with local models. It embeds the Draw Things engine ([draw-things-community](https://github.com/drawthingsai/draw-things-community)) in-process — no server — and reads/writes Draw Things' model folder and project file format. GPL-3.0.
 
 ## Commands
 
@@ -58,6 +58,7 @@ Core flow:
 ## Conventions
 
 - **Pure SwiftUI.** All AppKit use is confined to `App/MacPlatform.swift`; Mac-vs-iPad modifier shims live in `App/PlatformViews.swift` (iPad counterparts in `iPadPlatform.swift`). Don't add AppKit/UIKit elsewhere. Platform differences use `#if os(macOS)` / `#if os(iOS)`; changes must build for both `mac` and `ipad-sim`.
+- The Mac target is macOS 26, so anything newer needs a fallback; the compiler reports it. `ARCHS` is arm64 for the Mac because below macOS 27 Xcode would also build Intel, which has no `Float16`.
 - Formatting: 2-space indent, no line limit (see `.swiftformat`). `redundantSelf` and `preferForLoop` are disabled deliberately — enabling them broke the build.
 - Doc comments explain *why* and name the engine code being followed; match that style.
 - User-facing docs live in `docs/` and `MCP.md`; update them when behavior they describe changes.

@@ -2,7 +2,7 @@
 
 ## What you need
 
-- A Mac with Apple silicon running macOS 27 or later. Image models are large, so more memory lets you run bigger models and keep them loaded between runs.
+- A Mac with Apple silicon running macOS 26 or later. Image models are large, so more memory lets you run bigger models and keep them loaded between runs.
 - Xcode, only if you build the app yourself.
 - Disk space for models. A single model is typically 5 to 20 GB, so many people keep them on an external drive.
 - Optional: Draw Things installed in `/Applications`. The build copies its small preview decoders from it to show sharp step-by-step previews. Without it Atelier still works and shows lower-resolution previews.
