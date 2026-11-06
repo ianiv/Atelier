@@ -141,23 +141,69 @@ struct DrawThingsImportSheet: View {
         .disabled(selection.projects.isEmpty)
       }
       Section {
+        // Above the list: with hundreds of files, nothing below it gets seen.
+        if importer.catalogMissing {
+          Text("The community catalog couldn't be reached, so this list may include models it would have recognized. Try again when you're online.")
+            .font(.caption).foregroundStyle(.secondary)
+        }
+        if !importer.unmatched.isEmpty, let documents = DrawThingsApp.documents, DrawThingsApp.isDetected, !selection.contains(documents) {
+          VStack(alignment: .leading, spacing: 6) {
+            Text("Draw Things can keep its lists of imported models and LoRAs in its Documents folder, even when the files are on another drive. Add that folder first: it may account for these files.")
+            Button("Add Documents Folder…") { addDocuments(documents) }
+              .disabled(importer.isScanning || importer.isImporting)
+          }
+        }
+        bulkActions
         if importer.unmatched.isEmpty {
           Text("None.").foregroundStyle(.secondary)
         }
         ForEach(importer.unmatched) { file in unmatchedRow(file) }
       } header: {
         Text("Model Files Atelier Can't Match")
-      } footer: {
-        VStack(alignment: .leading, spacing: 4) {
-          if importer.catalogMissing {
-            Text("The community catalog couldn't be reached, so this list may include models it would have recognized. Try again when you're online.")
-          }
-          // Draw Things lists imported models in its own Documents, even for files on another drive.
-          if !importer.unmatched.isEmpty, let documents = DrawThingsApp.documents, DrawThingsApp.isDetected, !selection.contains(documents) {
-            Text("Draw Things keeps its list of imported models in its Documents folder. Adding that folder may account for these files.")
-          }
+      }
+    }
+  }
+
+  /// Adds Draw Things' Documents, directly if macOS already allows it, else through the panel, which
+  /// opens there and is what gets it allowed.
+  private func addDocuments(_ documents: URL) {
+    if (try? FileManager.default.contentsOfDirectory(atPath: documents.path)) != nil {
+      Task { await importer.add(documents, create: create) }
+    } else {
+      choosing = true
+    }
+  }
+
+  /// One action for many files, for libraries too large to set by hand. Each shows only with two or
+  /// more files to act on.
+  @ViewBuilder private var bulkActions: some View {
+    let unmatched = importer.unmatched
+    let converted = unmatched.filter { $0.kind == .converted && importer.canList($0, create: create) }
+    let originals = unmatched.filter { $0.kind == .unconverted }
+    if converted.filter(\.isLoRA).count > 1 || converted.count(where: { !$0.isLoRA }) > 1 || originals.count > 1 {
+      HStack {
+        familyMenu(for: converted.filter(\.isLoRA), noun: "LoRAs", isLoRA: true)
+        familyMenu(for: converted.filter { !$0.isLoRA }, noun: "Models", isLoRA: false)
+        if originals.count > 1 {
+          Button("Import \(originals.count) as LoRAs…") { showImport(.loras) { library.prepareImport(originals.map(\.url)) } }
+          Button("Import \(originals.count) as Models…") { showImport(.models) { library.prepareModelImport(originals.map(\.url)) } }
         }
       }
+      .disabled(importer.isImporting)
+    }
+  }
+
+  @ViewBuilder private func familyMenu(for files: [DrawThingsContents.UnmatchedFile], noun: String, isLoRA _: Bool) -> some View {
+    if files.count > 1, let first = files.first {
+      Menu("Set \(files.count) \(noun) To") {
+        ForEach(importer.familyChoices(for: first), id: \.version) { family in
+          Button(family.name) { for file in files { importer.families[file.url] = family.version } }
+        }
+        Divider()
+        Button("Clear") { for file in files { importer.families[file.url] = nil } }
+      }
+      .fixedSize()
+      .help("Applies one family to all of them. Listed when you click Import.")
     }
   }
 

@@ -1,6 +1,6 @@
 @testable import Atelier
-import Foundation
 @preconcurrency import Diffusion
+import Foundation
 @preconcurrency import ModelZoo
 import SQLite3
 import Testing
@@ -146,6 +146,68 @@ struct DrawThingsImportTests {
     // With no model files anywhere, the empty one can still be chosen.
     let empty = DrawThingsSelection(folders: [DrawThingsContents.scan(documents)])
     #expect(empty.foldersToShare { _ in false }.count == 1)
+  }
+
+  func lora(_ name: String, _ file: String, prefix: String = "", version: String = "krea_2", here: Bool = true) -> ModelLibrary.LoRA {
+    ModelLibrary.LoRA(name: name, file: file, prefix: prefix, version: version, size: here ? 1 : nil, registry: URL(fileURLWithPath: "/"))
+  }
+
+  /// Draw Things' 8-bit conversion deletes the original, whose entry keeps the trigger words.
+  @Test func anEightBitCopyTakesOverFromItsDeletedOriginal() {
+    let byFile = ModelLibrary.linkingLoRACopies([
+      lora("Style", "style_lora_f16.ckpt", prefix: "in style ", here: false),
+      lora("Style Small", "style_lora_q8p.ckpt"),
+    ])
+    #expect(byFile.map(\.file) == ["style_lora_q8p.ckpt"])
+    #expect(byFile[0].prefix == "in style ")
+    let byName = ModelLibrary.linkingLoRACopies([
+      lora("Style (Krea 2)", "style_lora_f16.ckpt", prefix: "in style ", here: false),
+      lora("Style (Krea 2) (8-bit)", "converted.ckpt"),
+    ])
+    #expect(byName.map(\.file) == ["converted.ckpt"])
+    #expect(byName[0].prefix == "in style ")
+  }
+
+  /// As one user's custom_lora.json shows them.
+  @Test func aRealEightBitCopyGetsItsOriginalsNameAndTriggerWords() {
+    for original in ["age_slider_v1_krea_lora_f16.ckpt", "renamed_on_import_lora_f16.ckpt"] {
+      let linked = ModelLibrary.linkingLoRACopies([
+        lora("Age Slider v1 Krea", original, prefix: "age slider ", here: false),
+        lora("age_slider_v1_krea_lora_q8p", "age_slider_v1_krea_lora_q8p.ckpt"),
+      ])
+      #expect(linked.map(\.file) == ["age_slider_v1_krea_lora_q8p.ckpt"])
+      #expect(linked[0].prefix == "age slider ")
+      #expect(linked[0].name == "Age Slider v1 Krea")
+    }
+    // A name its owner chose stays.
+    let named = ModelLibrary.linkingLoRACopies([
+      lora("Style", "style_lora_f16.ckpt", here: false),
+      lora("My Style Small", "style_lora_q8p.ckpt"),
+    ])
+    #expect(named[0].name == "My Style Small")
+  }
+
+  @Test func onlyARealCopyTakesOver() {
+    // Its own trigger words stay.
+    let own = ModelLibrary.linkingLoRACopies([
+      lora("Style", "style_lora_f16.ckpt", prefix: "old ", here: false),
+      lora("Style", "style_lora_q8p.ckpt", prefix: "new "),
+    ])
+    #expect(own.map(\.prefix) == ["new "])
+    // Another family, or another name, leaves the missing one showing its warning.
+    let others = ModelLibrary.linkingLoRACopies([
+      lora("Style", "style_lora_f16.ckpt", prefix: "old ", here: false),
+      lora("Style", "style_lora_q8p.ckpt", version: "flux2"),
+      lora("Other", "other_lora_q8p.ckpt"),
+    ])
+    #expect(others.count == 3)
+    #expect(others.first { $0.file == "style_lora_f16.ckpt" }?.isDownloaded == false)
+    #expect(others.first { $0.file == "style_lora_q8p.ckpt" }?.prefix == "")
+    // Both files here: two LoRAs.
+    #expect(ModelLibrary.linkingLoRACopies([
+      lora("Style", "style_lora_f16.ckpt", prefix: "old "),
+      lora("Style", "style_lora_q8p.ckpt"),
+    ]).count == 2)
   }
 
   /// A catalog model, from what the app bundle ships.

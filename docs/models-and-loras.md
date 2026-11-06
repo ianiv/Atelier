@@ -40,8 +40,8 @@ Some families can't be imported yet: MiniMax H3, HiDream O1, Qwen Image 2.1, LTX
 
 Atelier only lists a model it can find in a catalog or a `custom.json`, because the file alone doesn't say which family it is. [Import from Draw Things](getting-started.md#import-from-draw-things) lists the other files in a folder, each with one of these reasons:
 
-- **Not converted yet.** The file is an original checkpoint or LoRA, which the engine can't run as it is. **Import as Model…** or **Import as LoRA…** converts a copy.
-- **Converted, but not registered.** Draw Things converted the file, but no `custom.json` in the chosen folders lists it. Draw Things usually keeps that list in its Documents folder, even for files on another drive, so add that folder first. If the file still isn't explained, choose its **Model Family**. When you click **Import**, Atelier adds it to the `custom.json` in the file's folder, taking its encoders and default settings from a catalog model of that family.
+- **Not converted yet.** The file is an original checkpoint or LoRA, which the engine can't run as it is. **Import as Model…** or **Import as LoRA…** converts a copy, and with two or more such files, buttons above the list import them all at once.
+- **Converted, but not registered.** Draw Things converted the file, but no `custom.json` in the chosen folders lists it. Draw Things usually keeps that list in its Documents folder, even for files on another drive, so add that folder first. If the file still isn't explained, choose its **Model Family**, or use **Set To** above the list to give many files the same family. When you click **Import**, Atelier adds it to the `custom.json` in the file's folder, taking its encoders and default settings from a catalog model of that family.
 
 The file itself doesn't say what it is, so Atelier can't check your choice. If it's wrong, the model won't load or will produce noise. To change it, edit the file's entry in `custom.json`; don't use **Move to Trash**, which also trashes the model file.
 
@@ -59,6 +59,8 @@ The copy is saved next to the original and listed as "<name> (8-bit)" or "<name>
 ## LoRAs
 
 Click **LoRAs** in the sidebar. **Family** filters the list by the model family each LoRA was made for.
+
+Converting a LoRA to 8-bit in Draw Things deletes the original file and leaves the copy without its trigger words. Atelier treats the two as one LoRA: it shows the copy, with the original's trigger words if the copy has none, and the original's name if the copy's is only its file name. A yellow warning means a LoRA's file can't be found in any models folder.
 
 ### Importing a LoRA
 

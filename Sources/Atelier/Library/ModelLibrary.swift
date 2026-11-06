@@ -711,7 +711,39 @@ final class ModelLibrary {
             size: Self.size(of: specification.file, in: directories), registry: directory))
       }
     }
-    self.loras = loras.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    self.loras = Self.linkingLoRACopies(loras).sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+  }
+
+  /// Draw Things' 8-bit conversion deletes the original LoRA's file but leaves its custom_lora.json
+  /// entry, and the copy's new entry has no trigger words. So a file that's gone and a file that's
+  /// here, in the same family with the same name apart from the precision, are one LoRA: it's shown
+  /// once, as the copy, with the original's trigger words if it has none. Only in memory: this
+  /// file is Draw Things' too, and saving an edit in the LoRAs screen is what writes them down.
+  nonisolated static func linkingLoRACopies(_ loras: [LoRA]) -> [LoRA] {
+    // Names and file names, without what differs between the two. The copy's name is usually just
+    // its file name ("Age Slider v1 Krea" becomes age_slider_v1_krea_lora_q8p.ckpt).
+    func normalized(_ text: String) -> String {
+      text.lowercased()
+        .replacingOccurrences(of: "[^a-z0-9.]+", with: "_", options: .regularExpression)
+        .replacingOccurrences(of: "\\.ckpt$", with: "", options: .regularExpression)
+        .replacingOccurrences(of: "(_lora)?(_(f16|q8p|q6p|q5p|i8x|8_?bit))?_*$", with: "", options: .regularExpression)
+        .replacingOccurrences(of: "^_+", with: "", options: .regularExpression)
+    }
+    func keys(_ lora: LoRA) -> Set<String> { [normalized(lora.file), normalized(lora.name)] }
+    let present = loras.filter(\.isDownloaded)
+    var missing = loras.filter { !$0.isDownloaded }
+    var result = present
+    for index in result.indices {
+      let copy = result[index]
+      guard let match = missing.firstIndex(where: { $0.version == copy.version && !keys($0).isDisjoint(with: keys(copy)) }) else { continue }
+      if copy.prefix.trimmingCharacters(in: .whitespaces).isEmpty { result[index].prefix = missing[match].prefix }
+      // A name that's only the file name says less than the one its owner chose.
+      if normalized(copy.name) == normalized(copy.file), normalized(copy.name) != copy.name.lowercased() || copy.name.contains("_") {
+        result[index].name = missing[match].name
+      }
+      missing.remove(at: match)
+    }
+    return result + missing
   }
 
   /// Model families (readable names, as MGK reports a model's `version`) whose LoRAs the engine
