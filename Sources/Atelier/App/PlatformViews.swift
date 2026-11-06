@@ -108,6 +108,20 @@ extension View {
     #endif
   }
 
+  /// The size of a sheet that opens at `idealSize`. The Mac's can be dragged larger or down to the
+  /// minimums; an iPad sheet can't be dragged, so it's `sheetFrame` there.
+  func resizableSheetFrame(minWidth: CGFloat, minHeight: CGFloat, idealSize: CGSize) -> some View {
+    #if os(macOS)
+      frame(
+        minWidth: minWidth, idealWidth: idealSize.width, maxWidth: .infinity,
+        minHeight: minHeight, idealHeight: idealSize.height, maxHeight: .infinity
+      )
+      .presentationSizing(.fitted)
+    #else
+      sheetFrame(width: idealSize.width, height: idealSize.height)
+    #endif
+  }
+
   /// A Settings path field's width: wide on the Mac; on iPad it takes what the row leaves, since
   /// a narrow window has no room for a fixed width.
   func settingsFieldWidth() -> some View {

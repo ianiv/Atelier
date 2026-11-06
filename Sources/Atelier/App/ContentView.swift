@@ -59,6 +59,8 @@ struct ContentView: View {
     create.queue.waiting.count + (create.queue.running == nil ? 0 : 1)
   }
 
+  @State private var windowSize: CGSize = .zero
+
   var body: some View {
     @Bindable var navigation = navigation
     @Bindable var create = create
@@ -169,6 +171,9 @@ struct ContentView: View {
       .onAppear { if DrawThingsApp.takeFirstRunOffer() { offeringDrawThingsImport = true } }
       // For menu commands, which act on the key window's undo stack.
       .focusedSceneValue(\.windowUndoManager, undoManager)
+      // Sheets size themselves from it: SwiftUI gives them no way to ask about the window or screen.
+      .onGeometryChange(for: CGSize.self) { $0.size } action: { windowSize = $0 }
+      .environment(\.mainWindowSize, windowSize)
   }
 }
 
@@ -178,6 +183,11 @@ struct ContentView: View {
     nonisolated static let sidebarMinimumWidth: CGFloat = 1000
   }
 #endif
+
+extension EnvironmentValues {
+  /// The size of the window's content, for a sheet to size itself by.
+  @Entry var mainWindowSize: CGSize = .zero
+}
 
 extension FocusedValues {
   @Entry var windowUndoManager: UndoManager?

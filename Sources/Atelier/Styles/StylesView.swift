@@ -1298,7 +1298,8 @@ struct ThumbnailViewer: View {
   }
 }
 
-/// An image full size, in a sheet sized to the image: fitted to start, then zoomed with a pinch,
+/// An image full size, in a resizable sheet that opens fitted to most of the main window (SwiftUI
+/// tells a sheet nothing about the screen): fitted to start, then zoomed with a pinch,
 /// the buttons or ⌘+ / ⌘- (⌘0 actual size, ⌘9 fit), and panned by dragging. A double click switches
 /// between fit and actual size there. Space, Escape or Done closes it. A new `imageID` fits the
 /// image again; a new `image` with the same id keeps the zoom. For a style's thumbnail
@@ -1312,6 +1313,7 @@ struct ImageViewer: View {
   let emptyTitle: String
   var arrow: (KeyEquivalent) -> KeyPress.Result = { _ in .ignored }
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.mainWindowSize) private var windowSize
   /// Points per image pixel; nil while fitted, so the image keeps fitting as the sheet resizes.
   @State private var zoom: CGFloat?
   /// The image's centre from the view's, in points.
@@ -1322,8 +1324,10 @@ struct ImageViewer: View {
   @State private var viewSize: CGSize = .zero
   @FocusState private var focused: Bool
 
-  /// The largest the image area gets, before it's fitted to the image's shape.
-  private static let maxArea = CGSize(width: 900, height: 700)
+  /// The height of the controls under the image.
+  private static let controlsHeight: CGFloat = 52
+  /// The smallest the image area opens, and can be resized to.
+  private static let minArea = CGSize(width: 480, height: 320)
 
   var body: some View {
     VStack(spacing: 0) {
@@ -1331,7 +1335,9 @@ struct ImageViewer: View {
       Divider()
       controls.padding(10)
     }
-    .sheetFrame(width: sheetSize.width, height: sheetSize.height)
+    .resizableSheetFrame(
+      minWidth: Self.minArea.width, minHeight: Self.minArea.height + Self.controlsHeight, idealSize: sheetSize
+    )
     .focusable()
     .focusEffectDisabled()
     .focused($focused)
@@ -1349,14 +1355,17 @@ struct ImageViewer: View {
     }
   }
 
-  /// The image area fitted to the image's aspect within `maxArea`, plus the controls.
+  /// The size the sheet opens at: the image fitted to most of the main window, however small the
+  /// image, plus the controls. A sheet keeps the size it opens at, and a thumbnail is still loading
+  /// then, so with no image yet it's square, as thumbnails usually are.
   private var sheetSize: CGSize {
-    let controls: CGFloat = 52
-    guard let image, image.width > 0, image.height > 0 else { return CGSize(width: 560, height: 560 + controls) }
-    let aspect = CGFloat(image.width) / CGFloat(image.height)
-    var size = Self.maxArea
-    if aspect > size.width / size.height { size.height = size.width / aspect } else { size.width = size.height * aspect }
-    return CGSize(width: max(size.width, 480).rounded(), height: (max(size.height, 320) + controls).rounded())
+    let window = windowSize == .zero ? CGSize(width: 960, height: 760) : windowSize
+    let most = CGSize(width: window.width * 0.9, height: window.height * 0.9 - Self.controlsHeight)
+    let shape = pixels.width > 0 && pixels.height > 0 ? pixels : CGSize(width: 1, height: 1)
+    let scale = min(most.width / shape.width, most.height / shape.height)
+    return CGSize(
+      width: max(shape.width * scale, Self.minArea.width).rounded(),
+      height: (max(shape.height * scale, Self.minArea.height) + Self.controlsHeight).rounded())
   }
 
   private var pixels: CGSize {
