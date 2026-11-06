@@ -60,12 +60,15 @@ struct StylePicker: View {
   /// of them.
   @AppStorage("stylePickerLibrary") private var libraryStorage = ""
 
+  private static let thumbnailSide: CGFloat = 40
+
   private var libraries: [StyleCollection] { model.styles?.libraries ?? [] }
 
   /// A library of a paired server.
   private struct RemoteSection: Identifiable {
     /// The server's id and the library's, as one: only the two together are unique.
     let id: String
+    let serverID: UUID
     let server: String
     let library: RemoteStyleGroup
 
@@ -75,7 +78,7 @@ struct StylePicker: View {
   private var remoteSections: [RemoteSection] {
     model.remoteServers.servers.flatMap { server in
       model.remoteStyles.libraries(of: server.id).map {
-        RemoteSection(id: "\(server.id.uuidString)/\($0.id)", server: server.name, library: $0)
+        RemoteSection(id: "\(server.id.uuidString)/\($0.id)", serverID: server.id, server: server.name, library: $0)
       }
     }
   }
@@ -122,7 +125,15 @@ struct StylePicker: View {
       .padding(.vertical, 10)
       Divider()
       List {
-        if query.isEmpty { row(name: "No Style", detail: "The prompt as typed", id: nil) }
+        if query.isEmpty {
+          row(name: "No Style", detail: "The prompt as typed", id: nil) {
+            Image(systemName: "nosign")
+              .font(.system(size: Self.thumbnailSide / 3))
+              .foregroundStyle(.tertiary)
+              .frame(width: Self.thumbnailSide, height: Self.thumbnailSide)
+              .accessibilityHidden(true)
+          }
+        }
         ForEach(shown) { library in
           ForEach(library.categories, id: \.self) { category in
             let inCategory = library.styles.filter { $0.category == category && matches($0) }
@@ -133,7 +144,9 @@ struct StylePicker: View {
               Section {
                 if open {
                   ForEach(inCategory) { style in
-                    row(name: style.name, detail: style.subcategory, id: style.id)
+                    row(name: style.name, detail: style.subcategory, id: style.id) {
+                      StyleThumbnail(id: style.id, side: Self.thumbnailSide)
+                    }
                   }
                 }
               } header: {
@@ -144,14 +157,16 @@ struct StylePicker: View {
         }
         ForEach(shownRemote) { section in
           ForEach(section.library.categories, id: \.self) { category in
-            let inCategory = section.library.styles.map(\.style).filter { $0.category == category && matches($0) }
+            let inCategory = section.library.styles.filter { $0.style.category == category && matches($0.style) }
             if !inCategory.isEmpty {
               let key = "\(section.id)/\(category)"
               let open = !query.isEmpty || !collapsed.contains(key)
               Section {
                 if open {
-                  ForEach(inCategory) { style in
-                    row(name: style.name, detail: style.subcategory, id: style.id)
+                  ForEach(inCategory) { remote in
+                    row(name: remote.style.name, detail: remote.style.subcategory, id: remote.id) {
+                      ServerStyleThumbnail(remote: remote, server: section.serverID, side: Self.thumbnailSide)
+                    }
                   }
                 }
               } header: {
@@ -180,7 +195,7 @@ struct StylePicker: View {
       .padding(.horizontal, 14)
       .padding(.vertical, 10)
     }
-    .frame(width: 360, height: 440)
+    .frame(width: 380, height: 520)
   }
 
   private var collapsed: Set<String> {
@@ -210,11 +225,12 @@ struct StylePicker: View {
     .accessibilityValue(open ? "Expanded" : "Collapsed")
   }
 
-  private func row(name: String, detail: String, id: UUID?) -> some View {
+  private func row(name: String, detail: String, id: UUID?, @ViewBuilder thumbnail: () -> some View) -> some View {
     Button {
       pick(id)
     } label: {
-      HStack {
+      HStack(spacing: 10) {
+        thumbnail()
         VStack(alignment: .leading) {
           Text(name)
           if !detail.isEmpty {

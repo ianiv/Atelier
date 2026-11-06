@@ -973,7 +973,7 @@ private struct ServerStylesList: View {
   }
 }
 
-private struct ServerStyleThumbnail: View {
+struct ServerStyleThumbnail: View {
   let remote: RemoteStyle
   let server: UUID
   let side: CGFloat
