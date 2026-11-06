@@ -154,8 +154,6 @@ struct CanvasView: View {
   /// A video dropped on the canvas, choosing how to upscale it.
   @State private var droppedVideo: DroppedVideo?
   @State private var videoError: String?
-  /// Upscale… on the canvas image is choosing how.
-  @State private var upscalingImage = false
   @Environment(\.undoManager) private var undoManager
 
   private static let margin: Double = 24
@@ -280,7 +278,7 @@ struct CanvasView: View {
       isPresented: Binding(get: { videoError != nil }, set: { if !$0 { videoError = nil } }),
       actions: { Button("OK") { videoError = nil } },
       message: { Text(videoError ?? "") })
-    .sheet(isPresented: $upscalingImage) {
+    .sheet(isPresented: Bindable(model).upscalingCanvasImage) {
       ImageUpscaleSheet(width: model.image?.width ?? 0, height: model.image?.height ?? 0)
     }
     .sheet(item: $droppedVideo) { video in
@@ -350,7 +348,7 @@ struct CanvasView: View {
     Button("Save to Photos") { saveToPhotos() }
       .disabled(model.image == nil)
     Divider()
-    Button("Upscale…") { upscalingImage = true }
+    Button("Upscale…") { model.upscalingCanvasImage = true }
       .disabled(!model.canUpscaleCanvasImage)
     Divider()
     CanvasContentItems(

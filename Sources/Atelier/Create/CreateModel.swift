@@ -1877,6 +1877,9 @@ final class CreateModel {
     runNext()
   }
 
+  /// Upscale… on the canvas image is choosing how.
+  var upscalingCanvasImage = false
+
   /// Whether the canvas holds an image Upscale… can take: a finished one, not a playing video.
   var canUpscaleCanvasImage: Bool { image != nil && !imageIsPreview && canvasClip == nil }
 

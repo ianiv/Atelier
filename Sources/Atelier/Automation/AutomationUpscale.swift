@@ -10,7 +10,8 @@ extension Automation {
   ///
   ///   Atelier --upscale-check --project NAME [--method flashVSR|system] [--scale 2]
   ///           [--variant turbo|base] [--clip ID] [--frames N] [--export DIR]
-  ///           [--export-clip ID|latest] [--image] [--upscaler FILE] [--seedvr FILE] [--limit-pixels N] [--quit]
+  ///           [--export-clip ID|latest] [--image] [--upscaler FILE] [--seedvr FILE] [--limit-pixels N]
+  ///           [--image-sheet-shots DIR --input-image FILE] [--quit]
   static func upscaleCheck(_ model: CreateModel) {
     let args = CommandLine.arguments
     func value(_ name: String) -> String? {
@@ -31,6 +32,29 @@ extension Automation {
       }
       // `--image`: the smallest image instead, with `--method`, `--upscaler FILE` or the first
       // model installed.
+      // `--image-sheet-shots DIR --input-image FILE`: the Upscale Image sheet with each kind of
+      // upscaler selected, as PNGs. What was chosen is put back.
+      if let directory = value("--image-sheet-shots"), let input = value("--input-image"),
+         let image = ImageLoader.image(at: URL(fileURLWithPath: input))
+      {
+        model.setCanvasImage(image, metadata: nil)
+        let defaults = UserDefaults.standard
+        let saved = defaults.object(forKey: "imageUpscaler")
+        let tags = (ImageUpscale.installed.first.map { ["model:\($0.file)"] } ?? [])
+          + ["flashVSR:turbo", "flashVSR:base", "system"]
+          + ImageUpscale.seedVR2Models(in: model.modelFiles).prefix(1).map { "seedVR2:\($0.file)" }
+        model.upscalingCanvasImage = true
+        for tag in tags {
+          defaults.set(tag, forKey: "imageUpscaler")
+          try? await Task.sleep(for: .seconds(1.5))
+          let name = tag.prefix { $0 != "." }.replacingOccurrences(of: ":", with: "-")
+          let url = URL(fileURLWithPath: directory).appending(path: "sheet-\(image.width)-\(name).png")
+          log("\(AutomationWindows.snapshotSheet(to: url) ? "PASS" : "FAIL") \(url.path)")
+        }
+        model.upscalingCanvasImage = false
+        if let saved { defaults.set(saved, forKey: "imageUpscaler") } else { defaults.removeObject(forKey: "imageUpscaler") }
+        return finish()
+      }
       if args.contains("--image") {
         ImageUpscale.pixelLimitForChecks = value("--limit-pixels").flatMap(Int.init)
         // `--input-image FILE`: that file, as an imported image on the canvas.

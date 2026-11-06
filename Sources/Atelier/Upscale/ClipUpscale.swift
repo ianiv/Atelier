@@ -61,12 +61,33 @@ nonisolated struct ImageUpscale: Codable, Sendable, Hashable {
     }
   }
 
+  /// Whether Max would make something 2× and 4× don't for a `width`×`height` image: larger than
+  /// the image, and a different size from both.
+  func offersMax(width: Int, height: Int) -> Bool {
+    guard sizeLimit != nil else { return false }
+    let largest = ImageUpscale(upscaler: upscaler, scale: Self.maxScale).outputSize(width: width, height: height)
+    guard largest.width * largest.height > width * height else { return false }
+    return Self.scales.allSatisfy { scale in
+      let size = ImageUpscale(upscaler: upscaler, scale: scale).outputSize(width: width, height: height)
+      return size != largest
+    }
+  }
+
   /// The scales to offer for a `width`×`height` image, Max last.
   func scales(width: Int, height: Int) -> [Int] {
     if case .video(.system, _) = upscaler {
       return SystemSuperResolution.scaleFactors(width: width, height: height, input: .image)
     }
-    return Self.scales + (sizeLimit == nil ? [] : [Self.maxScale])
+    return Self.scales + (offersMax(width: width, height: height) ? [Self.maxScale] : [])
+  }
+
+  /// This with a remembered Max settled when Max isn't offered for this image: the largest scale
+  /// that works, or the largest if none does.
+  func resolved(width: Int, height: Int) -> ImageUpscale {
+    guard scale == Self.maxScale, !offersMax(width: width, height: height) else { return self }
+    let scales = scales(width: width, height: height).sorted(by: >)
+    let works = scales.first { ImageUpscale(upscaler: upscaler, scale: $0).problem(width: width, height: height) == nil }
+    return ImageUpscale(upscaler: upscaler, scale: works ?? scales.first ?? Self.scales.max() ?? 4)
   }
 
   /// The largest size of `width`×`height`'s shape within `pixels`, in multiples of `grid`.
@@ -80,7 +101,7 @@ nonisolated struct ImageUpscale: Codable, Sendable, Hashable {
   func problem(width: Int, height: Int) -> String? {
     if case .video(let method, let variant) = upscaler {
       if method == .flashVSR, FlashVSRFiles.installed(variant ?? .turbo) == nil {
-        return "Download FlashVSR+ \((variant ?? .turbo).title) to use it."
+        return "FlashVSR+ \((variant ?? .turbo).title) isn't downloaded yet."
       }
       if method == .system {
         guard SystemSuperResolution.isSupported else { return "This device doesn't support Apple Super Resolution." }
@@ -118,7 +139,7 @@ nonisolated struct ImageUpscale: Codable, Sendable, Hashable {
       .map { ($0, ModelZoo.humanReadableNameForModel($0)) }
   }
 
-  static let scales = [4, 2]
+  static let scales = [2, 4]
 
   /// The upscaler models in the models folder. Not the settings' file-name match: that also finds
   /// LTX's spatial upscalers, which aren't for images.

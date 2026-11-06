@@ -106,6 +106,23 @@ struct ImageUpscaleTests {
     #expect(ImageUpscale(upscaler: seedVR2, scale: ImageUpscale.maxScale).problem(width: 4096, height: 4096) != nil)
   }
 
+  @Test func maxOnFixedScalesIsTheLargest() {
+    let model = ImageUpscale(upscaler: .model("4x_ultrasharp_f16.ckpt"), scale: ImageUpscale.maxScale)
+    #expect(model.resolved(width: 512, height: 512).scale == 4)
+    let capped = ImageUpscale(upscaler: seedVR2, scale: ImageUpscale.maxScale)
+    #expect(capped.resolved(width: 512, height: 512).scale == ImageUpscale.maxScale)
+  }
+
+  @Test func maxOnlyWhenItMakesItsOwnSize() {
+    let capped = ImageUpscale(upscaler: seedVR2, scale: ImageUpscale.maxScale)
+    #expect(capped.offersMax(width: 512, height: 512))
+    // 4× is exactly the limit.
+    #expect(!capped.offersMax(width: 1024, height: 1024))
+    #expect(capped.resolved(width: 1024, height: 1024).scale == 4)
+    // Already at the limit.
+    #expect(!capped.offersMax(width: 4096, height: 4096))
+  }
+
   @Test func onlyLimitedUpscalersOfferMax() {
     #expect(ImageUpscale(upscaler: seedVR2, scale: 4).scales(width: 512, height: 512).contains(ImageUpscale.maxScale))
     #expect(!ImageUpscale(upscaler: .model("4x_ultrasharp_f16.ckpt"), scale: 4).scales(width: 512, height: 512).contains(ImageUpscale.maxScale))

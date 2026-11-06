@@ -38,7 +38,8 @@ struct UpscaleSheet: View {
 }
 
 /// Upscale… on the canvas image: any upscaler, named for its model, and a scale, then queue it.
-/// The result is a new image in History.
+/// The result is a new image in History. A FlashVSR+ version that isn't here yet is still offered,
+/// and the main button downloads it first.
 struct ImageUpscaleSheet: View {
   @Environment(CreateModel.self) private var create
   @Environment(\.dismiss) private var dismiss
@@ -47,84 +48,137 @@ struct ImageUpscaleSheet: View {
   /// An option's tag.
   @AppStorage("imageUpscaler") private var chosen = ""
   @AppStorage("imageUpscaleScale") private var scale = 4
-  @AppStorage("upscaleFlashVSRVariant") private var variant = FlashVSRFiles.Variant.turbo
   private let models = ImageUpscale.installed
+  private var download = FlashVSRDownload.shared
+
+  init(width: Int, height: Int) {
+    self.width = width
+    self.height = height
+  }
 
   private var seedVR2: [(file: String, name: String)] { ImageUpscale.seedVR2Models(in: create.modelFiles) }
 
   private var tags: [String] {
-    models.map { "model:\($0.file)" } + ["flashVSR", "system"] + seedVR2.map { "seedVR2:\($0.file)" }
+    models.map { "model:\($0.file)" }
+      + FlashVSRFiles.Variant.allCases.map { "flashVSR:\($0.rawValue)" } + ["system"]
+      + seedVR2.map { "seedVR2:\($0.file)" }
   }
 
   /// The one last picked while it's there, else the first.
   private var selection: String { tags.contains(chosen) ? chosen : tags[0] }
 
-  private var method: ClipUpscale.Method? { ClipUpscale.Method(rawValue: selection) }
-
-  private var upscale: ImageUpscale {
-    let chosenScale = ImageUpscale(upscaler: upscaler, scale: scale)
-    let offered = chosenScale.scales(width: width, height: height)
-    return ImageUpscale(upscaler: upscaler, scale: offered.contains(scale) ? scale : offered.first ?? scale)
+  private var upscaler: ImageUpscale.Upscaler {
+    if selection == "system" { return .video(.system, nil) }
+    if selection.hasPrefix("flashVSR:") { return .video(.flashVSR, variant ?? .turbo) }
+    if selection.hasPrefix("seedVR2:") { return .seedVR2(String(selection.dropFirst("seedVR2:".count))) }
+    return .model(String(selection.dropFirst("model:".count)))
   }
 
-  private var upscaler: ImageUpscale.Upscaler {
-    if let method {
-      return .video(method, method == .flashVSR ? variant : nil)
+  /// The FlashVSR+ version selected.
+  private var variant: FlashVSRFiles.Variant? {
+    guard selection.hasPrefix("flashVSR:") else { return nil }
+    return FlashVSRFiles.Variant(rawValue: String(selection.dropFirst("flashVSR:".count)))
+  }
+
+  private var upscale: ImageUpscale {
+    ImageUpscale(upscaler: upscaler, scale: scale).resolved(width: width, height: height)
+  }
+
+  private var caption: String {
+    switch upscaler {
+    case .model: "Sharpens the image, without a diffusion model."
+    case .video(.flashVSR, _): "Restores detail with a video model. It uses a lot of memory at large sizes."
+    case .video(.system, _): "Runs on the Neural Engine in seconds. macOS downloads its model the first time."
+    case .seedVR2: "Restores detail with a diffusion model in one step, and can invent texture."
     }
-    if selection.hasPrefix("seedVR2:") {
-      return .seedVR2(String(selection.dropFirst("seedVR2:".count)))
-    }
-    return .model(String(selection.dropFirst("model:".count)))
   }
 
   var body: some View {
     let upscale = self.upscale
     let size = upscale.outputSize(width: width, height: height)
-    let problem = upscale.problem(width: width, height: height)
     let offered = upscale.scales(width: width, height: height)
-    VStack(alignment: .leading, spacing: 12) {
+    let missing = variant.flatMap { FlashVSRFiles.installed($0) == nil ? $0 : nil }
+    let downloading = download.variant
+    let problem = upscale.problem(width: width, height: height)
+    let note: String? =
+      downloading.map { "Downloading FlashVSR+ \($0.title)… \(Int(download.fraction * 100))%" }
+        ?? download.failure ?? problem
+    VStack(alignment: .leading, spacing: 14) {
       Text("Upscale Image").font(.headline)
-      Picker("Upscaler", selection: Binding(get: { selection }, set: { chosen = $0 })) {
-        ForEach(models, id: \.file) { Text($0.name).tag("model:\($0.file)") }
-        if !models.isEmpty { Divider() }
-        Text("FlashVSR+").tag("flashVSR")
-        Text("Apple Super Resolution").tag("system")
-        if !seedVR2.isEmpty { Divider() }
-        ForEach(seedVR2, id: \.file) { Text($0.name).tag("seedVR2:\($0.file)") }
-      }
-      UpscaleControls(
-        width: width, height: height, method: .constant(method), scale: $scale, variant: $variant,
-        showsAll: false, withoutMethod: selection.hasPrefix("seedVR2:")
-          ? "SeedVR2 restores the image with a diffusion model in one step. It uses a lot of memory."
-          : "This upscaler model sharpens the image alone, without a diffusion model.")
-      // Every scale stays; what this upscaler can't do is disabled.
-      Picker("Scale", selection: Binding(get: { upscale.scale }, set: { scale = $0 })) {
-        ForEach(ImageUpscale.scales + [ImageUpscale.maxScale], id: \.self) {
-          Text($0 == ImageUpscale.maxScale ? "Max" : "\($0)×").tag($0)
-            .disabled(!offered.contains($0))
+      Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 10) {
+        GridRow {
+          Text("Upscaler").gridColumnAlignment(.trailing)
+          VStack(alignment: .leading, spacing: 6) {
+            picker
+            // Room for two lines always, so the sheet doesn't move between upscalers.
+            Text(caption).font(.caption).foregroundStyle(.secondary)
+              .lineLimit(2, reservesSpace: true)
+          }
         }
-      }
-      .pickerStyle(.segmented)
-      .disabled(offered.isEmpty)
-      LabeledContent("Size", value: "\(width) × \(height) → " + (offered.isEmpty ? "—" : "\(size.width) × \(size.height)"))
-      if let problem {
-        Text(problem).font(.caption).foregroundStyle(.secondary)
+        GridRow {
+          Text("Scale")
+          // SwiftUI can't grey one segment, so a scale this upscaler can't do stays choosable and
+          // the note says why. Max only comes when it makes a size of its own.
+          Picker("Scale", selection: Binding(get: { upscale.scale }, set: { scale = $0 })) {
+            ForEach(ImageUpscale.scales + (upscale.offersMax(width: width, height: height) ? [ImageUpscale.maxScale] : []), id: \.self) {
+              Text($0 == ImageUpscale.maxScale ? "Max" : "\($0)×").tag($0)
+            }
+          }
+          .labelsHidden()
+          .pickerStyle(.segmented)
+          .disabled(offered.isEmpty)
+        }
+        GridRow {
+          Text("Size")
+          VStack(alignment: .leading, spacing: 6) {
+            Text("\(width) × \(height) → " + (problem != nil ? "—" : "\(size.width) × \(size.height)"))
+              .monospacedDigit()
+            Text(note ?? " ").font(.caption).foregroundStyle(.secondary)
+              .lineLimit(2, reservesSpace: true)
+          }
+        }
       }
       Spacer(minLength: 0)
       HStack {
         Spacer()
-        Button("Cancel", role: .cancel) { dismiss() }
-          .keyboardShortcut(.cancelAction)
-        Button("Upscale") {
-          create.upscaleCanvasImage(upscale)
-          dismiss()
+        Button("Cancel", role: .cancel) {
+          if downloading != nil { download.cancel() } else { dismiss() }
+        }
+        .keyboardShortcut(.cancelAction)
+        Button(missing.map { "Download \(Self.bytes(FlashVSRDownload.remainingBytes($0)))" } ?? "Upscale") {
+          if let missing {
+            download.start(missing)
+          } else {
+            create.upscaleCanvasImage(upscale)
+            dismiss()
+          }
         }
         .keyboardShortcut(.defaultAction)
-        .disabled(problem != nil)
+        .disabled(downloading != nil || (missing == nil && problem != nil))
       }
     }
     .sheetPadding()
-    .sheetFrame(width: 440, height: 420)
+    .sheetFrame(width: 460, height: 270)
+  }
+
+  private var picker: some View {
+    Picker("Upscaler", selection: Binding(get: { selection }, set: { chosen = $0 })) {
+      ForEach(models, id: \.file) { Text($0.name).tag("model:\($0.file)") }
+      if !models.isEmpty { Divider() }
+      ForEach(FlashVSRFiles.Variant.allCases, id: \.self) { variant in
+        Text(
+          "FlashVSR+ \(variant.title)" + (FlashVSRFiles.installed(variant) == nil ? " (not downloaded)" : "")
+        ).tag("flashVSR:\(variant.rawValue)")
+      }
+      Text("Apple Super Resolution").tag("system")
+      if !seedVR2.isEmpty { Divider() }
+      ForEach(seedVR2, id: \.file) { Text($0.name).tag("seedVR2:\($0.file)") }
+    }
+    .labelsHidden()
+  }
+
+  private static func bytes(_ count: Int64) -> String {
+    ByteCountFormatter.string(fromByteCount: count, countStyle: .file)
   }
 }
 
@@ -218,20 +272,14 @@ struct UpscaleControls: View {
   let offersNone: Bool
   /// Where it would run, when that's a server: what it has decides, not what's on this device.
   let server: (name: String, upscalers: RemoteUpscalers)?
-  /// False for the image sheet, which has its own method and scales.
-  let showsAll: Bool
-  /// What the caption says with no method.
-  let withoutMethod: String
   private var download = FlashVSRDownload.shared
 
   init(
     width: Int, height: Int, method: Binding<ClipUpscale.Method?>, scale: Binding<Int>,
     variant: Binding<FlashVSRFiles.Variant>, offersNone: Bool = false,
-    server: (name: String, upscalers: RemoteUpscalers)? = nil, showsAll: Bool = true, withoutMethod: String = "At its own size."
+    server: (name: String, upscalers: RemoteUpscalers)? = nil
   ) {
     self.server = server
-    self.showsAll = showsAll
-    self.withoutMethod = withoutMethod
     self.width = width
     self.height = height
     _method = method
@@ -277,20 +325,18 @@ struct UpscaleControls: View {
     let downloading = download.variant
     let missing = FlashVSRFiles.installed(variant) == nil
     Group {
-      if showsAll {
-        Picker(offersNone ? "Upscale" : "Method", selection: $method) {
-          if offersNone { Text("None").tag(ClipUpscale.Method?.none) }
-          Text("Quality").tag(ClipUpscale.Method?.some(.flashVSR))
-          Text("Fast").tag(ClipUpscale.Method?.some(.system))
-        }
-        .pickerStyle(.segmented)
+      Picker(offersNone ? "Upscale" : "Method", selection: $method) {
+        if offersNone { Text("None").tag(ClipUpscale.Method?.none) }
+        Text("Quality").tag(ClipUpscale.Method?.some(.flashVSR))
+        Text("Fast").tag(ClipUpscale.Method?.some(.system))
       }
+      .pickerStyle(.segmented)
       Text(
         method == .flashVSR
           ? "FlashVSR+ restores detail as one stream, steady from frame to frame. It takes a few seconds a frame."
           : method == .system
           ? "Apple Super Resolution runs on the Neural Engine in seconds. macOS downloads its model the first time."
-          : withoutMethod
+          : "At its own size."
       )
       .font(.caption).foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)
@@ -319,18 +365,16 @@ struct UpscaleControls: View {
       if let failure = download.failure {
         Text(failure).font(.caption).foregroundStyle(.red)
       }
-      if showsAll {
-        Picker("Scale", selection: $scale) {
-          ForEach(scales.isEmpty ? ClipUpscale.scales : scales, id: \.self) {
-            Text("\($0)×").tag($0)
-          }
+      Picker("Scale", selection: $scale) {
+        ForEach(scales.isEmpty ? ClipUpscale.scales : scales, id: \.self) {
+          Text("\($0)×").tag($0)
         }
-        .pickerStyle(.segmented)
-        .disabled(method == nil || scales.isEmpty)
-        LabeledContent("Size", value: "\(width) × \(height) → \(size.width) × \(size.height)")
-        if let problem {
-          Text(problem).font(.caption).foregroundStyle(.secondary)
-        }
+      }
+      .pickerStyle(.segmented)
+      .disabled(method == nil || scales.isEmpty)
+      LabeledContent("Size", value: "\(width) × \(height) → \(size.width) × \(size.height)")
+      if let problem {
+        Text(problem).font(.caption).foregroundStyle(.secondary)
       }
     }
     // On each control, which is harmless: the first sets things right.
@@ -340,7 +384,6 @@ struct UpscaleControls: View {
 
   /// Keeps the scale to one the method offers at this size.
   private func offerScale() {
-    guard showsAll else { return }
     if let first = scales.first, !scales.contains(scale) { scale = first }
   }
 
