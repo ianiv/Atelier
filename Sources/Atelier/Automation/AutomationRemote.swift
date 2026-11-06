@@ -519,6 +519,7 @@ extension Automation {
       await model.refreshRemoteStyles(server: hostRecord.id)
       let fetched = model.remoteStyles.styles(of: hostRecord.id).first { $0.id == serverStyle.id }
       check(fetched?.style.template == serverStyle.template, "a server's styles come over")
+      check(fetched?.libraryName == serverStyles.currentLibrary.name, "they say which library they're in")
       check(model.styles?.styles == localStylesBefore, "and don't touch this device's own")
       if let fetched {
         let thumbnail = await model.remoteStyles.thumbnail(of: fetched, server: hostRecord.id, backend: hostBackend)

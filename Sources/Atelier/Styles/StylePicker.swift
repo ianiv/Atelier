@@ -56,12 +56,33 @@ struct StylePicker: View {
   /// Categories you collapsed, remembered across launches (one name per line); every other one
   /// is open, new ones included.
   @AppStorage("stylePickerCollapsed") private var collapsedStorage = ""
-  /// The library to list, by id; empty, or one that's gone, for all of them.
+  /// The library to list: a library's id or a `RemoteSection`'s; empty, or one that's gone, for all
+  /// of them.
   @AppStorage("stylePickerLibrary") private var libraryStorage = ""
 
   private var libraries: [StyleCollection] { model.styles?.libraries ?? [] }
 
-  private var showsAll: Bool { !libraries.contains { $0.id.uuidString == libraryStorage } }
+  /// A library of a paired server.
+  private struct RemoteSection: Identifiable {
+    /// The server's id and the library's, as one: only the two together are unique.
+    let id: String
+    let server: String
+    let library: RemoteStyleGroup
+
+    var title: String { library.name.map { "\(server): \($0)" } ?? server }
+  }
+
+  private var remoteSections: [RemoteSection] {
+    model.remoteServers.servers.flatMap { server in
+      model.remoteStyles.libraries(of: server.id).map {
+        RemoteSection(id: "\(server.id.uuidString)/\($0.id)", server: server.name, library: $0)
+      }
+    }
+  }
+
+  private var showsAll: Bool {
+    !libraries.contains { $0.id.uuidString == libraryStorage } && !remoteSections.contains { $0.id == libraryStorage }
+  }
 
   private func matches(_ style: Style) -> Bool {
     query.isEmpty || style.name.localizedCaseInsensitiveContains(query) || style.category.localizedCaseInsensitiveContains(query)
@@ -72,6 +93,9 @@ struct StylePicker: View {
     let shown = showsAll ? libraries : libraries.filter { $0.id.uuidString == libraryStorage }
     let styles = shown.flatMap(\.styles)
     let matching = styles.filter(matches)
+    let sections = remoteSections
+    let shownRemote = showsAll ? sections : sections.filter { $0.id == libraryStorage }
+    let anyMatch = !matching.isEmpty || shownRemote.contains { $0.library.styles.contains { matches($0.style) } }
     VStack(spacing: 0) {
       // Far enough in to clear the popover's rounded corners.
       HStack(spacing: 8) {
@@ -79,12 +103,20 @@ struct StylePicker: View {
         Picker("Library", selection: Binding(get: { showsAll ? "" : libraryStorage }, set: { libraryStorage = $0 })) {
           Text("All Libraries").tag("")
           ForEach(libraries) { Text($0.name).tag($0.id.uuidString) }
+          ForEach(model.remoteServers.servers) { server in
+            let own = sections.filter { $0.id.hasPrefix(server.id.uuidString + "/") }
+            if !own.isEmpty {
+              Section(server.name) {
+                ForEach(own) { Text($0.library.name ?? server.name).tag($0.id) }
+              }
+            }
+          }
         }
         .labelsHidden()
         .pickerStyle(.menu)
         .frame(width: 120)
-        .disabled(libraries.count < 2)
-        .help(libraries.count < 2 ? "Add libraries on the Styles screen" : "Which library to list")
+        .disabled(libraries.count < 2 && sections.isEmpty)
+        .help(libraries.count < 2 && sections.isEmpty ? "Add libraries on the Styles screen" : "Which library to list")
       }
       .padding(.horizontal, 14)
       .padding(.vertical, 10)
@@ -110,26 +142,28 @@ struct StylePicker: View {
             }
           }
         }
-        ForEach(showsAll ? model.remoteServers.servers : []) { server in
-          let remote = model.remoteStyles.styles(of: server.id).map(\.style).filter(matches)
-          if !remote.isEmpty {
-            let title = "From \(server.name)"
-            let open = !query.isEmpty || !collapsed.contains(title)
-            Section {
-              if open {
-                ForEach(remote) { style in
-                  row(name: style.name, detail: style.subcategory, id: style.id)
+        ForEach(shownRemote) { section in
+          ForEach(section.library.categories, id: \.self) { category in
+            let inCategory = section.library.styles.map(\.style).filter { $0.category == category && matches($0) }
+            if !inCategory.isEmpty {
+              let key = "\(section.id)/\(category)"
+              let open = !query.isEmpty || !collapsed.contains(key)
+              Section {
+                if open {
+                  ForEach(inCategory) { style in
+                    row(name: style.name, detail: style.subcategory, id: style.id)
+                  }
                 }
+              } header: {
+                header(category, key: key, library: showsAll ? section.title : nil, count: inCategory.count, open: open)
               }
-            } header: {
-              header(title, key: title, library: nil, count: remote.count, open: open)
             }
           }
         }
         if styles.isEmpty, model.remoteStyles.all.isEmpty {
           Text("No styles yet. Add or import them in the Styles section.")
             .foregroundStyle(.secondary)
-        } else if matching.isEmpty {
+        } else if !anyMatch {
           Text("No styles match.").foregroundStyle(.secondary)
         }
       }

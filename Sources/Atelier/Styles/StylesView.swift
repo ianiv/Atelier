@@ -39,11 +39,20 @@ struct StylesView: View {
   @State private var gridWidth: CGFloat = 0
   /// The paired server whose styles are shown; nil for this device's.
   @AppStorage("stylesSource") private var sourceStorage = ""
+  /// Which of that server's libraries; empty, or one that's gone, for its first.
+  @AppStorage("stylesSourceLibrary") private var sourceLibraryStorage = ""
   @State private var serverSelection: UUID?
   /// The name box for a new library or a rename, while it's up.
   @State private var naming: LibraryNaming?
   @State private var nameText = ""
   @State private var deletingLibrary = false
+
+  /// A choice in the library menu. Separate cases because a server's library ids can match this
+  /// device's: every device's first library has the same one.
+  private enum LibraryChoice: Hashable {
+    case local(UUID)
+    case server(UUID, library: String)
+  }
 
   private enum LibraryNaming: Equatable {
     /// With the styles to move into the new library.
@@ -52,6 +61,13 @@ struct StylesView: View {
   }
 
   private var source: UUID? { UUID(uuidString: sourceStorage) }
+
+  /// The server library on screen; nil when the server has no styles here yet.
+  private var serverLibrary: RemoteStyleGroup? {
+    guard let source else { return nil }
+    let libraries = create.remoteStyles.libraries(of: source)
+    return libraries.first { $0.id == sourceLibraryStorage } ?? libraries.first
+  }
 
   private var selectedRemote: RemoteStyle? {
     source.flatMap { server in create.remoteStyles.styles(of: server).first { $0.id == serverSelection } }
@@ -224,24 +240,36 @@ struct StylesView: View {
       }
   }
 
+  private var libraryMenuTitle: String {
+    guard let source, let server = create.remoteServers.name(of: source) else { return styles.currentLibrary.name }
+    return serverLibrary?.name.map { "\(server): \($0)" } ?? server
+  }
+
   /// Which styles the screen shows: one of this device's libraries or a paired server's, with the
-  /// commands for the libraries. A server that's away stays listed: its styles are kept here.
+  /// commands for this device's. A server that's away stays listed: its styles are kept here.
   private var libraryMenu: some View {
     let current = styles.currentLibrary
     return ToolbarPickerMenu(
-      title: source.flatMap { create.remoteServers.name(of: $0) } ?? current.name, width: 150
+      title: libraryMenuTitle, width: 150
     ) {
-      Picker("Library", selection: Binding(get: { source ?? styles.currentLibraryID }, set: { choose($0) })) {
+      Picker("Library", selection: Binding(get: { libraryChoice }, set: { choose($0) })) {
         Section(CreateModel.thisDeviceName) {
           ForEach(styles.libraries) { library in
-            Text(verbatim: "\(library.name) (\(library.styles.count))").tag(library.id)
+            Text(verbatim: "\(library.name) (\(library.styles.count))").tag(LibraryChoice.local(library.id))
           }
         }
-        if !create.remoteServers.servers.isEmpty {
-          Section("Servers") {
-            ForEach(create.remoteServers.servers) { server in
-              Text(create.remoteServers.status(of: server.id) == .offline ? "\(server.name) (Offline)" : server.name)
-                .tag(server.id)
+        // A section per server, however few it has, so a server's libraries read as its own.
+        ForEach(create.remoteServers.servers) { server in
+          let name = create.remoteServers.status(of: server.id) == .offline ? "\(server.name) (Offline)" : server.name
+          let libraries = create.remoteStyles.libraries(of: server.id)
+          Section(name) {
+            if libraries.isEmpty {
+              // Not reached yet: picked by the server's name until its libraries come.
+              Text(server.name).tag(LibraryChoice.server(server.id, library: ""))
+            }
+            ForEach(libraries) { library in
+              Text(verbatim: "\(library.name ?? server.name) (\(library.styles.count))")
+                .tag(LibraryChoice.server(server.id, library: library.id))
             }
           }
         }
@@ -254,18 +282,29 @@ struct StylesView: View {
       Button("Delete “\(current.name)”…", systemImage: "trash", role: .destructive) { deletingLibrary = true }
         .disabled(source != nil || styles.libraries.count < 2)
     }
-    .help("Which library to show, or a paired server's styles")
+    .help("Which library to show, yours or a paired server's")
     .onAppear { create.remoteServers.loadIfNeeded() }
     .task(id: sourceStorage) { if let source { await create.refreshRemoteStyles(server: source) } }
   }
 
-  private func choose(_ id: UUID) {
-    if styles.libraries.contains(where: { $0.id == id }) {
-      sourceStorage = ""
-      styles.selectLibrary(id)
-    } else {
-      sourceStorage = id.uuidString
+  private var libraryChoice: LibraryChoice {
+    source.map { .server($0, library: serverLibrary?.id ?? "") } ?? .local(styles.currentLibraryID)
+  }
+
+  private func choose(_ choice: LibraryChoice) {
+    switch choice {
+    case .local(let id): choose(id)
+    case .server(let server, let library):
+      sourceStorage = server.uuidString
+      sourceLibraryStorage = library
+      serverSelection = nil
     }
+  }
+
+  /// Shows one of this device's libraries.
+  private func choose(_ id: UUID) {
+    sourceStorage = ""
+    styles.selectLibrary(id)
   }
 
   private func startNaming(_ purpose: LibraryNaming) {
@@ -319,7 +358,7 @@ struct StylesView: View {
   @ViewBuilder
   private var content: some View {
     if let source, create.remoteServers.name(of: source) != nil {
-      ServerStylesList(server: source, search: search, selection: $serverSelection)
+      ServerStylesList(server: source, library: serverLibrary, search: search, selection: $serverSelection)
     } else if styles.styles.isEmpty {
       ContentUnavailableView {
         Label("No Styles", systemImage: "paintpalette")
@@ -862,6 +901,7 @@ struct StyleThumbnail: View {
 /// A paired server's styles: read-only, and usable like this device's own.
 private struct ServerStylesList: View {
   let server: UUID
+  let library: RemoteStyleGroup?
   let search: String
   @Binding var selection: UUID?
   @Environment(CreateModel.self) private var create
@@ -869,7 +909,7 @@ private struct ServerStylesList: View {
 
   private var filtered: [RemoteStyle] {
     let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
-    return create.remoteStyles.styles(of: server).filter { remote in
+    return (library?.styles ?? []).filter { remote in
       query.isEmpty || remote.style.name.localizedCaseInsensitiveContains(query)
         || remote.style.category.localizedCaseInsensitiveContains(query)
         || remote.style.subcategory.localizedCaseInsensitiveContains(query)
@@ -879,7 +919,8 @@ private struct ServerStylesList: View {
 
   var body: some View {
     let name = create.remoteServers.name(of: server) ?? "This server"
-    let categories = Array(Set(filtered.map(\.style.category))).sorted()
+    // In the server's order, as it shows them itself.
+    let categories = RemoteStyleGroup(id: "", styles: filtered).categories
     VStack(spacing: 0) {
       if create.remoteServers.status(of: server) == .offline {
         Label("\(name) is offline. These are its styles as last seen.", systemImage: "wifi.slash")
@@ -888,7 +929,7 @@ private struct ServerStylesList: View {
           .frame(maxWidth: .infinity, alignment: .leading)
           .padding(10)
       }
-      if create.remoteStyles.styles(of: server).isEmpty {
+      if library == nil {
         ContentUnavailableView("No Styles", systemImage: "paintpalette", description: Text("\(name) has no styles to share, or hasn't been reached yet."))
       } else if filtered.isEmpty {
         ContentUnavailableView.search(text: search)
@@ -910,7 +951,12 @@ private struct ServerStylesList: View {
     HStack(spacing: 10) {
       ServerStyleThumbnail(remote: remote, server: server, side: 44)
       VStack(alignment: .leading, spacing: 2) {
-        Text(remote.style.name).lineLimit(1)
+        HStack(spacing: 6) {
+          Text(remote.style.name).lineLimit(1)
+          if !remote.style.subcategory.isEmpty {
+            Text(remote.style.subcategory).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+          }
+        }
         Text(remote.style.template).font(.caption).foregroundStyle(.secondary).lineLimit(1)
       }
     }

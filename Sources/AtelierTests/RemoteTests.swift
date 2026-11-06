@@ -575,6 +575,30 @@ struct RemoteStyleLibraryTests {
     }
   }
 
+  @Test func aServersStylesGroupByLibraryInItsOrder() {
+    let (film, art) = (UUID(), UUID())
+    func style(_ name: String, _ category: String, _ library: UUID, _ libraryName: String) -> RemoteStyle {
+      RemoteStyle(style: Style(name: name, category: category, template: "t"), libraryID: library, libraryName: libraryName)
+    }
+    let groups = RemoteStyleGroup.groups([
+      style("a", "Zoom", film, "Film"), style("b", "Alpha", film, "Film"), style("c", "Ink", art, "Art"), style("d", "Zoom", film, "Film")
+    ])
+    #expect(groups.map(\.name) == ["Film", "Art"])
+    #expect(groups[0].styles.map(\.style.name) == ["a", "b", "d"])
+    #expect(groups[0].categories == ["Zoom", "Alpha"], "categories stay in the server's order")
+  }
+
+  @Test func stylesFromAnOlderServerAreOneGroup() throws {
+    // Written before styles said which library they're in, as a list kept on disk may have been.
+    let old = RemoteStyle(style: Style(name: "x", template: "t"))
+    var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(old)) as? [String: Any])
+    object["libraryID"] = nil
+    object["libraryName"] = nil
+    let decoded = try JSONDecoder().decode(RemoteStyle.self, from: JSONSerialization.data(withJSONObject: object))
+    let groups = RemoteStyleGroup.groups([decoded, remote("y")])
+    #expect(groups.count == 1 && groups[0].id == "" && groups[0].name == nil && groups[0].styles.count == 2)
+  }
+
   @Test func thumbnailsNothingUsesGo() throws {
     try withTestFolder { folder in
       let server = UUID()

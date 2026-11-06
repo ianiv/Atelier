@@ -10,8 +10,40 @@ nonisolated struct RemoteStyle: Codable, Hashable, Identifiable, Sendable {
   var thumbnailHash: String?
   /// The model its thumbnail was made with, which Open in Create needs there to be.
   var thumbnailModel: String?
+  /// The server's library it's in. Nil from a server from before there were libraries.
+  var libraryID: UUID?
+  var libraryName: String?
 
   var id: UUID { style.id }
+}
+
+/// One of a server's libraries, from its list of styles. Not this device's kind of library: ids
+/// only mean something on their server, and every device's first library has the same one.
+nonisolated struct RemoteStyleGroup: Identifiable, Hashable {
+  /// The library's id, or empty for the styles of a server that doesn't say.
+  var id: String
+  var name: String?
+  var styles: [RemoteStyle]
+
+  /// Categories in the order the server keeps them.
+  var categories: [String] {
+    var seen = Set<String>()
+    return styles.map(\.style.category).filter { seen.insert($0).inserted }
+  }
+
+  /// `styles` by library, in the server's order.
+  static func groups(_ styles: [RemoteStyle]) -> [RemoteStyleGroup] {
+    var groups: [RemoteStyleGroup] = []
+    for style in styles {
+      let id = style.libraryID?.uuidString ?? ""
+      if let index = groups.firstIndex(where: { $0.id == id }) {
+        groups[index].styles.append(style)
+      } else {
+        groups.append(RemoteStyleGroup(id: id, name: style.libraryName, styles: [style]))
+      }
+    }
+    return groups
+  }
 }
 
 /// The styles of each paired server, kept on disk so they stay usable while it's offline:
@@ -60,6 +92,11 @@ final class RemoteStyleLibrary {
   func styles(of server: UUID) -> [RemoteStyle] {
     loadIfNeeded()
     return styles[server] ?? []
+  }
+
+  /// A server's styles by library.
+  func libraries(of server: UUID) -> [RemoteStyleGroup] {
+    RemoteStyleGroup.groups(styles(of: server))
   }
 
   /// Every server's styles, for looking one up.

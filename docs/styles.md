@@ -40,7 +40,7 @@ The first library is kept in `Styles.json` and `StyleThumbnails`, and each other
 
 ## Styles from another device
 
-With a server paired, the same menu on the Styles screen shows its styles, all its libraries together, and Create's style picker lists them under its name. They work like your own but are read-only; **Copy to This Mac** or **Copy to This iPad** keeps one you can edit. See [Running jobs on another device](remote.md#using-a-servers-styles).
+With a server paired, the same menu on the Styles screen lists its libraries under its name, each with its categories in the server's order. Create's style picker lists them too, with the server and library beside each category, and the menu beside its search box can show just one. They work like your own but are read-only; **Copy to This Mac** or **Copy to This iPad** keeps one you can edit. See [Running jobs on another device](remote.md#using-a-servers-styles).
 
 ## Thumbnails
 

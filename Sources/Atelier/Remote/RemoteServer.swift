@@ -605,13 +605,15 @@ final class RemoteServer {
     return .catalog(models: models, loras: loras, files: create?.modelFiles ?? [], upscalers: upscalers)
   }
 
-  /// This device's styles, with their thumbnails' hashes.
+  /// This device's styles library by library, with their thumbnails' hashes.
   func styleCatalog() -> RemoteMessage {
     guard let store = create?.styles else { return .styles([]) }
-    return .styles(store.allStyles.map { style in
-      RemoteStyle(
-        style: style, thumbnailHash: store.thumbnailJPEG(style.id).map { RemoteBlob($0).hash },
-        thumbnailModel: store.thumbnailModel(style.id))
+    return .styles(store.libraries.flatMap { library in
+      library.styles.map { style in
+        RemoteStyle(
+          style: style, thumbnailHash: store.thumbnailJPEG(style.id).map { RemoteBlob($0).hash },
+          thumbnailModel: store.thumbnailModel(style.id), libraryID: library.id, libraryName: library.name)
+      }
     })
   }
 
