@@ -359,11 +359,12 @@ final class DrawThingsImporter {
     if configurations.isEmpty { importsConfigurations = false } else if !hadConfigurations { importsConfigurations = true }
     if selection.projects.isEmpty { importsProjects = false } else if !hadProjects { importsProjects = true }
     // Files any catalog explains. The community list is what most downloads are in.
-    let community = await CommunityCatalog.specifications()
-    catalogMissing = community == nil
-    unmatched = await Self.unmatched(in: selection, known: Self.knownFiles(community: community ?? []))
+    let live = await CommunityCatalog.specifications()
+    catalogMissing = live == nil
+    let community = live ?? CommunityCatalog.shipped
+    unmatched = await Self.unmatched(in: selection, known: Self.knownFiles(community: community))
     families = families.filter { entry in unmatched.contains { $0.url == entry.key } }
-    templates = Self.templates(from: ModelZoo.availableSpecifications + ModelZoo.builtinSpecifications + (community ?? []))
+    templates = Self.templates(from: ModelZoo.availableSpecifications + ModelZoo.builtinSpecifications + community)
   }
 
   /// The families a converted file can be listed under: for a model, those with a catalog model to

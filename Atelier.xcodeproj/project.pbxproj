@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		D70A1100000000000000000C /* community-models.json in Resources */ = {isa = PBXBuildFile; fileRef = D70A1100000000000000000D /* community-models.json */; };
 		D70A1100000000000000000A /* AutomationDrawThings.swift in Sources */ = {isa = PBXBuildFile; fileRef = D70A1100000000000000000B /* AutomationDrawThings.swift */; };
 		D70A11000000000000000007 /* DrawThingsImportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D70A11000000000000000008 /* DrawThingsImportTests.swift */; };
 		D70A11000000000000000005 /* DrawThingsImportSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = D70A11000000000000000006 /* DrawThingsImportSheet.swift */; };
@@ -187,6 +188,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		D70A1100000000000000000D /* community-models.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = community-models.json; sourceTree = "<group>"; };
 		D70A1100000000000000000B /* AutomationDrawThings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationDrawThings.swift; sourceTree = "<group>"; };
 		D70A11000000000000000008 /* DrawThingsImportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawThingsImportTests.swift; sourceTree = "<group>"; };
 		D70A11000000000000000006 /* DrawThingsImportSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawThingsImportSheet.swift; sourceTree = "<group>"; };
@@ -559,6 +561,7 @@
 				D70A11000000000000000002 /* CommunityCatalog.swift */,
 				D70A11000000000000000004 /* DrawThingsImport.swift */,
 				D70A11000000000000000006 /* DrawThingsImportSheet.swift */,
+				D70A1100000000000000000D /* community-models.json */,
 				248FF150659188D7C4B12A12 /* ModelLibrary.swift */,
 				B8D4FA204E3C7B9F102D6EA4 /* MOSSImporter.swift */,
 				C4CBE9BE880BD55127FC9066 /* ModelsView.swift */,
@@ -780,6 +783,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D70A1100000000000000000C /* community-models.json in Resources */,
 				A7E11C0A1C0A7E11C0A7E102 /* AppIcon.icon in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

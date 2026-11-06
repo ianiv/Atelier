@@ -210,6 +210,16 @@ struct DrawThingsImportTests {
     ]).count == 2)
   }
 
+  /// These families and files are only in the community list, so they vanish without it.
+  @Test func theShippedCatalogCoversWhatOnlyTheDownloadHad() {
+    let files = Set(CommunityCatalog.shipped.map(\.file))
+    #expect(files.isSuperset(of: ["fasth3_omni_i8x.ckpt", "flux_3_klein_i8x.ckpt", "minimax_h3_ref2va_i8x.ckpt", "qwen_image_2.1_q8p.ckpt"]))
+    let templates = DrawThingsImporter.templates(from: CommunityCatalog.shipped)
+    for version in [ModelVersion.minimaxH3, .flux3_5b, .qwenImage2_1, .krea2] {
+      #expect(templates[version.rawValue] != nil)
+    }
+  }
+
   /// A catalog model, from what the app bundle ships.
   func catalog() throws -> [ModelZoo.Specification] {
     let url = try #require(Bundle.main.url(forResource: "models", withExtension: "json"))

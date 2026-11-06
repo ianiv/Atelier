@@ -143,7 +143,7 @@ struct DrawThingsImportSheet: View {
       Section {
         // Above the list: with hundreds of files, nothing below it gets seen.
         if importer.catalogMissing {
-          Text("The community catalog couldn't be reached, so this list may include models it would have recognized. Try again when you're online.")
+          Text("The community catalog couldn't be reached, so Atelier used the copy it shipped with. This list may include newer models it doesn't know yet. Try again when you're online.")
             .font(.caption).foregroundStyle(.secondary)
         }
         if !importer.unmatched.isEmpty, let documents = DrawThingsApp.documents, DrawThingsApp.isDetected, !selection.contains(documents) {

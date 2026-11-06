@@ -7,7 +7,7 @@ Atelier keeps models and LoRAs in your models folder (see [Settings](settings.md
 Click **Models** in the sidebar.
 
 - **Show**: Downloaded, Available or All. The catalog is the Draw Things community list plus models you imported.
-- **Refresh** reloads the catalog and rescans the models folder. If the community list couldn't be fetched when Atelier opened, for example with no network, Refresh tries again, and its models come back without a relaunch.
+- **Refresh** reloads the catalog and rescans the models folder. If the community list can't be fetched, for example with no network, Atelier uses the copy it shipped with, which may not have the newest models. Refresh tries the download again.
 - Select a model to see its file, family, size on disk and description, and a link to its Hugging Face page when it has one.
 
 ### Downloading
@@ -45,7 +45,7 @@ Atelier only lists a model it can find in a catalog or a `custom.json`, because 
 
 The file itself doesn't say what it is, so Atelier can't check your choice. If it's wrong, the model won't load or will produce noise. To change it, edit the file's entry in `custom.json`; don't use **Move to Trash**, which also trashes the model file.
 
-If the community catalog couldn't be reached, the list says so, because it may then include models the catalog would have recognized.
+If the community catalog couldn't be reached, the list says so, because it may then include models newer than the copy Atelier shipped with.
 
 ### Make 8-bit Copy (MOSS models)
 

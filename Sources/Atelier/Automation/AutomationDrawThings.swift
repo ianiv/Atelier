@@ -24,10 +24,9 @@ extension Automation {
     CommandLine.arguments.contains("--catalog-retry-check")
   }
 
-  /// `--catalog-retry-check`: fails the first models.drawthings.ai fetch, then checks that the
-  /// community models are missing, and that Refresh brings them back to the catalog and Create's
-  /// list once the network is back. Needs the network and a downloaded community model to see the
-  /// picker change, and writes nothing.
+  /// `--catalog-retry-check`: fails the models.drawthings.ai fetch, then checks that the shipped copy
+  /// supplies the community models, and that Refresh switches to the real list once the network is
+  /// back. Needs the network, and writes nothing.
   ///
   ///   Atelier --catalog-retry-check [--expect-model FILE] [--snapshot-sheet FILE] [-AtelierDrawThingsFolders '(A, B)'] \
   ///     [-AtelierShow drawThingsImport] [--quit]
@@ -42,17 +41,18 @@ extension Automation {
       }
       await library.refresh()
       let before = library.catalog.count
-      let beforeInstalled = model.models.count
-      print("while failing: \(before) in the catalog, \(beforeInstalled) installed listed")
+      print("while failing: \(before) in the catalog, \(model.models.count) installed listed")
+      check(library.catalog.contains { $0.file == "flux_3_klein_q8p.ckpt" }, "the shipped copy supplies the community models")
+      check(CommunityCatalog.fallback.count == CommunityCatalog.shipped.count, "the fallback is the shipped copy")
       await library.refresh()
       check(library.catalog.count == before, "Refresh with the network down changes nothing")
+      check(CommunityCatalog.generation == 1, "the shipped copy goes in once")
       URLProtocol.unregisterClass(FailingCatalogProtocol.self)
       await library.refresh()
       print("after retry: \(library.catalog.count) in the catalog, \(model.models.count) installed listed")
-      check(library.catalog.count > before, "Refresh brings the community models back without a relaunch")
-      check(CommunityCatalog.generation == 1, "the retry ran once")
+      check(CommunityCatalog.generation == 2, "Refresh replaces it once the network is back")
       await library.refresh()
-      check(CommunityCatalog.generation == 1, "a later Refresh doesn't fetch again")
+      check(CommunityCatalog.generation == 2, "a later Refresh doesn't fetch again")
       if let index = args.firstIndex(of: "--snapshot-sheet"), index + 1 < args.count {
         // Long enough for the sheet's scan and its own catalog lookup.
         try? await Task.sleep(for: .seconds(4))
