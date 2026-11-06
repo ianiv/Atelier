@@ -29,10 +29,11 @@ struct PresetMenu: View {
       if !others.isEmpty {
         Menu("Other Models") {
           ForEach(others) { preset in
-            // On a server, a preset's model may not be there: say so rather than apply it to
-            // whatever's selected.
-            let isMissing = model.runTarget != .local && !model.availableModels.contains { $0.file == preset.model }
-            Button(isMissing ? "\(preset.name) (\(name(of: preset.model)), not on \(model.runTargetServerName ?? "the server"))" : "\(preset.name) (\(name(of: preset.model)))") {
+            // A preset's model may not be downloaded, or not be on the server: say so rather than
+            // leave the model as it is.
+            let isMissing = !model.availableModels.contains { $0.file == preset.model }
+            let missing = model.runTarget == .local ? "not downloaded" : "not on \(model.runTargetServerName ?? "the server")"
+            Button(isMissing ? "\(preset.name) (\(name(of: preset.model)), \(missing))" : "\(preset.name) (\(name(of: preset.model)))") {
               model.apply(preset, undoManager: undoManager)
             }
             .disabled(isMissing)

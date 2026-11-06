@@ -93,7 +93,7 @@ Open the **Presets** menu in the toolbar:
   - **Only for [model]**: the preset is listed for this model only. Uncheck it to offer the preset for every model.
   - **Use as this model's defaults**: used by Reset, and as the baseline for the Changed group.
   - **All Current Settings** or **Changed Settings Only**. Changed Settings Only keeps the preset small and lets the model's defaults fill in the rest.
-- Pick a preset from the list to apply it. Presets for other models are under **Other Models**; picking one switches to its model. To use those settings on another model, switch back to it afterwards: your settings carry over.
+- Pick a preset from the list to apply it. Presets for other models are under **Other Models**; picking one switches to its model. A preset whose model isn't downloaded is listed but disabled. To use those settings on another model, switch back to it afterwards: your settings carry over.
 - **Default for [model]**: choose which preset (or **Model Defaults Only**) Reset uses for a model.
 - **Copy Settings as JSON** copies every setting, the model and the seed in Draw Things' configuration format. **Paste Settings** applies settings copied from Draw Things or Atelier.
 - **Import Preset…**, **Export**, **Delete** and **Show Presets Folder** manage presets as files. Import Preset also takes a `custom_configs.json` exported from Draw Things, and adds each configuration in it as a preset.

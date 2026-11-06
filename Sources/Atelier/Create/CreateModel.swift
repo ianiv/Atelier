@@ -1240,9 +1240,14 @@ final class CreateModel {
 
   /// Applies a preset on top of the model's defaults; settings it doesn't name keep the defaults.
   /// A preset for another downloaded model switches to that model first, then applies on top of
-  /// its defaults (and its default preset) once they load.
+  /// its defaults (and its default preset) once they load. One whose model isn't here changes
+  /// nothing: its values were saved for that model, so they don't go on whatever's selected.
   func apply(_ preset: Preset, undoManager: UndoManager?) {
-    if let model = preset.model, model != selectedModel, availableModels.contains(where: { $0.file == model }) {
+    if let model = preset.model, model != selectedModel {
+      guard availableModels.contains(where: { $0.file == model }) else {
+        errorMessage = "“\(preset.name)” is for \(model), which isn't available."
+        return
+      }
       pendingSettings = DrawThingsJSON.Pasted(preset).dump
       selectedModel = model
       return

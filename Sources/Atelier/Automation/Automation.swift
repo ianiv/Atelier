@@ -1055,6 +1055,12 @@ enum Automation {
         await settle()
         check(model.selectedModel == modelA && model.settings?.steps == 14,
           "\(modelA)'s preset picked on \(modelB) switched to \(modelA) with Steps 14 (steps \(model.settings?.steps ?? -1))")
+        // One whose model isn't here changes nothing, rather than landing on the selected model.
+        let absent = Preset(name: "Inspector Check Absent", values: ["steps": .number(15)], model: "not_downloaded.ckpt")
+        model.apply(absent, undoManager: nil)
+        check(model.selectedModel == modelA && model.settings?.steps == 14 && model.errorMessage != nil,
+          "a preset for a model that isn't downloaded changed nothing and said so")
+        model.errorMessage = nil
       }
       presets.delete(own)
       check(presets.defaultPreset(for: modelA) == nil, "deleting the preset cleared the default")
