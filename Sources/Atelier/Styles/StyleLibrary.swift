@@ -43,13 +43,24 @@ nonisolated enum StyleLibrary {
       .replacingOccurrences(of: "{{DATA}}", with: json)
   }
 
+  /// The `atelier-styles` block of a library page.
+  private static func document(in html: String) -> Document? {
+    guard let open = html.range(of: #"<script[^>]*id\s*=\s*["']atelier-styles["'][^>]*>"#, options: .regularExpression),
+          let close = html.range(of: "</script>", range: open.upperBound..<html.endIndex)
+    else { return nil }
+    return try? JSONDecoder().decode(Document.self, from: Data(html[open.upperBound..<close.lowerBound].utf8))
+  }
+
+  /// A library page's title, or nil when it isn't one or has none.
+  static func title(_ html: String) -> String? {
+    guard let title = document(in: html)?.title.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else { return nil }
+    return title
+  }
+
   /// The styles and thumbnails (JPEG or PNG data) in a library page, or nil when it has no
   /// `atelier-styles` block.
   static func read(_ html: String) -> [(style: Style, thumbnail: Data?)]? {
-    guard let open = html.range(of: #"<script[^>]*id\s*=\s*["']atelier-styles["'][^>]*>"#, options: .regularExpression),
-          let close = html.range(of: "</script>", range: open.upperBound..<html.endIndex),
-          let document = try? JSONDecoder().decode(Document.self, from: Data(html[open.upperBound..<close.lowerBound].utf8))
-    else { return nil }
+    guard let document = document(in: html) else { return nil }
     return document.styles.compactMap { entry in
       guard !entry.name.isEmpty, !entry.template.isEmpty else { return nil }
       let style = Style(

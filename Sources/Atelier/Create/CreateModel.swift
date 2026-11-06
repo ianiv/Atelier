@@ -585,7 +585,7 @@ final class CreateModel {
   /// back as its subject with that style selected; any other clears the style, so the prompt
   /// isn't styled twice.
   private func restorePrompts(_ savedPrompt: String, _ savedNegative: String) {
-    for style in (styles?.styles ?? []) + remoteStyles.all.map(\.style) {
+    for style in (styles?.allStyles ?? []) + remoteStyles.all.map(\.style) {
       if let matched = style.match(prompt: savedPrompt, negativePrompt: savedNegative) {
         prompt = matched.values[Style.subject] ?? ""
         negativePrompt = matched.negativePrompt

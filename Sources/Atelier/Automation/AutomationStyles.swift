@@ -98,6 +98,24 @@
           second.added == 0 && second.replaced == parsed.count && store.styles.count == before + first.added,
           "importing twice replaces instead of duplicating (\(first.added) added, then \(second.replaced) replaced)")
 
+        // Libraries, in memory like the rest of this copy.
+        let startLibrary = store.currentLibraryID
+        let checkLibrary = store.createLibrary(named: "Film Check")
+        store.importStyles(Array(parsed.prefix(3)), into: checkLibrary)
+        check(store.styles.count == before + first.added, "importing into another library leaves this one alone")
+        store.selectLibrary(checkLibrary)
+        check(store.styles.count == min(3, parsed.count), "switching library shows its styles")
+        check(store.style(id: store.libraries.first?.styles.first?.id) != nil, "a style in another library is still found")
+        if let snapshotDir {
+          navigation.section = .styles
+          try? await Task.sleep(for: .seconds(1))
+          snapshot(to: snapshotDir.appendingPathComponent("styles-other-library.png"))
+          navigation.section = .create
+        }
+        store.selectLibrary(startLibrary)
+        store.deleteLibrary(checkLibrary)
+        check(store.currentLibraryID == startLibrary && store.libraries.allSatisfy { $0.id != checkLibrary }, "deleting a library removes it")
+
         guard let withTags = store.styles.first(where: { $0.tags.count > 1 }) else { return }
         let setting = "a misty pine forest at dawn"
         model.prompt = subject

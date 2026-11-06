@@ -215,14 +215,17 @@ extension ToolbarContent {
 /// A picker in the toolbar as a menu titled with its current choice. A menu takes the toolbar's own
 /// padding; on the Mac a picker there sits its label almost against the capsule's edge. A fixed
 /// width, so the toolbar doesn't shift as the choice changes; a longer title is truncated.
-struct ToolbarPickerMenu<Picker: View>: View {
+struct ToolbarPickerMenu<Picker: View, Actions: View>: View {
   let title: String
   let width: CGFloat
   @ViewBuilder var picker: Picker
+  /// Commands under the choices.
+  @ViewBuilder var actions: Actions
 
   var body: some View {
     Menu {
       picker.pickerStyle(.inline).labelsHidden()
+      actions
     } label: {
       Text(title)
         .lineLimit(1)
@@ -230,6 +233,12 @@ struct ToolbarPickerMenu<Picker: View>: View {
         .frame(width: width, alignment: .leading)
         .padding(.leading, 6)
     }
+  }
+}
+
+extension ToolbarPickerMenu where Actions == EmptyView {
+  init(title: String, width: CGFloat, @ViewBuilder picker: () -> Picker) {
+    self.init(title: title, width: width, picker: picker, actions: { EmptyView() })
   }
 }
 

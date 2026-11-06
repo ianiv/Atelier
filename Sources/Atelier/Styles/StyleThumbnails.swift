@@ -37,12 +37,6 @@ nonisolated struct ThumbnailSource: Codable, Sendable {
 /// image, the Create canvas or an image file. When it's known how the image was made, the
 /// full-size image and its settings are kept beside it (`<id>-full.png`, `<id>.json`).
 extension StyleStore {
-  static var thumbnailsDirectory: URL {
-    scratchThumbnailsDirectory
-      ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-      .appendingPathComponent("Atelier/StyleThumbnails", isDirectory: true)
-  }
-
   /// Where a scripted run (which doesn't save the user's styles) writes thumbnails instead.
   @MainActor static var scratchThumbnailsDirectory: URL?
 
@@ -52,16 +46,57 @@ extension StyleStore {
   /// Pixels on a side: sharp in the editor at 2x.
   static let thumbnailSize = 384
 
-  private static func thumbnailURL(_ id: UUID) -> URL {
-    thumbnailsDirectory.appendingPathComponent(id.uuidString + ".jpg")
+  /// A style's thumbnail lives with its library.
+  private func thumbnailsFolder(ofStyle id: UUID) -> URL {
+    Self.scratchThumbnailsDirectory ?? thumbnailsFolder(ofLibrary: library(ofStyle: id)?.id ?? currentLibraryID)
   }
 
-  private static func fullImageURL(_ id: UUID) -> URL {
-    thumbnailsDirectory.appendingPathComponent(id.uuidString + "-full.png")
+  private func thumbnailURL(_ id: UUID) -> URL {
+    thumbnailsFolder(ofStyle: id).appendingPathComponent(id.uuidString + ".jpg")
   }
 
-  private static func sourceURL(_ id: UUID) -> URL {
-    thumbnailsDirectory.appendingPathComponent(id.uuidString + ".json")
+  private func fullImageURL(_ id: UUID) -> URL {
+    thumbnailsFolder(ofStyle: id).appendingPathComponent(id.uuidString + "-full.png")
+  }
+
+  private func sourceURL(_ id: UUID) -> URL {
+    thumbnailsFolder(ofStyle: id).appendingPathComponent(id.uuidString + ".json")
+  }
+
+  /// What follows a style's id in the names of its thumbnail, full image and settings.
+  private static let thumbnailSuffixes = [".jpg", "-full.png", ".json"]
+
+  /// Moves a style's thumbnail files between libraries' folders, while the style is still in `from`.
+  func moveThumbnailFiles(_ id: UUID, from: UUID, to: UUID) {
+    guard persists, Self.scratchThumbnailsDirectory == nil else { return }
+    let fileManager = FileManager.default
+    let destination = thumbnailsFolder(ofLibrary: to)
+    try? fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+    for suffix in Self.thumbnailSuffixes {
+      let file = id.uuidString + suffix
+      let source = thumbnailsFolder(ofLibrary: from).appendingPathComponent(file)
+      guard fileManager.fileExists(atPath: source.path) else { continue }
+      Log.attempt(Log.styles, "Moving a style's thumbnail") {
+        try fileManager.moveItem(at: source, to: destination.appendingPathComponent(file))
+      }
+    }
+  }
+
+  /// Copies a style's thumbnail files to a new style's name in a library's folder.
+  func copyThumbnailFiles(_ id: UUID, to newID: UUID, inLibrary library: UUID) {
+    thumbnails[newID] = thumbnails[id]
+    guard writesThumbnails else { return }
+    let fileManager = FileManager.default
+    let destination = Self.scratchThumbnailsDirectory ?? thumbnailsFolder(ofLibrary: library)
+    try? fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+    let folder = thumbnailsFolder(ofStyle: id)
+    for suffix in Self.thumbnailSuffixes {
+      let source = folder.appendingPathComponent(id.uuidString + suffix)
+      guard fileManager.fileExists(atPath: source.path) else { continue }
+      Log.attempt(Log.styles, "Copying a style's thumbnail") {
+        try fileManager.copyItem(at: source, to: destination.appendingPathComponent(newID.uuidString + suffix))
+      }
+    }
   }
 
   /// Removes the thumbnails, full images and settings in `folder` of styles that aren't in `ids`.
@@ -76,7 +111,7 @@ extension StyleStore {
 
   /// The style's thumbnail as JPEG, for a library file.
   func thumbnailJPEG(_ id: UUID) -> Data? {
-    if let data = try? Data(contentsOf: Self.thumbnailURL(id)) { return data }
+    if let data = try? Data(contentsOf: thumbnailURL(id)) { return data }
     // A scripted run keeps thumbnails in memory only.
     let data = NSMutableData()
     guard let image = thumbnails[id] ?? nil,
@@ -106,19 +141,19 @@ extension StyleStore {
   func canOpenThumbnail(_ id: UUID) -> Bool {
     // Read again when the thumbnail changes.
     _ = thumbnails[id]
-    return FileManager.default.fileExists(atPath: Self.sourceURL(id).path)
+    return FileManager.default.fileExists(atPath: sourceURL(id).path)
   }
 
   /// The full-size image and settings of the style's thumbnail.
   /// The model a style's thumbnail was made with, without reading its image.
   func thumbnailModel(_ id: UUID) -> String? {
-    (try? Data(contentsOf: Self.sourceURL(id))).flatMap { try? JSONDecoder().decode(ThumbnailSource.self, from: $0) }?.model
+    (try? Data(contentsOf: sourceURL(id))).flatMap { try? JSONDecoder().decode(ThumbnailSource.self, from: $0) }?.model
   }
 
   func thumbnailSource(_ id: UUID) -> (image: CGImage, source: ThumbnailSource)? {
-    guard let data = try? Data(contentsOf: Self.sourceURL(id)),
+    guard let data = try? Data(contentsOf: sourceURL(id)),
           let source = try? JSONDecoder().decode(ThumbnailSource.self, from: data),
-          let image = ImageLoader.image(at: Self.fullImageURL(id))
+          let image = ImageLoader.image(at: fullImageURL(id))
     else { return nil }
     return (image, source)
   }
@@ -126,7 +161,7 @@ extension StyleStore {
   /// The image the style's thumbnail was cut from, full size, else the thumbnail itself (a
   /// library's, or one made before full images were kept for every thumbnail).
   func fullThumbnailImage(_ id: UUID) async -> CGImage? {
-    let urls = [Self.fullImageURL(id), Self.thumbnailURL(id)]
+    let urls = [fullImageURL(id), thumbnailURL(id)]
     let image = await Self.firstImage(at: urls)
     return image ?? thumbnail(id)
   }
@@ -143,7 +178,7 @@ extension StyleStore {
   /// Reads the style's thumbnail from disk the first time it's shown.
   func loadThumbnail(_ id: UUID) async {
     guard thumbnails[id] == nil else { return }
-    let url = Self.thumbnailURL(id)
+    let url = thumbnailURL(id)
     let image = await Self.image(at: url)
     thumbnails[id] = .some(image)
   }
@@ -155,9 +190,9 @@ extension StyleStore {
   /// Sets the style's thumbnail from `image`, cropped to its centre square; nil removes it. With
   /// `source`, the full image and how it was made are kept for Open in Create.
   func setThumbnail(_ image: CGImage?, for id: UUID, source: ThumbnailSource? = nil) {
-    let url = Self.thumbnailURL(id)
+    let url = thumbnailURL(id)
     if writesThumbnails {
-      for file in [Self.fullImageURL(id), Self.sourceURL(id)] { try? FileManager.default.removeItem(at: file) }
+      for file in [fullImageURL(id), sourceURL(id)] { try? FileManager.default.removeItem(at: file) }
     }
     guard let image, let square = Self.square(image, side: Self.thumbnailSize) else {
       thumbnails[id] = .some(nil)
@@ -168,17 +203,17 @@ extension StyleStore {
       thumbnails[id] = .some(square)
       return
     }
-    try? FileManager.default.createDirectory(at: Self.thumbnailsDirectory, withIntermediateDirectories: true)
+    try? FileManager.default.createDirectory(at: thumbnailsFolder(ofStyle: id), withIntermediateDirectories: true)
     // The full image is kept for the viewer whenever the square is cut from more (not a library's
     // own thumbnail), and with its settings for Open in Create.
     let cropped = image.width != square.width || image.height != square.height
     if source != nil || cropped, let png = ImageTensor.png(image) {
       Log.attempt(Log.styles, "Saving a thumbnail's full image") {
-        try png.write(to: Self.fullImageURL(id), options: .atomic)
+        try png.write(to: fullImageURL(id), options: .atomic)
       }
       if let source, let json = try? JSONEncoder().encode(source) {
         Log.attempt(Log.styles, "Saving a thumbnail's settings") {
-          try json.write(to: Self.sourceURL(id), options: .atomic)
+          try json.write(to: sourceURL(id), options: .atomic)
         }
       }
     }

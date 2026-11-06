@@ -1,6 +1,149 @@
 @testable import Atelier
+import CoreGraphics
 import Foundation
 import Testing
+
+@MainActor
+struct StyleLibraryStoreTests {
+  /// Thumbnail size, so only the square is kept and not a full image beside it.
+  private func image() -> CGImage {
+    let context = CGContext(
+      data: nil, width: StyleStore.thumbnailSize, height: StyleStore.thumbnailSize, bitsPerComponent: 8, bytesPerRow: 0,
+      space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+    return context.makeImage()!
+  }
+
+  private func files(_ folder: URL) -> Set<String> {
+    Set((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [])
+  }
+
+  @Test func existingStylesBecomeTheFirstLibraryWhereTheyAre() throws {
+    try withTestFolder { root in
+      let old = Style(name: "Old", category: "C", template: "{{SUBJECT}}")
+      let oldFile = root.appending(path: "Styles.json")
+      let data = try JSONEncoder().encode([old])
+      try data.write(to: oldFile)
+      let thumbnails = root.appending(path: "StyleThumbnails", directoryHint: .isDirectory)
+      try FileManager.default.createDirectory(at: thumbnails, withIntermediateDirectories: true)
+      touch(thumbnails.appending(path: old.id.uuidString + ".jpg"))
+
+      let store = StyleStore(root: root)
+      #expect(store.libraries.map(\.id) == [StyleStore.mainLibraryID])
+      #expect(store.styles == [old])
+      #expect(try Data(contentsOf: oldFile) == data, "nothing is rewritten")
+      #expect(files(thumbnails) == [old.id.uuidString + ".jpg"])
+    }
+  }
+
+  @Test func librariesKeepTheirOwnFilesAndComeBack() throws {
+    try withTestFolder { root in
+      let store = StyleStore(root: root)
+      let main = Style(name: "Main", template: "{{SUBJECT}}")
+      store.save(main)
+      let film = store.createLibrary(named: "Film")
+      let kodak = Style(name: "Kodak", template: "{{SUBJECT}}, film")
+      store.importStyles([kodak], into: film)
+      store.setThumbnail(image(), for: kodak.id)
+
+      let imported = store.library(ofStyle: store.libraries[1].styles[0].id)
+      #expect(imported?.id == film)
+      let keptID = store.libraries[1].styles[0].id
+      #expect(files(store.thumbnailsFolder(ofLibrary: film)) == [keptID.uuidString + ".jpg"])
+      #expect(files(store.thumbnailsFolder(ofLibrary: StyleStore.mainLibraryID)).isEmpty)
+
+      let again = StyleStore(root: root)
+      #expect(again.libraries.map(\.name) == ["My Styles", "Film"])
+      #expect(again.libraries[0].styles.map(\.name) == ["Main"])
+      #expect(again.libraries[1].styles.map(\.name) == ["Kodak"])
+      #expect(again.style(id: keptID)?.name == "Kodak", "found from any library")
+      #expect(files(again.thumbnailsFolder(ofLibrary: film)) == [keptID.uuidString + ".jpg"], "a library's thumbnails aren't orphans")
+    }
+  }
+
+  @Test func importingReplacesOnlyWithinTheLibrary() throws {
+    try withTestFolder { root in
+      let store = StyleStore(root: root)
+      let style = Style(name: "Same", category: "C", template: "one")
+      store.importStyles([style])
+      let other = store.createLibrary(named: "Other")
+      #expect(store.importStyles([style], into: other).added == 1)
+      #expect(store.importStyles([Style(name: "same", category: "c", template: "two")], into: other).replaced == 1)
+      #expect(store.libraries[0].styles.map(\.template) == ["one"])
+      #expect(store.libraries[1].styles.map(\.template) == ["two"])
+    }
+  }
+
+  @Test func movingAndCopyingTakeThumbnails() throws {
+    try withTestFolder { root in
+      let store = StyleStore(root: root)
+      let main = store.currentLibraryID
+      let other = store.createLibrary(named: "Other")
+      let style = Style(name: "S", category: "C", template: "t")
+      store.save(style)
+      store.setThumbnail(image(), for: style.id)
+      let name = style.id.uuidString + ".jpg"
+
+      store.copy([style.id], toLibrary: other)
+      let copy = try #require(store.libraries[1].styles.first)
+      #expect(copy.id != style.id && copy.name == style.name)
+      #expect(files(store.thumbnailsFolder(ofLibrary: other)) == [copy.id.uuidString + ".jpg"])
+      #expect(files(store.thumbnailsFolder(ofLibrary: main)) == [name])
+
+      store.move([style.id], toLibrary: other)
+      #expect(store.libraries[0].styles.isEmpty)
+      #expect(Set(store.libraries[1].styles.map(\.id)) == [style.id, copy.id])
+      #expect(files(store.thumbnailsFolder(ofLibrary: main)).isEmpty)
+      #expect(files(store.thumbnailsFolder(ofLibrary: other)) == [name, copy.id.uuidString + ".jpg"])
+
+      let again = StyleStore(root: root)
+      #expect(again.libraries[0].styles.isEmpty && again.libraries[1].styles.count == 2)
+      #expect(files(again.thumbnailsFolder(ofLibrary: other)).count == 2)
+    }
+  }
+
+  @Test func deletingALibraryRemovesItsFilesButNeverTheLast() throws {
+    try withTestFolder { root in
+      let store = StyleStore(root: root)
+      let other = store.createLibrary(named: "Other")
+      store.selectLibrary(other)
+      let style = Style(name: "S", template: "t")
+      store.save(style)
+      store.setThumbnail(image(), for: style.id)
+      store.screenSelection = [style.id]
+      let folder = store.thumbnailsFolder(ofLibrary: other).deletingLastPathComponent()
+      #expect(FileManager.default.fileExists(atPath: folder.path))
+
+      store.deleteLibrary(other)
+      #expect(store.libraries.map(\.id) == [StyleStore.mainLibraryID])
+      #expect(store.currentLibraryID == StyleStore.mainLibraryID)
+      #expect(store.screenSelection.isEmpty)
+      #expect(!FileManager.default.fileExists(atPath: folder.path))
+
+      store.deleteLibrary(StyleStore.mainLibraryID)
+      #expect(store.libraries.count == 1, "the last library stays")
+      #expect(StyleStore(root: root).libraries.count == 1)
+    }
+  }
+
+  @Test func namesStayDistinct() throws {
+    try withTestFolder { root in
+      let store = StyleStore(root: root)
+      let one = store.createLibrary(named: "Film")
+      let two = store.createLibrary(named: "film")
+      #expect(store.libraries.first { $0.id == two }?.name == "film 2")
+      store.renameLibrary(two, to: "Film")
+      #expect(store.libraries.first { $0.id == two }?.name == "Film 2")
+      store.renameLibrary(one, to: "  Film  ")
+      #expect(store.libraries.first { $0.id == one }?.name == "Film")
+    }
+  }
+
+  @Test func aLibraryPageGivesItsTitle() throws {
+    let html = try StyleLibrary.html(title: "Film Cameras", styles: [Style(name: "S", template: "t")]) { _ in nil }
+    #expect(StyleLibrary.title(html) == "Film Cameras")
+    #expect(StyleLibrary.title("# Just markdown") == nil)
+  }
+}
 
 struct StyleTests {
   func style(_ template: String, negative: String = "") -> Style {

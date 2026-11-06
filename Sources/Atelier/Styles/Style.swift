@@ -234,18 +234,49 @@ nonisolated enum StyleFile {
   }
 }
 
-/// The user's styles, kept in one JSON file in Application Support.
+/// A named set of styles, called a library in the UI. (`StyleLibrary` is the exported web page.)
+nonisolated struct StyleCollection: Codable, Identifiable, Hashable {
+  var id = UUID()
+  var name: String
+  /// Kept in the library's own file; the list of libraries holds only ids and names.
+  var styles: [Style] = []
+
+  private enum CodingKeys: String, CodingKey {
+    case id, name
+  }
+
+  /// Categories in the order their first style appears.
+  var categories: [String] {
+    var seen = Set<String>()
+    return styles.map(\.category).filter { seen.insert($0).inserted }
+  }
+}
+
+/// The user's styles, in one or more libraries, in Application Support:
+///
+///     Atelier/StyleLibraries.json                  the libraries' ids and names, in order
+///     Atelier/Styles.json, StyleThumbnails/        the first library
+///     Atelier/StyleLibraries/<id>/Styles.json, StyleThumbnails/   each other one
+///
+/// The first library stays where styles were kept before there were libraries, so nothing has to
+/// move and a build from before them still reads it. Each library has its own thumbnails folder
+/// because such a build removes any thumbnail in `StyleThumbnails` of a style it doesn't know.
 @MainActor
 @Observable
 final class StyleStore {
-  private(set) var styles: [Style] = []
+  /// Never empty.
+  private(set) var libraries: [StyleCollection] = []
+  /// The library the Styles screen shows, and where new and imported styles go.
+  private(set) var currentLibraryID = StyleStore.mainLibraryID {
+    didSet { remember(currentLibraryID.uuidString, "stylesLibrary") }
+  }
   /// Thumbnails read so far, by style (StyleThumbnails.swift); nil marks one with none.
   var thumbnails: [UUID: CGImage?] = [:]
   /// What each tag takes when making thumbnails, by tag (`SUBJECT` included).
   var thumbnailValues = UserDefaults.standard.dictionary(forKey: "styleThumbnailValues") as? [String: String]
     ?? [Style.subject: "A woman with a red umbrella walking down a rainy city street"]
   {
-    didSet { if persists { UserDefaults.standard.set(thumbnailValues, forKey: "styleThumbnailValues") } }
+    didSet { remember(thumbnailValues, "styleThumbnailValues") }
   }
 
   /// Every tag the styles use, `SUBJECT` first, then in the order they first appear.
@@ -274,7 +305,7 @@ final class StyleStore {
   }
 
   private func remember(_ value: Any?, _ key: String) {
-    if persists { UserDefaults.standard.set(value, forKey: key) }
+    if isUserData { UserDefaults.standard.set(value, forKey: key) }
   }
 
   /// The thumbnails being made: how many are done (and failed) of how many, and the style running.
@@ -287,60 +318,214 @@ final class StyleStore {
   /// Off for scripted runs: they read the user's styles but don't change them.
   @ObservationIgnored let persists: Bool
 
-  static var file: URL {
-    FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-      .appendingPathComponent("Atelier/Styles.json")
+  /// The folder holding the libraries.
+  @ObservationIgnored let root: URL
+  /// Saving to the user's own folder, not a test's: settings are remembered, and a deleted library
+  /// goes to the Trash.
+  @ObservationIgnored private let isUserData: Bool
+
+  /// The library whose files are `Styles.json` and `StyleThumbnails` directly in `root`.
+  nonisolated static let mainLibraryID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+
+  private var libraryListFile: URL { root.appendingPathComponent("StyleLibraries.json") }
+
+  private func folder(ofLibrary id: UUID) -> URL {
+    id == Self.mainLibraryID ? root : root.appendingPathComponent("StyleLibraries/\(id.uuidString)", isDirectory: true)
   }
 
-  init(persists: Bool = true) {
+  private func stylesFile(ofLibrary id: UUID) -> URL {
+    folder(ofLibrary: id).appendingPathComponent("Styles.json")
+  }
+
+  func thumbnailsFolder(ofLibrary id: UUID) -> URL {
+    folder(ofLibrary: id).appendingPathComponent("StyleThumbnails", isDirectory: true)
+  }
+
+  /// `root` is for tests; the default is Application Support.
+  init(persists: Bool = true, root: URL? = nil) {
     self.persists = persists
-    guard let data = try? Data(contentsOf: Self.file), let saved = try? JSONDecoder().decode([Style].self, from: data) else { return }
-    styles = saved
-    // Only with styles read: a file that didn't decode says nothing about which thumbnails are used.
-    if persists, !saved.isEmpty {
-      Self.removeOrphanedThumbnails(in: Self.thumbnailsDirectory, keeping: Set(saved.map(\.id)))
+    self.root = root ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+      .appendingPathComponent("Atelier", isDirectory: true)
+    isUserData = persists && root == nil
+    let listed = (try? Data(contentsOf: libraryListFile)).flatMap { try? JSONDecoder().decode([StyleCollection].self, from: $0) }
+    var loaded = listed.flatMap { $0.isEmpty ? nil : $0 } ?? [StyleCollection(id: Self.mainLibraryID, name: "My Styles")]
+    for index in loaded.indices {
+      let id = loaded[index].id
+      guard let data = try? Data(contentsOf: stylesFile(ofLibrary: id)), let saved = try? JSONDecoder().decode([Style].self, from: data) else { continue }
+      loaded[index].styles = saved
+      // Only with styles read: a file that didn't decode says nothing about which thumbnails are used.
+      if persists, !saved.isEmpty {
+        Self.removeOrphanedThumbnails(in: thumbnailsFolder(ofLibrary: id), keeping: Set(saved.map(\.id)))
+      }
     }
+    libraries = loaded
+    let remembered = isUserData ? UserDefaults.standard.string(forKey: "stylesLibrary").flatMap(UUID.init(uuidString:)) : nil
+    currentLibraryID = loaded.first { $0.id == remembered }?.id ?? loaded[0].id
+    if persists, listed == nil { writeLibraryList() }
   }
 
+  var currentLibrary: StyleCollection {
+    libraries.first { $0.id == currentLibraryID } ?? libraries[0]
+  }
+
+  /// The current library's styles.
+  var styles: [Style] { currentLibrary.styles }
+
+  /// Every library's styles, the current library's first.
+  var allStyles: [Style] {
+    currentLibrary.styles + libraries.filter { $0.id != currentLibraryID }.flatMap(\.styles)
+  }
+
+  /// Looks in every library: a style stays usable on Create whichever one is on screen.
   func style(id: UUID?) -> Style? {
-    id.flatMap { id in styles.first { $0.id == id } }
-  }
-
-  /// Categories in the order their first style appears.
-  var categories: [String] {
-    var seen = Set<String>()
-    return styles.map(\.category).filter { seen.insert($0).inserted }
-  }
-
-  /// Adds a style, or replaces the one with its id.
-  func save(_ style: Style) {
-    if let index = styles.firstIndex(where: { $0.id == style.id }) {
-      styles[index] = style
-    } else {
-      // After the last style of its category, so categories stay together.
-      let index = styles.lastIndex { $0.category == style.category && $0.subcategory == style.subcategory }
-        ?? styles.lastIndex { $0.category == style.category }
-      styles.insert(style, at: index.map { $0 + 1 } ?? styles.count)
+    guard let id else { return nil }
+    for library in libraries {
+      if let style = library.styles.first(where: { $0.id == id }) { return style }
     }
-    write()
+    return nil
+  }
+
+  func library(ofStyle id: UUID) -> StyleCollection? {
+    libraries.first { $0.styles.contains { $0.id == id } }
+  }
+
+  /// The current library's categories.
+  var categories: [String] { currentLibrary.categories }
+
+  /// Shows another library on the Styles screen, which starts afresh there.
+  func selectLibrary(_ id: UUID) {
+    guard id != currentLibraryID, libraries.contains(where: { $0.id == id }) else { return }
+    currentLibraryID = id
+    // A filter left over from the last library would show this one as empty.
+    screenSearch = ""
+    screenSelection = []
+    screenCategory = nil
+    screenScrolledTo = nil
+    viewingThumbnail = nil
+  }
+
+  /// `name`, numbered if another library has it.
+  private func uniqueLibraryName(_ name: String, excluding id: UUID? = nil) -> String {
+    let taken = libraries.filter { $0.id != id }.map { $0.name.lowercased() }
+    var candidate = name
+    var number = 2
+    while taken.contains(candidate.lowercased()) {
+      candidate = "\(name) \(number)"
+      number += 1
+    }
+    return candidate
+  }
+
+  /// Adds an empty library at the end. Returns its id.
+  @discardableResult
+  func createLibrary(named name: String) -> UUID {
+    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    let library = StyleCollection(name: uniqueLibraryName(trimmed.isEmpty ? "New Library" : trimmed))
+    libraries.append(library)
+    writeLibraryList()
+    return library.id
+  }
+
+  func renameLibrary(_ id: UUID, to name: String) {
+    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, let index = libraries.firstIndex(where: { $0.id == id }) else { return }
+    libraries[index].name = uniqueLibraryName(trimmed, excluding: id)
+    writeLibraryList()
+  }
+
+  /// Removes a library, its styles and their thumbnails. The last one stays: there's always one.
+  func deleteLibrary(_ id: UUID) {
+    guard libraries.count > 1, let index = libraries.firstIndex(where: { $0.id == id }) else { return }
+    if id == currentLibraryID, let next = libraries.first(where: { $0.id != id }) { selectLibrary(next.id) }
+    for style in libraries[index].styles { thumbnails[style.id] = nil }
+    libraries.remove(at: index)
+    writeLibraryList()
+    guard persists else { return }
+    let fileManager = FileManager.default
+    for url in [stylesFile(ofLibrary: id), thumbnailsFolder(ofLibrary: id)] where fileManager.fileExists(atPath: url.path) {
+      // The Trash isn't there on every volume or on iPad.
+      if isUserData, (try? fileManager.trashItem(at: url, resultingItemURL: nil)) != nil { continue }
+      try? fileManager.removeItem(at: url)
+    }
+    if id != Self.mainLibraryID { try? fileManager.removeItem(at: folder(ofLibrary: id)) }
+  }
+
+  /// Moves styles to another library with their thumbnails. They keep their ids, so a style selected
+  /// on Create stays selected.
+  func move(_ ids: Set<UUID>, toLibrary target: UUID) {
+    guard let targetIndex = libraries.firstIndex(where: { $0.id == target }) else { return }
+    var sources: [UUID] = []
+    for index in libraries.indices where index != targetIndex {
+      let moving = libraries[index].styles.filter { ids.contains($0.id) }
+      guard !moving.isEmpty else { continue }
+      for style in moving {
+        moveThumbnailFiles(style.id, from: libraries[index].id, to: target)
+        insert(style, inLibraryAt: targetIndex)
+      }
+      libraries[index].styles.removeAll { ids.contains($0.id) }
+      sources.append(libraries[index].id)
+    }
+    guard !sources.isEmpty else { return }
+    // The target first: a failure between the two leaves a style in both, not in neither.
+    write(target)
+    sources.forEach(write)
+  }
+
+  /// Copies styles to another library with their thumbnails, under new ids.
+  func copy(_ ids: Set<UUID>, toLibrary target: UUID) {
+    guard let targetIndex = libraries.firstIndex(where: { $0.id == target }) else { return }
+    for var style in allStyles where ids.contains(style.id) {
+      let original = style.id
+      style.id = UUID()
+      copyThumbnailFiles(original, to: style.id, inLibrary: target)
+      insert(style, inLibraryAt: targetIndex)
+    }
+    write(target)
+  }
+
+  /// After the last style of its category, so categories stay together.
+  private func insert(_ style: Style, inLibraryAt library: Int) {
+    let styles = libraries[library].styles
+    let index = styles.lastIndex { $0.category == style.category && $0.subcategory == style.subcategory }
+      ?? styles.lastIndex { $0.category == style.category }
+    libraries[library].styles.insert(style, at: index.map { $0 + 1 } ?? styles.count)
+  }
+
+  /// Adds a style to the current library, or replaces the one with its id in whichever library has it.
+  func save(_ style: Style) {
+    for index in libraries.indices {
+      if let found = libraries[index].styles.firstIndex(where: { $0.id == style.id }) {
+        libraries[index].styles[found] = style
+        write(libraries[index].id)
+        return
+      }
+    }
+    guard let index = libraries.firstIndex(where: { $0.id == currentLibraryID }) else { return }
+    insert(style, inLibraryAt: index)
+    write(currentLibraryID)
   }
 
   func delete(_ ids: Set<UUID>) {
-    styles.removeAll { ids.contains($0.id) }
+    // Before the styles go: a thumbnail's folder is found from its style's library.
     for id in ids { setThumbnail(nil, for: id) }
-    write()
+    for index in libraries.indices where libraries[index].styles.contains(where: { ids.contains($0.id) }) {
+      libraries[index].styles.removeAll { ids.contains($0.id) }
+      write(libraries[index].id)
+    }
   }
 
-  /// Adds the styles in a style file. One with the same category and name as a style already
-  /// here replaces it, keeping its id (and so the selection on Create). Returns each imported
-  /// style's id here, in order.
+  /// Adds the styles in a style file to a library, by default the current one. One with the same
+  /// category and name as a style already in that library replaces it, keeping its id (and so the
+  /// selection on Create). Returns each imported style's id here, in order.
   @discardableResult
-  func importStyles(_ imported: [Style]) -> (added: Int, replaced: Int, ids: [UUID]) {
+  func importStyles(_ imported: [Style], into library: UUID? = nil) -> (added: Int, replaced: Int, ids: [UUID]) {
+    let target = library ?? currentLibraryID
+    guard let index = libraries.firstIndex(where: { $0.id == target }) else { return (0, 0, []) }
     var added = 0
     var replaced = 0
     var ids: [UUID] = []
     for var style in imported {
-      if let existing = styles.first(where: {
+      if let existing = libraries[index].styles.first(where: {
         $0.category.caseInsensitiveCompare(style.category) == .orderedSame
           && $0.name.caseInsensitiveCompare(style.name) == .orderedSame
       }) {
@@ -350,24 +535,36 @@ final class StyleStore {
         added += 1
       }
       ids.append(style.id)
-      if let index = styles.firstIndex(where: { $0.id == style.id }) {
-        styles[index] = style
+      if let found = libraries[index].styles.firstIndex(where: { $0.id == style.id }) {
+        libraries[index].styles[found] = style
       } else {
-        styles.append(style)
+        libraries[index].styles.append(style)
       }
     }
-    write()
+    write(target)
     return (added, replaced, ids)
   }
 
-  private func write() {
+  private func writeLibraryList() {
     guard persists else { return }
     do {
-      try FileManager.default.createDirectory(
-        at: Self.file.deletingLastPathComponent(), withIntermediateDirectories: true)
+      try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
       let encoder = JSONEncoder()
       encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-      try encoder.encode(styles).write(to: Self.file, options: .atomic)
+      try encoder.encode(libraries).write(to: libraryListFile, options: .atomic)
+    } catch {
+      Log.styles.error("Couldn't save the style libraries: \(error.localizedDescription, privacy: .public)")
+      reportFailure?("Couldn't save your style libraries: \(error.localizedDescription)")
+    }
+  }
+
+  private func write(_ id: UUID) {
+    guard persists, let library = libraries.first(where: { $0.id == id }) else { return }
+    do {
+      try FileManager.default.createDirectory(at: folder(ofLibrary: id), withIntermediateDirectories: true)
+      let encoder = JSONEncoder()
+      encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+      try encoder.encode(library.styles).write(to: stylesFile(ofLibrary: id), options: .atomic)
     } catch {
       Log.styles.error("Couldn't save styles: \(error.localizedDescription, privacy: .public)")
       reportFailure?("Couldn't save your styles: \(error.localizedDescription)")

@@ -608,7 +608,7 @@ final class RemoteServer {
   /// This device's styles, with their thumbnails' hashes.
   func styleCatalog() -> RemoteMessage {
     guard let store = create?.styles else { return .styles([]) }
-    return .styles(store.styles.map { style in
+    return .styles(store.allStyles.map { style in
       RemoteStyle(
         style: style, thumbnailHash: store.thumbnailJPEG(style.id).map { RemoteBlob($0).hash },
         thumbnailModel: store.thumbnailModel(style.id))

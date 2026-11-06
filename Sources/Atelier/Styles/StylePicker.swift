@@ -45,8 +45,8 @@ struct StyleControls: View {
   }
 }
 
-/// Searchable list of the styles in collapsible categories, with No Style first. While searching,
-/// every category with a match is open.
+/// Searchable list of the styles in collapsible categories, with No Style first, from every library
+/// or the one picked beside the search. While searching, every category with a match is open.
 struct StylePicker: View {
   let selection: UUID?
   let pick: (UUID?) -> Void
@@ -56,42 +56,62 @@ struct StylePicker: View {
   /// Categories you collapsed, remembered across launches (one name per line); every other one
   /// is open, new ones included.
   @AppStorage("stylePickerCollapsed") private var collapsedStorage = ""
+  /// The library to list, by id; empty, or one that's gone, for all of them.
+  @AppStorage("stylePickerLibrary") private var libraryStorage = ""
+
+  private var libraries: [StyleCollection] { model.styles?.libraries ?? [] }
+
+  private var showsAll: Bool { !libraries.contains { $0.id.uuidString == libraryStorage } }
+
+  private func matches(_ style: Style) -> Bool {
+    query.isEmpty || style.name.localizedCaseInsensitiveContains(query) || style.category.localizedCaseInsensitiveContains(query)
+      || style.subcategory.localizedCaseInsensitiveContains(query)
+  }
 
   var body: some View {
-    let styles = model.styles?.styles ?? []
-    let matching = query.isEmpty
-      ? styles
-      : styles.filter {
-        $0.name.localizedCaseInsensitiveContains(query) || $0.category.localizedCaseInsensitiveContains(query)
-          || $0.subcategory.localizedCaseInsensitiveContains(query)
-      }
-    let categories = model.styles?.categories ?? []
+    let shown = showsAll ? libraries : libraries.filter { $0.id.uuidString == libraryStorage }
+    let styles = shown.flatMap(\.styles)
+    let matching = styles.filter(matches)
     VStack(spacing: 0) {
       // Far enough in to clear the popover's rounded corners.
-      SearchField(text: $query, prompt: "Search styles").padding(.horizontal, 14).padding(.vertical, 10)
+      HStack(spacing: 8) {
+        SearchField(text: $query, prompt: "Search styles")
+        Picker("Library", selection: Binding(get: { showsAll ? "" : libraryStorage }, set: { libraryStorage = $0 })) {
+          Text("All Libraries").tag("")
+          ForEach(libraries) { Text($0.name).tag($0.id.uuidString) }
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .frame(width: 120)
+        .disabled(libraries.count < 2)
+        .help(libraries.count < 2 ? "Add libraries on the Styles screen" : "Which library to list")
+      }
+      .padding(.horizontal, 14)
+      .padding(.vertical, 10)
       Divider()
       List {
         if query.isEmpty { row(name: "No Style", detail: "The prompt as typed", id: nil) }
-        ForEach(categories, id: \.self) { category in
-          let inCategory = matching.filter { $0.category == category }
-          if !inCategory.isEmpty {
-            let open = !query.isEmpty || !collapsed.contains(category)
-            Section {
-              if open {
-                ForEach(inCategory) { style in
-                  row(name: style.name, detail: style.subcategory, id: style.id)
+        ForEach(shown) { library in
+          ForEach(library.categories, id: \.self) { category in
+            let inCategory = library.styles.filter { $0.category == category && matches($0) }
+            if !inCategory.isEmpty {
+              // Bare for the first library, so what was collapsed before there were libraries stays so.
+              let key = library.id == StyleStore.mainLibraryID ? category : "\(library.id)/\(category)"
+              let open = !query.isEmpty || !collapsed.contains(key)
+              Section {
+                if open {
+                  ForEach(inCategory) { style in
+                    row(name: style.name, detail: style.subcategory, id: style.id)
+                  }
                 }
+              } header: {
+                header(category, key: key, library: showsAll && libraries.count > 1 ? library.name : nil, count: inCategory.count, open: open)
               }
-            } header: {
-              header(category, count: inCategory.count, open: open)
             }
           }
         }
-        ForEach(model.remoteServers.servers) { server in
-          let remote = model.remoteStyles.styles(of: server.id).map(\.style).filter { style in
-            query.isEmpty || style.name.localizedCaseInsensitiveContains(query) || style.category.localizedCaseInsensitiveContains(query)
-              || style.subcategory.localizedCaseInsensitiveContains(query)
-          }
+        ForEach(showsAll ? model.remoteServers.servers : []) { server in
+          let remote = model.remoteStyles.styles(of: server.id).map(\.style).filter(matches)
           if !remote.isEmpty {
             let title = "From \(server.name)"
             let open = !query.isEmpty || !collapsed.contains(title)
@@ -102,7 +122,7 @@ struct StylePicker: View {
                 }
               }
             } header: {
-              header(title, count: remote.count, open: open)
+              header(title, key: title, library: nil, count: remote.count, open: open)
             }
           }
         }
@@ -133,10 +153,10 @@ struct StylePicker: View {
     Set(collapsedStorage.split(separator: "\n").map(String.init))
   }
 
-  private func header(_ category: String, count: Int, open: Bool) -> some View {
+  private func header(_ category: String, key: String, library: String?, count: Int, open: Bool) -> some View {
     Button {
       var set = collapsed
-      if set.contains(category) { set.remove(category) } else { set.insert(category) }
+      if set.contains(key) { set.remove(key) } else { set.insert(key) }
       collapsedStorage = set.sorted().joined(separator: "\n")
     } label: {
       HStack(spacing: 6) {
@@ -144,8 +164,9 @@ struct StylePicker: View {
           .font(.caption.weight(.semibold))
           .rotationEffect(.degrees(open ? 90 : 0))
           .accessibilityHidden(true)
-        Text(category.isEmpty ? "Uncategorized" : category)
+        Text(category.isEmpty ? "Uncategorized" : category).lineLimit(1)
         Spacer()
+        if let library { Text(library).lineLimit(1).foregroundStyle(.secondary) }
         Text("\(count)").monospacedDigit().foregroundStyle(.tertiary)
       }
       .contentShape(.rect)

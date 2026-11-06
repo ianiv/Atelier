@@ -40,6 +40,16 @@ struct StylesView: View {
   /// The paired server whose styles are shown; nil for this device's.
   @AppStorage("stylesSource") private var sourceStorage = ""
   @State private var serverSelection: UUID?
+  /// The name box for a new library or a rename, while it's up.
+  @State private var naming: LibraryNaming?
+  @State private var nameText = ""
+  @State private var deletingLibrary = false
+
+  private enum LibraryNaming: Equatable {
+    /// With the styles to move into the new library.
+    case new(moving: Set<UUID>)
+    case rename
+  }
 
   private var source: UUID? { UUID(uuidString: sourceStorage) }
 
@@ -69,7 +79,7 @@ struct StylesView: View {
 
   var body: some View {
     @Bindable var styles = styles
-    content
+    libraryDialogs(content)
       .overlay {
         if dropTargeted {
           RoundedRectangle(cornerRadius: 8)
@@ -83,7 +93,7 @@ struct StylesView: View {
       } isTargeted: { dropTargeted = $0 }
       .toolbar {
         ToolbarItem {
-          sourcePicker
+          libraryMenu
         }
         ToolbarItem {
           Picker("View", selection: $styles.screenGrid) {
@@ -121,13 +131,14 @@ struct StylesView: View {
         ToolbarItem {
           Menu {
             Button("Import Styles…", systemImage: "square.and.arrow.down") { chooseFiles() }
+            Button("Import as New Library…", systemImage: "square.and.arrow.down.on.square") { chooseFiles(asNewLibraries: true) }
             Button("Export Styles…", systemImage: "square.and.arrow.up") { exporting = true }
               .disabled(styles.styles.isEmpty)
           } label: {
             Label("Import or Export", systemImage: "square.and.arrow.down.on.square")
           }
           .disabled(source != nil)
-          .help("Import a style library or Markdown style file, or export these styles as a library page that works in any browser")
+          .help("Import a style library page or Markdown style file into this library or a new one, or export these styles as a page that works in any browser")
         }
         ToolbarItem {
           Button("New Style", systemImage: "plus") { newStyle() }
@@ -205,7 +216,7 @@ struct StylesView: View {
       }
       .sheet(isPresented: $exporting) {
         ExportStylesSheet(
-          selectedCount: selection.count, shownCount: filtered.count, suggestedTitle: category ?? "Styles"
+          selectedCount: selection.count, shownCount: filtered.count, suggestedTitle: category ?? styles.currentLibrary.name
         ) { options in
           exporting = false
           export(options)
@@ -213,20 +224,96 @@ struct StylesView: View {
       }
   }
 
-  /// Whose styles the screen shows. A server that's away stays listed: its styles are kept here.
-  private var sourcePicker: some View {
-    Picker("Styles From", selection: $sourceStorage) {
-      Text(CreateModel.thisDeviceName).tag("")
-      ForEach(create.remoteServers.servers) { server in
-        Text(create.remoteServers.status(of: server.id) == .offline ? "\(server.name) (Offline)" : server.name)
-          .tag(server.id.uuidString)
+  /// Which styles the screen shows: one of this device's libraries or a paired server's, with the
+  /// commands for the libraries. A server that's away stays listed: its styles are kept here.
+  private var libraryMenu: some View {
+    let current = styles.currentLibrary
+    return ToolbarPickerMenu(
+      title: source.flatMap { create.remoteServers.name(of: $0) } ?? current.name, width: 150
+    ) {
+      Picker("Library", selection: Binding(get: { source ?? styles.currentLibraryID }, set: { choose($0) })) {
+        Section(CreateModel.thisDeviceName) {
+          ForEach(styles.libraries) { library in
+            Text(verbatim: "\(library.name) (\(library.styles.count))").tag(library.id)
+          }
+        }
+        if !create.remoteServers.servers.isEmpty {
+          Section("Servers") {
+            ForEach(create.remoteServers.servers) { server in
+              Text(create.remoteServers.status(of: server.id) == .offline ? "\(server.name) (Offline)" : server.name)
+                .tag(server.id)
+            }
+          }
+        }
       }
+    } actions: {
+      Divider()
+      Button("New Library…", systemImage: "plus") { startNaming(.new(moving: [])) }
+      Button("Rename “\(current.name)”…", systemImage: "pencil") { startNaming(.rename) }
+        .disabled(source != nil)
+      Button("Delete “\(current.name)”…", systemImage: "trash", role: .destructive) { deletingLibrary = true }
+        .disabled(source != nil || styles.libraries.count < 2)
     }
-    .pickerStyle(.menu)
-    .disabled(create.remoteServers.servers.isEmpty)
-    .help(create.remoteServers.servers.isEmpty ? "Pair a server in Settings ▸ Compute to use its styles" : "Whose styles to show")
+    .help("Which library to show, or a paired server's styles")
     .onAppear { create.remoteServers.loadIfNeeded() }
     .task(id: sourceStorage) { if let source { await create.refreshRemoteStyles(server: source) } }
+  }
+
+  private func choose(_ id: UUID) {
+    if styles.libraries.contains(where: { $0.id == id }) {
+      sourceStorage = ""
+      styles.selectLibrary(id)
+    } else {
+      sourceStorage = id.uuidString
+    }
+  }
+
+  private func startNaming(_ purpose: LibraryNaming) {
+    nameText = purpose == .rename ? styles.currentLibrary.name : "New Library"
+    naming = purpose
+  }
+
+  private func finishNaming() {
+    switch naming {
+    case .rename: styles.renameLibrary(styles.currentLibraryID, to: nameText)
+    case .new(let moving):
+      let id = styles.createLibrary(named: nameText)
+      if !moving.isEmpty { styles.move(moving, toLibrary: id) }
+      choose(id)
+    case nil: break
+    }
+    naming = nil
+  }
+
+  /// The name box for a library, and the question before deleting one.
+  private func libraryDialogs(_ view: some View) -> some View {
+    let library = styles.currentLibrary
+    return view
+      .alert(
+        naming == .rename ? "Rename Library" : "New Library",
+        isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })
+      ) {
+        TextField("Name", text: $nameText)
+        Button("Cancel", role: .cancel) { naming = nil }
+        Button(naming == .rename ? "Rename" : "Create") { finishNaming() }
+          .disabled(nameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+      } message: {
+        if case .new(let moving) = naming, !moving.isEmpty {
+          Text(moving.count == 1 ? "The selected style moves into it." : "The \(moving.count) selected styles move into it.")
+        }
+      }
+      .confirmationDialog(
+        "Delete the library “\(library.name)” and its \(library.styles.count) styles?", isPresented: $deletingLibrary
+      ) {
+        Button("Delete Library", role: .destructive) {
+          if let id = create.styleID, library.styles.contains(where: { $0.id == id }) { create.styleID = nil }
+          styles.deleteLibrary(library.id)
+          deletingLibrary = false
+        }
+        Button("Cancel", role: .cancel) { deletingLibrary = false }
+      } message: {
+        Text("Thumbnails go too. Export the styles first to keep a copy.")
+      }
   }
 
   @ViewBuilder
@@ -283,6 +370,8 @@ struct StylesView: View {
             return .handled
           }
       }
+      // Each library opens at its own top rather than at the last one's scroll offset.
+      .id(styles.currentLibraryID)
     }
   }
 
@@ -382,8 +471,25 @@ struct StylesView: View {
       }
       .disabled(!styles.canOpenThumbnail(style.id))
       Button("Duplicate") { duplicate(style) }
-      Divider()
     }
+    let others = styles.libraries.filter { $0.id != styles.currentLibraryID }
+    Menu("Move to Library") {
+      ForEach(others) { library in
+        Button(library.name) {
+          styles.move(ids, toLibrary: library.id)
+          selection.subtract(ids)
+        }
+      }
+      if !others.isEmpty { Divider() }
+      Button("New Library…") { startNaming(.new(moving: ids)) }
+    }
+    Menu("Copy to Library") {
+      ForEach(others) { library in
+        Button(library.name) { styles.copy(ids, toLibrary: library.id) }
+      }
+    }
+    .disabled(others.isEmpty)
+    Divider()
     Button(ids.count > 1 ? "Delete \(ids.count) Styles…" : "Delete…", role: .destructive) {
       pendingDelete = ids
     }
@@ -539,19 +645,27 @@ struct StylesView: View {
     selection = [copy.id]
   }
 
-  private func chooseFiles() {
+  private func chooseFiles(asNewLibraries: Bool = false) {
     fileDialogs.open = FileDialogs.Open(
       types: [.html, .markdownText, .plainText], multiple: true,
       directory: FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first,
-      message: "Choose style files to import"
+      message: asNewLibraries ? "Choose style files. Each becomes a library." : "Choose style files to import into “\(styles.currentLibrary.name)”"
     ) { urls in
-      importFiles(urls)
+      importFiles(urls, asNewLibraries: asNewLibraries)
     }
   }
 
-  private func importFiles(_ urls: [URL]) {
-    var parsed: [Style] = []
-    var thumbnails: [Data?] = []
+  /// A library's name from a file with no title of its own: `film-camera-styles.md` is "Film camera styles".
+  private static func libraryName(fromFile url: URL) -> String {
+    let words = url.deletingPathExtension().lastPathComponent
+      .replacingOccurrences(of: "-", with: " ").replacingOccurrences(of: "_", with: " ")
+    return words.prefix(1).uppercased() + words.dropFirst()
+  }
+
+  /// Reads style files into the library on screen, or with `asNewLibraries` into a new library each,
+  /// named after its page's title or the file.
+  private func importFiles(_ urls: [URL], asNewLibraries: Bool = false) {
+    var files: [(name: String, found: [(style: Style, thumbnail: Data?)])] = []
     var unreadable: [String] = []
     for url in urls {
       let access = url.startAccessingSecurityScopedResource()
@@ -562,28 +676,41 @@ struct StylesView: View {
       }
       // A library page (with its thumbnails), else a Markdown style file.
       let found = StyleLibrary.read(text) ?? StyleFile.parse(text).map { ($0, nil) }
-      if found.isEmpty { unreadable.append(url.lastPathComponent) }
-      parsed += found.map(\.style)
-      thumbnails += found.map(\.thumbnail)
+      if found.isEmpty {
+        unreadable.append(url.lastPathComponent)
+      } else {
+        files.append((StyleLibrary.title(text) ?? Self.libraryName(fromFile: url), found))
+      }
     }
-    guard !parsed.isEmpty else {
+    guard !files.isEmpty else {
       message = (
         "No styles found",
         "\(unreadable.formatted(.list(type: .and))) has no styles Atelier can read: a style library exported from Atelier, or Markdown with a ### heading per style and a TEMPLATE: section under it. See Styles in Atelier's help."
       )
       return
     }
-    let result = styles.importStyles(parsed)
-    for (id, thumbnail) in zip(result.ids, thumbnails) {
-      if let thumbnail { styles.setThumbnail(data: thumbnail, for: id) }
+    var added = 0
+    var replaced = 0
+    var newLibrary: UUID?
+    for file in files {
+      let target = asNewLibraries ? styles.createLibrary(named: file.name) : styles.currentLibraryID
+      if asNewLibraries { newLibrary = target }
+      let result = styles.importStyles(file.found.map(\.style), into: target)
+      added += result.added
+      replaced += result.replaced
+      for (id, thumbnail) in zip(result.ids, file.found.map(\.thumbnail)) {
+        if let thumbnail { styles.setThumbnail(data: thumbnail, for: id) }
+      }
     }
-    var text = "\(result.added) added"
-    if result.replaced > 0 { text += ", \(result.replaced) replaced (same category and name)" }
+    var text = "\(added) added"
+    if replaced > 0 { text += ", \(replaced) replaced (same category and name)" }
     text += "."
     if !unreadable.isEmpty { text += " No styles found in \(unreadable.formatted(.list(type: .and)))." }
-    message = ("Imported \(parsed.count) \(parsed.count == 1 ? "style" : "styles")", text)
+    let count = added + replaced
+    message = ("Imported \(count) \(count == 1 ? "style" : "styles")", text)
     search = ""
     category = nil
+    if let newLibrary { choose(newLibrary) }
   }
 
   /// Writes a library page (styles and thumbnails, usable in any browser) or a Markdown style

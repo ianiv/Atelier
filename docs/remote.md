@@ -16,7 +16,7 @@ In Create, **Run on** at the top of the inspector picks where new jobs go: this 
 
 ## Using a server's styles
 
-A paired server's [styles](styles.md) can be used on this device. On the Styles screen, **Styles From** picks whose to show: this device's or a server's. In Create, the style picker lists each server's after your own, under its name. A server's style works just like your own, with the same tag boxes, and it works wherever the job runs, even on this device.
+A paired server's [styles](styles.md) can be used on this device. On the Styles screen, the library menu in the toolbar also lists paired servers: pick one to show its styles, all its libraries together. In Create, the style picker lists each server's after your own, under its name. A server's style works just like your own, with the same tag boxes, and it works wherever the job runs, even on this device.
 
 They're read-only here, and nothing the server does changes your own styles. To keep one and change it, choose **Copy to This iPad** or **Copy to This Mac**. If a server goes offline, its styles stay usable as last seen, marked as offline there. **Open Thumbnail in Create** brings back how a style's thumbnail was made, so it's unavailable when that thumbnail's model isn't where jobs are set to run. It needs the server online.
 

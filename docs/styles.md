@@ -17,17 +17,30 @@ The boxes keep only what you typed. History saves the full prompt the model got.
 
 ## The Styles screen
 
-**Styles** in the sidebar lists your styles by category, with the start of each template. The list/grid switch in the toolbar shows them instead as a grid of thumbnails with their names. Filter them with the search field, or pick a category from the toolbar. The style Create is using has a check mark. Select styles with a click, ⌘-click, ⇧-click, ⌘A or the arrow keys (in the grid, ← and → move along a row and ↑ and ↓ between rows). The screen keeps its filter, category, layout, selection and scroll position while you're on other screens and between launches.
+**Styles** in the sidebar lists the styles of one [library](#libraries) by category, with the start of each template. The list/grid switch in the toolbar shows them instead as a grid of thumbnails with their names. Filter them with the search field, or pick a category from the toolbar. The style Create is using has a check mark. Select styles with a click, ⌘-click, ⇧-click, ⌘A or the arrow keys (in the grid, ← and → move along a row and ↑ and ↓ between rows). The screen keeps its filter, category, layout, selection and scroll position while you're on other screens and between launches.
 
-- **New Style** (+) adds a style and opens it in the inspector. Edit its name, category, subcategory, template, negative prompt and notes, then click **Save**.
+- **New Style** (+) adds a style to the library on screen and opens it in the inspector. Edit its name, category, subcategory, template, negative prompt and notes, then click **Save**.
 - **Use on Create** (in the inspector, or the right-click menu) selects the style on Create and goes there.
 - **Duplicate** copies a style to start a variation; **Delete** removes the selected styles (⌫ works too). Deleting can't be undone, so export first to keep a copy.
-- **Import Styles…** (the toolbar's import/export menu) reads one or more style libraries (`.html`) or Markdown style files, or drop them on the screen. A style with the same category and name as one you have replaces it; a library's thumbnails come in with its styles.
-- **Export Styles…** asks which styles to export (the selected ones, or all the filter shows), a title, and a format: a style library, one `.html` file with thumbnails that also works on its own in any browser (see below), or a Markdown style file without thumbnails. The title is the library page's heading and the file's name.
+- **Import Styles…** (the toolbar's import/export menu) reads one or more library pages (`.html`) or Markdown style files into the library on screen, or drop them on the screen. A style with the same category and name as one in that library replaces it; a page's thumbnails come in with its styles. **Import as New Library…** makes a new library from each file instead.
+- **Export Styles…** asks which styles to export (the selected ones, or all the filter shows), a title, and a format: a library page, one `.html` file with thumbnails that also works on its own in any browser (see below), or a Markdown style file without thumbnails. The title is the library page's heading and the file's name.
+
+## Libraries
+
+Styles live in libraries, so a set for one model or purpose stays apart from the others. The first menu in the Styles screen's toolbar shows the library on screen and how many styles each has. Pick another to switch to it.
+
+- **New Library…**, **Rename…** and **Delete…** are in the same menu. There's always at least one library. Deleting one removes its styles and thumbnails; on a Mac their files go to the Trash.
+- **Import as New Library…** names the library after the page's title, or after the file for Markdown (`film-camera-styles.md` becomes "Film camera styles").
+- **Move to Library** and **Copy to Library** (the right-click menu) send the selected styles to another library with their thumbnails. **New Library…** under Move starts one from them.
+- Export works on the library on screen, and a style's category and name only have to be unique within its library.
+
+On Create, the style picker lists every library, with each category's library beside it, or just the one you pick beside its search box. Switching library on the Styles screen doesn't change the style Create is using, and reusing an image finds its style in any library, looking in the one on screen first.
+
+The first library is kept in `Styles.json` and `StyleThumbnails`, and each other one in its own folder under `StyleLibraries`, all in Atelier's Application Support folder. `StyleLibraries.json` there lists their names and order.
 
 ## Styles from another device
 
-With a server paired, **Styles From** on the Styles screen shows its styles, and Create's style picker lists them under its name. They work like your own but are read-only; **Copy to This Mac** or **Copy to This iPad** keeps one you can edit. See [Running jobs on another device](remote.md#using-a-servers-styles).
+With a server paired, the same menu on the Styles screen shows its styles, all its libraries together, and Create's style picker lists them under its name. They work like your own but are read-only; **Copy to This Mac** or **Copy to This iPad** keeps one you can edit. See [Running jobs on another device](remote.md#using-a-servers-styles).
 
 ## Thumbnails
 
@@ -41,11 +54,11 @@ Each style can have a square thumbnail, shown in the list and the editor.
 
 Generated thumbnails use what's on the Create screen when you start: the model, every inspector setting (size, steps, sampler, LoRAs and so on) and the seed, the same seed for every style so they compare like for like. Create's negative prompt, canvas and moodboard aren't used; only each style's own negative prompt is. Pick an image model there first, and lower the size or steps for a quicker batch. The jobs run in the queue like any other, but their images only become thumbnails: they aren't saved to a project and don't replace the image on the canvas.
 
-Styles are saved in `Styles.json` and thumbnails (with their full-size images, and settings when they're known) in `StyleThumbnails` in Atelier's Application Support folder. Style files don't carry thumbnails.
+Thumbnails are saved with their library, with their full-size images, and settings when they're known. Markdown style files don't carry thumbnails.
 
-## Style libraries
+## Library pages
 
-An exported style library is a single, self-contained web page: open it in any browser, on any device, with no Atelier and no internet connection. It lists the styles by category with their thumbnails, searches them, and shows only the categories you tick in the category menu at the top. Click a style to open it: fill in its tag boxes (Subject, Setting and so on) and an optional negative prompt, and copy the finished prompt and negative prompt. The page remembers your tag text, the categories you picked and which ones are collapsed.
+An exported library page is a single, self-contained web page: open it in any browser, on any device, with no Atelier and no internet connection. It lists the styles by category with their thumbnails, searches them, and shows only the categories you tick in the category menu at the top. Click a style to open it: fill in its tag boxes (Subject, Setting and so on) and an optional negative prompt, and copy the finished prompt and negative prompt. The page remembers your tag text, the categories you picked and which ones are collapsed.
 
 Atelier reads the styles back from a `<script type="application/json" id="atelier-styles">` element in the page, so a library made or edited by hand imports too, even a minimal HTML file holding nothing else:
 
