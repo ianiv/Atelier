@@ -5,10 +5,12 @@ import SwiftUI
 struct PresetMenu: View {
   @Environment(CreateModel.self) private var model
   @Environment(PresetStore.self) private var presets
+  @Environment(ModelLibrary.self) private var library
   @Environment(\.undoManager) private var undoManager
   @Environment(FileDialogs.self) private var fileDialogs
   @Environment(\.openURL) private var openURL
   @State private var saving = false
+  @State private var offeredDownload: ModelLibrary.PresetDownload?
   @State private var pasteFailed = false
 
   var body: some View {
@@ -29,14 +31,7 @@ struct PresetMenu: View {
       if !others.isEmpty {
         Menu("Other Models") {
           ForEach(others) { preset in
-            // A preset's model may not be downloaded, or not be on the server: say so rather than
-            // leave the model as it is.
-            let isMissing = !model.availableModels.contains { $0.file == preset.model }
-            let missing = model.runTarget == .local ? "not downloaded" : "not on \(model.runTargetServerName ?? "the server")"
-            Button(isMissing ? "\(preset.name) (\(name(of: preset.model)), \(missing))" : "\(preset.name) (\(name(of: preset.model)))") {
-              model.apply(preset, undoManager: undoManager)
-            }
-            .disabled(isMissing)
+            otherModelButton(preset)
           }
         }
       }
@@ -116,12 +111,49 @@ struct PresetMenu: View {
       Label("Presets", systemImage: "square.stack.3d.up")
     }
     .help("Presets: saved setting values applied on top of the model's defaults")
+    // The catalog is only read for the Models screen, so fetch it when a preset needs it.
+    .task(id: others.contains(where: isMissing)) {
+      if others.contains(where: isMissing), model.runTarget == .local, library.catalog.isEmpty {
+        await library.refresh()
+      }
+    }
+    .alert(
+      "Download \(offeredDownload?.model.name ?? "this model")?",
+      isPresented: Binding(get: { offeredDownload != nil }, set: { if !$0 { offeredDownload = nil } }),
+      presenting: offeredDownload
+    ) { download in
+      Button("Download") { library.download(download) }
+      Button("Cancel", role: .cancel) {}
+    } message: { download in
+      Text("“\(download.preset.name)” is for this model, which isn't downloaded. Atelier switches to it and applies the preset when the download finishes.")
+    }
     .sheet(isPresented: $saving) { SavePresetSheet() }
     .debugPresents("savePreset", $saving)
     .alert("The clipboard has no settings", isPresented: $pasteFailed) {
       Button("OK") {}
     } message: {
       Text("Copy a configuration in Draw Things, or settings in Atelier, then paste again. For a file with several configurations, use Import Preset.")
+    }
+  }
+
+  private func isMissing(_ preset: Preset) -> Bool {
+    !model.availableModels.contains { $0.file == preset.model }
+  }
+
+  /// A preset's model may not be here. If this device can download it, offer that; otherwise say
+  /// why not, rather than leave the model as it is.
+  @ViewBuilder private func otherModelButton(_ preset: Preset) -> some View {
+    let title = "\(preset.name) (\(name(of: preset.model))"
+    if !isMissing(preset) {
+      Button(title + ")") { model.apply(preset, undoManager: undoManager) }
+    } else if model.runTarget != .local {
+      Button(title + ", not on \(model.runTargetServerName ?? "the server"))") {}.disabled(true)
+    } else if library.downloads[preset.model ?? ""] != nil {
+      Button(title + ", downloading)") {}.disabled(true)
+    } else if let download = library.presetDownload(for: preset) {
+      Button(title + ", not downloaded)…") { offeredDownload = download }
+    } else {
+      Button(title + ", not downloaded)") {}.disabled(true)
     }
   }
 

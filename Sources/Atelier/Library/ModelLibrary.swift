@@ -44,6 +44,12 @@ final class ModelLibrary {
     }
   }
 
+  /// A preset whose model isn't here, and the catalog entry that can fetch it.
+  struct PresetDownload {
+    var preset: Preset
+    var model: MediaGenerationResolvedModel
+  }
+
   /// A LoRA file waiting to be imported or being imported.
   struct LoRAImport: Identifiable {
     let id = UUID()
@@ -94,6 +100,8 @@ final class ModelLibrary {
   private(set) var sizes: [String: Int64] = [:]
   private(set) var loras: [LoRA] = []
   private(set) var downloads: [String: Download] = [:]
+  /// Downloads started by picking a preset, by model file: the preset applies when they finish.
+  private(set) var presetDownloads: [String: PresetDownload] = [:]
   private(set) var importing: [LoRAImport] = []
   private(set) var importingModels: [ModelImport] = []
   /// 8-bit copies being written, by output file, with their progress.
@@ -173,6 +181,19 @@ final class ModelLibrary {
     customModels.contains(model.file)
   }
 
+  /// What can fetch `preset`'s model, if it's in the catalog. An imported model's file can't be
+  /// downloaded again, so that's nil too.
+  func presetDownload(for preset: Preset) -> PresetDownload? {
+    guard let model = catalog.first(where: { $0.file == preset.model }), !isCustom(model) else { return nil }
+    return PresetDownload(preset: preset, model: model)
+  }
+
+  /// Downloads a preset's model, then applies the preset, which switches to that model.
+  func download(_ download: PresetDownload) {
+    presetDownloads[download.model.file] = download
+    self.download(download.model)
+  }
+
   func download(_ model: MediaGenerationResolvedModel) {
     let file = model.file
     guard downloadTasks[file] == nil else { return }
@@ -180,6 +201,7 @@ final class ModelLibrary {
     downloads[file] = Download(
       file: file, fileIndex: 0, totalFiles: 0, bytesWritten: 0, totalBytes: 0)
     downloadTasks[file] = Task {
+      var finished = false
       do {
         _ = try await MediaGenerationEnvironment.default.ensure(file, offline: false) { state in
           guard case .downloading(let name, let index, let total, let written, let expected) = state
@@ -200,6 +222,7 @@ final class ModelLibrary {
             self.downloads[file] = progress
           }
         }
+        finished = true
       } catch is CancellationError {
         // Cancelled; the partial file stays so a later download resumes.
       } catch {
@@ -209,6 +232,14 @@ final class ModelLibrary {
       await afterChange()
       downloads[file] = nil
       downloadTasks[file] = nil
+      if let waiting = presetDownloads.removeValue(forKey: file) {
+        if finished {
+          create.apply(waiting.preset, undoManager: nil)
+        } else if let errorMessage {
+          // Started from Create, where this library's own message isn't shown.
+          create.errorMessage = errorMessage
+        }
+      }
     }
   }
 

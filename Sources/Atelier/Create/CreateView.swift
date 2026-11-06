@@ -550,6 +550,7 @@ final class CanvasState {
 struct StatusBar: View {
   @Environment(CreateModel.self) private var model
   @Environment(Navigation.self) private var navigation
+  @Environment(ModelLibrary.self) private var library
 
   var body: some View {
     HStack(spacing: 12) {
@@ -599,6 +600,12 @@ struct StatusBar: View {
         Text("Cancelling…")
       }
       Spacer()
+      // A preset picked for a model that wasn't here: its download started from Create, so its
+      // progress and Cancel are here too.
+      ForEach(library.presetDownloads.values.map(\.model).sorted { $0.file < $1.file }, id: \.file) { download in
+        Text("Downloading \(download.name)…").foregroundStyle(.secondary).lineLimit(1)
+        ModelStatus(model: download, library: library).frame(maxWidth: 160)
+      }
       QueueStatus()
       ZoomControls(canvas: model.canvas)
     }
