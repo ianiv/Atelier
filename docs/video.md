@@ -42,6 +42,8 @@ The inspector's **Video** section starts with **Length**: the number of frames, 
 
 Longer and larger videos take much longer and need much more memory. Try a short, small one first.
 
+MiniMax H3 models (including FastH3 Omni and HyperFlow H3 Flash) always decode in 256-pixel tiles, whatever the Tiled Decoding tile size says: larger tiles leave a grid of small blocks over the video.
+
 ## Starting from an image
 
 - **First frame.** With a model that takes one, put an image on the canvas and switch to **Edit**, as you would to edit an image. The video starts from what's inside the frame.

@@ -1,6 +1,7 @@
 @preconcurrency import _MediaGenerationKit
 @preconcurrency import DataModels
 import Foundation
+import ModelZoo
 @preconcurrency import ScriptDataModels
 
 nonisolated extension PipelineConfiguration {
@@ -10,6 +11,15 @@ nonisolated extension PipelineConfiguration {
   func engineConfiguration(template: GenerationConfiguration) -> GenerationConfiguration {
     let options = base.engineOptions(template: template)
     options.shiftForAudio = shiftForAudio
+    // MiniMax H3's video decoder normalizes its rotary coordinates per tile and only decodes
+    // 16-latent (256-pixel) tiles correctly; larger tiles cover the video in a ~32-pixel block grid.
+    // The engine uses that size itself when tiled decoding is off (`FirstStage.decode`, the
+    // `.minimaxH3` case), but passes the user's size through when it's on.
+    if ModelZoo.versionForModel(base.model) == .minimaxH3 {
+      options.decodingTileWidth = 256
+      options.decodingTileHeight = 256
+      options.decodingTileOverlap = 64
+    }
     return options.createGenerationConfiguration()
   }
 }
