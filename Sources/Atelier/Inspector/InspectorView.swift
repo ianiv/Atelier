@@ -534,10 +534,11 @@ struct FramesControl: View {
     }
   }
 
-  /// Snaps the typed count and shows the result; text that isn't a positive number reverts.
+  /// Snaps the typed count to the closest one the model takes (zero or less goes to the
+  /// shortest) and shows it; text that isn't a number reverts.
   private func commit() {
-    if let typed = Int(draft.trimmingCharacters(in: .whitespaces)), typed > 0 {
-      frames = video?.snapped(typed) ?? typed
+    if let typed = Int(draft.trimmingCharacters(in: .whitespaces)) {
+      frames = video?.snapped(typed) ?? max(typed, 1)
     }
     draft = String(video?.snapped(frames) ?? frames)
   }
