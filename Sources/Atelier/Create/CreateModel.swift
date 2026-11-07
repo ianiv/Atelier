@@ -371,6 +371,11 @@ final class CreateModel {
   /// The first sampling step seen and when, and when the latest one arrived, for the estimate.
   private var samplingStart: (date: Date, step: Int)?
   private var lastStepAt: Date?
+  /// Switches the status to "Decoding…" once the last step should be done. The engine reports a
+  /// step as it starts (`DDIMSampler` and friends call `feedback` before running it) and only
+  /// signposts `.imageDecoded` after decoding, so nothing marks the end of the last step: it's
+  /// taken to end one average step after it began. Cancelled by the next step or state.
+  private var decodingLabelTask: Task<Void, Never>?
   /// The project step behind `image` once it's a finished image (not a step preview), by its
   /// image tensor, which stays the same when steps are renumbered.
   private var imageStep: (project: String, tensorId: Int64)? {
@@ -2217,7 +2222,16 @@ final class CreateModel {
       if canvasFollowsRun, showsOnCanvas { coverCanvas(with: first) }
       noteStep(step, of: total)
     case .state(let state):
-      phase = .running(Self.describe(state))
+      if case .generating = state {} else {
+        decodingLabelTask?.cancel()
+        decodingLabelTask = nil
+      }
+      // A repeat of the last step's state mustn't undo "Decoding…".
+      var keepsDecodingLabel = false
+      if case .generating(let step, _) = state {
+        keepsDecodingLabel = step == self.step && phase == .running(Self.describe(.decoding))
+      }
+      if !keepsDecodingLabel { phase = .running(Self.describe(state)) }
       transfer = Self.transfer(in: state)
       if case .generating(let step, let total) = state {
         noteStep(step, of: total)
@@ -2231,6 +2245,17 @@ final class CreateModel {
       let now = Date()
       if samplingStart == nil { samplingStart = (now, step) }
       lastStepAt = now
+      decodingLabelTask?.cancel()
+      decodingLabelTask = nil
+      if step == total, total > 1, let start = samplingStart, step > start.step {
+        let perStep = now.timeIntervalSince(start.date) / Double(step - start.step)
+        let message = Self.describe(.generating(step: step, totalSteps: total))
+        decodingLabelTask = Task { [weak self] in
+          try? await Task.sleep(for: .seconds(perStep * 1.1))
+          guard !Task.isCancelled, let self, self.phase == .running(message) else { return }
+          self.phase = .running(Self.describe(.decoding))
+        }
+      }
     }
     self.step = step
     totalSteps = total
