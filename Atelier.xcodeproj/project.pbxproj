@@ -1417,10 +1417,10 @@
 		};
 		A4CE7021663F6A67DB66A52E /* XCRemoteSwiftPackageReference "draw-things-community" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/drawthingsai/draw-things-community";
+			repositoryURL = "https://github.com/ianiv/draw-things-community";
 			requirement = {
 				kind = revision;
-				revision = 8dbbb5c69b83c6312eb10622611d46a943de6f88;
+				revision = ce045515a6ebb4c36c9b74086f1585f34e4d7735;
 			};
 		};
 		FA3B96D181CC9804C2FF9474 /* XCRemoteSwiftPackageReference "flatbuffers" */ = {

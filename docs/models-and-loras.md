@@ -34,7 +34,7 @@ The converted model is saved in the models folder as `<name>_f16.ckpt`, marked *
 
 **MOSS Image fine-tunes** in OpenMOSS' layout (for example Kromoss) are converted by a dedicated importer and work like the official MOSS Image model.
 
-Some families can't be imported yet: MiniMax H3, HiDream O1, Qwen Image 2.1, LTX-2, SeedVR2, Kandinsky, Würstchen and LongCat. Atelier tells you after inspecting the file.
+Some families can't be imported yet: HiDream O1, Qwen Image 2.1, LTX-2, SeedVR2, Kandinsky, Würstchen and LongCat. Atelier tells you after inspecting the file.
 
 ### Model files Atelier can't match
 

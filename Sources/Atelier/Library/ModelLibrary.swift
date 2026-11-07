@@ -351,7 +351,7 @@ final class ModelLibrary {
   /// Families ModelImporter detects but can't convert: it traps on them (`fatalError`) instead
   /// of throwing, so they're turned away after inspection. MOSS goes through MOSSImporter.
   private nonisolated static let unconvertibleVersions: Set<ModelVersion> = [
-    .mossImage, .minimaxH3, .hiDreamO1, .qwenImage2_1, .ltx2, .ltx2_3, .seedvr2_3b, .seedvr2_7b,
+    .mossImage, .hiDreamO1, .qwenImage2_1, .ltx2, .ltx2_3, .seedvr2_3b, .seedvr2_7b,
     .kandinsky21, .wurstchenStageB, .longcatVideoAvatar1_5,
   ]
 

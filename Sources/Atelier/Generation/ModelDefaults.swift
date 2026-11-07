@@ -63,6 +63,14 @@ nonisolated enum ModelDefaults {
       prefix: "fasth3_omni_", steps: 8, guidanceScale: 1, shift: 12,
       resolutionDependentShift: false, sampler: .dDIMTrailing, size: (1280, 768), fps: 24,
       numFrames: 124, shiftForAudio: 3, replacesCatalog: true),
+    // HyperFlow H3 Flash, a compressed few-step MiniMax H3 (FL2VA or Ref2VA) imported from its GGUF
+    // as `hyperflow_h3_flash_*`. It's distilled for 4, 6 and 8 steps without CFG; the engine runs it
+    // with Euler on that step count's fixed sigma grid (`MiniMaxH3Layout.hyperFlowSigmaGrids`)
+    // whatever the sampler, so the sampler here only matters for display.
+    Fallback(
+      prefix: "hyperflow_", steps: 6, guidanceScale: 1, shift: 12,
+      resolutionDependentShift: false, sampler: .dDIMTrailing, size: (1344, 768), fps: 24,
+      numFrames: 124, shiftForAudio: 3, replacesCatalog: true),
     // The values the engine's run-longcat-avatar-video skill uses for the step-distilled DMD files.
     Fallback(
       prefix: "longcat_video_avatar_", steps: 8, guidanceScale: 1, shift: 7,
