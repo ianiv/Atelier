@@ -235,10 +235,15 @@ struct CanvasView: View {
         if model.layout != nil {
           LayoutCanvas(size: frameRect.size)
             .position(x: frameRect.midX, y: frameRect.midY)
-        } else if model.image == nil {
+        } else if model.image == nil, !model.isLoadingCanvasImage {
           ContentUnavailableView(
             "No image yet", systemImage: "photo",
             description: Text("Write a prompt below and press Generate (⌘↩), or drop an image here to edit it."))
+        }
+        if model.isLoadingCanvasImage, model.canvasClip == nil {
+          CanvasLoadingIndicator()
+            .position(x: frameRect.midX, y: frameRect.midY)
+            .allowsHitTesting(false)
         }
       }
       .frame(width: geometry.size.width, height: geometry.size.height)
@@ -427,6 +432,25 @@ struct CanvasView: View {
     ) { result in
       if case .failure(let error) = result { saveError = error.localizedDescription }
     }
+  }
+}
+
+/// Shown while an image is loading onto the canvas. It waits a moment first, so the usual quick
+/// load doesn't flash it.
+private struct CanvasLoadingIndicator: View {
+  @State private var isVisible = false
+
+  var body: some View {
+    ProgressView()
+      .controlSize(.large)
+      .padding(16)
+      .background(.regularMaterial, in: .rect(cornerRadius: 16))
+      .accessibilityLabel("Loading image")
+      .opacity(isVisible ? 1 : 0)
+      .task {
+        try? await Task.sleep(for: .milliseconds(250))
+        isVisible = true
+      }
   }
 }
 

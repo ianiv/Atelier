@@ -377,8 +377,15 @@ final class CreateModel {
     didSet {
       imageIsPreview = false
       showsFrame = false
+      canvasImageLoad = nil
     }
   }
+  /// The load the canvas is waiting on. Decoding a large image (an upscale, say) can take seconds,
+  /// with the old image still showing. A newer load, or anything else landing on the canvas,
+  /// takes over, so a slow older load can't end the wait for the newer one.
+  private var canvasImageLoad: UUID?
+  /// An image is on its way to the canvas and no preview has taken its place.
+  var isLoadingCanvasImage: Bool { canvasImageLoad != nil && !imageIsPreview }
   /// The canvas shows one frame of a clip (`useFrame`), not the clip playing.
   private var showsFrame = false
   /// The canvas shows a step preview, not `imageStep`'s image.
@@ -456,7 +463,8 @@ final class CreateModel {
     history.setCurrent(tensorId: tensorId, exact: true)
     canvasIsImported = false
     Task {
-      guard let frame = await history.image(tensorId: tensorId, in: projectName) else { return }
+      let frame = await whileLoadingCanvasImage { await history.image(tensorId: tensorId, in: projectName) }
+      guard let frame else { return }
       imageStep = (projectName, tensorId)
       showsFrame = true
       lastSavedTensorId = nil
@@ -851,13 +859,15 @@ final class CreateModel {
          session.imageTensorId != nil || session.imageStep != nil
       {
         Task {
-          var tensorId = session.imageTensorId
-          if tensorId == nil, let step = session.imageStep {
-            tensorId = await history.tensorId(at: step, in: project)
+          let loaded: (tensorId: Int64, image: CGImage)? = await whileLoadingCanvasImage {
+            var tensorId = session.imageTensorId
+            if tensorId == nil, let step = session.imageStep {
+              tensorId = await history.tensorId(at: step, in: project)
+            }
+            guard let tensorId, let image = await history.image(tensorId: tensorId, in: project) else { return nil }
+            return (tensorId, image)
           }
-          guard let tensorId, let restoredImage = await history.image(tensorId: tensorId, in: project),
-                image == nil
-          else { return }
+          guard let (tensorId, restoredImage) = loaded, image == nil else { return }
           lastSavedTensorId = tensorId
           imageStep = (project, tensorId)
           image = restoredImage
@@ -1006,7 +1016,7 @@ final class CreateModel {
     let restoreImage = Task {
       guard loadImage else { return }
       if restoreInput, item.inputTensorId != nil {
-        if let input = await history.input(of: item, in: projectName),
+        if let input = await whileLoadingCanvasImage({ await history.input(of: item, in: projectName) }),
            let inputTensorId = item.inputTensorId
         {
           guard imageStep?.tensorId == item.tensorId else { return }
@@ -1021,7 +1031,7 @@ final class CreateModel {
         guard imageStep?.tensorId == item.tensorId else { return }
         statusNote = "The image this was made from is no longer in the project."
       }
-      let full = await history.image(at: item.id, in: projectName)
+      let full = await whileLoadingCanvasImage { await history.image(at: item.id, in: projectName) }
       if let full, imageStep?.tensorId == item.tensorId { image = full }
     }
     let restoreMoodboard = Task {
@@ -2103,9 +2113,18 @@ final class CreateModel {
     history.setCurrent(tensorId: item.tensorId)
     canvasIsImported = false
     Task {
-      let full = await history.image(at: item.id, in: projectName)
+      let full = await whileLoadingCanvasImage { await history.image(at: item.id, in: projectName) }
       if let full, imageStep?.tensorId == item.tensorId, !imageIsPreview { image = full }
     }
+  }
+
+  /// Runs a load of the canvas image, marking the canvas as waiting on it.
+  private func whileLoadingCanvasImage<T>(_ load: () async -> T) async -> T {
+    let id = UUID()
+    canvasImageLoad = id
+    let result = await load()
+    if canvasImageLoad == id { canvasImageLoad = nil }
+    return result
   }
 
   /// The canvas is about to show something else: the running job's previews and result stop
