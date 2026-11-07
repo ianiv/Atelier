@@ -514,11 +514,10 @@ final class CreateModel {
     return list.prefix(1).uppercased() + list.dropFirst() + "."
   }
 
-  /// Generate works while a job runs: it queues the next one.
+  /// Generate works while a job runs: it queues the next one. An empty prompt is fine: a model can
+  /// run on no text at all, and an edit or a video may need none.
   var canGenerate: Bool {
     !isLoadingModel && selectedModel != nil && settings != nil && runTargetProblem == nil
-      // An empty prompt is fine when the style has a default subject.
-      && (!prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || style?.defaults[Style.subject] != nil)
   }
 
   var style: Style? { styles?.style(id: styleID) ?? remoteStyles.style(id: styleID) }

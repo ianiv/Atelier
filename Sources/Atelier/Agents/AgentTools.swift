@@ -210,7 +210,7 @@ final class AgentTools {
       "inputSchema": [
         "type": "object",
         "properties": [
-          "prompt": ["type": "string", "description": "Required, unless use_app_settings is true: then it defaults to the Create screen's prompt."],
+          "prompt": ["type": "string", "description": "Required, unless use_app_settings is true: then it defaults to the Create screen's prompt. Can be empty."],
           "negative_prompt": ["type": "string"],
           "model": ["type": "string", "description": "Model file or name (see list_models). Defaults to the model selected in the app."],
           "preset": ["type": "string", "description": "Name of a saved preset to apply (see list_presets)."],
@@ -351,8 +351,9 @@ final class AgentTools {
     let fromScreen = arguments["use_app_settings"] as? Bool == true && arguments["prompt"] == nil
     // The screen's prompt as Generate sends it: written into the selected style.
     let prompt = fromScreen ? create.styledPrompts.prompt : arguments["prompt"] as? String ?? ""
-    guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-      throw ToolError(fromScreen ? "The Create screen's prompt is empty." : "`prompt` is required.")
+    // An empty prompt is fine, as it is for Generate, but one left out is more likely a mistake.
+    guard fromScreen || arguments["prompt"] is String else {
+      throw ToolError("`prompt` is required (it can be empty).")
     }
     if create.models.isEmpty { await create.refreshModelList() }
     let model = try resolveModel(arguments["model"] as? String)
