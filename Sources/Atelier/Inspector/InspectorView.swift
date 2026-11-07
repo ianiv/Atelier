@@ -494,9 +494,15 @@ struct SettingRow: View {
 
 /// A video's length: the frame count, snapped to the counts the model takes, and how many
 /// seconds that plays for. The stepper moves between those counts.
+///
+/// Typing edits a text draft that snaps only on Return or when the field loses focus: a
+/// value-formatted field commits on every keystroke, so snapping there turned the "1" of
+/// "121" into the smallest count before the rest could be typed.
 struct FramesControl: View {
   @Binding var frames: Int
   let video: VideoModel?
+  @State private var draft = ""
+  @FocusState private var focused: Bool
 
   var body: some View {
     let snapped = video?.snapped(frames) ?? frames
@@ -506,21 +512,39 @@ struct FramesControl: View {
           .monospacedDigit()
           .foregroundStyle(.secondary)
       }
-      TextField(
-        "", value: Binding(get: { snapped }, set: { frames = video?.snapped($0) ?? $0 }),
-        format: .number.grouping(.never)
-      )
-      .labelsHidden()
-      .multilineTextAlignment(.trailing)
-      .frame(width: 52)
+      TextField("", text: $draft)
+        .labelsHidden()
+        .multilineTextAlignment(.trailing)
+        .frame(width: 52)
+        .focused($focused)
+        .onSubmit(commit)
+        .onChange(of: focused) { _, isFocused in
+          if !isFocused { commit() }
+        }
+        .onChange(of: snapped, initial: true) { _, value in
+          if !focused { draft = String(value) }
+        }
       Text("frames").foregroundStyle(.secondary)
       Stepper(
         "",
-        onIncrement: { frames = video?.stepped(snapped, by: 1) ?? snapped + 1 },
-        onDecrement: { frames = video?.stepped(snapped, by: -1) ?? max(snapped - 1, 1) }
+        onIncrement: { step(snapped, by: 1) },
+        onDecrement: { step(snapped, by: -1) }
       )
       .labelsHidden()
     }
+  }
+
+  /// Snaps the typed count and shows the result; text that isn't a positive number reverts.
+  private func commit() {
+    if let typed = Int(draft.trimmingCharacters(in: .whitespaces)), typed > 0 {
+      frames = video?.snapped(typed) ?? typed
+    }
+    draft = String(video?.snapped(frames) ?? frames)
+  }
+
+  private func step(_ snapped: Int, by delta: Int) {
+    frames = video?.stepped(snapped, by: delta) ?? max(snapped + delta, 1)
+    draft = String(video?.snapped(frames) ?? frames)
   }
 }
 
