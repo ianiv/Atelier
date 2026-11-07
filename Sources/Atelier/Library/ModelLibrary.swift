@@ -539,15 +539,17 @@ final class ModelLibrary {
     return specification.file
   }
 
-  /// Whether `model` can get an 8-bit copy in `format`: an imported full-precision MOSS model
-  /// without that copy yet. A copy whose file exists but isn't registered was interrupted, and
-  /// making it again resumes it.
+  /// Whether `model` can get an 8-bit copy in `format`: an imported full-precision MOSS or
+  /// MiniMax H3 model without that copy yet. MiniMax H3 only gets 8-bit S, the format Draw Things'
+  /// own H3 files use. A copy whose file exists but isn't registered was interrupted, and making it
+  /// again resumes it.
   func canMake8BitCopy(_ model: MediaGenerationResolvedModel, _ format: MOSSImporter.EightBit)
     -> Bool
   {
     let output = Self.eightBitFile(for: model.file, format)
-    return isCustom(model) && model.isDownloaded && model.file.hasSuffix("_f16.ckpt")
-      && ModelZoo.specificationForModel(model.file)?.version == .mossImage
+    let version = ModelZoo.specificationForModel(model.file)?.version
+    let supported = version == .mossImage || (version == .minimaxH3 && format == .rowwise)
+    return isCustom(model) && model.isDownloaded && model.file.hasSuffix("_f16.ckpt") && supported
       && quantizing[output] == nil && ModelZoo.specificationForModel(output) == nil
   }
 
@@ -556,10 +558,11 @@ final class ModelLibrary {
   }
 
   @concurrent private nonisolated static func quantize(
-    _ source: String, to destination: String, format: MOSSImporter.EightBit,
+    _ source: String, to destination: String, format: MOSSImporter.EightBit, miniMaxH3: Bool,
     progress: @escaping @Sendable (Float) -> Void
   ) async {
-    MOSSImporter.quantize(source, to: destination, format: format, progress: progress)
+    MOSSImporter.quantize(
+      source, to: destination, format: format, miniMaxH3: miniMaxH3, progress: progress)
   }
 
   /// Writes `<name>_q8p.ckpt` or `<name>_i8x.ckpt` next to the model, about half its size, and
@@ -581,7 +584,9 @@ final class ModelLibrary {
       }
     }
     Task {
-      await Self.quantize(source, to: destination, format: format, progress: progress)
+      await Self.quantize(
+        source, to: destination, format: format, miniMaxH3: specification.version == .minimaxH3,
+        progress: progress)
       if FileManager.default.fileExists(atPath: destination) {
         specification.file = output
         specification.name = "\(model.name) (\(format.title))"
