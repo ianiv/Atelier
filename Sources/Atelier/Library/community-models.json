@@ -16,7 +16,7 @@
       }
     },
     "frames_per_second": 24,
-    "note": "[Pika H3 Flex](https://huggingface.co/Pika-Labs/Pika-H3-Flex) is Pika's six-step post-training of MiniMax H3 for text-to-video and first/last-frame-conditioned generation. Use the canvas image for the first frame and the first enabled moodboard image for the last frame, or omit images for text-to-video. It generates 24 FPS video with synchronized 32 kHz stereo audio. Start with a 480- or 768-pixel short side, 6 LCM steps, Text Guidance 1, Shift 12, and Audio Shift 3. Released under the [MiniMax H3 Community License](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE).",
+    "note": "[Pika H3 Flex](https://huggingface.co/Pika-Labs/Pika-H3-Flex) is Pika's six-step post-training of MiniMax H3 for text-to-video and first/last-frame-conditioned generation. Use the canvas image for the first frame and the first enabled moodboard image for the last frame, or omit images for text-to-video. It generates 24 FPS video with synchronized 32 kHz stereo audio. Start with a 480- or 768-pixel short side, 6 TCD steps, Strategic Stochastic Sampling 100%, Text Guidance 1, Shift 4, and Audio Shift 1, which approximates Pika's six-step re-noising schedule (shift 12 / audio shift 3 on non-uniform knots). Released under the [MiniMax H3 Community License](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE).",
     "copyright": "\u00a9 2026 Mellis, Inc.",
     "hugging_face_link": "Pika-Labs/Pika-H3-Flex"
   },
@@ -37,7 +37,7 @@
       }
     },
     "frames_per_second": 24,
-    "note": "[Pika H3 Flex](https://huggingface.co/Pika-Labs/Pika-H3-Flex) is Pika's six-step post-training of MiniMax H3 for text-to-video and first/last-frame-conditioned generation. Use the canvas image for the first frame and the first enabled moodboard image for the last frame, or omit images for text-to-video. It generates 24 FPS video with synchronized 32 kHz stereo audio. Start with a 480- or 768-pixel short side, 6 LCM steps, Text Guidance 1, Shift 12, and Audio Shift 3. Released under the [MiniMax H3 Community License](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE).",
+    "note": "[Pika H3 Flex](https://huggingface.co/Pika-Labs/Pika-H3-Flex) is Pika's six-step post-training of MiniMax H3 for text-to-video and first/last-frame-conditioned generation. Use the canvas image for the first frame and the first enabled moodboard image for the last frame, or omit images for text-to-video. It generates 24 FPS video with synchronized 32 kHz stereo audio. Start with a 480- or 768-pixel short side, 6 TCD steps, Strategic Stochastic Sampling 100%, Text Guidance 1, Shift 4, and Audio Shift 1, which approximates Pika's six-step re-noising schedule (shift 12 / audio shift 3 on non-uniform knots). Released under the [MiniMax H3 Community License](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE).",
     "copyright": "\u00a9 2026 Mellis, Inc.",
     "hugging_face_link": "Pika-Labs/Pika-H3-Flex"
   },
@@ -58,7 +58,7 @@
       }
     },
     "frames_per_second": 24,
-    "note": "[Pika H3 Flex](https://huggingface.co/Pika-Labs/Pika-H3-Flex) is Pika's six-step post-training of MiniMax H3 for text-to-video and first/last-frame-conditioned generation. Use the canvas image for the first frame and the first enabled moodboard image for the last frame, or omit images for text-to-video. It generates 24 FPS video with synchronized 32 kHz stereo audio. Start with a 480- or 768-pixel short side, 6 LCM steps, Text Guidance 1, Shift 12, and Audio Shift 3. Released under the [MiniMax H3 Community License](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE).",
+    "note": "[Pika H3 Flex](https://huggingface.co/Pika-Labs/Pika-H3-Flex) is Pika's six-step post-training of MiniMax H3 for text-to-video and first/last-frame-conditioned generation. Use the canvas image for the first frame and the first enabled moodboard image for the last frame, or omit images for text-to-video. It generates 24 FPS video with synchronized 32 kHz stereo audio. Start with a 480- or 768-pixel short side, 6 TCD steps, Strategic Stochastic Sampling 100%, Text Guidance 1, Shift 4, and Audio Shift 1, which approximates Pika's six-step re-noising schedule (shift 12 / audio shift 3 on non-uniform knots). Released under the [MiniMax H3 Community License](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE).",
     "copyright": "\u00a9 2026 Mellis, Inc.",
     "hugging_face_link": "Pika-Labs/Pika-H3-Flex"
   },
@@ -79,7 +79,7 @@
       }
     },
     "frames_per_second": 24,
-    "note": "[Pika H3 Flex [ref2va]](https://huggingface.co/Pika-Labs/Pika-H3-Flex) is Pika's six-step post-training of MiniMax H3 [ref2va] that generates video guided by reference subjects, objects, or scenes. Provide reference images through the canvas and moodboard, and identify them in the prompt as <Picture 1>, <Picture 2>, etc. At least one reference image is required. It generates 24 FPS video with synchronized 32 kHz stereo audio. Start with a 480- or 768-pixel short side, 6 LCM steps, Text Guidance 1, Shift 12, and Audio Shift 3. Released under the [MiniMax H3 Community License](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE).",
+    "note": "[Pika H3 Flex [ref2va]](https://huggingface.co/Pika-Labs/Pika-H3-Flex) is Pika's six-step post-training of MiniMax H3 [ref2va] that generates video guided by reference subjects, objects, or scenes. Provide reference images through the canvas and moodboard, and identify them in the prompt as <Picture 1>, <Picture 2>, etc. At least one reference image is required. It generates 24 FPS video with synchronized 32 kHz stereo audio. Start with a 480- or 768-pixel short side, 6 TCD steps, Strategic Stochastic Sampling 100%, Text Guidance 1, Shift 4, and Audio Shift 1, which approximates Pika's six-step re-noising schedule (shift 12 / audio shift 3 on non-uniform knots). Released under the [MiniMax H3 Community License](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE).",
     "copyright": "\u00a9 2026 Mellis, Inc.",
     "hugging_face_link": "Pika-Labs/Pika-H3-Flex"
   },
@@ -100,7 +100,7 @@
       }
     },
     "frames_per_second": 24,
-    "note": "[Pika H3 Flex [ref2va]](https://huggingface.co/Pika-Labs/Pika-H3-Flex) is Pika's six-step post-training of MiniMax H3 [ref2va] that generates video guided by reference subjects, objects, or scenes. Provide reference images through the canvas and moodboard, and identify them in the prompt as <Picture 1>, <Picture 2>, etc. At least one reference image is required. It generates 24 FPS video with synchronized 32 kHz stereo audio. Start with a 480- or 768-pixel short side, 6 LCM steps, Text Guidance 1, Shift 12, and Audio Shift 3. Released under the [MiniMax H3 Community License](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE).",
+    "note": "[Pika H3 Flex [ref2va]](https://huggingface.co/Pika-Labs/Pika-H3-Flex) is Pika's six-step post-training of MiniMax H3 [ref2va] that generates video guided by reference subjects, objects, or scenes. Provide reference images through the canvas and moodboard, and identify them in the prompt as <Picture 1>, <Picture 2>, etc. At least one reference image is required. It generates 24 FPS video with synchronized 32 kHz stereo audio. Start with a 480- or 768-pixel short side, 6 TCD steps, Strategic Stochastic Sampling 100%, Text Guidance 1, Shift 4, and Audio Shift 1, which approximates Pika's six-step re-noising schedule (shift 12 / audio shift 3 on non-uniform knots). Released under the [MiniMax H3 Community License](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE).",
     "copyright": "\u00a9 2026 Mellis, Inc.",
     "hugging_face_link": "Pika-Labs/Pika-H3-Flex"
   },
@@ -121,7 +121,7 @@
       }
     },
     "frames_per_second": 24,
-    "note": "[Pika H3 Flex [ref2va]](https://huggingface.co/Pika-Labs/Pika-H3-Flex) is Pika's six-step post-training of MiniMax H3 [ref2va] that generates video guided by reference subjects, objects, or scenes. Provide reference images through the canvas and moodboard, and identify them in the prompt as <Picture 1>, <Picture 2>, etc. At least one reference image is required. It generates 24 FPS video with synchronized 32 kHz stereo audio. Start with a 480- or 768-pixel short side, 6 LCM steps, Text Guidance 1, Shift 12, and Audio Shift 3. Released under the [MiniMax H3 Community License](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE).",
+    "note": "[Pika H3 Flex [ref2va]](https://huggingface.co/Pika-Labs/Pika-H3-Flex) is Pika's six-step post-training of MiniMax H3 [ref2va] that generates video guided by reference subjects, objects, or scenes. Provide reference images through the canvas and moodboard, and identify them in the prompt as <Picture 1>, <Picture 2>, etc. At least one reference image is required. It generates 24 FPS video with synchronized 32 kHz stereo audio. Start with a 480- or 768-pixel short side, 6 TCD steps, Strategic Stochastic Sampling 100%, Text Guidance 1, Shift 4, and Audio Shift 1, which approximates Pika's six-step re-noising schedule (shift 12 / audio shift 3 on non-uniform knots). Released under the [MiniMax H3 Community License](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE).",
     "copyright": "\u00a9 2026 Mellis, Inc.",
     "hugging_face_link": "Pika-Labs/Pika-H3-Flex"
   },
