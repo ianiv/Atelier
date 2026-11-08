@@ -19,6 +19,7 @@ struct ModelsView: View {
   @AppStorage("modelsFilter") private var filter = Filter.downloaded
   @State private var selection: String?
   @State private var pendingDelete: MediaGenerationResolvedModel?
+  @State private var pendingMove: ModelLibrary.Move?
   @State private var dropTargeted = false
 
   private var filtered: [MediaGenerationResolvedModel] {
@@ -84,7 +85,9 @@ struct ModelsView: View {
       .detailInspector(selection: selection, isEmpty: selected == nil, clearSelection: { selection = nil }) {
         Group {
           if let selected {
-            ModelDetail(model: selected, delete: { pendingDelete = selected })
+            ModelDetail(
+              model: selected, delete: { pendingDelete = selected },
+              move: { pendingMove = library.planMove(selected, to: $0) })
           } else {
             ContentUnavailableView(
               "No selection", systemImage: "shippingbox",
@@ -146,6 +149,7 @@ struct ModelsView: View {
               : "\(model.file) is moved to the Trash. Shared files such as text encoders and VAEs stay in the models folder."
           )
         }
+        .moveConfirmation($pendingMove)
         .libraryErrorAlert()
         .deleteCommand {
           if let selected, library.canDelete(selected) { pendingDelete = selected }
@@ -197,6 +201,10 @@ struct ModelsView: View {
             .monospacedDigit().foregroundStyle(.secondary)
         }
         .width(min: 60, ideal: 80)
+        TableColumn("Folder") { model in
+          Text(library.folders[model.file].map(library.folderName) ?? "").foregroundStyle(.secondary)
+        }
+        .width(min: 70, ideal: 110)
         TableColumn("") { model in
           ModelStatus(model: model, library: library)
         }
@@ -206,6 +214,9 @@ struct ModelsView: View {
         if let file = files.first, let model = library.catalog.first(where: { $0.file == file }) {
           if model.isDownloaded {
             Button(Finder.revealTitle) { library.reveal(model.file) }
+            MoveToFolderMenu(library: library, file: model.file, folder: library.folders[model.file], enabled: library.canMove(model)) {
+              pendingMove = library.planMove(model, to: $0)
+            }
             Divider()
             Button("Move to Trash", role: .destructive) { pendingDelete = model }
               .disabled(!library.canDelete(model))
@@ -302,6 +313,7 @@ struct ModelStatus: View {
 struct ModelDetail: View {
   let model: MediaGenerationResolvedModel
   let delete: () -> Void
+  let move: (URL) -> Void
   @Environment(ModelLibrary.self) private var library
   @Environment(FileDialogs.self) private var fileDialogs
 
@@ -314,6 +326,9 @@ struct ModelDetail: View {
         if let size = library.sizes[model.file] {
           LabeledContent("Size on disk", value: ModelsView.bytes(size))
         }
+        if let folder = library.folders[model.file] {
+          LabeledContent("Folder", value: library.folderName(folder))
+        }
         if let download = library.downloads[model.file] {
           VStack(alignment: .leading) {
             ProgressView(value: download.fraction)
@@ -323,9 +338,12 @@ struct ModelDetail: View {
         } else if model.isDownloaded {
           ButtonRow {
             Button(Finder.revealTitle) { library.reveal(model.file) }
+            MoveToFolderMenu(
+              library: library, file: model.file, folder: library.folders[model.file], enabled: library.canMove(model), choose: move)
             Button("Move to Trash", role: .destructive, action: delete)
               .disabled(!library.canDelete(model))
           }
+          MoveProgressRow(file: model.file)
           ForEach(MOSSImporter.EightBit.allCases, id: \.self) { format in
             let output = ModelLibrary.eightBitFile(for: model.file, format)
             if let progress = library.quantizing[output] {
@@ -364,6 +382,89 @@ struct ModelDetail: View {
       }
     }
     .formStyle(.grouped)
+  }
+}
+
+/// "Move to" with the other models folders. Always there, disabled when a move can't start now
+/// or there's only one folder; a folder that already has the file is disabled in it.
+/// Gets the library passed in, for context menus built without the window's environment.
+struct MoveToFolderMenu: View {
+  let library: ModelLibrary
+  let file: String
+  let folder: URL?
+  let enabled: Bool
+  let choose: (URL) -> Void
+
+  var body: some View {
+    Menu("Move To") {
+      ForEach(library.destinations(from: folder), id: \.self) { destination in
+        Button(library.folderName(destination)) { choose(destination) }
+          .disabled(library.has(file, in: destination))
+      }
+    }
+    .disabled(!enabled)
+    .help(
+      library.hasOtherFolders
+        ? "Move its files to another models folder"
+        : "Add another models folder in Settings to move files between folders")
+  }
+}
+
+/// The progress of a move of `file`, while there is one.
+struct MoveProgressRow: View {
+  let file: String
+  @Environment(ModelLibrary.self) private var library
+
+  var body: some View {
+    if let moving = library.moving, moving.file == file {
+      HStack(spacing: 6) {
+        VStack(alignment: .leading) {
+          ProgressView(value: moving.fraction)
+          Text(
+            moving.fraction == nil
+              ? "Waiting to move to \(library.folderName(moving.destination))…"
+              : "Moving to \(library.folderName(moving.destination))…"
+          )
+          .font(.caption).foregroundStyle(.secondary)
+        }
+        Button {
+          library.cancelMove()
+        } label: {
+          Image(systemName: "xmark.circle.fill")
+        }
+        .buttonStyle(.borderless)
+        .help("Cancel move")
+        .accessibilityLabel("Cancel move")
+      }
+    }
+  }
+}
+
+extension View {
+  /// Asks before running a planned move, saying what it moves and copies.
+  func moveConfirmation(_ move: Binding<ModelLibrary.Move?>) -> some View {
+    modifier(MoveConfirmation(move: move))
+  }
+}
+
+private struct MoveConfirmation: ViewModifier {
+  @Binding var move: ModelLibrary.Move?
+  @Environment(ModelLibrary.self) private var library
+
+  func body(content: Content) -> some View {
+    content.confirmationDialog(
+      "Move \(move?.name ?? "it") to \(move.map { library.folderName($0.destination) } ?? "another folder")?",
+      isPresented: Binding(get: { move != nil }, set: { if !$0 { move = nil } }),
+      presenting: move
+    ) { planned in
+      Button("Move") {
+        move = nil
+        library.runMove(planned)
+      }
+      Button("Cancel", role: .cancel) { move = nil }
+    } message: { planned in
+      Text(library.describe(planned))
+    }
   }
 }
 

@@ -20,6 +20,15 @@ Select a model and click **Download**. Atelier also downloads the text encoders 
 
 **Move to Trash** moves the model's file to the Trash. Text encoders and other files that other models share are kept. For an imported model, its entry is removed from the library too. If an imported model's file has gone missing from the folder, it says "File missing" and **Remove from Library** cleans up the entry.
 
+### Moving between folders
+
+With [additional model folders](settings.md#additional-model-folders), the **Folder** column shows which folder each model's file is in. To choose what lives on the internal drive and what on an external one, select a model and pick a folder from **Move To** (also in the list's context menu), then confirm.
+
+- The model's text encoders, VAE and other files it needs move with it. A file that another model outside the destination also needs is copied instead, so that model keeps working when the other drive isn't connected. A file the destination already has stays where it is.
+- An imported model's `custom.json` entry moves to the destination folder's `custom.json` (both are backed up first, as for other changes).
+- Between two drives, every file is copied, read back and compared before the originals are deleted. Keep both drives connected until it finishes. Cancelling (the × beside the progress) before the copies are done leaves everything where it was. On one drive the files are just renamed, which is instant.
+- A move waits for a generation in progress to finish, and generations started meanwhile wait for the move. **Move To** is unavailable while a download, import or 8-bit copy is running, while a queued job uses the model, or when there's only one models folder.
+
 ### Importing a checkpoint
 
 To use a model that isn't in the catalog, such as a fine-tune you downloaded:
@@ -81,7 +90,7 @@ Converting a LoRA to 8-bit in Draw Things deletes the original file and leaves t
 
 ### Managing LoRAs
 
-Select a LoRA to rename it or change its trigger words, then click **Save** (or **Revert**). **Reveal in Finder** (on iPad, **Show in Files**, which opens its folder) shows its file, and **Move to Trash** deletes the file and removes it from `custom_lora.json`.
+Select a LoRA to rename it or change its trigger words, then click **Save** (or **Revert**). **Reveal in Finder** (on iPad, **Show in Files**, which opens its folder) shows its file, and **Move to Trash** deletes the file and removes it from `custom_lora.json`. **Move To** moves its file to another models folder, with its `custom_lora.json` entry when that's in the same folder, the same way as [moving a model](#moving-between-folders).
 
 To use a LoRA, add it in the inspector's LoRAs section in Create; see [Creating images](creating-images.md#loras).
 

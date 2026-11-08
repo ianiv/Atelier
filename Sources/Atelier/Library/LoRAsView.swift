@@ -9,6 +9,7 @@ struct LoRAsView: View {
   @State private var family: String?
   @State private var selection: String?
   @State private var pendingDelete: ModelLibrary.LoRA?
+  @State private var pendingMove: ModelLibrary.Move?
   @State private var dropTargeted = false
 
   private var filtered: [ModelLibrary.LoRA] {
@@ -78,7 +79,9 @@ struct LoRAsView: View {
       .detailInspector(selection: selection, isEmpty: selected == nil, clearSelection: { selection = nil }) {
         Group {
           if let selected {
-            LoRADetail(lora: selected, delete: { pendingDelete = selected })
+            LoRADetail(
+              lora: selected, delete: { pendingDelete = selected },
+              move: { pendingMove = library.planMove(selected, to: $0) })
               .id(selected.file)
           } else {
             ContentUnavailableView(
@@ -113,6 +116,7 @@ struct LoRAsView: View {
       } message: { lora in
         Text("\(lora.file) is moved to the Trash and removed from custom_lora.json.")
       }
+      .moveConfirmation($pendingMove)
       .libraryErrorAlert()
       .deleteCommand { pendingDelete = selected }
       .onAppear { library.reloadLoRAs() }
@@ -156,13 +160,21 @@ struct LoRAsView: View {
             .foregroundStyle(.secondary)
         }
         .width(min: 60, ideal: 80)
+        TableColumn("Folder") { lora in
+          Text(lora.folder.map(library.folderName) ?? "").foregroundStyle(.secondary)
+        }
+        .width(min: 70, ideal: 110)
       }
       .contextMenu(forSelectionType: String.self) { files in
         if let file = files.first, let lora = library.loras.first(where: { $0.file == file }) {
           Button(Finder.revealTitle) { library.reveal(lora.file) }
             .disabled(!lora.isDownloaded)
+          MoveToFolderMenu(library: library, file: lora.file, folder: lora.folder, enabled: library.canMove(lora)) {
+            pendingMove = library.planMove(lora, to: $0)
+          }
           Divider()
           Button("Move to Trash", role: .destructive) { pendingDelete = lora }
+            .disabled(library.moving?.file == lora.file)
         }
       }
     }
@@ -183,6 +195,7 @@ struct LoRAsView: View {
 struct LoRADetail: View {
   let lora: ModelLibrary.LoRA
   let delete: () -> Void
+  let move: (URL) -> Void
   @Environment(ModelLibrary.self) private var library
   @Environment(FileDialogs.self) private var fileDialogs
   @State private var name = ""
@@ -216,11 +229,15 @@ struct LoRADetail: View {
         LabeledContent("For", value: lora.family)
         LabeledContent("File") { Text(lora.file).textSelection(.enabled) }
         if let size = lora.size { LabeledContent("Size", value: ModelsView.bytes(size)) }
+        if let folder = lora.folder { LabeledContent("Folder", value: library.folderName(folder)) }
         ButtonRow {
           Button(Finder.revealTitle) { library.reveal(lora.file) }
             .disabled(!lora.isDownloaded)
+          MoveToFolderMenu(library: library, file: lora.file, folder: lora.folder, enabled: library.canMove(lora), choose: move)
           Button("Move to Trash", role: .destructive, action: delete)
+            .disabled(library.moving?.file == lora.file)
         }
+        MoveProgressRow(file: lora.file)
       }
     }
     .formStyle(.grouped)

@@ -26,6 +26,8 @@ final class ModelLibrary {
     var size: Int64?
     /// The models folder whose custom_lora.json lists it.
     var registry: URL
+    /// The models folder its file is in (the first that has it), if any has.
+    var folder: URL?
 
     var id: String { file }
     var isDownloaded: Bool { size != nil }
@@ -98,6 +100,8 @@ final class ModelLibrary {
   private(set) var customModels: Set<String> = []
   /// On-disk size of each downloaded model (the file plus its `-tensordata`).
   private(set) var sizes: [String: Int64] = [:]
+  /// The models folder each downloaded model's file is in (the first that has it).
+  private(set) var folders: [String: URL] = [:]
   private(set) var loras: [LoRA] = []
   private(set) var downloads: [String: Download] = [:]
   /// Downloads started by picking a preset, by model file: the preset applies when they finish.
@@ -107,11 +111,14 @@ final class ModelLibrary {
   /// 8-bit copies being written, by output file, with their progress.
   private(set) var quantizing: [String: Double] = [:]
   private(set) var freeSpace: Int64?
+  /// The move to another models folder running now (see `ModelMove.swift`); one at a time.
+  var moving: MoveProgress?
   var errorMessage: String?
 
   private var downloadTasks: [String: Task<Void, Never>] = [:]
-  private var importTask: Task<Void, Never>?
-  private var modelImportTask: Task<Void, Never>?
+  var importTask: Task<Void, Never>?
+  var modelImportTask: Task<Void, Never>?
+  var moveTask: Task<Void, Never>?
 
   init(create: CreateModel) {
     self.create = create
@@ -125,7 +132,7 @@ final class ModelLibrary {
   }
 
   /// The models folders that can be reached, in lookup order.
-  private var directories: [URL] {
+  var directories: [URL] {
     create.availableModelsDirectories.map { URL(fileURLWithPath: $0, isDirectory: true) }
   }
 
@@ -156,22 +163,25 @@ final class ModelLibrary {
     let directory = directory
     let directories = directories
     let files = catalog.filter(\.isDownloaded).map(\.file)
-    let (sizes, free) = await Self.measure(files: files, in: directories, volume: directory)
+    let (sizes, folders, free) = await Self.measure(files: files, in: directories, volume: directory)
     self.sizes = sizes
+    self.folders = folders
     freeSpace = free
   }
 
   @concurrent private nonisolated static func measure(
     files: [String], in directories: [URL], volume: URL
-  ) async -> (sizes: [String: Int64], free: Int64?) {
+  ) async -> (sizes: [String: Int64], folders: [String: URL], free: Int64?) {
     var sizes: [String: Int64] = [:]
+    var folders: [String: URL] = [:]
     for file in files {
       sizes[file] = size(of: file, in: directories)
+      folders[file] = folder(of: file, in: directories)
     }
     let free = try? volume.resourceValues(
       forKeys: [.volumeAvailableCapacityForImportantUsageKey]
     ).volumeAvailableCapacityForImportantUsage
-    return (sizes, free)
+    return (sizes, folders, free)
   }
 
   var downloadedCount: Int { catalog.filter(\.isDownloaded).count }
@@ -310,7 +320,7 @@ final class ModelLibrary {
   /// Whether `model` can be deleted now: downloaded (or imported, whose entry can go even when
   /// its file is missing), and not a model a queued or running job uses.
   func canDelete(_ model: MediaGenerationResolvedModel) -> Bool {
-    (model.isDownloaded || isCustom(model)) && downloads[model.file] == nil
+    (model.isDownloaded || isCustom(model)) && downloads[model.file] == nil && moving == nil
       && !create.queue.uses(model.file)
       && !(create.isLoadingModel && create.selectedModel == model.file)
   }
@@ -339,7 +349,7 @@ final class ModelLibrary {
     Finder.reveal(urls.isEmpty ? [directory] : urls)
   }
 
-  private func afterChange() async {
+  func afterChange() async {
     await refresh()
     await create.refreshModelList()
   }
@@ -550,7 +560,7 @@ final class ModelLibrary {
     let version = ModelZoo.specificationForModel(model.file)?.version
     let supported = version == .mossImage || (version == .minimaxH3 && format == .rowwise)
     return isCustom(model) && model.isDownloaded && model.file.hasSuffix("_f16.ckpt") && supported
-      && quantizing[output] == nil && ModelZoo.specificationForModel(output) == nil
+      && quantizing[output] == nil && moving == nil && ModelZoo.specificationForModel(output) == nil
   }
 
   static func eightBitFile(for file: String, _ format: MOSSImporter.EightBit) -> String {
@@ -647,7 +657,7 @@ final class ModelLibrary {
   /// Files an import of `file` wrote next to it (`<name>_vae_f16.ckpt` and the like, the
   /// suffixes ModelImporter uses), when its specification names them. Shared encoders and VAEs
   /// stay.
-  private static func importedCompanions(of file: String) -> [String] {
+  static func importedCompanions(of file: String) -> [String] {
     guard file.hasSuffix("_f16.ckpt"), let specification = ModelZoo.specificationForModel(file)
     else { return [] }
     let stem = String(file.dropLast("f16.ckpt".count))
@@ -722,7 +732,7 @@ final class ModelLibrary {
 
   /// Copies a folder's custom.json aside before the app first changes it in a session.
   private var backedUpModelFolders: Set<URL> = []
-  private func backUpModelRegistryOnce(in directory: URL? = nil) {
+  func backUpModelRegistryOnce(in directory: URL? = nil) {
     let directory = directory ?? self.directory
     guard backedUpModelFolders.insert(directory).inserted else { return }
     Self.backUp("custom.json", in: directory)
@@ -744,7 +754,8 @@ final class ModelLibrary {
           LoRA(
             name: specification.name, file: specification.file, prefix: specification.prefix,
             version: specification.version.rawValue,
-            size: Self.size(of: specification.file, in: directories), registry: directory))
+            size: Self.size(of: specification.file, in: directories), registry: directory,
+            folder: Self.folder(of: specification.file, in: directories)))
       }
     }
     self.loras = Self.linkingLoRACopies(loras).sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -949,6 +960,7 @@ final class ModelLibrary {
 
   /// Moves the LoRA file to the Trash and removes its custom_lora.json entry.
   func delete(_ lora: LoRA) {
+    guard moving?.file != lora.file else { return }
     errorMessage = nil
     do {
       for url in Self.files(of: lora.file, in: directories) {
@@ -968,7 +980,7 @@ final class ModelLibrary {
 
   /// Copies a folder's custom_lora.json aside before the app first changes it in a session.
   private var backedUpLoRAFolders: Set<URL> = []
-  private func backUpLoRARegistryOnce(in directory: URL) {
+  func backUpLoRARegistryOnce(in directory: URL) {
     guard backedUpLoRAFolders.insert(directory).inserted else { return }
     Self.backUp("custom_lora.json", in: directory)
   }
@@ -988,14 +1000,15 @@ final class ModelLibrary {
 
   /// `file` and its `-tensordata`, from the first models folder that has the file (the one the
   /// engine reads).
-  private nonisolated static func files(of file: String, in directories: [URL]) -> [URL] {
-    for directory in directories
-      where FileManager.default.fileExists(atPath: directory.appendingPathComponent(file).path)
-    {
-      return [file, file + "-tensordata"].map { directory.appendingPathComponent($0) }
-        .filter { FileManager.default.fileExists(atPath: $0.path) }
-    }
-    return []
+  nonisolated static func files(of file: String, in directories: [URL]) -> [URL] {
+    guard let directory = folder(of: file, in: directories) else { return [] }
+    return [file, file + "-tensordata"].map { directory.appendingPathComponent($0) }
+      .filter { FileManager.default.fileExists(atPath: $0.path) }
+  }
+
+  /// The first models folder that has `file`: the one the engine reads it from.
+  nonisolated static func folder(of file: String, in directories: [URL]) -> URL? {
+    directories.first { FileManager.default.fileExists(atPath: $0.appendingPathComponent(file).path) }
   }
 
   private nonisolated static func size(of file: String, in directories: [URL]) -> Int64? {
@@ -1021,7 +1034,7 @@ final class ModelLibrary {
     return candidate
   }
 
-  private static func readCustomModels(in directory: URL) -> [String] {
+  static func readCustomModels(in directory: URL) -> [String] {
     struct Entry: Decodable { var file: String }
     guard let data = try? Data(contentsOf: directory.appendingPathComponent("custom.json")),
           let entries = try? JSONDecoder().decode([Lenient<Entry>].self, from: data)

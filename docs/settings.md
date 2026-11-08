@@ -14,7 +14,7 @@ The folder Atelier reads models and LoRAs from, and downloads and imports into. 
 
 ### Additional model folders
 
-More folders Atelier reads models and LoRAs from, such as a second drive or another app's models folder. Click **Add Folder…** to add one and the minus button to stop using it (its files stay where they are). Models and LoRAs from every folder can be picked in Create, and LoRAs listed in any folder's `custom_lora.json` show up in the LoRAs screen. Downloads and imports still go to the models directory above.
+More folders Atelier reads models and LoRAs from, such as a second drive or another app's models folder. Click **Add Folder…** to add one and the minus button to stop using it (its files stay where they are). Models and LoRAs from every folder can be picked in Create, and LoRAs listed in any folder's `custom_lora.json` show up in the LoRAs screen. Downloads and imports still go to the models directory above. To move a model or LoRA to another folder, use **Move To** in the [Models or LoRAs screen](models-and-loras.md#moving-between-folders).
 
 When the same file name is in more than one folder, Atelier uses the one in the models directory first, then the additional folders in the order listed. A folder that can't be reached, for example on a disconnected drive, is marked **Not available** and skipped; Atelier picks it up again within a few seconds of the drive being reconnected. If the model you had picked was on that drive, it's picked again when the drive comes back.
 

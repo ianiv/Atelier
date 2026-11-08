@@ -400,6 +400,28 @@ actor GenerationEngine {
     return try await work()
   }
 
+  /// Runs `work`, which moves model files between the models folders, in the engine's turn with
+  /// nothing loaded from them: the cached pipeline and the weights the engine keeps in memory go
+  /// first, and the run after waits. Then points MGK at `directories` again, rereading their
+  /// custom.json and custom_lora.json, which a move changes, before that run.
+  func movingModelFiles<T: Sendable>(
+    reloading directories: [String], _ work: @concurrent @Sendable () async throws -> T
+  ) async throws -> T {
+    await waitForTurn()
+    defer { endTurn() }
+    pipeline = nil
+    // Applies the cache drop on the generation queue, where the preloader holds the weights.
+    try await onEngineQueue { _ in }
+    do {
+      let result = try await work()
+      await setModelsDirectories(directories)
+      return result
+    } catch {
+      await setModelsDirectories(directories)
+      throw error
+    }
+  }
+
   /// Runs `work` on the engine's queue after dropping the models the engine keeps loaded, which
   /// FlashVSR+ needs the memory of. Call it in the engine's turn. `work` checks `shouldContinue`,
   /// which turns false when the task is cancelled.
