@@ -21,9 +21,13 @@ if [ -z "$DEVELOPER_DIR" ] && ! xcodebuild -version >/dev/null 2>&1; then
 fi
 
 SIGNING=()
+# Mac builds are Apple silicon only. The app target says so (ARCHS), but Swift packages would
+# still build an Intel slice in Release, and the engine's Float16 code doesn't compile for Intel.
+ARCH_SETTINGS=()
 case "$PLATFORM" in
   mac)
     DESTINATION='platform=macOS'
+    ARCH_SETTINGS=(ARCHS=arm64 ONLY_ACTIVE_ARCH=YES)
     DERIVED=build/DerivedData
     PRODUCTS="$CONFIGURATION"
     OUTPUT=build/Atelier.app
@@ -55,7 +59,7 @@ esac
 
 xcodebuild -project Atelier.xcodeproj -scheme Atelier -configuration "$CONFIGURATION" \
   -derivedDataPath "$DERIVED" -clonedSourcePackagesDirPath build/SourcePackages \
-  -destination "$DESTINATION" -quiet "${SIGNING[@]}" build
+  -destination "$DESTINATION" -quiet "${SIGNING[@]}" "${ARCH_SETTINGS[@]}" build
 
 rm -rf "$OUTPUT"
 cp -R "$DERIVED/Build/Products/$PRODUCTS/Atelier.app" "$OUTPUT"

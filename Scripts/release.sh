@@ -65,7 +65,8 @@ xcodebuild -project Atelier.xcodeproj -scheme Atelier -configuration Release \
   DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" CODE_SIGN_STYLE=Manual \
   CODE_SIGN_IDENTITY="Developer ID Application" PROVISIONING_PROFILE_SPECIFIER="" \
   OTHER_CODE_SIGN_FLAGS="--timestamp" CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
-  DRAWTHINGS_APP="$EMPTY_DIR" "${VERSION_SETTINGS[@]}"
+  DRAWTHINGS_APP="$EMPTY_DIR" "${VERSION_SETTINGS[@]}" \
+  ARCHS=arm64 ONLY_ACTIVE_ARCH=YES  # Apple silicon only: the engine's Float16 code has no Intel build
 
 APP="$OUT/Atelier.app"
 ditto build/DerivedData/Build/Products/Release/Atelier.app "$APP"
