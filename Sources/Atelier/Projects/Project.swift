@@ -196,7 +196,8 @@ final nonisolated class Project: Sendable {
       sampler: String(describing: DataModels.SamplerType(rawValue: node.sampler.rawValue) ?? .dPMPP2MKarras),
       resolutionDependentShift: node.resolutionDependentShift,
       hiresFix: node.hiresFix,
-      configuration: ProjectMapping.dump(of: node)
+      configuration: ProjectMapping.dump(of: node),
+      timings: ProjectMapping.Profile(node.profileData).flatMap(GenerationTimings.init(profile:))
     )
   }
 
@@ -295,14 +296,15 @@ final nonisolated class Project: Sendable {
   @concurrent func append(
     tensor: Tensor<FloatType>, model: String, prompt: String, negativePrompt: String,
     seed: UInt32, settings: [String: JSONValue], createdAt: Date, duration: Double,
+    timings: GenerationTimings? = nil,
     reason: ProjectFormat.Reason = .generate, generated: Bool = true,
     moodboard: [MoodboardTensor] = [], inputTensorId: Int64? = nil,
     after parentTensorId: Int64? = nil
   ) async throws -> HistoryItem {
     try await append(
       frames: [tensor], clip: nil, model: model, prompt: prompt, negativePrompt: negativePrompt,
-      seed: seed, settings: settings, createdAt: createdAt, duration: duration, reason: reason,
-      generated: generated, moodboard: moodboard, inputTensorId: inputTensorId,
+      seed: seed, settings: settings, createdAt: createdAt, duration: duration, timings: timings,
+      reason: reason, generated: generated, moodboard: moodboard, inputTensorId: inputTensorId,
       after: parentTensorId)
   }
 
@@ -328,19 +330,20 @@ final nonisolated class Project: Sendable {
   @concurrent func appendClip(
     frames: [Tensor<FloatType>], clip: ClipContent, model: String, prompt: String,
     negativePrompt: String, seed: UInt32, settings: [String: JSONValue], createdAt: Date,
-    duration: Double, moodboard: [MoodboardTensor] = [],
+    duration: Double, timings: GenerationTimings? = nil, moodboard: [MoodboardTensor] = [],
     inputTensorId: Int64? = nil, after parentTensorId: Int64? = nil
   ) async throws -> HistoryItem {
     try await append(
       frames: frames, clip: clip, model: model, prompt: prompt, negativePrompt: negativePrompt,
-      seed: seed, settings: settings, createdAt: createdAt, duration: duration, reason: .generate,
+      seed: seed, settings: settings, createdAt: createdAt, duration: duration, timings: timings,
+      reason: .generate,
       generated: true, moodboard: moodboard, inputTensorId: inputTensorId, after: parentTensorId)
   }
 
   private func append(
     frames tensors: [Tensor<FloatType>], clip: ClipContent?, model: String, prompt: String,
     negativePrompt: String, seed: UInt32, settings: [String: JSONValue], createdAt: Date,
-    duration: Double, reason: ProjectFormat.Reason, generated: Bool,
+    duration: Double, timings: GenerationTimings?, reason: ProjectFormat.Reason, generated: Bool,
     moodboard: [MoodboardTensor], inputTensorId: Int64?,
     after parentTensorId: Int64?
   ) async throws -> HistoryItem {
@@ -436,7 +439,7 @@ final nonisolated class Project: Sendable {
             parentTensorId: index == 0
               ? parent.flatMap { tree.steps[$0]?.tensorId } : tensorIds[index - 1],
             clipId: clipId, indexInAClip: index, hasAudio: audioId != nil,
-            inputAudioId: inputAudioId)
+            inputAudioId: inputAudioId, timings: index == 0 ? timings : nil)
           let node = ProjectMapping.node(for: step, settings: settings)
           if index == 0 { appended = node }
           transaction.try(submit: TensorHistoryNodeChangeRequest.upsertRequest(node))

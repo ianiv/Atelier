@@ -873,6 +873,11 @@ struct HistoryDetail: View {
           value: sidecar.createdAt.formatted(date: .abbreviated, time: .shortened))
         LabeledContent(
           "Duration", value: Duration.seconds(sidecar.durationSeconds).formatted(.units(width: .abbreviated, fractionalPart: .show(length: 1))))
+        LabeledContent("Timings") {
+          Text(sidecar.timings.map { $0.lines.joined(separator: "\n") } ?? "Not recorded")
+            .multilineTextAlignment(.trailing)
+            .textSelection(.enabled)
+        }
       }
     }
     .formStyle(.grouped)

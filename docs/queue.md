@@ -20,6 +20,8 @@ Results are saved to the project that's open when they finish.
 
 The list has three parts: the image being made, the waiting images and recent ones (finished, failed or cancelled). Each row shows the prompt, model, size, seed and steps, with the result's thumbnail once it's done; recent ones show how long they took. Videos show their length and a film icon.
 
+A finished run on this device also shows how long each phase took: loading and encoding the prompt, encoding inputs, each sampling step, decoding (frames and soundtrack) and saving. The engine marks the end of sampling, so decoding is timed on its own; when it doesn't, the last step and decoding are shown together. The same timings are saved with the image or video (its info panel, **Timings**) and kept in the project, and agents get them from `get_job`, `list_jobs` and `get_image`.
+
 - **Pause Queue** (toolbar) lets the current image finish, or be stopped, and then holds the rest. Click it again (**Resume Queue**) to carry on. While paused, Generate still adds to the queue; the status bar says "Paused".
 - **Drag** waiting images to reorder them, or right-click one and choose **Run Next**.
 - **Cancel** (right-click, or Delete) takes a waiting image out. On the running one, **Stop** works like Stop under the prompt.

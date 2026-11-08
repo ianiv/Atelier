@@ -39,6 +39,8 @@ nonisolated enum ProjectMapping {
     var hasAudio = false
     /// The audio file a video run took, stored as an `audio_<id>` tensor. Kept in `profile_data`.
     var inputAudioId: Int64?
+    /// How long each phase of the run took, kept as `profile_data` timings (first frame only).
+    var timings: GenerationTimings?
   }
 
   /// `profile_data`: Draw Things' `GenerationProfile` as snake-case JSON (timings and duration),
@@ -69,7 +71,11 @@ nonisolated enum ProjectMapping {
       return (try? encoder.encode(self)).map { [UInt8]($0) } ?? []
     }
 
-    init(duration: Double, inputTensorId: Int64?, parentTensorId: Int64?, inputAudioId: Int64? = nil) {
+    init(
+      duration: Double, inputTensorId: Int64?, parentTensorId: Int64?, inputAudioId: Int64? = nil,
+      timings: [Timing] = []
+    ) {
+      self.timings = timings
       self.duration = duration
       self.inputTensorId = inputTensorId
       self.parentTensorId = parentTensorId
@@ -155,7 +161,8 @@ nonisolated enum ProjectMapping {
       resolutionDependentShift: d.bool("resolutionDependentShift", true),
       profileData: Profile(
         duration: step.generationTime, inputTensorId: step.inputTensorId,
-        parentTensorId: step.parentTensorId ?? 0, inputAudioId: step.inputAudioId
+        parentTensorId: step.parentTensorId ?? 0, inputAudioId: step.inputAudioId,
+        timings: step.timings?.profileTimings ?? []
       ).bytes,
       teaCacheStart: i32("teaCacheStart", 5), teaCacheEnd: i32("teaCacheEnd", -1),
       teaCacheThreshold: d.float("teaCacheThreshold", 0.06), teaCache: d.bool("teaCache", false),

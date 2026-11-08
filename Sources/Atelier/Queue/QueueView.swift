@@ -154,6 +154,14 @@ struct QueueRow: View {
             .foregroundStyle(.red)
             .lineLimit(2)
         }
+        if let timings = job.timings {
+          Text(timings.lines.joined(separator: " · "))
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+            .help(timings.lines.joined(separator: "\n"))
+            .textSelection(.enabled)
+        }
       }
       Spacer(minLength: 0)
       if video != nil {
