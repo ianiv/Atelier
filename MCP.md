@@ -76,7 +76,7 @@ Then ask for an image, for example: "Use Atelier to make a 1024×1024 watercolor
 | `get_image` | Shows the agent an image: what's on the canvas (the default), the project's newest (`latest`), or a History image by `history_step`. Returns it inline (`max_size`, default 1024 px on the long side) with its prompt and settings, and with `save_to` writes the full PNG. |
 | `generate` | One image, or with a video model one video. Returns the image (a video's first frame) inline (1024 px on the long side), writes the full PNG, or the MP4 with its sound (settings embedded), and saves it to the current project. With `background: true` it returns a `job_id` right away instead. |
 | `get_job` | Checks on a job: `waiting`, `running` (with step and total), `done` (with everything `generate` returns), `failed` or `cancelled`. Waits up to `wait_seconds` (default 30, at most 60) for it to finish first. |
-| `list_jobs` | Jobs from the last hour, newest first, with status and progress. |
+| `list_jobs` | Jobs from the last hour, newest first, with status and progress, and for finished ones their `timings` (see below). |
 | `cancel_job` | Stops a job, like Cancel in the Queue. |
 
 `generate` arguments: `prompt` (required unless `use_app_settings` is on; can be empty), `negative_prompt`, `model` (file or name; default is the app's selected model), `preset`, `use_app_settings` (start from the inspector's current values; without a `prompt`, generate the Create screen as it is), `settings` (any Draw Things configuration keys, e.g. `{"sampler": 1, "shift": 3}`), `width`, `height`, `steps`, `guidance_scale`, `seed`, `input_image` (a path or `data:` URL to edit), `strength`, `reference_images` (paths, or `{"image", "weight"}`), `num_frames` or `seconds` and `audio` (a path) for video models, `save_to` (a file or folder; default is a temporary folder, emptied the next time Atelier opens), `include_image` and `background`.
@@ -108,6 +108,8 @@ Runs stream progress (`notifications/progress`) to clients that send a progress 
 Some clients give up on a tool call after a few minutes; Claude's connection to a Mac, for one, cancels calls after 180 seconds. A video can take longer than that, so every `generate` runs as a job that keeps going when its call is cancelled or dropped.
 
 For long runs, call `generate` with `background: true`. It checks the arguments, queues the run and returns a `job_id` at once. Then call `get_job` with it: each call waits up to `wait_seconds` for the run to finish and otherwise returns its progress, so the agent checks in every half minute or so without one call outlasting the client's timeout. When the job is `done`, `get_job` returns exactly what `generate` would have, image included. A `generate` call that was cancelled or dropped without `background` shows up in `list_jobs`, and `get_job` collects its result the same way. `cancel_job`, or Cancel in the Queue, stops a job.
+
+For benchmarks, a finished run's result (from `generate`, `get_job` and `list_jobs`) has `timings` in its structured content, in seconds: `load_and_encode_prompt`, `encode_inputs`, `before_sampling`, `steps` (each step), `sampling`, `decode` (frames and soundtrack), `after_decode` and `total`. If the engine gave no end-of-sampling signal, `last_step_and_decode` replaces the last step and `decode`. `get_image` lists the same timings for a History item.
 
 Clients read the tool list when they connect, so after updating Atelier reconnect the agent (for example `/mcp` in Claude Code) to see `background` and the job tools.
 

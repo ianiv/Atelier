@@ -67,6 +67,8 @@ final class HistoryStore {
     var hiresFix: Bool
     /// Every public field of the pipeline configuration actually used.
     var configuration: [String: JSONValue]
+    /// How long each phase of the run took; nil for steps saved without them.
+    var timings: GenerationTimings?
   }
 
   private(set) var project: Project
@@ -228,6 +230,7 @@ final class HistoryStore {
     request: GenerationEngine.Request,
     startedAt: Date,
     finishedAt: Date,
+    timings: GenerationTimings? = nil,
     makeCurrent: () -> Bool = { true }
   ) async throws -> HistoryItem {
     var settings = request.configuration
@@ -267,14 +270,14 @@ final class HistoryStore {
           framesPerSecond: framesPerSecond, audio: output.audio, audioInput: output.audioInput),
         model: request.model, prompt: request.prompt, negativePrompt: request.negativePrompt,
         seed: request.seed, settings: dump, createdAt: finishedAt,
-        duration: finishedAt.timeIntervalSince(startedAt), moodboard: moodboard,
+        duration: finishedAt.timeIntervalSince(startedAt), timings: timings, moodboard: moodboard,
         inputTensorId: inputTensorId, after: parentTensorId)
     } else {
       item = try await project.append(
         tensor: ImageTensor.rgb(output.frames[0]), model: request.model, prompt: request.prompt,
         negativePrompt: request.negativePrompt, seed: request.seed,
         settings: dump, createdAt: finishedAt,
-        duration: finishedAt.timeIntervalSince(startedAt), moodboard: moodboard,
+        duration: finishedAt.timeIntervalSince(startedAt), timings: timings, moodboard: moodboard,
         inputTensorId: inputTensorId, after: parentTensorId)
     }
     if project === self.project {

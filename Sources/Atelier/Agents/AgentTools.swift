@@ -502,6 +502,7 @@ final class AgentTools {
     if let clip = item.clip {
       text += "\nVideo: " + ClipBadge.length(clip) + ". The image below is its first frame."
     }
+    if let timings = item.sidecar.timings { text += "\nTimings: " + timings.lines.joined(separator: "; ") + "." }
     if !notes.isEmpty { text += "\n" + notes.joined(separator: "\n") }
     var content: [[String: Any]] = [["type": "text", "text": text]]
     if arguments["include_image"] as? Bool != false, let image = ImageLoader.image(from: png, maxSide: 1024),
@@ -514,6 +515,7 @@ final class AgentTools {
       "seed": Int(seed), "width": configuration.width, "height": configuration.height,
       "steps": configuration.steps, "duration_seconds": seconds,
     ]
+    if let timings = item.sidecar.timings { structured["timings"] = timings.json }
     if let clip = item.clip {
       structured["frames"] = clip.frames.count
       structured["frames_per_second"] = clip.framesPerSecond
@@ -643,6 +645,7 @@ final class AgentTools {
     if let structured = job.result?["structuredContent"] as? [String: Any] {
       summary["history_step"] = structured["history_step"]
       summary["path"] = structured["path"]
+      summary["timings"] = structured["timings"]
     }
     return summary
   }
@@ -823,6 +826,7 @@ final class AgentTools {
         + "Model \(sidecar.model), \(sidecar.width)×\(sidecar.height), \(sidecar.steps) steps, "
         + "guidance \(sidecar.guidanceScale), seed \(sidecar.seed).\nPrompt: \(sidecar.prompt)"
       if !sidecar.negativePrompt.isEmpty { text += "\nNegative prompt: \(sidecar.negativePrompt)" }
+      if let timings = sidecar.timings { text += "\nTimings: " + timings.lines.joined(separator: "; ") + "." }
     } else {
       text = "The canvas image (\(image.width)×\(image.height)), not a saved history image: an imported image or a run in progress."
     }

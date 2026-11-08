@@ -129,6 +129,7 @@
 		A7E11C0A1C0A7E11C0A7E102 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = A7E11C0A1C0A7E11C0A7E101 /* AppIcon.icon */; };
 		DE71CE4BC9D3833FBA7F38B6 /* VideoModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E18897D6E8A7C0EFA40806FC /* VideoModel.swift */; };
 		07ED1A855EFB26A6036EA256 /* EngineConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = F39D61C6D37D8CE30146AA63 /* EngineConfiguration.swift */; };
+		A7E1C0D2B3F4A5B6C7D8E9F0 /* GenerationTimings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8F2D1E3C4A5B6C7D8E9F0A1 /* GenerationTimings.swift */; };
 		D9478AB0A5F467A78FBF0F6F /* ClipVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFEFDFCC1580AA7B96B192D4 /* ClipVideo.swift */; };
 		ABC9C966086FCD6CDDFBF814 /* ClipPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BEBA3D6C6994515FE6F7A28 /* ClipPlayer.swift */; };
 		FA666B187E2913EFB28CCC13 /* AudioClip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EA2F5D417DF60CE076D9B6C /* AudioClip.swift */; };
@@ -308,6 +309,7 @@
 		A1E4C0DE5167A7E1C0F1A001 /* Atelier.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Atelier.xcconfig; sourceTree = "<group>"; };
 		E18897D6E8A7C0EFA40806FC /* VideoModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoModel.swift; sourceTree = "<group>"; };
 		F39D61C6D37D8CE30146AA63 /* EngineConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineConfiguration.swift; sourceTree = "<group>"; };
+		B8F2D1E3C4A5B6C7D8E9F0A1 /* GenerationTimings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationTimings.swift; sourceTree = "<group>"; };
 		FFEFDFCC1580AA7B96B192D4 /* ClipVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipVideo.swift; sourceTree = "<group>"; };
 		3BEBA3D6C6994515FE6F7A28 /* ClipPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipPlayer.swift; sourceTree = "<group>"; };
 		2EA2F5D417DF60CE076D9B6C /* AudioClip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioClip.swift; sourceTree = "<group>"; };
@@ -511,6 +513,7 @@
 			isa = PBXGroup;
 			children = (
 				F39D61C6D37D8CE30146AA63 /* EngineConfiguration.swift */,
+				B8F2D1E3C4A5B6C7D8E9F0A1 /* GenerationTimings.swift */,
 				E18897D6E8A7C0EFA40806FC /* VideoModel.swift */,
 				C4E2A1D07B3F4A5E9C8D1F02 /* GenerationBackend.swift */,
 				1CAC35AB075AAB4CDF7AD898 /* GenerationEngine.swift */,
@@ -890,6 +893,7 @@
 				15B3CBDDD4DC0FCE7C625161 /* CreateView.swift in Sources */,
 				DE71CE4BC9D3833FBA7F38B6 /* VideoModel.swift in Sources */,
 				07ED1A855EFB26A6036EA256 /* EngineConfiguration.swift in Sources */,
+				A7E1C0D2B3F4A5B6C7D8E9F0 /* GenerationTimings.swift in Sources */,
 				D9478AB0A5F467A78FBF0F6F /* ClipVideo.swift in Sources */,
 				ABC9C966086FCD6CDDFBF814 /* ClipPlayer.swift in Sources */,
 				6EDD8483CFFCDF6D6F8845B3 /* Timeline.swift in Sources */,
@@ -1417,10 +1421,10 @@
 		};
 		A4CE7021663F6A67DB66A52E /* XCRemoteSwiftPackageReference "draw-things-community" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/drawthingsai/draw-things-community";
+			repositoryURL = "https://github.com/ianiv/draw-things-community";
 			requirement = {
 				kind = revision;
-				revision = 8dbbb5c69b83c6312eb10622611d46a943de6f88;
+				revision = ce045515a6ebb4c36c9b74086f1585f34e4d7735;
 			};
 		};
 		FA3B96D181CC9804C2FF9474 /* XCRemoteSwiftPackageReference "flatbuffers" */ = {

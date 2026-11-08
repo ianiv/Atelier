@@ -15,6 +15,20 @@ Pick a video model in Create and the same screen makes videos: the prompt, inspe
 
 FastH3 Omni is a fast MiniMax H3 Ref2VA: it starts at 1280×768, 8 steps and guidance 1.
 
+### HyperFlow H3 Flash
+
+[HyperFlow H3 Flash](https://huggingface.co/VideoRebirthAI/hyperflow-h3-flash) is a compressed MiniMax H3 (FL2VA or Ref2VA) that makes a clip in a few steps. It isn't in the catalog: you convert its GGUF file and import it.
+
+1. Download a GGUF from the `fl2va_gguf` or `ref2va_gguf` folder (Q8_0 is about 15 GB) and that folder's partner `config.json` from `fl2va_int8_convrot` or `ref2va_int8_convrot`.
+2. Convert it with `Scripts/hyperflow/hyperflow_gguf_to_safetensors.py` from the engine fork (needs Python with `gguf` and `numpy`):
+   `python hyperflow_gguf_to_safetensors.py <file>.gguf hyperflow_h3_flash_fl2va.safetensors --config config.json`. Keep `hyperflow` in the output name, and put `ref2va` in it for the Ref2VA file. The result is about 28 GB.
+3. Import the `.safetensors` file in **Models** (see [Importing a checkpoint](models-and-loras.md#importing-a-checkpoint)). It uses the MiniMax H3 text encoder and VAE.
+4. Select it in **Models** and click **Make 8-bit S Copy** (see [Make 8-bit Copy](models-and-loras.md#make-8-bit-copy-moss-and-minimax-h3-models)). The copy is about half the size and needs half the memory; use it in Create and move the full-precision one to the Trash if you like.
+
+It starts at 1344×768, 124 frames, 6 steps, guidance 1 and shift 12. It's trained for exactly 4, 6 or 8 steps (4 is fastest, 8 best) and always runs its own sampler on those steps; any other step count falls back to a plain linear schedule and looks worse. Leave guidance at 1 and the negative prompt empty.
+
+The weights are under the MiniMax H3 Community License: it doesn't cover the EU, the UK, South Korea or the US without MiniMax's permission, and asks that what you share be marked as AI-generated.
+
 LongCat starts at 832×512, 8 steps, guidance 1 and 93 frames (3.7 seconds at 25 fps). It always runs at guidance 1, and the audio is cut or padded to the clip's length. It also needs the 1.3 GB Whisper voice encoder, which downloads with it.
 
 Download them from **Models** like any other model. They're large, and a video takes minutes, not seconds.
@@ -27,6 +41,8 @@ The inspector's **Video** layout (from the menu at the top of the inspector) sho
 The inspector's **Video** section starts with **Length**: the number of frames, with how many seconds that plays for beside it. Each model only takes some frame counts (LTX one more than a multiple of 8, Wan one more than a multiple of 4, MiniMax H3 5 plus a multiple of 17), so the length snaps to the nearest one, and the stepper moves between them. Videos play at the rate the model was trained at (25 frames a second for LTX, 24 for MiniMax H3, 16 for Wan 2.1).
 
 Longer and larger videos take much longer and need much more memory. Try a short, small one first.
+
+MiniMax H3 models (including FastH3 Omni and HyperFlow H3 Flash) always decode in 256-pixel tiles, whatever the Tiled Decoding tile size says: larger tiles leave a grid of small blocks over the video.
 
 ## Starting from an image
 

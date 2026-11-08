@@ -34,7 +34,7 @@ The converted model is saved in the models folder as `<name>_f16.ckpt`, marked *
 
 **MOSS Image fine-tunes** in OpenMOSS' layout (for example Kromoss) are converted by a dedicated importer and work like the official MOSS Image model.
 
-Some families can't be imported yet: MiniMax H3, HiDream O1, Qwen Image 2.1, LTX-2, SeedVR2, Kandinsky, Würstchen and LongCat. Atelier tells you after inspecting the file.
+Some families can't be imported yet: HiDream O1, Qwen Image 2.1, LTX-2, SeedVR2, Kandinsky, Würstchen and LongCat. Atelier tells you after inspecting the file.
 
 ### Model files Atelier can't match
 
@@ -47,12 +47,14 @@ The file itself doesn't say what it is, so Atelier can't check your choice. If i
 
 If the community catalog couldn't be reached, the list says so, because it may then include models newer than the copy Atelier shipped with.
 
-### Make 8-bit Copy (MOSS models)
+### Make 8-bit Copy (MOSS and MiniMax H3 models)
 
-An imported MOSS model is full precision and large. Atelier can write a smaller copy at about half the size. Select the model and click:
+An imported MOSS or MiniMax H3 model (such as HyperFlow H3 Flash) is full precision and large. Atelier can write a smaller copy at about half the size. Select the model and click:
 
 - **Make 8-bit Copy**: like Draw Things' "8-bit" models. Slow to write.
 - **Make 8-bit S Copy**: like Draw Things' "8-bit S" models. These can run on the Apple Neural Engine (see Performance in [Settings](settings.md)).
+
+MiniMax H3 models only offer **Make 8-bit S Copy**, the format Draw Things' own H3 files use. The copy is faster too: each step reads half as much from memory, and it leaves more room for the text encoder.
 
 The copy is saved next to the original and listed as "<name> (8-bit)" or "<name> (8-bit S)" with the same settings. Pick it in Create like any other model. Once a copy exists, its button goes away. You can keep the full-precision model or move it to the Trash.
 

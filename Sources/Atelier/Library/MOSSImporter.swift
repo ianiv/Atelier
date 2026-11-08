@@ -93,8 +93,15 @@ nonisolated enum MOSSImporter {
   /// matrices palettized). Both keep the embedders and final linear layer in FP16, FP32 tensors
   /// as they are, and compress vectors (ezm7). An interrupted copy resumes: tensors already in
   /// `output` are kept (each write is its own transaction).
+  ///
+  /// `miniMaxH3` writes MiniMax H3 checkpoints (stock imports and compressed ones such as HyperFlow
+  /// H3 Flash) the way Draw Things' own `minimax_h3_*_i8x.ckpt` files store them: block linears
+  /// (including the factored `*_down` / `*_up` pairs) and the input patch projections row-wise
+  /// 8-bit, the AdaLN matrices palettized, the token refiner, timestep / endpoint embedders, text
+  /// projection and output projections in FP16, and vectors (norms, biases) ezm7.
   static func quantize(
-    _ path: String, to output: String, format: EightBit, progress: (Float) -> Void
+    _ path: String, to output: String, format: EightBit, miniMaxH3: Bool = false,
+    progress: (Float) -> Void
   ) {
     let graph = DynamicGraph()
     graph.openStore(
@@ -113,6 +120,19 @@ nonisolated enum MOSSImporter {
             continue
           }
           let fp16 = Tensor<Float16>(from: tensor)
+          if miniMaxH3 {
+            let isMatrix = fp16.shape.filter { $0 > 1 }.count > 1
+            let keepsFP16 = ["refiner", "embedder", "proj_out"].contains { key.contains($0) }
+            if keepsFP16 {
+              out.write(key, tensor: fp16)
+            } else if !isMatrix {
+              out.write(key, tensor: fp16, codec: .ezm7)
+            } else {
+              let rowwise = format == .rowwise && !key.contains("adaln")
+              out.write(key, tensor: fp16, codec: rowwise ? [.i8x, .ezm7] : [.q8p, .ezm7])
+            }
+            continue
+          }
           if key.contains("embedder") || key.contains("final_linear") {
             out.write(key, tensor: fp16)
           } else if fp16.shape.filter({ $0 > 1 }).count > 1 {

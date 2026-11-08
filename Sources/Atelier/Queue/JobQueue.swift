@@ -37,6 +37,8 @@ final class JobQueue {
     /// When it started running; nil while waiting, and for a job cancelled before it ran.
     var startedAt: Date?
     var finishedAt: Date?
+    /// How long each phase took (local generations that finished).
+    var timings: GenerationTimings?
     /// Queued by an agent over MCP.
     var fromAgent = false
     /// The name of the paired device this runs for (`RemoteServer`).
@@ -205,6 +207,11 @@ final class JobQueue {
   /// Ends the running job. A finished one's result is its line's latest step (and the input step
   /// it saved is reused by later jobs from the same canvas). A clip's latest step is its last
   /// frame (`tipTensorId`), which the next run follows.
+  /// Records a running job's phase timings, kept with it in Recent.
+  func setTimings(_ timings: GenerationTimings?, id: UUID) {
+    if running?.id == id { running?.timings = timings }
+  }
+
   func finishRunning(_ status: Job.Status, id: UUID, inputTensorId: Int64? = nil, tipTensorId: Int64? = nil) {
     guard var job = running?.id == id ? running : runningRemote.first(where: { $0.id == id }) else { return }
     if running?.id == id {

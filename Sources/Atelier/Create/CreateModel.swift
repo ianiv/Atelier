@@ -371,6 +371,8 @@ final class CreateModel {
   /// The first sampling step seen and when, and when the latest one arrived, for the estimate.
   private var samplingStart: (date: Date, step: Int)?
   private var lastStepAt: Date?
+  /// Each running local job's phase timings, as its progress arrives (see `GenerationTimings`).
+  private var timingRecorders: [UUID: GenerationTimingRecorder] = [:]
   /// The project step behind `image` once it's a finished image (not a step preview), by its
   /// image tensor, which stays the same when steps are renumbered.
   private var imageStep: (project: String, tensorId: Int64)? {
@@ -1679,8 +1681,11 @@ final class CreateModel {
       var inputTensorId: Int64?
       var tipTensorId: Int64?
       do {
+        timingRecorders[job.id] = GenerationTimingRecorder(startedAt: startedAt)
         let progress: @Sendable (GenerationEngine.Progress) -> Void = { progress in
+          let arrived = Date()
           Task { @MainActor in
+            if case .state(let state) = progress { self.timingRecorders[job.id]?.note(state, at: arrived) }
             self.noteRemoteProgress(progress, job)
             if job.id == self.foregroundJobID {
               self.handle(progress, showsOnCanvas: job.remoteDevice == nil)
@@ -1726,13 +1731,21 @@ final class CreateModel {
           finish(job, status: status)
           return
         }
+        let returnedAt = Date()
+        // Runs on a server report the server's states, so their timings would mislead.
+        var timings = job.target == .local ? timingRecorders[job.id]?.timings(returnedAt: returnedAt) : nil
         if output.isVideo { setRunMessage("Saving \(output.frames.count) frames…", job) }
         let followsRun = { self.canvasFollowsRun && job.id == self.foregroundJobID }
         let history = history
         let item = try await oneSaveAtATime {
           try await history.save(
-            output, request: request, startedAt: startedAt, finishedAt: Date(),
+            output, request: request, startedAt: startedAt, finishedAt: Date(), timings: timings,
             makeCurrent: followsRun)
+        }
+        if timings != nil {
+          timings?.save = Date().timeIntervalSince(returnedAt)
+          timings?.total = Date().timeIntervalSince(startedAt)
+          queue.setTimings(timings, id: job.id)
         }
         lastSavedTensorId = item.tensorId
         let finished = output.frames.first.flatMap(ImageTensor.cgImage(from:)) ?? runProgress(of: job)?.preview
@@ -1785,6 +1798,7 @@ final class CreateModel {
     _ job: JobQueue.Job, status: JobQueue.Job.Status, inputTensorId: Int64? = nil, tipTensorId: Int64? = nil
   ) {
     queue.finishRunning(status, id: job.id, inputTensorId: inputTensorId, tipTensorId: tipTensorId)
+    timingRecorders[job.id] = nil
     remoteRuns[job.id] = nil
     runTasks[job.id] = nil
     deviceFrames[job.id] = nil
@@ -2217,7 +2231,16 @@ final class CreateModel {
       if canvasFollowsRun, showsOnCanvas { coverCanvas(with: first) }
       noteStep(step, of: total)
     case .state(let state):
-      phase = .running(Self.describe(state))
+      switch state {
+      case .generating(let step, let total) where step == self.step && step == total && lastStepAt != nil:
+        // The engine reports the last step again once sampling has ended (`GenerationTimings`).
+        phase = .running(Self.describe(.decoding))
+      case .decoding:
+        // The engine signals `.imageDecoded` once decoding is done; saving is what's left.
+        phase = .running("Finishing…")
+      default:
+        phase = .running(Self.describe(state))
+      }
       transfer = Self.transfer(in: state)
       if case .generating(let step, let total) = state {
         noteStep(step, of: total)
