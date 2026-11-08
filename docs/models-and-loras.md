@@ -36,6 +36,15 @@ The converted model is saved in the models folder as `<name>_f16.ckpt`, marked *
 
 Some families can't be imported yet: HiDream O1, Qwen Image 2.1, LTX-2, SeedVR2, Kandinsky, Würstchen and LongCat. Atelier tells you after inspecting the file.
 
+### Fibo 2.0 Edit Turbo
+
+[Fibo 2.0 Edit Turbo](https://huggingface.co/briaai/Fibo-2.0-edit-turbo) from Bria edits an image from an instruction ("make the sky purple", "give the fox a scarf") and also makes images from a prompt alone. It isn't in the catalog, so it has to be converted first:
+
+- Its license is **CC BY-NC 4.0: non-commercial use only**. You accept it on Hugging Face before you can download the files.
+- Hugging Face ships the model as two transformer files and a Qwen3-VL text encoder. Convert the text encoder with the engine's `ModelConverter --fibo2-text-encoder` into the models folder (it's written as `fibo_2_qwen_3_vl_4b_f16.ckpt`), merge the two transformer files into one `.safetensors`, and import that as `fibo_2_….safetensors` so the converted file is named `fibo_2_…_f16.ckpt`. It uses FLUX.2's VAE, which is downloaded if missing.
+- Use **Edit** with the image on the canvas; moodboard images are sent as further images to edit. A prompt that is a JSON object with an `edit_instruction` key is passed as it is.
+- It runs at 4 steps with Euler A Trailing and resolution-dependent shift, at 1024×1024 by default. It's distilled without CFG, so there's no Guidance setting and the negative prompt is ignored. LoRAs aren't supported.
+
 ### Model files Atelier can't match
 
 Atelier only lists a model it can find in a catalog or a `custom.json`, because the file alone doesn't say which family it is. [Import from Draw Things](getting-started.md#import-from-draw-things) lists the other files in a folder, each with one of these reasons:

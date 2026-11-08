@@ -810,7 +810,7 @@ final class ModelLibrary {
       .v1, .v2, .sdxlBase, .ssd1b, .sd3, .sd3Large, .pixart, .auraflow, .flux1, .flux2,
       .flux2_9b, .flux2_4b, .flux3_5b, .hunyuanVideo, .wan21_1_3b, .wan21_14b, .wan22_5b,
       .hiDreamI1, .hiDreamO1, .qwenImage, .qwenImage2_1, .zImage, .ernieImage, .cosmos2_5_2b,
-      .ideogram4, .krea2, .ltx2, .ltx2_3, .minimaxH3, .mossImage,
+      .ideogram4, .krea2, .ltx2, .ltx2_3, .minimaxH3, .mossImage, .fibo2,
     ]
     return versions.map { ($0.rawValue, ModelZoo.humanReadableNameForVersion($0)) }
       .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
