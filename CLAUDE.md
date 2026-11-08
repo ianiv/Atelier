@@ -6,7 +6,7 @@ Atelier is a native SwiftUI app (macOS 26 + iPadOS 27, Apple silicon) that gener
 
 ## Commands
 
-Build only through the script; outputs land in `build/` (gitignored), never Xcode's default DerivedData.
+Build only through the script; outputs land in `build/` (gitignored, a symlink to `build.noindex/` so Spotlight skips them), never Xcode's default DerivedData.
 
 ```bash
 Scripts/build.sh [Debug|Release] [mac|ipad|ipad-sim]   # default: Release mac → build/Atelier.app

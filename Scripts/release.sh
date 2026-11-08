@@ -24,6 +24,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
+source "$SCRIPT_DIR/hide-build-from-spotlight.sh"
 NOTARY_PROFILE="${NOTARY_PROFILE:-atelier-notary}"
 VERSION_SETTINGS=(CURRENT_PROJECT_VERSION="$(git rev-list --count HEAD)")
 [ -n "$1" ] && VERSION_SETTINGS+=(MARKETING_VERSION="$1")

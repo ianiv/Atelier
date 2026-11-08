@@ -1,5 +1,6 @@
 .build/
-build/
+build
+build.noindex/
 xcuserdata/
 DerivedData/
 .DS_Store

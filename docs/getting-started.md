@@ -25,7 +25,7 @@ Release builds don't include Draw Things' preview decoders, so step-by-step prev
 
 You can also open `Atelier.xcodeproj` in Xcode and run the Atelier scheme.
 
-Builds stay in `build/`, and the scripts keep them out of Spotlight and Open With so only the installed app shows there. If old copies still show up, run `Scripts/clean-builds.sh`. It also deletes Xcode's own build folder for Atelier. Add `--all` to delete the build caches in `build/` too, which makes the next build a full one.
+Builds stay in `build/`, a link to `build.noindex/`, which keeps them out of Spotlight. The scripts also keep them out of Open With, so only the installed app shows there. If old copies still show up, run `Scripts/clean-builds.sh`. It also deletes Xcode's own build folder for Atelier. Add `--all` to delete the build caches in `build/` too, which makes the next build a full one.
 
 ### Code formatting
 

@@ -12,6 +12,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
+source "$SCRIPT_DIR/hide-build-from-spotlight.sh"
 CONFIGURATION="${1:-Release}"
 PLATFORM="${2:-mac}"
 
@@ -63,8 +64,8 @@ xcodebuild -project Atelier.xcodeproj -scheme Atelier -configuration "$CONFIGURA
 
 rm -rf "$OUTPUT"
 cp -R "$DERIVED/Build/Products/$PRODUCTS/Atelier.app" "$OUTPUT"
-# macOS registers every built copy with Launch Services, so they pile up in Spotlight and Open With.
-# Keep the installed app the only one listed.
+# macOS registers every built copy with Launch Services, so they pile up in Open With. Keep the
+# installed app the only one listed. hide-build-from-spotlight.sh does the same for Spotlight.
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 "$LSREGISTER" -u "$DERIVED/Build/Products/$PRODUCTS/Atelier.app" "$OUTPUT" 2>/dev/null || true
 echo "Built $PROJECT_ROOT/$OUTPUT"

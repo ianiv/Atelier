@@ -9,6 +9,7 @@ set -eo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
+source "$SCRIPT_DIR/hide-build-from-spotlight.sh"
 
 if [ -z "$DEVELOPER_DIR" ] && ! xcodebuild -version >/dev/null 2>&1; then
   export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
