@@ -234,11 +234,11 @@ struct ModelsView: View {
 
   private var footer: some View {
     HStack {
-      Text(
-        "\(library.downloadedCount) downloaded, \(Self.bytes(library.downloadedSize))"
-          + (library.freeSpace.map { ", \(Self.bytes($0)) free" } ?? ""))
+      Text("\(library.downloadedCount) downloaded, \(Self.bytes(library.downloadedSize))")
       Spacer()
       if library.isLoadingCatalog { ProgressView().controlSize(.small) }
+      AddFolderPicker().controlSize(.small)
+      if let free = library.freeSpace { Text("\(Self.bytes(free)) free") }
     }
     .font(.callout)
     .foregroundStyle(.secondary)
@@ -478,7 +478,7 @@ struct ModelImportSheet: View {
     VStack(alignment: .leading, spacing: 12) {
       Text("Import Models").font(.headline)
       Text(
-        "Each checkpoint is converted into the models folder and added to custom.json, then the text encoders and VAE it needs are downloaded. Leave the name empty to use the file name."
+        "Each checkpoint is converted into the folder below and added to its custom.json, then the text encoders and VAE it needs are downloaded there. Leave the name empty to use the file name."
       )
       .font(.callout).foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)
@@ -495,6 +495,8 @@ struct ModelImportSheet: View {
         Text("Converting a checkpoint takes a few minutes and a lot of memory.")
           .font(.caption).foregroundStyle(.secondary)
       }
+      AddFolderPicker()
+        .disabled(library.isImportingModels)
       HStack {
         Spacer()
         Button("Cancel", role: .cancel) { library.cancelModelImports() }

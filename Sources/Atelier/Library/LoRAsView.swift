@@ -263,7 +263,7 @@ struct LoRAImportSheet: View {
     VStack(alignment: .leading, spacing: 12) {
       Text("Import LoRAs").font(.headline)
       Text(
-        "Each file is converted into the models folder and added to custom_lora.json. Leave the name empty to use the file name and the detected model family."
+        "Each file is converted into the folder below and added to its custom_lora.json. Leave the name empty to use the file name and the detected model family."
       )
       .font(.callout).foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)
@@ -285,6 +285,8 @@ struct LoRAImportSheet: View {
       }
       .help("Override only if detection picks the wrong family.")
       .disabled(library.isImporting)
+      AddFolderPicker()
+        .disabled(library.isImporting)
       HStack {
         Spacer()
         Button("Cancel", role: .cancel) { library.cancelImports() }

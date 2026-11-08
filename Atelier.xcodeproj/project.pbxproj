@@ -29,6 +29,7 @@
 		A7E1F0C2B3D4A5968778696D /* AutomationEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1F0C2B3D4A5968778696C /* AutomationEngine.swift */; };
 		A7E1F0C2B3D4A5968778696B /* Log.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1F0C2B3D4A5968778696A /* Log.swift */; };
 		A9C3E5F70B1D2E3F40516278 /* AutomationModelMove.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9C3E5F70B1D2E3F40516277 /* AutomationModelMove.swift */; };
+		B7D4E6F80C1D2E3F40516284 /* AutomationAddFolder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7D4E6F80C1D2E3F40516283 /* AutomationAddFolder.swift */; };
 		A7E1F0C2B3D4A5968778695D /* AutomationCleanup.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1F0C2B3D4A5968778695C /* AutomationCleanup.swift */; };
 		A7E1F0C2B3D4A5968778695B /* TemporaryFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1F0C2B3D4A5968778695A /* TemporaryFiles.swift */; };
 		C442D7B6FB6852DA4CD2C251 /* AgentServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 859B3EF300FEC1C99AACF6D2 /* AgentServer.swift */; };
@@ -127,6 +128,7 @@
 		C1A1B98D2F1D4DB733D3A91A /* InspectorPresets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1695448917E4F53AE8A6DC58 /* InspectorPresets.swift */; };
 		1A2A67114ED9030A8948E8ED /* InspectorSize.swift in Sources */ = {isa = PBXBuildFile; fileRef = 767CBEA7FD85E530CA5726C1 /* InspectorSize.swift */; };
 		A9C3E5F70B1D2E3F40516274 /* ModelMove.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9C3E5F70B1D2E3F40516273 /* ModelMove.swift */; };
+		B7D4E6F80C1D2E3F40516282 /* AddFolder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7D4E6F80C1D2E3F40516281 /* AddFolder.swift */; };
 		FEC22431AE15251468257CA2 /* LibraryErrorAlert.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAFF310E4AA538AA8C02FC77 /* LibraryErrorAlert.swift */; };
 		600FFF1041FD67847B794622 /* LoRAsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 434F7495899302690802E139 /* LoRAsView.swift */; };
 		A7E11C0A1C0A7E11C0A7E102 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = A7E11C0A1C0A7E11C0A7E101 /* AppIcon.icon */; };
@@ -216,6 +218,7 @@
 		A7E1F0C2B3D4A5968778696C /* AutomationEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationEngine.swift; sourceTree = "<group>"; };
 		A7E1F0C2B3D4A5968778696A /* Log.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Log.swift; sourceTree = "<group>"; };
 		A9C3E5F70B1D2E3F40516277 /* AutomationModelMove.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationModelMove.swift; sourceTree = "<group>"; };
+		B7D4E6F80C1D2E3F40516283 /* AutomationAddFolder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationAddFolder.swift; sourceTree = "<group>"; };
 		A7E1F0C2B3D4A5968778695C /* AutomationCleanup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationCleanup.swift; sourceTree = "<group>"; };
 		A7E1F0C2B3D4A5968778695A /* TemporaryFiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemporaryFiles.swift; sourceTree = "<group>"; };
 		859B3EF300FEC1C99AACF6D2 /* AgentServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentServer.swift; sourceTree = "<group>"; };
@@ -309,6 +312,7 @@
 		1695448917E4F53AE8A6DC58 /* InspectorPresets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorPresets.swift; sourceTree = "<group>"; };
 		767CBEA7FD85E530CA5726C1 /* InspectorSize.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorSize.swift; sourceTree = "<group>"; };
 		A9C3E5F70B1D2E3F40516273 /* ModelMove.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelMove.swift; sourceTree = "<group>"; };
+		B7D4E6F80C1D2E3F40516281 /* AddFolder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddFolder.swift; sourceTree = "<group>"; };
 		DAFF310E4AA538AA8C02FC77 /* LibraryErrorAlert.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryErrorAlert.swift; sourceTree = "<group>"; };
 		434F7495899302690802E139 /* LoRAsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoRAsView.swift; sourceTree = "<group>"; };
 		A7E11C0A1C0A7E11C0A7E101 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = AppIcon.icon; sourceTree = "<group>"; };
@@ -450,6 +454,7 @@
 				A7E1F0C2B3D4A5968778696C /* AutomationEngine.swift */,
 				A7E1F0C2B3D4A5968778695C /* AutomationCleanup.swift */,
 				A9C3E5F70B1D2E3F40516277 /* AutomationModelMove.swift */,
+				B7D4E6F80C1D2E3F40516283 /* AutomationAddFolder.swift */,
 				D70A1100000000000000000B /* AutomationDrawThings.swift */,
 				D2FF5ECF7B3949AB28ABC1A2 /* AutomationUpscale.swift */,
 				E5D760BDEB2FA5F04BDAF779 /* AutomationTimeline.swift */,
@@ -570,6 +575,7 @@
 			children = (
 				DAFF310E4AA538AA8C02FC77 /* LibraryErrorAlert.swift */,
 				A9C3E5F70B1D2E3F40516273 /* ModelMove.swift */,
+				B7D4E6F80C1D2E3F40516281 /* AddFolder.swift */,
 				434F7495899302690802E139 /* LoRAsView.swift */,
 				D70A11000000000000000002 /* CommunityCatalog.swift */,
 				D70A11000000000000000004 /* DrawThingsImport.swift */,
@@ -895,6 +901,7 @@
 				A7E1F0C2B3D4A5968778696D /* AutomationEngine.swift in Sources */,
 				A7E1F0C2B3D4A5968778695D /* AutomationCleanup.swift in Sources */,
 				A9C3E5F70B1D2E3F40516278 /* AutomationModelMove.swift in Sources */,
+				B7D4E6F80C1D2E3F40516284 /* AutomationAddFolder.swift in Sources */,
 				D70A1100000000000000000A /* AutomationDrawThings.swift in Sources */,
 				58D2F5882DA905D40744609C /* AutomationUpscale.swift in Sources */,
 				70E8E18439D847EA73F0D5DD /* AutomationTimeline.swift in Sources */,
@@ -973,6 +980,7 @@
 				1A2A67114ED9030A8948E8ED /* InspectorSize.swift in Sources */,
 				FEC22431AE15251468257CA2 /* LibraryErrorAlert.swift in Sources */,
 				A9C3E5F70B1D2E3F40516274 /* ModelMove.swift in Sources */,
+				B7D4E6F80C1D2E3F40516282 /* AddFolder.swift in Sources */,
 				600FFF1041FD67847B794622 /* LoRAsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

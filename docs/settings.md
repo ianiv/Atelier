@@ -8,13 +8,13 @@ Open **Atelier ▸ Settings** (⌘,).
 
 ### Models directory
 
-The folder Atelier reads models and LoRAs from, and downloads and imports into. Click **Choose…** or type a path, then **Apply**. When it's never been set, Atelier uses `~/Documents/Models`, or the folder in the `DRAWTHINGS_MODELS_DIR` environment variable. To share models with Draw Things, use [Import from Draw Things](#import-from-draw-things), since macOS only lets Atelier read Draw Things' own folder once you've chosen it there or with **Choose…**.
+The folder Atelier reads models and LoRAs from, and downloads and imports into unless you choose another. Click **Choose…** or type a path, then **Apply**. When it's never been set, Atelier uses `~/Documents/Models`, or the folder in the `DRAWTHINGS_MODELS_DIR` environment variable. To share models with Draw Things, use [Import from Draw Things](#import-from-draw-things), since macOS only lets Atelier read Draw Things' own folder once you've chosen it there or with **Choose…**.
 
 **On iPad** there's no path to type. Settings shows the folder as the Files app names it, such as **On My iPad ▸ Atelier ▸ Models (Default)**. **Choose…** picks any folder Files can reach (iCloud Drive, another app's folder, an external drive), and **Use Default** goes back to the Models folder in Atelier's own folder. If a chosen folder can't be reached, for example on a disconnected drive, Settings says so.
 
 ### Additional model folders
 
-More folders Atelier reads models and LoRAs from, such as a second drive or another app's models folder. Click **Add Folder…** to add one and the minus button to stop using it (its files stay where they are). Models and LoRAs from every folder can be picked in Create, and LoRAs listed in any folder's `custom_lora.json` show up in the LoRAs screen. Downloads and imports still go to the models directory above. To move a model or LoRA to another folder, use **Move To** in the [Models or LoRAs screen](models-and-loras.md#moving-between-folders).
+More folders Atelier reads models and LoRAs from, such as a second drive or another app's models folder. Click **Add Folder…** to add one and the minus button to stop using it (its files stay where they are). Models and LoRAs from every folder can be picked in Create, and LoRAs listed in any folder's `custom_lora.json` show up in the LoRAs screen. Downloads and imports go to the models directory above unless you pick another folder in **Add To** on the [Models screen](models-and-loras.md#choosing-where-new-models-go). To move a model or LoRA to another folder, use **Move To** in the [Models or LoRAs screen](models-and-loras.md#moving-between-folders).
 
 When the same file name is in more than one folder, Atelier uses the one in the models directory first, then the additional folders in the order listed. A folder that can't be reached, for example on a disconnected drive, is marked **Not available** and skipped; Atelier picks it up again within a few seconds of the drive being reconnected. If the model you had picked was on that drive, it's picked again when the drive comes back.
 

@@ -20,6 +20,13 @@ Select a model and click **Download**. Atelier also downloads the text encoders 
 
 **Move to Trash** moves the model's file to the Trash. Text encoders and other files that other models share are kept. For an imported model, its entry is removed from the library too. If an imported model's file has gone missing from the folder, it says "File missing" and **Remove from Library** cleans up the entry.
 
+### Choosing where new models go
+
+With [additional model folders](settings.md#additional-model-folders), **Add To** at the bottom of the Models screen picks the folder that downloads, imported checkpoints and LoRAs, and 8-bit copies go to, so a model can land on the internal drive without moving it afterwards. The import sheets show the same choice. The free space beside it is for that folder's drive. With one models folder, **Add To** is there but can't be changed. If the chosen folder can't be reached, for example on a disconnected drive, new files go to the models folder from Settings.
+
+- A download puts the model's text encoders, VAE and other files there too, except ones a models folder already has.
+- An import into another folder is converted in the models folder from Settings first, then moved over, so that drive needs room for it while it converts. Its `custom.json` or `custom_lora.json` entry goes in the chosen folder.
+
 ### Moving between folders
 
 With [additional model folders](settings.md#additional-model-folders), the **Folder** column shows which folder each model's file is in. To choose what lives on the internal drive and what on an external one, select a model and pick a folder from **Move To** (also in the list's context menu), then confirm.
@@ -39,7 +46,7 @@ To use a model that isn't in the catalog, such as a fine-tune you downloaded:
 
 On iPad, Import… opens the Files picker. Importing a checkpoint and Make 8-bit Copy work there too but haven't been tried on an iPad yet; converting needs a lot of memory, so a Mac is the safer place for large checkpoints.
 
-The converted model is saved in the models folder as `<name>_f16.ckpt`, marked **Imported**, and any text encoders or VAE it needs are downloaded. It then appears in Create's model menu.
+The converted model is saved in the folder chosen in **Add To** as `<name>_f16.ckpt`, marked **Imported**, and any text encoders or VAE it needs are downloaded. It then appears in Create's model menu.
 
 **MOSS Image fine-tunes** in OpenMOSS' layout (for example Kromoss) are converted by a dedicated importer and work like the official MOSS Image model.
 
@@ -74,7 +81,7 @@ An imported MOSS or MiniMax H3 model (such as HyperFlow H3 Flash) is full precis
 
 MiniMax H3 models only offer **Make 8-bit S Copy**, the format Draw Things' own H3 files use. The copy is faster too: each step reads half as much from memory, and it leaves more room for the text encoder.
 
-The copy is saved next to the original and listed as "<name> (8-bit)" or "<name> (8-bit S)" with the same settings. Pick it in Create like any other model. Once a copy exists, its button goes away. You can keep the full-precision model or move it to the Trash.
+The copy is saved in the folder chosen in **Add To** and listed as "<name> (8-bit)" or "<name> (8-bit S)" with the same settings. Pick it in Create like any other model. Once a copy exists, its button goes away. You can keep the full-precision model or move it to the Trash.
 
 ## LoRAs
 
@@ -86,7 +93,7 @@ Converting a LoRA to 8-bit in Draw Things deletes the original file and leaves t
 
 1. Click **Import…** and choose `.safetensors` LoRA files, or drop them on the list.
 2. For each file, check the name, add its **trigger words** (the words it was trained on, which you add to your prompt to bring it in), and leave **Model family** on **Detect automatically** unless detection picks the wrong one.
-3. Import. The LoRA is converted, saved in the models folder and registered in `custom_lora.json`. It's usable right away; no relaunch needed.
+3. Import. The LoRA is converted, saved in the folder chosen in **Add To** and registered in that folder's `custom_lora.json`. It's usable right away; no relaunch needed.
 
 ### Managing LoRAs
 

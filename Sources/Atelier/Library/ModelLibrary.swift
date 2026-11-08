@@ -1,5 +1,6 @@
 @preconcurrency import _MediaGenerationKit
 @preconcurrency import Diffusion
+@preconcurrency import Downloader
 import Foundation
 @preconcurrency import ModelOp
 @preconcurrency import ModelZoo
@@ -7,7 +8,8 @@ import Observation
 
 /// Models and LoRAs in the models folders: the download catalog, downloads, model and LoRA
 /// imports, and deletes. Files are looked up in each available models folder in order (the first
-/// one with a file wins); downloads and imports go to the first.
+/// one with a file wins); downloads, imports and 8-bit copies go to the folder chosen to add to
+/// (`addFolder`, the first unless another is chosen).
 ///
 /// `ModelZoo`, `ModelOp` and `Diffusion` aren't products of the engine package, but they're built
 /// as dependencies of `_MediaGenerationKit` and import fine from the pinned revision. They're
@@ -119,15 +121,17 @@ final class ModelLibrary {
   var importTask: Task<Void, Never>?
   var modelImportTask: Task<Void, Never>?
   var moveTask: Task<Void, Never>?
+  /// The saved choice of folder to add to (`AddFolder.swift`), a path.
+  var addFolderPath = UserDefaults.standard.string(forKey: ModelLibrary.addFolderKey)
 
   init(create: CreateModel) {
     self.create = create
     create.onModelsReloaded = { [weak self] in self?.reloadLoRAs() }
   }
 
-  /// Where downloads and imports go: the first models folder that can be reached (the engine
-  /// writes there too), else the models directory setting.
-  private var directory: URL {
+  /// The first models folder that can be reached, else the models directory setting: where the
+  /// engine writes a file no folder has yet (`ModelZoo.filePathForModelDownloaded`).
+  var directory: URL {
     directories.first ?? URL(fileURLWithPath: create.modelsDirectory, isDirectory: true)
   }
 
@@ -160,7 +164,7 @@ final class ModelLibrary {
 
   /// Disk sizes of downloaded models and LoRAs, and free space on the volume.
   private func measure() async {
-    let directory = directory
+    let directory = addFolder
     let directories = directories
     let files = catalog.filter(\.isDownloaded).map(\.file)
     let (sizes, folders, free) = await Self.measure(files: files, in: directories, volume: directory)
@@ -210,21 +214,33 @@ final class ModelLibrary {
     errorMessage = nil
     downloads[file] = Download(
       file: file, fileIndex: 0, totalFiles: 0, bytesWritten: 0, totalBytes: 0)
+    let folder = addFolder
+    let viaEngine = isEngineFolder(folder)
     downloadTasks[file] = Task {
       var finished = false
+      let show: @Sendable (Download) -> Void = { progress in
+        Task { @MainActor in
+          guard self.downloadTasks[file] != nil else { return }
+          self.downloads[file] = progress
+        }
+      }
       do {
-        _ = try await MediaGenerationEnvironment.default.ensure(file, offline: false) { state in
-          guard case .downloading(let name, let index, let total, let written, let expected) = state
-          else { return }
-          let progress = Download(
-            file: name, fileIndex: index, totalFiles: total, bytesWritten: written,
-            totalBytes: expected)
-          Task { @MainActor in
-            guard self.downloadTasks[file] != nil else { return }
-            self.downloads[file] = progress
+        if viaEngine {
+          _ = try await MediaGenerationEnvironment.default.ensure(file, offline: false) { state in
+            guard case .downloading(let name, let index, let total, let written, let expected) = state
+            else { return }
+            show(Download(
+              file: name, fileIndex: index, totalFiles: total, bytesWritten: written,
+              totalBytes: expected))
+          }
+        } else {
+          try await Self.downloadModel(file, into: folder) { name, index, total, written, expected in
+            show(Download(
+              file: name, fileIndex: index, totalFiles: total, bytesWritten: written,
+              totalBytes: expected))
           }
         }
-        try await Self.downloadAudioEncoder(for: file) { name, written, expected in
+        try await Self.downloadAudioEncoder(for: file, into: folder) { name, written, expected in
           let progress = Download(
             file: name, fileIndex: 1, totalFiles: 1, bytesWritten: written, totalBytes: expected)
           Task { @MainActor in
@@ -259,11 +275,11 @@ final class ModelLibrary {
   /// or rewrites them for external data. MGK's own downloader is internal; the URL is the one it
   /// uses (`Storage.downloadFile`). Also runs before a generation, for a model downloaded earlier.
   nonisolated static func downloadAudioEncoder(
-    for model: String,
+    for model: String, into folder: URL? = nil,
     progress: @escaping @Sendable (_ file: String, _ written: Int64, _ expected: Int64) -> Void
   ) async throws {
     let directories = MediaGenerationEnvironment.default.externalUrls
-    guard let file = ModelZoo.audioEncoderForModel(model), let directory = directories.first,
+    guard let file = ModelZoo.audioEncoderForModel(model), let directory = folder ?? directories.first,
           !directories.contains(where: {
             FileManager.default.fileExists(atPath: $0.appendingPathComponent(file).path)
           }),
@@ -425,7 +441,7 @@ final class ModelLibrary {
     importingModels.removeAll()
   }
 
-  /// Converts the queued checkpoints one by one into the models directory, registers each in
+  /// Converts the queued checkpoints one by one into `addFolder`, registers each in
   /// custom.json and with the running engine, then downloads the text encoders and VAE it needs.
   func runModelImports() {
     guard modelImportTask == nil, importingModels.contains(where: \.canImport) else { return }
@@ -501,16 +517,21 @@ final class ModelLibrary {
     Set((try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? [])
   }
 
-  /// Imports one checkpoint and returns the model file it registered.
+  /// Imports one checkpoint into `addFolder` and returns the model file it registered.
   private func importModel(_ item: ModelImport) async throws -> String {
     let stem = item.source.deletingPathExtension().lastPathComponent
     let modelName = Self.availableModelName(for: stem, in: directories)
     let directory = directory
+    let folder = addFolder
     // The main file and the text encoders and autoencoder that come out of it share this prefix.
     let before = Self.fileNames(in: directory)
+    let beforeInFolder = Self.fileNames(in: folder)
     var succeeded = false
     defer {
-      if !succeeded { Self.removeNewFiles(in: directory, before: before, prefix: modelName + "_") }
+      if !succeeded {
+        Self.removeNewFiles(in: directory, before: before, prefix: modelName + "_")
+        Self.removeNewFiles(in: folder, before: beforeInFolder, prefix: modelName + "_")
+      }
     }
     let trimmedName = item.name.trimmingCharacters(in: .whitespacesAndNewlines)
     let displayName = trimmedName.isEmpty ? stem : trimmedName
@@ -538,13 +559,11 @@ final class ModelLibrary {
     else {
       throw CocoaError(.fileNoSuchFile)
     }
-    backUpModelRegistryOnce()
-    // custom.json resolves to ~/Documents/Models unless external URLs are preferred, which MGK
-    // leaves off. Prefer them just for this call (on the main thread, as the engine requires).
-    let preferred = ModelZoo.isExternalUrlsPreferred
-    ModelZoo.isExternalUrlsPreferred = true
-    ModelZoo.appendCustomSpecification(specification)
-    ModelZoo.isExternalUrlsPreferred = preferred
+    if !isEngineFolder(folder) {
+      let written = Self.fileNames(in: directory).subtracting(before).filter { $0.hasPrefix(modelName + "_") }
+      try await Self.moveImported(Array(written), from: directory, to: folder)
+    }
+    try registerImported(specification, in: folder)
     succeeded = true
     return specification.file
   }
@@ -575,8 +594,8 @@ final class ModelLibrary {
       source, to: destination, format: format, miniMaxH3: miniMaxH3, progress: progress)
   }
 
-  /// Writes `<name>_q8p.ckpt` or `<name>_i8x.ckpt` next to the model, about half its size, and
-  /// registers it as "<name> (8-bit)" or "(8-bit S)" with the same specification.
+  /// Writes `<name>_q8p.ckpt` or `<name>_i8x.ckpt` to `addFolder`, about half the model's size,
+  /// and registers it there as "<name> (8-bit)" or "(8-bit S)" with the same specification.
   func make8BitCopy(_ model: MediaGenerationResolvedModel, _ format: MOSSImporter.EightBit) {
     guard canMake8BitCopy(model, format),
           var specification = ModelZoo.specificationForModel(model.file)
@@ -585,7 +604,8 @@ final class ModelLibrary {
     let output = Self.eightBitFile(for: model.file, format)
     let source = (Self.files(of: model.file, in: directories).first
       ?? directory.appendingPathComponent(model.file)).path
-    let destination = directory.appendingPathComponent(output).path
+    let folder = addFolder
+    let destination = folder.appendingPathComponent(output).path
     quantizing[output] = 0
     let progress: @Sendable (Float) -> Void = { [weak self] value in
       Task { @MainActor [weak self] in
@@ -600,11 +620,11 @@ final class ModelLibrary {
       if FileManager.default.fileExists(atPath: destination) {
         specification.file = output
         specification.name = "\(model.name) (\(format.title))"
-        backUpModelRegistryOnce()
-        let preferred = ModelZoo.isExternalUrlsPreferred
-        ModelZoo.isExternalUrlsPreferred = true
-        ModelZoo.appendCustomSpecification(specification)
-        ModelZoo.isExternalUrlsPreferred = preferred
+        do {
+          try registerImported(specification, in: folder)
+        } catch {
+          errorMessage = "Couldn't list the \(format.title) copy of \(model.name): \(error.localizedDescription)"
+        }
       } else {
         errorMessage = "Couldn't write an \(format.title) copy of \(model.name)."
       }
@@ -851,7 +871,7 @@ final class ModelLibrary {
 
   var isImporting: Bool { importTask != nil }
 
-  /// Converts the queued files one by one into the models directory and registers each with the
+  /// Converts the queued files one by one into `addFolder` and registers each with the
   /// engine, so it can be used right away. `version` nil means detect it from the weights.
   func runImports(version: String?) {
     guard importTask == nil, !importing.isEmpty else { return }
@@ -892,12 +912,17 @@ final class ModelLibrary {
 
   private func importLoRA(_ item: LoRAImport, version: ModelVersion?) async throws {
     let directory = directory
+    let folder = addFolder
     let stem = item.source.deletingPathExtension().lastPathComponent
     let file = Self.availableLoRAFileName(for: stem, in: directories)
     let before = Self.fileNames(in: directory)
+    let beforeInFolder = Self.fileNames(in: folder)
     var succeeded = false
     defer {
-      if !succeeded { Self.removeNewFiles(in: directory, before: before, prefix: file) }
+      if !succeeded {
+        Self.removeNewFiles(in: directory, before: before, prefix: file)
+        Self.removeNewFiles(in: folder, before: beforeInFolder, prefix: file)
+      }
     }
     let source = item.source
     let id = item.id
@@ -921,10 +946,13 @@ final class ModelLibrary {
     let name =
       trimmedName.isEmpty
         ? "\(stem) (\(ModelZoo.humanReadableNameForVersion(detected)))" : trimmedName
+    if !isEngineFolder(folder) {
+      try await Self.moveImported([file, file + "-tensordata"], from: directory, to: folder)
+    }
     try register(
       LoRAZoo.Specification(
         name: name, file: file, prefix: item.prefix, version: detected,
-        isLoHa: isLoHa), in: directory)
+        isLoHa: isLoHa), in: folder)
     succeeded = true
   }
 
