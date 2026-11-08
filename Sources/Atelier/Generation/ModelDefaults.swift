@@ -71,6 +71,12 @@ nonisolated enum ModelDefaults {
       prefix: "hyperflow_", steps: 6, guidanceScale: 1, shift: 12,
       resolutionDependentShift: false, sampler: .dDIMTrailing, size: (1344, 768), fps: 24,
       numFrames: 124, shiftForAudio: 3, replacesCatalog: true),
+    // Fibo 2.0 Edit Turbo, imported (`fibo_2_*`): distilled for 4 steps without CFG, which the
+    // engine forces off (`isCfgEnabled`). Its scheduler shifts by image size from a base of 3, as
+    // FLUX does, so resolution-dependent shift is on.
+    Fallback(
+      prefix: "fibo_2_", steps: 4, guidanceScale: 1, shift: 3,
+      resolutionDependentShift: true, sampler: .eulerATrailing, size: (1024, 1024)),
     // The values the engine's run-longcat-avatar-video skill uses for the step-distilled DMD files.
     Fallback(
       prefix: "longcat_video_avatar_", steps: 8, guidanceScale: 1, shift: 7,

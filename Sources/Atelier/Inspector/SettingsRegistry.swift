@@ -52,6 +52,9 @@ nonisolated struct ModelTraits: Equatable {
   var isVideo: Bool { Self.videoPrefixes.contains { version.hasPrefix($0) } }
   var isSVD: Bool { version == "Stable Video Diffusion" }
   var isWan: Bool { version.hasPrefix("Wan") }
+  /// Models the engine always runs without classifier-free guidance (`isCfgEnabled` returns false
+  /// for them), so Guidance would do nothing.
+  var isWithoutCFG: Bool { version == "Fibo 2.0" }
   /// Mirrors `ModelZoo.teaCacheCoefficientsForModel`'s built-in table.
   var hasTeaCache: Bool {
     ["FLUX.1", "Hunyuan Video", "HiDream I1", "MiniMax H3"].contains(version) || isWan
@@ -347,7 +350,7 @@ enum SettingsRegistry {
       float(
         "guidanceScale", \.guidanceScale, "Guidance", .essentials,
         "How strongly the image follows the prompt (CFG scale).", range: 0...30, step: 0.5,
-        keywords: ["cfg", "text guidance"]),
+        keywords: ["cfg", "text guidance"], applies: { !$0.isWithoutCFG }),
       choice(
         "sampler", \.sampler, "Sampler", .essentials, "The sampling algorithm and its noise schedule.",
         titles: samplerTitles),
