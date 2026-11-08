@@ -811,7 +811,7 @@ struct HistoryDetail: View {
     Form {
       Section {
         if item.isVideo {
-          ClipPlayer(item: item, autoplay: false)
+          ClipPlayer(item: item)
             .frame(maxWidth: .infinity)
             .frame(height: 260)
         } else {

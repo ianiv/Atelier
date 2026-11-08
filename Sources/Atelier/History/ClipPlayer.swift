@@ -8,8 +8,8 @@ import SwiftUI
 /// This Frame as Input, …) stays Atelier's.
 struct ClipPlayer: View {
   let item: HistoryItem
-  /// Starts playing once loaded (the canvas); History's detail waits for Play.
-  var autoplay = true
+  /// Starts playing once loaded. Neither the canvas nor History's detail does: both wait for Play.
+  var autoplay = false
   /// Plays the canvas's playback and offers the canvas menu; otherwise (History) its own and
   /// the frame menu, since opening, clearing and zooming are about the canvas.
   var onCanvas = false
