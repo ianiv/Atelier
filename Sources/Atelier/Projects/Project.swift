@@ -918,6 +918,12 @@ nonisolated struct ProjectTree: Sendable {
     byTensor[tensorId]?.first
   }
 
+  /// The item listing the clip whose frame is the image `tensorId` (the clip's first frame), when
+  /// it's a clip frame.
+  func clipItem(frame tensorId: Int64) -> StepID? {
+    byTensor[tensorId]?.lazy.compactMap { clipItems[$0] }.first
+  }
+
   /// `id`, its parent, and so on to the first step.
   func ancestry(of id: StepID) -> [StepID] {
     var line: [StepID] = []

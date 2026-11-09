@@ -441,6 +441,15 @@ final class CreateModel {
     return history.item(tensorId: imageStep.tensorId)
   }
 
+  /// The video the canvas image is a frame of, when it shows one (`useFrame`): only its first
+  /// frame is a History item of its own.
+  private var canvasFrameClip: HistoryItem? {
+    guard !imageIsPreview, let imageStep, imageStep.project == history.project.name else {
+      return nil
+    }
+    return history.clipItem(frame: imageStep.tensorId)
+  }
+
   /// The clip behind the canvas, when it shows a finished video: the canvas plays it.
   var canvasClip: HistoryItem? {
     showsFrame ? nil : imageItem.flatMap { $0.isVideo ? $0 : nil }
@@ -790,11 +799,12 @@ final class CreateModel {
 
   /// The generation settings behind the canvas image: those an imported image carries, while it's
   /// the image they came with, else its History step's sidecar (an image made here), so Load
-  /// Settings from Image can bring them back after the inspector changed. A playing clip is left
-  /// to the video's own menu (`ClipPlayer`).
+  /// Settings from Image can bring them back after the inspector changed. A video frame on the
+  /// canvas (`useFrame`, any frame) has the video's settings, from the clip's item, which History
+  /// lists by its first frame. A playing clip is left to the video's own menu (`ClipPlayer`).
   var canvasImageSettings: ImageMetadata.Settings? {
     if let importedSettings, importedSettings.image === image { return importedSettings.settings }
-    if canvasClip == nil, let sidecar = imageItem?.sidecar, !sidecar.configuration.isEmpty {
+    if canvasClip == nil, let sidecar = (imageItem ?? canvasFrameClip)?.sidecar, !sidecar.configuration.isEmpty {
       return ImageMetadata.settings(from: sidecar)
     }
     return nil

@@ -371,6 +371,11 @@ final class HistoryStore {
     byTensor[tensorId]
   }
 
+  /// The video whose frame is the image `tensorId`, any frame (History lists a video by its first).
+  func clipItem(frame tensorId: Int64) -> HistoryItem? {
+    tree.clipItem(frame: tensorId).flatMap { tree.items[$0] }
+  }
+
   // MARK: - Branches
 
   /// The current step (possibly one that isn't generated, such as an Edit run's input).

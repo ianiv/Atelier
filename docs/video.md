@@ -67,7 +67,7 @@ The canvas plays the run's preview as it forms, frame by frame, and the status b
 A finished video waits on the canvas until you press Play, then loops. Right-click it for:
 
 - **Save Video…** and **Save to Photos**.
-- **Use This Frame as Input**: pauses on the frame on screen and puts it on the canvas in Edit mode. The next run follows that frame. From the last frame, that continues the video; from any other frame, it starts a branch there.
+- **Use This Frame as Input**: pauses on the frame on screen and puts it on the canvas in Edit mode. The next run follows that frame. From the last frame, that continues the video; from any other frame, it starts a branch there. **Load Settings from Image** then loads the video's settings, whichever frame it is.
 - **Use Last Frame as Input**: the same, from the last frame, to make the next part of a longer video.
 - **Copy Frame** and **Add Frame to Moodboard**.
 
