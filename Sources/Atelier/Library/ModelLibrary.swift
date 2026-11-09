@@ -470,13 +470,13 @@ final class ModelLibrary {
     }
   }
 
-  /// Converts a checkpoint to the engine's format at `output`.
+  /// Converts a checkpoint to the engine's format in `folder`.
   @concurrent private nonisolated static func convert(
-    _ source: URL, modelName: String, displayName: String, output: String,
+    _ source: URL, modelName: String, displayName: String, into folder: URL,
     progress: @escaping @Sendable (Float) -> Void
   ) async throws -> ModelZoo.Specification {
     if MOSSImporter.isMOSS(source) {
-      try MOSSImporter.convert(source, to: output, progress: progress)
+      try MOSSImporter.convert(source, to: folder.appendingPathComponent(modelName + "_f16.ckpt").path, progress: progress)
       guard
         let specification = MOSSImporter.specification(
           file: modelName + "_f16.ckpt", name: displayName)
@@ -485,7 +485,8 @@ final class ModelLibrary {
     }
     let importer = ModelImporter(
       filePath: source.path, modelName: modelName, isTextEncoderCustomized: false,
-      autoencoderFilePath: nil, textEncoderFilePath: nil, textEncoder2FilePath: nil)
+      autoencoderFilePath: nil, textEncoderFilePath: nil, textEncoder2FilePath: nil,
+      outputDirectory: folder.path)
     // Inspect first: the importer traps on families it can't convert.
     let detected = try importer.inspect().version
     guard !unconvertibleVersions.contains(detected) else {
@@ -521,17 +522,12 @@ final class ModelLibrary {
   private func importModel(_ item: ModelImport) async throws -> String {
     let stem = item.source.deletingPathExtension().lastPathComponent
     let modelName = Self.availableModelName(for: stem, in: directories)
-    let directory = directory
     let folder = addFolder
     // The main file and the text encoders and autoencoder that come out of it share this prefix.
-    let before = Self.fileNames(in: directory)
-    let beforeInFolder = Self.fileNames(in: folder)
+    let before = Self.fileNames(in: folder)
     var succeeded = false
     defer {
-      if !succeeded {
-        Self.removeNewFiles(in: directory, before: before, prefix: modelName + "_")
-        Self.removeNewFiles(in: folder, before: beforeInFolder, prefix: modelName + "_")
-      }
+      if !succeeded { Self.removeNewFiles(in: folder, before: before, prefix: modelName + "_") }
     }
     let trimmedName = item.name.trimmingCharacters(in: .whitespacesAndNewlines)
     let displayName = trimmedName.isEmpty ? stem : trimmedName
@@ -548,20 +544,15 @@ final class ModelLibrary {
     if let index = importingModels.firstIndex(where: { $0.id == id }) {
       importingModels[index].progress = 0
     }
-    // ModelImporter writes `<modelName>_f16.ckpt` to ModelZoo.filePathForModelDownloaded, which
-    // resolves against the models directory the engine set (as LoRA import does).
-    let output = directory.appendingPathComponent(modelName + "_f16.ckpt").path
+    // ModelImporter writes `<modelName>_f16.ckpt` and its encoders to the folder it's given (an
+    // `outputDirectory` the fork adds), not just the first models folder.
     let specification = try await Self.convert(
-      source, modelName: modelName, displayName: displayName, output: output, progress: progress)
+      source, modelName: modelName, displayName: displayName, into: folder, progress: progress)
     guard
       FileManager.default.fileExists(
-        atPath: directory.appendingPathComponent(specification.file).path)
+        atPath: folder.appendingPathComponent(specification.file).path)
     else {
       throw CocoaError(.fileNoSuchFile)
-    }
-    if !isEngineFolder(folder) {
-      let written = Self.fileNames(in: directory).subtracting(before).filter { $0.hasPrefix(modelName + "_") }
-      try await Self.moveImported(Array(written), from: directory, to: folder)
     }
     try registerImported(specification, in: folder)
     succeeded = true
@@ -901,28 +892,24 @@ final class ModelLibrary {
   }
 
   @concurrent private nonisolated static func importLoRAFile(
-    _ source: URL, name: String, file: String, version: String?,
+    _ source: URL, name: String, file: String, version: String?, into folder: URL,
     progress: @escaping @Sendable (Float) -> Void
   ) async throws -> (ModelVersion, Bool) {
     let result = try ModelOp.LoRAImporter.import(
       downloadedFile: source.path, name: name, filename: file, scaleFactor: 1,
-      forceVersion: version.flatMap(ModelVersion.init(rawValue:)), progress: progress)
+      forceVersion: version.flatMap(ModelVersion.init(rawValue:)), outputDirectory: folder.path,
+      progress: progress)
     return (result.0, result.3)
   }
 
   private func importLoRA(_ item: LoRAImport, version: ModelVersion?) async throws {
-    let directory = directory
     let folder = addFolder
     let stem = item.source.deletingPathExtension().lastPathComponent
     let file = Self.availableLoRAFileName(for: stem, in: directories)
-    let before = Self.fileNames(in: directory)
-    let beforeInFolder = Self.fileNames(in: folder)
+    let before = Self.fileNames(in: folder)
     var succeeded = false
     defer {
-      if !succeeded {
-        Self.removeNewFiles(in: directory, before: before, prefix: file)
-        Self.removeNewFiles(in: folder, before: beforeInFolder, prefix: file)
-      }
+      if !succeeded { Self.removeNewFiles(in: folder, before: before, prefix: file) }
     }
     let source = item.source
     let id = item.id
@@ -933,12 +920,12 @@ final class ModelLibrary {
       }
     }
     if let index = importing.firstIndex(where: { $0.id == id }) { importing[index].progress = 0 }
-    // ModelOp writes to LoRAZoo.filePathForModelDownloaded(file), which resolves against
-    // ModelZoo.externalUrls: the models directory the engine set. MGK's LoRAImporter swaps
-    // externalUrls to a temp folder instead, which would race a running generation.
+    // ModelOp writes to the folder it's given (an `outputDirectory` the fork adds). MGK's
+    // LoRAImporter swaps externalUrls to a temp folder instead, which would race a running
+    // generation.
     let (detected, isLoHa) = try await Self.importLoRAFile(
-      source, name: stem, file: file, version: version?.rawValue, progress: progress)
-    guard FileManager.default.fileExists(atPath: directory.appendingPathComponent(file).path)
+      source, name: stem, file: file, version: version?.rawValue, into: folder, progress: progress)
+    guard FileManager.default.fileExists(atPath: folder.appendingPathComponent(file).path)
     else {
       throw CocoaError(.fileNoSuchFile)
     }
@@ -946,9 +933,6 @@ final class ModelLibrary {
     let name =
       trimmedName.isEmpty
         ? "\(stem) (\(ModelZoo.humanReadableNameForVersion(detected)))" : trimmedName
-    if !isEngineFolder(folder) {
-      try await Self.moveImported([file, file + "-tensordata"], from: directory, to: folder)
-    }
     try register(
       LoRAZoo.Specification(
         name: name, file: file, prefix: item.prefix, version: detected,

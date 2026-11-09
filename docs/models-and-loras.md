@@ -25,7 +25,7 @@ Select a model and click **Download**. Atelier also downloads the text encoders 
 With [additional model folders](settings.md#additional-model-folders), **Add To** at the bottom of the Models screen picks the folder that downloads, imported checkpoints and LoRAs, and 8-bit copies go to, so a model can land on the internal drive without moving it afterwards. The import sheets show the same choice. The free space beside it is for that folder's drive. With one models folder, **Add To** is there but can't be changed. If the chosen folder can't be reached, for example on a disconnected drive, new files go to the models folder from Settings.
 
 - A download puts the model's text encoders, VAE and other files there too, except ones a models folder already has.
-- An import into another folder is converted in the models folder from Settings first, then moved over, so that drive needs room for it while it converts. Its `custom.json` or `custom_lora.json` entry goes in the chosen folder.
+- An import is converted straight into that folder, and its `custom.json` or `custom_lora.json` entry goes in that folder's file.
 
 ### Moving between folders
 

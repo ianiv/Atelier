@@ -1,6 +1,8 @@
 #if os(macOS)
   @preconcurrency import _MediaGenerationKit
+  @preconcurrency import Diffusion
   import Foundation
+  @preconcurrency import ModelOp
   @preconcurrency import ModelZoo
 
   extension Automation {
@@ -9,13 +11,14 @@
     /// models stay as they are:
     ///
     ///   Atelier --add-folder-check -modelsDirectory A -additionalModelsDirectories '(B)' \
-    ///     [--download FILE] [--show models --snapshot-dir DIR] [--quit]
+    ///     [--lora FILE.safetensors] [--download FILE] [--show models --snapshot-dir DIR] [--quit]
     ///
-    /// Both must be empty or missing. Chooses B, then does what an import there does after
-    /// converting (moves the new files from A, lists the model in B's custom.json) and checks the
-    /// files, the registry and what the engine and the library find. Lists one in A the engine's
-    /// way too, and checks a missing chosen folder falls back to A. With `--download FILE`, also
-    /// downloads that catalog file (a small one: realesrgan_x2plus_f16.ckpt is 34 MB) into B.
+    /// Both must be empty or missing. Chooses B, lists a stand-in model in B's custom.json as an
+    /// import there does, and checks the registry and what the engine and the library find. Lists
+    /// one in A the engine's way too, and checks a missing chosen folder falls back to A. With
+    /// `--lora FILE`, imports that LoRA (as SDXL) and checks it was converted straight into B.
+    /// With `--download FILE`, also downloads that catalog file (a small one:
+    /// realesrgan_x2plus_f16.ckpt is 34 MB) into B.
     static func addFolderCheck(_ model: CreateModel, library: ModelLibrary) {
       Task { @MainActor in
         func log(_ message: String) { print(message); fflush(stdout) }
@@ -63,20 +66,18 @@
         check(library.addFolder.standardizedFileURL == b.standardizedFileURL, "adds to the chosen folder")
         check(!library.isEngineFolder(b), "the chosen folder isn't the one the engine writes to")
 
-        // What an import into B does once the converter has written to A.
+        // What an import into B does once the converter has written there.
         let file = "add_check_f16.ckpt", encoder = "add_check_clip_vit_l14_f16.ckpt"
         for (name, size) in [(file, 3 << 20), (file + "-tensordata", 1 << 20), (encoder, 4096)] {
-          fm.createFile(atPath: a.appendingPathComponent(name).path, contents: Data(count: size))
+          fm.createFile(atPath: b.appendingPathComponent(name).path, contents: Data(count: size))
         }
         var specification = ModelLibrary.specification(for: file, template: template)
         specification.clipEncoder = encoder
         do {
-          try await ModelLibrary.moveImported([file, file + "-tensordata", encoder], from: a, to: b)
           try library.registerImported(specification, in: b)
         } catch {
-          log("FAIL moving the import: \(error.localizedDescription)")
+          log("FAIL listing the import: \(error.localizedDescription)")
         }
-        check([file, file + "-tensordata", encoder].allSatisfy { here($0, b) && !here($0, a) }, "the import's files are in B, not A")
         check(registered(b) == [file] && registered(a).isEmpty, "listed in B's custom.json only")
         check(ModelZoo.specificationForModel(file) != nil, "the engine knows the imported model")
         await library.afterChange()
@@ -93,6 +94,18 @@
         library.addFolderPath = b.appendingPathComponent("missing").path
         check(library.addFolder.standardizedFileURL == a.standardizedFileURL, "a missing chosen folder falls back to A")
         library.setAddFolder(b)
+
+        if let index = args.firstIndex(of: "--lora"), index + 1 < args.count {
+          let source = URL(fileURLWithPath: args[index + 1])
+          library.prepareImport([source])
+          library.runImports(version: ModelVersion.sdxlBase.rawValue)
+          while library.isImporting { try? await Task.sleep(for: .milliseconds(100)) }
+          let stem = Importer.cleanup(filename: source.deletingPathExtension().lastPathComponent)
+          let lora = stem + "_lora_f16.ckpt"
+          if let message = library.errorMessage { log("FAIL LoRA import: \(message)") }
+          check(here(lora, b) && !here(lora, a), "the LoRA was converted straight into B")
+          check(library.loras.contains { $0.file == lora && $0.registry.standardizedFileURL == b.standardizedFileURL }, "the LoRA is listed in B's custom_lora.json")
+        }
 
         if let index = args.firstIndex(of: "--download"), index + 1 < args.count {
           let download = args[index + 1]

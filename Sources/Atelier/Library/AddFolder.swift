@@ -10,13 +10,14 @@ import Synchronization
 /// import sheets), so a model can land on the internal drive without a move afterwards.
 ///
 /// The engine writes a file no folder has yet to the first folder
-/// (`ModelZoo.filePathForModelDownloaded`), and its importers take only a file name, so:
+/// (`ModelZoo.filePathForModelDownloaded`), and reordering its folders would shift them under a
+/// running generation, so each writer is pointed at the folder instead:
 /// - A download to another folder fetches the files itself, as MGK's `ensureModelReady` does
 ///   (same file list, URL, resumable downloader and checksum), straight into that folder.
-/// - An import to another folder converts into the first folder as before, then moves the new
-///   files over before they're registered, so nothing reads them mid-move.
-/// - An 8-bit copy is written by `MOSSImporter`, which takes a path, straight into the folder.
-/// The first folder keeps the engine's own paths, unchanged.
+/// - Model and LoRA imports pass it to the importers as `outputDirectory`, which the fork adds to
+///   `ModelImporter` and `LoRAImporter.import`.
+/// - An 8-bit copy is written by `MOSSImporter`, which takes a path.
+/// Downloads to the first folder still go through MGK, unchanged.
 extension ModelLibrary {
   nonisolated static let addFolderKey = "addModelsFolder"
 
@@ -91,20 +92,6 @@ extension ModelLibrary {
   }
 
   // MARK: - Imports
-
-  /// Moves files an import just wrote in the first folder into `folder`, with their `-tensordata`.
-  /// They aren't registered yet, so nothing has them open. Off the main actor: across drives a move
-  /// is a copy.
-  @concurrent nonisolated static func moveImported(_ files: [String], from source: URL, to folder: URL) async throws {
-    let fileManager = FileManager.default
-    for file in files {
-      let from = source.appendingPathComponent(file)
-      guard fileManager.fileExists(atPath: from.path) else { continue }
-      let to = folder.appendingPathComponent(file)
-      try? fileManager.removeItem(at: to)
-      try fileManager.moveItem(at: from, to: to)
-    }
-  }
 
   /// Lists an imported model in `folder`'s custom.json and with the running engine. The first
   /// folder goes through ModelZoo as it always has; another folder gets the entry written there
