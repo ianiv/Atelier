@@ -260,6 +260,14 @@ actor GenerationEngine {
               guard !cancellation.isCancelled else { return false }
               let state = Self.state(for: signpost, totalSteps: totalSteps)
               progress(.state(state))
+              // Sampling is over (the engine reports one past the last step, then decodes): a
+              // preview still waiting would only compete with decoding the video for the GPU and
+              // Neural Engine, and the video replaces it moments later.
+              switch signpost {
+              case .sampling(let step) where step < totalSteps: break
+              case .textEncoded, .imageEncoded, .controlsGenerated: break
+              default: previews.close()
+              }
               // The engine waits on this callback, and decoding a long video's preview takes
               // seconds (~4 s for 124 H3 frames with the tiny autoencoder), so it's decoded on
               // the preview queue instead. The latent is the engine's own CPU copy for this step

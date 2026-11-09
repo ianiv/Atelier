@@ -263,9 +263,11 @@ final class HistoryStore {
       ImageTensor.tensor(from: entry.image).map { Project.MoodboardTensor(tensor: $0, weight: entry.weight) }
     }
     let item: HistoryItem
+    var clipFrames: [Tensor<FloatType>] = []
     if let framesPerSecond = output.framesPerSecond {
+      clipFrames = output.frames.map(ImageTensor.rgb)
       item = try await project.appendClip(
-        frames: output.frames.map(ImageTensor.rgb),
+        frames: clipFrames,
         clip: Project.ClipContent(
           framesPerSecond: framesPerSecond, audio: output.audio, audioInput: output.audioInput),
         model: request.model, prompt: request.prompt, negativePrompt: request.negativePrompt,
@@ -288,7 +290,15 @@ final class HistoryStore {
       // The new step is likely the newest now, which the project records as no position.
       if keepCurrent { recordCurrent() }
     }
-    return self.item(tensorId: item.tensorId) ?? item
+    let saved = self.item(tensorId: item.tensorId) ?? item
+    // The player asks for the clip's MP4 as soon as it's shown. Start it now from the frames still
+    // in memory: reading them back means decompressing every frame from the project (~10 s for
+    // 124 frames at 832×512). They're the tensors just saved, converted to images the same way.
+    if project === self.project, saved.clip?.frames.count == clipFrames.count, !clipFrames.isEmpty {
+      nonisolated(unsafe) let frames = clipFrames
+      Task { _ = try? await videoFile(for: saved, frames: { ImageTensor.cgImage(from: frames[$0]) }) }
+    }
+    return saved
   }
 
   /// The step a run after `item` follows: its own, or a clip's last frame.
@@ -539,6 +549,13 @@ final class HistoryStore {
   /// The clip as an MP4 with its soundtrack and settings, written once into the caches folder
   /// and reused by the player, exports, drags and the output folder.
   func videoFile(for item: HistoryItem) async throws -> URL {
+    try await videoFile(for: item, frames: nil)
+  }
+
+  /// `frames`, when given, supplies the clip's images instead of reading them from the project.
+  private func videoFile(
+    for item: HistoryItem, frames: (@Sendable (Int) -> CGImage?)?
+  ) async throws -> URL {
     guard let clip = item.clip else { throw ClipVideoError.noFrames }
     let codec = VideoCodec.current
     let url = Self.clipCache.appendingPathComponent(
@@ -558,7 +575,7 @@ final class HistoryStore {
       do {
         try await ClipVideo.write(
           to: partial, count: clip.frames.count,
-          frame: { project.image(tensorId: clip.frames[$0]) },
+          frame: { frames?($0) ?? project.image(tensorId: clip.frames[$0]) },
           framesPerSecond: clip.framesPerSecond, audio: audio?.samples,
           audioSampleRate: audio?.sampleRate ?? 0, codec: codec, metadata: metadata)
         try? FileManager.default.removeItem(at: url)

@@ -347,19 +347,23 @@ final nonisolated class Project: Sendable {
     moodboard: [MoodboardTensor], inputTensorId: Int64?,
     after parentTensorId: Int64?
   ) async throws -> HistoryItem {
-    // Each frame's thumbnails, one frame decoded at a time (a clip's frames together are large).
-    var size: (width: Int32, height: Int32)?
-    var thumbnails: [(full: [UInt8]?, half: [UInt8]?)] = []
-    for tensor in tensors {
-      guard let image = ImageTensor.cgImage(from: tensor) else { throw ProjectError.badImage }
-      if size == nil { size = (Int32(image.width), Int32(image.height)) }
-      thumbnails.append(
-        (
-          ImageTensor.jpeg(image, quality: 0.75),
-          ImageTensor.downsampled(image).flatMap { ImageTensor.jpeg($0, quality: 0.5) }
-        ))
+    // Each frame's thumbnails, a few frames at a time across the cores (a clip's frames
+    // together are large, so each image is dropped once its thumbnails are made).
+    typealias Thumbnails = (size: (width: Int32, height: Int32), full: [UInt8]?, half: [UInt8]?)
+    let made = Mutex([Thumbnails?](repeating: nil, count: tensors.count))
+    nonisolated(unsafe) let sources = tensors
+    DispatchQueue.concurrentPerform(iterations: tensors.count) { index in
+      guard let image = ImageTensor.cgImage(from: sources[index]) else { return }
+      let thumbnails = (
+        size: (Int32(image.width), Int32(image.height)),
+        full: ImageTensor.jpeg(image, quality: 0.75),
+        half: ImageTensor.downsampled(image).flatMap { ImageTensor.jpeg($0, quality: 0.5) })
+      made.withLock { $0[index] = thumbnails }
     }
-    guard let size else { throw ProjectError.badImage }
+    let results = made.withLock { $0 }
+    guard !results.isEmpty, !results.contains(where: { $0 == nil }) else { throw ProjectError.badImage }
+    let thumbnails = results.map { (full: $0!.full, half: $0!.half) }
+    let size = results[0]!.size
     var tensorIds: [Int64] = []
     while tensorIds.count < tensors.count {
       let id = Int64.random(in: 100_000_000...299_999_999)
