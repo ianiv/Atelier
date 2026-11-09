@@ -648,7 +648,8 @@ enum SettingsRegistry {
         applies: { $0.isMiniMaxH3 }),
       float(
         "solAttentionTau", \.solAttentionTau, "Tau", .solAttention,
-        "How much attention is kept. Higher is closer to full attention, and slower.",
+        "How picky it is about what gets full attention. Higher is faster, with more quality "
+          + "cost; lower is closer to full attention.",
         range: 0...4, step: 0.05, digits: 2, applies: { $0.isMiniMaxH3 }),
 
       // CFG-Zero*

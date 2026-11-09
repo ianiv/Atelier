@@ -56,7 +56,7 @@ Models that take an audio file show an **Audio** box at the top of the moodboard
 
 LTX and MiniMax H3 make a soundtrack with the video. It's saved with the video, plays with it and is in the files you export. For MiniMax H3 models, **Audio Shift** (next to Shift in the inspector) shifts the soundtrack's noise schedule the way Shift does the video's.
 
-For MiniMax H3 models (including FastH3 and HyperFlow H3), **Sol Attention** (its own section, under TeaCache) switches the model to sparse attention from **Start Step** on. It's much faster on long or large videos, with a small quality cost; **Tau** sets how much attention is kept (higher is closer to full attention, and slower). It's off by default, as in Draw Things, and is saved with each video and in presets, so settings imported from Draw Things keep it.
+For MiniMax H3 models (including FastH3 and HyperFlow H3), **Sol Attention** (its own section, under TeaCache) switches the model to sparse attention from **Start Step** on. It's much faster on long or large videos, with a small quality cost; **Tau** sets how picky it is about what still gets full attention (higher is faster with more quality cost; lower is closer to full attention). It's off by default, as in Draw Things, and is saved with each video and in presets, so settings imported from Draw Things keep it.
 
 ## While it runs
 
