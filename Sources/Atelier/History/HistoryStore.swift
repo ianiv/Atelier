@@ -858,6 +858,9 @@ nonisolated enum JSONValue: Codable, Hashable, Sendable {
     if let configuration = value as? PipelineConfiguration {
       var fields = fields(of: configuration.base)
       fields["shiftForAudio"] = JSONValue(configuration.shiftForAudio)
+      fields["usesSolAttention"] = .bool(configuration.usesSolAttention)
+      fields["solAttentionStart"] = JSONValue(configuration.solAttentionStart)
+      fields["solAttentionTau"] = JSONValue(configuration.solAttentionTau)
       return fields
     }
     var fields: [String: JSONValue] = [:]

@@ -41,7 +41,8 @@ struct InspectorLayout: Codable, Hashable, Identifiable {
       "size", "steps", "guidanceScale", "sampler", "loras", "shift", "resolutionDependentShift",
       "seedMode", "speedUpWithGuidanceEmbed", "guidanceEmbed", "hiresFix", "hiresFixWidth",
       "hiresFixHeight", "hiresFixStrength", "refinerModel", "refinerStart", "upscaler",
-      "numFrames", "fps", "strength", "teaCache", "teaCacheThreshold", "cfgZeroStar",
+      "numFrames", "fps", "strength", "teaCache", "teaCacheThreshold", "usesSolAttention",
+      "cfgZeroStar",
       "cfgZeroInitSteps",
     ],
     expanded: [SettingSection.essentials.id, SettingSection.loras.id, SettingSection.sampling.id,
@@ -49,7 +50,7 @@ struct InspectorLayout: Codable, Hashable, Identifiable {
 
   /// For video models: length first, then what changes a video most (LTX's two-stage hires fix,
   /// Wan 2.2's low-noise expert as the refiner, Stable Video Diffusion's motion), what speeds it
-  /// up (TeaCache) and what keeps long, large videos in memory (tiled decoding). Settings a model
+  /// up (TeaCache, and Sol Attention for MiniMax H3) and what keeps long, large videos in memory (tiled decoding). Settings a model
   /// doesn't use hide themselves, so one layout serves every family.
   static let video = InspectorLayout(
     name: "Video",
@@ -57,13 +58,14 @@ struct InspectorLayout: Codable, Hashable, Identifiable {
       "size", "steps", "guidanceScale", "sampler", "numFrames", "fps", "motionScale", "loras",
       "shift", "seedMode", "hiresFix", "hiresFixWidth", "hiresFixHeight", "hiresFixStrength",
       "stage2Steps", "refinerModel", "refinerStart", "strength", "teaCache", "teaCacheThreshold",
-      "tiledDecoding",
+      "usesSolAttention", "tiledDecoding",
     ],
     expanded: [SettingSection.essentials.id, SettingSection.video.id, SettingSection.loras.id],
     sectionOrder: [
       SettingSection.essentials.id, SettingSection.video.id, SettingSection.loras.id,
       SettingSection.sampling.id, SettingSection.hiresFix.id, SettingSection.refiner.id,
-      SettingSection.imageToImage.id, SettingSection.teaCache.id, SettingSection.tiledDecoding.id,
+      SettingSection.imageToImage.id, SettingSection.teaCache.id, SettingSection.solAttention.id,
+      SettingSection.tiledDecoding.id,
     ])
 
   static let everything = InspectorLayout(

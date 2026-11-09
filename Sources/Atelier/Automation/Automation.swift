@@ -224,6 +224,7 @@ enum Automation {
       if let height = value("--height").flatMap(Int.init) { settings.height = height }
       if let steps = value("--steps").flatMap(Int.init) { settings.steps = steps }
       if let frames = value("--num-frames").flatMap(Int.init) { settings.numFrames = frames }
+      if let sol = value("--sol-attention") { settings.usesSolAttention = sol == "true" }
       if let hiresFix = value("--hires-fix") { settings.hiresFix = hiresFix == "true" }
       if let strength = value("--strength").flatMap(Float.init) { settings.strength = strength }
       if let blur = value("--mask-blur").flatMap(Float.init) { settings.maskBlur = blur }

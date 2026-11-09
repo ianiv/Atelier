@@ -11,6 +11,9 @@ nonisolated extension PipelineConfiguration {
   func engineConfiguration(template: GenerationConfiguration) -> GenerationConfiguration {
     let options = base.engineOptions(template: template)
     options.shiftForAudio = shiftForAudio
+    options.usesSolAttention = usesSolAttention
+    options.solAttentionStart = Int32(clamping: solAttentionStart)
+    options.solAttentionTau = solAttentionTau
     // MiniMax H3's video decoder normalizes its rotary coordinates per tile and only decodes
     // 16-latent (256-pixel) tiles correctly; larger tiles cover the video in a ~32-pixel block grid.
     // The engine uses that size itself when tiled decoding is off (`FirstStage.decode`, the

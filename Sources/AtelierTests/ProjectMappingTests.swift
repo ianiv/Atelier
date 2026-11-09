@@ -19,11 +19,23 @@ struct ProjectMappingTests {
       "sampler": .string(String(describing: DataModels.SamplerType.eulerA)), "hiresFix": .bool(true), "hiresFixWidth": .number(512),
       "hiresFixHeight": .number(256), "hiresFixStrength": .number(0.5), "upscaler": .string("up.ckpt"),
       "refinerModel": .string("refiner.ckpt"), "numFrames": .number(33), "maskBlur": .number(2.5),
+      "usesSolAttention": .bool(true), "solAttentionStart": .number(4), "solAttentionTau": .number(0.75),
     ]
     let dump = ProjectMapping.dump(of: ProjectMapping.node(for: step(), settings: settings))
     for (key, value) in settings {
       if dump[key] != value { Issue.record("\(key): wrote \(value), read \(String(describing: dump[key]))") }
     }
+  }
+
+  /// Sol Attention is app-only (MGK lacks it), so it travels in the dump and the registry reads it
+  /// back onto the configuration the engine run uses.
+  @MainActor @Test func solAttentionComesBackFromADump() {
+    let node = ProjectMapping.node(
+      for: step(), settings: ["usesSolAttention": .bool(true), "solAttentionStart": .number(3)])
+    #expect(node.usesSolAttention && node.solAttentionStart == 3 && node.solAttentionTau == 0.5)
+    let dump = ProjectMapping.dump(of: node)
+    #expect(SettingsRegistry.byID["usesSolAttention"]?.read(dump) == .bool(true))
+    #expect(SettingsRegistry.byID["solAttentionStart"]?.read(dump) == .number(3))
   }
 
   @Test func theStepsOwnFieldsGoOnTheNode() {

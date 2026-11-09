@@ -182,7 +182,10 @@ nonisolated enum ProjectMapping {
       colorCalibration: d.enumeration("colorCalibration", DataModels.ColorCalibration.self)
         .flatMap { ProjectFormat.ColorCalibration(rawValue: $0.rawValue) },
       expandPromptToJson: d.bool("expandPromptToJson", false),
-      shiftForAudio: d.float("shiftForAudio", 3)
+      shiftForAudio: d.float("shiftForAudio", 3),
+      usesSolAttention: d.bool("usesSolAttention", false),
+      solAttentionStart: i32("solAttentionStart", 2),
+      solAttentionTau: d.float("solAttentionTau", 0.5)
     )
   }
 
@@ -328,6 +331,9 @@ nonisolated enum ProjectMapping {
       "colorCalibration": e(DataModels.ColorCalibration(rawValue: node.colorCalibration.rawValue)),
       "expandPromptToJson": .bool(node.expandPromptToJson),
       "shiftForAudio": f(node.shiftForAudio),
+      "usesSolAttention": .bool(node.usesSolAttention),
+      "solAttentionStart": n(node.solAttentionStart),
+      "solAttentionTau": f(node.solAttentionTau),
     ]
   }
 

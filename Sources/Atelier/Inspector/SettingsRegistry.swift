@@ -9,6 +9,11 @@ nonisolated struct PipelineConfiguration: Sendable {
   var base: MediaGenerationPipeline.Configuration
   /// MiniMax H3's shift for its audio latents.
   var shiftForAudio: Float = 3
+  /// MiniMax H3's sparse (Sol) attention, from step `solAttentionStart` on. The engine ignores it
+  /// for other models (`LocalImageGenerator.sampler`).
+  var usesSolAttention = false
+  var solAttentionStart = 2
+  var solAttentionTau: Float = 0.5
 
   init(_ base: MediaGenerationPipeline.Configuration) { self.base = base }
 
@@ -52,6 +57,9 @@ nonisolated struct ModelTraits: Equatable {
   var isVideo: Bool { Self.videoPrefixes.contains { version.hasPrefix($0) } }
   var isSVD: Bool { version == "Stable Video Diffusion" }
   var isWan: Bool { version.hasPrefix("Wan") }
+  /// MiniMax H3 and the files built on it (FastH3, HyperFlow H3), which the engine all runs as
+  /// `.minimaxH3`, named "MiniMax H3" (`ModelZoo.humanReadableNameForVersion`).
+  var isMiniMaxH3: Bool { version.hasPrefix("MiniMax H3") }
   /// Models the engine always runs without classifier-free guidance (`isCfgEnabled` returns false
   /// for them), so Guidance would do nothing.
   var isWithoutCFG: Bool { version == "Fibo 2.0" }
@@ -65,7 +73,8 @@ nonisolated struct ModelTraits: Equatable {
 
 nonisolated enum SettingSection: String, CaseIterable, Identifiable, Codable {
   case essentials, sampling, loras, hiresFix, refiner, upscaler, video, textEncoders, sdxl,
-       imageToImage, tiledDecoding, tiledDiffusion, teaCache, cfgZero, output, kandinsky
+       imageToImage, tiledDecoding, tiledDiffusion, teaCache, solAttention, cfgZero, output,
+       kandinsky
 
   var id: String { rawValue }
 
@@ -84,6 +93,7 @@ nonisolated enum SettingSection: String, CaseIterable, Identifiable, Codable {
     case .tiledDecoding: "Tiled Decoding"
     case .tiledDiffusion: "Tiled Diffusion"
     case .teaCache: "TeaCache"
+    case .solAttention: "Sol Attention"
     case .cfgZero: "CFG-Zero*"
     case .output: "Output"
     case .kandinsky: "Image Prior"
@@ -97,6 +107,7 @@ nonisolated enum SettingSection: String, CaseIterable, Identifiable, Codable {
     case .tiledDecoding: "tiledDecoding"
     case .tiledDiffusion: "tiledDiffusion"
     case .teaCache: "teaCache"
+    case .solAttention: "usesSolAttention"
     case .cfgZero: "cfgZeroStar"
     default: nil
     }
@@ -367,7 +378,7 @@ enum SettingsRegistry {
       float(
         "shiftForAudio", \.shiftForAudio, "Audio Shift", .sampling,
         "Shifts the soundtrack's noise schedule, as Shift does the video's.", range: 0...12,
-        step: 0.1, applies: { $0.version.hasPrefix("MiniMax H3") }),
+        step: 0.1, applies: { $0.isMiniMaxH3 }),
       choice(
         "seedMode", \.seedMode, "Seed Mode", .sampling,
         "How the seed turns into noise. Scale Alike keeps compositions similar across sizes.",
@@ -624,6 +635,21 @@ enum SettingsRegistry {
         "teaCacheMaxSkipSteps", \.teaCacheMaxSkipSteps, "Max Skipped Steps", .teaCache,
         "Most consecutive steps that may be skipped.", range: 1...50,
         applies: { $0.hasTeaCache }),
+
+      // Sol Attention
+      toggle(
+        "usesSolAttention", \.usesSolAttention, "Sol Attention", .solAttention,
+        "Sparse attention for MiniMax H3. Much faster on long or large videos, with a small "
+          + "quality cost.",
+        keywords: ["speed", "attention", "sparse"], applies: { $0.isMiniMaxH3 }),
+      integer(
+        "solAttentionStart", \.solAttentionStart, "Start Step", .solAttention,
+        "Steps before this one use full attention.", range: 0...1000,
+        applies: { $0.isMiniMaxH3 }),
+      float(
+        "solAttentionTau", \.solAttentionTau, "Tau", .solAttention,
+        "How much attention is kept. Higher is closer to full attention, and slower.",
+        range: 0...4, step: 0.05, digits: 2, applies: { $0.isMiniMaxH3 }),
 
       // CFG-Zero*
       toggle(
