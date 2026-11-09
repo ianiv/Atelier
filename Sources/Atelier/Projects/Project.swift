@@ -807,6 +807,8 @@ nonisolated struct ProjectTree: Sendable {
   /// opens on and appends after.
   private(set) var newest: StepID?
   private var byTensor: [Int64: [StepID]] = [:]
+  /// Each clip frame's step: the item listing the clip (its first frame).
+  private var clipItems: [StepID: StepID] = [:]
   private var greatestLineage: [Int64: Int64] = [:]
 
   init() {}
@@ -829,6 +831,7 @@ nonisolated struct ProjectTree: Sendable {
     var byTime: [Int64: [StepID]] = [:]
     var profiles: [StepID: ProjectMapping.Profile] = [:]
     var clipFrames: [Int64: [(index: Int32, tensorId: Int64)]] = [:]
+    var clipFrameSteps: [Int64: [StepID]] = [:]
     var clipItems: [Int64: (id: StepID, inputAudioId: Int64?)] = [:]
     for node in nodes {
       let id = StepID(lineage: node.lineage, logicalTime: node.logicalTime)
@@ -847,6 +850,7 @@ nonisolated struct ProjectTree: Sendable {
       }
       if node.clipId >= 0, let tensorId {
         clipFrames[node.clipId, default: []].append((node.indexInAClip, tensorId))
+        clipFrameSteps[node.clipId, default: []].append(id)
       }
       // A clip is listed once, by its first frame.
       if withItems, node.generated, let tensorId, node.clipId < 0 || node.indexInAClip == 0 {
@@ -867,6 +871,7 @@ nonisolated struct ProjectTree: Sendable {
         clipId: clipId, frames: frames, framesPerSecond: row?.framesPerSecond ?? 0,
         audioId: row.flatMap { $0.audioId > 0 ? $0.audioId : nil }, inputAudioId: item.inputAudioId,
         previewOffset: (first?.previewId ?? 0) &- (first?.tensorId ?? 0))
+      for frame in clipFrameSteps[clipId] ?? [] { clipItems[frame] = item.id }
     }
     for id in Array(steps.keys) {
       let ruleParent = byTime[id.logicalTime - 1]?.filter { $0.lineage <= id.lineage }
@@ -948,10 +953,12 @@ nonisolated struct ProjectTree: Sendable {
     ancestry(of: id).first { items[$0] != nil }
   }
 
-  /// The generated step standing for `id` in the views: itself, else the nearest generated step
-  /// below it (newest first), else the nearest above it.
+  /// The generated step standing for `id` in the views: itself, else the clip it's a frame of,
+  /// else the nearest generated step below it (newest first), else the nearest above it.
   func representative(of id: StepID) -> StepID? {
     if items[id] != nil { return id }
+    // A clip is current at its last frame; the clip stands for it, not a run that follows it.
+    if let clip = clipItems[id] { return clip }
     var queue = children[id] ?? []
     var seen: Set<StepID> = [id]
     while !queue.isEmpty {
