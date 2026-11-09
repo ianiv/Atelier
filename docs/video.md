@@ -35,7 +35,7 @@ Download them from **Models** like any other model. They're large, and a video t
 
 ## Length
 
-The inspector's **Video** layout (from the menu at the top of the inspector) shows what most videos need: length, the second pass, the refiner, TeaCache and tiled decoding, with the rest one search away.
+The inspector's **Video** layout (from the menu at the top of the inspector) shows what most videos need: length, the second pass, the refiner, TeaCache, Sol Attention (MiniMax H3) and tiled decoding, with the rest one search away.
 
 
 The inspector's **Video** section starts with **Length**: the number of frames, with how many seconds that plays for beside it. Each model only takes some frame counts (LTX one more than a multiple of 8, Wan one more than a multiple of 4, MiniMax H3 5 plus a multiple of 17), so the length snaps to the nearest one, and the stepper moves between them. Videos play at the rate the model was trained at (25 frames a second for LTX, 24 for MiniMax H3, 16 for Wan 2.1).
@@ -48,7 +48,7 @@ MiniMax H3 models (including FastH3 Omni and HyperFlow H3 Flash) always decode i
 
 - **First frame.** With a model that takes one, put an image on the canvas and switch to **Edit**, as you would to edit an image. The video starts from what's inside the frame.
 - **Last frame (MiniMax H3 FL2VA).** The moodboard column is titled **Last Frame**: the first image on it is where the video ends.
-- **References (MiniMax H3 Ref2VA).** The column is titled **References**, and each image says which picture it is. In Edit mode the canvas is Picture 1 and the moodboard images follow. Refer to them in the prompt as `<Picture 1>`, `<Picture 2>` and so on.
+- **References (MiniMax H3 Ref2VA).** The column is titled **References**, and each image says which picture it is. In Edit mode the canvas is Picture 1 and the moodboard images follow. Refer to them in the prompt as `<Picture 1>`, `<Picture 2>` and so on. The distilled Ref2VA models (FastH3 Omni, Pika H3 Flex and HyperFlow H3 Flash Ref2VA) need at least one reference image, referred to in the prompt; without one they don't make a video.
 
 ## Audio
 
