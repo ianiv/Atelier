@@ -832,7 +832,7 @@ nonisolated struct ProjectTree: Sendable {
     var profiles: [StepID: ProjectMapping.Profile] = [:]
     var clipFrames: [Int64: [(index: Int32, tensorId: Int64)]] = [:]
     var clipFrameSteps: [Int64: [StepID]] = [:]
-    var clipItems: [Int64: (id: StepID, inputAudioId: Int64?)] = [:]
+    var clipListings: [Int64: (id: StepID, inputAudioId: Int64?)] = [:]
     for node in nodes {
       let id = StepID(lineage: node.lineage, logicalTime: node.logicalTime)
       let tensorId =
@@ -858,12 +858,12 @@ nonisolated struct ProjectTree: Sendable {
           id: id, tensorId: tensorId, previewId: node.previewId, sidecar: Project.sidecar(for: node),
           inputTensorId: profile?.inputTensorId)
         if node.clipId >= 0 {
-          clipItems[node.clipId] = (id, profile?.inputAudioId)
+          clipListings[node.clipId] = (id, profile?.inputAudioId)
         }
       }
     }
     let clipRows = Dictionary(clips.map { ($0.clipId, $0) }, uniquingKeysWith: { a, _ in a })
-    for (clipId, item) in clipItems {
+    for (clipId, item) in clipListings {
       let frames = (clipFrames[clipId] ?? []).sorted { $0.index < $1.index }.map(\.tensorId)
       let row = clipRows[clipId]
       let first = items[item.id]
