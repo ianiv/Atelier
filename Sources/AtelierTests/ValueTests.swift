@@ -1,6 +1,7 @@
 @testable import Atelier
 import CoreGraphics
 import Foundation
+import Synchronization
 import Testing
 
 /// A step with what a test cares about; the rest filled in.
@@ -228,5 +229,33 @@ struct TimelineLayoutTests {
 
   @Test func anEmptyTimelineLocatesNothing() {
     #expect(TimelineLayout(timeline([]), item: item).locate(0) == nil)
+  }
+}
+
+/// Step previews decode off the engine's queue: a slow decode skips previews instead of queuing
+/// them, and nothing is delivered once the run has ended.
+struct PreviewDecoderTests {
+  @Test func aSlowDecodeKeepsOnlyTheNewestPreviewAndNothingAfterClose() async throws {
+    let decoder = PreviewDecoder()
+    let ran = Mutex<[Int]>([])
+    let delivered = Mutex<[Int]>([])
+    let gate = DispatchSemaphore(value: 0)
+    func preview(_ n: Int, waits: Bool = false) {
+      decoder.submit {
+        if waits { gate.wait() }
+        ran.withLock { $0.append(n) }
+        decoder.deliver { delivered.withLock { $0.append(n) } }
+      }
+    }
+    preview(1, waits: true)
+    try await Task.sleep(for: .milliseconds(50))
+    for n in 2...5 { preview(n) }
+    gate.signal()
+    try await Task.sleep(for: .milliseconds(200))
+    #expect(ran.withLock { $0 } == [1, 5])
+    decoder.close()
+    preview(6)
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(delivered.withLock { $0 } == [1, 5])
   }
 }

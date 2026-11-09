@@ -239,6 +239,7 @@ actor GenerationEngine {
     let size = CGSize(width: settings.width, height: settings.height)
     let totalSteps = settings.steps
     let cancellation = EngineCancellation()
+    let previews = PreviewDecoder()
     let prompt = request.prompt
     let negativePrompt = request.negativePrompt
     progress(.state(.preparing))
@@ -259,13 +260,22 @@ actor GenerationEngine {
               guard !cancellation.isCancelled else { return false }
               let state = Self.state(for: signpost, totalSteps: totalSteps)
               progress(.state(state))
+              // The engine waits on this callback, and decoding a long video's preview takes
+              // seconds (~4 s for 124 H3 frames with the tiny autoencoder), so it's decoded on
+              // the preview queue instead. The latent is the engine's own CPU copy for this step
+              // (`unet.decode(…).rawValue.toCPU()`), so it stays valid after the callback returns.
               if let latent, case .generating(let step, let total) = state {
-                let frames = Self.previewFrames(
-                  latent, version: version, highResolution: highResolution, size: size)
-                if !frames.isEmpty { progress(.previewFrames(frames, step: step, totalSteps: total)) }
+                nonisolated(unsafe) let latent = latent
+                previews.submit {
+                  let frames = Self.previewFrames(
+                    latent, version: version, highResolution: highResolution, size: size)
+                  guard !frames.isEmpty else { return }
+                  previews.deliver { progress(.previewFrames(frames, step: step, totalSteps: total)) }
+                }
               }
               return !cancellation.isCancelled
             })
+          previews.close()
           cancellation.finish()
           if cancellation.isCancelled {
             continuation.resume(throwing: CancellationError())
@@ -741,6 +751,56 @@ actor GenerationEngine {
 private nonisolated struct EngineResult: Sendable {
   var frames: [Tensor<FloatType>]?
   var audio: [Tensor<Float>]?
+}
+
+/// Decodes a direct run's step previews on a queue of their own, so the engine's step callback
+/// returns at once. One decode runs at a time; a preview that arrives while one is decoding
+/// replaces any still waiting, so a slow decode skips steps instead of queuing them up.
+final nonisolated class PreviewDecoder: Sendable {
+  private struct State {
+    var waiting: (@Sendable () -> Void)?
+    var decoding = false
+    var closed = false
+  }
+
+  private let state = Mutex(State())
+  private let queue = DispatchQueue(label: "Atelier.preview", qos: .userInitiated)
+
+  func submit(_ work: @escaping @Sendable () -> Void) {
+    let start = state.withLock {
+      guard !$0.closed else { return false }
+      $0.waiting = work
+      guard !$0.decoding else { return false }
+      $0.decoding = true
+      return true
+    }
+    if start { queue.async { self.drain() } }
+  }
+
+  /// Runs `send` unless the run has ended, so no preview arrives after its result.
+  /// (Sending under the lock keeps `close()` from slipping in between the check and the send.)
+  func deliver(_ send: () -> Void) {
+    state.withLock { if !$0.closed { send() } }
+  }
+
+  /// Drops any waiting preview and stops delivering; called when the run ends.
+  func close() {
+    state.withLock {
+      $0.closed = true
+      $0.waiting = nil
+    }
+  }
+
+  private func drain() {
+    while let work = state.withLock({ state -> (@Sendable () -> Void)? in
+      let work = state.waiting
+      state.waiting = nil
+      if work == nil { state.decoding = false }
+      return work
+    }) {
+      work()
+    }
+  }
 }
 
 /// Cancels a direct engine run (MGK's `MediaGenerationCancellationBridge`): the engine hands over
