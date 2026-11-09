@@ -250,7 +250,8 @@ nonisolated enum MOSSEditLoRA {
     let headerLength = lengthData.withUnsafeBytes { Int(UInt64(littleEndian: $0.loadUnaligned(as: UInt64.self))) }
     guard headerLength > 0, headerLength < 100_000_000,
           let headerData = try input.read(upToCount: headerLength), headerData.count == headerLength,
-          let header = try JSONSerialization.jsonObject(with: headerData) as? [String: Any]
+          // Not JSON means not a safetensors file, so not this format; the import goes on as usual.
+          let header = (try? JSONSerialization.jsonObject(with: headerData)) as? [String: Any]
     else { return nil }
     let suffixes = [".lora_A", ".lora_B"]
     guard header.keys.contains(where: { key in suffixes.contains { key.hasSuffix($0) } }) else {
@@ -303,17 +304,17 @@ nonisolated enum MOSSEditLoRA {
       FileManager.default.createFile(atPath: output.path, contents: nil)
       let handle = try FileHandle(forWritingTo: output)
       defer { try? handle.close() }
-      withUnsafeBytes(of: UInt64(newHeader.count).littleEndian) { handle.write(Data($0)) }
-      handle.write(newHeader)
+      try handle.write(contentsOf: withUnsafeBytes(of: UInt64(newHeader.count).littleEndian) { Data($0) })
+      try handle.write(contentsOf: newHeader)
       var remaining = dataLength
       while remaining > 0 {
         guard let chunk = try input.read(upToCount: min(remaining, 64 << 20)), !chunk.isEmpty else {
           throw CocoaError(.fileReadCorruptFile)
         }
-        handle.write(chunk)
+        try handle.write(contentsOf: chunk)
         remaining -= chunk.count
       }
-      handle.write(alphaData)
+      try handle.write(contentsOf: alphaData)
     } catch {
       try? FileManager.default.removeItem(at: folder)
       throw error
