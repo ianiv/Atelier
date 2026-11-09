@@ -133,7 +133,7 @@ After an Edit run, the result replaces the canvas and the mode stays on Edit, so
 
 **Which models can edit:**
 
-- **Edit models** such as FLUX.2 (including Klein), Kontext, Qwen Image Edit and [Fibo 2.0 Edit Turbo](models-and-loras.md#fibo-20-edit-turbo) take the canvas as a reference and follow the prompt's instructions ("make it night", "add a red hat").
+- **Edit models** such as FLUX.2 (including Klein), Kontext, Qwen Image Edit and [Fibo 2.0 Edit Turbo](models-and-loras.md#fibo-20-edit-turbo) take the canvas as a reference and follow the prompt's instructions ("make it night", "add a red hat"). So does MOSS Image with a [MOSS Image Edit LoRA](models-and-loras.md#moss-image-edit-loras) on.
 - **Other models** edit through **Strength** (in the Image to Image section of the inspector). Below 100%, the model starts from the canvas: lower values stay closer to it, higher values change more. At 100% the canvas is ignored, so the Edit switch is disabled until you lower Strength.
 
 **Match Size to Image** (canvas right-click menu) sets the output size to the image's aspect ratio, which avoids cropping.
@@ -142,10 +142,10 @@ Areas of an image that are transparent are treated as the region to fill in. The
 
 ## Moodboard
 
-The **Moodboard** column on the right edge of the canvas holds reference images. Only models that take references (the edit models above) use it; with other models, such as MOSS, it says "Not used by this model". Collapse or expand it with its own button or from the **View** menu.
+The **Moodboard** column on the right edge of the canvas holds reference images. Only models that take references (the edit models above, and MOSS Image with a MOSS Image Edit LoRA on) use it; with other models, such as MOSS Image on its own, it says "Not used by this model". Collapse or expand it with its own button or from the **View** menu.
 
 - Add images by dropping them on the moodboard, with its **+** button (**Add Images…** for files, **Add from Photos…** for your photo library), or with **Add to Moodboard** from the canvas or the recent strip.
-- Click an image to set its **Weight**. 0% leaves it out of the next run. For edit models such as FLUX.2 and Kontext, any weight above 0% counts the same.
+- Click an image to set its **Weight**. 0% leaves it out of the next run. For edit models such as FLUX.2, Kontext and MOSS Image Edit, any weight above 0% counts the same.
 - Right-click an image for **Show on Canvas**, **Remove** and **Clear Moodboard**.
 
 Moodboard images are sent in both Generate and Edit modes, and are kept between launches. Each image you generate saves the moodboard it used, so "Use Settings" in History brings it back.

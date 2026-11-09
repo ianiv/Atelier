@@ -48,7 +48,7 @@ On iPad, Import… opens the Files picker. Importing a checkpoint and Make 8-bit
 
 The converted model is saved in the folder chosen in **Add To** as `<name>_f16.ckpt`, marked **Imported**, and any text encoders or VAE it needs are downloaded. It then appears in Create's model menu.
 
-**MOSS Image fine-tunes** in OpenMOSS' layout (for example Kromoss) are converted by a dedicated importer and work like the official MOSS Image model.
+**MOSS Image fine-tunes** in OpenMOSS' layout (for example Kromoss) are converted by a dedicated importer and work like the official MOSS Image model. To edit images with MOSS Image, add a [MOSS Image Edit LoRA](#moss-image-edit-loras).
 
 Some families can't be imported yet: HiDream O1, Qwen Image 2.1, LTX-2, SeedVR2, Kandinsky, Würstchen and LongCat. Atelier tells you after inspecting the file.
 
@@ -94,6 +94,14 @@ Converting a LoRA to 8-bit in Draw Things deletes the original file and leaves t
 1. Click **Import…** and choose `.safetensors` LoRA files, or drop them on the list.
 2. For each file, check the name, add its **trigger words** (the words it was trained on, which you add to your prompt to bring it in), and leave **Model family** on **Detect automatically** unless detection picks the wrong one.
 3. Import. The LoRA is converted, saved in the folder chosen in **Add To** and registered in that folder's `custom_lora.json`. It's usable right away; no relaunch needed.
+
+### MOSS Image Edit LoRAs
+
+LoRAs trained with the [MOSS Image Edit trainer](https://github.com/Chenkin-x/Moss-Image-Edit) turn MOSS Image into an edit model. Import the trainer's `.safetensors` file like any other LoRA: Atelier renames its tensors so the engine can read them and registers it as an edit LoRA. Pick a MOSS Image model, turn the LoRA on, and use **Edit**:
+
+- The canvas is the first reference image, and each moodboard image with a weight above 0% is another one after it. Weight is on or off: any weight above 0% counts the same. The trainer supports up to 4 references.
+- Write the change as a plain instruction ("change her shirt to bright red", "make the background a sunny beach, keep the person"). With more than one reference, say what each image is for, such as "put the jacket from the second image on the person in the first".
+- MOSS Image's usual steps and Guidance apply; Guidance around 4 works.
 
 ### Managing LoRAs
 

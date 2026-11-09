@@ -239,7 +239,7 @@ nonisolated enum MOSSImporter {
 ///
 /// These LoRAs edit: they read the canvas as a reference image, which the engine's MOSS graph takes
 /// when the LoRA has the Kontext modifier.
-enum MOSSEditLoRA {
+nonisolated enum MOSSEditLoRA {
   /// A converted copy of `url` in a new temporary folder, or nil when `url` isn't in this format.
   /// `isEdit` is whether the header says it's a MOSS edit LoRA. The caller removes the copy's
   /// folder.
