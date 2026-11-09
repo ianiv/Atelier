@@ -483,15 +483,20 @@ nonisolated enum ImageMetadata {
     if let atelier = embedded.atelier,
        let sidecar = try? sidecarDecoder.decode(HistoryStore.Sidecar.self, from: Data(atelier.utf8))
     {
-      return Settings(
-        prompt: sidecar.prompt, negativePrompt: sidecar.negativePrompt,
-        pasted: DrawThingsJSON.Pasted(
-          dump: sidecar.configuration, model: sidecar.model, seed: sidecar.seed))
+      return settings(from: sidecar)
     }
     for comment in embedded.comments {
       if let settings = drawThings(comment) { return settings }
     }
     return nil
+  }
+
+  /// The prompts, model, seed and settings an Atelier history sidecar records, exactly.
+  @MainActor static func settings(from sidecar: HistoryStore.Sidecar) -> Settings {
+    Settings(
+      prompt: sidecar.prompt, negativePrompt: sidecar.negativePrompt,
+      pasted: DrawThingsJSON.Pasted(
+        dump: sidecar.configuration, model: sidecar.model, seed: sidecar.seed))
   }
 
   @MainActor private static func drawThings(_ comment: String) -> Settings? {

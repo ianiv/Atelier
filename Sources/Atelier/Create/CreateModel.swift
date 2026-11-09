@@ -788,11 +788,16 @@ final class CreateModel {
     if failed > 0 { errorMessage = "Couldn't load \(failed == 1 ? "the photo" : "\(failed) photos")." }
   }
 
-  /// The generation settings the canvas image carries, while it's the imported image they came
-  /// with.
+  /// The generation settings behind the canvas image: those an imported image carries, while it's
+  /// the image they came with, else its History step's sidecar (an image made here), so Load
+  /// Settings from Image can bring them back after the inspector changed. A playing clip is left
+  /// to the video's own menu (`ClipPlayer`).
   var canvasImageSettings: ImageMetadata.Settings? {
-    guard let importedSettings, importedSettings.image === image else { return nil }
-    return importedSettings.settings
+    if let importedSettings, importedSettings.image === image { return importedSettings.settings }
+    if canvasClip == nil, let sidecar = imageItem?.sidecar, !sidecar.configuration.isEmpty {
+      return ImageMetadata.settings(from: sidecar)
+    }
+    return nil
   }
 
   /// How the canvas image was made, when that's known: its History step, or the settings an
@@ -825,7 +830,7 @@ final class CreateModel {
     errorMessage = nil
     statusNote = nil
     paste(loaded.pasted, undoManager: undoManager)
-    if let file = loaded.pasted.model, !models.contains(where: { $0.file == file }) {
+    if let file = loaded.pasted.model, !availableModels.contains(where: { $0.file == file }) {
       statusNote = "\(file) isn't downloaded, so its settings apply to the current model."
     }
   }
