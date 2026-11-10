@@ -8,8 +8,8 @@ extension Automation {
   ///     image's center) and every subject: the mask isn't empty and holds the click.
   ///   SAM 2.1 (`--sam`, downloading `--size` through the app's own download when it's missing):
   ///     the mask holds the positive point; the same prompt again skips the encoder; a negative
-  ///     point inside the selection (a second `--point`, else the selected pixel farthest from
-  ///     the first) takes at least a fifth of it away; Subtract after Add gives back the mask before;
+  ///     point inside the selection (a second `--point`, else pixels deep inside it, far from
+  ///     the first in each of eight directions, until one does) takes at least a fifth of it away; Subtract after Add gives back the mask before;
   ///     Replace is one undo step; `--box` selects inside the box. Prints encoder and decoder
   ///     timing.
   /// Points and box are in the input's pixels. `--snapshot-dir` saves the mask over the image
@@ -150,35 +150,46 @@ extension Automation {
           // A negative point inside the selection takes a clear part of it away. With a second
           // --point: both points selected, then the second marked to leave out instead (SAM keeps
           // a box's whole content however it's marked inside, so the box isn't used here).
-          // Without: the click's selection, then the selected pixel farthest from it left out.
+          // Without: the click's selection, then left out a pixel deep inside it (a third of the
+          // deepest's distance from the edge or more), as far from the click as it goes: the
+          // farthest in each of eight directions, tried nearest-last until one carves a part away.
+          // A pixel farthest from the click alone lands on a thin tip (a teapot's spout), and one
+          // in the middle of a single part takes nothing away, so neither proves anything.
           var base = [positive]
-          var negative = points.dropFirst().first
-          if let second = negative { base.append(SAMSegmenter.Point(location: second, positive: true)) }
+          let second = points.dropFirst().first
+          if let second { base.append(SAMSegmenter.Point(location: second, positive: true)) }
           _ = try await model.autoMask(points: base, mode: .replace, undoManager: nil)
-          if negative != nil { base.removeLast() }
+          if second != nil { base.removeLast() }
           let selected = paintedPixels()
-          if negative == nil, let selection = model.canvasMask?.coverage(width: input.width, height: input.height) {
-            var distance = 0.0
-            for y in stride(from: 0, to: input.height, by: 4) {
-              for x in stride(from: 0, to: input.width, by: 4) where selection[y * input.width + x] != 0 {
-                let d = hypot(Double(x) - click.x, Double(y) - click.y)
-                if d > distance {
-                  distance = d
-                  negative = CGPoint(x: x, y: y)
-                }
+          var candidates = second.map { [$0] } ?? []
+          if second == nil, let selection = model.canvasMask?.coverage(width: input.width, height: input.height) {
+            let edge = Self.edgeDistance(selection, width: input.width, height: input.height)
+            let depth = (edge.max() ?? 0) / 3
+            var farthest = [(distance: Double, point: CGPoint)?](repeating: nil, count: 8)
+            for y in stride(from: 0, to: input.height, by: 2) {
+              for x in stride(from: 0, to: input.width, by: 2) where depth > 0 && edge[y * input.width + x] >= depth {
+                let dx = Double(x) - click.x, dy = Double(y) - click.y
+                let distance = hypot(dx, dy)
+                let sector = (Int(((atan2(dy, dx) + .pi) / (2 * .pi) * 8).rounded(.down)) % 8 + 8) % 8
+                if distance > farthest[sector]?.distance ?? 0 { farthest[sector] = (distance, CGPoint(x: x, y: y)) }
               }
             }
+            candidates = farthest.compactMap(\.self).sorted { $0.distance > $1.distance }.map(\.point)
           }
-          if let negative {
+          var report = "no point deep inside the selection"
+          var carved = false
+          for (index, negative) in candidates.enumerated() {
             let wasSelected = painted(at: negative)
             let shrunk = try await model.autoMask(
               points: base + [SAMSegmenter.Point(location: negative, positive: false)], mode: .replace, undoManager: nil)
             let after = paintedPixels()
-            check(
-              wasSelected && !painted(at: negative) && Double(after) < Double(selected) * 0.8,
-              "sam: a negative point at \(Int(negative.x)),\(Int(negative.y)) inside the selection takes part of it away (\(selected) → \(after) px, \(Int((1 - Double(after) / Double(max(selected, 1))) * 100))% less, decoder \(ms(shrunk.decodeTime)))")
-            snapshot("sam-negative")
+            carved = wasSelected && !painted(at: negative) && Double(after) < Double(selected) * 0.8
+            report =
+              "at \(Int(negative.x)),\(Int(negative.y)) (try \(index + 1) of \(candidates.count)): \(selected) → \(after) px, \(Int((1 - Double(after) / Double(max(selected, 1))) * 100))% less, decoder \(ms(shrunk.decodeTime))"
+            if carved { break }
           }
+          check(carved, "sam: a negative point inside the selection takes at least a fifth of it away (\(report))")
+          snapshot("sam-negative")
 
           // Subtract after Add gives back what was there: a rectangle away from the selection.
           model.clearMask(undoManager: nil)
@@ -248,6 +259,25 @@ extension Automation {
       }
       finish()
     }
+  }
+
+  /// Each pixel's distance in pixels to the nearest unselected one (or the image's edge), by a
+  /// two-pass chamfer transform (3-4 weights, divided by 3): 0 outside the selection.
+  static func edgeDistance(_ selection: [UInt8], width: Int, height: Int) -> [Double] {
+    let far = Int.max / 4
+    var d = selection.map { $0 != 0 ? far : 0 }
+    func at(_ x: Int, _ y: Int) -> Int { x < 0 || y < 0 || x >= width || y >= height ? 0 : d[y * width + x] }
+    for y in 0..<height {
+      for x in 0..<width where d[y * width + x] != 0 {
+        d[y * width + x] = min(d[y * width + x], at(x - 1, y) + 3, at(x, y - 1) + 3, at(x - 1, y - 1) + 4, at(x + 1, y - 1) + 4)
+      }
+    }
+    for y in stride(from: height - 1, through: 0, by: -1) {
+      for x in stride(from: width - 1, through: 0, by: -1) where d[y * width + x] != 0 {
+        d[y * width + x] = min(d[y * width + x], at(x + 1, y) + 3, at(x, y + 1) + 3, at(x + 1, y + 1) + 4, at(x - 1, y + 1) + 4)
+      }
+    }
+    return d.map { Double($0) / 3 }
   }
 }
 #endif

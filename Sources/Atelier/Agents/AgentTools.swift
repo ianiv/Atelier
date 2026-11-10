@@ -922,7 +922,6 @@ final class AgentTools {
   }
 
   private func setCreateScreen(_ arguments: [String: Any]) async throws -> [String: Any] {
-    await Self.settleUndo()
     if create.models.isEmpty { await create.refreshModelList() }
     var notes: [String] = []
 
@@ -931,21 +930,34 @@ final class AgentTools {
       if model != create.selectedModel { create.selectedModel = model }
     }
     await create.modelLoaded()
-    guard let model = create.selectedModel else { throw ToolError("No model is downloaded.") }
-    // The preset or reset and the edits after it are one ⌘Z step, registered once at the end,
-    // and only when something changed.
-    let before = create.settings
+    guard var model = create.selectedModel else { throw ToolError("No model is downloaded.") }
 
+    var preset: Preset?
     if let name = arguments["preset"] as? String {
       // This model's or a shared preset first, else one for another downloaded model.
       let named = presets.presets.filter { $0.name.caseInsensitiveCompare(name) == .orderedSame }
       guard
-        let preset = named.first(where: { $0.model == nil || $0.model == model })
+        let found = named.first(where: { $0.model == nil || $0.model == model })
           ?? named.first(where: { preset in create.models.contains { $0.file == preset.model } })
       else { throw ToolError("No preset “\(name)” for a downloaded model. See list_presets.") }
+      preset = found
+      if let other = found.model, other != model {
+        // Switches models, applying the preset once the new model's defaults load. Undo can't
+        // go back across a model switch, so the step starts from what that gives.
+        create.apply(found, undoManager: nil)
+        await create.modelLoaded()
+        preset = nil
+        model = create.selectedModel ?? model
+      }
+    }
+    // The preset or reset and the edits after it are one ⌘Z step, registered once at the end,
+    // and only when something changed. What it undoes back to is read after the last wait, so
+    // an edit the user made meanwhile stays out of it.
+    await Self.settleUndo()
+    let before = create.settings
+    if let preset {
       create.apply(preset, undoManager: nil)
-      await create.modelLoaded()
-    } else if arguments["reset_settings"] as? Bool == true {
+    } else if arguments["preset"] == nil, arguments["reset_settings"] as? Bool == true {
       create.resetToModelDefaults(undoManager: nil)
     }
 
@@ -985,7 +997,7 @@ final class AgentTools {
         notes.append("\(model) isn't a video model, so num_frames and seconds were ignored.")
       }
     }
-    // A preset for another model switched models: undo can't go back across that, so the step
+    // Should the model have changed under it anyway, undo can't go back across that: the step
     // starts from the new model's values, as the inspector's own undo does.
     let restoring = before?.model == configuration.model ? before : create.settings
     if let restoring, !Self.sameSettings(restoring, configuration) {
@@ -1254,6 +1266,13 @@ final class AgentTools {
       }
       points.append(SAMSegmenter.Point(location: location, positive: point["positive"] as? Bool ?? true))
     }
+    // As many as SAM's prompt encoder takes beside the box (`SAMGeometry.promptInputs`): the
+    // Select tool drops the earliest past that, which an agent wouldn't see.
+    let pointLimit = SAMGeometry.maxPromptPoints - (arguments["box"] == nil ? 0 : 2)
+    guard points.count <= pointLimit else {
+      throw ToolError(
+        "auto_mask takes at most \(pointLimit) points\(arguments["box"] == nil ? "" : " with a box") (\(points.count) given). Use fewer, or select in steps with mode add and subtract.")
+    }
     var box: CGRect?
     if let value = arguments["box"] {
       guard let object = value as? [String: Any], let x = Self.double(object["x"]), let y = Self.double(object["y"]),
@@ -1327,7 +1346,11 @@ final class AgentTools {
       throw ToolError(
         create.image !== selection.image
           ? "The canvas changed while selecting. Call auto_mask again."
-          : mode == .subtract ? "There's no mask to subtract from any more." : maskUnavailableReason())
+          : mode == .subtract ? "There's no mask to subtract from any more."
+          : create.canEditMask && !create.canPaintMask
+          ? create.runTargetMaskProblem
+          ?? "\(create.runTargetServerName ?? "The server") can't take masks: its Atelier is older. Run on this device (Run on in the app)."
+          : maskUnavailableReason())
     }
     return try getCanvasMask(["view": "overlay"], extra: extra)
   }

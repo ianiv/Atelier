@@ -378,7 +378,18 @@ extension Automation {
       await expectError("auto_mask", ["points": [["x": width + 5, "y": 5]]], "outside", "a point off the image")
       await expectError("auto_mask", ["subject": true, "mode": "subtract"], "no mask to subtract", "subtract with no mask")
       await expectError("auto_mask", ["subject": true, "size": "huge"], "size", "an unknown size")
-      await expectError("auto_mask", ["subject": true], "subject", "no subject in the input")
+      await expectError(
+        "auto_mask", ["points": (0..<13).map { ["x": 10 + $0, "y": 10] }, "box": ["x": 0, "y": 0, "width": 50, "height": 50]],
+        "at most 12", "too many points with a box")
+      // Vision finds nothing in a scene with no clear subject; an input that has one can't test it.
+      do {
+        _ = try await call("auto_mask", ["subject": true])
+        print("SKIP no subject in the input: Vision found one in --input")
+        _ = try? await call("set_canvas_mask", ["clear": true])
+      } catch {
+        let message = error.localizedDescription
+        check(message.contains("No subject"), "no subject in the input: auto_mask fails (“\(message)”)")
+      }
       _ = try? await call("set_create_screen", ["canvas_mode": "generate"])
       await expectError("auto_mask", ["subject": true], "canvas_mode", "Generate mode")
       _ = try? await call("set_create_screen", ["canvas_mode": "edit"])
@@ -394,9 +405,15 @@ extension Automation {
         print("SKIP auto_mask on a subject: no --subject-input")
         return finish()
       }
+      guard CGRect(x: 0, y: 0, width: subjectImage.width, height: subjectImage.height).contains(subjectPoint) else {
+        print("SKIP auto_mask on a subject: --subject-point \(subjectPoint) is outside the \(subjectImage.width)×\(subjectImage.height) image")
+        return finish()
+      }
       _ = try? await call("set_canvas_image", ["image": "data:image/png;base64," + subjectPNG.base64EncodedString()])
       @MainActor func paintedAtPoint() -> Bool {
-        guard let mask = model.canvasMask, let image = model.image else { return false }
+        guard let mask = model.canvasMask, let image = model.image,
+              CGRect(x: 0, y: 0, width: image.width, height: image.height).contains(subjectPoint)
+        else { return false }
         return mask.coverage(width: image.width, height: image.height)[Int(subjectPoint.y) * image.width + Int(subjectPoint.x)] != 0
       }
       var selected = try? await call("auto_mask", ["subject": true])
