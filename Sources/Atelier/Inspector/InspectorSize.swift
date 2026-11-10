@@ -19,7 +19,10 @@ struct SizeButton: View {
     }
     .debugPresents("sizePopover", $showing)
     .popover(isPresented: $showing, arrowEdge: inspectorPopoverEdge) {
-      SizePopover(width: size.0, height: size.1) { width, height in
+      SizePopover(
+        width: size.0, height: size.1, megapixels: SizePreset.megapixels(for: model.traits),
+        maxSide: SizePreset.maxSide(for: model.traits)
+      ) { width, height in
         model.set(
           descriptor,
           to: .object(["width": .number(Double(width)), "height": .number(Double(height))]),
@@ -32,10 +35,13 @@ struct SizeButton: View {
 struct SizePopover: View {
   let width: Int
   let height: Int
+  /// The megapixel choices and the longest side the model takes.
+  var megapixels: [Double] = SizePreset.megapixels
+  var maxSide = SizePreset.maxSide
   let set: (Int, Int) -> Void
 
   var body: some View {
-    let match = SizePreset.match(width: width, height: height)
+    let match = SizePreset.match(width: width, height: height, megapixels: self.megapixels)
     let megapixels = match?.1 ?? closestMegapixels
     VStack(alignment: .leading, spacing: 12) {
       Text("Aspect Ratio").font(.headline)
@@ -61,7 +67,7 @@ struct SizePopover: View {
       ) {
         // No "Custom" segment for other sizes: the Mac gives every segment the widest label's
         // width, and "Custom" made the picker wider than the popover. None is selected instead.
-        ForEach(SizePreset.megapixels, id: \.self) { Text($0.formatted()).tag(Optional($0)) }
+        ForEach(self.megapixels, id: \.self) { Text($0.formatted()).tag(Optional($0)) }
       }
       .pickerStyle(.segmented)
       .labelsHidden()
@@ -125,20 +131,20 @@ struct SizePopover: View {
   }
 
   private func dimension(_ title: String, value: Int, set: @escaping (Int) -> Void) -> some View {
-    let binding = Binding(get: { value }, set: { set(SizePreset.snap(min(max($0, 64), 4096))) })
+    let binding = Binding(get: { value }, set: { set(SizePreset.snap(min(max($0, 64), maxSide))) })
     return HStack(spacing: 4) {
       Text(title).foregroundStyle(.secondary)
       TextField(title, value: binding, format: .number.grouping(.never))
         .labelsHidden()
         .multilineTextAlignment(.trailing)
         .frame(width: 60)
-      Stepper(title, value: binding, in: 64...4096, step: 64).labelsHidden()
+      Stepper(title, value: binding, in: 64...maxSide, step: 64).labelsHidden()
     }
   }
 
   private var closestMegapixels: Double {
     let mp = Double(width * height) / 1_048_576
-    return SizePreset.megapixels.min { abs($0 - mp) < abs($1 - mp) } ?? 1
+    return megapixels.min { abs($0 - mp) < abs($1 - mp) } ?? 1
   }
 
   private var closestAspect: SizePreset.AspectRatio {
