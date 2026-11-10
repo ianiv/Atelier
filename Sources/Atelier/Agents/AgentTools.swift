@@ -338,6 +338,20 @@ final class AgentTools {
       "annotations": ["readOnlyHint": true],
     ],
     [
+      "name": "match_colors",
+      "title": "Match colors to original",
+      "description":
+        "Matches an edited image's colors to the image it was made from (Reinhard color transfer in Lab), taking out the warm or cool shift edit models often add, like Match Colors to Original in the canvas menu. The original is the step's input (the canvas it was edited from), else its first moodboard image; a step this tool made goes back to that same original. Saves the result as a new history step after it, shows it on the canvas, and returns the step and the shift removed (delta_b > 0: the edit had come out warmer/yellower; delta_a > 0: more magenta). Takes a second or two; not for videos.",
+      "inputSchema": [
+        "type": "object",
+        "properties": [
+          "history_step": ["type": "integer", "description": "A history step from list_history or generate. Omit for the canvas image."],
+          "strength": ["type": "number", "minimum": 0, "maximum": 1, "description": "How far to move the colors, 0–1. Default 1."],
+          "luminance": ["type": "boolean", "description": "Also match lightness. Default false: edits often mean to change brightness."],
+        ],
+      ],
+    ],
+    [
       "name": "generate",
       "title": "Generate image or video",
       "description": """
@@ -449,6 +463,7 @@ final class AgentTools {
     case "auto_mask": return try await autoMask(arguments)
     case "list_history": return try Self.textResult(json: listHistory(arguments))
     case "get_image": return try await getImage(arguments)
+    case "match_colors": return try await matchColors(arguments)
     case "generate": return try await startGenerate(arguments, progress: progress)
     case "get_job": return try await getJob(arguments, progress: progress)
     case "list_jobs": return try Self.textResult(json: jobs.values.sorted { $0.startedAt > $1.startedAt }.map(Self.summary))
@@ -1690,6 +1705,45 @@ final class AgentTools {
       content.append(["type": "image", "data": preview.base64EncodedString(), "mimeType": "image/jpeg"])
     }
     return ["content": content]
+  }
+
+  private func matchColors(_ arguments: [String: Any]) async throws -> [String: Any] {
+    let item: HistoryItem
+    if let step = Self.int(arguments["history_step"]) {
+      guard let found = create.history.items.first(where: { $0.id.logicalTime == step }) else {
+        throw ToolError("No history step \(step) in “\(create.history.project.name)”. See list_history.")
+      }
+      item = found
+    } else {
+      guard let onCanvas = create.imageItem else {
+        throw ToolError("The canvas doesn't show a saved image. Pass history_step (see list_history).")
+      }
+      item = onCanvas
+    }
+    guard !item.isVideo else { throw ToolError("History step \(item.id.logicalTime) is a video; match_colors takes images.") }
+    guard create.hasOriginal(item) else {
+      throw ToolError("History step \(item.id.logicalTime) has no original to match: it wasn't made from the canvas or a moodboard image.")
+    }
+    var options = ColorMatch.Options()
+    if let strength = arguments["strength"] {
+      guard let value = (strength as? NSNumber)?.doubleValue, (0...1).contains(value) else {
+        throw ToolError("`strength` must be a number from 0 to 1.")
+      }
+      options.strength = value
+    }
+    if let luminance = arguments["luminance"] {
+      guard let value = luminance as? Bool else { throw ToolError("`luminance` must be true or false.") }
+      options.matchLuminance = value
+    }
+    let (saved, shift) = try await create.matchColors(item, options: options)
+    func rounded(_ value: Double) -> Double { (value * 100).rounded() / 100 }
+    var result: [String: Any] = [
+      "history_step": saved.id.logicalTime, "matched_step": item.id.logicalTime,
+      "strength": options.strength, "luminance": options.matchLuminance,
+      "delta_a": rounded(shift.a), "delta_b": rounded(shift.b), "summary": shift.summary,
+    ]
+    if options.matchLuminance { result["delta_l"] = rounded(shift.l) }
+    return try Self.textResult(json: result)
   }
 
   private static func shortened(_ prompt: String) -> String {

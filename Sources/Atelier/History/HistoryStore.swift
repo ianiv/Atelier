@@ -18,6 +18,8 @@ nonisolated struct HistoryItem: Identifiable, Hashable, Sendable {
   /// Set for a step generated from the canvas (Edit): the image tensor of its input, the step
   /// before it.
   var inputTensorId: Int64?
+  /// How many moodboard images the step went in with (Draw Things' `shuffle_data_stored`).
+  var moodboardCount = 0
   /// Set for a video: the item is its first frame and stands for the whole clip.
   var clip: ClipInfo?
 
@@ -71,6 +73,8 @@ final class HistoryStore {
     var timings: GenerationTimings?
     /// For a region refined and merged back into its input: where the frame was, and the mask.
     var refine: RefineRecord?
+    /// For a step made by Match Colors to Original: how, and from which original.
+    var colorMatch: ColorMatch.Record?
   }
 
   private(set) var project: Project
@@ -308,7 +312,7 @@ final class HistoryStore {
         negativePrompt: request.negativePrompt, seed: request.seed,
         settings: dump, createdAt: finishedAt,
         duration: finishedAt.timeIntervalSince(startedAt), timings: timings, moodboard: moodboard,
-        inputTensorId: inputTensorId, after: parentTensorId, refined: refined)
+        inputTensorId: inputTensorId, after: parentTensorId, refined: refined, colorMatch: request.colorMatch)
     }
     // An image from outside the project, saved now as a merge's input (the image itself),
     // remembers the mask it was queued with. One already in the project remembered it when the job

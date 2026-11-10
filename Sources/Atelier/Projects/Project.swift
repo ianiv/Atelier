@@ -298,7 +298,8 @@ final nonisolated class Project: Sendable {
       hiresFix: node.hiresFix,
       configuration: ProjectMapping.dump(of: node),
       timings: ProjectMapping.Profile(node.profileData).flatMap(GenerationTimings.init(profile:)),
-      refine: ProjectMapping.Profile(node.profileData)?.refine
+      refine: ProjectMapping.Profile(node.profileData)?.refine,
+      colorMatch: ProjectMapping.Profile(node.profileData)?.colorMatch
     )
   }
 
@@ -532,13 +533,14 @@ final nonisolated class Project: Sendable {
     timings: GenerationTimings? = nil,
     reason: ProjectFormat.Reason = .generate, generated: Bool = true,
     moodboard: [MoodboardTensor] = [], inputTensorId: Int64? = nil,
-    after parentTensorId: Int64? = nil, refined: RefinedStep? = nil
+    after parentTensorId: Int64? = nil, refined: RefinedStep? = nil,
+    colorMatch: ColorMatch.Record? = nil
   ) async throws -> HistoryItem {
     try await append(
       frames: [tensor], clip: nil, model: model, prompt: prompt, negativePrompt: negativePrompt,
       seed: seed, settings: settings, createdAt: createdAt, duration: duration, timings: timings,
       reason: reason, generated: generated, moodboard: moodboard, inputTensorId: inputTensorId,
-      after: parentTensorId, refined: refined)
+      after: parentTensorId, refined: refined, colorMatch: colorMatch)
   }
 
   /// A moodboard image going into a step.
@@ -570,7 +572,8 @@ final nonisolated class Project: Sendable {
       frames: frames, clip: clip, model: model, prompt: prompt, negativePrompt: negativePrompt,
       seed: seed, settings: settings, createdAt: createdAt, duration: duration, timings: timings,
       reason: .generate,
-      generated: true, moodboard: moodboard, inputTensorId: inputTensorId, after: parentTensorId, refined: nil)
+      generated: true, moodboard: moodboard, inputTensorId: inputTensorId, after: parentTensorId, refined: nil,
+      colorMatch: nil)
   }
 
   private func append(
@@ -578,7 +581,7 @@ final nonisolated class Project: Sendable {
     negativePrompt: String, seed: UInt32, settings: [String: JSONValue], createdAt: Date,
     duration: Double, timings: GenerationTimings?, reason: ProjectFormat.Reason, generated: Bool,
     moodboard: [MoodboardTensor], inputTensorId: Int64?,
-    after parentTensorId: Int64?, refined: RefinedStep?
+    after parentTensorId: Int64?, refined: RefinedStep?, colorMatch: ColorMatch.Record?
   ) async throws -> HistoryItem {
     // Each frame's thumbnails, a few frames at a time across the cores (a clip's frames
     // together are large, so each image is dropped once its thumbnails are made).
@@ -699,6 +702,7 @@ final nonisolated class Project: Sendable {
             clipId: clipId, indexInAClip: index, hasAudio: audioId != nil,
             inputAudioId: inputAudioId, timings: index == 0 ? timings : nil,
             refine: index == 0 ? refined?.record : nil,
+            colorMatch: index == 0 ? colorMatch : nil,
             layerCount: index == 0 ? layered.map { Int32($0.rows.count) } : nil,
             contentOffset: index == 0 ? layered.map { ($0.rows.last!.x, $0.rows.last!.y) } : nil)
           let node = ProjectMapping.node(for: step, settings: settings)
@@ -756,6 +760,7 @@ final nonisolated class Project: Sendable {
     return HistoryItem(
       id: StepID(lineage: node.lineage, logicalTime: node.logicalTime), tensorId: tensorIds[0],
       previewId: previewIds[0], sidecar: Self.sidecar(for: node), inputTensorId: inputTensorId,
+      moodboardCount: moodboard.count,
       clip: node.clipId >= 0
         ? ClipInfo(
           clipId: node.clipId, frames: tensorIds, framesPerSecond: clip?.framesPerSecond ?? 0,
@@ -1213,7 +1218,7 @@ nonisolated struct ProjectTree: Sendable {
       if withItems, node.generated, let tensorId, node.clipId < 0 || node.indexInAClip == 0 {
         items[id] = HistoryItem(
           id: id, tensorId: tensorId, previewId: node.previewId, sidecar: Project.sidecar(for: node),
-          inputTensorId: profile?.inputTensorId)
+          inputTensorId: profile?.inputTensorId, moodboardCount: Int(node.shuffleDataStored))
         if node.clipId >= 0 {
           clipListings[node.clipId] = (id, profile?.inputAudioId)
         }

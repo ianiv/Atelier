@@ -2198,6 +2198,122 @@ final class CreateModel {
     runNext()
   }
 
+  // MARK: - Match Colors to Original
+
+  /// Match Colors to Original is working out a result.
+  private(set) var isMatchingColors = false
+
+  /// Whether Match Colors to Original can take the canvas: a finished image saved in the project
+  /// (not a video) that has an original to match.
+  var canMatchCanvasColors: Bool {
+    guard canvasShowsImage, !isMatchingColors, let item = imageItem else { return false }
+    return hasOriginal(item)
+  }
+
+  /// Whether a step has an image its colors can be matched to (see `originalImage(for:)`).
+  func hasOriginal(_ item: HistoryItem) -> Bool {
+    !item.isVideo && (item.sidecar.colorMatch != nil || item.inputTensorId != nil || item.moodboardCount > 0)
+  }
+
+  /// The image an edit was made from: a Match Colors result's own original, else the step's input
+  /// (the canvas it was edited from), else its first moodboard image with weight. The parent isn't
+  /// used: a step that took no canvas wasn't made from it. Also says which tensor it is (nil for a
+  /// moodboard image), which the result records, and the moodboard image to carry along.
+  func originalImage(for item: HistoryItem) async -> (image: CGImage, tensorId: Int64?, moodboard: GenerationEngine.Reference?)? {
+    guard !item.isVideo else { return nil }
+    let projectName = history.project.name
+    func firstMoodboardImage() async -> (image: CGImage, tensorId: Int64?, moodboard: GenerationEngine.Reference?)? {
+      guard item.moodboardCount > 0,
+            let entry = await history.moodboard(at: item.id, in: projectName).first(where: { $0.weight > 0 })
+      else { return nil }
+      return (entry.image, nil, GenerationEngine.Reference(image: entry.image, weight: entry.weight))
+    }
+    // Matching a match again goes back to its original, not to the image it was matched from.
+    if let record = item.sidecar.colorMatch {
+      if let tensorId = record.originalTensorId {
+        return await history.image(tensorId: tensorId, in: projectName).map { ($0, tensorId, nil) }
+      }
+      return await firstMoodboardImage()
+    }
+    if let tensorId = item.inputTensorId {
+      if let input = await history.input(of: item, in: projectName) { return (input.image, tensorId, nil) }
+      if let image = await history.image(tensorId: tensorId, in: projectName) { return (image, tensorId, nil) }
+    }
+    return await firstMoodboardImage()
+  }
+
+  /// Matches a saved image's colors to its original's (`ColorMatch`) and saves the result as a new
+  /// History step after it, carrying its settings as an upscale does, then shows it. Runs here
+  /// rather than in the queue: it's quick and needs no GPU.
+  @discardableResult
+  func matchColors(_ item: HistoryItem, options: ColorMatch.Options = ColorMatch.Options()) async throws
+    -> (item: HistoryItem, shift: ColorMatch.Shift)
+  {
+    guard !isMatchingColors else { throw ColorMatchError.busy }
+    guard !item.isVideo else { throw ColorMatchError.video }
+    isMatchingColors = true
+    defer { isMatchingColors = false }
+    let projectName = history.project.name
+    guard let original = await originalImage(for: item) else { throw ColorMatchError.noOriginal }
+    guard let edited = await history.image(tensorId: item.tensorId, in: projectName),
+          let result = await ColorMatch.matching(edited, to: original.image, options: options),
+          let tensor = ImageTensor.tensor(from: result.image)
+    else { throw ColorMatchError.unreadable }
+    let (matched, shift) = result
+    guard var configuration = settings else { throw ColorMatchError.noSettings }
+    SettingsRegistry.apply(dump: item.sidecar.configuration, to: &configuration)
+    configuration.width = matched.width
+    configuration.height = matched.height
+    var request = GenerationEngine.Request(
+      model: item.sidecar.model, prompt: item.sidecar.prompt, negativePrompt: item.sidecar.negativePrompt,
+      seed: item.sidecar.seed, configuration: configuration)
+    request.canvas = edited
+    request.canvasTensorId = item.tensorId
+    request.parentTensorId = HistoryStore.tip(of: item)
+    // A moodboard original goes along, so matching the result again finds it there.
+    if let moodboard = original.moodboard { request.moodboard = [moodboard] }
+    request.colorMatch = ColorMatch.Record(
+      strength: options.strength, luminance: options.matchLuminance, originalTensorId: original.tensorId)
+    let startedAt = Date()
+    let history = history
+    let saved = try await oneSaveAtATime {
+      try await history.save(
+        GenerationEngine.Output(frames: [tensor]), request: request, startedAt: startedAt, finishedAt: Date())
+    }
+    lastSavedTensorId = saved.tensorId
+    if let failure = await history.writeToOutputFolder(saved, image: matched) { errorMessage = failure }
+    show(saved)
+    statusNote = shift.summary
+    saveSession()
+    return (saved, shift)
+  }
+
+  /// Match Colors to Original on the canvas image, with the default options.
+  func matchCanvasColors() {
+    guard canMatchCanvasColors, let item = imageItem else { return }
+    Task {
+      do {
+        try await matchColors(item)
+      } catch {
+        errorMessage = error.localizedDescription
+      }
+    }
+  }
+
+  nonisolated enum ColorMatchError: LocalizedError {
+    case busy, video, noOriginal, unreadable, noSettings
+
+    var errorDescription: String? {
+      switch self {
+      case .busy: "Colors are already being matched."
+      case .video: "Match Colors to Original works on images, not videos."
+      case .noOriginal: "This image has no original to match: it wasn't made from the canvas or a moodboard image, or that image is no longer in the project."
+      case .unreadable: "The image or its original couldn't be read."
+      case .noSettings: "There are no settings to save the result with yet: wait for the model list to load."
+      }
+    }
+  }
+
   /// Runs an image upscale job on this device: with a model, or as a video upscaler's one-frame clip.
   private func upscaled(
     image: CGImage, as upscale: ImageUpscale, request: GenerationEngine.Request,
