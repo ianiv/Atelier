@@ -296,16 +296,19 @@ nonisolated struct CanvasMask: Codable, Sendable, Hashable {
     static let painted: UInt8 = 2
   }
 
-  /// The frame's mask for the engine: 2 where painted, 1 where the frame lies outside the image
-  /// (so it still outpaints there: an explicit mask replaces the one the engine derives from the
-  /// canvas's transparency, `MediaGenerationExecutionUtilities.generate`), 0 elsewhere. As an
+  /// The frame's mask for the engine: 2 where painted, 1 where the frame lies outside the image or
+  /// the rendered `canvas` is transparent (alpha below 128, as the engine's own alpha mask reads
+  /// it: a grown image's empty corners), so it still outpaints there: an explicit mask replaces
+  /// the one the engine derives from the canvas's transparency
+  /// (`MediaGenerationExecutionUtilities.generate`), 0 elsewhere. As an
   /// opaque gray PNG at the frame size, the form MGK's `.mask()` input takes: it decodes it,
   /// redraws it at the run's size (`ImageConverter.resize`, the same size here, so no
   /// resampling) and reads gray value v as code v (`ImageConverter.grayscaleTensor`). Nil when
   /// nothing painted is inside the frame: the run is then the same as without a mask.
-  func frameMask(_ placement: CanvasPlacement) -> Data? {
+  func frameMask(_ placement: CanvasPlacement, canvas: CGImage? = nil) -> Data? {
     let width = Int(placement.frameSize.width), height = Int(placement.frameSize.height)
     let rect = placement.imageRect
+    let alpha = canvas.flatMap { Self.alpha(of: $0, width: width, height: height) }
     let painted = coverage(
       width: width, height: height, scale: placement.zoom, origin: rect.origin)
     var codes = [UInt8](repeating: Code.keep, count: width * height)
@@ -314,7 +317,9 @@ nonisolated struct CanvasMask: Codable, Sendable, Hashable {
       let insideY = Double(y) + 0.5 >= rect.minY && Double(y) + 0.5 < rect.maxY
       for x in 0..<width {
         let index = y * width + x
-        if !insideY || Double(x) + 0.5 < rect.minX || Double(x) + 0.5 >= rect.maxX {
+        if !insideY || Double(x) + 0.5 < rect.minX || Double(x) + 0.5 >= rect.maxX
+          || (alpha.map { $0[index] < 128 } ?? false)
+        {
           codes[index] = Code.empty
         } else if painted[index] != 0 {
           codes[index] = Code.painted
@@ -326,9 +331,37 @@ nonisolated struct CanvasMask: Codable, Sendable, Hashable {
     return Self.grayPNG(codes, width: width, height: height)
   }
 
-  /// The codes Draw Things stores for a step's canvas mask (`binary_mask_<id>`): 2 painted, 0 not.
-  static func storedCodes(_ coverage: [UInt8]) -> [UInt8] {
-    coverage.map { $0 != 0 ? Code.painted : Code.keep }
+  /// Draw Things' inpainting brush codes, as it stores a layer's mask (`binary_mask_<id>`): a
+  /// painted pixel is 0xF9 (code 1, "nothing here", with alpha 0xF8), an untouched opaque one 3.
+  /// Other alpha is `1 | (alpha & 0xF8)` (`ImageConverter.imageAndMask(from:)`).
+  enum Stored {
+    static let painted: UInt8 = 0xF9
+    static let opaque: UInt8 = 3
+
+    static func code(alpha: UInt8) -> UInt8 {
+      alpha == 255 ? opaque : 1 | (alpha & 0xF8)
+    }
+
+    /// The alpha a stored code renders with (`ImageConverter.image(from:scaleFactor:binaryMask:)`):
+    /// codes 0 and 3 are opaque, any other has `byte & 0xF8`.
+    static func alpha(_ code: UInt8) -> UInt8 {
+      code & 7 == 0 || code & 7 == 3 ? 255 : code & 0xF8
+    }
+  }
+
+  /// The alpha of `image` drawn at `width` × `height`, top row first.
+  static func alpha(of image: CGImage, width: Int, height: Int) -> [UInt8]? {
+    var rgba = [UInt8](repeating: 0, count: width * height * 4)
+    let drawn = rgba.withUnsafeMutableBytes { raw -> Bool in
+      guard let context = CGContext(
+        data: raw.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+        space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+      else { return false }
+      context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+      return true
+    }
+    guard drawn else { return nil }
+    return (0..<(width * height)).map { rgba[$0 * 4 + 3] }
   }
 
   /// An opaque RGB PNG whose every pixel has red = green = blue = its byte. RGB rather than gray:

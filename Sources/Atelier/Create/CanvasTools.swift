@@ -39,7 +39,14 @@ extension CreateModel {
   /// of an Edit run, for an image model, with no layout editor over it. Strength needn't be below
   /// 100%: painting is what makes Edit mean something then (`canEdit`).
   var canPaintMask: Bool {
-    canvasShowsImage && canvasMode == .edit && videoModel == nil && layout == nil
+    canvasShowsImage && canvasMode == .edit && videoModel == nil && layout == nil && runTargetTakesMasks
+  }
+
+  /// Where runs go can inpaint with a mask: this device, or a server new enough to list it
+  /// (`RemoteProtocol.maskFeature`). An older one would regenerate the whole frame, so jobs with a
+  /// mask are refused there (`RemoteBackend.submit`).
+  var runTargetTakesMasks: Bool {
+    runTarget == .local || serverCatalog?.features.contains(RemoteProtocol.maskFeature) == true
   }
 
   /// The output size: the frame on the canvas.
@@ -60,7 +67,9 @@ extension CreateModel {
   /// frame showing part of the image, reaching past it, or with a mask painted.
   var canMergeIntoImage: Bool {
     guard effectiveCanvasMode == .edit, videoModel == nil, let canvasPlacement else { return false }
-    return !canvasPlacement.showsWholeImage || canvasMask?.mayHavePaint == true
+    return RefineMerge.applies(
+      placement: canvasPlacement, scale: canvas.scale, offset: canvas.offset,
+      hasMask: canvasMask?.mayHavePaint == true && runTargetTakesMasks)
   }
 
   // MARK: Mask
@@ -115,15 +124,19 @@ extension CreateModel {
   // MARK: Frame
 
   /// Zooms and moves the canvas so the frame shows `region` of the canvas image (its pixels, from
-  /// the top left), fitted and centered. False without an image.
+  /// the top left), fitted and centered. Returns the region the frame actually shows, which is
+  /// larger or smaller when the zoom needed is beyond the canvas's range (`CanvasState.range`),
+  /// and differs in shape when the frame's does; nil without an image.
   @discardableResult
-  func showRegion(_ region: CGRect) -> Bool {
-    guard canvasShowsImage, let image, let frameSize, region.width > 0, region.height > 0 else { return false }
-    let placement = CanvasPlacement.zoomAndOffset(
-      showing: region, sourceSize: CGSize(width: image.width, height: image.height), frameSize: frameSize)
-    canvas.scale = min(max(placement.scale, CanvasState.range.lowerBound), CanvasState.range.upperBound)
-    canvas.offset = placement.offset
-    return true
+  func showRegion(_ region: CGRect) -> CGRect? {
+    guard canvasShowsImage, let image, let frameSize, region.width > 0, region.height > 0 else { return nil }
+    let sourceSize = CGSize(width: image.width, height: image.height)
+    let wanted = CanvasPlacement.zoomAndOffset(showing: region, sourceSize: sourceSize, frameSize: frameSize)
+    let scale = min(max(wanted.scale, CanvasState.range.lowerBound), CanvasState.range.upperBound)
+    canvas.scale = scale
+    canvas.offset = CGSize(
+      width: (sourceSize.width / 2 - region.midX) * scale, height: (sourceSize.height / 2 - region.midY) * scale)
+    return canvasPlacement?.cropRect
   }
 
   // MARK: Placing an image
@@ -149,31 +162,16 @@ extension CreateModel {
   }
 
   /// Lands a merged result: the frame keeps showing the region it refined (the image may have
-  /// grown, moving it), and the mask stays, moved with it.
-  func keepRefinePlacement(for tensorId: Int64, merge: RefineMerge, sourceOrigin: CGPoint, resultSize: CGSize) {
+  /// grown, moving it).
+  func keepRefinePlacement(merge: RefineMerge, sourceOrigin: CGPoint, resultSize: CGSize) {
     let placement = merge.placement
     let zoom = placement.zoom
     let crop = placement.cropRect
     let center = CGPoint(x: crop.midX + sourceOrigin.x, y: crop.midY + sourceOrigin.y)
     let scale = (zoom.x + zoom.y) / 2
-    pendingCanvasPlacement = (
-      tensorId, scale,
-      CGSize(width: (resultSize.width / 2 - center.x) * scale, height: (resultSize.height / 2 - center.y) * scale)
-    )
-    canvasMask = merge.mask?.translated(by: sourceOrigin)
-    keepsMaskOnce = true
-  }
-
-  /// The canvas shows another image: a pending placement for it applies, else it's fitted.
-  func placeNewCanvasImage() {
-    if let pending = pendingCanvasPlacement, pending.tensorId == imageItem?.tensorId {
-      pendingCanvasPlacement = nil
-      canvas.scale = pending.scale
-      canvas.offset = pending.offset
-    } else {
-      pendingCanvasPlacement = nil
-      canvas.zoomToFit()
-    }
+    canvas.scale = scale
+    canvas.offset = CGSize(
+      width: (resultSize.width / 2 - center.x) * scale, height: (resultSize.height / 2 - center.y) * scale)
   }
 }
 
@@ -344,6 +342,7 @@ struct CanvasToolControls: View {
     .labelStyle(.iconOnly)
     .buttonStyle(.borderless)
     .disabled(!enabled)
+    MergeIntoImageToggle()
   }
 
   private static var toolHelp: String {
@@ -355,18 +354,19 @@ struct CanvasToolControls: View {
   }
 }
 
-/// Merge into Image, beside the Input badge: always shown with it, enabled when it would do
-/// something (`canMergeIntoImage`).
+/// Merge into Image, in the status bar with the canvas tools: always there, enabled when it would
+/// do something (`canMergeIntoImage`).
 struct MergeIntoImageToggle: View {
   @Environment(CreateModel.self) private var model
 
   var body: some View {
     @Bindable var model = model
     Toggle(isOn: $model.mergeIntoImage) {
-      Label("Merge into Image", systemImage: "square.on.square.dashed")
+      Label("Merge into Image", systemImage: "square.on.square.dashed").touchTarget()
     }
     .toggleStyle(.button)
-    .font(.caption.weight(.medium))
+    .labelStyle(.iconOnly)
+    .buttonStyle(.borderless)
     .disabled(!model.canMergeIntoImage)
     .help(
       "Put the result back into the whole image, through the mask when one is painted. The image grows when the frame reaches past it. Off saves just what's in the frame.")

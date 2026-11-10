@@ -44,6 +44,8 @@ final class CreateModel {
     var loras: [ModelLibrary.LoRA]
     var files: [String]
     var upscalers: RemoteUpscalers
+    /// `RemoteProtocol.features` the server lists.
+    var features: Set<String> = []
   }
 
   /// Where new jobs run (Run on). A job keeps the target it was queued with.
@@ -132,7 +134,7 @@ final class CreateModel {
         // Only its name and family are read here: it lives on the server.
         ModelLibrary.LoRA(name: $0.name, file: $0.file, prefix: $0.prefix, version: $0.version, size: 1, registry: URL(filePath: "/"))
       },
-      files: catalog.files, upscalers: catalog.upscalers)
+      files: catalog.files, upscalers: catalog.upscalers, features: catalog.features)
     reconcileModel()
   }
 
@@ -352,10 +354,6 @@ final class CreateModel {
   var mergeIntoImage = UserDefaults.standard.object(forKey: "mergeIntoImage") as? Bool ?? true {
     didSet { UserDefaults.standard.set(mergeIntoImage, forKey: "mergeIntoImage") }
   }
-  /// The zoom and offset to give the image with this tensor once it lands on the canvas, instead
-  /// of fitting it: a merged result keeps the refined region in the frame, and Use Settings puts
-  /// a refine step's input back as it was.
-  var pendingCanvasPlacement: (tensorId: Int64, scale: Double?, offset: CGSize)?
   /// The canvas image came from outside the project (drop, paste, Open), not yet saved as a step.
   private var canvasIsImported = false
   /// The generation settings an imported canvas image carries, with that image.
@@ -401,17 +399,11 @@ final class CreateModel {
       imageIsPreview = false
       showsFrame = false
       canvasImageLoad = nil
-      // The mask belongs to the image it was painted on (as in Draw Things, it stays through a
-      // run whose result merges back, see `keepsMaskOnce`).
-      if keepsMaskOnce {
-        keepsMaskOnce = false
-      } else {
-        canvasMask = nil
-      }
+      // The mask belongs to the image it was painted on. A run whose result merges back puts it
+      // back once that result is on the canvas, as Draw Things keeps it.
+      canvasMask = nil
     }
   }
-  /// The next image to land keeps `canvasMask` (a merged result, or Use Settings restoring one).
-  var keepsMaskOnce = false
   /// The load the canvas is waiting on. Decoding a large image (an upscale, say) can take seconds,
   /// with the old image still showing. A newer load, or anything else landing on the canvas,
   /// takes over, so a slow older load can't end the wait for the newer one.
@@ -925,6 +917,7 @@ final class CreateModel {
           lastSavedTensorId = tensorId
           imageStep = (project, tensorId)
           image = restoredImage
+          canvas.zoomToFit()
         }
       }
     }
@@ -1064,6 +1057,8 @@ final class CreateModel {
       imageStep = (projectName, item.tensorId)
       history.setCurrent(tensorId: item.tensorId)
       canvasIsImported = false
+      // A new image starts fitted to the frame (the model places every image it puts there).
+      canvas.zoomToFit()
     }
     // An Edit step brings back its input, fitted, in Edit mode, so rerunning reproduces it.
     // Without its input (deleted since) it shows the result, as for a Generate step.
@@ -1083,9 +1078,7 @@ final class CreateModel {
             let offset = CGSize(width: refine.offset[0], height: refine.offset[1])
             canvas.scale = refine.scale
             canvas.offset = offset
-            pendingCanvasPlacement = (inputTensorId, refine.scale, offset)
             canvasMask = refine.mask
-            mergeIntoImage = true
           } else {
             canvas.zoomToFit()
           }
@@ -1795,7 +1788,7 @@ final class CreateModel {
           return
         }
         // A refined region goes back into the image it came from, here, where its project is.
-        var refined: Project.Refined?
+        var refined: RefinedStep?
         var mergedOrigin: CGPoint?
         if let merge = request.merge, !output.isVideo, let frame = output.frames.first {
           setRunMessage("Merging into the image…", job)
@@ -1803,7 +1796,7 @@ final class CreateModel {
             frame, into: merge, maskBlur: Double(request.configuration.maskBlur),
             maskBlurOutset: request.configuration.maskBlurOutset)
           output.frames = [merged.tensor]
-          refined = Project.Refined(mask: merged.maskTensor, record: merged.record)
+          refined = merged.step
           mergedOrigin = merged.sourceOrigin
         }
         let returnedAt = Date()
@@ -1823,16 +1816,22 @@ final class CreateModel {
           queue.setTimings(timings, id: job.id)
         }
         lastSavedTensorId = item.tensorId
-        let finished = output.frames.first.flatMap(ImageTensor.cgImage(from:)) ?? runProgress(of: job)?.preview
+        // A merged refine shows as its project shows it: its whole canvas, transparent where empty.
+        let finished = refined?.composite ?? output.frames.first.flatMap(ImageTensor.cgImage(from:))
+          ?? runProgress(of: job)?.preview
         if followsRun() {
-          if let merge = request.merge, let mergedOrigin, let finished {
-            keepRefinePlacement(
-              for: item.tensorId, merge: merge, sourceOrigin: mergedOrigin,
-              resultSize: CGSize(width: finished.width, height: finished.height))
-          }
+          // The mask painted on the source stays on the canvas, moved as the image grew.
+          let keptMask = request.merge?.canvasMask?.translated(by: mergedOrigin ?? .zero)
           imageStep = (history.project.name, item.tensorId)
           canvasIsImported = false
           if let finished { image = finished }
+          if let merge = request.merge, let mergedOrigin, let finished {
+            keepRefinePlacement(
+              merge: merge, sourceOrigin: mergedOrigin, resultSize: CGSize(width: finished.width, height: finished.height))
+            canvasMask = keptMask
+          } else {
+            canvas.zoomToFit()
+          }
         }
         if let placement = request.placement, item.isVideo { timelines.place(item, at: placement) }
         if let failure = await history.writeToOutputFolder(item, image: finished) {
@@ -2206,6 +2205,7 @@ final class CreateModel {
     imageStep = (projectName, item.tensorId)
     history.setCurrent(tensorId: item.tensorId)
     canvasIsImported = false
+    canvas.zoomToFit()
     Task {
       let full = await whileLoadingCanvasImage { await history.image(at: item.id, in: projectName) }
       if let full, imageStep?.tensorId == item.tensorId, !imageIsPreview { image = full }
@@ -2227,6 +2227,7 @@ final class CreateModel {
     history.setCurrent(tensorId: item.tensorId)
     canvasIsImported = false
     image = full
+    canvas.zoomToFit()
     canvasMode = .edit
     return true
   }

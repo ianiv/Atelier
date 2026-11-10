@@ -83,7 +83,7 @@ actor GenerationEngine {
   private var pipeline: MediaGenerationPipeline?
   /// The model and image inputs (canvas, then moodboard sizes) of the last run, see
   /// `dropCachedModelsIfInputsChanged`.
-  private var lastImageInputs: (model: String, canvas: Bool, mask: Bool, sizes: [[Int]])?
+  private var lastImageInputs: (model: String, canvas: Bool, sizes: [[Int]])?
 
   private var isRunning = false
   private var waiting: [CheckedContinuation<Void, Never>] = []
@@ -582,12 +582,12 @@ actor GenerationEngine {
   private func dropCachedModelsIfInputsChanged(_ request: Request) {
     let images = [request.canvas].compactMap(\.self) + request.moodboard.map(\.image)
     let inputs = (
-      model: request.model, canvas: request.canvas != nil, mask: request.mask != nil,
+      model: request.model, canvas: request.canvas != nil,
       sizes: images.map { [$0.width, $0.height] }
     )
     defer { lastImageInputs = inputs }
     guard let last = lastImageInputs, last.model == inputs.model,
-          last.canvas != inputs.canvas || last.mask != inputs.mask || last.sizes != inputs.sizes,
+          last.canvas != inputs.canvas || last.sizes != inputs.sizes,
           var dictionary = Self.engineWorkspace()?.dictionary
     else { return }
     // The preloader applies each change in order on the generation queue, ahead of this run.

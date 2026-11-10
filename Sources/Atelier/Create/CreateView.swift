@@ -239,19 +239,16 @@ struct CanvasView: View {
           Color.clear
             .frame(width: frameRect.width, height: frameRect.height)
             .overlay(alignment: .topLeading) {
-              HStack(spacing: 6) {
-                Label("Input", systemImage: "square.and.pencil")
-                  .font(.caption.weight(.medium))
-                  .padding(.horizontal, 8)
-                  .padding(.vertical, 4)
-                  .glassEffect(.regular.tint(.accentColor), in: .capsule)
-                  .help("Edit mode: what's inside the frame is sent to the model. Empty areas are filled in; with a mask, only the painted area changes.")
-                  .allowsHitTesting(false)
-                MergeIntoImageToggle()
-              }
-              .padding(8)
+              Label("Input", systemImage: "square.and.pencil")
+                .font(.caption.weight(.medium))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .glassEffect(.regular.tint(.accentColor), in: .capsule)
+                .padding(8)
+                .help("Edit mode: what's inside the frame is sent to the model. Empty areas are filled in; with a mask, only the painted area changes.")
             }
             .position(x: frameRect.midX, y: frameRect.midY)
+            .allowsHitTesting(false)
         }
         if model.layout != nil {
           LayoutCanvas(size: frameRect.size)
@@ -281,6 +278,8 @@ struct CanvasView: View {
           spaceDown = press.phase != .up
           return .handled
         }
+        // A Space let go after focus moved elsewhere never arrives here.
+        .onChange(of: canvasFocused) { if !canvasFocused { spaceDown = false } }
       #endif
         .onTapGesture(count: 2) {
           if canvas.scale == nil { canvas.zoom(to: 1) } else { canvas.zoomToFit() }
@@ -301,8 +300,6 @@ struct CanvasView: View {
         .onChange(of: imageFit, initial: true) { canvas.fitScale = imageFit }
     }
     .background(Color.underPageBackground.ignoresSafeArea())
-    // A new image starts fitted to the frame, unless it keeps a refined region in view.
-    .onChange(of: model.imageItem?.tensorId) { model.placeNewCanvasImage() }
     .onChange(of: model.canvasMask, initial: true) { updateMaskTint() }
     .onChange(of: model.image.map(ObjectIdentifier.init)) { updateMaskTint() }
     .alert(

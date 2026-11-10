@@ -252,15 +252,18 @@ nonisolated struct RemoteBackend: GenerationBackend {
     return (source, image)
   }
 
-  func catalog() async throws -> (models: [RemoteModelInfo], loras: [RemoteLoRAInfo], files: [String], upscalers: RemoteUpscalers) {
-    guard case .catalog(let models, let loras, let files, let upscalers) = try await paired().request(.catalogRequest) else {
+  func catalog() async throws -> (
+    models: [RemoteModelInfo], loras: [RemoteLoRAInfo], files: [String], upscalers: RemoteUpscalers, features: Set<String>
+  ) {
+    guard case .catalog(let models, let loras, let files, let upscalers, let features) = try await paired().request(.catalogRequest)
+    else {
       throw RemoteError.connectionLost
     }
     // What the rest of the app asks of a model by file name has to know these.
     RemoteModelTraits.remember(
       models: models.reduce(into: [:]) { $0[$1.file] = $1.traits },
       loras: Dictionary(loras.map { ($0.file, $0.modifier) }) { first, _ in first })
-    return (models, loras, files, upscalers)
+    return (models, loras, files, upscalers, Set(features ?? []))
   }
 
   // MARK: - A job's steps
@@ -313,6 +316,11 @@ nonisolated struct RemoteBackend: GenerationBackend {
     progress: @escaping @Sendable (GenerationEngine.Progress) -> Void
   ) async throws {
     let client = try paired()
+    // A server that predates masks would ignore one and regenerate the whole frame.
+    if request.mask != nil, try await !catalog().features.contains(RemoteProtocol.maskFeature) {
+      throw RemoteError.server(
+        "This server's Atelier is too old to inpaint with a mask. Update Atelier there, clear the mask, or run on this device.")
+    }
     let prepared = try await Self.prepare(request)
     let total = prepared.blobs.reduce(0) { $0 + $1.data.count }
     var done = 0

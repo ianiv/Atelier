@@ -18,6 +18,9 @@ nonisolated struct RefineMerge: Sendable {
   var frameSize: CGSize
   /// The painted mask, in `source`'s pixels; nil merges the whole frame.
   var mask: CanvasMask?
+  /// The canvas's mask when the run was queued, painted inside the frame or not: it goes back on
+  /// the canvas with the result.
+  var canvasMask: CanvasMask?
 
   var placement: CanvasPlacement {
     CanvasPlacement(
@@ -34,28 +37,34 @@ nonisolated struct RefineMerge: Sendable {
     var frameWidth: Double
     var frameHeight: Double
     var mask: CanvasMask?
+    var canvasMask: CanvasMask?
   }
 
   var record: Record {
     Record(
       sourceTensorId: sourceTensorId, scale: scale, offsetX: offset.width, offsetY: offset.height,
-      frameWidth: frameSize.width, frameHeight: frameSize.height, mask: mask)
+      frameWidth: frameSize.width, frameHeight: frameSize.height, mask: mask, canvasMask: canvasMask)
   }
 
-  init(source: CGImage, sourceTensorId: Int64?, scale: Double?, offset: CGSize, frameSize: CGSize, mask: CanvasMask?) {
+  init(
+    source: CGImage, sourceTensorId: Int64?, scale: Double?, offset: CGSize, frameSize: CGSize, mask: CanvasMask?,
+    canvasMask: CanvasMask? = nil
+  ) {
     self.source = source
     self.sourceTensorId = sourceTensorId
     self.scale = scale
     self.offset = offset
     self.frameSize = frameSize
     self.mask = mask
+    self.canvasMask = canvasMask ?? mask
   }
 
   init(record: Record, source: CGImage, sameProject: Bool) {
     self.init(
       source: source, sourceTensorId: sameProject ? record.sourceTensorId : nil, scale: record.scale,
       offset: CGSize(width: record.offsetX, height: record.offsetY),
-      frameSize: CGSize(width: record.frameWidth, height: record.frameHeight), mask: record.mask)
+      frameSize: CGSize(width: record.frameWidth, height: record.frameHeight), mask: record.mask,
+      canvasMask: record.canvasMask)
   }
 }
 
@@ -78,8 +87,7 @@ extension GenerationEngine.Request {
   /// image's center from the frame's, frame pixels, y down; see `CanvasPlacement.zoomAndOffset`
   /// to show a region instead), the mask's codes when anything painted is in the frame, and with
   /// `merge`, how to merge the result back into `source`. Returns false when `source` couldn't be
-  /// drawn. Merge only applies when it changes anything: the frame shows less or more than the
-  /// whole image, or there's a mask.
+  /// drawn. Merge only applies when it changes anything (`RefineMerge.applies`).
   @discardableResult
   mutating func setRefineInputs(
     source: CGImage, sourceTensorId: Int64?, isImported: Bool, scale: Double?, offset: CGSize,
@@ -91,12 +99,12 @@ extension GenerationEngine.Request {
     guard let rendered = CanvasState.render(source, placement: placement) else { return false }
     canvas = rendered
     canvasIsImported = isImported
-    let maskPNG = mask.flatMap { $0.mayHavePaint ? $0.frameMask(placement) : nil }
+    let maskPNG = mask.flatMap { $0.mayHavePaint ? $0.frameMask(placement, canvas: rendered) : nil }
     self.mask = maskPNG
-    if merge, maskPNG != nil || !placement.showsWholeImage {
+    if merge, RefineMerge.applies(placement: placement, scale: scale, offset: offset, hasMask: maskPNG != nil) {
       self.merge = RefineMerge(
         source: source, sourceTensorId: isImported ? nil : sourceTensorId, scale: scale, offset: offset,
-        frameSize: frame, mask: maskPNG != nil ? mask : nil)
+        frameSize: frame, mask: maskPNG != nil ? mask : nil, canvasMask: mask)
       // The input step is the source itself, saved once for every job from it.
       canvasTensorId = self.merge?.sourceTensorId
       canvasKey = "merge \(ObjectIdentifier(source))"
@@ -111,6 +119,41 @@ extension GenerationEngine.Request {
   }
 }
 
+nonisolated extension RefineMerge {
+  /// Whether merging changes anything: with a mask, or with the frame moved or zoomed to show part
+  /// of the image or reach past it. A fitted, centered image is left as Edit always took it (the
+  /// result at the output size), even when its shape leaves bars in the frame.
+  static func applies(placement: CanvasPlacement, scale: Double?, offset: CGSize, hasMask: Bool) -> Bool {
+    hasMask || (!placement.showsWholeImage && !(scale == nil && offset == .zero))
+  }
+}
+
+/// A merged result as the project stores it, Draw Things' way. Without a mask, inside the source,
+/// it's one flattened image layer. With a mask, or when the frame reached past the source, it's
+/// two layers, as Draw Things keeps a canvas: the source at the origin (its own step's tensor when
+/// that's a plain image, carrying the paint mask, `CanvasMask.Stored`), and over it the merged
+/// result cropped to the frame, at the frame's place in the source's pixels (possibly negative).
+/// What neither layer covers is empty (`Project.composite`).
+nonisolated struct RefinedStep: @unchecked Sendable {
+  var record: RefineRecord
+  /// The merged image as it shows: the canvas of both layers, transparent where neither reaches.
+  var composite: CGImage
+  var layers: Layers?
+
+  struct Layers {
+    /// The canvas image, alpha and all.
+    var source: CGImage
+    /// Its project step's image, reused as the bottom layer when that's a plain image.
+    var sourceTensorId: Int64?
+    /// Painted pixels at the source's size, 255 painted (`CanvasMask.coverage`).
+    var paint: [UInt8]?
+    /// The merged result inside the frame, and where its top left is in the source's pixels.
+    var frame: CGImage
+    var frameX: Int32
+    var frameY: Int32
+  }
+}
+
 /// Merges a refine run's result back into its source image (`RefineMerge`), in pure Core
 /// Graphics plus byte math, so it's exact and testable. The result frame is scaled back into the
 /// rectangle it showed (`CanvasPlacement.cropRect`) on a canvas grown to hold both the source and
@@ -118,23 +161,20 @@ extension GenerationEngine.Request {
 /// neither covers stay transparent.
 ///
 /// With a mask, the result shows through it, grown by Mask Blur Outset and feathered by Mask Blur
-/// as the engine does in the frame (`LocalImageGenerator.imageWithMask`: dilate, then blur), but
-/// at the source's resolution; source pixels the feathered mask doesn't reach are left exactly as
-/// they were. Without a mask, the whole frame goes in, its edges that lie inside the source
-/// feathered over Mask Blur pixels so no seam shows; edges at or past the source's edge aren't.
-/// Wherever the frame lies outside the source (outpainted), the result goes in whole.
+/// as the engine does in the frame (`LocalImageGenerator.imageWithMask`: dilate, then blur), the
+/// amounts converted from frame pixels to the source's; source pixels the feathered mask doesn't
+/// reach are left exactly as they were. The frame's edges that lie inside the source are feathered
+/// over Mask Blur too, with or without a mask, so no seam shows; edges at or past the source's edge
+/// aren't. Wherever the frame lies outside the source or over its transparent pixels
+/// (outpainted), the result goes in whole.
 nonisolated enum CanvasMerge {
   struct Merged: @unchecked Sendable {
     var image: CGImage
-    /// `image` as the project stores it (RGB: what neither covers turns black).
+    /// `image` as one flattened tensor (RGB: what neither covers turns black), for the run's output.
     var tensor: Tensor<FloatType> = Tensor(.CPU, .NHWC(1, 1, 1, 3))
-    /// `storedMask` as the `binary_mask` tensor, `[height, width]`.
-    var maskTensor: Tensor<UInt8>?
     /// Where the source's top left is in `image` (it moves when the canvas grows left or up).
     var sourceOrigin: CGPoint
-    /// The mask as Draw Things stores a step's canvas mask, at `image`'s size: 2 painted, 0 not.
-    var storedMask: [UInt8]?
-    var record: RefineRecord
+    var step: RefinedStep
   }
 
   @concurrent static func merged(
@@ -145,15 +185,6 @@ nonisolated enum CanvasMerge {
           let tensor = ImageTensor.tensor(from: merged.image)
     else { throw ProjectError.badImage }
     merged.tensor = tensor
-    if let codes = merged.storedMask {
-      let width = merged.image.width, height = merged.image.height
-      var mask = Tensor<UInt8>(.CPU, .NC(height, width))
-      mask.withUnsafeMutableBytes { raw in
-        let bytes = raw.bindMemory(to: UInt8.self)
-        for index in 0..<min(codes.count, bytes.count) { bytes[index] = codes[index] }
-      }
-      merged.maskTensor = mask
-    }
     return merged
   }
 
@@ -162,12 +193,17 @@ nonisolated enum CanvasMerge {
     let source = merge.source
     let sourceWidth = source.width, sourceHeight = source.height
     let crop = placement.cropRect
-    let bounds = CGRect(x: 0, y: 0, width: sourceWidth, height: sourceHeight).union(crop).integral
+    let sourceRect = CGRect(x: 0, y: 0, width: sourceWidth, height: sourceHeight)
+    let bounds = sourceRect.union(crop).integral
     let width = Int(bounds.width), height = Int(bounds.height)
     guard width > 0, height > 0, width <= 16384, height <= 16384 else { return nil }
     let originX = Int(-bounds.minX), originY = Int(-bounds.minY)
     // The frame in the merged image's pixels.
     let frameRect = crop.offsetBy(dx: Double(originX), dy: Double(originY))
+    // Mask Blur and Outset are frame pixels (the engine applies them in the frame).
+    let zoom = (placement.zoom.x + placement.zoom.y) / 2
+    let feather = maskBlur / zoom
+    let outset = Int((Double(maskBlurOutset) / zoom).rounded())
 
     guard var output = draw(source, width: width, height: height, in: CGRect(
             x: originX, y: originY, width: sourceWidth, height: sourceHeight)),
@@ -180,19 +216,17 @@ nonisolated enum CanvasMerge {
     let x0 = Int(region.minX), y0 = Int(region.minY)
     let regionWidth = Int(region.width), regionHeight = Int(region.height)
     var weight = [Float](repeating: 1, count: regionWidth * regionHeight)
-    func insideSource(_ x: Int, _ y: Int) -> Bool {
-      x >= originX && x < originX + sourceWidth && y >= originY && y < originY + sourceHeight
-    }
     if let mask = merge.mask {
       let coverage = mask.coverage(
         width: regionWidth, height: regionHeight,
         origin: CGPoint(x: originX - x0, y: originY - y0))
       weight = coverage.map { $0 != 0 ? 1 : 0 }
-      weight = MaskFilter.outset(weight, width: regionWidth, height: regionHeight, by: maskBlurOutset)
-      weight = MaskFilter.blur(weight, width: regionWidth, height: regionHeight, sigma: maskBlur)
-    } else if maskBlur > 0 {
-      // Feather only the edges inside the source.
-      let feather = Float(maskBlur)
+      weight = MaskFilter.outset(weight, width: regionWidth, height: regionHeight, by: outset)
+      weight = MaskFilter.blur(weight, width: regionWidth, height: regionHeight, sigma: feather)
+    }
+    if feather > 0 {
+      // The frame's edges inside the source fade out, so a mask crossing one leaves no seam.
+      let fade = Float(feather)
       let left = crop.minX > 0, right = crop.maxX < Double(sourceWidth)
       let top = crop.minY > 0, bottom = crop.maxY < Double(sourceHeight)
       for j in 0..<regionHeight {
@@ -200,17 +234,17 @@ nonisolated enum CanvasMerge {
         for i in 0..<regionWidth {
           let px = Float(x0 + i) + 0.5
           var w: Float = 1
-          if left { w = min(w, (px - Float(frameRect.minX)) / feather) }
-          if right { w = min(w, (Float(frameRect.maxX) - px) / feather) }
-          if top { w = min(w, (py - Float(frameRect.minY)) / feather) }
-          if bottom { w = min(w, (Float(frameRect.maxY) - py) / feather) }
-          weight[j * regionWidth + i] = min(max(w, 0), 1)
+          if left { w = min(w, (px - Float(frameRect.minX)) / fade) }
+          if right { w = min(w, (Float(frameRect.maxX) - px) / fade) }
+          if top { w = min(w, (py - Float(frameRect.minY)) / fade) }
+          if bottom { w = min(w, (Float(frameRect.maxY) - py) / fade) }
+          weight[j * regionWidth + i] *= min(max(w, 0), 1)
         }
       }
     }
-    // Outpainted pixels take the result whole.
+    // Outpainted pixels take the result whole: outside the source, or where it's transparent.
     for j in 0..<regionHeight {
-      for i in 0..<regionWidth where !insideSource(x0 + i, y0 + j) {
+      for i in 0..<regionWidth where output[((y0 + j) * width + x0 + i) * 4 + 3] < 128 {
         weight[j * regionWidth + i] = 1
       }
     }
@@ -233,13 +267,18 @@ nonisolated enum CanvasMerge {
     }
     guard let image = makeImage(output, width: width, height: height) else { return nil }
 
-    let storedMask = merge.mask.map {
-      CanvasMask.storedCodes($0.coverage(width: width, height: height, origin: CGPoint(x: originX, y: originY)))
-    }
     let record = RefineRecord(
       rect: [crop.minX, crop.minY, crop.width, crop.height], scale: merge.scale,
       offset: [merge.offset.width, merge.offset.height], mask: merge.mask)
-    return Merged(image: image, sourceOrigin: CGPoint(x: originX, y: originY), storedMask: storedMask, record: record)
+    var step = RefinedStep(record: record, composite: image)
+    let grown = bounds != sourceRect
+    if grown || merge.mask != nil, let frame = image.cropping(to: region) {
+      step.layers = RefinedStep.Layers(
+        source: source, sourceTensorId: merge.sourceTensorId,
+        paint: merge.mask.map { $0.coverage(width: sourceWidth, height: sourceHeight) },
+        frame: frame, frameX: Int32(x0 - originX), frameY: Int32(y0 - originY))
+    }
+    return Merged(image: image, sourceOrigin: CGPoint(x: originX, y: originY), step: step)
   }
 
   /// RGBA premultiplied sRGB bytes, `width` × `height` from the top-left row, with `image` drawn

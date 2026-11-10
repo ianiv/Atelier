@@ -289,7 +289,7 @@ extension Automation {
       let restored = await settled { model.image.flatMap { pixelDifference($0, firstImage) } }
       check(
         restored?.maxDelta == 0 && model.canvasMode == .edit && model.canvas.scale == nil,
-        "Use Settings on the second step puts the first result on the canvas, fitted, in Edit mode")
+        "Use Settings on the second step puts the first result on the canvas, fitted, in Edit mode (image \(restored.map { "max delta \($0.maxDelta)" } ?? "size differs"), zoom \(model.canvas.scale.map { "\($0)" } ?? "fit"), mode \(model.canvasMode.rawValue))")
       check(model.prompt == second.sidecar.prompt, "and loads the second step's prompt")
       if let rerun = await run(), let rerunImage = await model.history.image(for: rerun),
         let difference = pixelDifference(rerunImage, secondImage)

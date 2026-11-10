@@ -106,11 +106,13 @@ nonisolated enum SavedQueue {
           try mask.write(to: folder.appending(path: "\(job.id)-mask.png"))
         }
       }
-      if let merge = request.merge {
-        guard let png = ImageTensor.png(merge.source) else { continue }
-        Log.attempt(Log.queue, "Saving a queued job's source image") {
+      // Without its source image the job still runs; its result just isn't merged back.
+      var mergeRecord: RefineMerge.Record?
+      if let merge = request.merge, let png = ImageTensor.png(merge.source) {
+        let failure = Log.attempt(Log.queue, "Saving a queued job's source image") {
           try png.write(to: folder.appending(path: "\(job.id)-source.png"))
         }
+        if failure == nil { mergeRecord = merge.record }
       }
       for (index, reference) in request.moodboard.enumerated() {
         Log.attempt(Log.queue, "Saving a queued job's moodboard") {
@@ -126,7 +128,7 @@ nonisolated enum SavedQueue {
           canvasTensorId: request.canvasTensorId, canvasIsImported: request.canvasIsImported,
           moodboardWeights: request.moodboard.map(\.weight), audio: request.audio,
           placement: request.placement, upscale: request.upscale, imageUpscale: request.imageUpscale,
-          target: job.target, hasMask: request.mask != nil, merge: request.merge?.record))
+          target: job.target, hasMask: request.mask != nil, merge: mergeRecord))
     }
     if let data = try? JSONEncoder().encode(entries) {
       Log.attempt(Log.queue, "Saving the queue") {

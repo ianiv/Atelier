@@ -602,7 +602,9 @@ final class RemoteServer {
     let upscalers = RemoteUpscalers(
       flashVSR: FlashVSRFiles.Variant.allCases.filter { FlashVSRFiles.installed($0) != nil },
       superResolution: SystemSuperResolution.isSupported)
-    return .catalog(models: models, loras: loras, files: create?.modelFiles ?? [], upscalers: upscalers)
+    return .catalog(
+      models: models, loras: loras, files: create?.modelFiles ?? [], upscalers: upscalers,
+      features: RemoteProtocol.features)
   }
 
   /// This device's styles library by library, with their thumbnails' hashes.

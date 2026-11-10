@@ -233,7 +233,7 @@ final class HistoryStore {
     startedAt: Date,
     finishedAt: Date,
     timings: GenerationTimings? = nil,
-    refined: Project.Refined? = nil,
+    refined: RefinedStep? = nil,
     makeCurrent: () -> Bool = { true }
   ) async throws -> HistoryItem {
     var settings = request.configuration
@@ -279,8 +279,13 @@ final class HistoryStore {
         duration: finishedAt.timeIntervalSince(startedAt), timings: timings, moodboard: moodboard,
         inputTensorId: inputTensorId, after: parentTensorId)
     } else {
+      // A layered refine's bottom layer is its input's image, the step just found or saved.
+      var refined = refined
+      if request.merge != nil, let inputTensorId { refined?.layers?.sourceTensorId = inputTensorId }
+      // A layered refine's own image is its top layer: the frame.
+      let image = refined?.layers.flatMap { ImageTensor.tensor(from: $0.frame) } ?? ImageTensor.rgb(output.frames[0])
       item = try await project.append(
-        tensor: ImageTensor.rgb(output.frames[0]), model: request.model, prompt: request.prompt,
+        tensor: image, model: request.model, prompt: request.prompt,
         negativePrompt: request.negativePrompt, seed: request.seed,
         settings: dump, createdAt: finishedAt,
         duration: finishedAt.timeIntervalSince(startedAt), timings: timings, moodboard: moodboard,

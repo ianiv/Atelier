@@ -107,7 +107,7 @@ final nonisolated class Project: Sendable {
   func input(of id: StepID, tensorId: Int64) -> (id: StepID, image: CGImage)? {
     let tree = tree(items: false)
     guard let parent = tree.steps[id]?.parent, tree.steps[parent]?.tensorId == tensorId,
-          let image = self.tensor(id: tensorId).flatMap(ImageTensor.cgImage(from:))
+          let image = image(tensorId: tensorId)
     else { return nil }
     return (parent, image)
   }
@@ -248,7 +248,7 @@ final nonisolated class Project: Sendable {
   }
 
   func image(for item: HistoryItem) -> CGImage? {
-    tensor(id: item.tensorId).flatMap(ImageTensor.cgImage(from:))
+    image(tensorId: item.tensorId)
   }
 
   /// The full-resolution image of a step, if it has one.
@@ -256,8 +256,140 @@ final nonisolated class Project: Sendable {
     imageTensorId(at: id).flatMap(image(tensorId:))
   }
 
+  /// The image of the step whose image layer is `tensorId`: for a step of several layers (a
+  /// merged refine, or a Draw Things canvas), all of them composited (`Self.composite`).
   func image(tensorId: Int64) -> CGImage? {
-    tensor(id: tensorId).flatMap(ImageTensor.cgImage(from:))
+    if let layers = canvasLayers(imageTensorId: tensorId) {
+      let drawn: [CompositeLayer] = layers.compactMap { layer in
+        guard let image = tensor(id: layer.tensorId).flatMap(ImageTensor.cgImage(from:)) else { return nil }
+        let mask = layer.maskId > 0 ? self.mask(id: layer.maskId) : nil
+        return CompositeLayer(
+          image: image, mask: mask?.codes, maskWidth: mask?.width ?? 0, maskHeight: mask?.height ?? 0,
+          x: Int(layer.x), y: Int(layer.y), scaleFactorBy120: Int(layer.scaleFactorBy120))
+      }
+      if drawn.count == layers.count, let composite = Self.composite(drawn) { return composite }
+    }
+    return tensor(id: tensorId).flatMap(ImageTensor.cgImage(from:))
+  }
+
+  /// The layers, bottom to top, of the step whose image (top) layer is `tensorId`, when they're
+  /// more than one plain image at the origin; nil for a plain step.
+  private func canvasLayers(imageTensorId tensorId: Int64) -> [Layer]? {
+    for row in workspace.fetch(for: Layer.self).where(Layer.tensorId == tensorId) {
+      let layers = workspace.fetch(for: Layer.self).where(
+        Layer.lineage == row.lineage && Layer.logicalTime == row.logicalTime && Layer.tensorId > 0,
+        orderBy: [Layer.index.ascending])
+      guard layers.last?.tensorId == tensorId else { continue }
+      let plain = layers.count == 1
+        && layers[0].maskId == 0 && layers[0].x == 0 && layers[0].y == 0 && layers[0].scaleFactorBy120 == 120
+      return plain ? nil : Array(layers)
+    }
+    return nil
+  }
+
+  /// The layers of the step whose image is `tensorId`, bottom to top, for checks.
+  func layerSummary(tensorId: Int64) -> [(tensorId: Int64, maskId: Int64, x: Int32, y: Int32)] {
+    for row in workspace.fetch(for: Layer.self).where(Layer.tensorId == tensorId) {
+      let layers = workspace.fetch(for: Layer.self).where(
+        Layer.lineage == row.lineage && Layer.logicalTime == row.logicalTime, orderBy: [Layer.index.ascending])
+      if layers.last?.tensorId == tensorId { return layers.map { ($0.tensorId, $0.maskId, $0.x, $0.y) } }
+    }
+    return []
+  }
+
+  /// A layer's mask (`binary_mask_<id>`, `[height, width]` codes).
+  private func mask(id: Int64) -> (codes: [UInt8], width: Int, height: Int)? {
+    storeAccess.withLock { _ in
+      var mask: (codes: [UInt8], width: Int, height: Int)?
+      graph.openStore(url.path, flags: [.readOnly]) {
+        guard let tensor = $0.read("binary_mask_\(id)", codec: [.fpzip, .zip]).map({ Tensor<UInt8>($0) }),
+              tensor.shape.count == 2
+        else { return }
+        let height = tensor.shape[0], width = tensor.shape[1]
+        let codes = tensor.withUnsafeBytes { Array($0.bindMemory(to: UInt8.self).prefix(width * height)) }
+        mask = (codes, width, height)
+      }
+      return mask
+    }
+  }
+
+  /// One layer of a canvas: its image, mask codes, and position in canvas units.
+  struct CompositeLayer {
+    var image: CGImage
+    var mask: [UInt8]?
+    var maskWidth: Int
+    var maskHeight: Int
+    var x: Int
+    var y: Int
+    var scaleFactorBy120: Int
+  }
+
+  /// Layers composited as Draw Things draws its canvas: each covers (x, y, width·120/s, height·120/s)
+  /// in canvas units, drawn in order bottom to top, its mask's codes giving its alpha (0 and 3
+  /// opaque, any other `byte & 0xF8`, `ImageConverter.image(from:scaleFactor:binaryMask:)`, the
+  /// mask read nearest-neighbour at the layer's size). The result spans the layers' union, at the
+  /// finest layer's density (1 pixel per unit when all are at 120); what no layer covers is
+  /// transparent.
+  static func composite(_ layers: [CompositeLayer]) -> CGImage? {
+    guard !layers.isEmpty else { return nil }
+    func units(_ layer: CompositeLayer) -> CGRect {
+      let scale = Double(max(layer.scaleFactorBy120, 1)) / 120
+      return CGRect(
+        x: Double(layer.x), y: Double(layer.y), width: Double(layer.image.width) / scale,
+        height: Double(layer.image.height) / scale)
+    }
+    let union = layers.dropFirst().reduce(units(layers[0])) { $0.union(units($1)) }
+    let density = Double(layers.map(\.scaleFactorBy120).max() ?? 120) / 120
+    let width = Int((union.width * density).rounded(.up)), height = Int((union.height * density).rounded(.up))
+    guard width > 0, height > 0, width <= 32768, height <= 32768,
+          let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    else { return nil }
+    context.interpolationQuality = .high
+    for layer in layers {
+      guard let image = masked(layer) else { continue }
+      let rect = units(layer)
+      let drawn = CGRect(
+        x: (rect.minX - union.minX) * density, y: (rect.minY - union.minY) * density,
+        width: rect.width * density, height: rect.height * density)
+      context.draw(
+        image, in: CGRect(x: drawn.minX, y: Double(height) - drawn.maxY, width: drawn.width, height: drawn.height))
+    }
+    return context.makeImage()
+  }
+
+  /// A layer's image with its mask's alpha applied.
+  private static func masked(_ layer: CompositeLayer) -> CGImage? {
+    guard let mask = layer.mask, layer.maskWidth > 0, layer.maskHeight > 0 else { return layer.image }
+    let width = layer.image.width, height = layer.image.height
+    var rgba = [UInt8](repeating: 0, count: width * height * 4)
+    let drawn = rgba.withUnsafeMutableBytes { raw -> Bool in
+      guard let context = CGContext(
+        data: raw.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+        space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+      else { return false }
+      context.draw(layer.image, in: CGRect(x: 0, y: 0, width: width, height: height))
+      return true
+    }
+    guard drawn else { return nil }
+    let scaleY = Double(layer.maskHeight) / Double(height), scaleX = Double(layer.maskWidth) / Double(width)
+    for y in 0..<height {
+      let my = min(max(Int(((Double(y) + 0.5) * scaleY - 0.5).rounded()), 0), layer.maskHeight - 1)
+      for x in 0..<width {
+        let mx = min(max(Int(((Double(x) + 0.5) * scaleX - 0.5).rounded()), 0), layer.maskWidth - 1)
+        let alpha = CanvasMask.Stored.alpha(mask[my * layer.maskWidth + mx])
+        guard alpha != 255 else { continue }
+        let index = (y * width + x) * 4
+        for c in 0..<4 { rgba[index + c] = UInt8((Int(rgba[index + c]) * Int(alpha)) / 255) }
+      }
+    }
+    guard let provider = CGDataProvider(data: Data(rgba) as CFData) else { return nil }
+    return CGImage(
+      width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
+      space: CGColorSpace(name: CGColorSpace.sRGB)!,
+      bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+      provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
   }
 
   /// A step's image tensor, if it has one.
@@ -300,21 +432,13 @@ final nonisolated class Project: Sendable {
     timings: GenerationTimings? = nil,
     reason: ProjectFormat.Reason = .generate, generated: Bool = true,
     moodboard: [MoodboardTensor] = [], inputTensorId: Int64? = nil,
-    after parentTensorId: Int64? = nil, refined: Refined? = nil
+    after parentTensorId: Int64? = nil, refined: RefinedStep? = nil
   ) async throws -> HistoryItem {
     try await append(
       frames: [tensor], clip: nil, model: model, prompt: prompt, negativePrompt: negativePrompt,
       seed: seed, settings: settings, createdAt: createdAt, duration: duration, timings: timings,
       reason: reason, generated: generated, moodboard: moodboard, inputTensorId: inputTensorId,
       after: parentTensorId, refined: refined)
-  }
-
-  /// What a step made by refining part of its input keeps beyond its image: its canvas mask, as
-  /// Draw Things stores one (`binary_mask_<id>`, `[height, width]` of codes, the image's size), and
-  /// where the frame was (`ProjectMapping.Step.refine`).
-  struct Refined: @unchecked Sendable {
-    var mask: Tensor<UInt8>?
-    var record: RefineRecord
   }
 
   /// A moodboard image going into a step.
@@ -354,7 +478,7 @@ final nonisolated class Project: Sendable {
     negativePrompt: String, seed: UInt32, settings: [String: JSONValue], createdAt: Date,
     duration: Double, timings: GenerationTimings?, reason: ProjectFormat.Reason, generated: Bool,
     moodboard: [MoodboardTensor], inputTensorId: Int64?,
-    after parentTensorId: Int64?, refined: Refined?
+    after parentTensorId: Int64?, refined: RefinedStep?
   ) async throws -> HistoryItem {
     // Each frame's thumbnails, a few frames at a time across the cores (a clip's frames
     // together are large, so each image is dropped once its thumbnails are made).
@@ -371,7 +495,13 @@ final nonisolated class Project: Sendable {
     }
     let results = made.withLock { $0 }
     guard !results.isEmpty, !results.contains(where: { $0 == nil }) else { throw ProjectError.badImage }
-    let thumbnails = results.map { (full: $0!.full, half: $0!.half) }
+    var thumbnails = results.map { (full: $0!.full, half: $0!.half) }
+    if let composite = refined?.composite, refined?.layers != nil {
+      // A layered step's thumbnail is its whole canvas, as Draw Things shows it.
+      thumbnails[0] = (
+        ImageTensor.jpeg(composite, quality: 0.75),
+        ImageTensor.downsampled(composite).flatMap { ImageTensor.jpeg($0, quality: 0.5) })
+    }
     let size = results[0]!.size
     var tensorIds: [Int64] = []
     while tensorIds.count < tensors.count {
@@ -384,8 +514,7 @@ final nonisolated class Project: Sendable {
     // As addAudio: "audio_<id>" in the band above.
     let audioId = clip?.audio.map { _ in Int64.random(in: 1_800_000_000...2_199_999_999) }
     let inputAudioId = clip?.audioInput.map { _ in Int64.random(in: 1_800_000_000...2_199_999_999) }
-    // As ImageHistoryManager's saveImageData: "binary_mask_<id>" in its own band.
-    let maskId = refined?.mask.map { _ in Int64.random(in: 300_000_000...599_999_999) }
+    let layered = refined?.layers.flatMap { layeredRefine($0, frameTensorId: tensorIds[0]) }
     var written: [String] = []
     do {
       try writeTensors(
@@ -396,9 +525,15 @@ final nonisolated class Project: Sendable {
         try writeTensor(audio, name: "audio_\(audioId)")
         written.append("audio_\(audioId)")
       }
-      if let maskId, let mask = refined?.mask {
-        try writeTensor(mask, name: "binary_mask_\(maskId)")
-        written.append("binary_mask_\(maskId)")
+      if let layered {
+        for (name, tensor) in layered.images {
+          try writeTensor(tensor, name: name)
+          written.append(name)
+        }
+        for (name, mask) in layered.masks {
+          try writeTensor(mask, name: name)
+          written.append(name)
+        }
       }
       if let inputAudioId, let audio = clip?.audioInput {
         try writeTensor(audio, name: "audio_\(inputAudioId)")
@@ -415,7 +550,11 @@ final nonisolated class Project: Sendable {
     for (entry, shuffleId) in zip(moodboard, shuffleIds) {
       moodboardPreview &+= shuffleId &* Int64((entry.weight * 1000).rounded())
     }
-    let previewIds = tensorIds.map { $0 &+ (maskId ?? 0) &+ moodboardPreview }
+    var previewIds = tensorIds.map { $0 &+ moodboardPreview }
+    if let layered {
+      // Every layer's tensor and mask (`ImageHistoryManager.pushHistory`).
+      previewIds[0] = layered.rows.reduce(moodboardPreview) { $0 &+ $1.tensorId &+ $1.maskId }
+    }
     let (width, height) = size
     let wallClock = Int64(createdAt.timeIntervalSince1970 * 1_000_000)
 
@@ -459,16 +598,28 @@ final nonisolated class Project: Sendable {
               ? parent.flatMap { tree.steps[$0]?.tensorId } : tensorIds[index - 1],
             clipId: clipId, indexInAClip: index, hasAudio: audioId != nil,
             inputAudioId: inputAudioId, timings: index == 0 ? timings : nil,
-            refine: index == 0 ? refined?.record : nil)
+            refine: index == 0 ? refined?.record : nil,
+            layerCount: index == 0 ? layered.map { Int32($0.rows.count) } : nil,
+            contentOffset: index == 0 ? layered.map { ($0.rows.last!.x, $0.rows.last!.y) } : nil)
           let node = ProjectMapping.node(for: step, settings: settings)
           if index == 0 { appended = node }
           transaction.try(submit: TensorHistoryNodeChangeRequest.upsertRequest(node))
-          transaction.try(
-            submit: ProjectFormat.TensorDataChangeRequest.upsertRequest(
-              Layer(
-                lineage: id.lineage, logicalTime: id.logicalTime, index: 0, x: 0, y: 0,
-                width: width, height: height, scaleFactorBy120: 120, tensorId: tensorIds[index],
-                maskId: index == 0 ? maskId ?? 0 : 0)))
+          if index == 0, let layered {
+            for (layerIndex, row) in layered.rows.enumerated() {
+              transaction.try(
+                submit: ProjectFormat.TensorDataChangeRequest.upsertRequest(
+                  Layer(
+                    lineage: id.lineage, logicalTime: id.logicalTime, index: Int64(layerIndex), x: row.x, y: row.y,
+                    width: row.width, height: row.height, scaleFactorBy120: 120, tensorId: row.tensorId,
+                    maskId: row.maskId)))
+            }
+          } else {
+            transaction.try(
+              submit: ProjectFormat.TensorDataChangeRequest.upsertRequest(
+                Layer(
+                  lineage: id.lineage, logicalTime: id.logicalTime, index: 0, x: 0, y: 0,
+                  width: width, height: height, scaleFactorBy120: 120, tensorId: tensorIds[index])))
+          }
           for (moodIndex, (entry, shuffleId)) in zip(moodboard, shuffleIds).enumerated() {
             transaction.try(
               submit: TensorMoodboardDataChangeRequest.upsertRequest(
@@ -509,6 +660,89 @@ final nonisolated class Project: Sendable {
         ? ClipInfo(
           clipId: node.clipId, frames: tensorIds, framesPerSecond: clip?.framesPerSecond ?? 0,
           audioId: audioId, inputAudioId: inputAudioId, previewOffset: moodboardPreview) : nil)
+  }
+
+  /// One layer row of a layered step, in source pixels at 120 (1 pixel per canvas unit).
+  struct LayerRow {
+    var tensorId: Int64
+    var maskId: Int64
+    var x: Int32
+    var y: Int32
+    var width: Int32
+    var height: Int32
+  }
+
+  /// The layers of a merged refine (`RefinedStep.Layers`) and the tensors they need written: the
+  /// source at the origin, reusing its step's tensor when that step is one plain layer of the same
+  /// image there, carrying the paint mask (0xF9 painted, else its alpha's code, as Draw Things'
+  /// brush and `ImageConverter.imageAndMask(from:)` write them); then the frame, `frameTensorId`,
+  /// with a mask only where it isn't opaque.
+  private func layeredRefine(_ layers: RefinedStep.Layers, frameTensorId: Int64) -> (
+    rows: [LayerRow], images: [(String, Tensor<FloatType>)], masks: [(String, Tensor<UInt8>)]
+  )? {
+    let source = layers.source
+    let width = source.width, height = source.height
+    guard let alpha = CanvasMask.alpha(of: source, width: width, height: height),
+          let frameAlpha = CanvasMask.alpha(of: layers.frame, width: layers.frame.width, height: layers.frame.height)
+    else { return nil }
+    var images: [(String, Tensor<FloatType>)] = []
+    var masks: [(String, Tensor<UInt8>)] = []
+    func newMaskId() -> Int64 { Int64.random(in: 300_000_000...599_999_999) }
+    let opaque = !alpha.contains { $0 != 255 }
+    var sourceTensorId: Int64
+    if let id = layers.sourceTensorId, opaque, isPlainLayer(tensorId: id, width: width, height: height) {
+      sourceTensorId = id
+    } else {
+      guard let tensor = ImageTensor.tensor(from: source) else { return nil }
+      repeat {
+        sourceTensorId = Int64.random(in: 100_000_000...299_999_999)
+      } while sourceTensorId == frameTensorId
+      images.append(("tensor_history_\(sourceTensorId)", tensor))
+    }
+    var sourceMaskId: Int64 = 0
+    if layers.paint != nil || !opaque {
+      let paint = layers.paint
+      let codes = alpha.indices.map { index -> UInt8 in
+        paint.map { $0[index] != 0 } == true ? CanvasMask.Stored.painted : CanvasMask.Stored.code(alpha: alpha[index])
+      }
+      sourceMaskId = newMaskId()
+      masks.append(("binary_mask_\(sourceMaskId)", Self.maskTensor(codes, width: width, height: height)))
+    }
+    var frameMaskId: Int64 = 0
+    if frameAlpha.contains(where: { $0 != 255 }) {
+      repeat { frameMaskId = newMaskId() } while frameMaskId == sourceMaskId
+      masks.append((
+        "binary_mask_\(frameMaskId)",
+        Self.maskTensor(frameAlpha.map(CanvasMask.Stored.code(alpha:)), width: layers.frame.width, height: layers.frame.height)))
+    }
+    return (
+      [
+        LayerRow(tensorId: sourceTensorId, maskId: sourceMaskId, x: 0, y: 0, width: Int32(width), height: Int32(height)),
+        LayerRow(
+          tensorId: frameTensorId, maskId: frameMaskId, x: layers.frameX, y: layers.frameY,
+          width: Int32(layers.frame.width), height: Int32(layers.frame.height)),
+      ],
+      images, masks
+    )
+  }
+
+  /// Whether `tensorId` is some step's only layer, a plain image at the origin of this size.
+  private func isPlainLayer(tensorId: Int64, width: Int, height: Int) -> Bool {
+    let rows = workspace.fetch(for: Layer.self).where(Layer.tensorId == tensorId)
+    return rows.contains { row in
+      row.x == 0 && row.y == 0 && row.scaleFactorBy120 == 120 && row.maskId == 0 && row.width == width
+        && row.height == height
+        && workspace.fetch(for: Layer.self).where(Layer.lineage == row.lineage && Layer.logicalTime == row.logicalTime).count == 1
+    }
+  }
+
+  static func maskTensor(_ codes: [UInt8], width: Int, height: Int) -> Tensor<UInt8> {
+    var mask = Tensor<UInt8>(.CPU, .NC(height, width))
+    mask.withUnsafeMutableBytes { raw in
+      let bytes = raw.bindMemory(to: UInt8.self)
+      for index in 0..<min(codes.count, bytes.count) { bytes[index] = codes[index] }
+    }
+    return mask
   }
 
   /// Deletes a step, its layers, thumbnails and tensors. Returns its parent's image tensor.

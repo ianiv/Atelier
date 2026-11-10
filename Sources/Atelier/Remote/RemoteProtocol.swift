@@ -16,6 +16,12 @@ nonisolated enum RemoteProtocol {
   /// How long results nobody collected, and uploads nothing used, stay on the server.
   static let retention: TimeInterval = 7 * 24 * 60 * 60
   static let maxDeviceNameLength = 64
+  /// What this copy can do beyond version 1, listed in its catalog so a client can tell an older
+  /// server (which lists none) apart without refusing it outright.
+  static let features = [maskFeature]
+  /// Runs a job's inpainting mask (`RemoteJobRequest.mask`). A server without it would ignore the
+  /// mask and regenerate the whole frame.
+  static let maskFeature = "mask"
 }
 
 nonisolated struct RemoteModelInfo: Codable, Hashable, Sendable {
@@ -114,7 +120,10 @@ nonisolated enum RemoteMessage: Codable, Sendable {
   // What the server has.
   case catalogRequest
   /// `files`: every file name in the server's models folders, which offer refiners and upscalers.
-  case catalog(models: [RemoteModelInfo], loras: [RemoteLoRAInfo], files: [String], upscalers: RemoteUpscalers)
+  /// `features`: `RemoteProtocol.features`; nil from servers older than the list.
+  case catalog(
+    models: [RemoteModelInfo], loras: [RemoteLoRAInfo], files: [String], upscalers: RemoteUpscalers,
+    features: [String]? = nil)
   case modelDefaultsRequest(model: String)
   case modelDefaults(settings: [String: JSONValue])
   case stylesRequest

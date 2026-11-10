@@ -78,8 +78,6 @@ extension Automation {
       // (a) A rectangle mask, fitted.
       model.prompt = "a bright red flower"
       model.placeOnCanvas(source)
-      // The canvas fits a new image as it appears (`placeNewCanvasImage`); let that happen first.
-      try? await Task.sleep(for: .milliseconds(300))
       let maskRect = CGRect(x: half / 2, y: half / 2, width: half, height: half)
       check(model.addMaskStrokes([.rect(maskRect)], actionName: Self.agentMaskName, undoManager: nil), "a mask can be painted on the canvas")
       let maskA = model.canvasMask
@@ -99,16 +97,20 @@ extension Automation {
       check(outside?.maxDelta == 0, "(a) pixels away from the mask are the input's exactly (max delta \(outside?.maxDelta ?? -1))")
       check((inside?.meanDelta ?? 0) > 1, "(a) the masked area changed (mean delta \(String(format: "%.1f", inside?.meanDelta ?? 0)))")
       check(a.sidecar.refine?.mask == maskA && a.inputTensorId != nil, "(a) the step keeps its mask and region, after its input")
+      let layersA = await model.history.project.read { $0.layerSummary(tensorId: a.tensorId) }
+      check(
+        layersA.count == 2 && layersA[0].maskId > 0 && layersA[0].tensorId == a.inputTensorId,
+        "(a) it's stored as two layers, the input's own tensor with the mask under the frame (\(layersA.map { "\($0.tensorId)/\($0.maskId)@\($0.x),\($0.y)" }))")
       check(model.canvasMask != nil, "(a) the mask stays on the canvas after the run")
 
       // (b) Zoomed 2× on the top-left quadrant, no mask.
       model.prompt = "a watercolor painting"
       model.placeOnCanvas(source)
-      // The canvas fits a new image as it appears (`placeNewCanvasImage`); let that happen first.
-      try? await Task.sleep(for: .milliseconds(300))
       check(model.canvasMask == nil, "(b) a new image on the canvas has no mask")
-      model.showRegion(CGRect(x: 0, y: 0, width: half, height: half))
-      check(model.canvas.scale == 2 && model.canMergeIntoImage, "(b) the frame shows the quadrant at 2×, merge enabled")
+      let shown = model.showRegion(CGRect(x: 0, y: 0, width: half, height: half))
+      check(
+        shown == CGRect(x: 0, y: 0, width: half, height: half) && model.canvas.scale == 2 && model.canMergeIntoImage,
+        "(b) the frame shows the quadrant at 2×, merge enabled (shows \(shown.map { "\($0)" } ?? "nothing"))")
       guard let b = await run(), let imageB = await model.history.image(for: b) else {
         check(false, "(b) the zoomed run saved nothing")
         return finish()
@@ -121,19 +123,57 @@ extension Automation {
       check(
         model.canvas.scale.map { abs($0 - 2) < 0.01 } == true, "(b) the canvas still shows the quadrant after the run")
 
-      // (c) The frame past the right edge, at 1×.
+      // (c) The frame past the right edge and above the top, at 1×: the image grows right and up,
+      // leaving two corners neither covers.
       model.placeOnCanvas(source)
-      // The canvas fits a new image as it appears (`placeNewCanvasImage`); let that happen first.
-      try? await Task.sleep(for: .milliseconds(300))
       model.canvas.scale = 1
-      model.canvas.offset = CGSize(width: -half, height: 0)
+      model.canvas.offset = CGSize(width: -half, height: half / 2)
       guard let c = await run(), let imageC = await model.history.image(for: c) else {
         check(false, "(c) the outpainting run saved nothing")
         return finish()
       }
+      let grownHeight = size + size / 4
       check(
-        imageC.width == size + size / 2 && imageC.height == size,
+        imageC.width == size + size / 2 && imageC.height == grownHeight,
         "(c) the result grows to hold the image and the frame (\(imageC.width)×\(imageC.height))")
+      // Read back from a fresh opening of the project file, as after a relaunch.
+      let reopened = Project(url: model.history.project.url)
+      let reread = await reopened.read { $0.image(tensorId: c.tensorId) }
+      await reopened.close()
+      let alpha = reread.flatMap { CanvasMask.alpha(of: $0, width: $0.width, height: $0.height) }
+      if let reread, let alpha {
+        let width = reread.width
+        let topLeft = alpha[10 * width + 10], bottomRight = alpha[(reread.height - 10) * width + width - 10]
+        let middle = alpha[(reread.height / 2) * width + width / 2]
+        check(
+          topLeft == 0 && bottomRight == 0 && middle == 255,
+          "(c) reopened, the corners neither covers are transparent (alpha \(topLeft), \(bottomRight); middle \(middle))")
+      } else {
+        check(false, "(c) the grown step couldn't be read back")
+      }
+      // A masked Edit on it outpaints those corners: code 1 there in the frame's mask.
+      if await model.placeOnCanvas(c), let image = model.image {
+        model.addMaskStrokes(
+          [.rect(CGRect(x: 0, y: 0, width: image.width, height: image.height))], actionName: Self.agentMaskName,
+          undoManager: nil)
+        if let request = model.screenRequest(), let png = request.mask, let placement = model.canvasPlacement,
+           let decoded = ImageLoader.image(from: png)
+        {
+          // The mask's red channel is its code (`CanvasMask.grayPNG`).
+          let bytes = CanvasRefineBytes.rgba(decoded)
+          let codes = stride(from: 0, to: bytes.count, by: 4).map { bytes[$0] }
+          let rect = placement.imageRect
+          let corner = CGPoint(x: rect.minX + 10 * placement.zoom.x, y: rect.minY + 10 * placement.zoom.y)
+          let code = codes[Int(corner.y) * decoded.width + Int(corner.x)]
+          let center = codes[Int(rect.midY) * decoded.width + Int(rect.midX)]
+          check(code == CanvasMask.Code.empty && center == CanvasMask.Code.painted, "(c) a masked Edit sends code 1 in the empty corner (\(code)), 2 where painted (\(center))")
+        } else {
+          check(false, "(c) no masked request from the grown image")
+        }
+        model.clearMask(undoManager: nil)
+      } else {
+        check(false, "(c) the grown step didn't go on the canvas")
+      }
 
       // (d) Use Settings.
       model.clearCanvas()
@@ -141,10 +181,12 @@ extension Automation {
       await idle()
       try? await Task.sleep(for: .seconds(1))
       let restoredB = model.image.flatMap { pixelDifference($0, source) }
+      let imageBack = restoredB?.maxDelta == 0
+      let zoomBack = model.canvas.scale.map { abs($0 - 2) < 0.01 } == true
+      let modeBack = model.canvasMode == .edit
       check(
-        restoredB?.maxDelta == 0 && model.canvas.scale.map { abs($0 - 2) < 0.01 } == true
-          && model.canvasMode == .edit,
-        "(d) Use Settings on (b) puts the input back zoomed on the quadrant")
+        imageBack && zoomBack && modeBack,
+        "(d) Use Settings on (b) puts the input back zoomed on the quadrant (image \(imageBack ? "ok" : "differs, max delta \(restoredB?.maxDelta ?? -1)"), zoom \(model.canvas.scale.map { "\($0)" } ?? "fit"), mode \(model.canvasMode.rawValue))")
       model.use(a)
       await idle()
       try? await Task.sleep(for: .seconds(1))

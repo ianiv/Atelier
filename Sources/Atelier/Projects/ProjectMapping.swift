@@ -44,6 +44,10 @@ nonisolated enum ProjectMapping {
     /// A refined region merged back into its input (`CanvasMerge`): where the frame was and the
     /// mask. Kept in `profile_data`.
     var refine: RefineRecord?
+    /// A layered step (a merged refine): how many layers it has (`data_stored`) and the top
+    /// layer's position, which Draw Things keeps as the node's content offset.
+    var layerCount: Int32?
+    var contentOffset: (x: Int32, y: Int32)?
   }
 
   /// `profile_data`: Draw Things' `GenerationProfile` as snake-case JSON (timings and duration),
@@ -146,7 +150,8 @@ nonisolated enum ProjectMapping {
       faceRestoration: d.string("faceRestoration"), clipWeight: d.float("clipWeight", 1),
       negativePromptForImagePrior: d.bool("negativePromptForImagePrior", true),
       imagePriorSteps: u32("imagePriorSteps", 5),
-      dataStored: step.tensorId != 0 ? 1 : 0, previewId: step.previewId,
+      dataStored: step.layerCount ?? (step.tensorId != 0 ? 1 : 0), previewId: step.previewId,
+      contentOffsetX: step.contentOffset?.x ?? 0, contentOffsetY: step.contentOffset?.y ?? 0,
       refinerModel: d.string("refinerModel"),
       originalImageHeight: u32("originalImageHeight", 0),
       originalImageWidth: u32("originalImageWidth", 0),

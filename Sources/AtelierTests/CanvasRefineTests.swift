@@ -185,7 +185,7 @@ struct CanvasRefineTests {
     let merged = try #require(CanvasMerge.merge(result, into: merge, maskBlur: 0, maskBlurOutset: 0))
     #expect(merged.image.width == 256 && merged.image.height == 256)
     #expect(merged.sourceOrigin == .zero)
-    #expect(merged.record.rect == [128, 128, 128, 128])
+    #expect(merged.step.record.rect == [128, 128, 128, 128])
     let out = Self.rgba(merged.image), original = Self.rgba(source)
     for (x, y) in [(10, 10), (200, 10), (10, 200), (127, 127)] {
       #expect(Self.pixel(out, width: 256, x, y) == Self.pixel(original, width: 256, x, y))
@@ -220,7 +220,7 @@ struct CanvasRefineTests {
       frameSize: CGSize(width: 128, height: 128), mask: nil)
     let merged = try #require(CanvasMerge.merge(result, into: merge, maskBlur: 0, maskBlurOutset: 0))
     #expect(merged.image.width == 320 && merged.image.height == 256)
-    #expect(merged.record.rect == [192, 64, 128, 128])
+    #expect(merged.step.record.rect == [192, 64, 128, 128])
     let out = Self.rgba(merged.image), original = Self.rgba(source)
     #expect(Self.pixel(out, width: 320, 300, 128) == [0, 255, 0, 255])
     #expect(Self.pixel(out, width: 320, 200, 128) == [0, 255, 0, 255])
@@ -261,8 +261,97 @@ struct CanvasRefineTests {
     #expect(changedFar == 0)
     // Just outside the rectangle, the outset and blur blend a little in.
     #expect(Self.pixel(out, width: 256, 141, 120) != Self.pixel(original, width: 256, 141, 120))
-    let stored = try #require(merged.storedMask)
-    #expect(stored[120 * 256 + 120] == CanvasMask.Code.painted && stored[10 * 256 + 10] == CanvasMask.Code.keep)
+    // A mask makes it two layers: the source with the paint under the frame.
+    let layers = try #require(merged.step.layers)
+    let paint = try #require(layers.paint)
+    #expect(paint[120 * 256 + 120] == 255 && paint[10 * 256 + 10] == 0)
+    #expect(layers.sourceTensorId == 7 && layers.frameX == 0 && layers.frameY == 0 && layers.frame.width == 256)
+  }
+
+  @Test func aFittedCenteredImageDoesntMergeWithoutAMask() {
+    // A 4:3 image fitted in a square frame leaves bars, but merging would only blur it.
+    let placement = CanvasPlacement(
+      sourceSize: CGSize(width: 400, height: 300), frameSize: CGSize(width: 256, height: 256), scale: nil, offset: .zero)
+    #expect(!placement.showsWholeImage)
+    #expect(!RefineMerge.applies(placement: placement, scale: nil, offset: .zero, hasMask: false))
+    #expect(RefineMerge.applies(placement: placement, scale: nil, offset: .zero, hasMask: true))
+    #expect(RefineMerge.applies(placement: placement, scale: nil, offset: CGSize(width: 4, height: 0), hasMask: false))
+  }
+
+  @Test func transparentCanvasPixelsAreOutpaintedInTheMask() throws {
+    // The left half of the canvas image is transparent (a grown image's empty corner).
+    var bytes = [UInt8](repeating: 255, count: 64 * 64 * 4)
+    for y in 0..<64 {
+      for x in 0..<32 {
+        for c in 0..<4 { bytes[(y * 64 + x) * 4 + c] = 0 }
+      }
+    }
+    let image = try #require(Self.image(bytes, width: 64, height: 64))
+    let placement = CanvasPlacement(sourceSize: CGSize(width: 64, height: 64), frameSize: CGSize(width: 64, height: 64), scale: nil, offset: .zero)
+    let rendered = try #require(CanvasState.render(image, placement: placement))
+    let png = try #require(CanvasMask(rects: [CGRect(x: 0, y: 0, width: 64, height: 64)]).frameMask(placement, canvas: rendered))
+    let codes = Self.rgba(try #require(ImageLoader.image(from: png)))
+    #expect(codes[(10 * 64 + 10) * 4] == CanvasMask.Code.empty)
+    #expect(codes[(10 * 64 + 50) * 4] == CanvasMask.Code.painted)
+  }
+
+  @Test func storedCodesFollowDrawThings() {
+    #expect(CanvasMask.Stored.code(alpha: 255) == 3)
+    #expect(CanvasMask.Stored.code(alpha: 0) == 1)
+    #expect(CanvasMask.Stored.alpha(CanvasMask.Stored.painted) == 0xF8)
+    #expect(CanvasMask.Stored.alpha(3) == 255 && CanvasMask.Stored.alpha(0) == 255 && CanvasMask.Stored.alpha(1) == 0)
+  }
+
+  // MARK: - Layered steps in the project
+
+  /// A grown, masked merge is written as Draw Things writes a canvas (the source's own tensor
+  /// under the frame, the paint as 0xF9 on it) and reads back composited, empty where neither
+  /// layer reaches; its preview id sums every layer's tensor and mask.
+  @Test func aGrownMergeIsStoredAsTwoLayersAndReadBackWhole() async throws {
+    let folder = FileManager.default.temporaryDirectory.appending(path: "CanvasRefineTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let project = Project(url: folder.appending(path: "Layers.sqlite3"))
+    let source = try Self.pattern(width: 128, height: 128)
+    let sourceTensor = try #require(ImageTensor.tensor(from: source))
+    let first = try await project.append(
+      tensor: sourceTensor, model: "m", prompt: "", negativePrompt: "", seed: 1, settings: [:], createdAt: Date(),
+      duration: 0, reason: .imported, generated: false)
+    // At 1× a 128 frame centered on the right edge, 32 above the top: grows right and up.
+    let mask = CanvasMask(rects: [CGRect(x: 100, y: 20, width: 20, height: 20)])
+    let merge = RefineMerge(
+      source: source, sourceTensorId: first.tensorId, scale: 1, offset: CGSize(width: -64, height: 32),
+      frameSize: CGSize(width: 128, height: 128), mask: mask)
+    let result = try Self.solid(width: 128, height: 128, red: 0, green: 255, blue: 0)
+    let merged = try #require(CanvasMerge.merge(result, into: merge, maskBlur: 0, maskBlurOutset: 0))
+    #expect(merged.image.width == 192 && merged.image.height == 160)
+    let layers = try #require(merged.step.layers)
+    #expect(layers.frameX == 64 && layers.frameY == -32)
+    let item = try await project.append(
+      tensor: try #require(ImageTensor.tensor(from: layers.frame)), model: "m", prompt: "", negativePrompt: "", seed: 1,
+      settings: [:], createdAt: Date(), duration: 0, inputTensorId: first.tensorId, after: first.tensorId,
+      refined: merged.step)
+
+    let rows = await project.read { $0.layerSummary(tensorId: item.tensorId) }
+    #expect(rows.count == 2)
+    #expect(rows.first?.tensorId == first.tensorId && (rows.first?.maskId ?? 0) > 0)
+    #expect(rows.last?.x == 64 && rows.last?.y == -32)
+    #expect(item.previewId == rows.reduce(0) { $0 &+ $1.tensorId &+ $1.maskId })
+
+    let read = try #require(await project.read { $0.image(for: item) })
+    #expect(read.width == 192 && read.height == 160)
+    let bytes = Self.rgba(read)
+    // Top left (above the source, left of the frame): empty. Inside the frame past the source:
+    // the result. Inside the source, away from the frame: the source, exactly.
+    #expect(Self.pixel(bytes, width: 192, 10, 10) == [0, 0, 0, 0])
+    #expect(Self.pixel(bytes, width: 192, 180, 150) == [0, 0, 0, 0])
+    #expect(Self.pixel(bytes, width: 192, 180, 40) == [0, 255, 0, 255])
+    let original = Self.rgba(source)
+    #expect(Self.pixel(bytes, width: 192, 10, 100) == Self.pixel(original, width: 128, 10, 68))
+    // The source step itself is unchanged, and still one plain layer.
+    let firstRows = await project.read { $0.layerSummary(tensorId: first.tensorId) }
+    #expect(firstRows.count == 1 && firstRows[0].maskId == 0)
+    await project.close()
   }
 
   @Test func blurKeepsItsTotal() {
