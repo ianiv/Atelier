@@ -364,6 +364,8 @@ final class CreateModel {
   /// The mask the canvas image arrived with (brought back, a result's, or none), so leaving it
   /// unchanged writes nothing.
   @ObservationIgnored private var landedMask: (tensorId: Int64, mask: CanvasMask?)?
+  /// The undo targets of the canvas images with mask or Select steps (`registerCanvasUndo`).
+  @ObservationIgnored var canvasUndoTargets: [CanvasUndoTarget] = []
   /// Whether the mask paints inside the frame, for the mask and placement it was worked out for
   /// (`screenFrameHasPaint`).
   @ObservationIgnored var frameMaskCache: (key: String, hasPaint: Bool)?
@@ -424,6 +426,8 @@ final class CreateModel {
     didSet {
       // Before anything else changes: the size it's kept at comes from what the canvas shows.
       if let oldValue { persistCanvasMask(for: oldValue) }
+      // The old image's mask and Select steps leave the history with it.
+      retireCanvasUndo()
       landedMask = nil
       maskPendingTensorId = imageStep?.tensorId
       imageIsPreview = false
@@ -2649,6 +2653,6 @@ extension CreateModel {
   /// Replaces the canvas mask with the copied one, stretched to fill the image: one undo step.
   func pasteMask(undoManager: UndoManager?) {
     guard canPasteMask, let copiedMask else { return }
-    applyMask(copiedMask.mask, from: copiedMask.size, how: .replace, undoManager: undoManager)
+    applyMask(copiedMask.mask, from: copiedMask.size, how: .replace, actionName: "Paste Mask", undoManager: undoManager)
   }
 }

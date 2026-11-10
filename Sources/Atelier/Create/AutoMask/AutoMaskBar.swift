@@ -46,13 +46,16 @@ struct AutoMaskBar: View {
     let installed = download.isInstalled(session.size)
     let downloading = download.size
     Button("Select Subject", systemImage: "person.crop.rectangle") {
-      model.autoMask.selectSubject(model: model)
+      model.autoMask.selectSubject(model: model, undoManager: undoManager)
     }
     .help("Selects the image's main subjects, with Apple's subject detection. Nothing to download.")
     .disabled(!paints || session.isBusy)
     Divider().frame(height: 18)
     Menu {
-      Picker("SAM 2.1 Size", selection: $session.size) {
+      Picker(
+        "SAM 2.1 Size",
+        selection: Binding(get: { session.size }, set: { model.autoMask.setSize($0, model: model, undoManager: undoManager) })
+      ) {
         ForEach(SAMFiles.Size.allCases, id: \.self) { size in
           Text("\(size.title) (\(Self.bytes(size.bytes)))").tag(size)
         }
@@ -111,7 +114,7 @@ struct AutoMaskBar: View {
       .help(Self.help(mode))
     }
     Button("Clear Points", systemImage: "xmark.circle") {
-      model.autoMask.clearPoints()
+      model.autoMask.clearPoints(model: model, undoManager: undoManager)
     }
     .labelStyle(.iconOnly)
     .help("Clear Points (Esc)")

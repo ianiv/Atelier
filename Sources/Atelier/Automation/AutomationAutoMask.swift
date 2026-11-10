@@ -10,8 +10,11 @@ extension Automation {
   ///     the mask holds the positive point; the same prompt again skips the encoder; a negative
   ///     point inside the selection (a second `--point`, else pixels deep inside it, far from
   ///     the first in each of eight directions, until one does) takes at least a fifth of it away; Subtract after Add gives back the mask before;
-  ///     Replace is one undo step; `--box` selects inside the box. Prints encoder and decoder
-  ///     timing.
+  ///     Replace is one undo step; `--box` selects inside the box; and the Select tool's own
+  ///     history: commit a selection, change a setting, add two points, then undo ×3 and redo ×3
+  ///     through them in order (each undo of a point selecting again, its preview the same as a
+  ///     fresh selection of those points), and undoing the commit brings back both the mask and
+  ///     its points. Prints encoder and decoder timing.
   /// Points and box are in the input's pixels. `--snapshot-dir` saves the mask over the image
   /// after each part. Prints PASS/FAIL lines.
   ///
@@ -228,6 +231,101 @@ extension Automation {
           undo.undo()
           check(replaced != previous && model.canvasMask == previous, "sam: Replace undoes in one step")
 
+          // The Select tool's steps in the one history, among a setting's.
+          do {
+            model.clearMask(undoManager: nil)
+            model.autoMask.clearPoints(model: model, undoManager: nil)
+            let history = UndoManager()
+            history.groupsByEvent = false
+            /// One user action: its own undo group, as an event gives it.
+            @MainActor func act(_ body: () -> Void) async {
+              history.beginUndoGrouping()
+              body()
+              history.endUndoGrouping()
+              try? await Task.sleep(for: .milliseconds(20))
+              while model.autoMask.isBusy { try? await Task.sleep(for: .milliseconds(50)) }
+            }
+            @MainActor func step(_ body: () -> Void) async {
+              body()
+              try? await Task.sleep(for: .milliseconds(20))
+              while model.autoMask.isBusy { try? await Task.sleep(for: .milliseconds(50)) }
+            }
+            /// The preview is SAM's selection of the points shown (no older run's).
+            @MainActor func previewMatches() async -> Bool {
+              let session = model.autoMask
+              guard !session.points.isEmpty else { return session.preview == nil }
+              guard let preview = session.preview,
+                    let fresh = try? await model.samSelection(SAMSegmenter.Prompt(points: session.points, box: session.box), size: size)
+              else { return false }
+              return preview.coverage == fresh.selection.coverage
+            }
+            let p2 = SAMSegmenter.Point(location: CGPoint(x: click.x + 6, y: click.y + 6), positive: true)
+            let p3 = SAMSegmenter.Point(location: CGPoint(x: click.x - 6, y: click.y - 6), positive: false)
+            await act { model.autoMask.addPoint(click, positive: true, model: model, undoManager: history) }
+            check(history.undoActionName == "Add Point" && model.autoMask.preview != nil, "history: a click is an “Add Point” step (\(history.undoActionName))")
+            await act { model.commitAutoMaskPreview(mode: .add, undoManager: history) }
+            let committed = model.canvasMask
+            check(
+              committed != nil && model.autoMask.points.isEmpty && history.undoActionName == "Add Selection",
+              "history: Add commits the selection and clears the points, one “Add Selection” step")
+            let stepsBefore = model.settings?.steps ?? 0
+            await act {
+              if let steps = SettingsRegistry.byID["steps"] { model.set(steps, to: .number(Double(stepsBefore + 3)), undoManager: history) }
+            }
+            check(model.settings?.steps == stepsBefore + 3, "history: a setting changes (\(history.undoActionName))")
+            await act { model.autoMask.addPoint(p2.location, positive: true, model: model, undoManager: history) }
+            // The second point right after the first, before its preview comes: the newer run wins.
+            history.beginUndoGrouping()
+            model.autoMask.addPoint(p3.location, positive: false, model: model, undoManager: history)
+            history.endUndoGrouping()
+            await step {}
+            var matches = await previewMatches()
+            check(
+              model.autoMask.points == [p2, p3] && history.undoActionName == "Exclude Point" && matches,
+              "history: two more points, the second an “Exclude Point” step; the preview is theirs")
+            await step { history.undo() }
+            matches = await previewMatches()
+            check(model.autoMask.points == [p2] && matches, "history: undo 1 takes the second point away and selects again")
+            await step { history.undo() }
+            check(model.autoMask.points.isEmpty && model.autoMask.preview == nil && model.canvasMask == committed, "history: undo 2 takes the first point away")
+            await step { history.undo() }
+            check(model.settings?.steps == stepsBefore && model.canvasMask == committed, "history: undo 3 puts the setting back, the mask unchanged")
+            await step { history.redo() }
+            check(model.settings?.steps == stepsBefore + 3, "history: redo 1 changes the setting again")
+            await step { history.redo() }
+            matches = await previewMatches()
+            check(model.autoMask.points == [p2] && matches, "history: redo 2 adds the first point again")
+            await step { history.redo() }
+            matches = await previewMatches()
+            check(model.autoMask.points == [p2, p3] && matches && !history.canRedo, "history: redo 3 adds the second, and that's the end")
+            // Back past the setting to the commit: undoing it brings back the mask and its points.
+            for _ in 0..<3 { await step { history.undo() } }
+            check(history.undoActionName == "Add Selection", "history: next to undo is the commit (\(history.undoActionName))")
+            await step { history.undo() }
+            matches = await previewMatches()
+            check(
+              model.canvasMask == nil && model.autoMask.points == [SAMSegmenter.Point(location: click, positive: true)] && matches,
+              "history: undoing the commit takes the selection out of the mask and puts its point back")
+            await step { history.redo() }
+            check(model.canvasMask == committed && model.autoMask.points.isEmpty, "history: redoing it commits it again")
+            // A step on an image that's gone leaves the history and never reaches another image.
+            await act { model.autoMask.addPoint(click, positive: true, model: model, undoManager: history) }
+            await act { model.addMaskStrokes([.rect(corners[0])], actionName: "Brush Stroke", undoManager: history) }
+            let other = CanvasMask(rects: [corners[3]])
+            // Another image (a copy: placing the very same image object again would be the same
+            // image to the Select tool).
+            if let copy = input.copy() { model.placeOnCanvas(copy) }
+            // The Select tool follows the canvas image as the view updates.
+            model.autoMask.follow(model.image)
+            model.setMask(other, actionName: "Brush Stroke", undoManager: nil)
+            let undoable = history.canUndo
+            await step { if history.canUndo { history.undo() } }
+            check(
+              !undoable && model.canvasMask == other && model.autoMask.points.isEmpty,
+              "history: after another image goes on the canvas, the old image's steps are gone, so ⌘Z can't reach the new one (undoable \(undoable), mask \(model.canvasMask == other ? "kept" : "changed"), points \(model.autoMask.points.count))")
+            model.clearMask(undoManager: nil)
+          }
+
           if let box {
             model.clearMask(undoManager: nil)
             let boxed = try await model.autoMask(points: [], box: box, mode: .replace, undoManager: nil)
@@ -255,7 +353,7 @@ extension Automation {
         try? await Task.sleep(for: .milliseconds(500))
         Automation.snapshot(to: snapshots.appending(path: "automask-window.png"))
         note("window snapshot: \(FileManager.default.fileExists(atPath: snapshots.appending(path: "automask-window.png").path) ? "saved" : "no window (window \(AutomationWindows.mainWindowNumber))")")
-        model.autoMask.clearPoints()
+        model.autoMask.clearPoints(model: model, undoManager: nil)
       }
       finish()
     }

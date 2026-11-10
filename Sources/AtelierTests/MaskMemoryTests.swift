@@ -208,3 +208,45 @@ struct MaskMemoryTests {
     await project.close()
   }
 }
+
+/// The Select tool's undo steps: its prompt, and the undo manager behaviour the per-image undo
+/// targets rely on (`CreateModel.retireCanvasUndo`).
+@MainActor struct CanvasUndoTests {
+  @Test func aPromptKeepsTheClicksTheDecoderTakes() {
+    let points = (0..<20).map { SAMSegmenter.Point(location: CGPoint(x: $0, y: 0), positive: true) }
+    let trimmed = AutoMaskPrompt(points: points).trimmed()
+    #expect(trimmed.points.count == SAMGeometry.maxPromptPoints && trimmed.points.last == points.last)
+    let boxed = AutoMaskPrompt(points: points, box: CGRect(x: 0, y: 0, width: 4, height: 4)).trimmed()
+    #expect(boxed.points.count == SAMGeometry.maxPromptPoints - 2)
+    #expect(AutoMaskPrompt().isEmpty && !AutoMaskPrompt(subject: true).isEmpty)
+  }
+
+  @Test func commitsAreNamedForWhatTheyDo() {
+    #expect(AutoMaskMode.add.actionName == "Add Selection")
+    #expect(AutoMaskMode.subtract.actionName == "Subtract Selection")
+    #expect(AutoMaskMode.replace.actionName == "Replace Mask")
+  }
+
+  /// Removing one target's actions leaves the others' steps in order, block-registered ones
+  /// included, and an emptied group goes.
+  @Test @MainActor func removingATargetsStepsLeavesTheRest() {
+    final class Target {}
+    let undo = UndoManager()
+    undo.groupsByEvent = false
+    let image = Target(), settings = Target()
+    var log: [String] = []
+    func step(_ target: Target, _ name: String) {
+      undo.beginUndoGrouping()
+      undo.registerUndo(withTarget: target) { _ in log.append(name) }
+      undo.endUndoGrouping()
+    }
+    step(image, "point 1")
+    step(settings, "steps")
+    step(image, "point 2")
+    undo.removeAllActions(withTarget: image)
+    #expect(undo.canUndo)
+    undo.undo()
+    #expect(log == ["steps"])
+    #expect(!undo.canUndo)
+  }
+}

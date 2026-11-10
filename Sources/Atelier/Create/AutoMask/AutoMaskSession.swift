@@ -14,6 +14,15 @@ nonisolated enum AutoMaskMode: String, CaseIterable, Sendable, Codable {
     }
   }
 
+  /// The undo step the Select tool's button makes.
+  var actionName: String {
+    switch self {
+    case .add: "Add Selection"
+    case .subtract: "Subtract Selection"
+    case .replace: "Replace Mask"
+    }
+  }
+
   /// The mask after committing `selection` (a bitmap stroke, `CanvasMask.Stroke.bitmap`) to
   /// `mask` this way. Replace starts over from the selection alone; subtracting from no mask
   /// leaves none.
@@ -29,6 +38,26 @@ nonisolated enum AutoMaskMode: String, CaseIterable, Sendable, Codable {
     case .replace:
       return CanvasMask(strokes: [stroke])
     }
+  }
+}
+
+/// What the Select tool selects from: SAM's clicks and box, or Vision's subject (under a point, or
+/// all of them). Each change is an undo step (`AutoMaskSession.change`).
+struct AutoMaskPrompt: Equatable {
+  var points: [SAMSegmenter.Point] = []
+  var box: CGRect?
+  var subject = false
+  var subjectPoint: CGPoint?
+
+  var isEmpty: Bool { points.isEmpty && box == nil && !subject }
+
+  /// The clicks the decoder can take beside the box (`SAMGeometry.promptInputs`), so the dots on
+  /// the canvas are the ones used: the earliest go.
+  func trimmed() -> AutoMaskPrompt {
+    var trimmed = self
+    let limit = SAMGeometry.maxPromptPoints - (box == nil ? 0 : 2)
+    if trimmed.points.count > limit { trimmed.points.removeFirst(trimmed.points.count - limit) }
+    return trimmed
   }
 }
 
@@ -82,22 +111,28 @@ enum AutoMaskError: LocalizedError {
 
 /// The Select tool's state: the clicks and box on the canvas image, the preview they select and
 /// whether SAM or Vision is working on it. Points and box are in the image's pixels; a new canvas
-/// image starts over (`follow`).
+/// image starts over (`follow`). Every change to them is an undo step in the window's history,
+/// among the mask's and the settings' own: undoing one puts the clicks and box back and selects
+/// again (the image's encoding is cached, so only the decoder runs).
 @MainActor
 @Observable
 final class AutoMaskSession {
   static let sizeKey = "autoMaskModelSize"
 
-  /// Which SAM 2.1 to use (Small unless picked otherwise).
+  /// Which SAM 2.1 to use (Small unless picked otherwise). Changing it starts over: a selection
+  /// is the model's (`setSize` makes that an undo step).
   var size = UserDefaults.standard.string(forKey: AutoMaskSession.sizeKey).flatMap(SAMFiles.Size.init(rawValue:)) ?? .small {
     didSet {
       UserDefaults.standard.set(size.rawValue, forKey: Self.sizeKey)
-      clearPoints()
+      reset()
     }
   }
 
   private(set) var points: [SAMSegmenter.Point] = []
   private(set) var box: CGRect?
+  /// The preview is Vision's subject (under `subjectPoint`, else all of them), not SAM's.
+  private var subject = false
+  private var subjectPoint: CGPoint?
   /// iPad has no Option key: this makes taps negative points instead.
   var negative = false
   private(set) var preview: AutoMaskSelection?
@@ -109,58 +144,113 @@ final class AutoMaskSession {
 
   var hasPrompt: Bool { !points.isEmpty || box != nil }
 
-  /// Starts over when the canvas shows another image.
+  /// What the preview is selected from now.
+  var prompt: AutoMaskPrompt {
+    AutoMaskPrompt(points: points, box: box, subject: subject, subjectPoint: subjectPoint)
+  }
+
+  /// Starts over when the canvas shows another image. Not an undo step: the steps on the old
+  /// image leave the history with it (`CreateModel.retireCanvasUndo`).
   func follow(_ image: CGImage?) {
     guard image !== self.image else { return }
-    clearPoints()
+    reset()
     self.image = image
   }
 
-  /// Clears the points, box and preview (Clear Points, Esc).
-  func clearPoints() {
+  /// Clears the points, box and preview, with no undo step.
+  private func reset() {
     task?.cancel()
     task = nil
     points = []
     box = nil
+    subject = false
+    subjectPoint = nil
     preview = nil
     failure = nil
     isBusy = false
   }
 
-  /// Adds a click (image pixels) and selects again. Ignored until SAM is downloaded: clicking is
-  /// SAM's (the controls say so).
-  func addPoint(_ location: CGPoint, positive: Bool, model: CreateModel) {
+  /// Clear Points (and Esc): one undo step when there was anything to clear.
+  func clearPoints(model: CreateModel, undoManager: UndoManager?) {
+    guard !prompt.isEmpty || preview != nil else { return }
+    follow(model.image)
+    change(to: AutoMaskPrompt(), actionName: "Clear Points", model: model, undoManager: undoManager)
+  }
+
+  /// Adds a click (image pixels) and selects again: one undo step, “Add Point” or “Exclude
+  /// Point”. Ignored until SAM is downloaded: clicking is SAM's (the controls say so).
+  func addPoint(_ location: CGPoint, positive: Bool, model: CreateModel, undoManager: UndoManager? = nil) {
     guard SAMDownload.shared.isInstalled(size) else { return }
     follow(model.image)
-    points.append(SAMSegmenter.Point(location: location, positive: positive))
-    trimPoints()
-    segment(model)
+    var next = AutoMaskPrompt(points: points, box: box)
+    next.points.append(SAMSegmenter.Point(location: location, positive: positive))
+    change(to: next.trimmed(), actionName: positive ? "Add Point" : "Exclude Point", model: model, undoManager: undoManager)
   }
 
-  /// Sets the box (image pixels) and selects again. Ignored until SAM is downloaded.
-  func setBox(_ rect: CGRect, model: CreateModel) {
+  /// Sets the box (image pixels) and selects again: one undo step, “Select Box”. Ignored until
+  /// SAM is downloaded.
+  func setBox(_ rect: CGRect, model: CreateModel, undoManager: UndoManager? = nil) {
     guard SAMDownload.shared.isInstalled(size) else { return }
     follow(model.image)
-    box = rect.standardized
-    trimPoints()
-    segment(model)
+    let next = AutoMaskPrompt(points: points, box: rect.standardized)
+    change(to: next.trimmed(), actionName: "Select Box", model: model, undoManager: undoManager)
   }
 
-  /// Keeps the clicks the decoder can take beside the box (`SAMGeometry.promptInputs`), so the
-  /// dots on the canvas are the ones used: the earliest go.
-  private func trimPoints() {
-    let limit = SAMGeometry.maxPromptPoints - (box == nil ? 0 : 2)
-    if points.count > limit { points.removeFirst(points.count - limit) }
-  }
-
-  /// Select Subject: Vision's subject (the one under `point`, else all of them) as the preview.
-  /// Clears SAM's points: the two don't combine.
-  func selectSubject(at point: CGPoint? = nil, model: CreateModel) {
+  /// Select Subject: Vision's subject (the one under `point`, else all of them) as the preview,
+  /// one undo step. Clears SAM's points: the two don't combine.
+  func selectSubject(at point: CGPoint? = nil, model: CreateModel, undoManager: UndoManager? = nil) {
     follow(model.image)
-    clearPoints()
-    run(model) { model in
-      let selection = try await model.subjectSelection(at: point)
-      return selection.selection
+    change(
+      to: AutoMaskPrompt(subject: true, subjectPoint: point), actionName: "Select Subject", model: model,
+      undoManager: undoManager)
+  }
+
+  /// Picks SAM's size. With a selection under way that starts it over, so it's an undo step that
+  /// puts the size and the selection back.
+  func setSize(_ newSize: SAMFiles.Size, model: CreateModel, undoManager: UndoManager?) {
+    guard newSize != size else { return }
+    let before = (size: size, prompt: prompt)
+    size = newSize
+    guard !before.prompt.isEmpty, let undoManager, let image = model.image, image === self.image else { return }
+    model.registerCanvasUndo(on: image, undoManager: undoManager, actionName: "Change SAM Size") { [weak self, weak model] in
+      guard let self, let model, self.image === image else { return }
+      self.size = before.size
+      self.select(before.prompt, model: model)
+      self.setSize(newSize, model: model, undoManager: undoManager)
+    }
+  }
+
+  /// Makes `prompt` the selection's and selects again, as one undo step named `actionName` that
+  /// puts back the one before (and redoes this). For the Select tool's own changes and a
+  /// commit's clearing of the points.
+  func change(to prompt: AutoMaskPrompt, actionName: String, model: CreateModel, undoManager: UndoManager?) {
+    let before = self.prompt
+    select(prompt, model: model)
+    guard before != prompt, let undoManager, let image = model.image, image === self.image else { return }
+    model.registerCanvasUndo(on: image, undoManager: undoManager, actionName: actionName) { [weak self, weak model] in
+      guard let self, let model, self.image === image else { return }
+      self.change(to: before, actionName: actionName, model: model, undoManager: undoManager)
+    }
+  }
+
+  /// Shows `prompt`'s selection: SAM's or Vision's, run again (the newest run wins, `run`), or
+  /// none.
+  private func select(_ prompt: AutoMaskPrompt, model: CreateModel) {
+    task?.cancel()
+    task = nil
+    points = prompt.points
+    box = prompt.box
+    subject = prompt.subject
+    subjectPoint = prompt.subjectPoint
+    failure = nil
+    if prompt.subject {
+      let point = prompt.subjectPoint
+      run(model) { model in try await model.subjectSelection(at: point).selection }
+    } else if hasPrompt {
+      segment(model)
+    } else {
+      preview = nil
+      isBusy = false
     }
   }
 
@@ -272,11 +362,16 @@ extension CreateModel {
     return true
   }
 
-  /// The Select tool's Add / Subtract / Replace: commits the preview and clears the points.
+  /// The Select tool's Add / Subtract / Replace: commits the preview and clears the points, as one
+  /// undo step (“Add Selection”, “Subtract Selection”, “Replace Mask”). Undoing it puts back both
+  /// the mask and the clicks and box it was selected with, to go on refining the selection.
   @discardableResult
   func commitAutoMaskPreview(mode: AutoMaskMode, undoManager: UndoManager?) -> Bool {
-    guard let preview = autoMask.preview, commitAutoMask(preview, mode: mode, undoManager: undoManager) else { return false }
-    autoMask.clearPoints()
+    guard let preview = autoMask.preview else { return false }
+    undoManager?.beginUndoGrouping()
+    defer { undoManager?.endUndoGrouping() }
+    guard commitAutoMask(preview, mode: mode, actionName: mode.actionName, undoManager: undoManager) else { return false }
+    autoMask.change(to: AutoMaskPrompt(), actionName: mode.actionName, model: self, undoManager: undoManager)
     return true
   }
 

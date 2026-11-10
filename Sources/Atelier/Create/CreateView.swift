@@ -295,7 +295,7 @@ struct CanvasView: View {
         // Esc clears the Select tool's points; otherwise it stops the run as before.
         .onKeyPress(.escape) {
           guard model.canvasTool == .select, model.autoMask.hasPrompt || model.autoMask.preview != nil else { return .ignored }
-          model.autoMask.clearPoints()
+          model.autoMask.clearPoints(model: model, undoManager: undoManager)
           return .handled
         }
         .onModifierKeysChanged(mask: .option) { _, keys in optionDown = keys.contains(.option) }
@@ -314,7 +314,7 @@ struct CanvasView: View {
                 let size = imageSize,
                 let point = selectPoint(location, frame: frameRect, points: points).flatMap({ SAMGeometry.clickPoint($0, imageSize: size) })
           else { return }
-          model.autoMask.addPoint(point, positive: !model.autoMask.negative, model: model)
+          model.autoMask.addPoint(point, positive: !model.autoMask.negative, model: model, undoManager: undoManager)
         }
       #endif
         // The margin around a video offers its menu too, not the image one.
@@ -414,7 +414,9 @@ struct CanvasView: View {
   }
 
   private func endStroke() {
-    if let stroke = liveStroke { model.addMaskStrokes([stroke], undoManager: undoManager) }
+    if let stroke = liveStroke {
+      model.addMaskStrokes([stroke], actionName: stroke.erases ? "Erase" : "Brush Stroke", undoManager: undoManager)
+    }
     liveStroke = nil
   }
 
@@ -445,10 +447,10 @@ struct CanvasView: View {
     if hypot(location.x - start.x, location.y - start.y) < 4 {
       // A click past the image's edges marks nothing.
       if let point = SAMGeometry.clickPoint(drag.start, imageSize: size) {
-        model.autoMask.addPoint(point, positive: positive, model: model)
+        model.autoMask.addPoint(point, positive: positive, model: model, undoManager: undoManager)
       }
     } else if let box = SAMGeometry.clampedBox(from: drag.start, to: drag.end, imageSize: size) {
-      model.autoMask.setBox(box, model: model)
+      model.autoMask.setBox(box, model: model, undoManager: undoManager)
     }
   }
 

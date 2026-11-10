@@ -104,7 +104,7 @@ extension CreateModel {
   /// Adds strokes or shapes (in the canvas image's pixels, from its top left), each painting or
   /// erasing as it says. False when there's no image to paint on.
   @discardableResult
-  func addMaskStrokes(_ strokes: [CanvasMask.Stroke], actionName: String = "Paint Mask", undoManager: UndoManager?) -> Bool {
+  func addMaskStrokes(_ strokes: [CanvasMask.Stroke], actionName: String = "Brush Stroke", undoManager: UndoManager?) -> Bool {
     // Inverting an existing mask paints nothing new, so it's allowed where painting isn't.
     let invertsOnly = canvasMask != nil && strokes.allSatisfy { $0.kind == .invert }
     guard invertsOnly ? canEditMask : canPaintMask, !strokes.isEmpty else { return false }
@@ -135,19 +135,53 @@ extension CreateModel {
     setMask(nil, actionName: actionName, undoManager: undoManager)
   }
 
-  /// Replaces the mask as one undo step. Undoing does nothing once another image is on the canvas.
+  /// Replaces the mask as one undo step. It belongs to the image on the canvas: once another
+  /// image is there the step leaves the history (`retireCanvasUndo`), and it never changes
+  /// another image's mask.
   func setMask(_ mask: CanvasMask?, actionName: String, undoManager: UndoManager?) {
     let previous = canvasMask
     canvasMask = mask
     guard let undoManager, let image else { return }
-    let imageID = ObjectIdentifier(image)
-    undoManager.registerUndo(withTarget: self) { target in
+    registerCanvasUndo(on: image, undoManager: undoManager, actionName: actionName) { [weak self] in
+      self?.setMask(previous, actionName: actionName, undoManager: undoManager)
+    }
+  }
+
+  // MARK: Undo on the canvas image
+
+  /// Registers `undo` as a step named `actionName` on `image`'s own undo target, so it runs only
+  /// while that same image (by identity) is on the canvas, and leaves the history once another
+  /// image takes its place. `undo` registers its own redo, as `registerUndo` handlers do.
+  func registerCanvasUndo(on image: CGImage, undoManager: UndoManager, actionName: String, _ undo: @escaping @MainActor () -> Void) {
+    let target = canvasUndoTarget(for: image, undoManager: undoManager)
+    undoManager.registerUndo(withTarget: target) { [weak self] target in
       MainActor.assumeIsolated {
-        guard target.image.map(ObjectIdentifier.init) == imageID else { return }
-        target.setMask(previous, actionName: actionName, undoManager: undoManager)
+        guard let self, self.image === target.image else { return }
+        undo()
       }
     }
     undoManager.setActionName(actionName)
+  }
+
+  private func canvasUndoTarget(for image: CGImage, undoManager: UndoManager) -> CanvasUndoTarget {
+    let target = canvasUndoTargets.first { $0.image === image } ?? {
+      let target = CanvasUndoTarget(image: image)
+      canvasUndoTargets.append(target)
+      return target
+    }()
+    target.undoManagers.add(undoManager)
+    return target
+  }
+
+  /// Takes the mask and Select steps made so far out of the undo history, as the canvas moves to
+  /// another image (`imageStep` changing): undoing them would change nothing, and they mustn't
+  /// reach the new image. Switching images isn't itself undoable, so neither are steps made
+  /// before it; setting changes and the rest stay.
+  func retireCanvasUndo() {
+    for target in canvasUndoTargets {
+      for undoManager in target.undoManagers.allObjects { undoManager.removeAllActions(withTarget: target) }
+    }
+    canvasUndoTargets = []
   }
 
   // MARK: Frame
@@ -200,6 +234,17 @@ extension CreateModel {
     canvas.scale = scale
     canvas.offset = CGSize(
       width: (resultSize.width / 2 - center.x) * scale, height: (resultSize.height / 2 - center.y) * scale)
+  }
+}
+
+/// The undo target of one canvas image's mask and Select steps (`registerCanvasUndo`), holding
+/// the image so its identity can't pass to another, and the undo managers it has steps on.
+final class CanvasUndoTarget {
+  let image: CGImage
+  let undoManagers = NSHashTable<UndoManager>.weakObjects()
+
+  init(image: CGImage) {
+    self.image = image
   }
 }
 
