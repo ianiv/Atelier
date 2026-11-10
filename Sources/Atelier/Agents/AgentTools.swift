@@ -719,12 +719,27 @@ final class AgentTools {
     // first (one “Add Selection” step), waiting for it if it's still being worked out.
     var selectionNote: String?
     var selectionAdded = false
+    var selectionStep: String?
+    // A Generate press already waiting on it goes first.
+    while create.waitsForSelection {
+      try Task.checkCancellation()
+      try await Task.sleep(for: .milliseconds(20))
+    }
     if create.hasPendingSelection {
-      await create.settlePendingSelection()
-      await Self.settleUndo()
-      let before = create.canvasMask
-      selectionNote = Self.asOneUndoStep { create.addPendingSelection(undoManager: $0) }
-      selectionAdded = create.canvasMask != before
+      let settled = await create.settlePendingSelection()
+      // A call given up on adds nothing to the user's mask.
+      try Task.checkCancellation()
+      if settled {
+        await Self.settleUndo()
+        try Task.checkCancellation()
+        let before = create.canvasMask
+        selectionNote = Self.asOneUndoStep { create.addPendingSelection(undoManager: $0) }
+        selectionAdded = create.canvasMask != before
+        // The step's name as it is: a user's change still open joins its own step.
+        if selectionAdded { selectionStep = Self.mainWindowUndoManager?.undoActionName }
+      } else {
+        selectionNote = CreateModel.selectionTimedOutNote
+      }
     }
     if let problem = create.runTargetProblem {
       throw ToolError(problem + (create.runTargetMaskProblem != nil ? " (set_canvas_mask with clear: true clears it)" : ""))
@@ -776,7 +791,9 @@ final class AgentTools {
     let saved = await create.history.image(for: item)
     let size = saved.map { ["width": $0.width, "height": $0.height] } ?? ["width": item.sidecar.width, "height": item.sidecar.height]
     var notes: [String] = []
-    if selectionAdded { notes.append("The Select tool's selection was added to the mask first.") }
+    if selectionAdded {
+      notes.append("The Select tool's selection was added to the mask first\(selectionStep.map { " (⌘Z step “\($0)”)" } ?? "").")
+    }
     if let selectionNote { notes.append(selectionNote) }
     if merged { notes.append("Merged into the whole image (\(size["width"]!)×\(size["height"]!)).") }
     if let parent { notes.append("It follows history step \(parent.id.logicalTime).") }
@@ -785,7 +802,7 @@ final class AgentTools {
       arguments: arguments,
       extra: [
         "parent_history_step": parent?.id.logicalTime ?? NSNull(), "merged": merged,
-        "selection_added": selectionAdded,
+        "selection_added": selectionAdded, "selection_undo_step": selectionStep ?? NSNull(),
         "canvas_size": size,
         "region": region.map(Self.json) ?? NSNull(),
       ])
@@ -1089,6 +1106,19 @@ final class AgentTools {
       "merge_applies": create.canMergeIntoImage,
       "can_paint_mask": create.canPaintMask,
     ]
+    // The Select tool's selection not yet in the mask, which Generate (and use_canvas) adds first.
+    let session = create.autoMask
+    if create.hasPendingSelection {
+      state["pending_selection"] = [
+        "points": session.points.count,
+        "box": session.box.map(Self.json) ?? NSNull(),
+        "subject": session.prompt.subject,
+        "busy": session.isBusy,
+        "failure": session.failure ?? NSNull(),
+      ] as [String: Any]
+    } else {
+      state["pending_selection"] = NSNull()
+    }
     if let frame = create.frameSize { state["frame"] = Self.json(frame) }
     guard create.canvasShowsImage, let image = create.image else { return state }
     let sourceSize = CGSize(width: image.width, height: image.height)

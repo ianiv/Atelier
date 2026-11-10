@@ -624,7 +624,7 @@ struct HistoryView: View {
 
   private func use(_ item: HistoryItem, newSeed: Bool, loadImage: Bool = true) {
     guard create.canUse(item) else { return }
-    create.use(item, newSeed: newSeed, loadImage: loadImage)
+    create.use(item, newSeed: newSeed, loadImage: loadImage, undoManager: undoManager)
     navigation.section = .create
   }
 

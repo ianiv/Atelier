@@ -1085,9 +1085,11 @@ final class CreateModel {
   /// image onto the canvas (an Edit step's input instead, with `restoreInput`). With `newSeed`,
   /// rolls a fresh seed and generates as soon as the model is ready.
   func use(
-    _ item: HistoryItem, newSeed: Bool = false, loadImage: Bool = true, restoreInput: Bool = true
+    _ item: HistoryItem, newSeed: Bool = false, loadImage: Bool = true, restoreInput: Bool = true,
+    undoManager: UndoManager? = nil
   ) {
     guard canUse(item) else { return }
+    if newSeed { rerunUndoManager = undoManager }
     let sidecar = item.sidecar
     restorePrompts(sidecar.prompt, sidecar.negativePrompt)
     errorMessage = nil
@@ -1165,7 +1167,7 @@ final class CreateModel {
         Task {
           await restoreMoodboard.value
           await restoreImage.value
-          generate()
+          generate(undoManager: rerunUndoManager)
         }
       }
     } else {
@@ -1506,24 +1508,52 @@ final class CreateModel {
 
   /// Queues `count` images of the prompt; runs right away when nothing else is. A Select
   /// selection not yet put into the mask goes in first, as Add does (`addPendingSelection`):
-  /// leaving it out would surprise. One still being worked out is waited for.
+  /// leaving it out would surprise. One still being worked out is waited for (`waitsForSelection`,
+  /// which holds Generate meanwhile); the run then takes the prompt and settings as they are when
+  /// the selection goes in. It's dropped, with a note, if the canvas image or Edit mode changes
+  /// during the wait.
   func generate(undoManager: UndoManager? = nil) {
-    guard canGenerate else { return }
-    let undoManager = undoManager ?? Self.windowUndoManager
+    guard canGenerate, !waitsForSelection else { return }
+    let undoManager = undoManager ?? rerunUndoManager ?? Self.windowUndoManager
     guard hasPendingSelection, autoMask.isBusy else {
       let note = addPendingSelection(undoManager: undoManager)
       queueGeneration()
       if let note { statusNote = note }
       return
     }
+    let waitedImage = image, waitedMode = canvasMode
+    waitsForSelection = true
+    statusNote = "Adding the selection…"
     Task {
-      await settlePendingSelection()
-      guard canGenerate else { return }
-      let note = addPendingSelection(undoManager: undoManager)
+      let settled = await settlePendingSelection()
+      waitsForSelection = false
+      if statusNote == "Adding the selection…" { statusNote = nil }
+      guard image === waitedImage, canvasMode == waitedMode else {
+        statusNote = "The run was cancelled because the canvas changed while its selection was being worked out."
+        return
+      }
+      guard canGenerate else {
+        statusNote = "The run didn't start: \(runTargetProblem ?? "there's no model or settings to run with now")."
+        return
+      }
+      let note = settled ? addPendingSelection(undoManager: undoManager) : Self.selectionTimedOutNote
       queueGeneration()
       if let note { statusNote = note }
     }
   }
+
+  /// Generate is waiting for a Select selection to be worked out, to add it first: Generate is
+  /// disabled meanwhile, so a second press doesn't queue a second run.
+  private(set) var waitsForSelection = false
+  /// The undo manager of the view that asked for a rerun (Rerun with New Seed), for its
+  /// selection's undo step once the model loads.
+  @ObservationIgnored weak var rerunUndoManager: UndoManager?
+  /// How long Generate waits for a selection before running without it.
+  static let selectionWait: Duration = .seconds(30)
+  static let selectionTimedOutNote = "The selection took too long to work out, so the run went without it."
+
+  /// Generate can be pressed now (the button and ⌘↩).
+  var canPressGenerate: Bool { canGenerate && !waitsForSelection }
 
   /// The window's undo manager, for runs started without one at hand (Use Settings' rerun).
   static var windowUndoManager: UndoManager? {
@@ -1537,16 +1567,25 @@ final class CreateModel {
   /// The Select tool has a selection (or one being worked out) that isn't in the mask, on the
   /// image an Edit run would take. In Edit as the user set it: at Strength 100% Edit only takes
   /// effect with a mask, which this is about to make.
+  /// A selection that failed counts too (its points still there), so the run says it went without
+  /// it.
   var hasPendingSelection: Bool {
-    canvasMode == .edit && videoModel == nil && canvasClip == nil
-      && (autoMask.preview != nil || autoMask.isBusy) && autoMask.preview.map { $0.image === image } ?? true
+    guard canvasMode == .edit, videoModel == nil, canvasClip == nil, let image else { return false }
+    if let preview = autoMask.preview { return preview.image === image }
+    return autoMask.image === image && (autoMask.isBusy || (autoMask.failure != nil && !autoMask.prompt.isEmpty))
   }
 
-  /// Waits for a selection still being worked out (SAM's decoder, or the image's first encoding).
-  func settlePendingSelection() async {
+  /// Waits for a selection still being worked out (SAM's decoder, or the image's first encoding),
+  /// at most `selectionWait`. False when it gave up: the wait was cancelled (an agent's call) or
+  /// ran out of time.
+  func settlePendingSelection() async -> Bool {
+    let deadline = ContinuousClock.now + Self.selectionWait
     while autoMask.isBusy {
-      try? await Task.sleep(for: .milliseconds(20))
+      guard !Task.isCancelled, ContinuousClock.now < deadline,
+            (try? await Task.sleep(for: .milliseconds(20))) != nil
+      else { return false }
     }
+    return true
   }
 
   /// Puts a waiting Select selection into the mask, as Add does: one “Add Selection” undo step,
@@ -1557,7 +1596,8 @@ final class CreateModel {
   func addPendingSelection(undoManager: UndoManager?) -> String? {
     guard hasPendingSelection, !autoMask.isBusy else { return nil }
     guard let preview = autoMask.preview, preview.stroke != nil else {
-      return "The selection wasn't added to the mask: \(autoMask.failure ?? "it selects nothing")."
+      let reason = autoMask.failure.map { $0.hasSuffix(".") ? String($0.dropLast()) : $0 } ?? "it selects nothing"
+      return "The selection wasn't added to the mask: \(reason). The run went without it."
     }
     guard canPaintMask else { return nil }
     commitAutoMaskPreview(mode: .add, undoManager: undoManager)

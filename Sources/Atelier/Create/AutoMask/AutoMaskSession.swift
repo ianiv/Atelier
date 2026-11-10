@@ -142,7 +142,7 @@ final class AutoMaskSession {
   private(set) var isBusy = false
   private(set) var failure: String?
   /// The canvas image the points are on, held so its identity can't pass to another image.
-  private var image: CGImage?
+  private(set) var image: CGImage?
   private var task: Task<Void, Never>?
 
   var hasPrompt: Bool { !points.isEmpty || box != nil }

@@ -1,14 +1,12 @@
 import SwiftUI
 
 /// The Select tool's controls, over the bottom of the canvas while Select is the tool: Select
-/// Subject (Vision, nothing to download), SAM 2.1's size and download, a text prompt (not
-/// available yet), then Add / Subtract / Replace to put the preview into the mask, and Clear
-/// Points. Every control stays; ones that can't act are disabled.
+/// Subject (Vision, nothing to download), SAM 2.1's size and download, then Add / Subtract /
+/// Replace to put the preview into the mask, and Clear Points. Every control stays; ones that can't act are disabled.
 struct AutoMaskBar: View {
   @Environment(CreateModel.self) private var model
   @Environment(\.undoManager) private var undoManager
   private var download = SAMDownload.shared
-  @State private var text = ""
 
   var body: some View {
     VStack(spacing: 4) {
@@ -95,16 +93,11 @@ struct AutoMaskBar: View {
     #endif
   }
 
-  /// The text prompt (not available yet), Add / Subtract / Replace and Clear Points.
+  /// Add / Subtract / Replace and Clear Points.
   @ViewBuilder private var committing: some View {
     let session = model.autoMask
     let paints = model.canPaintMask
     let hasPreview = session.preview != nil
-    TextField("Select:", text: $text, prompt: Text("Select: describe it"))
-      .textFieldStyle(.roundedBorder)
-      .frame(width: 150)
-      .disabled(true)
-      .help("Selecting by description isn't available yet.")
     ProgressView().controlSize(.small).opacity(session.isBusy ? 1 : 0)
     ForEach(AutoMaskMode.allCases, id: \.self) { mode in
       Button(mode.title) {

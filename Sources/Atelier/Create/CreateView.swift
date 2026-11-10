@@ -1224,7 +1224,7 @@ struct PromptComposer: View {
         .help(model.isRunning ? "Add to Queue (⌘↩)" : "Generate (⌘↩)")
         .buttonStyle(.glassProminent)
         .keyboardShortcut(.return, modifiers: .command)
-        .disabled(!model.canGenerate)
+        .disabled(!model.canPressGenerate)
       }
       .controlSize(.large)
     }

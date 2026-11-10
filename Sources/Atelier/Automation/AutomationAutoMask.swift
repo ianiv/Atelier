@@ -388,6 +388,86 @@ extension Automation {
               }
               while model.isBusy { try? await Task.sleep(for: .milliseconds(100)) }
             }
+            // Generate while a selection is still being worked out: held, once.
+            do {
+              @MainActor func jobs() -> Int { (model.queue.running == nil ? 0 : 1) + model.queue.waiting.count }
+              @MainActor func idle() async { while model.isBusy || model.waitsForSelection { try? await Task.sleep(for: .milliseconds(50)) } }
+              await idle()
+              model.clearMask(undoManager: nil)
+              model.autoMask.clearPoints(model: model, undoManager: nil)
+              history.beginUndoGrouping()
+              model.autoMask.addPoint(click, positive: true, model: model, undoManager: history)
+              history.endUndoGrouping()
+              model.generate(undoManager: history)
+              let held = model.waitsForSelection && !model.canPressGenerate && model.statusNote == "Adding the selection…"
+              model.generate(undoManager: history)
+              while model.waitsForSelection { try? await Task.sleep(for: .milliseconds(10)) }
+              check(held && jobs() == 1 && model.canvasMask != nil, "generate: pressed twice while the selection is worked out, it's held (“Adding the selection…”) and queues one run (\(jobs()))")
+              await idle()
+
+              // The canvas changing during the wait drops the run.
+              model.clearMask(undoManager: nil)
+              model.autoMask.clearPoints(model: model, undoManager: nil)
+              history.beginUndoGrouping()
+              model.autoMask.addPoint(click, positive: true, model: model, undoManager: history)
+              history.endUndoGrouping()
+              model.generate(undoManager: history)
+              let waited = model.waitsForSelection
+              if let current = model.image, let copy = current.copy() { model.placeOnCanvas(copy) }
+              while model.waitsForSelection { try? await Task.sleep(for: .milliseconds(10)) }
+              check(
+                waited && jobs() == 0 && model.canvasMask == nil && (model.statusNote ?? "").contains("canvas changed"),
+                "generate: another image during the wait drops the run, saying so (“\(model.statusNote ?? "")”)")
+
+              // A selection that failed: the run goes without it, saying so. Vision finds no subject
+              // in a plain gray image.
+              if let gray = Self.gray(width: 512, height: 512) {
+                model.placeOnCanvas(gray)
+                model.autoMask.follow(model.image)
+                history.beginUndoGrouping()
+                model.autoMask.selectSubject(model: model, undoManager: history)
+                history.endUndoGrouping()
+                while model.autoMask.isBusy { try? await Task.sleep(for: .milliseconds(20)) }
+                let failed = model.autoMask.failure != nil && model.hasPendingSelection
+                model.generate(undoManager: history)
+                let note = model.statusNote ?? ""
+                check(
+                  failed && note.contains("wasn't added") && jobs() == 1 && model.canvasMask == nil,
+                  "generate: a failed selection is left out and the run goes, saying so (“\(note)”)")
+                await idle()
+              }
+
+              // An agent's call cancelled while it waits: it stops at once and adds nothing.
+              if let current = model.image, let copy = input.copy() ?? current.copy() {
+                model.placeOnCanvas(copy)
+                model.autoMask.follow(model.image)
+                model.clearMask(undoManager: nil)
+                model.autoMask.addPoint(click, positive: true, model: model, undoManager: nil)
+                let tools = AgentTools(create: model, presets: presets)
+                let started = Task { @MainActor () -> Bool in
+                  do {
+                    _ = try await tools.call("generate", arguments: ["use_app_settings": true, "use_canvas": true]) { _ in }
+                    return true
+                  } catch {
+                    return false
+                  }
+                }
+                try? await Task.sleep(for: .milliseconds(30))
+                let stillDecoding = model.autoMask.isBusy
+                _ = try? await tools.call("cancel_job", arguments: ["job_id": "job-1"]) { _ in }
+                let cancelledAt = ContinuousClock.now
+                // The main actor stays free: a short sleep comes back about on time.
+                try? await Task.sleep(for: .milliseconds(50))
+                let lag = ContinuousClock.now - cancelledAt
+                let failedCall = await started.value == false
+                while model.autoMask.isBusy { try? await Task.sleep(for: .milliseconds(20)) }
+                check(
+                  stillDecoding && lag < .seconds(1) && failedCall && model.canvasMask == nil && jobs() == 0
+                    && model.autoMask.preview != nil,
+                  "agents: a use_canvas call cancelled while the selection is worked out returns at once and adds nothing (main actor back in \(lag))")
+                model.autoMask.clearPoints(model: model, undoManager: nil)
+              }
+            }
             // A step on an image that's gone leaves the history and never reaches another image.
             await act { model.autoMask.addPoint(click, positive: true, model: model, undoManager: history) }
             await act { model.addMaskStrokes([.rect(corners[0])], actionName: "Brush Stroke", undoManager: history) }
@@ -456,6 +536,17 @@ extension Automation {
       }
     }
     return d.map { Double($0) / 3 }
+  }
+
+  /// A plain gray image, with no subject for Vision to find.
+  static func gray(width: Int, height: Int) -> CGImage? {
+    guard let context = CGContext(
+      data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+      space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+    else { return nil }
+    context.setFillColor(gray: 0.5, alpha: 1)
+    context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+    return context.makeImage()
   }
 }
 #endif
