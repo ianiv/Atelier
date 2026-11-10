@@ -1504,8 +1504,68 @@ final class CreateModel {
     return base
   }
 
-  /// Queues `count` images of the prompt; runs right away when nothing else is.
-  func generate() {
+  /// Queues `count` images of the prompt; runs right away when nothing else is. A Select
+  /// selection not yet put into the mask goes in first, as Add does (`addPendingSelection`):
+  /// leaving it out would surprise. One still being worked out is waited for.
+  func generate(undoManager: UndoManager? = nil) {
+    guard canGenerate else { return }
+    let undoManager = undoManager ?? Self.windowUndoManager
+    guard hasPendingSelection, autoMask.isBusy else {
+      let note = addPendingSelection(undoManager: undoManager)
+      queueGeneration()
+      if let note { statusNote = note }
+      return
+    }
+    Task {
+      await settlePendingSelection()
+      guard canGenerate else { return }
+      let note = addPendingSelection(undoManager: undoManager)
+      queueGeneration()
+      if let note { statusNote = note }
+    }
+  }
+
+  /// The window's undo manager, for runs started without one at hand (Use Settings' rerun).
+  static var windowUndoManager: UndoManager? {
+    #if os(macOS)
+      AgentTools.mainWindowUndoManager
+    #else
+      nil
+    #endif
+  }
+
+  /// The Select tool has a selection (or one being worked out) that isn't in the mask, on the
+  /// image an Edit run would take. In Edit as the user set it: at Strength 100% Edit only takes
+  /// effect with a mask, which this is about to make.
+  var hasPendingSelection: Bool {
+    canvasMode == .edit && videoModel == nil && canvasClip == nil
+      && (autoMask.preview != nil || autoMask.isBusy) && autoMask.preview.map { $0.image === image } ?? true
+  }
+
+  /// Waits for a selection still being worked out (SAM's decoder, or the image's first encoding).
+  func settlePendingSelection() async {
+    while autoMask.isBusy {
+      try? await Task.sleep(for: .milliseconds(20))
+    }
+  }
+
+  /// Puts a waiting Select selection into the mask, as Add does: one “Add Selection” undo step,
+  /// the points cleared. Returns a status note when there was one to add and it couldn't be: it
+  /// failed or selects nothing (the run goes without it). Where the mask can't be painted (an
+  /// older server), it's left alone and Generate follows the usual rules for masks.
+  @discardableResult
+  func addPendingSelection(undoManager: UndoManager?) -> String? {
+    guard hasPendingSelection, !autoMask.isBusy else { return nil }
+    guard let preview = autoMask.preview, preview.stroke != nil else {
+      return "The selection wasn't added to the mask: \(autoMask.failure ?? "it selects nothing")."
+    }
+    guard canPaintMask else { return nil }
+    commitAutoMaskPreview(mode: .add, undoManager: undoManager)
+    return nil
+  }
+
+  /// Queues the run from the screen as it is now.
+  private func queueGeneration() {
     guard canGenerate, let base = screenRequest() else { return }
     // The canvas image remembers the mask it's queued with now, not when the run is saved (the
     // mask may have changed, or been cleared, by then).
@@ -2586,11 +2646,12 @@ extension CreateModel {
     return image
   }
 
-  /// The step's image didn't arrive: the canvas keeps showing the one before, with the mask tools
-  /// back on it rather than silently off, and says so.
+  /// The step's image didn't arrive: the canvas keeps showing the one before, so it says so, and
+  /// why the mask tools are off.
   private func canvasImageDidNotLoad(_ note: String) {
-    awaitsStepImage = false
-    statusNote = note
+    // The mask tools stay off: what shows is the image before, and anything painted or selected
+    // on it would be kept as the new step's.
+    statusNote = note + " Put another image on the canvas to paint a mask."
   }
 
   /// The step on the canvas is in the project now called `name`, renamed from `old`: it's the same

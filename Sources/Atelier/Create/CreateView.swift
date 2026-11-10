@@ -1106,6 +1106,8 @@ enum GenerationTime {
 /// under a disclosure and Generate beside it.
 struct PromptComposer: View {
   @Environment(CreateModel.self) private var model
+  /// For a Select selection Generate adds to the mask first (one undo step).
+  @Environment(\.undoManager) private var undoManager
   @AppStorage("showNegativePrompt") private var showNegative = false
   @AppStorage(PromptSplitter.linesKey) private var promptLines = 3
   @FocusState private var promptFocused: Bool
@@ -1214,7 +1216,7 @@ struct PromptComposer: View {
         .disabled(!model.isRunning || model.phase == .cancelling)
         CountControl()
         Button {
-          model.generate()
+          model.generate(undoManager: undoManager)
         } label: {
           Label("Generate", systemImage: model.isRunning ? "text.badge.plus" : "sparkles")
         }
@@ -1236,7 +1238,7 @@ struct PromptComposer: View {
   private func tagFields(_ style: Style) -> some View {
     StyleTagFields(
       tags: style.tags, lines: promptLines, focus: $focusedTag, text: tagBinding, prompt: tagPrompt,
-      submit: { model.generate() })
+      submit: { model.generate(undoManager: undoManager) })
   }
 
   private func tagBinding(_ tag: String) -> Binding<String> {
@@ -1280,7 +1282,7 @@ struct PromptComposer: View {
         .lineLimit(promptLines, reservesSpace: true)
         .textFieldStyle(.plain)
         .font(.body)
-        .onSubmit { model.generate() }
+        .onSubmit { model.generate(undoManager: undoManager) }
     #endif
   }
 

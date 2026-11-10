@@ -326,7 +326,8 @@ extension Automation {
             check(model.autoMask.size == otherSize && model.autoMask.points.isEmpty, "history: redoing it changes the size again")
             await step { history.undo() }
             check(model.autoMask.size == size && model.autoMask.points.count == 1, "history: and undoing again puts it back")
-            // Under a run's preview: undoing a click brings the points back and the selection
+            // Generate with a selection not yet in the mask adds it first, as Add does. Then,
+            // under that run's preview, undoing the add brings the points back and the selection
             // waits for the image (no error), rather than failing.
             if var settings = model.settings {
               settings.steps = 2
@@ -334,11 +335,39 @@ extension Automation {
               settings.height = 512
               model.settings = settings
               model.canvasMode = .edit
+              @MainActor func runningMask() -> Bool { model.queue.running?.request?.mask != nil }
+              // A selection still being worked out is waited for.
+              model.clearMask(undoManager: nil)
+              model.autoMask.clearPoints(model: model, undoManager: nil)
+              history.beginUndoGrouping()
+              model.autoMask.addPoint(click, positive: true, model: model, undoManager: history)
+              history.endUndoGrouping()
+              let decoding = model.autoMask.isBusy
+              model.generate(undoManager: history)
+              let addedAtOnce = model.canvasMask != nil
+              for _ in 0..<1500 where model.canvasMask == nil || !model.isBusy {
+                try? await Task.sleep(for: .milliseconds(20))
+              }
+              check(
+                decoding && !addedAtOnce && model.canvasMask != nil && runningMask() && history.undoActionName == "Add Selection"
+                  && model.autoMask.points.isEmpty,
+                "generate: a selection still decoding is awaited, then added to the mask (“\(history.undoActionName)”), and the run carries it")
+              while model.isBusy { try? await Task.sleep(for: .milliseconds(100)) }
+              check(model.canEditMask && model.canvasUndoImage === model.image, "generate: once the result lands, it's the image mask steps go on")
+
+              // A selection ready: added at once, the run carries the mask.
               let second = SAMSegmenter.Point(location: CGPoint(x: click.x + 6, y: click.y + 6), positive: true)
+              model.clearMask(undoManager: nil)
               model.autoMask.clearPoints(model: model, undoManager: nil)
               await act { model.autoMask.addPoint(click, positive: true, model: model, undoManager: history) }
               await act { model.autoMask.addPoint(second.location, positive: true, model: model, undoManager: history) }
-              model.generate()
+              let request = model.screenRequest()
+              check(request?.mask == nil, "generate: before it, the selection isn't in the mask a run would take")
+              model.generate(undoManager: history)
+              check(
+                model.canvasMask != nil && history.undoActionName == "Add Selection" && model.autoMask.points.isEmpty
+                  && (runningMask() || model.queue.waiting.last?.request?.mask != nil),
+                "generate: a ready selection is added first, one “Add Selection” step, and the queued run carries the mask")
               var covered = false
               for _ in 0..<3000 where model.isBusy {
                 if !model.canvasShowsImage, model.canvasUndoImage != nil {
@@ -347,20 +376,17 @@ extension Automation {
                 }
                 try? await Task.sleep(for: .milliseconds(5))
               }
-              if covered {
-                let undoName = history.undoActionName
+              if covered, !model.canvasShowsImage, model.isBusy {
                 history.undo()
-                try? await Task.sleep(for: .milliseconds(50))
                 let session = model.autoMask
                 check(
-                  session.points == [SAMSegmenter.Point(location: click, positive: true)] && session.selectionWaits
-                    && session.failure == nil && session.preview == nil,
-                  "history: undoing a click under a run's preview brings the points back, selecting once the image shows (points \(session.points.count), waits \(session.selectionWaits), preview \(session.preview != nil), failure \(session.failure ?? "none"), undo name before “\(undoName)”)")
+                  session.points == [SAMSegmenter.Point(location: click, positive: true), second] && session.selectionWaits
+                    && session.failure == nil && session.preview == nil && model.canvasMask == nil,
+                  "history: undoing the add under the run's preview takes it out and brings the points back, selecting once the image shows (points \(session.points.count), waits \(session.selectionWaits), failure \(session.failure ?? "none"))")
               } else {
-                print("SKIP history: no run preview covered the canvas to undo under (ran \(model.lastSavedStep != nil), live preview \(model.livePreview != nil), error \(model.errorMessage ?? "none"))")
+                print("SKIP history: no run preview covered the canvas to undo under")
               }
               while model.isBusy { try? await Task.sleep(for: .milliseconds(100)) }
-              check(model.canEditMask && model.canvasUndoImage === model.image, "history: once the result lands, it's the image mask steps go on")
             }
             // A step on an image that's gone leaves the history and never reaches another image.
             await act { model.autoMask.addPoint(click, positive: true, model: model, undoManager: history) }

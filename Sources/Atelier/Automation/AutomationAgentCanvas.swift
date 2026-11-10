@@ -488,6 +488,29 @@ extension Automation {
         check(
           !paintedAtPoint() && selected?["encode_ms"] is NSNull,
           "subtracting the same selection takes it out, without encoding the image again (coverage \(selected?["coverage"] ?? "?"))")
+        // A selection the user made with the Select tool and didn't add: use_canvas adds it first.
+        _ = try? await call("set_canvas_mask", ["clear": true])
+        model.autoMask.clearPoints(model: model, undoManager: nil)
+        model.autoMask.addPoint(subjectPoint, positive: true, model: model, undoManager: nil)
+        while model.autoMask.isBusy { try? await Task.sleep(for: .milliseconds(20)) }
+        do {
+          // In the background, to see the step while the run goes (it leaves the history with the
+          // input image once the result lands, as every mask step does).
+          let started = try await call("generate", ["use_app_settings": true, "use_canvas": true, "background": true])
+          let during = undoManager.undoActionName
+          let addedNow = model.autoMask.points.isEmpty && model.isBusy
+          var ran = started
+          if let job = started["job_id"] as? String {
+            for _ in 0..<10 where ran["selection_added"] == nil {
+              ran = (try? await call("get_job", ["job_id": job, "wait_seconds": 30])) ?? ran
+            }
+          }
+          check(
+            ran["selection_added"] as? Bool == true && during == "Add Selection" && addedNow && paintedAtPoint(),
+            "generate use_canvas adds the Select tool's pending selection to the mask first, one “Add Selection” step (selection_added \(ran["selection_added"] ?? "missing"), “\(during)” while it ran, painted \(paintedAtPoint()))")
+        } catch {
+          check(false, "generate use_canvas with a pending selection (\(error.localizedDescription))")
+        }
       } else {
         print("SKIP auto_mask with SAM 2.1 Small: not installed")
         await expectError("auto_mask", ["points": [["x": subjectPoint.x, "y": subjectPoint.y]], "size": "small"], "Select tool", "SAM not downloaded")

@@ -127,7 +127,7 @@ enum AppLifecycle {
   static func onVolumesChanged(_ action: @escaping @MainActor () -> Void) {
     for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
       observations.append(
-        NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: nil) { _ in
+        NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { _ in
           MainActor.assumeIsolated { action() }
         })
     }

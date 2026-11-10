@@ -715,6 +715,17 @@ final class AgentTools {
     }
     if create.models.isEmpty { await create.refreshModelList() }
     await create.modelLoaded()
+    // As Generate does: a selection made with the Select tool and not yet in the mask goes in
+    // first (one “Add Selection” step), waiting for it if it's still being worked out.
+    var selectionNote: String?
+    var selectionAdded = false
+    if create.hasPendingSelection {
+      await create.settlePendingSelection()
+      await Self.settleUndo()
+      let before = create.canvasMask
+      selectionNote = Self.asOneUndoStep { create.addPendingSelection(undoManager: $0) }
+      selectionAdded = create.canvasMask != before
+    }
     if let problem = create.runTargetProblem {
       throw ToolError(problem + (create.runTargetMaskProblem != nil ? " (set_canvas_mask with clear: true clears it)" : ""))
     }
@@ -765,6 +776,8 @@ final class AgentTools {
     let saved = await create.history.image(for: item)
     let size = saved.map { ["width": $0.width, "height": $0.height] } ?? ["width": item.sidecar.width, "height": item.sidecar.height]
     var notes: [String] = []
+    if selectionAdded { notes.append("The Select tool's selection was added to the mask first.") }
+    if let selectionNote { notes.append(selectionNote) }
     if merged { notes.append("Merged into the whole image (\(size["width"]!)×\(size["height"]!)).") }
     if let parent { notes.append("It follows history step \(parent.id.logicalTime).") }
     return try await result(
@@ -772,6 +785,7 @@ final class AgentTools {
       arguments: arguments,
       extra: [
         "parent_history_step": parent?.id.logicalTime ?? NSNull(), "merged": merged,
+        "selection_added": selectionAdded,
         "canvas_size": size,
         "region": region.map(Self.json) ?? NSNull(),
       ])
