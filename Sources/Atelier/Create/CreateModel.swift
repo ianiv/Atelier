@@ -354,6 +354,8 @@ final class CreateModel {
   @ObservationIgnored var frameMaskCache: (key: String, hasPaint: Bool)?
   /// What a drag on the canvas does (on iPad the Pencil always paints and fingers move it).
   var canvasTool = CanvasTool.move
+  /// The Select tool's clicks, box and preview (`AutoMaskSession`).
+  let autoMask = AutoMaskSession()
   /// The brush's width in frame pixels.
   var brushSize = UserDefaults.standard.object(forKey: "brushSize") as? Double ?? 64 {
     didSet { UserDefaults.standard.set(brushSize, forKey: "brushSize") }

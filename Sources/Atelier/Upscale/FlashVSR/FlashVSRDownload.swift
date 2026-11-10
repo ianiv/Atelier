@@ -61,8 +61,9 @@ final class FlashVSRDownload {
     task?.cancel()
   }
 
-  /// Downloads `url` to `destination`, replacing what's there, reporting bytes written.
-  private static func download(
+  /// Downloads `url` to `destination`, replacing what's there, reporting bytes written. Also
+  /// fetches SAM 2.1's files (`SAMDownload`).
+  static func download(
     _ url: URL, to destination: URL, progress: @escaping @MainActor (Int64) -> Void
   ) async throws {
     try FileManager.default.createDirectory(

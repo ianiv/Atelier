@@ -159,13 +159,21 @@ struct CanvasView: View {
   @State private var liveStroke: CanvasMask.Stroke?
   /// The red tint of the canvas mask, redrawn when the mask changes.
   @State private var maskTint: CGImage?
+  /// The Select tool's drag: where it began and is now, in image pixels.
+  @State private var selectDrag: (start: CGPoint, end: CGPoint)?
   #if os(macOS)
     /// Space is held: a drag moves the image whatever the tool.
     @State private var spaceDown = false
+    /// Option is held: a Select click marks what to leave out.
+    @State private var optionDown = false
     @FocusState private var canvasFocused: Bool
   #else
     /// Where each finger's drag began, for moving with one finger.
     @State private var touchStart: CGPoint?
+    /// Where the Pencil's Select drag began (view points).
+    @State private var pencilStart: CGPoint?
+    /// When the Pencil last marked a point or box, so the same touch's tap doesn't mark again.
+    @State private var pencilMarkedAt: Date?
   #endif
 
   private static let margin: Double = 24
@@ -225,6 +233,12 @@ struct CanvasView: View {
               .frame(width: size.width, height: size.height)
               .position(center)
               .allowsHitTesting(false)
+            if model.canvasTool == .select {
+              selectionOverlay(image: image, scale: zoom * points)
+                .frame(width: size.width, height: size.height)
+                .position(center)
+                .allowsHitTesting(false)
+            }
           }
         }
         let isInput = model.effectiveCanvasMode == .edit && model.image != nil && model.canvasClip == nil
@@ -268,7 +282,7 @@ struct CanvasView: View {
       .clipped()
       .contentShape(.rect)
       .gesture(
-        dragGesture(canvas, points: points, center: center, zoom: zoom)
+        dragGesture(canvas, points: points, center: center, zoom: zoom, frame: frameRect)
           .simultaneously(with: zoomGesture(canvas, frame: frameRect, points: points, in: geometry.size)))
       #if os(macOS)
         .focusable(model.canPaintMask)
@@ -278,12 +292,30 @@ struct CanvasView: View {
           spaceDown = press.phase != .up
           return .handled
         }
+        // Esc clears the Select tool's points; otherwise it stops the run as before.
+        .onKeyPress(.escape) {
+          guard model.canvasTool == .select, model.autoMask.hasPrompt || model.autoMask.preview != nil else { return .ignored }
+          model.autoMask.clearPoints()
+          return .handled
+        }
+        .onModifierKeysChanged(mask: .option) { _, keys in optionDown = keys.contains(.option) }
         // A Space let go after focus moved elsewhere never arrives here.
         .onChange(of: canvasFocused) { if !canvasFocused { spaceDown = false } }
       #endif
         .onTapGesture(count: 2) {
           if canvas.scale == nil { canvas.zoom(to: 1) } else { canvas.zoomToFit() }
         }
+      #if os(iOS)
+        // A finger tap with Select marks a point (the Pencil's taps and drags go through
+        // `dragGesture`).
+        .onTapGesture { location in
+          guard model.canvasTool == .select, model.canPaintMask,
+                pencilMarkedAt.map({ Date().timeIntervalSince($0) > 0.5 }) ?? true,
+                let point = selectPoint(location, frame: frameRect, points: points)
+          else { return }
+          model.autoMask.addPoint(point, positive: !model.autoMask.negative, model: model)
+        }
+      #endif
         // The margin around a video offers its menu too, not the image one.
         .contextMenu {
           if let clip = model.canvasClip {
@@ -298,10 +330,21 @@ struct CanvasView: View {
           return true
         }
         .onChange(of: imageFit, initial: true) { canvas.fitScale = imageFit }
+        // The Select tool's own controls, over the canvas while it's the tool: outside the
+        // canvas's gestures, so a click on them doesn't mark the image.
+        // At the bottom: the moodboard sits at the top right.
+        .overlay(alignment: .bottom) {
+          if model.canvasTool == .select {
+            AutoMaskBar().padding(.bottom, 8).padding(.horizontal, 16)
+          }
+        }
     }
     .background(Color.underPageBackground.ignoresSafeArea())
     .onChange(of: model.canvasMask, initial: true) { updateMaskTint() }
-    .onChange(of: model.image.map(ObjectIdentifier.init)) { updateMaskTint() }
+    .onChange(of: model.image.map(ObjectIdentifier.init)) {
+      updateMaskTint()
+      model.autoMask.follow(model.image)
+    }
     .alert(
       "Couldn't save the image",
       isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } }),
@@ -374,32 +417,79 @@ struct CanvasView: View {
     liveStroke = nil
   }
 
+  /// The image pixel under `location` (view points), through the frame's placement of the image
+  /// (`CanvasPlacement`), for the Select tool.
+  private func selectPoint(_ location: CGPoint, frame: CGRect, points: Double) -> CGPoint? {
+    guard let placement = model.canvasPlacement else { return nil }
+    return placement.sourcePoint(fromFrame: CGPoint(x: (location.x - frame.minX) / points, y: (location.y - frame.minY) / points))
+  }
+
+  /// Follows a Select drag (or tap) from `start` to `location` (view points).
+  private func dragSelection(from start: CGPoint, to location: CGPoint, frame: CGRect, points: Double) {
+    guard let from = selectPoint(start, frame: frame, points: points),
+          let to = selectPoint(location, frame: frame, points: points)
+    else { return }
+    selectDrag = (from, to)
+  }
+
+  /// Ends a Select drag: a short one is a click (a point, `positive` or not), a longer one a box.
+  private func endSelection(from start: CGPoint, to location: CGPoint, positive: Bool) {
+    defer { selectDrag = nil }
+    guard let drag = selectDrag else { return }
+    if hypot(location.x - start.x, location.y - start.y) < 4 {
+      model.autoMask.addPoint(drag.start, positive: positive, model: model)
+    } else {
+      model.autoMask.setBox(
+        CGRect(x: drag.start.x, y: drag.start.y, width: drag.end.x - drag.start.x, height: drag.end.y - drag.start.y), model: model)
+    }
+  }
+
   #if os(macOS)
-    /// A drag paints with Brush or Eraser and moves the image with Move or while Space is held.
-    private func dragGesture(_ canvas: CanvasState, points: Double, center: CGPoint, zoom: Double) -> some Gesture {
+    /// A drag paints with Brush or Eraser, selects with Select (a click marks a point, Option-click
+    /// one to leave out, a drag a box), and moves the image with Move or while Space is held.
+    private func dragGesture(_ canvas: CanvasState, points: Double, center: CGPoint, zoom: Double, frame: CGRect) -> some Gesture {
       let paints = model.canPaintMask && model.canvasTool != .move
+      let selects = model.canvasTool == .select
       return DragGesture(minimumDistance: paints ? 0 : 2)
         .onChanged { value in
           if paints, !spaceDown, gestureStart == nil {
             canvasFocused = true
-            paint(at: value.location, erases: model.canvasTool == .eraser, center: center, zoom: zoom, points: points)
-          } else if liveStroke == nil {
+            if selects {
+              dragSelection(from: value.startLocation, to: value.location, frame: frame, points: points)
+            } else {
+              paint(at: value.location, erases: model.canvasTool == .eraser, center: center, zoom: zoom, points: points)
+            }
+          } else if liveStroke == nil, selectDrag == nil {
             pan(canvas, by: value.translation, points: points)
           }
         }
-        .onEnded { _ in
+        .onEnded { value in
           gestureStart = nil
           endStroke()
+          if selectDrag != nil {
+            endSelection(from: value.startLocation, to: value.location, positive: !optionDown)
+          }
         }
     }
   #else
     /// Apple Pencil paints (Eraser erases), whatever the tool; one finger moves the image, and two
     /// zoom (`zoomGesture`).
-    private func dragGesture(_ canvas: CanvasState, points: Double, center: CGPoint, zoom: Double) -> some Gesture {
+    private func dragGesture(_ canvas: CanvasState, points: Double, center: CGPoint, zoom: Double, frame: CGRect) -> some Gesture {
       SpatialEventGesture()
         .onChanged { events in
           let active = events.filter { $0.phase == .active }
-          if let pencil = active.first(where: { $0.kind == .pencil }) {
+          if model.canvasTool == .select, let pencil = events.first(where: { $0.kind == .pencil }) {
+            // With Select the Pencil marks: a tap a point, a drag a box.
+            guard model.canPaintMask else { return }
+            let start = pencilStart ?? pencil.location
+            pencilStart = start
+            dragSelection(from: start, to: pencil.location, frame: frame, points: points)
+            if pencil.phase != .active {
+              endSelection(from: start, to: pencil.location, positive: !model.autoMask.negative)
+              pencilStart = nil
+              pencilMarkedAt = Date()
+            }
+          } else if let pencil = active.first(where: { $0.kind == .pencil }) {
             guard model.canPaintMask else { return }
             paint(at: pencil.location, erases: model.canvasTool == .eraser, center: center, zoom: zoom, points: points)
           } else if active.count == 1, let touch = active.first, liveStroke == nil {
@@ -411,9 +501,16 @@ struct CanvasView: View {
           }
           if events.contains(where: { $0.kind == .pencil && $0.phase != .active }) { endStroke() }
         }
-        .onEnded { _ in
+        .onEnded { events in
           gestureStart = nil
           touchStart = nil
+          // A Pencil lifted in the gesture's last events, which `onChanged` doesn't see.
+          if let start = pencilStart, let pencil = events.first(where: { $0.kind == .pencil }) {
+            endSelection(from: start, to: pencil.location, positive: !model.autoMask.negative)
+            pencilMarkedAt = Date()
+          }
+          pencilStart = nil
+          selectDrag = nil
           endStroke()
         }
     }
@@ -441,6 +538,36 @@ struct CanvasView: View {
               path, with: .color(liveStroke.erases ? .white.opacity(0.5) : .red.opacity(0.45)),
               style: StrokeStyle(lineWidth: liveStroke.radius * 2 * scale, lineCap: .round, lineJoin: .round))
           }
+        }
+      }
+    }
+  }
+
+  /// The Select tool's preview tinted blue (apart from the mask's red), its points (green to
+  /// include, red to leave out) and its box, over the image.
+  private func selectionOverlay(image: CGImage, scale: Double) -> some View {
+    let session = model.autoMask
+    let preview = session.preview.flatMap { $0.image == ObjectIdentifier(image) ? $0.tint : nil }
+    return ZStack {
+      if let preview {
+        Image(decorative: preview, scale: 1)
+          .resizable()
+          .interpolation(.none)
+      }
+      Canvas { context, _ in
+        let box = selectDrag.map {
+          CGRect(x: $0.start.x, y: $0.start.y, width: $0.end.x - $0.start.x, height: $0.end.y - $0.start.y).standardized
+        } ?? session.box
+        if let box {
+          let rect = CGRect(x: box.minX * scale, y: box.minY * scale, width: box.width * scale, height: box.height * scale)
+          context.stroke(Path(rect), with: .color(.white), style: StrokeStyle(lineWidth: 2, dash: [5, 4]))
+          context.stroke(Path(rect), with: .color(.black.opacity(0.6)), style: StrokeStyle(lineWidth: 1))
+        }
+        for point in session.points {
+          let center = CGPoint(x: point.location.x * scale, y: point.location.y * scale)
+          let dot = Path(ellipseIn: CGRect(x: center.x - 6, y: center.y - 6, width: 12, height: 12))
+          context.fill(dot, with: .color(point.positive ? .green : .red))
+          context.stroke(dot, with: .color(.white), lineWidth: 2)
         }
       }
     }

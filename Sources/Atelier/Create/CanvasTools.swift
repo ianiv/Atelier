@@ -3,9 +3,10 @@ import SwiftUI
 
 /// What a drag on the canvas does. On iPad the Pencil always paints (or erases, with Eraser) and
 /// fingers always move and zoom, as in Draw Things; on the Mac a drag paints with Brush or Eraser
-/// and Space-drag moves.
+/// and Space-drag moves. Select picks what to mask by clicking and dragging a box
+/// (`AutoMaskSession`).
 enum CanvasTool: String, CaseIterable, Identifiable {
-  case move, brush, eraser
+  case move, brush, eraser, select
 
   var id: Self { self }
 
@@ -14,6 +15,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
     case .move: "Move"
     case .brush: "Brush"
     case .eraser: "Eraser"
+    case .select: "Select"
     }
   }
 
@@ -22,6 +24,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
     case .move: "hand.raised"
     case .brush: "paintbrush.pointed"
     case .eraser: "eraser"
+    case .select: "wand.and.sparkles"
     }
   }
 }

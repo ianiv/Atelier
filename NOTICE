@@ -40,6 +40,18 @@ https://huggingface.co/ruchangyao/FlashVSR_plus (the prompt embedding, posi_prom
 https://huggingface.co/deAPI-ai/flashvsr-v1-1).
 
 -------------------------------------------------------------------------------
+SAM 2.1 Core ML models
+https://huggingface.co/apple/coreml-sam2.1-tiny
+https://huggingface.co/apple/coreml-sam2.1-small
+https://huggingface.co/apple/coreml-sam2.1-large
+Apple's Core ML conversion of SAM 2.1 (Segment Anything in Images and Videos,
+https://github.com/facebookresearch/sam2), copyright Meta Platforms, Inc. and affiliates.
+Licensed under the Apache License, Version 2.0.
+
+The model behind the canvas's Select tool (clicks and boxes). Atelier doesn't ship the weights;
+it downloads them into a "SAM 2.1" folder of your models folder.
+
+-------------------------------------------------------------------------------
 Sparkle (Mac app only)
 https://github.com/sparkle-project/Sparkle
 Copyright Andy Matuschak, Sparkle Project contributors. Licensed under the MIT License.

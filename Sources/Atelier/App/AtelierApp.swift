@@ -248,6 +248,9 @@ struct AboutSettingsView: View {
       Credit(
         name: "FlashVSR and FlashVSR+", detail: "The Quality upscaler and its weights. OpenImagingLab, Apache-2.0.",
         url: "https://github.com/OpenImagingLab/FlashVSR"),
+      Credit(
+        name: "SAM 2.1 (Core ML)", detail: "Select's clicks and boxes. Apple's conversion of Meta's model, Apache-2.0.",
+        url: "https://huggingface.co/apple/coreml-sam2.1-small"),
     ]
     #if os(macOS)
       credits.append(

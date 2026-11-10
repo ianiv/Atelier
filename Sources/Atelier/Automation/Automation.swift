@@ -26,7 +26,8 @@ import SwiftUI
 /// `--project-check` exercises the project format on a scratch project, and `--edit-input-check`
 /// Use Settings on Edit steps (AutomationProject.swift). `--refine-check` refines part of an image
 /// and merges it back (AutomationRefine.swift); `--agent-canvas-check` does it through the agent
-/// canvas tools (AutomationAgentCanvas.swift). `--queue-check` runs the queue
+/// canvas tools (AutomationAgentCanvas.swift). `--automask-check` selects with Vision and SAM
+/// into the canvas mask (AutomationAutoMask.swift). `--queue-check` runs the queue
 /// (AutomationQueue.swift).
 @MainActor
 enum Automation {
@@ -39,7 +40,8 @@ enum Automation {
   nonisolated static var isRequested: Bool {
     let flags = [
       "--show", "--resize-bench", "--inspector-check", "--library-check", "--project-check",
-      "--reuse", "--generate", "--ux-check", "--edit-input-check", "--refine-check", "--agent-canvas-check", "--queue-check",
+      "--reuse", "--generate", "--ux-check", "--edit-input-check", "--refine-check", "--agent-canvas-check",
+      "--automask-check", "--queue-check",
       "--timeline-check", "--upscale-check", "--timeline-export-check", "--flashvsr-check",
       "--model-folders-check", "--styles-check", "--cleanup-check", "--engine-check", "--playback-check",
       "--remote-check", "--remote-net-check", "--remote-shots", "--remote-url-check", "--remote-tailnet-check",
@@ -93,6 +95,10 @@ enum Automation {
     }
     if args.contains("--agent-canvas-check") {
       agentCanvasCheck(model, presets: presets)
+      return
+    }
+    if args.contains("--automask-check") {
+      autoMaskCheck(model, navigation: navigation, layouts: layouts, presets: presets)
       return
     }
     if args.contains("--queue-check") {

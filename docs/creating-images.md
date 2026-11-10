@@ -137,6 +137,18 @@ The mask stays on the canvas after a run, so you can refine again, and is cleare
 
 When the image grows, the corners neither the image nor the frame covered stay empty (transparent), and the next Edit fills them in. Atelier saves such a result as Draw Things saves a canvas, as layers (the image, and the frame over it), so Draw Things shows it the same way, and Atelier shows Draw Things canvases made of several layers whole.
 
+#### Select (auto mask)
+
+The **Select** tool (the wand, next to Brush and Eraser) makes the mask for you. Its controls appear over the bottom of the canvas while it's the tool.
+
+- **Select Subject** picks the image's main subjects with Apple's subject detection, the one Photos uses to lift subjects. It needs no download. It finds people, animals and objects that stand out; a landscape with no clear subject selects nothing.
+- **Clicks and boxes** use SAM 2.1 (Segment Anything), which downloads once: press **Download** (93.9 MB for Small) and it goes into a "SAM 2.1" folder of your models folder, with progress and Cancel beside it. Until then those controls are disabled. The **SAM** menu picks the size: **Small** is the default, **Tiny** is a little faster and **Large** (457 MB) a little more exact.
+- On the Mac, click what you want (a green point), Option-click what to leave out (a red point), or drag a box around it. On iPad, tap with a finger or Apple Pencil, choose **+** or **−** to say whether a tap includes or leaves out, and drag a box with Apple Pencil; fingers still move and zoom. Each point refines the selection; the first click on an image takes a few seconds while SAM reads it, later ones are quick.
+- The selection shows in blue, apart from the red mask. **Add** puts it into the mask, **Subtract** takes it out, **Replace** makes it the whole mask. Each is one step to undo (⌘Z). **Clear Points** (or Esc) starts over.
+- Selecting by a description (the **Select:** field) isn't available yet.
+
+Select works where painting does: an image on the canvas in Edit mode, for an image model, on this device or a server that takes masks.
+
 ### Settings from an image
 
 Images made by Draw Things carry their prompt, model, seed and settings, and so do images Atelier saves. When an image you bring in has them, the status bar says so. Images made in Atelier have them too, whether they're on the canvas after a run or picked in History or the recent strip, so you can get an image's settings back after changing the inspector. A video frame put on the canvas with **Use This Frame as Input** has the video's settings. Choose **Load Settings from Image** (canvas right-click menu, or the **Image** menu) to load the prompt, negative prompt, model, seed and every setting, on top of the model's defaults like **Paste Settings**. If the image's model isn't downloaded, the settings apply to the current model. The **Random** seed checkbox stays as it is, so with Random on the next image still gets a new seed.
