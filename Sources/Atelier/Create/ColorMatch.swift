@@ -28,7 +28,7 @@ nonisolated enum ColorMatch {
 
   /// The shift taken out: the edited image's mean minus the original's, in Lab units. Positive b
   /// is warmer (yellower), positive a more magenta.
-  struct Shift: Sendable, Hashable {
+  struct Shift: Codable, Sendable, Hashable {
     var l: Double
     var a: Double
     var b: Double
@@ -55,6 +55,30 @@ nonisolated enum ColorMatch {
     /// The original's image tensor; nil when the original was the step's first moodboard image
     /// (carried over with it).
     var originalTensorId: Int64?
+    /// The shift taken out, so the Queue and agents can say what changed without measuring again.
+    /// Optional: steps saved before it was recorded don't have it.
+    var shift: Shift?
+  }
+
+  /// A queued Match Colors to Original (`GenerationEngine.Request.colorMatch`): which step, in
+  /// which project, and how. It names its project because it saves there whichever project is
+  /// open when it runs (`CreateModel.run(_:request:job:)`), and it's worked out from the project
+  /// when it runs rather than when queued, so it's kept across a quit with no images of its own.
+  struct Job: Codable, Hashable, Sendable {
+    var project: String
+    /// The edited step's image tensor, which stays the same when steps are renumbered.
+    var sourceTensorId: Int64
+    var strength: Double
+    var luminance: Bool
+    /// What the saved step records, once the job has run.
+    var record: Record?
+
+    var options: Options { Options(strength: strength, matchLuminance: luminance) }
+
+    /// The same match: its result wouldn't change, so it's never queued twice.
+    func isSameMatch(as other: Job) -> Bool {
+      project == other.project && sourceTensorId == other.sourceTensorId
+    }
   }
 
   /// Per-channel mean and population standard deviation (plus 1e-6, as the script adds), L, a, b.
@@ -73,19 +97,35 @@ nonisolated enum ColorMatch {
   // MARK: Images
 
   /// `image` with its colors matched to `reference`'s, and the shift taken out; nil when either
-  /// can't be read.
-  static func matched(_ image: CGImage, to reference: CGImage, options: Options = Options()) -> (image: CGImage, shift: Shift)? {
+  /// can't be read. `progress` hears how far it is, 0 to 1, mostly through the transfer, which
+  /// takes the time; it can throw to stop.
+  static func matched(
+    _ image: CGImage, to reference: CGImage, options: Options = Options(), progress: (Double) throws -> Void
+  ) rethrows -> (image: CGImage, shift: Shift)? {
     guard let pixels = rgba(image), let referencePixels = rgba(reference) else { return nil }
     let target = stats(rgba: downsampled(pixels, width: image.width, height: image.height))
     let source = stats(rgba: downsampled(referencePixels, width: reference.width, height: reference.height))
-    let out = transferred(rgba: pixels, target: target, reference: source, options: options)
+    try progress(0.05)
+    let out = try transferred(rgba: pixels, target: target, reference: source, options: options) { try progress(0.05 + 0.9 * $0) }
     guard let result = cgImage(rgba: out, width: image.width, height: image.height) else { return nil }
+    try progress(1)
     return (result, shift(target: target, reference: source))
   }
 
-  /// Runs `matched` away from the main actor: a large image takes a moment.
-  @concurrent static func matching(_ image: CGImage, to reference: CGImage, options: Options) async -> (image: CGImage, shift: Shift)? {
-    matched(image, to: reference, options: options)
+  /// `matched` with no progress. (A defaulted closure would make every `rethrows` call throwing.)
+  static func matched(_ image: CGImage, to reference: CGImage, options: Options = Options()) -> (image: CGImage, shift: Shift)? {
+    matched(image, to: reference, options: options) { _ in }
+  }
+
+  /// Runs `matched` away from the main actor: a large image takes a moment. Stops with
+  /// `CancellationError` when the task is cancelled, between slices of the transfer.
+  @concurrent static func matching(
+    _ image: CGImage, to reference: CGImage, options: Options, progress: @escaping @Sendable (Double) -> Void = { _ in }
+  ) async throws -> (image: CGImage, shift: Shift)? {
+    try matched(image, to: reference, options: options) { fraction in
+      try Task.checkCancellation()
+      progress(fraction)
+    }
   }
 
   /// The image's pixels as tightly packed sRGB RGBA8, not premultiplied.
@@ -175,8 +215,11 @@ nonisolated enum ColorMatch {
   /// The pixels with a and b (and L when `matchLuminance`) moved from `target`'s statistics to
   /// `reference`'s: matched = (x − target mean) · (reference std / target std) + reference mean,
   /// then x + strength · (matched − x). Done a slice at a time, so a large image's Lab planes
-  /// never all exist at once.
-  static func transferred(rgba: [UInt8], target: Stats, reference: Stats, options: Options) -> [UInt8] {
+  /// never all exist at once. `progress` hears the fraction done after each slice (at least 1%
+  /// apart, and 1 at the end); it can throw to stop.
+  static func transferred(
+    rgba: [UInt8], target: Stats, reference: Stats, options: Options, progress: (Double) throws -> Void
+  ) rethrows -> [UInt8] {
     // matched − x is linear in x, so the whole step is x · scale + offset per channel.
     func coefficients(_ channel: Int) -> (scale: Double, offset: Double) {
       let k = reference.std[channel] / target.std[channel]
@@ -188,6 +231,7 @@ nonisolated enum ColorMatch {
     let b = coefficients(2)
     var out = [UInt8](repeating: 0, count: rgba.count)
     let slice = 65536 * 4
+    var reported = 0.0
     for start in stride(from: 0, to: rgba.count, by: slice) {
       let end = min(start + slice, rgba.count)
       let pixels = Array(rgba[start..<end])
@@ -199,8 +243,19 @@ nonisolated enum ColorMatch {
       for index in alpha.indices { alpha[index] = pixels[index * 4 + 3] }
       let converted = encoded(lab: planes, alpha: alpha)
       out.replaceSubrange(start..<end, with: converted)
+      let fraction = Double(end) / Double(rgba.count)
+      if fraction - reported >= 0.01 || end == rgba.count {
+        reported = fraction
+        try progress(fraction)
+      }
     }
+    if rgba.isEmpty { try progress(1) }
     return out
+  }
+
+  /// `transferred` with no progress.
+  static func transferred(rgba: [UInt8], target: Stats, reference: Stats, options: Options) -> [UInt8] {
+    transferred(rgba: rgba, target: target, reference: reference, options: options) { _ in }
   }
 
   // MARK: Lab

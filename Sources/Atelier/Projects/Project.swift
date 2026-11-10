@@ -67,6 +67,9 @@ final nonisolated class Project: Sendable {
     DispatchQueue.global(qos: .utility).async { workspace.shutdown(flags: [], completion: nil) }
   }
 
+  /// False once `close` has run (a rename does, before moving the file).
+  var isOpen: Bool { !isClosed.withLock { $0 } }
+
   /// Finishes pending writes and closes the database. The project can't be used afterwards.
   @concurrent func close() async {
     let wasClosed = isClosed.withLock {

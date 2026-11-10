@@ -55,9 +55,10 @@ actor GenerationEngine {
     var upscale: ClipUpscale?
     /// Upscales `canvas` instead of generating (`CreateModel`'s `upscaled(image:as:request:progress:)`).
     var imageUpscale: ImageUpscale?
-    /// The result is `canvas` with its colors matched to an original (`CreateModel.matchColors`),
-    /// recorded with the saved step. Never run: it's saved directly.
-    var colorMatch: ColorMatch.Record?
+    /// Matches a saved step's colors to its original instead of generating
+    /// (`CreateModel.run(_:request:job:)`); its `record` is what the saved step keeps. Never sent to
+    /// the engine or a server.
+    var colorMatch: ColorMatch.Job?
   }
 
   /// What a run made: one frame for an image, every frame of a clip and its soundtrack for video.

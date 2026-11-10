@@ -133,4 +133,46 @@ struct ColorMatchTests {
     let back = try #require(ColorMatch.rgba(matched))
     #expect(abs(ColorMatch.stats(rgba: back).mean.z - ColorMatch.stats(rgba: original).mean.z) < 0.3)
   }
+
+  /// The Queue shows a match's progress from `transferred`, which reports after each slice.
+  @Test func transferProgressOnlyGrowsAndEndsAtOne() {
+    // Several slices of 65,536 pixels, the last one short.
+    let original = pixels(65536 * 3 + 1000)
+    let warm = shifted(original, by: SIMD3(0, 0, 4))
+    var reports: [Double] = []
+    _ = ColorMatch.transferred(
+      rgba: warm, target: ColorMatch.stats(rgba: warm), reference: ColorMatch.stats(rgba: original), options: .init()
+    ) { reports.append($0) }
+    #expect(reports.count >= 4)
+    #expect(zip(reports, reports.dropFirst()).allSatisfy { $0 <= $1 })
+    #expect(reports.last == 1)
+  }
+
+  /// A throw from `progress` stops the transfer, as Stop does to a running match.
+  @Test func transferStopsWhenProgressThrows() {
+    let original = pixels(65536 * 2)
+    var reports = 0
+    #expect(throws: CancellationError.self) {
+      try ColorMatch.transferred(
+        rgba: original, target: ColorMatch.stats(rgba: original), reference: ColorMatch.stats(rgba: original), options: .init()
+      ) { _ in
+        reports += 1
+        throw CancellationError()
+      }
+    }
+    #expect(reports == 1)
+  }
+
+  /// What a step records survives `profile_data`'s snake-case coding, shift included.
+  @Test func recordRoundTripsWithItsShift() throws {
+    let record = ColorMatch.Record(strength: 0.5, luminance: true, originalTensorId: 7, shift: .init(l: 1, a: -2, b: 3.5))
+    let encoder = JSONEncoder()
+    encoder.keyEncodingStrategy = .convertToSnakeCase
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    #expect(try decoder.decode(ColorMatch.Record.self, from: encoder.encode(record)) == record)
+    // Saved before the shift was recorded.
+    let old = try decoder.decode(ColorMatch.Record.self, from: Data(#"{"strength":1,"luminance":false}"#.utf8))
+    #expect(old.shift == nil && old.originalTensorId == nil)
+  }
 }

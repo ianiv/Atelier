@@ -109,6 +109,15 @@ final class HistoryStore {
   private var childMasks: [Int64: CanvasMask] = [:]
   /// Progress of the one-time import of the old PNG history, while it runs.
   private(set) var importProgress: (done: Int, total: Int)?
+  /// Projects other than the current one that something still holds (a queued Match Colors to
+  /// Original saving into its own project), by name, so `project(named:)` and `open` hand out the
+  /// same one rather than open a second connection to the same file.
+  @ObservationIgnored private var heldProjects: [String: WeakProject] = [:]
+
+  private final class WeakProject {
+    weak var project: Project?
+    init(_ project: Project) { self.project = project }
+  }
 
   static let defaultProjectName = "Atelier"
   private static let currentProjectKey = "currentProject"
@@ -180,7 +189,12 @@ final class HistoryStore {
   /// Makes `name` the current project, creating it if needed.
   func open(_ name: String) async {
     guard name != project.name else { return }
-    project = Project(url: Self.url(for: name))
+    // One still held (a job saving into it) is the one opened; the one left stays findable while
+    // it's held.
+    let previous = project
+    project = heldProjects.removeValue(forKey: name)?.project ?? Project(url: Self.url(for: name))
+    heldProjects[previous.name] = WeakProject(previous)
+    heldProjects = heldProjects.filter { $0.value.project != nil }
     if SessionState.isEnabled { UserDefaults.standard.set(name, forKey: Self.currentProjectKey) }
     isLoaded = false
     items = []
@@ -197,6 +211,19 @@ final class HistoryStore {
   func setOutput(_ output: ProjectOutput) {
     self.output = output
     project.output = output
+  }
+
+  /// The project called `name`, open or not, for work that reads and saves into its own project
+  /// whichever is open: the current one, else one opened for it (the same one every caller gets
+  /// while one holds it, see `heldProjects`). Nil when there's no such project file.
+  func project(named name: String) -> Project? {
+    if name == project.name { return project }
+    if let held = heldProjects[name]?.project { return held }
+    let url = Self.url(for: name)
+    guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+    let opened = Project(url: url)
+    heldProjects[name] = WeakProject(opened)
+    return opened
   }
 
   /// A name not taken yet: `base`, else `base 2`, `base 3`, …
@@ -260,12 +287,14 @@ final class HistoryStore {
     timings: GenerationTimings? = nil,
     refined: RefinedStep? = nil,
     resultMask: CanvasMask? = nil,
+    into target: Project? = nil,
     makeCurrent: () -> Bool = { true }
   ) async throws -> HistoryItem {
     var settings = request.configuration
     settings.seed = request.seed
     if output.isVideo { settings.numFrames = output.frames.count }
-    let project = project
+    // The current project, unless the caller names its own (`project(named:)`).
+    let project = target ?? project
     let dump = JSONValue.fields(of: settings)
     // The run follows the step that was current when it started, or with the canvas, the
     // canvas's step: an Edit run's input is its result's parent. When the canvas isn't exactly
@@ -315,7 +344,7 @@ final class HistoryStore {
         negativePrompt: request.negativePrompt, seed: request.seed,
         settings: dump, createdAt: finishedAt,
         duration: finishedAt.timeIntervalSince(startedAt), timings: timings, moodboard: moodboard,
-        inputTensorId: inputTensorId, after: parentTensorId, refined: refined, colorMatch: request.colorMatch)
+        inputTensorId: inputTensorId, after: parentTensorId, refined: refined, colorMatch: request.colorMatch?.record)
     }
     // An image from outside the project, saved now as a merge's input (the image itself),
     // remembers the mask it was queued with. One already in the project remembered it when the job
@@ -614,11 +643,13 @@ final class HistoryStore {
 
   /// Writes a newly generated image or clip to the output folder when Settings or the project
   /// turns that on, named like an export. Returns why it couldn't be written, if it couldn't.
-  func writeToOutputFolder(_ item: HistoryItem, image: CGImage?) async -> String? {
+  /// `project` is the one it was saved in when that isn't the current one.
+  func writeToOutputFolder(_ item: HistoryItem, image: CGImage?, in project: Project? = nil) async -> String? {
+    let output = project.map { $0 === self.project ? self.output : $0.output } ?? self.output
     guard output.effectiveSaves else { return nil }
     let access = FolderBookmarks.open(output.effectiveFolder)
     let folder = access.url
-    let name = fileName(for: item)
+    let name = project.map { "\($0.name) \(item.id.logicalTime)-\(item.sidecar.seed)" } ?? fileName(for: item)
     do {
       defer { withExtendedLifetime(access) {} }
       let file: (data: Data?, video: URL?, extension: String)

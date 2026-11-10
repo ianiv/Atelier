@@ -1,8 +1,9 @@
 import Foundation
 import Observation
 
-/// Generations (and upscaled timeline exports) waiting to run, the one running and the recent
-/// ones, in order. Each generation holds its own snapshot of the prompt, settings, seed, canvas
+/// Generations (with image and clip upscales and Match Colors to Original, which are
+/// generation jobs too) and upscaled timeline exports waiting to run, the one running and the
+/// recent ones, in order. Each generation holds its own snapshot of the prompt, settings, seed, canvas
 /// and moodboard, taken when it was queued. CreateModel runs them one at a time.
 @MainActor
 @Observable
@@ -104,9 +105,24 @@ final class JobQueue {
 
   var isEmpty: Bool { waiting.isEmpty && running == nil && runningRemote.isEmpty }
 
-  /// Whether a waiting or running job uses `model`.
+  /// Whether a waiting or running job uses `model`. A Match Colors to Original job only names the
+  /// model its step was made with; it never loads it.
   func uses(_ model: String) -> Bool {
-    running?.request?.model == model || waiting.contains { $0.request?.model == model }
+    func uses(_ job: Job) -> Bool { job.request?.model == model && job.request?.colorMatch == nil }
+    return running.map(uses) == true || waiting.contains(where: uses)
+  }
+
+  /// The waiting or running Match Colors to Original job for the same step as `match`, if any.
+  func pendingColorMatch(_ match: ColorMatch.Job) -> Job? {
+    ((running.map { [$0] } ?? []) + waiting).first { $0.request?.colorMatch?.isSameMatch(as: match) == true }
+  }
+
+  /// Records what a running Match Colors to Original job saved, so its row can say so whichever
+  /// project is open.
+  func setColorMatchRecord(_ record: ColorMatch.Record, id: UUID) {
+    guard running?.id == id, case .generation(var request)? = running?.work else { return }
+    request.colorMatch?.record = record
+    running?.work = .generation(request)
   }
 
   /// Adds jobs at the end. Ones without a step to follow go on the line being queued, or start
