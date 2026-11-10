@@ -410,6 +410,8 @@ final class CreateModel {
   /// `imageStep` changed and its image hasn't landed yet: the canvas still shows the one before,
   /// which is no longer the step's, so nothing is painted or selected on it meanwhile.
   private var awaitsStepImage = false
+  /// Set while `projectRenamed` relabels `imageStep`.
+  @ObservationIgnored private var relabelsImageStep = false
   /// The canvas image is open full size (`ImageViewer`).
   var viewingCanvasImage = false
   /// The image of the step the last run saved.
@@ -429,6 +431,8 @@ final class CreateModel {
   /// image tensor, which stays the same when steps are renumbered.
   private var imageStep: (project: String, tensorId: Int64)? {
     didSet {
+      // A project rename only relabels it (`projectRenamed`).
+      guard !relabelsImageStep else { return }
       // Before anything else changes: the size it's kept at comes from what the canvas shows.
       if let oldValue { persistCanvasMask(for: oldValue) }
       // The old image's mask and Select steps leave the history with it, and its selection.
@@ -1137,6 +1141,8 @@ final class CreateModel {
       if let full, imageStep?.tensorId == item.tensorId {
         image = full
         await restoreCanvasMask()
+      } else if full == nil, imageStep?.tensorId == item.tensorId {
+        canvasImageDidNotLoad("This image couldn't be read from the project.")
       }
     }
     let restoreMoodboard = Task {
@@ -1229,6 +1235,8 @@ final class CreateModel {
     defer { isReloadingModels = false }
     let directories = await reachableModelsDirectories()
     availableModelsDirectories = directories
+    // SAM 2.1 may be in, or go to, another folder now.
+    SAMDownload.shared.refresh()
     await engine.setModelsDirectories(directories)
     await loadModelList()
     onModelsReloaded?()
@@ -1887,6 +1895,10 @@ final class CreateModel {
           ?? runProgress(of: job)?.preview
         if followsRun() {
           imageStep = (history.project.name, item.tensorId)
+          // The result takes the preview's place: the image beneath it is the run's input, no
+          // longer the canvas's (its mask and Select steps went with the step change above).
+          canvasBeforePreview = nil
+          previewCoversCanvas = false
           canvasIsImported = false
           if let finished { image = finished }
           if let merge = request.merge, let mergedOrigin, let finished {
@@ -1896,6 +1908,7 @@ final class CreateModel {
           } else {
             canvas.zoomToFit()
           }
+          if finished == nil { canvasImageDidNotLoad("The result couldn't be shown.") }
           // Saved with it just now (or none, for a result that isn't merged).
           landedMask = (item.tensorId, canvasMask)
           maskPendingTensorId = nil
@@ -2278,6 +2291,8 @@ final class CreateModel {
       if let full, imageStep?.tensorId == item.tensorId, !imageIsPreview {
         image = full
         await restoreCanvasMask()
+      } else if full == nil, imageStep?.tensorId == item.tensorId {
+        canvasImageDidNotLoad("This image couldn't be read from the project.")
       }
     }
   }
@@ -2565,9 +2580,26 @@ extension CreateModel {
   /// it, the image beneath (whose mask the canvas still holds). Nil while the step's image is on
   /// its way, or with no image of its own.
   var canvasUndoImage: CGImage? {
-    if previewCoversCanvas { return canvasBeforePreview?.image }
+    // Only while the preview is what shows: once the result lands, it's the canvas's image.
+    if previewCoversCanvas, imageIsPreview { return canvasBeforePreview?.image }
     guard !awaitsStepImage, !isLoadingCanvasImage, canvasClip == nil, !imageIsPreview else { return nil }
     return image
+  }
+
+  /// The step's image didn't arrive: the canvas keeps showing the one before, with the mask tools
+  /// back on it rather than silently off, and says so.
+  private func canvasImageDidNotLoad(_ note: String) {
+    awaitsStepImage = false
+    statusNote = note
+  }
+
+  /// The step on the canvas is in the project now called `name`, renamed from `old`: it's the same
+  /// image, so nothing about it changes.
+  func projectRenamed(from old: String, to name: String) {
+    guard let step = imageStep, step.project == old else { return }
+    relabelsImageStep = true
+    imageStep = (name, step.tensorId)
+    relabelsImageStep = false
   }
 
   /// The canvas shows its step's own image, loaded: what mask tools may change

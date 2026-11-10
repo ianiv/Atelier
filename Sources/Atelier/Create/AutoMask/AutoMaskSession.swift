@@ -133,6 +133,9 @@ final class AutoMaskSession {
   /// The preview is Vision's subject (under `subjectPoint`, else all of them), not SAM's.
   private var subject = false
   private var subjectPoint: CGPoint?
+  /// The points came back (an undo) while a run's preview covered their image: selecting waits
+  /// until the image shows again (`resumeSelecting`).
+  private(set) var selectionWaits = false
   /// iPad has no Option key: this makes taps negative points instead.
   var negative = false
   private(set) var preview: AutoMaskSelection?
@@ -165,6 +168,7 @@ final class AutoMaskSession {
     box = nil
     subject = false
     subjectPoint = nil
+    selectionWaits = false
     preview = nil
     failure = nil
     isBusy = false
@@ -247,6 +251,12 @@ final class AutoMaskSession {
     }
   }
 
+  /// Selects from points that waited under a run's preview, once their image shows again.
+  func resumeSelecting(model: CreateModel) {
+    guard selectionWaits, let image, model.image === image, model.canEditMask else { return }
+    select(prompt, model: model)
+  }
+
   /// Shows `prompt`'s selection: SAM's or Vision's, run again (the newest run wins, `run`), or
   /// none.
   private func select(_ prompt: AutoMaskPrompt, model: CreateModel) {
@@ -257,6 +267,14 @@ final class AutoMaskSession {
     subject = prompt.subject
     subjectPoint = prompt.subjectPoint
     failure = nil
+    selectionWaits = false
+    // Under a run's preview the image can't be selected on; its points wait for it.
+    if !prompt.isEmpty, !model.canEditMask, model.canvasUndoImage === image, model.image !== image {
+      preview = nil
+      isBusy = false
+      selectionWaits = true
+      return
+    }
     if prompt.subject {
       let point = prompt.subjectPoint
       run(model) { model in try await model.subjectSelection(at: point).selection }

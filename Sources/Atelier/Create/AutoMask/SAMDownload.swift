@@ -22,6 +22,8 @@ final class SAMDownload {
 
   init() {
     refresh()
+    // A drive with a models folder on it may have come or gone.
+    AppLifecycle.onVolumesChanged { [weak self] in self?.refresh() }
   }
 
   /// The models folder a download goes into now (`SAMFiles.downloadFolder`); nil when none can.

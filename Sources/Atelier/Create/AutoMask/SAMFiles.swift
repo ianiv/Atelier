@@ -98,30 +98,56 @@ nonisolated struct SAMFiles: Sendable {
   /// The models folder SAM downloads into: one that already has a SAM folder; else the main
   /// models folder; else the first additional one, leaving out folders inside another app's
   /// container (Draw Things' own models folder, added to read its models, isn't Atelier's to
-  /// write in). Only folders that are there now and writable: one on an unmounted drive is
-  /// skipped, never made.
+  /// write in). Only folders that are there now and writable, so one on an unmounted drive is
+  /// skipped, never made; except the default models folder (~/Documents/Models), which Atelier
+  /// makes on first use, so it's taken while missing when the folder it goes in is there.
   static func downloadFolder(
-    primary: String, additional: [String], ownBundleID: String? = Bundle.main.bundleIdentifier,
+    primary: String, additional: [String], defaultPrimary: String = AppSettings.defaultModelsDirectory,
+    ownBundleID: String? = Bundle.main.bundleIdentifier, ownHome: String = NSHomeDirectory(),
     isReachable: (String) -> Bool = FolderBookmarks.isReachable
   ) -> URL? {
     let manager = FileManager.default
+    func key(_ path: String) -> String { URL(fileURLWithPath: path).standardizedFileURL.path }
+    // The default folder, not made yet: usable when its parent is there and writable.
+    let makesDefault = !primary.isEmpty && key(primary) == key(defaultPrimary) && !manager.fileExists(atPath: primary)
+      && manager.isWritableFile(atPath: URL(fileURLWithPath: primary).deletingLastPathComponent().path)
     var seen = Set<String>()
-    let folders = ([primary] + additional).filter { path in
-      !path.isEmpty && seen.insert(URL(fileURLWithPath: path).standardizedFileURL.path).inserted && isReachable(path)
-    }
-    let usable = folders.filter { manager.isWritableFile(atPath: $0) && !isInOtherAppsContainer($0, ownBundleID: ownBundleID) }
+    let usable = ([primary] + additional).enumerated().filter { index, path in
+      guard !path.isEmpty, seen.insert(key(path)).inserted else { return false }
+      if index == 0, makesDefault { return true }
+      return isReachable(path) && manager.isWritableFile(atPath: path)
+        && !isInOtherAppsContainer(path, ownBundleID: ownBundleID, ownHome: ownHome)
+    }.map(\.element)
     let chosen = usable.first { manager.fileExists(atPath: URL(fileURLWithPath: $0).appending(path: folderName).path) }
       ?? usable.first
     return chosen.map { URL(fileURLWithPath: $0, isDirectory: true) }
   }
 
-  /// Whether `path` is inside another app's sandbox container (or a group container), which
-  /// Atelier may read from but shouldn't fill with its own files.
-  static func isInOtherAppsContainer(_ path: String, ownBundleID: String?) -> Bool {
-    let components = URL(fileURLWithPath: path).standardizedFileURL.pathComponents
-    for (index, component) in components.enumerated() where index > 0 && components[index - 1] == "Library" {
-      guard component == "Containers" || component == "Group Containers", index + 1 < components.count else { continue }
-      return components[index + 1] != ownBundleID
+  /// Whether `path` is inside another app's sandbox container, which Atelier may read from but
+  /// shouldn't fill with its own files: on the Mac `~/Library/Containers/<bundle id>` or
+  /// `Group Containers/<id>` other than Atelier's own; on iPad another app's
+  /// `Containers/Data/Application/<UUID>` or `Containers/Shared/AppGroup/<UUID>` (Atelier's own is
+  /// its home folder). Symlinks resolved (`/var` is `/private/var`), compared ignoring case as the
+  /// file system does.
+  static func isInOtherAppsContainer(_ path: String, ownBundleID: String?, ownHome: String = NSHomeDirectory()) -> Bool {
+    func components(_ path: String) -> [String] {
+      var parts = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.pathComponents.map { $0.lowercased() }
+      // `/private/var` and `/var` are one folder; resolving only strips `/private` from paths
+      // that exist.
+      if parts.count > 2, parts[1] == "private", ["var", "tmp", "etc"].contains(parts[2]) { parts.remove(at: 1) }
+      return parts
+    }
+    let parts = components(path)
+    for index in parts.indices.dropFirst() where parts[index - 1] == "library" {
+      guard parts[index] == "containers" || parts[index] == "group containers", index + 1 < parts.count else { continue }
+      return parts[index + 1] != ownBundleID?.lowercased()
+    }
+    for index in parts.indices where parts[index] == "containers" && index + 3 < parts.count {
+      let kind = (parts[index + 1], parts[index + 2])
+      guard kind == ("data", "application") || kind == ("shared", "appgroup") else { continue }
+      let container = Array(parts[...(index + 3)])
+      let home = components(ownHome)
+      return !(home.count >= container.count && Array(home[..<container.count]) == container)
     }
     return false
   }

@@ -74,6 +74,11 @@ enum AppLifecycle {
     observe(UIApplication.didBecomeActiveNotification, action)
   }
 
+  /// iPad has no notice of a drive coming or going: coming back to the app is when to look again.
+  static func onVolumesChanged(_ action: @escaping @MainActor () -> Void) {
+    onBecomeActive(action)
+  }
+
   static func onEnterBackground(_ action: @escaping @MainActor () -> Void) {
     observe(UIApplication.didEnterBackgroundNotification, action)
   }

@@ -346,6 +346,7 @@ struct CanvasView: View {
       updateMaskTint()
       // A run's preview over the image doesn't end its selection: its steps still undo.
       model.autoMask.follow(model.canvasUndoImage ?? model.image)
+      model.autoMask.resumeSelecting(model: model)
     }
     .alert(
       "Couldn't save the image",

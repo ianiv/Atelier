@@ -1109,7 +1109,9 @@ struct ProjectMenu: View {
         await history.open(history.projectNames.contains(name) ? history.availableName(name) : name)
       case .rename:
         do {
+          let old = history.project.name
           try await history.renameCurrent(to: name)
+          create.projectRenamed(from: old, to: history.project.name)
         } catch {
           self.error = error.localizedDescription
         }

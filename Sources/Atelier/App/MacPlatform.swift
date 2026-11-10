@@ -123,6 +123,16 @@ enum AppLifecycle {
     observe(NSApplication.didBecomeActiveNotification, action)
   }
 
+  /// A drive was connected or ejected (folders on it come and go).
+  static func onVolumesChanged(_ action: @escaping @MainActor () -> Void) {
+    for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
+      observations.append(
+        NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: nil) { _ in
+          MainActor.assumeIsolated { action() }
+        })
+    }
+  }
+
   /// Set by `quit()`, which scripted runs call, so they don't stop to ask.
   fileprivate static var isQuittingWithoutAsking = false
 

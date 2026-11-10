@@ -260,11 +260,27 @@ struct SAMFolderTests {
     return url.path
   }
 
-  private static func choose(_ primary: String, _ additional: [String]) -> String? {
+  private static func choose(_ primary: String, _ additional: [String], defaultPrimary: String = "/nonexistent/Models") -> String? {
     SAMFiles.downloadFolder(
-      primary: primary, additional: additional, ownBundleID: "ca.blogaholics.Atelier",
-      isReachable: { FileManager.default.fileExists(atPath: $0) }
+      primary: primary, additional: additional, defaultPrimary: defaultPrimary, ownBundleID: "ca.blogaholics.Atelier",
+      ownHome: "/Users/x", isReachable: { FileManager.default.fileExists(atPath: $0) }
     )?.path
+  }
+
+  /// The default models folder isn't made until something goes in it: a download may make it,
+  /// when the folder it goes in is there.
+  @Test func theDefaultModelsFolderCanBeMadeForIt() throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: "SAMFolderTests-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let documents = try Self.folder(root, "Documents")
+    let models = URL(fileURLWithPath: documents).appending(path: "Models").path
+    let atelier = try Self.folder(root, "Atelier")
+    #expect(Self.choose(models, [atelier], defaultPrimary: models) == models)
+    #expect(!FileManager.default.fileExists(atPath: models))
+    // Not another missing folder, nor the default where its parent is gone too.
+    #expect(Self.choose(models, [atelier]) == atelier)
+    let deep = root.appending(path: "Gone/Documents/Models").path
+    #expect(Self.choose(deep, [atelier], defaultPrimary: deep) == atelier)
   }
 
   @Test func theDownloadGoesWhereItCan() throws {
@@ -292,12 +308,31 @@ struct SAMFolderTests {
     #expect(Self.choose(main, [container, atelier]) == main)
   }
 
+  @Test func aSymlinkIntoAContainerCounts() throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: "SAMFolderTests-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let container = try Self.folder(root, "Library/Containers/com.liuliu.draw-things/Data/Documents/Models")
+    let link = root.appending(path: "DT Models").path
+    try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: container)
+    #expect(SAMFiles.isInOtherAppsContainer(link, ownBundleID: "ca.blogaholics.Atelier"))
+    #expect(Self.choose("/nonexistent/Models", [link]) == nil)
+  }
+
   @Test func containersAreOtherAppsUnlessTheyreOurs() {
     let draw = "/Users/x/Library/Containers/com.liuliu.draw-things/Data/Documents/Models"
     #expect(SAMFiles.isInOtherAppsContainer(draw, ownBundleID: "ca.blogaholics.Atelier"))
     #expect(!SAMFiles.isInOtherAppsContainer("/Users/x/Library/Containers/ca.blogaholics.Atelier/Data/Models", ownBundleID: "ca.blogaholics.Atelier"))
     #expect(SAMFiles.isInOtherAppsContainer("/Users/x/Library/Group Containers/group.other/Models", ownBundleID: "ca.blogaholics.Atelier"))
     #expect(!SAMFiles.isInOtherAppsContainer("/Users/x/Atelier", ownBundleID: "ca.blogaholics.Atelier"))
+    // Case as the file system ignores it.
+    #expect(SAMFiles.isInOtherAppsContainer("/Users/x/library/CONTAINERS/com.liuliu.draw-things/Data", ownBundleID: "ca.blogaholics.Atelier"))
+    #expect(!SAMFiles.isInOtherAppsContainer("/Users/x/Library/Containers/CA.Blogaholics.Atelier/Data", ownBundleID: "ca.blogaholics.Atelier"))
+    // iPad: another app's container, or an app group, but not Atelier's own (its home), with
+    // /var and /private/var the same folder.
+    let own = "/private/var/mobile/Containers/Data/Application/AAAA-1111"
+    #expect(SAMFiles.isInOtherAppsContainer("/var/mobile/Containers/Data/Application/BBBB-2222/Documents/Models", ownBundleID: "x", ownHome: own))
+    #expect(!SAMFiles.isInOtherAppsContainer("/var/mobile/Containers/Data/Application/aaaa-1111/Documents/Models", ownBundleID: "x", ownHome: own))
+    #expect(SAMFiles.isInOtherAppsContainer("/private/var/mobile/Containers/Shared/AppGroup/CCCC/Models", ownBundleID: "x", ownHome: own))
   }
 
   @Test func anInstalledSizeIsFoundInAnyFolder() throws {

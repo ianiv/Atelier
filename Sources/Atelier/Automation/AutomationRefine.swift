@@ -92,7 +92,34 @@ extension Automation {
       if let request = model.screenRequest() {
         check(request.mask != nil && request.merge != nil, "the run carries the mask and merges")
       }
-      guard let a = await run(), let imageA = await model.history.image(for: a) else {
+      // Watched closely: between the result landing and the run's end (writing it out), mask
+      // steps belong to the result, not the image the preview covered.
+      let previousStep = model.lastSavedStep
+      // Saving to an output folder (a scratch one) is the wait between the two.
+      let outputBefore = model.history.output
+      let outputFolder = FileManager.default.temporaryDirectory.appending(path: "atelier-refine-output-\(UUID().uuidString)")
+      try? FileManager.default.createDirectory(at: outputFolder, withIntermediateDirectories: true)
+      model.history.setOutput(ProjectOutput(saves: true, folder: outputFolder.path))
+      defer { try? FileManager.default.removeItem(at: outputFolder) }
+      model.generate()
+      var landedState: Bool?
+      try? await Task.sleep(for: .milliseconds(50))
+      while model.isBusy {
+        if landedState == nil, model.lastSavedStep != previousStep, model.canvasShowsImage {
+          landedState = model.canvasUndoImage === model.image && model.canEditMask
+        }
+        // Every turn of the main actor, so the moment between the two isn't missed.
+        await Task.yield()
+      }
+      await idle()
+      model.history.setOutput(outputBefore)
+      if let landedState {
+        check(landedState, "(a) as the result lands, mask steps go on the result")
+      } else {
+        print("SKIP (a) the result landed and the run ended between two looks")
+      }
+      let a0 = model.lastSavedStep != previousStep ? model.lastSavedStep.flatMap { model.history.item($0) } : nil
+      guard let a = a0, let imageA = await model.history.image(for: a) else {
         check(false, "(a) the masked run saved nothing")
         return finish()
       }
@@ -109,6 +136,17 @@ extension Automation {
         layersA.count == 2 && layersA[0].maskId > 0 && layersA[0].tensorId == a.inputTensorId,
         "(a) it's stored as two layers, the input's own tensor with the mask under the frame (\(layersA.map { "\($0.tensorId)/\($0.maskId)@\($0.x),\($0.y)" }))")
       check(model.canvasMask != nil, "(a) the mask stays on the canvas after the run")
+      do {
+        let undo = UndoManager()
+        undo.groupsByEvent = false
+        let before = model.canvasMask
+        undo.beginUndoGrouping()
+        let painted = model.addMaskStrokes([.rect(CGRect(x: 0, y: 0, width: 16, height: 16))], actionName: "Brush Stroke", undoManager: undo)
+        undo.endUndoGrouping()
+        let changed = model.canvasMask != before
+        undo.undo()
+        check(painted && changed && model.canvasMask == before, "(a) a stroke on the result undoes on it")
+      }
 
       // (b) Zoomed 2× on the top-left quadrant, no mask.
       model.prompt = "a watercolor painting"
