@@ -1357,10 +1357,15 @@ final class CreateModel {
     self.settings = configuration
   }
 
-  /// Replaces the inspector's values as one undo step, for an agent's edits.
-  func replaceSettings(with configuration: PipelineConfiguration, actionName: String, undoManager: UndoManager?) {
+  /// Replaces the inspector's values as one undo step, for an agent's edits. Undo goes back to
+  /// `restoring` (by default the values now): an agent that applied a preset without undo first
+  /// makes the preset and its edits one step.
+  func replaceSettings(
+    with configuration: PipelineConfiguration, restoring: PipelineConfiguration? = nil, actionName: String,
+    undoManager: UndoManager?
+  ) {
     guard let settings else { return }
-    registerUndo(restoring: settings, undoManager, actionName: actionName)
+    registerUndo(restoring: restoring ?? settings, undoManager, actionName: actionName)
     self.settings = configuration
   }
 

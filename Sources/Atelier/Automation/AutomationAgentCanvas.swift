@@ -38,6 +38,9 @@ extension Automation {
       let tools = AgentTools(create: model, presets: presets)
       /// A tool's answer: its structured content, else its text parsed as JSON.
       @MainActor func call(_ name: String, _ arguments: [String: Any] = [:]) async throws -> [String: Any] {
+        // Let the run loop turn first, as it does between an MCP client's requests: the undo
+        // manager closes each pass's event group then.
+        try? await Task.sleep(for: .milliseconds(20))
         let result = try await tools.call(name, arguments: arguments) { _ in }
         if let structured = result["structuredContent"] as? [String: Any] { return structured }
         let text = (result["content"] as? [[String: Any]])?.first?["text"] as? String ?? "{}"
@@ -83,6 +86,16 @@ extension Automation {
         await idle()
         model.resetToModelDefaults(undoManager: nil)
       }
+      // One undo manager for the whole run, chosen now: the window's (which can come up after the
+      // model list), or a stand-in when a launch with the screen locked opens no window.
+      for _ in 0..<100 where AgentTools.mainWindowUndoManager == nil {
+        try? await Task.sleep(for: .milliseconds(100))
+      }
+      let undoManager = AgentTools.mainWindowUndoManager ?? UndoManager()
+      if AgentTools.mainWindowUndoManager == nil {
+        print("note: no main window (is the screen locked?); undoing with a stand-in undo manager")
+      }
+      AgentTools.undoManagerForChecks = undoManager
       // The input's shape at about a quarter megapixel, so a fitted image fills the frame.
       let frame = CanvasPlacement.frameSize(forRegion: CGSize(width: input.width, height: input.height), pixelCount: 512 * 512)
       do {
@@ -100,16 +113,15 @@ extension Automation {
       check(
         model.settings?.maskBlur == 4 && model.mergeIntoImage && model.settings?.width == Int(frame.width),
         "set_create_screen sets the size, mask blur and Merge into Image")
-      // The window can come up after the model list.
-      for _ in 0..<100 where AgentTools.mainWindowUndoManager == nil {
-        try? await Task.sleep(for: .milliseconds(100))
-      }
-      if AgentTools.mainWindowUndoManager == nil {
-        // A launch while the screen is locked opens no window: undo as the window would.
-        print("note: no main window (is the screen locked?); undoing with a stand-in undo manager")
-        AgentTools.undoManagerWithoutWindow = UndoManager()
-      }
-      let undoManager = AgentTools.mainWindowUndoManager
+      // A reset and the edits after it in one call are one ⌘Z step.
+      _ = try? await call("set_create_screen", ["reset_settings": true, "steps": 3])
+      let resetApplied = model.settings?.steps == 3 && model.settings?.width != Int(frame.width)
+      try? await Task.sleep(for: .milliseconds(20))
+      undoManager.undo()
+      check(
+        resetApplied && model.settings?.steps == Int(value("--steps") ?? "4") ?? 4 && model.settings?.width == Int(frame.width)
+          && model.settings?.maskBlur == 4,
+        "reset_settings with steps is one ⌘Z step")
 
       // Errors on an empty canvas, each naming set_canvas_image.
       model.clearCanvas()
@@ -141,7 +153,7 @@ extension Automation {
         near(summary?["coverage"] as? Double ?? 0, 0.25) && same(rect(summary?["bounds"]), center)
           && summary?["sent_with_next_run"] as? Bool == true,
         "replace: a centered rect covers a quarter (\(summary?["coverage"] ?? "?")), bounds match, the next run sends it")
-      check(undoManager?.undoActionName == CreateModel.agentMaskActionName, "the change is an “Agent Mask” undo step (\(undoManager?.undoActionName ?? "none"))")
+      check(undoManager.undoActionName == CreateModel.agentMaskActionName, "the change is an “Agent Mask” undo step (\(undoManager.undoActionName))")
       summary = try? await call("set_canvas_mask", ["mode": "add", "shapes": [["shape": "ellipse", "x": 0, "y": 0, "width": width / 8, "height": height / 8]]])
       let added = summary?["coverage"] as? Double ?? 0
       check(added > 0.25 + 0.005, "add: an ellipse in the corner adds to it (\(added))")
@@ -152,14 +164,40 @@ extension Automation {
       check(near(summary?["coverage"] as? Double ?? 0, 0.125), "subtract: half the rect taken away (\(summary?["coverage"] ?? "?"))")
       summary = try? await call("set_canvas_mask", ["invert": true])
       check(near(summary?["coverage"] as? Double ?? 0, 0.875), "invert flips it (\(summary?["coverage"] ?? "?"))")
-      undoManager?.undo()
+      undoManager.undo()
       check(near(coverage(), 0.125), "⌘Z undoes the agent's invert (\(coverage()))")
       // Shapes and invert in one call: one undo step.
       _ = try? await call("set_canvas_mask", ["mode": "add", "shapes": [["shape": "polygon", "points": [[0, height], [width / 4, height], [0, height * 3 / 4]]]], "invert": true])
-      undoManager?.undo()
+      undoManager.undo()
       check(near(coverage(), 0.125), "one call with a shape and invert is one undo step (\(coverage()))")
       summary = try? await call("set_canvas_mask", ["clear": true])
       check(summary?["has_mask"] as? Bool == false && model.canvasMask == nil, "clear clears it")
+
+      // A user's change registered in the same run-loop pass as an agent call (no turn between),
+      // so its event group is open when the agent's change comes. Closing that group from the
+      // agent made the undo manager throw when it closed it itself; now the agent waits for it,
+      // then joins it (AppKit closes it at the next event, so with none it stays open), and the
+      // calls after it are steps of their own again.
+      try? await Task.sleep(for: .milliseconds(50))
+      var userUndone = false
+      undoManager.registerUndo(withTarget: model) { _ in userUndone = true }
+      undoManager.setActionName("User Change")
+      let userGroupOpen = undoManager.groupingLevel == 1
+      _ = try? await tools.call("set_canvas_mask", arguments: ["shapes": [rectShape]]) { _ in }
+      let masked = near(coverage(), 0.25)
+      // Run-loop passes end here; a group closed out from under the undo manager would throw now.
+      try? await Task.sleep(for: .milliseconds(300))
+      let joined = undoManager.groupingLevel == 1
+      undoManager.undo()
+      if !joined, !userUndone { undoManager.undo() }
+      check(
+        userGroupOpen && masked && userUndone && model.canvasMask == nil,
+        "an agent mask while a user's change holds the group open waits, doesn't crash, and undoes (\(joined ? "joined the user's step" : "a step of its own"))")
+      _ = try? await call("set_canvas_mask", ["shapes": [rectShape]])
+      _ = try? await call("set_canvas_mask", ["invert": true])
+      undoManager.undo()
+      check(near(coverage(), 0.25) && undoManager.groupingLevel == 0, "after it, agent calls are steps of their own again (\(coverage()))")
+      _ = try? await call("set_canvas_mask", ["clear": true])
 
       // An image mask, white on the left half.
       let leftHalf = CanvasMask(rects: [CGRect(x: 0, y: 0, width: width / 2, height: height)]).image(sourceSize: CGSize(width: width, height: height))
@@ -233,7 +271,7 @@ extension Automation {
       check(
         square && same(rect(state?["region"]), CGRect(x: 0, y: 0, width: height, height: height)),
         "size_to_region makes the output square and shows the square region (\(model.settings?.width ?? 0)×\(model.settings?.height ?? 0))")
-      undoManager?.undo()
+      undoManager.undo()
       check(model.settings?.width == Int(frame.width) && model.settings?.height == Int(frame.height), "⌘Z puts the output size back")
       _ = try? await call("set_canvas_region", ["fit": true])
       await expectError("set_canvas_region", ["scale": 100], "0.05", "a scale out of range")

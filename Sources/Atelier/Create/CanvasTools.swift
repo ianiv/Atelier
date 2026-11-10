@@ -88,10 +88,12 @@ extension CreateModel {
   /// frame showing part of the image, reaching past it, or with a mask painted.
   var canMergeIntoImage: Bool {
     guard effectiveCanvasMode == .edit, videoModel == nil, let canvasPlacement else { return false }
-    // As `setRefineInputs` decides for the request Generate would queue.
-    return RefineMerge.applies(
-      placement: canvasPlacement, scale: canvas.scale, offset: canvas.offset,
-      hasMask: runTargetTakesMasks && screenFrameHasPaint)
+    // As `setRefineInputs` decides for the request Generate would queue. The placement alone
+    // settles it while panning or zooming, without rasterizing the mask for each new frame.
+    if RefineMerge.applies(placement: canvasPlacement, scale: canvas.scale, offset: canvas.offset, hasMask: false) {
+      return true
+    }
+    return runTargetTakesMasks && screenFrameHasPaint
   }
 
   // MARK: Mask

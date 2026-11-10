@@ -400,9 +400,9 @@ final class AgentTools {
     case "get_create_screen": return try Self.textResult(json: createScreen())
     case "set_create_screen": return try await setCreateScreen(arguments)
     case "set_canvas_image": return try await setCanvasImage(arguments)
-    case "set_canvas_mask": return try setCanvasMask(arguments)
+    case "set_canvas_mask": return try await setCanvasMask(arguments)
     case "get_canvas_mask": return try getCanvasMask(arguments)
-    case "set_canvas_region": return try setCanvasRegion(arguments)
+    case "set_canvas_region": return try await setCanvasRegion(arguments)
     case "list_history": return try Self.textResult(json: listHistory(arguments))
     case "get_image": return try await getImage(arguments)
     case "generate": return try await startGenerate(arguments, progress: progress)
@@ -671,14 +671,16 @@ final class AgentTools {
     }
     if create.models.isEmpty { await create.refreshModelList() }
     await create.modelLoaded()
-    _ = try canvasImage()
     if let problem = create.runTargetProblem {
       throw ToolError(problem + (create.runTargetMaskProblem != nil ? " (set_canvas_mask with clear: true clears it)" : ""))
     }
     guard var request = create.screenRequest(), let model = create.selectedModel else {
       throw ToolError(create.errorMessage ?? "The Create screen has no model or settings loaded yet.")
     }
+    // The request's own canvas, not what the canvas shows: while a run's preview covers it, Generate
+    // still takes the image beneath.
     guard request.canvas != nil else {
+      if !create.canvasShowsImage { try canvasImage() }
       throw ToolError(
         create.canvasMode == .generate
           ? "The canvas is in Generate mode, so a run wouldn't take it. Call set_create_screen with canvas_mode \"edit\"."
@@ -693,7 +695,7 @@ final class AgentTools {
     }
     request.seed = seed
     if create.videoModel?.takesAudio == true, create.audio.url != nil { request.audio = create.audio.snapshot() }
-    let region = create.canvasPlacement?.cropRect
+    let region = request.merge?.placement.cropRect ?? create.canvasPlacement?.cropRect
     let merged = request.merge != nil
 
     let summary = String(request.prompt.prefix(60))
@@ -894,6 +896,9 @@ final class AgentTools {
     }
     await create.modelLoaded()
     guard let model = create.selectedModel else { throw ToolError("No model is downloaded.") }
+    // The preset or reset and the edits after it are one ⌘Z step, registered once at the end,
+    // and only when something changed.
+    let before = create.settings
 
     if let name = arguments["preset"] as? String {
       // This model's or a shared preset first, else one for another downloaded model.
@@ -902,10 +907,10 @@ final class AgentTools {
         let preset = named.first(where: { $0.model == nil || $0.model == model })
           ?? named.first(where: { preset in create.models.contains { $0.file == preset.model } })
       else { throw ToolError("No preset “\(name)” for a downloaded model. See list_presets.") }
-      Self.asOneUndoStep { create.apply(preset, undoManager: $0) }
+      create.apply(preset, undoManager: nil)
       await create.modelLoaded()
     } else if arguments["reset_settings"] as? Bool == true {
-      Self.asOneUndoStep { create.resetToModelDefaults(undoManager: $0) }
+      create.resetToModelDefaults(undoManager: nil)
     }
 
     guard var configuration = create.settings else {
@@ -951,8 +956,13 @@ final class AgentTools {
         notes.append("\(model) isn't a video model, so num_frames and seconds were ignored.")
       }
     }
-    if changed {
-      Self.asOneUndoStep { create.replaceSettings(with: configuration, actionName: "Agent Settings", undoManager: $0) }
+    // A preset for another model switched models: undo can't go back across that, so the step
+    // starts from the new model's values, as the inspector's own undo does.
+    let restoring = before?.model == configuration.model ? before : create.settings
+    if let restoring, changed || !Self.sameSettings(restoring, create.settings) {
+      await Self.asOneUndoStep {
+        create.replaceSettings(with: configuration, restoring: restoring, actionName: "Agent Settings", undoManager: $0)
+      }
     }
 
     if let prompt = arguments["prompt"] as? String {
@@ -1079,7 +1089,7 @@ final class AgentTools {
     return try Self.textResult(json: canvasState())
   }
 
-  private func setCanvasMask(_ arguments: [String: Any]) throws -> [String: Any] {
+  private func setCanvasMask(_ arguments: [String: Any]) async throws -> [String: Any] {
     let image = try canvasImage()
     let sourceRect = CGRect(x: 0, y: 0, width: image.width, height: image.height)
     let size = "\(image.width)×\(image.height)"
@@ -1135,8 +1145,12 @@ final class AgentTools {
       throw ToolError(
         "\(create.runTargetServerName ?? "The server") can't take masks: its Atelier is older. Run on this device (Run on in the app), or only clear the mask.")
     }
-    Self.asOneUndoStep {
-      create.setMask(mask.strokes.isEmpty ? nil : mask, actionName: CreateModel.agentMaskActionName, undoManager: $0)
+    // The mask is checked against the image now: waiting for the pass to end mustn't land it on
+    // another one.
+    let imageID = ObjectIdentifier(image)
+    await Self.asOneUndoStep { undoManager in
+      guard create.image.map(ObjectIdentifier.init) == imageID else { return }
+      create.setMask(mask.strokes.isEmpty ? nil : mask, actionName: CreateModel.agentMaskActionName, undoManager: undoManager)
     }
     var result = maskSummary()
     if !notes.isEmpty { result["notes"] = notes }
@@ -1229,7 +1243,7 @@ final class AgentTools {
     return ["content": content, "structuredContent": Self.tidy(summary)]
   }
 
-  private func setCanvasRegion(_ arguments: [String: Any]) throws -> [String: Any] {
+  private func setCanvasRegion(_ arguments: [String: Any]) async throws -> [String: Any] {
     let image = try canvasImage()
     let sourceSize = CGSize(width: image.width, height: image.height)
     let sourceRect = CGRect(origin: .zero, size: sourceSize)
@@ -1248,14 +1262,14 @@ final class AgentTools {
     var notes: [String] = []
 
     /// Sets the output size to `area`'s shape at about the current pixel count, as one undo step.
-    func size(to area: CGSize) {
+    func size(to area: CGSize) async {
       guard sizeToRegion, var configuration = create.settings else { return }
       let size = CanvasPlacement.frameSize(
         forRegion: area, pixelCount: Double(configuration.width * configuration.height))
       guard Int(size.width) != configuration.width || Int(size.height) != configuration.height else { return }
       configuration.width = Int(size.width)
       configuration.height = Int(size.height)
-      Self.asOneUndoStep { create.replaceSettings(with: configuration, actionName: "Agent Settings", undoManager: $0) }
+      await Self.asOneUndoStep { create.replaceSettings(with: configuration, actionName: "Agent Settings", undoManager: $0) }
       notes.append("The output size is now \(configuration.width)×\(configuration.height).")
     }
 
@@ -1268,7 +1282,7 @@ final class AgentTools {
       guard region.intersects(sourceRect) else {
         throw ToolError("`region` doesn't overlap the \(image.width)×\(image.height) canvas image (its pixels from the top left).")
       }
-      size(to: region.size)
+      await size(to: region.size)
       guard let frameSize = create.frameSize else { throw ToolError("The Create screen has no output size yet.") }
       let grown = CanvasPlacement.grown(region, toShapeOf: frameSize)
       let wanted = CanvasPlacement.zoomAndOffset(showing: grown, sourceSize: sourceSize, frameSize: frameSize).scale
@@ -1282,7 +1296,7 @@ final class AgentTools {
           "Showing that region needs a zoom of \(String(format: "%.3g", wanted))×, outside the canvas's 0.05×–32×, so the frame shows `region` instead.")
       }
     } else if fit {
-      size(to: sourceSize)
+      await size(to: sourceSize)
       create.canvas.zoomToFit()
     } else if actualSize {
       create.canvas.zoom(to: 1)
@@ -1396,27 +1410,43 @@ final class AgentTools {
 
   /// The main window's undo manager, which the Create screen's ⌘Z uses.
   static var mainWindowUndoManager: UndoManager? {
-    NSApp.windows.first { $0.identifier?.rawValue.hasPrefix("main") == true && $0.isVisible }?.undoManager
-      ?? undoManagerWithoutWindow
+    undoManagerForChecks
+      ?? NSApp.windows.first { $0.identifier?.rawValue.hasPrefix("main") == true && $0.isVisible }?.undoManager
   }
 
-  /// What scripted checks undo with when no window comes up (a launch while the screen is locked
-  /// opens none). Never set in normal use.
-  static var undoManagerWithoutWindow: UndoManager?
+  /// The undo manager a scripted check chose for its whole run (the window's, or a stand-in when
+  /// a launch with the screen locked opens no window). Never set in normal use.
+  static var undoManagerForChecks: UndoManager?
 
-  /// Makes `change` a ⌘Z step of its own on the main window's undo manager. It groups by event,
-  /// and calls reach the main actor through dispatch, not as events: a change registered with no
-  /// group open starts one that AppKit only closes at the next user event, gathering every call
-  /// until then into one step. So an open event group is closed first, as `undo()` itself does
-  /// (agents never leave one of their own open), and the change gets a group that closes as it
-  /// returns.
+  /// Whether two configurations hold the same value for every setting.
+  private static func sameSettings(_ a: PipelineConfiguration?, _ b: PipelineConfiguration?) -> Bool {
+    guard let a, let b else { return a == nil && b == nil }
+    return a.model == b.model && SettingsRegistry.all.allSatisfy { $0.get(a) == $0.get(b) }
+  }
+
+  /// Makes `change` (which registers undo) a ⌘Z step of its own on the main window's undo
+  /// manager. It groups by event, and agent calls reach the main actor through dispatch, not as
+  /// events: with no user event between calls, AppKit never closes the event group a change
+  /// opens (`beginUndoGrouping` at level 0 opens one too), so every call until the next event
+  /// would be one step. So at level 0 the change gets a plain group, with grouping by event off
+  /// just while it's open, and leaves nothing open. A group already open belongs to the undo
+  /// manager or a user's event, which close it (closing it here would make their close throw):
+  /// this waits a moment for that, then joins it, as a change of the user's would.
   @discardableResult
-  private static func asOneUndoStep<T>(_ change: (UndoManager?) throws -> T) rethrows -> T {
+  private static func asOneUndoStep<T>(_ change: (UndoManager?) throws -> T) async rethrows -> T {
     guard let undoManager = mainWindowUndoManager else { return try change(nil) }
-    if undoManager.groupsByEvent, undoManager.groupingLevel == 1 { undoManager.endUndoGrouping() }
+    let deadline = Date().addingTimeInterval(0.3)
+    while undoManager.groupingLevel > 0, Date() < deadline {
+      try? await Task.sleep(for: .milliseconds(5))
+    }
     guard undoManager.groupingLevel == 0 else { return try change(undoManager) }
+    let groupsByEvent = undoManager.groupsByEvent
+    undoManager.groupsByEvent = false
     undoManager.beginUndoGrouping()
-    defer { undoManager.endUndoGrouping() }
+    defer {
+      undoManager.endUndoGrouping()
+      undoManager.groupsByEvent = groupsByEvent
+    }
     return try change(undoManager)
   }
 
