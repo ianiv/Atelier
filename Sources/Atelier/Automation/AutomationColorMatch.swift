@@ -7,7 +7,8 @@ extension Automation {
   /// puts the copy on the canvas, matches it from the canvas menu's action, and prints PASS/FAIL
   /// lines: the result is a new step after the edit, the reported Δb is the shift put in, the
   /// result's colors are the original's, the canvas shows it, matching it again goes back to the
-  /// same original, and the action is unavailable for a step with no original and for a video.
+  /// same original, and the action is unavailable for a step with no original, for a video, and for a
+  /// step whose moodboard images all have weight 0.
   ///
   ///   Atelier --color-match-check --project NAME [--input-image FILE] [--quit]
   ///
@@ -90,6 +91,8 @@ extension Automation {
       let edit: HistoryItem
       let plain: HistoryItem
       let video: HistoryItem
+      var unweighted: HistoryItem
+      var weighted: HistoryItem
       do {
         edit = try await history.save(
           GenerationEngine.Output(frames: [warmTensor]), request: request, startedAt: Date(), finishedAt: Date())
@@ -101,6 +104,14 @@ extension Automation {
         var clip = GenerationEngine.Output(frames: [originalTensor, warmTensor])
         clip.framesPerSecond = 8
         video = try await history.save(clip, request: generated, startedAt: Date(), finishedAt: Date())
+        // Steps made from a moodboard image alone: at weight 0 the model didn't take it.
+        var moodboarded = generated
+        moodboarded.moodboard = [GenerationEngine.Reference(image: original, weight: 0)]
+        unweighted = try await history.save(
+          GenerationEngine.Output(frames: [warmTensor]), request: moodboarded, startedAt: Date(), finishedAt: Date())
+        moodboarded.moodboard = [GenerationEngine.Reference(image: original, weight: 1)]
+        weighted = try await history.save(
+          GenerationEngine.Output(frames: [warmTensor]), request: moodboarded, startedAt: Date(), finishedAt: Date())
       } catch {
         check(false, "saving the check's steps: \(error.localizedDescription)")
         return finish()
@@ -117,6 +128,16 @@ extension Automation {
       model.show(video)
       try? await Task.sleep(for: .seconds(1))
       check(!model.hasOriginal(video) && !model.canMatchCanvasColors, "unavailable for a video")
+      check(!model.hasOriginal(unweighted) && model.hasOriginal(weighted), "a moodboard counts only with weight above 0, as saved")
+      // As read back from the project, as History lists them after opening it.
+      await history.reload()
+      if let listed = history.items.first(where: { $0 == unweighted }) { unweighted = listed }
+      if let listed = history.items.first(where: { $0 == weighted }) { weighted = listed }
+      check(
+        unweighted.moodboardCount == 1 && !model.hasOriginal(unweighted) && model.hasOriginal(weighted),
+        "a moodboard counts only with weight above 0, as read back")
+      model.show(unweighted)
+      check(await shown(unweighted) && !model.canMatchCanvasColors, "unavailable when every moodboard image has weight 0")
 
       // From the canvas, as the menu item does.
       model.show(edit)

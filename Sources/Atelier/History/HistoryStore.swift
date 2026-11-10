@@ -20,6 +20,9 @@ nonisolated struct HistoryItem: Identifiable, Hashable, Sendable {
   var inputTensorId: Int64?
   /// How many moodboard images the step went in with (Draw Things' `shuffle_data_stored`).
   var moodboardCount = 0
+  /// How many of those had weight above 0: the ones the model took, which Match Colors to
+  /// Original may match to.
+  var weightedMoodboardCount = 0
   /// Set for a video: the item is its first frame and stands for the whole clip.
   var clip: ClipInfo?
 

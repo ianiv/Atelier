@@ -1708,6 +1708,7 @@ final class AgentTools {
   }
 
   private func matchColors(_ arguments: [String: Any]) async throws -> [String: Any] {
+    if arguments["history_step"] != nil, Self.int(arguments["history_step"]) == nil { throw ToolError("`history_step` is a history step number (see list_history).") }
     let item: HistoryItem
     if let step = Self.int(arguments["history_step"]) {
       guard let found = create.history.items.first(where: { $0.id.logicalTime == step }) else {
@@ -1726,13 +1727,13 @@ final class AgentTools {
     }
     var options = ColorMatch.Options()
     if let strength = arguments["strength"] {
-      guard let value = (strength as? NSNumber)?.doubleValue, (0...1).contains(value) else {
+      guard !Self.isBoolean(strength), let value = (strength as? NSNumber)?.doubleValue, (0...1).contains(value) else {
         throw ToolError("`strength` must be a number from 0 to 1.")
       }
       options.strength = value
     }
     if let luminance = arguments["luminance"] {
-      guard let value = luminance as? Bool else { throw ToolError("`luminance` must be true or false.") }
+      guard Self.isBoolean(luminance), let value = luminance as? Bool else { throw ToolError("`luminance` must be true or false.") }
       options.matchLuminance = value
     }
     let (saved, shift) = try await create.matchColors(item, options: options)
@@ -1936,6 +1937,12 @@ final class AgentTools {
 
   private static func int(_ value: Any?) -> Int? {
     (value as? NSNumber).map(\.intValue) ?? (value as? String).flatMap { Int($0) }
+  }
+
+  /// Whether a JSON value is true or false rather than a number: both arrive as `NSNumber`, and
+  /// `as? Bool` / `as? NSNumber` take either.
+  private static func isBoolean(_ value: Any) -> Bool {
+    (value as? NSNumber).map { CFGetTypeID($0) == CFBooleanGetTypeID() } ?? false
   }
 
   private static func double(_ value: Any?) -> Double? {

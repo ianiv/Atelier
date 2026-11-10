@@ -2210,9 +2210,10 @@ final class CreateModel {
     return hasOriginal(item)
   }
 
-  /// Whether a step has an image its colors can be matched to (see `originalImage(for:)`).
+  /// Whether a step has an image its colors can be matched to (see `originalImage(for:)`). A
+  /// moodboard counts only with an image of weight above 0, the one `originalImage` would take.
   func hasOriginal(_ item: HistoryItem) -> Bool {
-    !item.isVideo && (item.sidecar.colorMatch != nil || item.inputTensorId != nil || item.moodboardCount > 0)
+    !item.isVideo && (item.sidecar.colorMatch != nil || item.inputTensorId != nil || item.weightedMoodboardCount > 0)
   }
 
   /// The image an edit was made from: a Match Colors result's own original, else the step's input
@@ -2223,7 +2224,7 @@ final class CreateModel {
     guard !item.isVideo else { return nil }
     let projectName = history.project.name
     func firstMoodboardImage() async -> (image: CGImage, tensorId: Int64?, moodboard: GenerationEngine.Reference?)? {
-      guard item.moodboardCount > 0,
+      guard item.weightedMoodboardCount > 0,
             let entry = await history.moodboard(at: item.id, in: projectName).first(where: { $0.weight > 0 })
       else { return nil }
       return (entry.image, nil, GenerationEngine.Reference(image: entry.image, weight: entry.weight))
@@ -2276,6 +2277,8 @@ final class CreateModel {
       strength: options.strength, luminance: options.matchLuminance, originalTensorId: original.tensorId)
     let startedAt = Date()
     let history = history
+    // The original and the edit were read from this project; another may have opened since.
+    guard history.project.name == projectName else { throw ColorMatchError.projectChanged }
     let saved = try await oneSaveAtATime {
       try await history.save(
         GenerationEngine.Output(frames: [tensor]), request: request, startedAt: startedAt, finishedAt: Date())
@@ -2301,7 +2304,7 @@ final class CreateModel {
   }
 
   nonisolated enum ColorMatchError: LocalizedError {
-    case busy, video, noOriginal, unreadable, noSettings
+    case busy, video, noOriginal, unreadable, noSettings, projectChanged
 
     var errorDescription: String? {
       switch self {
@@ -2310,6 +2313,7 @@ final class CreateModel {
       case .noOriginal: "This image has no original to match: it wasn't made from the canvas or a moodboard image, or that image is no longer in the project."
       case .unreadable: "The image or its original couldn't be read."
       case .noSettings: "There are no settings to save the result with yet: wait for the model list to load."
+      case .projectChanged: "The project changed while colors were being matched, so the result wasn't saved. Open the image's project and try again."
       }
     }
   }

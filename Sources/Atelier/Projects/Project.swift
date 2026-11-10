@@ -98,7 +98,8 @@ final nonisolated class Project: Sendable {
       ProjectTree(
         nodes: Array(workspace.fetch(for: TensorHistoryNode.self).all()),
         layers: Array(workspace.fetch(for: Layer.self).all()),
-        clips: items ? Array(workspace.fetch(for: Clip.self).all()) : [], items: items)
+        clips: items ? Array(workspace.fetch(for: Clip.self).all()) : [],
+        moods: items ? Array(workspace.fetch(for: TensorMoodboardData.self).all()) : [], items: items)
     }
   }
 
@@ -760,7 +761,7 @@ final nonisolated class Project: Sendable {
     return HistoryItem(
       id: StepID(lineage: node.lineage, logicalTime: node.logicalTime), tensorId: tensorIds[0],
       previewId: previewIds[0], sidecar: Self.sidecar(for: node), inputTensorId: inputTensorId,
-      moodboardCount: moodboard.count,
+      moodboardCount: moodboard.count, weightedMoodboardCount: moodboard.count { $0.weight > 0 },
       clip: node.clipId >= 0
         ? ClipInfo(
           clipId: node.clipId, frames: tensorIds, framesPerSecond: clip?.framesPerSecond ?? 0,
@@ -1176,8 +1177,13 @@ nonisolated struct ProjectTree: Sendable {
   /// `items` false leaves out History's items (their settings take longest to read).
   init(
     nodes: [TensorHistoryNode], layers: [ProjectFormat.TensorData], clips: [Clip] = [],
-    items withItems: Bool = true
+    moods: [TensorMoodboardData] = [], items withItems: Bool = true
   ) {
+    // Each step's moodboard images with weight, which History's items count.
+    var weightedMoods: [StepID: Int] = [:]
+    for mood in moods where mood.weight > 0 {
+      weightedMoods[StepID(lineage: mood.lineage, logicalTime: mood.logicalTime), default: 0] += 1
+    }
     // The image layer: the top layer with a tensor, else the node's own field.
     var layerTensors: [StepID: (index: Int64, tensorId: Int64)] = [:]
     var allLayerTensors: [StepID: Set<Int64>] = [:]
@@ -1218,7 +1224,8 @@ nonisolated struct ProjectTree: Sendable {
       if withItems, node.generated, let tensorId, node.clipId < 0 || node.indexInAClip == 0 {
         items[id] = HistoryItem(
           id: id, tensorId: tensorId, previewId: node.previewId, sidecar: Project.sidecar(for: node),
-          inputTensorId: profile?.inputTensorId, moodboardCount: Int(node.shuffleDataStored))
+          inputTensorId: profile?.inputTensorId, moodboardCount: Int(node.shuffleDataStored),
+          weightedMoodboardCount: weightedMoods[id] ?? 0)
         if node.clipId >= 0 {
           clipListings[node.clipId] = (id, profile?.inputAudioId)
         }
