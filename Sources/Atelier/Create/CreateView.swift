@@ -344,7 +344,8 @@ struct CanvasView: View {
     .onChange(of: model.canvasMask, initial: true) { updateMaskTint() }
     .onChange(of: model.image.map(ObjectIdentifier.init)) {
       updateMaskTint()
-      model.autoMask.follow(model.image)
+      // A run's preview over the image doesn't end its selection: its steps still undo.
+      model.autoMask.follow(model.canvasUndoImage ?? model.image)
     }
     .alert(
       "Couldn't save the image",

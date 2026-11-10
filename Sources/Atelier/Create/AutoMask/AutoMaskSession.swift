@@ -173,6 +173,7 @@ final class AutoMaskSession {
   /// Clear Points (and Esc): one undo step when there was anything to clear.
   func clearPoints(model: CreateModel, undoManager: UndoManager?) {
     guard !prompt.isEmpty || preview != nil else { return }
+    guard model.canEditMask else { return reset() }
     follow(model.image)
     change(to: AutoMaskPrompt(), actionName: "Clear Points", model: model, undoManager: undoManager)
   }
@@ -180,7 +181,8 @@ final class AutoMaskSession {
   /// Adds a click (image pixels) and selects again: one undo step, “Add Point” or “Exclude
   /// Point”. Ignored until SAM is downloaded: clicking is SAM's (the controls say so).
   func addPoint(_ location: CGPoint, positive: Bool, model: CreateModel, undoManager: UndoManager? = nil) {
-    guard SAMDownload.shared.isInstalled(size) else { return }
+    // Not while another image is loading in: the points would be on the one going.
+    guard SAMDownload.shared.isInstalled(size), model.canPaintMask else { return }
     follow(model.image)
     var next = AutoMaskPrompt(points: points, box: box)
     next.points.append(SAMSegmenter.Point(location: location, positive: positive))
@@ -190,7 +192,7 @@ final class AutoMaskSession {
   /// Sets the box (image pixels) and selects again: one undo step, “Select Box”. Ignored until
   /// SAM is downloaded.
   func setBox(_ rect: CGRect, model: CreateModel, undoManager: UndoManager? = nil) {
-    guard SAMDownload.shared.isInstalled(size) else { return }
+    guard SAMDownload.shared.isInstalled(size), model.canPaintMask else { return }
     follow(model.image)
     let next = AutoMaskPrompt(points: points, box: rect.standardized)
     change(to: next.trimmed(), actionName: "Select Box", model: model, undoManager: undoManager)
@@ -199,6 +201,7 @@ final class AutoMaskSession {
   /// Select Subject: Vision's subject (the one under `point`, else all of them) as the preview,
   /// one undo step. Clears SAM's points: the two don't combine.
   func selectSubject(at point: CGPoint? = nil, model: CreateModel, undoManager: UndoManager? = nil) {
+    guard model.canPaintMask else { return }
     follow(model.image)
     change(
       to: AutoMaskPrompt(subject: true, subjectPoint: point), actionName: "Select Subject", model: model,
@@ -209,14 +212,25 @@ final class AutoMaskSession {
   /// puts the size and the selection back.
   func setSize(_ newSize: SAMFiles.Size, model: CreateModel, undoManager: UndoManager?) {
     guard newSize != size else { return }
+    guard !prompt.isEmpty else {
+      size = newSize
+      return
+    }
+    swapSize(to: newSize, prompt: AutoMaskPrompt(), model: model, undoManager: undoManager)
+  }
+
+  /// Sets the size and the selection together, as one undo step that swaps back to the ones
+  /// before (and its redo to these): undoing a size change brings back the size and the points
+  /// it cleared.
+  private func swapSize(to newSize: SAMFiles.Size, prompt newPrompt: AutoMaskPrompt, model: CreateModel, undoManager: UndoManager?) {
     let before = (size: size, prompt: prompt)
+    // The size's own didSet starts over; then the selection to go with it.
     size = newSize
-    guard !before.prompt.isEmpty, let undoManager, let image = model.image, image === self.image else { return }
+    select(newPrompt, model: model)
+    guard let undoManager, let image = model.canvasUndoImage, image === self.image else { return }
     model.registerCanvasUndo(on: image, undoManager: undoManager, actionName: "Change SAM Size") { [weak self, weak model] in
       guard let self, let model, self.image === image else { return }
-      self.size = before.size
-      self.select(before.prompt, model: model)
-      self.setSize(newSize, model: model, undoManager: undoManager)
+      self.swapSize(to: before.size, prompt: before.prompt, model: model, undoManager: undoManager)
     }
   }
 
@@ -226,7 +240,7 @@ final class AutoMaskSession {
   func change(to prompt: AutoMaskPrompt, actionName: String, model: CreateModel, undoManager: UndoManager?) {
     let before = self.prompt
     select(prompt, model: model)
-    guard before != prompt, let undoManager, let image = model.image, image === self.image else { return }
+    guard before != prompt, let undoManager, let image = model.canvasUndoImage, image === self.image else { return }
     model.registerCanvasUndo(on: image, undoManager: undoManager, actionName: actionName) { [weak self, weak model] in
       guard let self, let model, self.image === image else { return }
       self.change(to: before, actionName: actionName, model: model, undoManager: undoManager)
@@ -272,6 +286,8 @@ final class AutoMaskSession {
       } catch is CancellationError {
         return
       } catch {
+        // A newer selection took over: its own result (or failure) is the one to show.
+        guard !Task.isCancelled else { return }
         preview = nil
         failure = error.localizedDescription
       }

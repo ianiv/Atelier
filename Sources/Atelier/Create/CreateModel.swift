@@ -404,7 +404,12 @@ final class CreateModel {
   private(set) var isLoadingModel = false
   private(set) var step = 0
   private(set) var totalSteps = 0
-  private(set) var image: CGImage?
+  private(set) var image: CGImage? {
+    didSet { awaitsStepImage = false }
+  }
+  /// `imageStep` changed and its image hasn't landed yet: the canvas still shows the one before,
+  /// which is no longer the step's, so nothing is painted or selected on it meanwhile.
+  private var awaitsStepImage = false
   /// The canvas image is open full size (`ImageViewer`).
   var viewingCanvasImage = false
   /// The image of the step the last run saved.
@@ -426,8 +431,10 @@ final class CreateModel {
     didSet {
       // Before anything else changes: the size it's kept at comes from what the canvas shows.
       if let oldValue { persistCanvasMask(for: oldValue) }
-      // The old image's mask and Select steps leave the history with it.
+      // The old image's mask and Select steps leave the history with it, and its selection.
       retireCanvasUndo()
+      autoMask.follow(nil)
+      awaitsStepImage = imageStep != nil
       landedMask = nil
       maskPendingTensorId = imageStep?.tensorId
       imageIsPreview = false
@@ -1051,7 +1058,7 @@ final class CreateModel {
   /// Remembers the model, prompts, seed, inspector values and canvas image for the next launch.
   func saveSession() {
     // The canvas image's mask, so it's there after a relaunch too.
-    if let imageStep { persistCanvasMask(for: imageStep) }
+    rememberCanvasMask()
     // Until the models load, the last session's model and settings are still waiting to apply.
     guard restored == nil else { return }
     SessionState(
@@ -1492,6 +1499,9 @@ final class CreateModel {
   /// Queues `count` images of the prompt; runs right away when nothing else is.
   func generate() {
     guard canGenerate, let base = screenRequest() else { return }
+    // The canvas image remembers the mask it's queued with now, not when the run is saved (the
+    // mask may have changed, or been cleared, by then).
+    rememberCanvasMask()
     statusNote = nil
     let takesAudio = videoModel?.takesAudio == true && audio.url != nil
     remember(prompt: prompt)
@@ -2544,6 +2554,25 @@ extension CreateModel {
     history.setMask(canvasMask, forImage: step.tensorId, size: size)
     landedMask = (step.tensorId, canvasMask)
   }
+
+  /// The canvas image remembers its mask now (`persistCanvasMask`): before a job is queued from
+  /// it, the project changes, or the app goes away.
+  func rememberCanvasMask() {
+    if let imageStep { persistCanvasMask(for: imageStep) }
+  }
+
+  /// The image mask and Select steps belong to: the canvas image, or while a run's preview covers
+  /// it, the image beneath (whose mask the canvas still holds). Nil while the step's image is on
+  /// its way, or with no image of its own.
+  var canvasUndoImage: CGImage? {
+    if previewCoversCanvas { return canvasBeforePreview?.image }
+    guard !awaitsStepImage, !isLoadingCanvasImage, canvasClip == nil, !imageIsPreview else { return nil }
+    return image
+  }
+
+  /// The canvas shows its step's own image, loaded: what mask tools may change
+  /// (`canEditMask`).
+  var canvasImageIsCurrent: Bool { !awaitsStepImage && !isLoadingCanvasImage }
 
   /// Brings back the mask the canvas image last had (`HistoryStore.storedMask`), once the image is
   /// on the canvas: it's the image's, so it registers no undo step. Not when another image took

@@ -116,7 +116,11 @@ extension Automation {
 
       if usesSAM {
         if SAMFiles.installed(size) == nil {
-          note("downloading SAM 2.1 \(size.title) into \(SAMFiles.folder(size).path)…")
+          guard let folder = SAMFiles.downloadFolder else {
+            check(false, "SAM 2.1 \(size.title) isn't installed and no models folder can take a download")
+            return finish()
+          }
+          note("downloading SAM 2.1 \(size.title) into \(SAMFiles.folder(size, in: folder).path)…")
           let progress = Task { @MainActor in
             var last = -1
             while !Task.isCancelled {
@@ -308,6 +312,20 @@ extension Automation {
               "history: undoing the commit takes the selection out of the mask and puts its point back")
             await step { history.redo() }
             check(model.canvasMask == committed && model.autoMask.points.isEmpty, "history: redoing it commits it again")
+            // Another SAM size starts the selection over, as one step that puts both back.
+            let otherSize: SAMFiles.Size = size == .tiny ? .small : .tiny
+            await act { model.autoMask.addPoint(click, positive: true, model: model, undoManager: history) }
+            await act { model.autoMask.setSize(otherSize, model: model, undoManager: history) }
+            check(
+              model.autoMask.size == otherSize && model.autoMask.points.isEmpty && history.undoActionName == "Change SAM Size",
+              "history: a size change clears the points, one “Change SAM Size” step")
+            await step { history.undo() }
+            matches = await previewMatches()
+            check(model.autoMask.size == size && model.autoMask.points.count == 1 && matches, "history: undoing it brings back the size and the point, selected again")
+            await step { history.redo() }
+            check(model.autoMask.size == otherSize && model.autoMask.points.isEmpty, "history: redoing it changes the size again")
+            await step { history.undo() }
+            check(model.autoMask.size == size && model.autoMask.points.count == 1, "history: and undoing again puts it back")
             // A step on an image that's gone leaves the history and never reaches another image.
             await act { model.autoMask.addPoint(click, positive: true, model: model, undoManager: history) }
             await act { model.addMaskStrokes([.rect(corners[0])], actionName: "Brush Stroke", undoManager: history) }

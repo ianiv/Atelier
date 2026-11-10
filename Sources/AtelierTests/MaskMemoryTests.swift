@@ -250,3 +250,73 @@ struct MaskMemoryTests {
     #expect(!undo.canUndo)
   }
 }
+
+/// Where SAM 2.1 is found and downloaded: any models folder that's there, never another app's
+/// container, never one that's missing.
+struct SAMFolderTests {
+  private static func folder(_ root: URL, _ path: String) throws -> String {
+    let url = root.appending(path: path, directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    return url.path
+  }
+
+  private static func choose(_ primary: String, _ additional: [String]) -> String? {
+    SAMFiles.downloadFolder(
+      primary: primary, additional: additional, ownBundleID: "ca.blogaholics.Atelier",
+      isReachable: { FileManager.default.fileExists(atPath: $0) }
+    )?.path
+  }
+
+  @Test func theDownloadGoesWhereItCan() throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: "SAMFolderTests-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let missing = root.appending(path: "Volumes/External/Models").path
+    let container = try Self.folder(root, "Library/Containers/com.liuliu.draw-things/Data/Documents/Models")
+    let atelier = try Self.folder(root, "Atelier")
+    // The main folder's drive is gone: not Draw Things' container, the next one. Nothing is made
+    // where the missing folder was.
+    #expect(Self.choose(missing, [container, atelier]) == atelier)
+    #expect(!FileManager.default.fileExists(atPath: missing))
+    // Only the container: nowhere.
+    #expect(Self.choose(missing, [container]) == nil)
+    // The main folder, when it's there.
+    let main = try Self.folder(root, "Models")
+    #expect(Self.choose(main, [container, atelier]) == main)
+    // A folder that has SAM already wins, unless it's the container.
+    _ = try Self.folder(root, "Atelier/SAM 2.1")
+    _ = try Self.folder(root, "Library/Containers/com.liuliu.draw-things/Data/Documents/Models/SAM 2.1")
+    #expect(Self.choose(main, [container, atelier]) == atelier)
+    // A read-only folder can't take it.
+    try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: atelier)
+    defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: atelier) }
+    #expect(Self.choose(main, [container, atelier]) == main)
+  }
+
+  @Test func containersAreOtherAppsUnlessTheyreOurs() {
+    let draw = "/Users/x/Library/Containers/com.liuliu.draw-things/Data/Documents/Models"
+    #expect(SAMFiles.isInOtherAppsContainer(draw, ownBundleID: "ca.blogaholics.Atelier"))
+    #expect(!SAMFiles.isInOtherAppsContainer("/Users/x/Library/Containers/ca.blogaholics.Atelier/Data/Models", ownBundleID: "ca.blogaholics.Atelier"))
+    #expect(SAMFiles.isInOtherAppsContainer("/Users/x/Library/Group Containers/group.other/Models", ownBundleID: "ca.blogaholics.Atelier"))
+    #expect(!SAMFiles.isInOtherAppsContainer("/Users/x/Atelier", ownBundleID: "ca.blogaholics.Atelier"))
+  }
+
+  @Test func anInstalledSizeIsFoundInAnyFolder() throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: "SAMFolderTests-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let first = root.appending(path: "First", directoryHint: .isDirectory)
+    let second = root.appending(path: "Second", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: first, withIntermediateDirectories: true)
+    let sizeFolder = SAMFiles.folder(.small, in: second)
+    let files = SAMFiles(root: sizeFolder, size: .small)
+    for part in SAMFiles.Part.allCases {
+      try FileManager.default.createDirectory(at: files.package(part), withIntermediateDirectories: true)
+    }
+    let weights = files.package(.imageEncoder).appending(path: "weight.bin")
+    try Data(count: 10).write(to: weights)
+    let listing = [SAMFiles.ListedFile(path: String(weights.path.dropFirst(sizeFolder.path.count + 1)), size: 10)]
+    try JSONEncoder().encode(listing).write(to: sizeFolder.appending(path: SAMFiles.listingName))
+    #expect(SAMFiles.installed(.small, in: [first, second])?.root.standardizedFileURL == sizeFolder.standardizedFileURL)
+    #expect(SAMFiles.installed(.small, in: [first]) == nil)
+    #expect(SAMFiles.installed(.tiny, in: [first, second]) == nil)
+  }
+}

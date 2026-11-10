@@ -78,14 +78,61 @@ nonisolated struct SAMFiles: Sendable {
       directoryHint: .isDirectory)
   }
 
-  /// The models directory's SAM folder.
-  static var folder: URL { URL(fileURLWithPath: AppSettings.modelsDirectory).appending(path: folderName) }
+  /// The models folders that can be read now (`AppSettings.availableModelsDirectories`): the
+  /// main one, then the additional ones; an unmounted drive's is left out.
+  static var modelFolders: [URL] {
+    AppSettings.availableModelsDirectories(primary: AppSettings.modelsDirectory, additional: AppSettings.additionalModelsDirectories)
+      .map { URL(fileURLWithPath: $0, isDirectory: true) }
+  }
 
-  static func folder(_ size: Size) -> URL { folder.appending(path: size.title, directoryHint: .isDirectory) }
+  /// A models folder's SAM folder for `size`.
+  static func folder(_ size: Size, in modelsFolder: URL) -> URL {
+    modelsFolder.appending(path: folderName, directoryHint: .isDirectory).appending(path: size.title, directoryHint: .isDirectory)
+  }
 
-  /// The size, when its download finished and every file it listed is still there at its size.
-  static func installed(_ size: Size) -> SAMFiles? {
-    let root = folder(size)
+  /// Where a download of SAM goes, nil when no folder can take it (`downloadFolder(primary:...)`).
+  static var downloadFolder: URL? {
+    downloadFolder(primary: AppSettings.modelsDirectory, additional: AppSettings.additionalModelsDirectories)
+  }
+
+  /// The models folder SAM downloads into: one that already has a SAM folder; else the main
+  /// models folder; else the first additional one, leaving out folders inside another app's
+  /// container (Draw Things' own models folder, added to read its models, isn't Atelier's to
+  /// write in). Only folders that are there now and writable: one on an unmounted drive is
+  /// skipped, never made.
+  static func downloadFolder(
+    primary: String, additional: [String], ownBundleID: String? = Bundle.main.bundleIdentifier,
+    isReachable: (String) -> Bool = FolderBookmarks.isReachable
+  ) -> URL? {
+    let manager = FileManager.default
+    var seen = Set<String>()
+    let folders = ([primary] + additional).filter { path in
+      !path.isEmpty && seen.insert(URL(fileURLWithPath: path).standardizedFileURL.path).inserted && isReachable(path)
+    }
+    let usable = folders.filter { manager.isWritableFile(atPath: $0) && !isInOtherAppsContainer($0, ownBundleID: ownBundleID) }
+    let chosen = usable.first { manager.fileExists(atPath: URL(fileURLWithPath: $0).appending(path: folderName).path) }
+      ?? usable.first
+    return chosen.map { URL(fileURLWithPath: $0, isDirectory: true) }
+  }
+
+  /// Whether `path` is inside another app's sandbox container (or a group container), which
+  /// Atelier may read from but shouldn't fill with its own files.
+  static func isInOtherAppsContainer(_ path: String, ownBundleID: String?) -> Bool {
+    let components = URL(fileURLWithPath: path).standardizedFileURL.pathComponents
+    for (index, component) in components.enumerated() where index > 0 && components[index - 1] == "Library" {
+      guard component == "Containers" || component == "Group Containers", index + 1 < components.count else { continue }
+      return components[index + 1] != ownBundleID
+    }
+    return false
+  }
+
+  /// The size, in the first models folder where its download finished and every file it listed is
+  /// still there at its size.
+  static func installed(_ size: Size, in folders: [URL] = modelFolders) -> SAMFiles? {
+    folders.lazy.compactMap { installed(size, root: folder(size, in: $0)) }.first
+  }
+
+  private static func installed(_ size: Size, root: URL) -> SAMFiles? {
     guard let data = try? Data(contentsOf: root.appending(path: listingName)),
           let files = try? JSONDecoder().decode([ListedFile].self, from: data), !files.isEmpty
     else { return nil }

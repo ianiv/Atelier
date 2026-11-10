@@ -721,6 +721,8 @@ final class AgentTools {
     guard var request = create.screenRequest(), let model = create.selectedModel else {
       throw ToolError(create.errorMessage ?? "The Create screen has no model or settings loaded yet.")
     }
+    // As Generate does: the canvas image remembers the mask it's queued with.
+    create.rememberCanvasMask()
     // The request's own canvas, not what the canvas shows: while a run's preview covers it, Generate
     // still takes the image beneath.
     guard request.canvas != nil else {

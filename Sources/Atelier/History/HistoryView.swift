@@ -1031,6 +1031,7 @@ struct Thumbnail: View {
 /// The current project, with switching, New Project… and Rename….
 struct ProjectMenu: View {
   @Environment(HistoryStore.self) private var history
+  @Environment(CreateModel.self) private var create
   @State private var naming: Naming?
   @State private var error: String?
   @State private var editingOutput = false
@@ -1056,7 +1057,7 @@ struct ProjectMenu: View {
           project,
           isOn: Binding(
             get: { project == history.project.name },
-            set: { if $0 { Task { await history.open(project) } } }))
+            set: { if $0 { open(project) } }))
       }
       Divider()
       Button("New Project…") { naming = .new(suggested: history.availableName()) }
@@ -1091,9 +1092,17 @@ struct ProjectMenu: View {
       message: { Text(error ?? "") })
   }
 
+  /// Switches projects, the canvas image remembering its mask first: it's in the project going.
+  private func open(_ project: String) {
+    create.rememberCanvasMask()
+    Task { await history.open(project) }
+  }
+
   private func commit(_ kind: Naming, name: String) {
     let name = name.trimmingCharacters(in: .whitespaces)
     guard HistoryStore.isValidName(name) else { return }
+    // A rename changes the project's name, a switch the project: either way, first.
+    create.rememberCanvasMask()
     Task {
       switch kind {
       case .new:

@@ -48,7 +48,7 @@ extension CreateModel {
   /// A mask on the canvas can be changed without painting more (Invert, Clear), whatever the run
   /// target takes: a mask an older server can't use can still be cleared.
   var canEditMask: Bool {
-    canvasShowsImage && canvasMode == .edit && videoModel == nil && layout == nil
+    canvasShowsImage && canvasImageIsCurrent && canvasMode == .edit && videoModel == nil && layout == nil
   }
 
   /// Whether the next Edit run from the screen would send a mask, wherever it runs: something
@@ -141,7 +141,7 @@ extension CreateModel {
   func setMask(_ mask: CanvasMask?, actionName: String, undoManager: UndoManager?) {
     let previous = canvasMask
     canvasMask = mask
-    guard let undoManager, let image else { return }
+    guard let undoManager, let image = canvasUndoImage else { return }
     registerCanvasUndo(on: image, undoManager: undoManager, actionName: actionName) { [weak self] in
       self?.setMask(previous, actionName: actionName, undoManager: undoManager)
     }
@@ -156,7 +156,8 @@ extension CreateModel {
     let target = canvasUndoTarget(for: image, undoManager: undoManager)
     undoManager.registerUndo(withTarget: target) { [weak self] target in
       MainActor.assumeIsolated {
-        guard let self, self.image === target.image else { return }
+        // The same image, or the one beneath a run's preview: never another.
+        guard let self, self.canvasUndoImage === target.image else { return }
         undo()
       }
     }

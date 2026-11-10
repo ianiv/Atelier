@@ -78,8 +78,8 @@ struct AutoMaskBar: View {
       Button(installed ? "Downloaded" : "Download (\(Self.bytes(download.remainingBytes(session.size))))") {
         download.start(session.size)
       }
-      .disabled(installed)
-      .help("Downloads SAM 2.1 \(session.size.title) into \(SAMFiles.folderName) in the models folder, from Hugging Face. Clicking and dragging a box to select need it.")
+      .disabled(installed || download.destination == nil)
+      .help(Self.downloadHelp(session.size, into: download.destination))
     }
     #if os(iOS)
       // No Option key: this decides what a tap marks.
@@ -135,6 +135,14 @@ struct AutoMaskBar: View {
     #else
       "Click to mark what to select, Option-click what to leave out, or drag a box. Hold Space to drag the image."
     #endif
+  }
+
+  /// Where the Download button puts SAM, named so it's no surprise.
+  private static func downloadHelp(_ size: SAMFiles.Size, into folder: URL?) -> String {
+    guard let folder else {
+      return "No models folder can take SAM 2.1 now: connect the models folder's drive, or add a folder in Settings ▸ Models."
+    }
+    return "Downloads SAM 2.1 \(size.title) from Hugging Face into \(SAMFiles.folderName) in \(folder.path). Clicking and dragging a box to select need it."
   }
 
   private static func bytes(_ count: Int64) -> String {

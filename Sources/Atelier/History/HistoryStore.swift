@@ -310,19 +310,12 @@ final class HistoryStore {
         duration: finishedAt.timeIntervalSince(startedAt), timings: timings, moodboard: moodboard,
         inputTensorId: inputTensorId, after: parentTensorId, refined: refined)
     }
-    // The canvas image remembers the mask it had when the run was queued, whether or not the run
-    // used it (Merge off, a zoomed frame): its own step when it's one, else the input saved for a
-    // merge, which is the image itself. The merged result keeps it too, moved as the image grew.
-    if let source = request.canvasSourceMask {
-      var target: Int64?
-      if let tensorId = source.tensorId, await step(tensorId: tensorId, in: project) != nil {
-        target = tensorId
-      } else if request.merge != nil {
-        target = inputTensorId
-      }
-      if let target {
-        keepMask(source.mask, forImage: target, size: CGSize(width: source.width, height: source.height), in: project)
-      }
+    // An image from outside the project, saved now as a merge's input (the image itself),
+    // remembers the mask it was queued with. One already in the project remembered it when the job
+    // was queued (`CreateModel.rememberCanvasMask`): writing it again here could undo a change
+    // made since. The merged result keeps it too, moved as the image grew.
+    if let source = request.canvasSourceMask, source.tensorId == nil, request.merge != nil, let inputTensorId {
+      keepMask(source.mask, forImage: inputTensorId, size: CGSize(width: source.width, height: source.height), in: project)
     }
     if let resultMask {
       keepMask(resultMask, forImage: item.tensorId, size: refined.map { CGSize(width: $0.composite.width, height: $0.composite.height) }, in: project)
