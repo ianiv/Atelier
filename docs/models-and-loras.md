@@ -63,11 +63,15 @@ Some families can't be imported yet: HiDream O1, Qwen Image 2.1, LTX-2, SeedVR2,
 
 ### MiniMax H3 Image
 
-[MiniMax H3 Image](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image) makes images from a prompt and edits one or more pictures from an instruction, in one model. It isn't in the catalog, so it has to be converted first:
+[MiniMax H3 Image](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image) makes images from a prompt and edits one or more pictures from an instruction, in one model. It isn't in the catalog, because it needs two manual downloads and a conversion. Atelier walks you through it:
 
 - Its license is the **MiniMax-H3-Image Community License**, which doesn't cover use in the European Union, the United Kingdom, South Korea or the United States. Read it on Hugging Face before you download the files.
-- Import the model from one `.safetensors` file: ComfyUI's [`minimax_h3_image_pruned_bf16.safetensors`](https://huggingface.co/Comfy-Org/MiniMax-H3-Image) (40 GB) is the easiest. Then use [Make 8-bit Copy](#make-8-bit-copy-moss-and-minimax-h3-models): the copy is 21 GB, and on a 48 GB Mac it makes a 2048×2048 image in well under a minute where the full-precision file takes many minutes.
-- Convert its VAE with the engine's `ModelConverter --h3-image-vae` into the models folder (it's written as `minimax_h3_image_vae_f16.ckpt`). The text encoder is MiniMax H3's, which is downloaded if missing.
+- In **Models**, find the **MiniMax H3 Image** row above the list and click **Install…**. Once the model and its VAE are installed, the row says so and the button is turned off.
+- Under **1. Download**, the two links open Hugging Face in your browser: `minimax_h3_image_pruned_bf16.safetensors` (40 GB) and `minimax_h3_image_vae_fp16.safetensors` (1.2 GB).
+- Under **2. Import**, click **Choose Downloaded Files…** and pick both files. If you pick only the model, the VAE is taken from the same folder or from a `vae` folder beside it. Atelier imports the model, converts the VAE to `minimax_h3_image_vae_f16.ckpt`, and makes the [8-bit S copy](#make-8-bit-copy-moss-and-minimax-h3-models): 21 GB, which on a 48 GB Mac makes a 2048×2048 image in well under a minute where the full-precision file takes many minutes. The text encoder is MiniMax H3's and downloads afterwards in the Models list.
+- **Move the full-precision copy to the Trash afterwards** is on by default. It moves only the converted `.ckpt` Atelier wrote, never the `.safetensors` files you downloaded, which you can delete yourself once it's installed.
+- The install needs about 90 GB of free space while it runs and about 50 GB afterwards. If it stops part way, run it again: finished steps are skipped.
+- To do it by hand, import the model file with **Import…** (or drop it on the Models list), then import the VAE file the same way, then use **Make 8-bit Copy**.
 - For an edit, use **Edit** with the picture on the canvas; moodboard images are sent as further pictures. The prompt calls them `<Picture 1>` (the canvas), `<Picture 2>` and so on.
 - It runs at 6 steps, the only step count it was distilled for, at 2048×2048 by default; it works from about 4 to 20 megapixels and is at its best around 16 (4096×4096). For this model the size popover offers up to 16 megapixels and sides up to 6400 px. With the 8-bit S copy on a 48 GB Mac, 16 megapixels takes under two minutes and about 26 GB of memory. It's distilled without CFG, so there's no Guidance setting and the negative prompt is ignored. Sampler and Shift don't change the result.
 - It expects a long, detailed English description of the whole image, so a short prompt gives a plainer picture than the examples online.
