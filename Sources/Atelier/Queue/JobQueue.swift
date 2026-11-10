@@ -117,6 +117,15 @@ final class JobQueue {
     ((running.map { [$0] } ?? []) + waiting).first { $0.request?.colorMatch?.isSameMatch(as: match) == true }
   }
 
+  /// Waiting Match Colors to Original jobs for a project that was renamed follow it.
+  func renameColorMatchProject(from old: String, to name: String) {
+    for index in waiting.indices {
+      guard case .generation(var request) = waiting[index].work, request.colorMatch?.project == old else { continue }
+      request.colorMatch?.project = name
+      waiting[index].work = .generation(request)
+    }
+  }
+
   /// Records what a running Match Colors to Original job saved, so its row can say so whichever
   /// project is open.
   func setColorMatchRecord(_ record: ColorMatch.Record, id: UUID) {
@@ -228,7 +237,11 @@ final class JobQueue {
     if running?.id == id { running?.timings = timings }
   }
 
-  func finishRunning(_ status: Job.Status, id: UUID, inputTensorId: Int64? = nil, tipTensorId: Int64? = nil) {
+  /// `inOpenProject` false: the result was saved into a project that isn't open (a Match Colors
+  /// to Original job's own), so it's no step to follow here.
+  func finishRunning(
+    _ status: Job.Status, id: UUID, inputTensorId: Int64? = nil, tipTensorId: Int64? = nil, inOpenProject: Bool = true
+  ) {
     guard var job = running?.id == id ? running : runningRemote.first(where: { $0.id == id }) else { return }
     if running?.id == id {
       running = nil
@@ -237,7 +250,7 @@ final class JobQueue {
     }
     job.status = status
     job.finishedAt = Date()
-    if case .finished(let tensorId) = status {
+    if case .finished(let tensorId) = status, inOpenProject {
       // Saving a result makes it the current step.
       let tip = tipTensorId ?? tensorId
       expectedCurrent = tip

@@ -2064,9 +2064,10 @@ final class CreateModel {
 
   /// Ends the running job and starts the next.
   private func finish(
-    _ job: JobQueue.Job, status: JobQueue.Job.Status, inputTensorId: Int64? = nil, tipTensorId: Int64? = nil
+    _ job: JobQueue.Job, status: JobQueue.Job.Status, inputTensorId: Int64? = nil, tipTensorId: Int64? = nil,
+    inOpenProject: Bool = true
   ) {
-    queue.finishRunning(status, id: job.id, inputTensorId: inputTensorId, tipTensorId: tipTensorId)
+    queue.finishRunning(status, id: job.id, inputTensorId: inputTensorId, tipTensorId: tipTensorId, inOpenProject: inOpenProject)
     timingRecorders[job.id] = nil
     remoteRuns[job.id] = nil
     runTasks[job.id] = nil
@@ -2308,11 +2309,14 @@ final class CreateModel {
   func matchColors(
     forAgent item: HistoryItem, options: ColorMatch.Options, progress: @escaping (Int, String) -> Void
   ) async throws -> HistoryItem {
+    let pending = pendingColorMatch(for: item)?.id
     let id = try queueColorMatch(item, options: options, fromAgent: true)
+    // A match someone else queued (the canvas menu) is theirs: giving up on it only ends this wait.
+    let joined = id == pending
     return try await withTaskCancellationHandler {
       try await colorMatchResult(of: id, progress: progress)
     } onCancel: {
-      Task { @MainActor in self.cancel(id) }
+      if !joined { Task { @MainActor in self.cancel(id) } }
     }
   }
 
@@ -2360,6 +2364,7 @@ final class CreateModel {
     let task = Task {
       var status = JobQueue.Job.Status.cancelled
       var inputTensorId: Int64?
+      var inOpenProject = true
       do {
         guard let project = history.project(named: match.project), project.isOpen else {
           throw ColorMatchError.projectMissing(match.project)
@@ -2409,7 +2414,12 @@ final class CreateModel {
         let followsRun = { self.canvasFollowsRun && job.id == self.foregroundJobID && project === self.history.project }
         let history = history
         let saved = try await oneSaveAtATime {
-          try await history.save(
+          // A rename since it started closed the project it read from (`renameCurrent`): saving
+          // there would write to a closed file.
+          guard history.project(named: match.project) === project, project.isOpen else {
+            throw ColorMatchError.projectMissing(match.project)
+          }
+          return try await history.save(
             GenerationEngine.Output(frames: [tensor]), request: request, startedAt: startedAt, finishedAt: Date(),
             into: project, makeCurrent: followsRun)
         }
@@ -2435,12 +2445,13 @@ final class CreateModel {
         FinishedNotice.post(prompt: shift.summary, seconds: Date().timeIntervalSince(startedAt), title: "Colors matched")
         status = .finished(tensorId: saved.tensorId)
         inputTensorId = saved.inputTensorId
+        inOpenProject = project === history.project
       } catch is CancellationError {
       } catch {
         errorMessage = error.localizedDescription
         status = .failed(error.localizedDescription)
       }
-      finish(job, status: status, inputTensorId: inputTensorId)
+      finish(job, status: status, inputTensorId: inputTensorId, inOpenProject: inOpenProject)
     }
     track(task, for: job)
   }
@@ -2766,7 +2777,10 @@ final class CreateModel {
   /// Queues a finished, failed or cancelled job again, same settings and seed.
   func retry(_ id: UUID) {
     // A match already waiting or running for the same step would make the same image.
-    if let match = queue.recent.first(where: { $0.id == id })?.request?.colorMatch, queue.pendingColorMatch(match) != nil { return }
+    if let match = queue.recent.first(where: { $0.id == id })?.request?.colorMatch, queue.pendingColorMatch(match) != nil {
+      statusNote = "Colors are already being matched for that image, so it wasn't queued again."
+      return
+    }
     queue.retry(id)
     runNext()
   }
@@ -2963,6 +2977,7 @@ extension CreateModel {
   /// The step on the canvas is in the project now called `name`, renamed from `old`: it's the same
   /// image, so nothing about it changes.
   func projectRenamed(from old: String, to name: String) {
+    queue.renameColorMatchProject(from: old, to: name)
     guard let step = imageStep, step.project == old else { return }
     relabelsImageStep = true
     imageStep = (name, step.tensorId)

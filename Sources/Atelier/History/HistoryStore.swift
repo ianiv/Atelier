@@ -364,7 +364,8 @@ final class HistoryStore {
       // The new step is likely the newest now, which the project records as no position.
       if keepCurrent { recordCurrent() }
     }
-    let saved = self.item(tensorId: item.tensorId) ?? item
+    // Tensor ids are per project: another project's step can only be the one just appended.
+    let saved = project === self.project ? self.item(tensorId: item.tensorId) ?? item : item
     // The player asks for the clip's MP4 as soon as it's shown. Start it now from the frames still
     // in memory: reading them back means decompressing every frame from the project (~10 s for
     // 124 frames at 832×512). They're the tensors just saved, converted to images the same way.
