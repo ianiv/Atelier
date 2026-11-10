@@ -38,10 +38,17 @@ struct AutoMaskSelection {
   var coverage: [UInt8]
   var width: Int
   var height: Int
-  /// The canvas image it was worked out on: committing it to another image would be wrong.
-  var image: ObjectIdentifier
+  /// The canvas image it was worked out on: committing it to another image would be wrong. Held
+  /// and compared by identity (`===`): an object identifier alone could be reused by a new image
+  /// once this one is freed.
+  var image: CGImage
   /// The selection tinted for the canvas (`AutoMaskSession.tint`).
   var tint: CGImage?
+  /// Pixels selected.
+  var selectedPixels: Int
+  /// The selection as a mask stroke (`CanvasMask.Stroke.bitmap`), made with the rest off the main
+  /// actor (encoding a 4K mask as PNG takes a while); nil when nothing is selected.
+  var stroke: CanvasMask.Stroke?
 }
 
 /// What an auto mask did, for callers without the view (scripted checks, agents).
@@ -59,7 +66,7 @@ struct AutoMaskOutcome {
 }
 
 enum AutoMaskError: LocalizedError {
-  case cannotPaint, notDownloaded(SAMFiles.Size), emptyPrompt, nothingSelected, imageChanged
+  case cannotPaint, notDownloaded(SAMFiles.Size), emptyPrompt, nothingSelected, imageChanged, noMaskToSubtract
 
   var errorDescription: String? {
     switch self {
@@ -68,6 +75,7 @@ enum AutoMaskError: LocalizedError {
     case .emptyPrompt: "Click the image or drag a box to select."
     case .nothingSelected: "Nothing was selected."
     case .imageChanged: "The canvas image changed."
+    case .noMaskToSubtract: "There's no mask to subtract from."
     }
   }
 }
@@ -95,18 +103,17 @@ final class AutoMaskSession {
   private(set) var preview: AutoMaskSelection?
   private(set) var isBusy = false
   private(set) var failure: String?
-  /// The canvas image the points are on.
-  private var imageID: ObjectIdentifier?
+  /// The canvas image the points are on, held so its identity can't pass to another image.
+  private var image: CGImage?
   private var task: Task<Void, Never>?
 
   var hasPrompt: Bool { !points.isEmpty || box != nil }
 
   /// Starts over when the canvas shows another image.
   func follow(_ image: CGImage?) {
-    let id = image.map(ObjectIdentifier.init)
-    guard id != imageID else { return }
+    guard image !== self.image else { return }
     clearPoints()
-    imageID = id
+    self.image = image
   }
 
   /// Clears the points, box and preview (Clear Points, Esc).
@@ -120,20 +127,30 @@ final class AutoMaskSession {
     isBusy = false
   }
 
-  /// Adds a click (image pixels) and selects again.
+  /// Adds a click (image pixels) and selects again. Ignored until SAM is downloaded: clicking is
+  /// SAM's (the controls say so).
   func addPoint(_ location: CGPoint, positive: Bool, model: CreateModel) {
+    guard SAMDownload.shared.isInstalled(size) else { return }
     follow(model.image)
     points.append(SAMSegmenter.Point(location: location, positive: positive))
-    // The decoder takes so many; the earliest go (`SAMGeometry.promptInputs`).
-    if points.count > SAMGeometry.maxPromptPoints { points.removeFirst(points.count - SAMGeometry.maxPromptPoints) }
+    trimPoints()
     segment(model)
   }
 
-  /// Sets the box (image pixels) and selects again.
+  /// Sets the box (image pixels) and selects again. Ignored until SAM is downloaded.
   func setBox(_ rect: CGRect, model: CreateModel) {
+    guard SAMDownload.shared.isInstalled(size) else { return }
     follow(model.image)
     box = rect.standardized
+    trimPoints()
     segment(model)
+  }
+
+  /// Keeps the clicks the decoder can take beside the box (`SAMGeometry.promptInputs`), so the
+  /// dots on the canvas are the ones used: the earliest go.
+  private func trimPoints() {
+    let limit = SAMGeometry.maxPromptPoints - (box == nil ? 0 : 2)
+    if points.count > limit { points.removeFirst(points.count - limit) }
   }
 
   /// Select Subject: Vision's subject (the one under `point`, else all of them) as the preview.
@@ -231,9 +248,15 @@ extension CreateModel {
     return (selection, clock.now - start)
   }
 
+  /// The selection with its tint, pixel count and mask stroke, all worked out off the main actor.
   private static func selection(_ coverage: [UInt8], width: Int, height: Int, image: CGImage) async -> AutoMaskSelection {
-    let tint = await Task.detached(priority: .userInitiated) { AutoMaskSession.tint(coverage, width: width, height: height) }.value
-    return AutoMaskSelection(coverage: coverage, width: width, height: height, image: ObjectIdentifier(image), tint: tint)
+    let (tint, count, stroke) = await Task.detached(priority: .userInitiated) {
+      let count = coverage.reduce(0) { $0 + ($1 != 0 ? 1 : 0) }
+      let stroke = count == 0 ? nil : SAMGeometry.grayImage(coverage, width: width, height: height).flatMap { CanvasMask.Stroke.bitmap($0) }
+      return (AutoMaskSession.tint(coverage, width: width, height: height), count, stroke)
+    }.value
+    return AutoMaskSelection(
+      coverage: coverage, width: width, height: height, image: image, tint: tint, selectedPixels: count, stroke: stroke)
   }
 
   /// Puts `selection` into the canvas mask (`mode`), as one undo step. False when it can't: the
@@ -241,10 +264,9 @@ extension CreateModel {
   /// a target that takes masks; subtracting only a mask to subtract from).
   @discardableResult
   func commitAutoMask(_ selection: AutoMaskSelection, mode: AutoMaskMode, actionName: String = autoMaskActionName, undoManager: UndoManager?) -> Bool {
-    guard let image, ObjectIdentifier(image) == selection.image,
+    guard let image, image === selection.image,
           mode == .subtract ? canEditMask && canvasMask != nil : canPaintMask,
-          let gray = SAMGeometry.grayImage(selection.coverage, width: selection.width, height: selection.height),
-          let stroke = CanvasMask.Stroke.bitmap(gray, at: .zero, erases: mode == .subtract)
+          let stroke = selection.stroke
     else { return false }
     setMask(mode.applied(stroke, to: canvasMask), actionName: actionName, undoManager: undoManager)
     return true
@@ -263,9 +285,11 @@ extension CreateModel {
     points: [SAMSegmenter.Point], box: CGRect? = nil, mode: AutoMaskMode, size: SAMFiles.Size? = nil,
     actionName: String = autoMaskActionName, undoManager: UndoManager?
   ) async throws -> AutoMaskOutcome {
+    try checkCanCommit(mode)
     let (selection, result) = try await samSelection(SAMSegmenter.Prompt(points: points, box: box), size: size)
-    let selected = selection.coverage.reduce(0) { $0 + ($1 != 0 ? 1 : 0) }
+    let selected = selection.selectedPixels
     guard selected > 0 else { throw AutoMaskError.nothingSelected }
+    try checkCanCommit(mode)
     guard commitAutoMask(selection, mode: mode, actionName: actionName, undoManager: undoManager) else { throw AutoMaskError.cannotPaint }
     return AutoMaskOutcome(
       stats: canvasMaskStats, selectedPixels: selected, score: result.score, encodeTime: result.encodeTime,
@@ -276,10 +300,22 @@ extension CreateModel {
   func autoMaskSubject(
     at point: CGPoint? = nil, mode: AutoMaskMode, actionName: String = autoMaskActionName, undoManager: UndoManager?
   ) async throws -> AutoMaskOutcome {
+    try checkCanCommit(mode)
     let (selection, time) = try await subjectSelection(at: point)
-    let selected = selection.coverage.reduce(0) { $0 + ($1 != 0 ? 1 : 0) }
+    let selected = selection.selectedPixels
     guard selected > 0 else { throw AutoMaskError.nothingSelected }
+    try checkCanCommit(mode)
     guard commitAutoMask(selection, mode: mode, actionName: actionName, undoManager: undoManager) else { throw AutoMaskError.cannotPaint }
     return AutoMaskOutcome(stats: canvasMaskStats, selectedPixels: selected, score: nil, encodeTime: nil, decodeTime: time)
+  }
+
+  /// Why `mode` can't go into the mask now, checked before running a model and again after.
+  private func checkCanCommit(_ mode: AutoMaskMode) throws {
+    if mode == .subtract {
+      guard canEditMask else { throw AutoMaskError.cannotPaint }
+      guard canvasMask != nil else { throw AutoMaskError.noMaskToSubtract }
+    } else {
+      guard canPaintMask else { throw AutoMaskError.cannotPaint }
+    }
   }
 }

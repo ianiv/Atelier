@@ -67,7 +67,9 @@ actor SAMSegmenter {
     var highResFeatures1: MLMultiArray
   }
 
-  private struct Models {
+  /// Unchecked: the models are only used inside this actor; the loading task hands them back to
+  /// it.
+  private struct Models: @unchecked Sendable {
     var files: SAMFiles
     var encoder: MLModel
     var promptEncoder: MLModel
@@ -75,6 +77,9 @@ actor SAMSegmenter {
   }
 
   private var models: Models?
+  /// The load under way, so a second segment while the first compiles waits for it instead of
+  /// compiling again (the actor lets other calls in at each await).
+  private var loading: (files: SAMFiles, task: Task<Models, Error>)?
   private var cache = SAMEmbeddingCache<Embedding>(capacity: 2)
   private let memoryPressure: DispatchSourceMemoryPressure
 
@@ -101,6 +106,7 @@ actor SAMSegmenter {
   func segment(_ image: CGImage, prompt: Prompt, files: SAMFiles) async throws -> Result {
     let clock = ContinuousClock()
     let models = try await load(files)
+    try Task.checkCancellation()
     let key = SAMEmbeddingCache<Embedding>.Key(image: image, size: files.size)
     var encodeTime: Duration?
     let embedding: Embedding
@@ -150,7 +156,27 @@ actor SAMSegmenter {
   }
 
   private func load(_ files: SAMFiles) async throws -> Models {
-    if let models, models.files.root == files.root, models.files.size == files.size { return models }
+    func same(_ other: SAMFiles) -> Bool { other.root == files.root && other.size == files.size }
+    if let models, same(models.files) { return models }
+    if let loading, same(loading.files) { return try await loading.task.value }
+    // Not cancelled with the caller: a later click would only start it again.
+    let task = Task { try await Self.loadModels(files) }
+    loading = (files, task)
+    do {
+      let loaded = try await task.value
+      if let loading, same(loading.files) { self.loading = nil }
+      // Encodings from another size don't fit this one's decoder; the key keeps them apart, but
+      // they'd only take memory.
+      cache.removeAll()
+      models = loaded
+      return loaded
+    } catch {
+      if let loading, same(loading.files) { self.loading = nil }
+      throw error
+    }
+  }
+
+  private nonisolated static func loadModels(_ files: SAMFiles) async throws -> Models {
     func model(_ part: SAMFiles.Part) async throws -> MLModel {
       let compiled = files.compiled(part)
       if !FileManager.default.fileExists(atPath: compiled.appending(path: "coremldata.bin").path) {
@@ -165,13 +191,8 @@ actor SAMSegmenter {
       configuration.computeUnits = .cpuAndGPU
       return try MLModel(contentsOf: compiled, configuration: configuration)
     }
-    let loaded = try await Models(
+    return try await Models(
       files: files, encoder: model(.imageEncoder), promptEncoder: model(.promptEncoder), decoder: model(.maskDecoder))
-    // Encodings from another size don't fit this one's decoder; the key keeps them apart, but
-    // they'd only take memory.
-    cache.removeAll()
-    models = loaded
-    return loaded
   }
 
   /// Synchronous predictions, here and below: the actor is where they run, and Core ML's async
@@ -302,6 +323,19 @@ nonisolated enum SAMGeometry {
     points += clicks.map { modelPoint($0.location, sourceSize: sourceSize) }
     labels += clicks.map { $0.positive ? 1 : 0 }
     return (points, labels)
+  }
+
+  /// A click in image pixels, or nil when it's past the image's edges.
+  static func clickPoint(_ point: CGPoint, imageSize: CGSize) -> CGPoint? {
+    CGRect(origin: .zero, size: imageSize).contains(point) ? point : nil
+  }
+
+  /// The box dragged from `start` to `end` (image pixels), cut to the image; nil when less than a
+  /// pixel of it is on the image.
+  static func clampedBox(from start: CGPoint, to end: CGPoint, imageSize: CGSize) -> CGRect? {
+    let box = CGRect(x: start.x, y: start.y, width: end.x - start.x, height: end.y - start.y).standardized
+      .intersection(CGRect(origin: .zero, size: imageSize))
+    return box.isNull || box.width < 1 || box.height < 1 ? nil : box
   }
 
   static func bestMask(scores: [Float]) -> Int {

@@ -8,7 +8,8 @@ extension Automation {
   ///     image's center) and every subject: the mask isn't empty and holds the click.
   ///   SAM 2.1 (`--sam`, downloading `--size` through the app's own download when it's missing):
   ///     the mask holds the positive point; the same prompt again skips the encoder; a negative
-  ///     point inside the selection shrinks it; Subtract after Add gives back the mask before;
+  ///     point inside the selection (a second `--point`, else the selected pixel farthest from
+  ///     the first) takes at least a fifth of it away; Subtract after Add gives back the mask before;
   ///     Replace is one undo step; `--box` selects inside the box. Prints encoder and decoder
   ///     timing.
   /// Points and box are in the input's pixels. `--snapshot-dir` saves the mask over the image
@@ -146,24 +147,36 @@ extension Automation {
           let again = try await model.autoMask(points: [positive], mode: .replace, undoManager: nil)
           check(again.encodeTime == nil && paintedPixels() == whole, "sam: the same image again skips the encoder (decoder \(ms(again.decodeTime)))")
 
-          // A negative point on the selection, as far from the click as it reaches.
-          if let selection = model.canvasMask?.coverage(width: input.width, height: input.height) {
-            var farthest = click, distance = 0.0
+          // A negative point inside the selection takes a clear part of it away. With a second
+          // --point: both points selected, then the second marked to leave out instead (SAM keeps
+          // a box's whole content however it's marked inside, so the box isn't used here).
+          // Without: the click's selection, then the selected pixel farthest from it left out.
+          var base = [positive]
+          var negative = points.dropFirst().first
+          if let second = negative { base.append(SAMSegmenter.Point(location: second, positive: true)) }
+          _ = try await model.autoMask(points: base, mode: .replace, undoManager: nil)
+          if negative != nil { base.removeLast() }
+          let selected = paintedPixels()
+          if negative == nil, let selection = model.canvasMask?.coverage(width: input.width, height: input.height) {
+            var distance = 0.0
             for y in stride(from: 0, to: input.height, by: 4) {
               for x in stride(from: 0, to: input.width, by: 4) where selection[y * input.width + x] != 0 {
                 let d = hypot(Double(x) - click.x, Double(y) - click.y)
                 if d > distance {
                   distance = d
-                  farthest = CGPoint(x: x, y: y)
+                  negative = CGPoint(x: x, y: y)
                 }
               }
             }
-            let negative = points.dropFirst().first ?? farthest
+          }
+          if let negative {
+            let wasSelected = painted(at: negative)
             let shrunk = try await model.autoMask(
-              points: [positive, SAMSegmenter.Point(location: negative, positive: false)], mode: .replace, undoManager: nil)
+              points: base + [SAMSegmenter.Point(location: negative, positive: false)], mode: .replace, undoManager: nil)
+            let after = paintedPixels()
             check(
-              paintedPixels() < whole,
-              "sam: a negative point at \(Int(negative.x)),\(Int(negative.y)) shrinks the mask (\(whole) → \(paintedPixels()) px, decoder \(ms(shrunk.decodeTime)))")
+              wasSelected && !painted(at: negative) && Double(after) < Double(selected) * 0.8,
+              "sam: a negative point at \(Int(negative.x)),\(Int(negative.y)) inside the selection takes part of it away (\(selected) → \(after) px, \(Int((1 - Double(after) / Double(max(selected, 1))) * 100))% less, decoder \(ms(shrunk.decodeTime)))")
             snapshot("sam-negative")
           }
 

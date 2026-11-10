@@ -36,15 +36,14 @@ struct AutoMaskBar: View {
     .padding(.vertical, 6)
     .glassEffect(.regular, in: .rect(cornerRadius: 12))
     .help(Self.gestureHelp)
+    .onAppear { download.refresh() }
   }
 
   /// Select Subject, SAM's size and download, the iPad's include/exclude choice.
   @ViewBuilder private var selecting: some View {
     @Bindable var session = model.autoMask
     let paints = model.canPaintMask
-    // Read so the bar looks again when a download finishes.
-    let _ = download.finished
-    let installed = SAMFiles.installed(session.size) != nil
+    let installed = download.isInstalled(session.size)
     let downloading = download.size
     Button("Select Subject", systemImage: "person.crop.rectangle") {
       model.autoMask.selectSubject(model: model)
@@ -73,7 +72,7 @@ struct AutoMaskBar: View {
       .frame(width: 140)
       Button("Cancel") { download.cancel() }
     } else {
-      Button(installed ? "Downloaded" : "Download (\(Self.bytes(SAMDownload.remainingBytes(session.size))))") {
+      Button(installed ? "Downloaded" : "Download (\(Self.bytes(download.remainingBytes(session.size))))") {
         download.start(session.size)
       }
       .disabled(installed)

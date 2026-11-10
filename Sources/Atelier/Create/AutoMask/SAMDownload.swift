@@ -15,14 +15,27 @@ final class SAMDownload {
   private(set) var size: SAMFiles.Size?
   private(set) var fraction: Double = 0
   private(set) var failure: String?
-  /// Bumped when a download finishes, so views that ask `SAMFiles.installed` look again.
-  private(set) var finished = 0
+  /// The sizes installed, as last looked up (`refresh`): views and clicks ask this rather than
+  /// reading the folder on every render.
+  private(set) var installed: Set<SAMFiles.Size> = []
   private var task: Task<Void, Never>?
+
+  init() {
+    refresh()
+  }
+
+  /// Looks in the models folder again: at launch, after a download, and when the Select tool's
+  /// controls appear (the models folder may have changed in Settings).
+  func refresh() {
+    installed = Set(SAMFiles.Size.allCases.filter { SAMFiles.installed($0) != nil })
+  }
+
+  func isInstalled(_ size: SAMFiles.Size) -> Bool { installed.contains(size) }
 
   /// Bytes left to download for `size` (all of it until it's installed: the listing isn't known
   /// before the download starts).
-  static func remainingBytes(_ size: SAMFiles.Size) -> Int64 {
-    SAMFiles.installed(size) == nil ? size.bytes : 0
+  func remainingBytes(_ size: SAMFiles.Size) -> Int64 {
+    isInstalled(size) ? 0 : size.bytes
   }
 
   func start(_ size: SAMFiles.Size) {
@@ -33,12 +46,12 @@ final class SAMDownload {
     task = Task {
       do {
         try await Self.download(size) { self.fraction = $0 }
-        finished += 1
       } catch {
         if !(error is CancellationError), (error as? URLError)?.code != .cancelled {
           failure = "Couldn't download SAM 2.1: \(error.localizedDescription)"
         }
       }
+      refresh()
       self.size = nil
       task = nil
     }

@@ -311,7 +311,8 @@ struct CanvasView: View {
         .onTapGesture { location in
           guard model.canvasTool == .select, model.canPaintMask,
                 pencilMarkedAt.map({ Date().timeIntervalSince($0) > 0.5 }) ?? true,
-                let point = selectPoint(location, frame: frameRect, points: points)
+                let size = imageSize,
+                let point = selectPoint(location, frame: frameRect, points: points).flatMap({ SAMGeometry.clickPoint($0, imageSize: size) })
           else { return }
           model.autoMask.addPoint(point, positive: !model.autoMask.negative, model: model)
         }
@@ -419,9 +420,14 @@ struct CanvasView: View {
 
   /// The image pixel under `location` (view points), through the frame's placement of the image
   /// (`CanvasPlacement`), for the Select tool.
+  /// Not clamped: a drag may start or end past the image (`endSelection` decides).
   private func selectPoint(_ location: CGPoint, frame: CGRect, points: Double) -> CGPoint? {
     guard let placement = model.canvasPlacement else { return nil }
     return placement.sourcePoint(fromFrame: CGPoint(x: (location.x - frame.minX) / points, y: (location.y - frame.minY) / points))
+  }
+
+  private var imageSize: CGSize? {
+    model.image.map { CGSize(width: $0.width, height: $0.height) }
   }
 
   /// Follows a Select drag (or tap) from `start` to `location` (view points).
@@ -435,12 +441,14 @@ struct CanvasView: View {
   /// Ends a Select drag: a short one is a click (a point, `positive` or not), a longer one a box.
   private func endSelection(from start: CGPoint, to location: CGPoint, positive: Bool) {
     defer { selectDrag = nil }
-    guard let drag = selectDrag else { return }
+    guard let drag = selectDrag, let size = imageSize else { return }
     if hypot(location.x - start.x, location.y - start.y) < 4 {
-      model.autoMask.addPoint(drag.start, positive: positive, model: model)
-    } else {
-      model.autoMask.setBox(
-        CGRect(x: drag.start.x, y: drag.start.y, width: drag.end.x - drag.start.x, height: drag.end.y - drag.start.y), model: model)
+      // A click past the image's edges marks nothing.
+      if let point = SAMGeometry.clickPoint(drag.start, imageSize: size) {
+        model.autoMask.addPoint(point, positive: positive, model: model)
+      }
+    } else if let box = SAMGeometry.clampedBox(from: drag.start, to: drag.end, imageSize: size) {
+      model.autoMask.setBox(box, model: model)
     }
   }
 
@@ -547,7 +555,7 @@ struct CanvasView: View {
   /// include, red to leave out) and its box, over the image.
   private func selectionOverlay(image: CGImage, scale: Double) -> some View {
     let session = model.autoMask
-    let preview = session.preview.flatMap { $0.image == ObjectIdentifier(image) ? $0.tint : nil }
+    let preview = session.preview.flatMap { $0.image === image ? $0.tint : nil }
     return ZStack {
       if let preview {
         Image(decorative: preview, scale: 1)

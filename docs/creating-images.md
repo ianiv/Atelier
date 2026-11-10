@@ -142,9 +142,9 @@ When the image grows, the corners neither the image nor the frame covered stay e
 The **Select** tool (the wand, next to Brush and Eraser) makes the mask for you. Its controls appear over the bottom of the canvas while it's the tool.
 
 - **Select Subject** picks the image's main subjects with Apple's subject detection, the one Photos uses to lift subjects. It needs no download. It finds people, animals and objects that stand out; a landscape with no clear subject selects nothing.
-- **Clicks and boxes** use SAM 2.1 (Segment Anything), which downloads once: press **Download** (93.9 MB for Small) and it goes into a "SAM 2.1" folder of your models folder, with progress and Cancel beside it. Until then those controls are disabled. The **SAM** menu picks the size: **Small** is the default, **Tiny** is a little faster and **Large** (457 MB) a little more exact.
+- **Clicks and boxes** use SAM 2.1 (Segment Anything), which downloads once: press **Download** (93.9 MB for Small) and it goes into a "SAM 2.1" folder of your models folder, with progress and Cancel beside it. Until then those controls are disabled and clicking the image does nothing. The **SAM** menu picks the size: **Small** is the default, **Tiny** is a little faster and **Large** (457 MB) a little more exact.
 - On the Mac, click what you want (a green point), Option-click what to leave out (a red point), or drag a box around it. On iPad, tap with a finger or Apple Pencil, choose **+** or **−** to say whether a tap includes or leaves out, and drag a box with Apple Pencil; fingers still move and zoom. Each point refines the selection; the first click on an image takes a few seconds while SAM reads it, later ones are quick.
-- The selection shows in blue, apart from the red mask. **Add** puts it into the mask, **Subtract** takes it out, **Replace** makes it the whole mask. Each is one step to undo (⌘Z). **Clear Points** (or Esc) starts over.
+- The selection shows in blue, apart from the red mask. **Add** puts it into the mask, **Subtract** takes it out, **Replace** makes it the whole mask. Each is one step to undo (⌘Z). **Clear Points** (or Esc, on the Mac) starts over.
 - Selecting by a description (the **Select:** field) isn't available yet.
 
 Select works where painting does: an image on the canvas in Edit mode, for an image model, on this device or a server that takes masks.

@@ -26,6 +26,19 @@ struct AutoMaskTests {
     #expect(zoomed.sourcePoint(fromFrame: zoomed.framePoint(fromSource: point)) == point)
   }
 
+  @Test func clicksPastTheImageAreIgnoredAndBoxesCut() {
+    let size = CGSize(width: 100, height: 50)
+    #expect(SAMGeometry.clickPoint(CGPoint(x: 10, y: 10), imageSize: size) == CGPoint(x: 10, y: 10))
+    #expect(SAMGeometry.clickPoint(CGPoint(x: -1, y: 10), imageSize: size) == nil)
+    #expect(SAMGeometry.clickPoint(CGPoint(x: 10, y: 50), imageSize: size) == nil)
+    // Dragged up and left from past the bottom right: cut to the image.
+    #expect(
+      SAMGeometry.clampedBox(from: CGPoint(x: 150, y: 80), to: CGPoint(x: 60, y: 20), imageSize: size)
+        == CGRect(x: 60, y: 20, width: 40, height: 30))
+    // Wholly off the image.
+    #expect(SAMGeometry.clampedBox(from: CGPoint(x: 120, y: 0), to: CGPoint(x: 200, y: 40), imageSize: size) == nil)
+  }
+
   @Test func imagePointsStretchIntoSAMsSquareInput() {
     let size = CGSize(width: 2048, height: 512)
     #expect(SAMGeometry.modelPoint(CGPoint(x: 1024, y: 256), sourceSize: size) == CGPoint(x: 512, y: 512))
