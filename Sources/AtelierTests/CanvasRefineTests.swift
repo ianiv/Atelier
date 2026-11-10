@@ -173,6 +173,45 @@ struct CanvasRefineTests {
     #expect(fitted.cropRect == CGRect(x: 0, y: 0, width: 1024, height: 1024))
   }
 
+  /// The region math behind agents' `set_canvas_region`: a region of another shape grows about its
+  /// center to the frame's (never cropped), and fitting it shows exactly the grown region.
+  @Test func aRegionGrowsToTheFrameShapeAndShowsWhole() {
+    let wide = CGSize(width: 1024, height: 512)
+    // A square region in a 2:1 frame grows sideways about its center.
+    let grown = CanvasPlacement.grown(CGRect(x: 100, y: 100, width: 200, height: 200), toShapeOf: wide)
+    #expect(grown == CGRect(x: 0, y: 100, width: 400, height: 200))
+    // A wide region in a square frame grows up and down.
+    let tall = CanvasPlacement.grown(CGRect(x: 0, y: 50, width: 400, height: 100), toShapeOf: CGSize(width: 512, height: 512))
+    #expect(tall == CGRect(x: 0, y: -100, width: 400, height: 400))
+    // Already the frame's shape: unchanged.
+    let same = CGRect(x: 10, y: 20, width: 300, height: 150)
+    #expect(CanvasPlacement.grown(same, toShapeOf: wide) == same)
+    // Fitting the original region shows the grown one.
+    let region = CGRect(x: 128, y: 128, width: 256, height: 256)
+    let placement = CanvasPlacement(sourceSize: CGSize(width: 1024, height: 768), frameSize: wide, showing: region)
+    #expect(placement.cropRect == CanvasPlacement.grown(region, toShapeOf: wide))
+    #expect(placement.cropRect == CGRect(x: 0, y: 128, width: 512, height: 256))
+  }
+
+  @Test func centeringAPointAtAScale() {
+    let source = CGSize(width: 512, height: 512)
+    // The image's center at any scale is no offset.
+    #expect(CanvasPlacement.offset(centering: CGPoint(x: 256, y: 256), scale: 3, sourceSize: source) == .zero)
+    // The top-left quadrant's center at 2×: the image's center sits 256 frame pixels right and down.
+    let offset = CanvasPlacement.offset(centering: CGPoint(x: 128, y: 128), scale: 2, sourceSize: source)
+    #expect(offset == CGSize(width: 256, height: 256))
+    let placement = CanvasPlacement(sourceSize: source, frameSize: source, scale: 2, offset: offset)
+    #expect(placement.cropRect == CGRect(x: 0, y: 0, width: 256, height: 256))
+  }
+
+  @Test func frameSizeForARegionKeepsItsShapeInWholeUnits() {
+    // A 2:1 region at about a megapixel.
+    #expect(CanvasPlacement.frameSize(forRegion: CGSize(width: 400, height: 200), pixelCount: 1024 * 1024) == CGSize(width: 1472, height: 704))
+    // Square stays square.
+    #expect(CanvasPlacement.frameSize(forRegion: CGSize(width: 33, height: 33), pixelCount: 512 * 512) == CGSize(width: 512, height: 512))
+    #expect(CanvasPlacement.frameSize(forRegion: .zero, pixelCount: 512 * 512) == .zero)
+  }
+
   // MARK: - Merge
 
   @Test func aZoomedQuadrantMergesIntoItWithoutMovingTheRest() throws {

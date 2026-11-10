@@ -34,10 +34,37 @@ nonisolated struct CanvasPlacement: Sendable, Equatable {
   /// frame, fitted, centered: for callers that name a region instead of moving the canvas.
   static func zoomAndOffset(showing region: CGRect, sourceSize: CGSize, frameSize: CGSize) -> (scale: Double, offset: CGSize) {
     let zoom = min(frameSize.width / max(region.width, 1), frameSize.height / max(region.height, 1))
-    return (
-      zoom,
-      CGSize(width: (sourceSize.width / 2 - region.midX) * zoom, height: (sourceSize.height / 2 - region.midY) * zoom)
-    )
+    return (zoom, offset(centering: CGPoint(x: region.midX, y: region.midY), scale: zoom, sourceSize: sourceSize))
+  }
+
+  /// `region` grown about its center to the frame's shape: wider or taller, never cropped. Fitting
+  /// a region shows exactly this, so it's the region a caller gets when it names one of another
+  /// shape (agents' `set_canvas_region`).
+  static func grown(_ region: CGRect, toShapeOf frameSize: CGSize) -> CGRect {
+    guard region.width > 0, region.height > 0, frameSize.width > 0, frameSize.height > 0 else { return region }
+    let aspect = frameSize.width / frameSize.height
+    var size = region.size
+    if size.width / size.height < aspect {
+      size.width = size.height * aspect
+    } else {
+      size.height = size.width / aspect
+    }
+    return CGRect(x: region.midX - size.width / 2, y: region.midY - size.height / 2, width: size.width, height: size.height)
+  }
+
+  /// The canvas offset (`CanvasState.offset`: the image's center from the frame's, frame pixels,
+  /// y down) that puts image point `center` in the middle of the frame at `scale`.
+  static func offset(centering center: CGPoint, scale: Double, sourceSize: CGSize) -> CGSize {
+    CGSize(width: (sourceSize.width / 2 - center.x) * scale, height: (sourceSize.height / 2 - center.y) * scale)
+  }
+
+  /// The output size for showing a region of `regionSize` at about `pixelCount` pixels: its shape,
+  /// each side a multiple of 64 as the size setting takes (agents' `size_to_region`).
+  static func frameSize(forRegion regionSize: CGSize, pixelCount: Double) -> CGSize {
+    guard regionSize.width > 0, regionSize.height > 0, pixelCount > 0 else { return .zero }
+    let aspect = regionSize.width / regionSize.height
+    func units(_ value: Double) -> Double { max((value / 64).rounded(), 1) * 64 }
+    return CGSize(width: units((pixelCount * aspect).squareRoot()), height: units((pixelCount / aspect).squareRoot()))
   }
 
   init(sourceSize: CGSize, frameSize: CGSize, showing region: CGRect) {

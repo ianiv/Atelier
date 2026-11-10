@@ -124,7 +124,7 @@ final class AgentTools {
       "name": "get_create_screen",
       "title": "Get Create screen",
       "description":
-        "Returns what's on Atelier's Create screen right now: the selected model, prompt, negative prompt, the selected style (Generate writes the prompt into its template; styled_prompt is the result), seed and whether it's random, the image count, every inspector setting as Draw Things configuration JSON, the settings that differ from the model's defaults, and how many reference images there are. The user may have changed any of it since your last call.",
+        "Returns what's on Atelier's Create screen right now: the selected model, prompt, negative prompt, the selected style (Generate writes the prompt into its template; styled_prompt is the result), seed and whether it's random, the image count, every inspector setting as Draw Things configuration JSON, the settings that differ from the model's defaults, how many reference images there are, and `canvas`: the canvas image (its history step and size), the frame (output size), the region of the image it shows (source pixels, from the top left), its zoom and offset, the canvas mode, the mask summary and Merge into Image. The user may have changed any of it since your last call.",
       "inputSchema": ["type": "object", "properties": [String: Any]()],
       "annotations": ["readOnlyHint": true],
     ],
@@ -160,6 +160,108 @@ final class AgentTools {
           "random_seed": ["type": "boolean", "description": "true: a new seed for every Generate (the Random checkbox). false: keep the current seed."],
           "count": ["type": "integer", "description": "How many images each press of Generate makes: 1, 2, 3, 4, 6, 8, 12 or 16."],
           "layout_editor": ["type": "boolean", "description": "Open (true) or close (false) the Layout editor, which draws a layout prompt's boxes on the canvas. Only for models that take layout prompts (FLUX.3, Ideogram 4, MOSS Image). While it's open, a new layout prompt moves the boxes on screen."],
+          "canvas_mode": ["type": "string", "enum": ["generate", "edit"], "description": "The canvas's Generate / Edit switch: Edit sends the canvas (and its mask) to the model. set_canvas_image switches to Edit."],
+          "merge_into_image": ["type": "boolean", "description": "Merge into Image: an Edit run on part of the image, past its edges or with a mask puts its result back into the whole image (true, the default) instead of saving just the frame."],
+        ],
+      ],
+    ],
+    [
+      "name": "set_canvas_image",
+      "title": "Put an image on the canvas",
+      "description": """
+        Puts an image on the Create screen's canvas, as clicking it in History or dropping it \
+        there does: fitted to the frame, in Edit mode, with no mask. Give a History step (see \
+        list_history), which the next run then follows, or an image file or data: URL. Returns \
+        the canvas as get_create_screen's `canvas` describes it. Then paint a mask \
+        (set_canvas_mask), pick a region (set_canvas_region), or generate with use_canvas.
+        """,
+      "inputSchema": [
+        "type": "object",
+        "properties": [
+          "history_step": ["type": "integer", "description": "A history step from list_history or generate (images only; not a video)."],
+          "image": ["type": "string", "description": "Instead: path to an image, or a data: URL."],
+        ],
+      ],
+    ],
+    [
+      "name": "set_canvas_mask",
+      "title": "Paint the canvas mask",
+      "description": """
+        Paints the mask on the canvas image: the area an Edit run regenerates. Coordinates are \
+        the canvas image's pixels from its top left (see get_create_screen's canvas.source_size). \
+        Applied in order: `clear`, then `image` and `shapes` (by `mode`: replace the mask, the \
+        default, add to it or subtract from it), then `invert`. The whole call is one ⌘Z step, \
+        “Agent Mask”, and shows on the canvas as it happens. Returns the mask summary \
+        (get_canvas_mask's). Needs an image on the canvas (set_canvas_image) in Edit mode.
+        """,
+      "inputSchema": [
+        "type": "object",
+        "properties": [
+          "image": ["type": "string", "description": "A mask image the size of the canvas image (path or data: URL): white (opaque, light) regenerates; transparent or black keeps."],
+          "shapes": [
+            "type": "array",
+            "description": "Shapes to paint: {\"shape\": \"rect\" or \"ellipse\", \"x\", \"y\", \"width\", \"height\"} or {\"shape\": \"polygon\", \"points\": [[x, y], …]} (3 points or more).",
+            "items": [
+              "type": "object", "required": ["shape"],
+              "properties": [
+                "shape": ["type": "string", "enum": ["rect", "ellipse", "polygon"]],
+                "x": ["type": "number"], "y": ["type": "number"], "width": ["type": "number"], "height": ["type": "number"],
+                "points": ["type": "array", "items": ["type": "array", "items": ["type": "number"]]],
+              ],
+            ],
+          ],
+          "mode": ["type": "string", "enum": ["replace", "add", "subtract"], "description": "What `image` and `shapes` do to the mask there is. Default replace."],
+          "invert": ["type": "boolean", "description": "Flip the mask over the whole image, last."],
+          "clear": ["type": "boolean", "description": "Clear the mask, first. Alone, it just clears it."],
+        ],
+      ],
+    ],
+    [
+      "name": "get_canvas_mask",
+      "title": "Get canvas mask",
+      "description": """
+        Shows the canvas mask: `overlay` (the default) is the canvas image with the mask tinted \
+        red, the frame (what a run sees) outlined in yellow and anything outside the image \
+        hatched; `mask` is the mask itself, white on black at the canvas image's size, as \
+        set_canvas_mask takes it; `both` returns both. Comes with a summary: has_mask, the \
+        image size, coverage (share of the image painted), the painted bounds, \
+        coverage_in_region (share of what the frame shows) and whether the next run sends it.
+        """,
+      "inputSchema": [
+        "type": "object",
+        "properties": [
+          "view": ["type": "string", "enum": ["overlay", "mask", "both"]],
+          "max_size": ["type": "integer", "description": "Long side of the returned images in pixels, 256–2048. Default 1024."],
+          "save_to": ["type": "string", "description": "Also write the full-size PNGs to this file or folder."],
+        ],
+      ],
+      "annotations": ["readOnlyHint": true],
+    ],
+    [
+      "name": "set_canvas_region",
+      "title": "Choose the canvas region",
+      "description": """
+        Zooms and moves the canvas so the frame shows part of the image, as zooming and dragging \
+        it does: an Edit run then regenerates just that region, at the frame's full resolution, \
+        and with Merge into Image puts it back into the whole image. Pass one of: `region` \
+        (source pixels from the top left; grown about its center to the frame's shape, never \
+        cropped), `fit`, `actual_size` (1 image pixel per frame pixel, keeping the center), or \
+        `scale` (frame pixels per image pixel) with an optional `center`. The frame size stays \
+        unless `size_to_region` is true. Returns the canvas, with the region the frame actually \
+        shows: larger or smaller than asked when the zoom needed is outside 0.05×–32×.
+        """,
+      "inputSchema": [
+        "type": "object",
+        "properties": [
+          "region": [
+            "type": "object", "required": ["x", "y", "width", "height"],
+            "properties": ["x": ["type": "number"], "y": ["type": "number"], "width": ["type": "number"], "height": ["type": "number"]],
+          ],
+          "fit": ["type": "boolean", "description": "Fit the whole image in the frame."],
+          "actual_size": ["type": "boolean", "description": "Actual size, keeping what's in the middle."],
+          "scale": ["type": "number", "description": "Frame pixels per image pixel, 0.05–32."],
+          "center": ["type": "array", "items": ["type": "number"], "description": "With scale: the image point [x, y] to put in the middle of the frame. Default: what's there now."],
+          "size_to_region": ["type": "boolean", "description": "With region or fit: first set the output size to the region's shape at about the current pixel count (multiples of 64). A setting change, undoable with ⌘Z."],
         ],
       ],
     ],
@@ -205,7 +307,9 @@ final class AgentTools {
         (image to image), or for video models starts from it as the first frame; \
         `reference_images` go to models that take references (see list_models). With \
         use_app_settings and no prompt, it generates what's on the Create screen: its model, \
-        prompt, negative prompt, settings and (unless Random is on) seed.
+        prompt, negative prompt, settings and (unless Random is on) seed. With use_canvas too, \
+        it runs exactly what the Generate button would, canvas included: the region the frame \
+        shows, the mask, and Merge into Image.
         """,
       "inputSchema": [
         "type": "object",
@@ -241,6 +345,7 @@ final class AgentTools {
           "audio": ["type": "string", "description": "Video models that take audio (see list_models): path to an audio file."],
           "save_to": ["type": "string", "description": "Where to write the PNG or MP4: a file path, or a folder. Defaults to a temporary folder."],
           "include_image": ["type": "boolean", "description": "Return the image inline (scaled to 1024 px on the long side). Default true."],
+          "use_canvas": ["type": "boolean", "description": "With use_app_settings: run exactly what the Generate button would, taking the canvas image, the region the frame shows (set_canvas_region), its mask (set_canvas_mask), the moodboard and Merge into Image. Takes no prompt, settings or input_image: change those with set_create_screen and set_canvas_image first. Returns the result (the merged whole image when it merges) and the step it followed."],
           "background": ["type": "boolean", "description": "Return a job_id right away instead of waiting for the result, then check on it with get_job. Use it for videos and anything that may take more than a couple of minutes, since some clients give up on long calls. Either way the run keeps going if the call is cancelled or dropped; only cancel_job stops it."],
         ],
       ],
@@ -294,6 +399,10 @@ final class AgentTools {
     case "get_settings": return try await getSettings(arguments)
     case "get_create_screen": return try Self.textResult(json: createScreen())
     case "set_create_screen": return try await setCreateScreen(arguments)
+    case "set_canvas_image": return try await setCanvasImage(arguments)
+    case "set_canvas_mask": return try setCanvasMask(arguments)
+    case "get_canvas_mask": return try getCanvasMask(arguments)
+    case "set_canvas_region": return try setCanvasRegion(arguments)
     case "list_history": return try Self.textResult(json: listHistory(arguments))
     case "get_image": return try await getImage(arguments)
     case "generate": return try await startGenerate(arguments, progress: progress)
@@ -347,6 +456,7 @@ final class AgentTools {
   private func generate(
     _ arguments: [String: Any], progress: @escaping (Progress) -> Void
   ) async throws -> [String: Any] {
+    if arguments["use_canvas"] as? Bool == true { return try await generateFromCanvas(arguments, progress: progress) }
     // Without a prompt, use_app_settings generates the Create screen as it is.
     let fromScreen = arguments["use_app_settings"] as? Bool == true && arguments["prompt"] == nil
     // The screen's prompt as Generate sends it: written into the selected style.
@@ -482,6 +592,17 @@ final class AgentTools {
       self?.activity = "\(message): “\(summary)”"
       progress(Progress(step: step, total: total, message: message))
     }
+    return try await result(
+      of: item, model: model, configuration: configuration, seed: seed, summary: summary, notes: notes,
+      arguments: arguments)
+  }
+
+  /// What a finished run answers with: the file written, the image inline and the structured
+  /// result (plus `extra`).
+  private func result(
+    of item: HistoryItem, model: String, configuration: PipelineConfiguration, seed: UInt32, summary: String,
+    notes: [String], arguments: [String: Any], extra: [String: Any] = [:]
+  ) async throws -> [String: Any] {
     let png = try await create.history.pngData(item)
     let url = try Self.outputURL(
       arguments["save_to"] as? String, name: create.history.fileName(for: item),
@@ -521,7 +642,91 @@ final class AgentTools {
       structured["frames_per_second"] = clip.framesPerSecond
       structured["has_audio"] = clip.audioId != nil
     }
+    structured.merge(extra) { _, new in new }
     return ["content": content, "structuredContent": structured]
+  }
+
+  /// `generate` with use_canvas: the request the Generate button would queue (`screenRequest`),
+  /// run where Generate would run it, so the canvas region, mask and Merge into Image behave as
+  /// they do for the user, merge and layered storage included (`CreateModel.run`).
+  private func generateFromCanvas(
+    _ arguments: [String: Any], progress: @escaping (Progress) -> Void
+  ) async throws -> [String: Any] {
+    guard arguments["use_app_settings"] as? Bool == true else {
+      throw ToolError("use_canvas runs the Create screen as Generate would, so it needs use_app_settings: true too.")
+    }
+    if arguments["input_image"] != nil {
+      throw ToolError("use_canvas takes the canvas as the input, so leave out input_image; put an image there with set_canvas_image.")
+    }
+    // Only what Generate would send goes: anything else is changed on the screen first, where the
+    // user sees it.
+    let screenFields = [
+      "prompt", "negative_prompt", "model", "preset", "settings", "width", "height", "steps", "guidance_scale",
+      "strength", "reference_images", "num_frames", "seconds", "audio",
+    ]
+    let extra = screenFields.filter { arguments[$0] != nil }
+    if !extra.isEmpty {
+      throw ToolError(
+        "With use_canvas, generate runs the Create screen as it is, so it doesn't take \(extra.joined(separator: ", ")). Change them with set_create_screen first.")
+    }
+    if create.models.isEmpty { await create.refreshModelList() }
+    await create.modelLoaded()
+    _ = try canvasImage()
+    if let problem = create.runTargetProblem {
+      throw ToolError(problem + (create.runTargetMaskProblem != nil ? " (set_canvas_mask with clear: true clears it)" : ""))
+    }
+    guard var request = create.screenRequest(), let model = create.selectedModel else {
+      throw ToolError(create.errorMessage ?? "The Create screen has no model or settings loaded yet.")
+    }
+    guard request.canvas != nil else {
+      throw ToolError(
+        create.canvasMode == .generate
+          ? "The canvas is in Generate mode, so a run wouldn't take it. Call set_create_screen with canvas_mode \"edit\"."
+          : "Edit means nothing to this model at Strength 100% with no mask: paint a mask (set_canvas_mask) or lower `strength` (set_create_screen).")
+    }
+    let seed: UInt32
+    if let value = Self.int(arguments["seed"]) {
+      guard value >= 0, value <= Int(UInt32.max) else { throw ToolError("`seed` must be 0–4294967295.") }
+      seed = UInt32(value)
+    } else {
+      seed = create.seedLocked ? create.seed : UInt32.random(in: 0...UInt32.max)
+    }
+    request.seed = seed
+    if create.videoModel?.takesAudio == true, create.audio.url != nil { request.audio = create.audio.snapshot() }
+    let region = create.canvasPlacement?.cropRect
+    let merged = request.merge != nil
+
+    let summary = String(request.prompt.prefix(60))
+    activity = "Waiting: “\(summary)”"
+    progress(Progress(step: 0, total: nil, message: "Waiting for the current run to finish", isQueued: true))
+    defer { activity = nil }
+    let item = try await create.generate(forAgent: request, target: create.runTarget) { [weak self] update in
+      guard case .state(let state) = update else { return }
+      let message = Self.describe(state)
+      var step = 0
+      var total: Int?
+      if case .generating(let current, let all) = state {
+        step = current
+        total = all
+      }
+      self?.activity = "\(message): “\(summary)”"
+      progress(Progress(step: step, total: total, message: message))
+    }
+    let parent = item.inputTensorId.flatMap { create.history.item(tensorId: $0) }
+    // The saved image's own size: a merged one is the whole (maybe grown) image, not the frame.
+    let saved = await create.history.image(for: item)
+    let size = saved.map { ["width": $0.width, "height": $0.height] } ?? ["width": item.sidecar.width, "height": item.sidecar.height]
+    var notes: [String] = []
+    if merged { notes.append("Merged into the whole image (\(size["width"]!)×\(size["height"]!)).") }
+    if let parent { notes.append("It follows history step \(parent.id.logicalTime).") }
+    return try await result(
+      of: item, model: model, configuration: request.configuration, seed: seed, summary: summary, notes: notes,
+      arguments: arguments,
+      extra: [
+        "parent_history_step": parent?.id.logicalTime ?? NSNull(), "merged": merged,
+        "canvas_size": size,
+        "region": region.map(Self.json) ?? NSNull(),
+      ])
   }
 
   // MARK: - Jobs
@@ -674,13 +879,13 @@ final class AgentTools {
       "reference_images": create.moodboard.items.count,
       "layout_editor": create.layout != nil ? "open" : create.layoutFormat == nil ? "not available for this model" : "closed",
       "canvas_has_image": create.image != nil,
+      "canvas": canvasState(),
       "busy": create.workUnderway ?? NSNull(),
     ]
   }
 
   private func setCreateScreen(_ arguments: [String: Any]) async throws -> [String: Any] {
     if create.models.isEmpty { await create.refreshModelList() }
-    let undoManager = Self.mainWindowUndoManager
     var notes: [String] = []
 
     if let name = arguments["model"] as? String {
@@ -697,10 +902,10 @@ final class AgentTools {
         let preset = named.first(where: { $0.model == nil || $0.model == model })
           ?? named.first(where: { preset in create.models.contains { $0.file == preset.model } })
       else { throw ToolError("No preset “\(name)” for a downloaded model. See list_presets.") }
-      create.apply(preset, undoManager: undoManager)
+      Self.asOneUndoStep { create.apply(preset, undoManager: $0) }
       await create.modelLoaded()
     } else if arguments["reset_settings"] as? Bool == true {
-      create.resetToModelDefaults(undoManager: undoManager)
+      Self.asOneUndoStep { create.resetToModelDefaults(undoManager: $0) }
     }
 
     guard var configuration = create.settings else {
@@ -747,7 +952,7 @@ final class AgentTools {
       }
     }
     if changed {
-      create.replaceSettings(with: configuration, actionName: "Agent Settings", undoManager: undoManager)
+      Self.asOneUndoStep { create.replaceSettings(with: configuration, actionName: "Agent Settings", undoManager: $0) }
     }
 
     if let prompt = arguments["prompt"] as? String {
@@ -775,10 +980,348 @@ final class AgentTools {
       guard counts.contains(count) else { throw ToolError("`count` must be one of 1, 2, 3, 4, 6, 8, 12 or 16.") }
       create.count = count
     }
+    if let mode = arguments["canvas_mode"] as? String {
+      guard let canvasMode = CreateModel.CanvasMode(rawValue: mode) else {
+        throw ToolError("`canvas_mode` is \"generate\" or \"edit\".")
+      }
+      create.canvasMode = canvasMode
+      if canvasMode == .edit, create.effectiveCanvasMode == .generate {
+        notes.append("Edit means nothing to \(model) at Strength 100% with no mask, so runs still generate from the prompt alone until you paint a mask (set_canvas_mask) or lower `strength`.")
+      }
+    }
+    if let merge = arguments["merge_into_image"] as? Bool { create.mergeIntoImage = merge }
 
     var result = createScreen()
     if !notes.isEmpty { result["notes"] = notes }
     return try Self.textResult(json: result)
+  }
+
+  // MARK: - Canvas
+
+  /// The canvas as an agent sees it: what's on it, the frame, the region of the image the frame
+  /// shows (all in the image's pixels from its top left), the mode and the mask.
+  private func canvasState() -> [String: Any] {
+    let shows =
+      create.canvasClip != nil ? "video" : create.canvasShowsImage ? "image" : create.image != nil ? "run preview" : "empty"
+    var state: [String: Any] = [
+      "has_image": create.canvasShowsImage,
+      "shows": shows,
+      "canvas_mode": create.canvasMode.rawValue,
+      // Edit means nothing at Strength 100% with no mask, so runs fall back to Generate.
+      "canvas_mode_in_effect": create.effectiveCanvasMode.rawValue,
+      "merge_into_image": create.mergeIntoImage,
+      "merge_applies": create.canMergeIntoImage,
+      "can_paint_mask": create.canPaintMask,
+    ]
+    if let frame = create.frameSize { state["frame"] = Self.json(frame) }
+    guard create.canvasShowsImage, let image = create.image else { return state }
+    let sourceSize = CGSize(width: image.width, height: image.height)
+    state["source_step"] = create.imageItem?.id.logicalTime ?? NSNull()
+    state["source_size"] = Self.json(sourceSize)
+    if let placement = create.canvasPlacement {
+      let crop = placement.cropRect
+      state["region"] = Self.json(crop)
+      state["scale"] = (placement.zoom.x + placement.zoom.y) / 2
+      state["fitted"] = create.canvas.scale == nil
+      state["offset"] = ["x": create.canvas.offset.width, "y": create.canvas.offset.height]
+      // Half a pixel of slack for rounding to whole frame pixels.
+      state["extends_past_image"] = !CGRect(origin: .zero, size: sourceSize).insetBy(dx: -0.5, dy: -0.5).contains(crop)
+    }
+    state["mask"] = maskSummary()
+    return state
+  }
+
+  /// get_canvas_mask's summary, also what set_canvas_mask returns.
+  private func maskSummary() -> [String: Any] {
+    guard let stats = create.canvasMaskStats, let image = create.image else { return ["has_mask": false] }
+    return [
+      "has_mask": stats.paintedPixels > 0,
+      "source_size": Self.json(CGSize(width: image.width, height: image.height)),
+      "painted_pixels": stats.paintedPixels,
+      "coverage": stats.paintedFraction,
+      "bounds": stats.bounds.map(Self.json) ?? NSNull(),
+      "coverage_in_region": stats.frameFraction ?? NSNull(),
+      // Painted inside the frame, in Edit, for a target that takes masks: what Generate sends.
+      "sent_with_next_run": create.runTargetTakesMasks && create.screenFrameHasPaint,
+    ]
+  }
+
+  /// The canvas image an agent can work on, or why there isn't one.
+  @discardableResult
+  private func canvasImage() throws -> CGImage {
+    if create.canvasClip != nil {
+      throw ToolError("The canvas plays a video. Put an image on it with set_canvas_image first.")
+    }
+    guard create.canvasShowsImage, let image = create.image else {
+      throw ToolError(
+        create.image != nil
+          ? "The canvas shows a run's preview. Wait for it (get_job), or put an image there with set_canvas_image."
+          : "The canvas is empty. Call set_canvas_image first.")
+    }
+    return image
+  }
+
+  private func setCanvasImage(_ arguments: [String: Any]) async throws -> [String: Any] {
+    let step = Self.int(arguments["history_step"])
+    let source = arguments["image"] as? String
+    guard (step == nil) != (source == nil) else {
+      throw ToolError("Pass `history_step` (see list_history) or `image` (a path or data: URL), not both.")
+    }
+    if let step {
+      guard let item = create.history.items.first(where: { $0.id.logicalTime == step }) else {
+        throw ToolError("No history step \(step) in “\(create.history.project.name)”. See list_history.")
+      }
+      guard !item.isVideo else { throw ToolError("History step \(step) is a video; the canvas mask and region work on images.") }
+      guard await create.placeOnCanvas(item) else { throw ToolError("Couldn't read history step \(step)'s image.") }
+    } else if let source {
+      create.placeOnCanvas(try Self.loadImage(source))
+    }
+    return try Self.textResult(json: canvasState())
+  }
+
+  private func setCanvasMask(_ arguments: [String: Any]) throws -> [String: Any] {
+    let image = try canvasImage()
+    let sourceRect = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+    let size = "\(image.width)×\(image.height)"
+    let clear = arguments["clear"] as? Bool == true
+    let invert = arguments["invert"] as? Bool == true
+    let mode = arguments["mode"] as? String ?? "replace"
+    guard ["replace", "add", "subtract"].contains(mode) else {
+      throw ToolError("`mode` is \"replace\" (the default), \"add\" or \"subtract\".")
+    }
+    let shapes = arguments["shapes"] as? [Any]
+    let maskSource = arguments["image"] as? String
+    if arguments["shapes"] != nil, shapes == nil { throw ToolError("`shapes` is an array of shapes.") }
+    guard clear || invert || shapes != nil || maskSource != nil else {
+      throw ToolError("Pass `shapes`, `image`, `invert` or `clear`.")
+    }
+    guard create.canEditMask else { throw ToolError(maskUnavailableReason()) }
+
+    let erases = mode == "subtract"
+    var strokes: [CanvasMask.Stroke] = []
+    var notes: [String] = []
+    for (index, entry) in (shapes ?? []).enumerated() {
+      guard let shape = entry as? [String: Any] else { throw ToolError("Shape \(index + 1) isn't an object.") }
+      let stroke = try Self.stroke(shape, number: index + 1, erases: erases)
+      let bounds = stroke.kind == .polygon ? Self.bounds(of: stroke.points) : Self.bounds(of: stroke.points).standardized
+      guard bounds.intersects(sourceRect) else {
+        throw ToolError("Shape \(index + 1) lies wholly outside the \(size) canvas image (coordinates are its pixels from the top left).")
+      }
+      strokes.append(stroke)
+    }
+    if let maskSource {
+      let mask = try Self.loadImage(maskSource)
+      guard mask.width == image.width, mask.height == image.height else {
+        throw ToolError(
+          "The mask image is \(mask.width)×\(mask.height), but the canvas image is \(size). Make it that size: white regenerates, black or transparent keeps.")
+      }
+      if let stroke = CanvasMask.Stroke.bitmap(mask, erases: erases) {
+        strokes.append(stroke)
+      } else {
+        notes.append("The mask image paints nothing (no opaque pixels light enough).")
+      }
+    }
+    // Replacing starts from nothing; only shapes or an image replace (invert alone flips what's there).
+    let replaces = clear || (mode == "replace" && (shapes != nil || maskSource != nil))
+    let base = replaces ? nil : create.canvasMask
+    var mask = base ?? CanvasMask()
+    mask.strokes += strokes
+    if invert { mask.strokes.append(.invert) }
+    // As the canvas's own Invert Mask: flipping a mask that's there paints nothing new, so it's
+    // allowed where painting isn't (an older server); anything else paints.
+    let invertsExisting = invert && strokes.isEmpty && base != nil
+    let paintsNew = strokes.contains { !$0.erases } || (invert && !invertsExisting)
+    if paintsNew, !create.canPaintMask {
+      throw ToolError(
+        "\(create.runTargetServerName ?? "The server") can't take masks: its Atelier is older. Run on this device (Run on in the app), or only clear the mask.")
+    }
+    Self.asOneUndoStep {
+      create.setMask(mask.strokes.isEmpty ? nil : mask, actionName: CreateModel.agentMaskActionName, undoManager: $0)
+    }
+    var result = maskSummary()
+    if !notes.isEmpty { result["notes"] = notes }
+    return try Self.textResult(json: result)
+  }
+
+  /// Why the mask can't change now (`canEditMask` is false with an image on the canvas).
+  private func maskUnavailableReason() -> String {
+    if create.videoModel != nil { return "\(create.selectedModel ?? "This model") makes video, which takes no mask." }
+    if create.layout != nil { return "The Layout editor is open over the canvas. Close it with set_create_screen {layout_editor: false}." }
+    if create.canvasMode != .edit {
+      return "The canvas is in Generate mode, where there's no mask. Call set_create_screen with canvas_mode \"edit\"."
+    }
+    return "The mask can't change now."
+  }
+
+  /// One `set_canvas_mask` shape as a mask stroke.
+  private static func stroke(_ shape: [String: Any], number: Int, erases: Bool) throws -> CanvasMask.Stroke {
+    switch shape["shape"] as? String {
+    case "rect", "ellipse":
+      guard let x = double(shape["x"]), let y = double(shape["y"]), let width = double(shape["width"]),
+            let height = double(shape["height"])
+      else { throw ToolError("Shape \(number) needs x, y, width and height.") }
+      guard width > 0, height > 0 else { throw ToolError("Shape \(number) has no size: width and height must be above 0.") }
+      let rect = CGRect(x: x, y: y, width: width, height: height)
+      return shape["shape"] as? String == "rect" ? .rect(rect, erases: erases) : .ellipse(in: rect, erases: erases)
+    case "polygon":
+      let points = (shape["points"] as? [Any] ?? []).compactMap { point -> CGPoint? in
+        if let pair = point as? [Any], pair.count == 2, let x = double(pair[0]), let y = double(pair[1]) {
+          return CGPoint(x: x, y: y)
+        }
+        if let object = point as? [String: Any], let x = double(object["x"]), let y = double(object["y"]) {
+          return CGPoint(x: x, y: y)
+        }
+        return nil
+      }
+      guard points.count >= 3 else { throw ToolError("Shape \(number), a polygon, needs `points` with at least 3 [x, y] pairs.") }
+      let bounds = Self.bounds(of: points)
+      guard bounds.width > 0, bounds.height > 0 else { throw ToolError("Shape \(number), a polygon, has no area.") }
+      return .polygon(points, erases: erases)
+    default:
+      throw ToolError("Shape \(number)'s `shape` is \"rect\", \"ellipse\" or \"polygon\".")
+    }
+  }
+
+  private static func bounds(of points: [CGPoint]) -> CGRect {
+    guard let first = points.first else { return .null }
+    return points.dropFirst().reduce(CGRect(origin: first, size: .zero)) { $0.union(CGRect(origin: $1, size: .zero)) }
+  }
+
+  private func getCanvasMask(_ arguments: [String: Any]) throws -> [String: Any] {
+    let image = try canvasImage()
+    let view = arguments["view"] as? String ?? "overlay"
+    guard ["overlay", "mask", "both"].contains(view) else { throw ToolError("`view` is \"overlay\" (the default), \"mask\" or \"both\".") }
+    let maxSide = min(max(Self.int(arguments["max_size"]) ?? 1024, 256), 2048)
+    let sourceSize = CGSize(width: image.width, height: image.height)
+    var views: [(name: String, image: CGImage)] = []
+    if view != "mask" {
+      guard let overlay = create.canvasMaskOverlay() else { throw ToolError("Couldn't draw the overlay.") }
+      views.append(("overlay", overlay))
+    }
+    if view != "overlay" {
+      guard let mask = (create.canvasMask ?? CanvasMask()).image(sourceSize: sourceSize) else { throw ToolError("Couldn't draw the mask.") }
+      views.append(("mask", mask))
+    }
+    var summary = maskSummary()
+    if let saveTo = arguments["save_to"] as? String {
+      var saved: [String: String] = [:]
+      for entry in views {
+        // Two views to one file name: each gets its own suffix.
+        var target = saveTo
+        if views.count > 1, !saveTo.hasSuffix("/"), !(saveTo as NSString).pathExtension.isEmpty {
+          let path = (saveTo as NSString).deletingPathExtension
+          target = "\(path)-\(entry.name).\((saveTo as NSString).pathExtension)"
+        }
+        let url = try Self.outputURL(target, name: "Canvas \(entry.name == "mask" ? "Mask" : "Overlay")", extension: "png")
+        guard let png = ImageTensor.png(entry.image) else { throw ToolError("Couldn't encode the \(entry.name).") }
+        try png.write(to: url)
+        saved[entry.name] = url.path
+      }
+      summary["saved"] = saved
+    }
+    let data = try JSONSerialization.data(withJSONObject: Self.tidy(summary), options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+    var content: [[String: Any]] = [["type": "text", "text": String(decoding: data, as: UTF8.self)]]
+    for entry in views {
+      if let preview = Self.jpeg(ImageLoader.fitted(entry.image, maxSide: maxSide)) {
+        content.append(["type": "image", "data": preview.base64EncodedString(), "mimeType": "image/jpeg"])
+      }
+    }
+    return ["content": content, "structuredContent": Self.tidy(summary)]
+  }
+
+  private func setCanvasRegion(_ arguments: [String: Any]) throws -> [String: Any] {
+    let image = try canvasImage()
+    let sourceSize = CGSize(width: image.width, height: image.height)
+    let sourceRect = CGRect(origin: .zero, size: sourceSize)
+    let regionArgument = arguments["region"]
+    let fit = arguments["fit"] as? Bool == true
+    let actualSize = arguments["actual_size"] as? Bool == true
+    let scale = Self.double(arguments["scale"])
+    guard [regionArgument != nil, fit, actualSize, scale != nil].filter(\.self).count == 1 else {
+      throw ToolError("Pass one of `region`, `fit`, `actual_size` or `scale`.")
+    }
+    let sizeToRegion = arguments["size_to_region"] as? Bool == true
+    if sizeToRegion, actualSize || scale != nil {
+      throw ToolError("size_to_region goes with `region` or `fit`, which name the area to size the output to.")
+    }
+    var result: [String: Any] = [:]
+    var notes: [String] = []
+
+    /// Sets the output size to `area`'s shape at about the current pixel count, as one undo step.
+    func size(to area: CGSize) {
+      guard sizeToRegion, var configuration = create.settings else { return }
+      let size = CanvasPlacement.frameSize(
+        forRegion: area, pixelCount: Double(configuration.width * configuration.height))
+      guard Int(size.width) != configuration.width || Int(size.height) != configuration.height else { return }
+      configuration.width = Int(size.width)
+      configuration.height = Int(size.height)
+      Self.asOneUndoStep { create.replaceSettings(with: configuration, actionName: "Agent Settings", undoManager: $0) }
+      notes.append("The output size is now \(configuration.width)×\(configuration.height).")
+    }
+
+    if let regionArgument {
+      guard let object = regionArgument as? [String: Any], let x = Self.double(object["x"]), let y = Self.double(object["y"]),
+            let width = Self.double(object["width"]), let height = Self.double(object["height"])
+      else { throw ToolError("`region` is {\"x\", \"y\", \"width\", \"height\"} in the canvas image's pixels.") }
+      guard width > 0, height > 0 else { throw ToolError("`region` has no size: width and height must be above 0.") }
+      let region = CGRect(x: x, y: y, width: width, height: height)
+      guard region.intersects(sourceRect) else {
+        throw ToolError("`region` doesn't overlap the \(image.width)×\(image.height) canvas image (its pixels from the top left).")
+      }
+      size(to: region.size)
+      guard let frameSize = create.frameSize else { throw ToolError("The Create screen has no output size yet.") }
+      let grown = CanvasPlacement.grown(region, toShapeOf: frameSize)
+      let wanted = CanvasPlacement.zoomAndOffset(showing: grown, sourceSize: sourceSize, frameSize: frameSize).scale
+      create.showRegion(grown)
+      result["requested_region"] = Self.json(region)
+      result["grown_region"] = Self.json(grown)
+      let clamped = !CanvasState.range.contains(wanted)
+      result["clamped"] = clamped
+      if clamped {
+        notes.append(
+          "Showing that region needs a zoom of \(String(format: "%.3g", wanted))×, outside the canvas's 0.05×–32×, so the frame shows `region` instead.")
+      }
+    } else if fit {
+      size(to: sourceSize)
+      create.canvas.zoomToFit()
+    } else if actualSize {
+      create.canvas.zoom(to: 1)
+    } else if let scale {
+      guard CanvasState.range.contains(scale) else { throw ToolError("`scale` must be 0.05–32 (frame pixels per image pixel).") }
+      var center: CGPoint
+      if let crop = create.canvasPlacement?.cropRect { center = CGPoint(x: crop.midX, y: crop.midY) } else {
+        center = CGPoint(x: sourceSize.width / 2, y: sourceSize.height / 2)
+      }
+      if let value = arguments["center"] {
+        guard let pair = value as? [Any], pair.count == 2, let x = Self.double(pair[0]), let y = Self.double(pair[1]) else {
+          throw ToolError("`center` is [x, y] in the canvas image's pixels.")
+        }
+        center = CGPoint(x: x, y: y)
+      }
+      create.canvas.scale = scale
+      create.canvas.offset = CanvasPlacement.offset(centering: center, scale: scale, sourceSize: sourceSize)
+    }
+    let state = canvasState()
+    result.merge(state) { _, new in new }
+    if state["extends_past_image"] as? Bool == true {
+      notes.append("The frame reaches past the image's edges: an Edit run fills in what's outside, and with Merge into Image the image grows to hold it.")
+    }
+    if let crop = create.canvasPlacement?.cropRect, !crop.intersects(sourceRect) {
+      notes.append("The frame shows none of the image.")
+    }
+    if create.effectiveCanvasMode == .generate {
+      notes.append("Runs don't take the canvas now (canvas_mode_in_effect is generate): paint a mask, lower `strength`, or set canvas_mode edit.")
+    }
+    if !notes.isEmpty { result["notes"] = notes }
+    return try Self.textResult(json: result)
+  }
+
+  private static func json(_ rect: CGRect) -> [String: Any] {
+    ["x": Double(rect.minX), "y": Double(rect.minY), "width": Double(rect.width), "height": Double(rect.height)]
+  }
+
+  private static func json(_ size: CGSize) -> [String: Any] {
+    ["width": Int(size.width), "height": Int(size.height)]
   }
 
   // MARK: - Images
@@ -852,8 +1395,29 @@ final class AgentTools {
   }
 
   /// The main window's undo manager, which the Create screen's ⌘Z uses.
-  private static var mainWindowUndoManager: UndoManager? {
+  static var mainWindowUndoManager: UndoManager? {
     NSApp.windows.first { $0.identifier?.rawValue.hasPrefix("main") == true && $0.isVisible }?.undoManager
+      ?? undoManagerWithoutWindow
+  }
+
+  /// What scripted checks undo with when no window comes up (a launch while the screen is locked
+  /// opens none). Never set in normal use.
+  static var undoManagerWithoutWindow: UndoManager?
+
+  /// Makes `change` a ⌘Z step of its own on the main window's undo manager. It groups by event,
+  /// and calls reach the main actor through dispatch, not as events: a change registered with no
+  /// group open starts one that AppKit only closes at the next user event, gathering every call
+  /// until then into one step. So an open event group is closed first, as `undo()` itself does
+  /// (agents never leave one of their own open), and the change gets a group that closes as it
+  /// returns.
+  @discardableResult
+  private static func asOneUndoStep<T>(_ change: (UndoManager?) throws -> T) rethrows -> T {
+    guard let undoManager = mainWindowUndoManager else { return try change(nil) }
+    if undoManager.groupsByEvent, undoManager.groupingLevel == 1 { undoManager.endUndoGrouping() }
+    guard undoManager.groupingLevel == 0 else { return try change(undoManager) }
+    undoManager.beginUndoGrouping()
+    defer { undoManager.endUndoGrouping() }
+    return try change(undoManager)
   }
 
   // MARK: - Helpers

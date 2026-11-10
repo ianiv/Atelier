@@ -158,8 +158,7 @@ extension CreateModel {
     let wanted = CanvasPlacement.zoomAndOffset(showing: region, sourceSize: sourceSize, frameSize: frameSize)
     let scale = min(max(wanted.scale, CanvasState.range.lowerBound), CanvasState.range.upperBound)
     canvas.scale = scale
-    canvas.offset = CGSize(
-      width: (sourceSize.width / 2 - region.midX) * scale, height: (sourceSize.height / 2 - region.midY) * scale)
+    canvas.offset = CanvasPlacement.offset(centering: CGPoint(x: region.midX, y: region.midY), scale: scale, sourceSize: sourceSize)
     return canvasPlacement?.cropRect
   }
 
@@ -239,6 +238,19 @@ extension CanvasMask {
       paintedPixels: count, paintedFraction: width * height > 0 ? Double(count) / Double(width * height) : 0,
       bounds: count > 0 ? CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1) : nil,
       frameFraction: placement == nil ? nil : frameTotal > 0 ? Double(inFrame) / Double(frameTotal) : 0)
+  }
+
+  /// The mask as an opaque image the size of the canvas image, white where painted and black
+  /// elsewhere: the form agents pass to `set_canvas_mask`, so one read back can be sent again.
+  func image(sourceSize: CGSize) -> CGImage? {
+    let width = Int(sourceSize.width), height = Int(sourceSize.height)
+    guard width > 0, height > 0,
+          let provider = CGDataProvider(data: Data(coverage(width: width, height: height)) as CFData)
+    else { return nil }
+    return CGImage(
+      width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 8, bytesPerRow: width,
+      space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
+      provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
   }
 
   /// The mask as a red tint for the canvas, `alpha` where painted, at most `maxSide` pixels on its

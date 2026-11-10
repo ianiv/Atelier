@@ -225,8 +225,9 @@ extension Automation {
     return context.makeImage()
   }
 
-  /// The channel differences of two same-sized images over the pixels (top-left based) `where` picks.
-  private static func difference(_ a: CGImage, _ b: CGImage, where include: (CGPoint) -> Bool)
+  /// The channel differences of two same-sized images over the pixels (top-left based) `where`
+  /// picks. Also for `--agent-canvas-check`.
+  static func difference(_ a: CGImage, _ b: CGImage, where include: (CGPoint) -> Bool)
     -> (maxDelta: Int, meanDelta: Double)?
   {
     guard a.width == b.width, a.height == b.height else { return nil }
@@ -247,7 +248,7 @@ extension Automation {
   }
 }
 
-private enum CanvasRefineBytes {
+enum CanvasRefineBytes {
   static func rgba(_ image: CGImage) -> [UInt8] {
     var bytes = [UInt8](repeating: 0, count: image.width * image.height * 4)
     bytes.withUnsafeMutableBytes { raw in

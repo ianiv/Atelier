@@ -1492,14 +1492,16 @@ final class CreateModel {
 
   /// Queues an agent's request (AgentTools) like Generate: progress, previews and the result show
   /// on the canvas and in the status bar, and Stop or the Queue cancel it. The prompt, inspector
-  /// and moodboard are left alone. Cancelling the caller cancels the job.
+  /// and moodboard are left alone. Cancelling the caller cancels the job. `target` defaults to
+  /// this device for its own models; a request taken from the screen (`screenRequest`) passes
+  /// Run on, so it runs where Generate would.
   func generate(
-    forAgent request: GenerationEngine.Request,
+    forAgent request: GenerationEngine.Request, target: JobTarget? = nil,
     progress: @escaping (GenerationEngine.Progress) -> Void
   ) async throws -> HistoryItem {
     // A model only the selected server has runs there; any other runs on this device, as agents
     // choose among this device's models.
-    let target = models.contains(where: { $0.file == request.model }) ? JobTarget.local : runTarget
+    let target = target ?? (models.contains(where: { $0.file == request.model }) ? JobTarget.local : runTarget)
     let id = queue.append([request], currentTensorId: history.currentTensorId, target: target, fromAgent: true)[0]
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
