@@ -54,15 +54,17 @@ nonisolated struct ModelTraits: Equatable {
   var isSD1or2: Bool { version == "Stable Diffusion v1" || version == "Stable Diffusion v2" }
   var isSD3: Bool { version.hasPrefix("Stable Diffusion 3") }
   var isFlux1: Bool { version == "FLUX.1" }
-  var isVideo: Bool { Self.videoPrefixes.contains { version.hasPrefix($0) } }
+  var isVideo: Bool { Self.videoPrefixes.contains { version.hasPrefix($0) } && !isMiniMaxH3Image }
   var isSVD: Bool { version == "Stable Video Diffusion" }
   var isWan: Bool { version.hasPrefix("Wan") }
   /// MiniMax H3 and the files built on it (FastH3, HyperFlow H3), which the engine all runs as
   /// `.minimaxH3`, named "MiniMax H3" (`ModelZoo.humanReadableNameForVersion`).
-  var isMiniMaxH3: Bool { version.hasPrefix("MiniMax H3") }
+  var isMiniMaxH3: Bool { version == "MiniMax H3" }
+  /// MiniMax H3 Image (`.minimaxH3Image`): the H3 transformer without audio, making one image.
+  var isMiniMaxH3Image: Bool { version == "MiniMax H3 Image" }
   /// Models the engine always runs without classifier-free guidance (`isCfgEnabled` returns false
   /// for them), so Guidance would do nothing.
-  var isWithoutCFG: Bool { version == "Fibo 2.0" }
+  var isWithoutCFG: Bool { version == "Fibo 2.0" || isMiniMaxH3Image }
   /// Mirrors `ModelZoo.teaCacheCoefficientsForModel`'s built-in table.
   var hasTeaCache: Bool {
     ["FLUX.1", "Hunyuan Video", "HiDream I1", "MiniMax H3"].contains(version) || isWan

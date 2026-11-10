@@ -560,15 +560,17 @@ final class ModelLibrary {
   }
 
   /// Whether `model` can get an 8-bit copy in `format`: an imported full-precision MOSS or
-  /// MiniMax H3 model without that copy yet. MiniMax H3 only gets 8-bit S, the format Draw Things'
-  /// own H3 files use. A copy whose file exists but isn't registered was interrupted, and making it
+  /// MiniMax H3 (video or Image) model without that copy yet. MiniMax H3 only gets 8-bit S, the
+  /// format Draw Things' own H3 files use. A copy whose file exists but isn't registered was interrupted, and making it
   /// again resumes it.
   func canMake8BitCopy(_ model: MediaGenerationResolvedModel, _ format: MOSSImporter.EightBit)
     -> Bool
   {
     let output = Self.eightBitFile(for: model.file, format)
     let version = ModelZoo.specificationForModel(model.file)?.version
-    let supported = version == .mossImage || (version == .minimaxH3 && format == .rowwise)
+    let supported =
+      version == .mossImage
+      || ((version == .minimaxH3 || version == .minimaxH3Image) && format == .rowwise)
     return isCustom(model) && model.isDownloaded && model.file.hasSuffix("_f16.ckpt") && supported
       && quantizing[output] == nil && moving == nil && ModelZoo.specificationForModel(output) == nil
   }
@@ -606,7 +608,8 @@ final class ModelLibrary {
     }
     Task {
       await Self.quantize(
-        source, to: destination, format: format, miniMaxH3: specification.version == .minimaxH3,
+        source, to: destination, format: format,
+        miniMaxH3: specification.version == .minimaxH3 || specification.version == .minimaxH3Image,
         progress: progress)
       if FileManager.default.fileExists(atPath: destination) {
         specification.file = output
@@ -638,6 +641,9 @@ final class ModelLibrary {
     -> UInt16
   {
     switch version {
+    case .minimaxH3Image:
+      // Tuned for about 2,048 x 2,048 pixels of area.
+      return 32
     case .hunyuanVideo, .wan21_14b, .wan22_5b, .longcatVideoAvatar1_5, .minimaxH3:
       return 12
     case .wan21_1_3b:
@@ -832,7 +838,7 @@ final class ModelLibrary {
       .v1, .v2, .sdxlBase, .ssd1b, .sd3, .sd3Large, .pixart, .auraflow, .flux1, .flux2,
       .flux2_9b, .flux2_4b, .flux3_5b, .hunyuanVideo, .wan21_1_3b, .wan21_14b, .wan22_5b,
       .hiDreamI1, .hiDreamO1, .qwenImage, .qwenImage2_1, .zImage, .ernieImage, .cosmos2_5_2b,
-      .ideogram4, .krea2, .ltx2, .ltx2_3, .minimaxH3, .mossImage, .fibo2,
+      .ideogram4, .krea2, .ltx2, .ltx2_3, .minimaxH3, .minimaxH3Image, .mossImage, .fibo2,
     ]
     return versions.map { ($0.rawValue, ModelZoo.humanReadableNameForVersion($0)) }
       .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }

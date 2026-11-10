@@ -98,7 +98,9 @@ nonisolated enum MOSSImporter {
   /// H3 Flash) the way Draw Things' own `minimax_h3_*_i8x.ckpt` files store them: block linears
   /// (including the factored `*_down` / `*_up` pairs) and the input patch projections row-wise
   /// 8-bit, the AdaLN matrices palettized, the token refiner, timestep / endpoint embedders, text
-  /// projection and output projections in FP16, and vectors (norms, biases) ezm7.
+  /// projection and output projections in FP16, and vectors (norms, biases) ezm7. The AdaLN
+  /// matrices of a curve-form checkpoint (MiniMax H3 Image from ComfyUI) are a few columns wide,
+  /// where a palette would cost precision and save nothing, so they stay FP16.
   static func quantize(
     _ path: String, to output: String, format: EightBit, miniMaxH3: Bool = false,
     progress: (Float) -> Void
@@ -122,7 +124,10 @@ nonisolated enum MOSSImporter {
           let fp16 = Tensor<Float16>(from: tensor)
           if miniMaxH3 {
             let isMatrix = fp16.shape.filter { $0 > 1 }.count > 1
-            let keepsFP16 = ["refiner", "embedder", "proj_out"].contains { key.contains($0) }
+            let isSmallAdaLN =
+              (key.contains("adaln") || key.contains("norm_out")) && fp16.shape.reduce(1, *) < 1 << 20
+            let keepsFP16 =
+              ["refiner", "embedder", "proj_out"].contains { key.contains($0) } || isSmallAdaLN
             if keepsFP16 {
               out.write(key, tensor: fp16)
             } else if !isMatrix {

@@ -159,7 +159,7 @@ After an Edit run, the result replaces the canvas and the mode stays on Edit, so
 
 **Which models can edit:**
 
-- **Edit models** such as FLUX.2 (including Klein), Kontext, Qwen Image Edit and [Fibo 2.0 Edit Turbo](models-and-loras.md#fibo-20-edit-turbo) take the canvas as a reference and follow the prompt's instructions ("make it night", "add a red hat"). So does MOSS Image with a [MOSS Image Edit LoRA](models-and-loras.md#moss-image-edit-loras) on.
+- **Edit models** such as FLUX.2 (including Klein), Kontext, Qwen Image Edit, [Fibo 2.0 Edit Turbo](models-and-loras.md#fibo-20-edit-turbo) and [MiniMax H3 Image](models-and-loras.md#minimax-h3-image) take the canvas as a reference and follow the prompt's instructions ("make it night", "add a red hat"). So does MOSS Image with a [MOSS Image Edit LoRA](models-and-loras.md#moss-image-edit-loras) on.
 - **Other models** edit through **Strength** (in the Image to Image section of the inspector). Below 100%, the model starts from the canvas: lower values stay closer to it, higher values change more. At 100% the canvas is ignored, so the Edit switch is disabled until you lower Strength.
 
 **Match Size to Image** (canvas right-click menu) sets the output size to the image's aspect ratio, which avoids cropping.

@@ -22,6 +22,9 @@ nonisolated enum ModelDefaults {
     var numFrames: Int?
     var shiftForAudio: Float?
     var replacesCatalog = false
+    /// Matches every file of this model family instead of a file name prefix, for imports whose
+    /// name is the user's.
+    var version: ModelVersion?
   }
 
   /// Models the engine runs and static.libnnc.org hosts, but that no catalog lists: neither
@@ -77,6 +80,14 @@ nonisolated enum ModelDefaults {
     Fallback(
       prefix: "fibo_2_", steps: 4, guidanceScale: 1, shift: 3,
       resolutionDependentShift: true, sampler: .eulerATrailing, size: (1024, 1024)),
+    // MiniMax H3 Image, imported: distilled to 6 steps without CFG (the engine forces it off) on
+    // its own sigma grid, which the engine samples with Euler whatever the sampler or shift
+    // (`MiniMaxH3Layout.sigmaGrids`), so those two only matter for display. Tuned for about
+    // 2,048 x 2,048 pixels of area; its working range goes up to 16 megapixels.
+    Fallback(
+      prefix: "", steps: 6, guidanceScale: 1, shift: 1,
+      resolutionDependentShift: false, sampler: .dDIMTrailing, size: (2048, 2048),
+      replacesCatalog: true, version: .minimaxH3Image),
     // The values the engine's run-longcat-avatar-video skill uses for the step-distilled DMD files.
     Fallback(
       prefix: "longcat_video_avatar_", steps: 8, guidanceScale: 1, shift: 7,
@@ -92,7 +103,11 @@ nonisolated enum ModelDefaults {
     var settings = configuration
     // Hires fix runs a second sampling pass; keep it off unless the user turns it on.
     settings.hiresFix = false
-    guard let fallback = fallbacks.first(where: { model.hasPrefix($0.prefix) }),
+    let version = ModelZoo.specificationForModel(model)?.version
+    guard
+      let fallback = fallbacks.first(where: {
+        $0.version.map { $0 == version } ?? model.hasPrefix($0.prefix)
+      }),
           fallback.replacesCatalog || isGenericTemplate(configuration)
     else {
       return settings
