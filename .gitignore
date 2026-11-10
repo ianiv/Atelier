@@ -6,3 +6,4 @@ DerivedData/
 .DS_Store
 Config/Local.xcconfig
 CLAUDE.local.md
+.orchestrate/

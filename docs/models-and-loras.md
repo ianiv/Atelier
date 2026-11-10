@@ -99,8 +99,9 @@ Converting a LoRA to 8-bit in Draw Things deletes the original file and leaves t
 
 LoRAs trained with the [MOSS Image Edit trainer](https://github.com/Chenkin-x/Moss-Image-Edit) turn MOSS Image into an edit model. Import the trainer's `.safetensors` file like any other LoRA: Atelier renames its tensors so the engine can read them and registers it as an edit LoRA. Pick a MOSS Image model and turn the LoRA on. It works in **Edit**, and moodboard images are references in **Generate** too:
 
-- The canvas is the first reference image, and each moodboard image with a weight above 0% is another one after it. Weight is on or off: any weight above 0% counts the same. The trainer's README says to use at most 4 reference images.
-- Write the change as a plain instruction ("change her shirt to bright red", "make the background a sunny beach, keep the person"). With more than one reference, say what each image is for, such as "put the jacket from the second image on the person in the first".
+- The canvas is the first reference image, and each moodboard image with a weight above 0% is another one after it. Weight is on or off: any weight above 0% counts the same.
+- Write the change as a plain instruction ("change her shirt to bright red", "make the background a sunny beach, keep the person").
+- Edits of a single image work well. Edits that combine images, such as "put the jacket from image 2 on the woman in image 1", usually give back the first image unchanged: Atelier sends every reference, but the released LoRA was trained on single-image edits. A LoRA trained on multi-image edits (the trainer supports up to 4 references) may do better.
 - MOSS Image's usual steps and Guidance apply.
 
 ### Managing LoRAs
