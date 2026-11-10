@@ -117,7 +117,9 @@ nonisolated struct CanvasMask: Codable, Sendable, Hashable {
       case ellipse
       /// The polygon through its points.
       case polygon
-      /// A bitmap (`bitmap`, a PNG: white painted) with its top left at the one point.
+      /// A bitmap (`bitmap`, a PNG: white painted) with its top left at the one point, drawn at
+      /// `size` when set (a mask stretched onto an image of another size, `scaled`), else at its
+      /// own pixel size.
       case bitmap
     }
 
@@ -128,13 +130,20 @@ nonisolated struct CanvasMask: Codable, Sendable, Hashable {
     /// Takes away from the mask instead of adding to it (the eraser, or a subtracted shape).
     var erases = false
     var bitmap: Data?
+    /// The rectangle size a bitmap is drawn at, image pixels; nil is its own size. Optional, so
+    /// masks saved before it decode as they were.
+    var size: CGSize?
 
-    init(kind: Kind, points: [CGPoint] = [], radius: Double = 0, erases: Bool = false, bitmap: Data? = nil) {
+    init(
+      kind: Kind, points: [CGPoint] = [], radius: Double = 0, erases: Bool = false, bitmap: Data? = nil,
+      size: CGSize? = nil
+    ) {
       self.kind = kind
       self.points = points
       self.radius = radius
       self.erases = erases
       self.bitmap = bitmap
+      self.size = size
     }
 
     static let invert = Stroke(kind: .invert)
@@ -148,6 +157,20 @@ nonisolated struct CanvasMask: Codable, Sendable, Hashable {
       hasher.combine(radius)
       hasher.combine(erases)
       hasher.combine(bitmap)
+      hasher.combine(size?.width)
+      hasher.combine(size?.height)
+    }
+
+    /// The size a bitmap stroke is drawn at: `size`, else its PNG's pixel size (read from the
+    /// header, without decoding it).
+    var bitmapSize: CGSize? {
+      if let size { return size }
+      guard let bitmap, let source = CGImageSourceCreateWithData(bitmap as CFData, nil),
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+            let width = properties[kCGImagePropertyPixelWidth] as? Int,
+            let height = properties[kCGImagePropertyPixelHeight] as? Int
+      else { return nil }
+      return CGSize(width: width, height: height)
     }
 
     static func rect(_ rect: CGRect, erases: Bool = false) -> Stroke {
@@ -207,6 +230,50 @@ nonisolated struct CanvasMask: Codable, Sendable, Hashable {
   /// Whether anything can have been painted (a mask of only erasing paints nothing).
   var mayHavePaint: Bool {
     strokes.contains { !$0.erases }
+  }
+
+  /// The mask stretched by `sx` across and `sy` down, to lie the same way on an image of another
+  /// size (applying one image's mask to another stretches it to fill): points scale, a brush's
+  /// radius by the geometric mean (it stays round), and a bitmap is drawn into its scaled
+  /// rectangle. The same size gives the mask back as it is.
+  func scaled(sx: Double, sy: Double) -> CanvasMask {
+    guard sx != 1 || sy != 1 else { return self }
+    var scaled = self
+    for index in scaled.strokes.indices {
+      var stroke = scaled.strokes[index]
+      if stroke.kind == .bitmap, let size = stroke.bitmapSize {
+        stroke.size = CGSize(width: size.width * sx, height: size.height * sy)
+      }
+      stroke.points = stroke.points.map { CGPoint(x: $0.x * sx, y: $0.y * sy) }
+      stroke.radius *= (sx * sy).squareRoot()
+      scaled.strokes[index] = stroke
+    }
+    return scaled
+  }
+
+  /// The mask scaled from an image of `from` to one of `to` (`scaled(sx:sy:)`).
+  func scaled(from: CGSize, to: CGSize) -> CanvasMask {
+    guard from.width > 0, from.height > 0 else { return self }
+    return scaled(sx: to.width / from.width, sy: to.height / from.height)
+  }
+
+  /// What the mask paints over a `width` × `height` image, as one bitmap stroke (nil when it
+  /// paints nothing there): the same pixels, but adding or subtracting it leaves the rest of
+  /// another mask alone, which its own erasing and inverting strokes wouldn't.
+  func flattenedStroke(width: Int, height: Int, erases: Bool = false) -> Stroke? {
+    let painted = coverage(width: width, height: height)
+    guard painted.contains(255), let png = Self.grayPNG(painted, width: width, height: height) else { return nil }
+    return Stroke(kind: .bitmap, points: [.zero], erases: erases, bitmap: png)
+  }
+
+  /// The mask to keep with an image of `size` (`HistoryStore.setMask`): as it is, unless it holds
+  /// several bitmaps (each Select pick adds one, a whole-image PNG), which are flattened into one
+  /// so the project doesn't keep a stack of them.
+  func compacted(for size: CGSize?) -> CanvasMask {
+    guard let size, strokes.count(where: { $0.kind == .bitmap }) > 1,
+          let stroke = flattenedStroke(width: Int(size.width), height: Int(size.height))
+    else { return self }
+    return CanvasMask(strokes: [stroke])
   }
 
   func translated(by delta: CGPoint) -> CanvasMask {
@@ -269,10 +336,10 @@ nonisolated struct CanvasMask: Codable, Sendable, Hashable {
                 let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
           else { continue }
           // Painted (white) pixels as a mask of the stroke color, so erasing leaves the rest.
-          let rect = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+          let rect = CGRect(origin: .zero, size: stroke.size ?? CGSize(width: image.width, height: image.height))
           context.saveGState()
           // Upright: the flip above would turn it over.
-          context.translateBy(x: point.x, y: point.y + CGFloat(image.height))
+          context.translateBy(x: point.x, y: point.y + rect.height)
           context.scaleBy(x: 1, y: -1)
           if let mask = Self.grayAlpha(of: image) {
             context.clip(to: rect, mask: mask)

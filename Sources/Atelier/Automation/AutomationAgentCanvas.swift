@@ -9,6 +9,9 @@ extension Automation {
   /// size_to_region), the `canvas` object in get_create_screen and its set_create_screen
   /// fields, the errors each gives, and one `generate` with use_canvas: a masked run that merges,
   /// follows the input step, is stored as two layers and leaves pixels away from the mask alone.
+  /// Then masks kept per image: set_canvas_image bringing a step's mask back (and `mask: false`),
+  /// list_history's has_mask, get_canvas_mask on a step, and set_canvas_mask from_history_step
+  /// (replace, add, subtract, invert, one ⌘Z step each, and its errors).
   /// The frame is set to the input's shape at about a quarter megapixel. Image models that edit at
   /// Strength below 1. Then auto_mask: its errors, Vision finding no subject in the input, and on
   /// `--subject-input` (an image with a subject at `--subject-point`, default 620,550) Vision's
@@ -139,6 +142,7 @@ extension Automation {
       // set_canvas_image, from a data: URL.
       guard let png = ImageTensor.png(input) else { return finish() }
       let placed = try? await call("set_canvas_image", ["image": "data:image/png;base64," + png.base64EncodedString()])
+      var placedBack: [String: Any]?
       let source = model.image
       let width = Double(input.width), height = Double(input.height)
       let sourceSize = placed?["source_size"] as? [String: Any]
@@ -347,9 +351,33 @@ extension Automation {
       check((inside?.meanDelta ?? 0) > 1, "the masked area changed (mean delta \(String(format: "%.1f", inside?.meanDelta ?? 0)))")
       check(model.canvasMask == mask, "the mask stays on the canvas after the run")
 
+      // The result remembers the mask: set_canvas_image brings it back, unless told not to.
+      @MainActor func listed(_ step: Int64) async -> [String: Any]? {
+        let text = (try? await tools.call("list_history", arguments: ["limit": 50]) { _ in })
+          .flatMap { ($0["content"] as? [[String: Any]])?.first?["text"] as? String }
+        let rows = text.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [[String: Any]]
+        return rows?.first { ($0["history_step"] as? NSNumber)?.int64Value == step }
+      }
+      check((await listed(step))?["has_mask"] as? Bool == true, "list_history says the masked run's result has a mask")
+      _ = try? await call("set_canvas_image", ["image": "data:image/png;base64," + png.base64EncodedString()])
+      placedBack = try? await call("set_canvas_image", ["history_step": step])
+      check(
+        placedBack?["mask_restored"] as? Bool == true && model.canvasMask == mask,
+        "set_canvas_image on the result brings its mask back (mask_restored \(placedBack?["mask_restored"] ?? "?"))")
+      placedBack = try? await call("set_canvas_image", ["history_step": step, "mask": false])
+      check(
+        placedBack?["mask_restored"] as? Bool == false && model.canvasMask == nil,
+        "set_canvas_image with mask: false leaves it off")
+      let stepMask = try? await call("get_canvas_mask", ["history_step": step, "view": "mask"])
+      check(
+        stepMask?["has_mask"] as? Bool == true && near(stepMask?["coverage"] as? Double ?? 0, 0.25) && model.canvasMask == nil,
+        "get_canvas_mask with history_step shows the step's mask (coverage \(stepMask?["coverage"] ?? "?")), leaving the canvas alone")
+      await expectError("set_canvas_image", ["history_step": step, "mask": "yes"], "true or false", "a mask that isn't a boolean")
+      await expectError("get_canvas_mask", ["history_step": 999_999], "list_history", "a missing step's mask")
+
       // Zoom, then edit, from that History step: the run follows it.
       let quadrant = CGRect(x: 0, y: 0, width: width / 2, height: height / 2)
-      _ = try? await call("set_canvas_image", ["history_step": step])
+      _ = try? await call("set_canvas_image", ["history_step": step, "mask": false])
       _ = try? await call("set_create_screen", ["prompt": "a watercolor painting"])
       state = try? await call("set_canvas_region", ["region": ["x": 0, "y": 0, "width": width / 2, "height": height / 2]])
       check(model.imageItem == item && same(rect(state?["region"]), quadrant), "set_canvas_image puts the History step on the canvas, and the region zooms onto its quadrant")
@@ -369,6 +397,30 @@ extension Automation {
       let changed = difference(zoomedImage, image) { $0.x < width / 2 - margin && $0.y < height / 2 - margin }
       check(rest?.maxDelta == 0, "outside the region nothing changed (max delta \(rest?.maxDelta ?? -1))")
       check((changed?.meanDelta ?? 0) > 1, "the region changed (mean delta \(String(format: "%.1f", changed?.meanDelta ?? 0)))")
+      check((await listed(step))?["has_mask"] as? Bool == true, "leaving the result with mask: false didn't clear the mask it remembers")
+
+      // set_canvas_mask from_history_step, on the zoomed result (which has no mask of its own).
+      check((await listed(zoomedStep))?["has_mask"] as? Bool == false, "list_history says the zoomed result has no mask")
+      await expectError("set_canvas_mask", ["from_history_step": zoomedStep], "has no mask", "a step with no mask")
+      await expectError("set_canvas_mask", ["from_history_step": 999_999], "list_history", "a missing step")
+      await expectError("set_canvas_mask", ["from_history_step": "one"], "history step number", "a step that isn't a number")
+      _ = try? await call("set_canvas_region", ["fit": true])
+      summary = try? await call("set_canvas_mask", ["from_history_step": step])
+      check(
+        near(summary?["coverage"] as? Double ?? 0, 0.25) && same(rect(summary?["bounds"]), center)
+          && undoManager.undoActionName == CreateModel.agentMaskActionName,
+        "from_history_step replaces the mask with that step's (\(summary?["coverage"] ?? "?")), one “Agent Mask” step")
+      let leftStrip: [String: Any] = ["shape": "rect", "x": 0, "y": 0, "width": width / 4, "height": height]
+      _ = try? await call("set_canvas_mask", ["shapes": [leftStrip]])
+      summary = try? await call("set_canvas_mask", ["from_history_step": step, "mode": "add"])
+      check(near(summary?["coverage"] as? Double ?? 0, 0.5), "from_history_step mode add adds it (\(summary?["coverage"] ?? "?"))")
+      summary = try? await call("set_canvas_mask", ["from_history_step": step, "mode": "subtract"])
+      check(near(summary?["coverage"] as? Double ?? 0, 0.25), "from_history_step mode subtract takes it away (\(summary?["coverage"] ?? "?"))")
+      summary = try? await call("set_canvas_mask", ["from_history_step": step, "invert": true])
+      check(near(summary?["coverage"] as? Double ?? 0, 0.75), "from_history_step with invert flips it (\(summary?["coverage"] ?? "?"))")
+      undoManager.undo()
+      check(near(coverage(), 0.25), "⌘Z undoes the whole call (\(coverage()))")
+      _ = try? await call("set_canvas_mask", ["clear": true])
 
       // auto_mask: errors first, on the input (which has no subject Vision finds).
       _ = try? await call("set_canvas_image", ["image": "data:image/png;base64," + png.base64EncodedString()])

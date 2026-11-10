@@ -225,6 +225,11 @@ final class CreateModel {
         if let merge = record.merge, let source = clientJobs.mergeSource(of: record) {
           request.merge = RefineMerge(record: merge, source: source, sameProject: sameProject)
         }
+        request.canvasSourceMask = record.canvasSourceMask.map { mask in
+          var mask = mask
+          if !sameProject { mask.tensorId = nil }
+          return mask
+        }
       }
       request.moodboard = clientJobs.moodboard(of: record)
       request.placement = sameProject ? record.placement : nil
@@ -347,8 +352,18 @@ final class CreateModel {
   private static var storedCanvasMode: CanvasMode {
     UserDefaults.standard.string(forKey: "canvasMode").flatMap(CanvasMode.init(rawValue:)) ?? .generate
   }
-  /// The inpainting mask painted on the canvas image (`CanvasTools.swift` changes it).
+  /// The inpainting mask painted on the canvas image (`CanvasTools.swift` changes it). Each image
+  /// remembers the last one it had (`persistCanvasMask`, `restoreCanvasMask`).
   var canvasMask: CanvasMask?
+  /// The mask Copy Mask took, with the size of the image it was on, for Paste Mask. Kept in the
+  /// app: a mask means nothing to other apps.
+  var copiedMask: CopiedMask?
+  /// The canvas image whose remembered mask hasn't been brought back yet (it's loading, or its
+  /// image is): leaving it with no mask then says nothing about its mask, so it isn't cleared.
+  @ObservationIgnored private var maskPendingTensorId: Int64?
+  /// The mask the canvas image arrived with (brought back, a result's, or none), so leaving it
+  /// unchanged writes nothing.
+  @ObservationIgnored private var landedMask: (tensorId: Int64, mask: CanvasMask?)?
   /// Whether the mask paints inside the frame, for the mask and placement it was worked out for
   /// (`screenFrameHasPaint`).
   @ObservationIgnored var frameMaskCache: (key: String, hasPaint: Bool)?
@@ -407,11 +422,16 @@ final class CreateModel {
   /// image tensor, which stays the same when steps are renumbered.
   private var imageStep: (project: String, tensorId: Int64)? {
     didSet {
+      // Before anything else changes: the size it's kept at comes from what the canvas shows.
+      if let oldValue { persistCanvasMask(for: oldValue) }
+      landedMask = nil
+      maskPendingTensorId = imageStep?.tensorId
       imageIsPreview = false
       showsFrame = false
       canvasImageLoad = nil
-      // The mask belongs to the image it was painted on. A run whose result merges back puts it
-      // back once that result is on the canvas, as Draw Things keeps it.
+      // The mask belongs to the image it was painted on, which remembers it; the new image's own
+      // comes back once it's there (`restoreCanvasMask`). A run whose result merges back puts the
+      // source's back on the result, as Draw Things keeps it.
       canvasMask = nil
     }
   }
@@ -518,6 +538,7 @@ final class CreateModel {
       image = frame
       canvas.zoomToFit()
       canvasMode = .edit
+      await restoreCanvasMask()
     }
   }
 
@@ -925,10 +946,7 @@ final class CreateModel {
             return (tensorId, image)
           }
           guard let (tensorId, restoredImage) = loaded, image == nil else { return }
-          lastSavedTensorId = tensorId
-          imageStep = (project, tensorId)
-          image = restoredImage
-          canvas.zoomToFit()
+          await restoreSessionImage(restoredImage, tensorId: tensorId, project: project)
         }
       }
     }
@@ -1028,6 +1046,8 @@ final class CreateModel {
 
   /// Remembers the model, prompts, seed, inspector values and canvas image for the next launch.
   func saveSession() {
+    // The canvas image's mask, so it's there after a relaunch too.
+    if let imageStep { persistCanvasMask(for: imageStep) }
     // Until the models load, the last session's model and settings are still waiting to apply.
     guard restored == nil else { return }
     SessionState(
@@ -1089,9 +1109,12 @@ final class CreateModel {
             let offset = CGSize(width: refine.offset[0], height: refine.offset[1])
             canvas.scale = refine.scale
             canvas.offset = offset
+            // The run's own mask, to reproduce it, rather than what the input had last.
             canvasMask = refine.mask
+            maskPendingTensorId = nil
           } else {
             canvas.zoomToFit()
+            await restoreCanvasMask()
           }
           canvasMode = .edit
           return
@@ -1100,7 +1123,10 @@ final class CreateModel {
         statusNote = "The image this was made from is no longer in the project."
       }
       let full = await whileLoadingCanvasImage { await history.image(at: item.id, in: projectName) }
-      if let full, imageStep?.tensorId == item.tensorId { image = full }
+      if let full, imageStep?.tensorId == item.tensorId {
+        image = full
+        await restoreCanvasMask()
+      }
     }
     let restoreMoodboard = Task {
       let references = await history.moodboard(at: item.id, in: projectName)
@@ -1443,6 +1469,11 @@ final class CreateModel {
         source: source.image, sourceTensorId: step, isImported: source.isImported, scale: source.scale,
         offset: source.offset, mask: refines && runTargetTakesMasks ? canvasMask : nil,
         merge: refines && mergeIntoImage)
+      // The image remembers its mask even when this run can't take it (a video model, an older
+      // server).
+      base.canvasSourceMask = canvasMask.map {
+        CanvasSourceMask(tensorId: step, width: Double(source.image.width), height: Double(source.image.height), mask: $0)
+      }
       if let pending = pendingPlacement, source.step?.tensorId == pending.frameTensorId,
          source.step?.project == pending.project, !source.isPreview
       {
@@ -1824,10 +1855,12 @@ final class CreateModel {
         if output.isVideo { setRunMessage("Saving \(output.frames.count) frames…", job) }
         let followsRun = { self.canvasFollowsRun && job.id == self.foregroundJobID }
         let history = history
+        // The mask painted on the source stays with the result, moved as the image grew.
+        let keptMask = mergedOrigin.flatMap { origin in request.merge?.canvasMask?.translated(by: origin) }
         let item = try await oneSaveAtATime {
           try await history.save(
             output, request: request, startedAt: startedAt, finishedAt: Date(), timings: timings,
-            refined: refined, makeCurrent: followsRun)
+            refined: refined, resultMask: keptMask, makeCurrent: followsRun)
         }
         if timings != nil {
           timings?.save = Date().timeIntervalSince(returnedAt)
@@ -1839,8 +1872,6 @@ final class CreateModel {
         let finished = refined?.composite ?? output.frames.first.flatMap(ImageTensor.cgImage(from:))
           ?? runProgress(of: job)?.preview
         if followsRun() {
-          // The mask painted on the source stays on the canvas, moved as the image grew.
-          let keptMask = request.merge?.canvasMask?.translated(by: mergedOrigin ?? .zero)
           imageStep = (history.project.name, item.tensorId)
           canvasIsImported = false
           if let finished { image = finished }
@@ -1851,6 +1882,9 @@ final class CreateModel {
           } else {
             canvas.zoomToFit()
           }
+          // Saved with it just now (or none, for a result that isn't merged).
+          landedMask = (item.tensorId, canvasMask)
+          maskPendingTensorId = nil
         }
         if let placement = request.placement, item.isVideo { timelines.place(item, at: placement) }
         if let failure = await history.writeToOutputFolder(item, image: finished) {
@@ -2227,14 +2261,17 @@ final class CreateModel {
     canvas.zoomToFit()
     Task {
       let full = await whileLoadingCanvasImage { await history.image(at: item.id, in: projectName) }
-      if let full, imageStep?.tensorId == item.tensorId, !imageIsPreview { image = full }
+      if let full, imageStep?.tensorId == item.tensorId, !imageIsPreview {
+        image = full
+        await restoreCanvasMask()
+      }
     }
   }
 
   /// Puts a History step's image on the canvas as the input of the next Edit run (it becomes the
-  /// current step), with no mask, for callers without the view. Returns once it's there; false
-  /// for a video or an image that can't be read.
-  func placeOnCanvas(_ item: HistoryItem) async -> Bool {
+  /// current step), for callers without the view, with the mask it last had unless `restoresMask`
+  /// is false. Returns once it's there; false for a video or an image that can't be read.
+  func placeOnCanvas(_ item: HistoryItem, restoresMask: Bool = true) async -> Bool {
     guard !item.isVideo else { return false }
     let projectName = history.project.name
     guard let full = await whileLoadingCanvasImage({ await history.image(at: item.id, in: projectName) }) else {
@@ -2248,6 +2285,13 @@ final class CreateModel {
     image = full
     canvas.zoomToFit()
     canvasMode = .edit
+    if restoresMask {
+      await restoreCanvasMask()
+    } else {
+      // Left without its mask on purpose: leaving it unchanged keeps the one it had.
+      maskPendingTensorId = nil
+      landedMask = (item.tensorId, nil)
+    }
     return true
   }
 
@@ -2460,5 +2504,151 @@ enum FinishedNotice {
       guard (try? await center.requestAuthorization(options: [.alert, .sound])) == true else { return }
       try? await center.add(request)
     }
+  }
+}
+
+// MARK: - Masks kept per image
+
+/// A mask copied from the canvas (Copy Mask), with the size of the image it was on, so Paste Mask
+/// can stretch it onto another.
+struct CopiedMask {
+  var mask: CanvasMask
+  var size: CGSize
+}
+
+extension CreateModel {
+  /// How a mask from elsewhere goes onto the canvas's.
+  enum MaskApplication: String {
+    case replace, add, subtract
+  }
+
+  /// The image the canvas is leaving remembers the mask it has now (`HistoryStore.setMask`):
+  /// painted, Selected or brought back, used by a run or not; clearing it clears that. Images
+  /// from outside the project (not yet a step) remember nothing. Nothing is written when the mask
+  /// is the one it arrived with, or when its own hasn't come back yet.
+  private func persistCanvasMask(for step: (project: String, tensorId: Int64)) {
+    guard step.project == history.project.name else { return }
+    if canvasMask == nil, maskPendingTensorId == step.tensorId { return }
+    if let landedMask, landedMask.tensorId == step.tensorId, landedMask.mask == canvasMask { return }
+    // At the image's size, for compacting: the image under a run's preview, else the one showing.
+    var size: CGSize?
+    if previewCoversCanvas, let before = canvasBeforePreview, before.step?.tensorId == step.tensorId {
+      size = CGSize(width: before.image.width, height: before.image.height)
+    } else if !imageIsPreview, let image {
+      size = CGSize(width: image.width, height: image.height)
+    }
+    history.setMask(canvasMask, forImage: step.tensorId, size: size)
+    landedMask = (step.tensorId, canvasMask)
+  }
+
+  /// Brings back the mask the canvas image last had (`HistoryStore.storedMask`), once the image is
+  /// on the canvas: it's the image's, so it registers no undo step. Not when another image took
+  /// its place while it loaded, or something was painted meanwhile. Returns whether a mask came
+  /// back.
+  @discardableResult
+  func restoreCanvasMask() async -> Bool {
+    guard let step = imageStep, step.project == history.project.name else { return false }
+    let mask = await history.storedMask(tensorId: step.tensorId)
+    guard let current = imageStep, current.project == step.project, current.tensorId == step.tensorId else { return false }
+    if maskPendingTensorId == step.tensorId { maskPendingTensorId = nil }
+    guard canvasMask == nil else { return false }
+    landedMask = (step.tensorId, mask)
+    guard let mask else { return false }
+    canvasMask = mask
+    return true
+  }
+
+  /// The last session's canvas image, back on the canvas after a relaunch with the mask it had.
+  func restoreSessionImage(_ restoredImage: CGImage, tensorId: Int64, project: String) async {
+    lastSavedTensorId = tensorId
+    imageStep = (project, tensorId)
+    image = restoredImage
+    canvas.zoomToFit()
+    await restoreCanvasMask()
+  }
+
+  /// Whether `item` has a mask that can go on the canvas now (`applyMask(from:how:undoManager:)`).
+  func canApplyMask(from item: HistoryItem) -> Bool {
+    !item.isVideo && canPaintMask && history.hasStoredMask(tensorId: item.tensorId)
+  }
+
+  /// `item`'s remembered mask and the size of its image, which it's in the pixels of.
+  func storedMask(of item: HistoryItem) async -> (mask: CanvasMask, size: CGSize)? {
+    guard !item.isVideo, history.hasStoredMask(tensorId: item.tensorId) else { return nil }
+    let projectName = history.project.name
+    guard let mask = await history.storedMask(tensorId: item.tensorId) else { return nil }
+    if canvasShowsImage, imageStep?.tensorId == item.tensorId, imageStep?.project == projectName, let image {
+      return (mask, CGSize(width: image.width, height: image.height))
+    }
+    guard let source = await history.image(tensorId: item.tensorId, in: projectName) else { return nil }
+    return (mask, CGSize(width: source.width, height: source.height))
+  }
+
+  /// Puts `item`'s remembered mask on the canvas image, stretched to fill it, replacing the mask
+  /// there or added to it: one undo step, “Use Mask”. False when it has none, or the canvas
+  /// changed while it was read.
+  @discardableResult
+  func applyMask(from item: HistoryItem, how: MaskApplication, undoManager: UndoManager?) async -> Bool {
+    guard canApplyMask(from: item), let target = image.map(ObjectIdentifier.init), let stored = await storedMask(of: item), image.map(ObjectIdentifier.init) == target else { return false }
+    return applyMask(stored.mask, from: stored.size, how: how, undoManager: undoManager)
+  }
+
+  /// Puts a mask made on an image of `sourceSize` on the canvas image, stretched to fill it
+  /// (`CanvasMask.scaled`): replacing the mask there, or adding or subtracting what it paints,
+  /// then with `invert` flipped. One undo step named `actionName`. Subtracting needs a mask to
+  /// take from; the others, a canvas that can be painted (`canPaintMask`).
+  @discardableResult
+  func applyMask(
+    _ mask: CanvasMask, from sourceSize: CGSize, how: MaskApplication, invert: Bool = false,
+    actionName: String = "Use Mask", undoManager: UndoManager?
+  ) -> Bool {
+    guard canvasShowsImage, let image, how == .subtract ? canEditMask && canvasMask != nil : canPaintMask else { return false }
+    let strokes = Self.strokes(applying: mask, from: sourceSize, to: CGSize(width: image.width, height: image.height), how: how)
+    var result = how == .replace ? CanvasMask() : canvasMask ?? CanvasMask()
+    result.strokes += strokes
+    if invert { result.strokes.append(.invert) }
+    setMask(result.strokes.isEmpty ? nil : result, actionName: actionName, undoManager: undoManager)
+    return true
+  }
+
+  /// The strokes that put `mask`, made on an image of `sourceSize`, on one of `size`, stretched to
+  /// fill it: for replace, the mask's own; to add or subtract, only what it paints (its own erasing
+  /// and inverting strokes would reach the mask there is, so a mask with any is flattened to one
+  /// bitmap first), painting or erasing.
+  nonisolated static func strokes(applying mask: CanvasMask, from sourceSize: CGSize, to size: CGSize, how: MaskApplication)
+    -> [CanvasMask.Stroke]
+  {
+    let fitted = mask.scaled(from: sourceSize, to: size)
+    guard how != .replace else { return fitted.strokes }
+    let erases = how == .subtract
+    if fitted.strokes.contains(where: { $0.erases || $0.kind == .invert }) {
+      return fitted.flattenedStroke(width: Int(size.width), height: Int(size.height), erases: erases).map { [$0] } ?? []
+    }
+    return fitted.strokes.map { stroke in
+      var stroke = stroke
+      stroke.erases = erases
+      return stroke
+    }
+  }
+
+  /// Copy Mask: there's a mask on the canvas image.
+  var canCopyMask: Bool {
+    canvasShowsImage && canvasMask?.mayHavePaint == true
+  }
+
+  func copyMask() {
+    guard canCopyMask, let canvasMask, let image else { return }
+    copiedMask = CopiedMask(mask: canvasMask, size: CGSize(width: image.width, height: image.height))
+  }
+
+  /// Paste Mask: a copied mask and a canvas that can be painted.
+  var canPasteMask: Bool {
+    copiedMask != nil && canPaintMask
+  }
+
+  /// Replaces the canvas mask with the copied one, stretched to fill the image: one undo step.
+  func pasteMask(undoManager: UndoManager?) {
+    guard canPasteMask, let copiedMask else { return }
+    applyMask(copiedMask.mask, from: copiedMask.size, how: .replace, undoManager: undoManager)
   }
 }

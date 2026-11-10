@@ -494,6 +494,8 @@ struct HistoryView: View {
       Button("Copy Seed") { copy(String(item.sidecar.seed)) }
       Button(item.isVideo ? "Export Video…" : "Export PNG…") { export([item]) }
       Button("Save to Photos") { saveToPhotos([item]) }
+      Divider()
+      MaskMenu(item: item, undoManager: undoManager)
       if item.isVideo {
         Divider()
         Button("Add to Timeline") { addToTimeline([item]) }

@@ -68,6 +68,15 @@ nonisolated struct RefineMerge: Sendable {
   }
 }
 
+/// The canvas image's mask when an Edit job was queued, for that image to remember: the image's
+/// step (nil for an image from outside), its size, and the mask in its pixels.
+nonisolated struct CanvasSourceMask: Codable, Hashable, Sendable {
+  var tensorId: Int64?
+  var width: Double
+  var height: Double
+  var mask: CanvasMask
+}
+
 /// Where a merged step came from, kept in its `profile_data` (`ProjectMapping.Profile`'s
 /// `refine_*` keys) so Use Settings can put its input back as it was: zoomed, moved and masked.
 nonisolated struct RefineRecord: Codable, Hashable, Sendable {
@@ -101,6 +110,10 @@ extension GenerationEngine.Request {
     canvasIsImported = isImported
     let maskPNG = mask.flatMap { $0.mayHavePaint ? $0.frameMask(placement, canvas: rendered) : nil }
     self.mask = maskPNG
+    canvasSourceMask = mask.map {
+      CanvasSourceMask(
+        tensorId: isImported ? nil : sourceTensorId, width: Double(source.width), height: Double(source.height), mask: $0)
+    }
     if merge, RefineMerge.applies(placement: placement, scale: scale, offset: offset, hasMask: maskPNG != nil) {
       self.merge = RefineMerge(
         source: source, sourceTensorId: isImported ? nil : sourceTensorId, scale: scale, offset: offset,

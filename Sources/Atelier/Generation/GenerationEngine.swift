@@ -41,6 +41,9 @@ actor GenerationEngine {
     /// Merge the result back into the canvas image it was refined from (`CanvasMerge`), on the
     /// device whose project holds it. Set with `canvas` (`setRefineInputs`).
     var merge: RefineMerge?
+    /// Edit mode: the mask on the canvas image when the job was queued, used or not, which that
+    /// image remembers once the result is saved (`HistoryStore.save`). Set with `canvas`.
+    var canvasSourceMask: CanvasSourceMask?
     /// Moodboard images sent as references (weight above zero only).
     var moodboard: [Reference] = []
     /// An audio file for video models that take one (`VideoModel.takesAudio`), kept by

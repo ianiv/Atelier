@@ -27,6 +27,8 @@ nonisolated struct RemoteClientJob: Codable, Hashable, Sendable {
   var hasMask: Bool? = nil
   /// How the result merges into its source image, beside it as `-source.png`.
   var merge: RefineMerge.Record? = nil
+  /// The mask the canvas image remembers (`Request.canvasSourceMask`).
+  var canvasSourceMask: CanvasSourceMask? = nil
 }
 
 nonisolated struct RemoteClientJobs: Sendable {
@@ -48,7 +50,8 @@ nonisolated struct RemoteClientJobs: Sendable {
       negativePrompt: request.negativePrompt, seed: request.seed, settings: JSONValue.fields(of: settings),
       parentTensorId: request.parentTensorId, hasCanvas: request.canvas != nil, canvasTensorId: request.canvasTensorId,
       canvasIsImported: request.canvasIsImported, moodboardWeights: request.moodboard.map(\.weight),
-      placement: request.placement, hasMask: request.mask != nil, merge: request.merge?.record)
+      placement: request.placement, hasMask: request.mask != nil, merge: request.merge?.record,
+      canvasSourceMask: request.canvasSourceMask)
     Log.attempt(Log.remote, "Keeping a remote job") {
       try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
       if let canvas = request.canvas { try ImageTensor.png(canvas)?.write(to: url(job, "-canvas.png")) }

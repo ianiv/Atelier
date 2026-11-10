@@ -22,11 +22,13 @@ Ratings are saved in the project, so they stay with the image when you branch fr
 
 ## Reusing an image
 
-- **Use Settings** (or double-click the image) loads the image's model, prompt, seed and every setting into Create. The seed is kept, so generating again reproduces the image. If the image was made with Edit, its input image is put back on the canvas in Edit mode as well, and its moodboard is restored. For an image made by refining part of its input and merging the result back ([Refining part of an image](creating-images.md#refining-part-of-an-image)), the input comes back zoomed on the same region, with its mask.
+- **Use Settings** (or double-click the image) loads the image's model, prompt, seed and every setting into Create. The seed is kept, so generating again reproduces the image. If the image was made with Edit, its input image is put back on the canvas in Edit mode as well, and its moodboard is restored. For an image made by refining part of its input and merging the result back ([Refining part of an image](creating-images.md#refining-part-of-an-image)), the input comes back zoomed on the same region, with its mask. Otherwise an image comes back with the last mask it had on the canvas, as it does when you click it.
 - **Rerun with New Seed** does the same with a fresh seed, for a variation.
 - If the model that made an image isn't downloaded anymore, History says so and Use Settings is unavailable.
 
-You can also drag images from History onto the canvas or the moodboard in Create.
+- **Mask ▸ Replace Canvas Mask** and **Mask ▸ Add to Canvas Mask** put the mask an image remembers on the image on the canvas, stretched to fill it ([Refining part of an image](creating-images.md#refining-part-of-an-image)). They're available when the image has a mask and the canvas can be painted.
+
+You can also drag images from History onto the canvas or the moodboard in Create. A dragged image comes in as a new image, without its mask.
 
 ## Copying, exporting and deleting
 

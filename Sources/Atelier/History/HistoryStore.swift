@@ -92,6 +92,14 @@ final class HistoryStore {
   private(set) var output = ProjectOutput()
   /// Star ratings (1 to 5) by image tensor; a clip's is under its first frame.
   private(set) var ratings: [Int64: Int] = [:]
+  /// The images with a kept mask (`Project.storedMask`), true when it paints anything, false for
+  /// one cleared over an older mask. Read once per opening and kept up to date here.
+  private(set) var storedMasks: [Int64: Bool] = [:]
+  /// The project `storedMasks` was read from.
+  @ObservationIgnored private var storedMasksProject: ObjectIdentifier?
+  /// For projects from before masks were kept per image: the mask of each image's newest Edit
+  /// child that recorded one (`refine_mask`), by the image's tensor (`childMasks`).
+  private var childMasks: [Int64: CanvasMask] = [:]
   /// Progress of the one-time import of the old PNG history, while it runs.
   private(set) var importProgress: (done: Int, total: Int)?
 
@@ -125,17 +133,25 @@ final class HistoryStore {
 
   func reload() async {
     let project = project
-    let (tree, stored, output, ratings) = await project.read {
-      project -> (ProjectTree, StepID?, ProjectOutput, [Int64: Int]) in
+    let readsMasks = storedMasksProject != ObjectIdentifier(project)
+    let (tree, stored, output, ratings, masks) = await project.read {
+      project -> (ProjectTree, StepID?, ProjectOutput, [Int64: Int], [Int64: Bool]?) in
       let tree = project.tree()
-      return (tree, project.storedCurrentStep(in: tree), project.output, project.ratings)
+      return (
+        tree, project.storedCurrentStep(in: tree), project.output, project.ratings,
+        readsMasks ? project.storedMaskImages() : nil)
     }
     guard project === self.project else { return }
     self.output = output
     self.ratings = ratings
+    if let masks {
+      storedMasks = masks
+      storedMasksProject = ObjectIdentifier(project)
+    }
     self.tree = tree
     items = tree.itemsNewestFirst
     byTensor = Dictionary(items.map { ($0.tensorId, $0) }, uniquingKeysWith: { a, _ in a })
+    childMasks = Self.childMasks(items)
     visibleParents = [:]
     visibleChildren = [:]
     for item in items {
@@ -165,6 +181,8 @@ final class HistoryStore {
     currentTensorId = nil
     output = ProjectOutput()
     ratings = [:]
+    storedMasks = [:]
+    childMasks = [:]
     await reload()
   }
 
@@ -234,6 +252,7 @@ final class HistoryStore {
     finishedAt: Date,
     timings: GenerationTimings? = nil,
     refined: RefinedStep? = nil,
+    resultMask: CanvasMask? = nil,
     makeCurrent: () -> Bool = { true }
   ) async throws -> HistoryItem {
     var settings = request.configuration
@@ -290,6 +309,23 @@ final class HistoryStore {
         settings: dump, createdAt: finishedAt,
         duration: finishedAt.timeIntervalSince(startedAt), timings: timings, moodboard: moodboard,
         inputTensorId: inputTensorId, after: parentTensorId, refined: refined)
+    }
+    // The canvas image remembers the mask it had when the run was queued, whether or not the run
+    // used it (Merge off, a zoomed frame): its own step when it's one, else the input saved for a
+    // merge, which is the image itself. The merged result keeps it too, moved as the image grew.
+    if let source = request.canvasSourceMask {
+      var target: Int64?
+      if let tensorId = source.tensorId, await step(tensorId: tensorId, in: project) != nil {
+        target = tensorId
+      } else if request.merge != nil {
+        target = inputTensorId
+      }
+      if let target {
+        keepMask(source.mask, forImage: target, size: CGSize(width: source.width, height: source.height), in: project)
+      }
+    }
+    if let resultMask {
+      keepMask(resultMask, forImage: item.tensorId, size: refined.map { CGSize(width: $0.composite.width, height: $0.composite.height) }, in: project)
     }
     if project === self.project {
       // A fork may have renumbered other steps.
@@ -353,9 +389,97 @@ final class HistoryStore {
     project.setCurrentStep(nil)
     await reload()
     recordCurrent()
+    // A later image could be given a deleted one's tensor: don't let it inherit the mask either.
+    let gone = await project.read { $0.pruneStoredMasks(keeping: $0.tree(items: false)) }
+    if project === self.project { for tensorId in gone { storedMasks[tensorId] = nil } }
     // A later image could be given a deleted one's tensor: don't let it inherit the rating.
     let kept = ratings.filter { byTensor[$0.key] != nil }
     if kept.count != ratings.count { ratings = kept; project.ratings = kept }
+  }
+
+  // MARK: - Masks
+
+  /// Whether the image has a mask to bring back or apply (`storedMask`): its own kept one, else
+  /// one from before masks were kept (its newest Edit child's, its own refine record's), else a
+  /// Draw Things layer mask.
+  func hasStoredMask(tensorId: Int64) -> Bool {
+    if let kept = storedMasks[tensorId] { return kept }
+    return hasOlderMask(tensorId: tensorId)
+  }
+
+  /// A mask other than a kept one: `storedMask`'s fallbacks.
+  private func hasOlderMask(tensorId: Int64) -> Bool {
+    if childMasks[tensorId] != nil { return true }
+    if let refine = byTensor[tensorId]?.sidecar.refine {
+      return refine.mask != nil
+    }
+    return tree.layerMaskedImages.contains(tensorId)
+  }
+
+  /// The mask the image last had on the canvas, in its pixels: the one kept with it (none when it
+  /// was cleared). For older projects, the mask its newest Edit child recorded, else a merged
+  /// result's own record moved as the image grew, else a Draw Things canvas's painted layer mask
+  /// (read-only, one bitmap; not for Atelier's own merged steps, whose layer mask is their
+  /// record's).
+  func storedMask(tensorId: Int64) async -> CanvasMask? {
+    let project = project
+    if let kept = storedMasks[tensorId] {
+      guard kept else { return nil }
+      if let mask = await project.read({ $0.storedMask(forImage: tensorId) }) { return mask }
+    }
+    if let mask = childMasks[tensorId] { return mask }
+    if let refine = byTensor[tensorId]?.sidecar.refine {
+      return refine.mask.flatMap { Self.resultMask(of: refine, mask: $0) }
+    }
+    guard tree.layerMaskedImages.contains(tensorId) else { return nil }
+    return await project.read { $0.layerMask(tensorId: tensorId) }
+  }
+
+  /// Keeps `mask` as the image's last mask (nil or one that paints nothing clears it), compacted
+  /// for an image of `size` (`CanvasMask.compacted`). Clearing writes an empty mask where an older
+  /// one would otherwise come back, and removes the key where none would.
+  func setMask(_ mask: CanvasMask?, forImage tensorId: Int64, size: CGSize?) {
+    guard tree.step(tensorId: tensorId) != nil else { return }
+    keepMask(mask, forImage: tensorId, size: size, in: project)
+  }
+
+  private func keepMask(_ mask: CanvasMask?, forImage tensorId: Int64, size: CGSize?, in project: Project) {
+    let loaded = project === self.project
+    if let mask, mask.mayHavePaint {
+      project.setStoredMask(mask.compacted(for: size), forImage: tensorId)
+      if loaded { storedMasks[tensorId] = true }
+    } else if loaded {
+      if hasOlderMask(tensorId: tensorId) {
+        guard storedMasks[tensorId] != false else { return }
+        project.setStoredMask(CanvasMask(), forImage: tensorId)
+        storedMasks[tensorId] = false
+      } else if storedMasks[tensorId] != nil {
+        project.setStoredMask(nil, forImage: tensorId)
+        storedMasks[tensorId] = nil
+      }
+    } else {
+      project.setStoredMask(nil, forImage: tensorId)
+    }
+  }
+
+  /// Each image's newest Edit child's recorded mask (`refine_mask`, in the image's pixels), from
+  /// `items` newest first: what an image from before masks were kept had on the canvas last.
+  nonisolated static func childMasks(_ items: [HistoryItem]) -> [Int64: CanvasMask] {
+    var masks: [Int64: CanvasMask] = [:]
+    for item in items {
+      guard let input = item.inputTensorId, masks[input] == nil, let mask = item.sidecar.refine?.mask else { continue }
+      masks[input] = mask
+    }
+    return masks
+  }
+
+  /// A merged result's recorded mask (in its input's pixels) on the result: moved by where the
+  /// input's top left landed, as `CanvasMerge.merge` grows the image (the union of the input and
+  /// the frame, to whole pixels).
+  nonisolated static func resultMask(of record: RefineRecord, mask: CanvasMask) -> CanvasMask {
+    guard record.rect.count == 4 else { return mask }
+    let origin = CGPoint(x: -min(record.rect[0].rounded(.down), 0), y: -min(record.rect[1].rounded(.down), 0))
+    return mask.translated(by: origin)
   }
 
   // MARK: - Ratings

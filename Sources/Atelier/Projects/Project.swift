@@ -168,6 +168,106 @@ final nonisolated class Project: Sendable {
     }
   }
 
+  /// The mask an image last had on the canvas (`HistoryStore.setMask`), under
+  /// `atelier_mask_<image tensor id>` as `CanvasMask` JSON, the way ratings and timelines are kept:
+  /// by tensor, which a fork or delete doesn't renumber, in the project file, which Draw Things
+  /// ignores. An empty mask records one cleared on an image that has an older mask to fall back to
+  /// (`HistoryStore.storedMask`); nil is no key.
+  func storedMask(forImage tensorId: Int64) -> CanvasMask? {
+    workspace.dictionary[Self.maskKey(tensorId), String.self]
+      .flatMap { try? JSONDecoder().decode(CanvasMask.self, from: Data($0.utf8)) }
+  }
+
+  /// Keeps `mask` as the image's (`storedMask`); nil removes the key.
+  func setStoredMask(_ mask: CanvasMask?, forImage tensorId: Int64) {
+    workspace.dictionary[Self.maskKey(tensorId), String.self] =
+      mask.flatMap { try? JSONEncoder().encode($0) }.map { String(decoding: $0, as: UTF8.self) }
+  }
+
+  /// The images with a kept mask, true when it paints anything (false for a cleared one). Reads
+  /// every key (slow for a dictionary), so it's read once per opening (`HistoryStore.reload`).
+  func storedMaskImages() -> [Int64: Bool] {
+    let cleared = (try? JSONEncoder().encode(CanvasMask())).map { String(decoding: $0, as: UTF8.self) }
+    var images: [Int64: Bool] = [:]
+    for key in workspace.dictionary.keys where key.hasPrefix(Self.maskKeyPrefix) {
+      guard let tensorId = Int64(key.dropFirst(Self.maskKeyPrefix.count)),
+            let json = workspace.dictionary[key, String.self]
+      else { continue }
+      images[tensorId] = json != cleared
+    }
+    return images
+  }
+
+  /// Removes the kept masks of images no step shows any more (deleted), unless another step still
+  /// has that image. Returns the images whose mask went.
+  @discardableResult
+  func pruneStoredMasks(keeping tree: ProjectTree) -> [Int64] {
+    let gone = storedMaskImages().keys.filter { tree.step(tensorId: $0) == nil }
+    for tensorId in gone { setStoredMask(nil, forImage: tensorId) }
+    return Array(gone)
+  }
+
+  private static let maskKeyPrefix = "atelier_mask_"
+  private static func maskKey(_ tensorId: Int64) -> String { maskKeyPrefix + String(tensorId) }
+
+  /// A Draw Things canvas's painted mask, for the step whose image is `tensorId`, as one bitmap
+  /// stroke in the composited image's pixels (`Self.paintedMask`); nil when no layer paints.
+  /// Read-only: Atelier keeps its own masks as `storedMask`.
+  func layerMask(tensorId: Int64) -> CanvasMask? {
+    guard let layers = canvasLayers(imageTensorId: tensorId), layers.contains(where: { $0.maskId > 0 }) else { return nil }
+    let drawn: [CompositeLayer] = layers.compactMap { layer in
+      guard let image = tensor(id: layer.tensorId).flatMap(ImageTensor.cgImage(from:)) else { return nil }
+      let mask = layer.maskId > 0 ? self.mask(id: layer.maskId) : nil
+      return CompositeLayer(
+        image: image, mask: mask?.codes, maskWidth: mask?.width ?? 0, maskHeight: mask?.height ?? 0,
+        x: Int(layer.x), y: Int(layer.y), scaleFactorBy120: Int(layer.scaleFactorBy120))
+    }
+    guard drawn.count == layers.count else { return nil }
+    return Self.paintedMask(drawn)
+  }
+
+  /// Where Draw Things' layers are painted with its inpainting brush, laid out as `composite` lays
+  /// them out: a pixel is painted where any layer's mask code there is other than 0 or 3
+  /// (`CanvasMask.Stored`; the brush writes 0xF9, code 1), the mask read nearest-neighbour at the
+  /// layer's size as `masked` reads it. One bitmap stroke at the composite's size, nil when nothing
+  /// is painted.
+  static func paintedMask(_ layers: [CompositeLayer]) -> CanvasMask? {
+    guard !layers.isEmpty else { return nil }
+    func units(_ layer: CompositeLayer) -> CGRect {
+      let scale = Double(max(layer.scaleFactorBy120, 1)) / 120
+      return CGRect(
+        x: Double(layer.x), y: Double(layer.y), width: Double(layer.image.width) / scale,
+        height: Double(layer.image.height) / scale)
+    }
+    let union = layers.dropFirst().reduce(units(layers[0])) { $0.union(units($1)) }
+    let density = Double(layers.map(\.scaleFactorBy120).max() ?? 120) / 120
+    let width = Int((union.width * density).rounded(.up)), height = Int((union.height * density).rounded(.up))
+    guard width > 0, height > 0, width <= 32768, height <= 32768 else { return nil }
+    var painted = [UInt8](repeating: 0, count: width * height)
+    for layer in layers {
+      let rect = units(layer)
+      let drawn = CGRect(
+        x: (rect.minX - union.minX) * density, y: (rect.minY - union.minY) * density,
+        width: rect.width * density, height: rect.height * density)
+      let x0 = max(Int(drawn.minX.rounded()), 0), x1 = min(Int(drawn.maxX.rounded()), width)
+      let y0 = max(Int(drawn.minY.rounded()), 0), y1 = min(Int(drawn.maxY.rounded()), height)
+      guard x0 < x1, y0 < y1,
+            let mask = layer.mask, layer.maskWidth > 0, layer.maskHeight > 0,
+            mask.count >= layer.maskWidth * layer.maskHeight
+      else { continue }
+      for y in y0..<y1 {
+        let my = min(max(Int((Double(y) + 0.5 - drawn.minY) / drawn.height * Double(layer.maskHeight)), 0), layer.maskHeight - 1)
+        for x in x0..<x1 {
+          let mx = min(max(Int((Double(x) + 0.5 - drawn.minX) / drawn.width * Double(layer.maskWidth)), 0), layer.maskWidth - 1)
+          let code = mask[my * layer.maskWidth + mx] & 7
+          if code != 0, code != 3 { painted[y * width + x] = 255 }
+        }
+      }
+    }
+    guard painted.contains(255), let png = CanvasMask.grayPNG(painted, width: width, height: height) else { return nil }
+    return CanvasMask(strokes: [CanvasMask.Stroke(kind: .bitmap, points: [.zero], bitmap: png)])
+  }
+
   /// The image layer's tensor: from the canvas layers when stored (the top one with a tensor), else
   /// the node's own field.
   private func imageTensorId(of node: TensorHistoryNode) -> Int64? {
@@ -1062,6 +1162,9 @@ nonisolated struct ProjectTree: Sendable {
   /// Each clip frame's step: the item listing the clip (its first frame).
   private var clipItems: [StepID: StepID] = [:]
   private var greatestLineage: [Int64: Int64] = [:]
+  /// The images of steps with a layer mask (a Draw Things canvas, or a merged refine's source
+  /// layer): what `Project.layerMask` may find paint in.
+  private(set) var layerMaskedImages: Set<Int64> = []
 
   init() {}
 
@@ -1073,8 +1176,10 @@ nonisolated struct ProjectTree: Sendable {
     // The image layer: the top layer with a tensor, else the node's own field.
     var layerTensors: [StepID: (index: Int64, tensorId: Int64)] = [:]
     var allLayerTensors: [StepID: Set<Int64>] = [:]
+    var maskedSteps: Set<StepID> = []
     for layer in layers where layer.tensorId > 0 {
       let id = StepID(lineage: layer.lineage, logicalTime: layer.logicalTime)
+      if layer.maskId > 0 { maskedSteps.insert(id) }
       allLayerTensors[id, default: []].insert(layer.tensorId)
       if layerTensors[id].map({ layer.index > $0.index }) ?? true {
         layerTensors[id] = (layer.index, layer.tensorId)
@@ -1148,6 +1253,7 @@ nonisolated struct ProjectTree: Sendable {
       if let parent { children[parent, default: []].append(id) }
     }
     for (id, list) in children { children[id] = list.sorted(by: isNewer) }
+    layerMaskedImages = Set(maskedSteps.compactMap { steps[$0]?.tensorId })
   }
 
   /// Where a recorded tensor appears on more than one step (Draw Things can share one), the

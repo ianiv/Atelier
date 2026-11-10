@@ -618,6 +618,8 @@ struct CanvasView: View {
     Button("Upscale…") { model.upscalingCanvasImage = true }
       .disabled(!model.canUpscaleCanvasImage)
     Divider()
+    MaskCopyItems(model: model, undoManager: undoManager)
+    Divider()
     CanvasContentItems(
       noun: "Image", addToMoodboardTitle: "Add to Moodboard",
       canLoadSettings: model.canvasImageSettings != nil,
@@ -1078,6 +1080,7 @@ struct RecentStrip: View {
           Task { if let image = await history.image(for: item) { model.moodboard.add(image) } }
         }
         Button("Copy Image") { Task { await history.copyImage(item) } }
+        MaskMenu(item: item, undoManager: undoManager)
       }
   }
 }

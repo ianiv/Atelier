@@ -34,6 +34,8 @@ nonisolated enum SavedQueue {
     var hasMask: Bool?
     /// How the result merges back into its source image, which is beside it as `-source.png`.
     var merge: RefineMerge.Record?
+    /// The mask the canvas image remembers (`Request.canvasSourceMask`).
+    var canvasSourceMask: CanvasSourceMask?
   }
 
   /// A saved job, before its settings are put back on its model's defaults.
@@ -63,6 +65,11 @@ nonisolated enum SavedQueue {
         if let record = entry.merge, let mergeSource {
           request.merge = RefineMerge(record: record, source: mergeSource, sameProject: sameProject)
           request.canvasTensorId = request.merge?.sourceTensorId
+        }
+        request.canvasSourceMask = entry.canvasSourceMask.map { mask in
+          var mask = mask
+          if !sameProject { mask.tensorId = nil }
+          return mask
         }
       }
       request.moodboard = moodboard
@@ -128,7 +135,8 @@ nonisolated enum SavedQueue {
           canvasTensorId: request.canvasTensorId, canvasIsImported: request.canvasIsImported,
           moodboardWeights: request.moodboard.map(\.weight), audio: request.audio,
           placement: request.placement, upscale: request.upscale, imageUpscale: request.imageUpscale,
-          target: job.target, hasMask: request.mask != nil, merge: mergeRecord))
+          target: job.target, hasMask: request.mask != nil, merge: mergeRecord,
+          canvasSourceMask: request.canvasSourceMask))
     }
     if let data = try? JSONEncoder().encode(entries) {
       Log.attempt(Log.queue, "Saving the queue") {

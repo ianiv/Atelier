@@ -158,6 +158,8 @@ struct AtelierApp: App {
         Button("Clear Canvas") { create.clearCanvas() }
           .disabled(navigation.section != .create)
         Divider()
+        MaskCopyItems(model: create, undoManager: undoManager, enabled: navigation.section == .create)
+        Divider()
         Picker("Mode", selection: Binding(get: { create.effectiveCanvasMode }, set: { create.canvasMode = $0 })) {
           Text("Generate").tag(CreateModel.CanvasMode.generate)
           Text("Edit").tag(CreateModel.CanvasMode.edit)

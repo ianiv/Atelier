@@ -170,16 +170,19 @@ final class AgentTools {
       "title": "Put an image on the canvas",
       "description": """
         Puts an image on the Create screen's canvas, as clicking it in History or dropping it \
-        there does: fitted to the frame, in Edit mode, with no mask. Give a History step (see \
-        list_history), which the next run then follows, or an image file or data: URL. Returns \
-        the canvas as get_create_screen's `canvas` describes it. Then paint a mask \
-        (set_canvas_mask), pick a region (set_canvas_region), or generate with use_canvas.
+        there does: fitted to the frame, in Edit mode. Give a History step (see list_history), \
+        which the next run then follows and which comes back with the mask it last had on the \
+        canvas (`mask: false` leaves it off), or an image file or data: URL, which has no mask. \
+        Returns the canvas as get_create_screen's `canvas` describes it, with mask_restored. \
+        Then paint a mask (set_canvas_mask), pick a region (set_canvas_region), or generate with \
+        use_canvas.
         """,
       "inputSchema": [
         "type": "object",
         "properties": [
           "history_step": ["type": "integer", "description": "A history step from list_history or generate (images only; not a video)."],
           "image": ["type": "string", "description": "Instead: path to an image, or a data: URL."],
+          "mask": ["type": "boolean", "description": "With history_step: bring back the step's mask (the default). False puts the image there with no mask."],
         ],
       ],
     ],
@@ -189,8 +192,10 @@ final class AgentTools {
       "description": """
         Paints the mask on the canvas image: the area an Edit run regenerates. Coordinates are \
         the canvas image's pixels from its top left (see get_create_screen's canvas.source_size). \
-        Applied in order: `clear`, then `image` and `shapes` (by `mode`: replace the mask, the \
-        default, add to it or subtract from it), then `invert`. The whole call is one ⌘Z step, \
+        Applied in order: `clear`, then `from_history_step`, `image` and `shapes` (by `mode`: \
+        replace the mask, the default, add to it or subtract from it), then `invert`. \
+        `from_history_step` takes another image's mask (see list_history's has_mask), stretched \
+        to fill the canvas image when the sizes differ. The whole call is one ⌘Z step, \
         “Agent Mask”, and shows on the canvas as it happens. Returns the mask summary \
         (get_canvas_mask's). Needs an image on the canvas (set_canvas_image) in Edit mode.
         """,
@@ -210,7 +215,8 @@ final class AgentTools {
               ],
             ],
           ],
-          "mode": ["type": "string", "enum": ["replace", "add", "subtract"], "description": "What `image` and `shapes` do to the mask there is. Default replace."],
+          "from_history_step": ["type": "integer", "description": "A history step whose mask (the one it last had on the canvas) to use, stretched to fill the canvas image."],
+          "mode": ["type": "string", "enum": ["replace", "add", "subtract"], "description": "What `from_history_step`, `image` and `shapes` do to the mask there is. Default replace."],
           "invert": ["type": "boolean", "description": "Flip the mask over the whole image, last."],
           "clear": ["type": "boolean", "description": "Clear the mask, first. Alone, it just clears it."],
         ],
@@ -225,11 +231,14 @@ final class AgentTools {
         hatched; `mask` is the mask itself, white on black at the canvas image's size, as \
         set_canvas_mask takes it; `both` returns both. Comes with a summary: has_mask, the \
         image size, coverage (share of the image painted), the painted bounds, \
-        coverage_in_region (share of what the frame shows) and whether the next run sends it.
+        coverage_in_region (share of what the frame shows) and whether the next run sends it. \
+        With `history_step`, shows that image's remembered mask instead (over that image, no \
+        frame), leaving the canvas alone.
         """,
       "inputSchema": [
         "type": "object",
         "properties": [
+          "history_step": ["type": "integer", "description": "A history step (see list_history) whose remembered mask to show. Omit for the canvas."],
           "view": ["type": "string", "enum": ["overlay", "mask", "both"]],
           "max_size": ["type": "integer", "description": "Long side of the returned images in pixels, 256–2048. Default 1024."],
           "save_to": ["type": "string", "description": "Also write the full-size PNGs to this file or folder."],
@@ -303,7 +312,7 @@ final class AgentTools {
       "name": "list_history",
       "title": "List history",
       "description":
-        "Lists the newest images and videos in the current Atelier project, newest first: history step, prompt (shortened), model, seed, size, star rating, and whether it's a video. Includes what the user generated themselves. Use get_image to look at one.",
+        "Lists the newest images and videos in the current Atelier project, newest first: history step, prompt (shortened), model, seed, size, star rating, whether it's a video, and has_mask (it remembers a mask: set_canvas_image brings it back, set_canvas_mask from_history_step applies it, get_canvas_mask history_step shows it). Includes what the user generated themselves. Use get_image to look at one.",
       "inputSchema": [
         "type": "object",
         "properties": [
@@ -435,7 +444,7 @@ final class AgentTools {
     case "set_create_screen": return try await setCreateScreen(arguments)
     case "set_canvas_image": return try await setCanvasImage(arguments)
     case "set_canvas_mask": return try await setCanvasMask(arguments)
-    case "get_canvas_mask": return try getCanvasMask(arguments)
+    case "get_canvas_mask": return try await getCanvasMask(arguments)
     case "set_canvas_region": return try await setCanvasRegion(arguments)
     case "auto_mask": return try await autoMask(arguments)
     case "list_history": return try Self.textResult(json: listHistory(arguments))
@@ -1118,19 +1127,44 @@ final class AgentTools {
     guard (step == nil) != (source == nil) else {
       throw ToolError("Pass `history_step` (see list_history) or `image` (a path or data: URL), not both.")
     }
+    if arguments["mask"] != nil, !(arguments["mask"] is Bool) { throw ToolError("`mask` is true or false.") }
+    let restoresMask = arguments["mask"] as? Bool ?? true
     if let step {
-      guard let item = create.history.items.first(where: { $0.id.logicalTime == step }) else {
-        throw ToolError("No history step \(step) in “\(create.history.project.name)”. See list_history.")
-      }
-      guard !item.isVideo else { throw ToolError("History step \(step) is a video; the canvas mask and region work on images.") }
-      guard await create.placeOnCanvas(item) else { throw ToolError("Couldn't read history step \(step)'s image.") }
+      let item = try historyImage(step)
+      guard await create.placeOnCanvas(item, restoresMask: restoresMask) else { throw ToolError("Couldn't read history step \(step)'s image.") }
     } else if let source {
       create.placeOnCanvas(try Self.loadImage(source))
     }
-    return try Self.textResult(json: canvasState())
+    var state = canvasState()
+    // Placing clears the mask, so any mask now is the step's own, brought back.
+    state["mask_restored"] = step != nil && restoresMask && create.canvasMask != nil
+    return try Self.textResult(json: state)
+  }
+
+  /// A History step that's an image, or why not.
+  private func historyImage(_ step: Int) throws -> HistoryItem {
+    guard let item = create.history.items.first(where: { $0.id.logicalTime == step }) else {
+      throw ToolError("No history step \(step) in “\(create.history.project.name)”. See list_history.")
+    }
+    guard !item.isVideo else { throw ToolError("History step \(step) is a video; the canvas mask and region work on images.") }
+    return item
+  }
+
+  /// A History step's remembered mask and its image's size, or why there's none.
+  private func historyMask(_ step: Int) async throws -> (mask: CanvasMask, size: CGSize) {
+    let item = try historyImage(step)
+    guard create.history.hasStoredMask(tensorId: item.tensorId), let stored = await create.storedMask(of: item) else {
+      throw ToolError("History step \(step) has no mask (see list_history's has_mask).")
+    }
+    return stored
   }
 
   private func setCanvasMask(_ arguments: [String: Any]) async throws -> [String: Any] {
+    // Another step's mask is read first: it's in that image's pixels, whatever the canvas holds.
+    let fromStep = Self.int(arguments["from_history_step"])
+    if arguments["from_history_step"] != nil, fromStep == nil { throw ToolError("`from_history_step` is a history step number (see list_history).") }
+    var stored: (mask: CanvasMask, size: CGSize)?
+    if let fromStep { stored = try await historyMask(fromStep) }
     // Before reading the mask it builds on: nothing waits after that, so the mask can't land on
     // another image or overwrite an edit made meanwhile.
     await Self.settleUndo()
@@ -1146,14 +1180,23 @@ final class AgentTools {
     let shapes = arguments["shapes"] as? [Any]
     let maskSource = arguments["image"] as? String
     if arguments["shapes"] != nil, shapes == nil { throw ToolError("`shapes` is an array of shapes.") }
-    guard clear || invert || shapes != nil || maskSource != nil else {
-      throw ToolError("Pass `shapes`, `image`, `invert` or `clear`.")
+    guard clear || invert || shapes != nil || maskSource != nil || stored != nil else {
+      throw ToolError("Pass `shapes`, `image`, `from_history_step`, `invert` or `clear`.")
     }
     guard create.canEditMask else { throw ToolError(maskUnavailableReason()) }
 
     let erases = mode == "subtract"
     var strokes: [CanvasMask.Stroke] = []
     var notes: [String] = []
+    if let stored, let fromStep {
+      let how = CreateModel.MaskApplication(rawValue: mode) ?? .replace
+      let fitted = CreateModel.strokes(applying: stored.mask, from: stored.size, to: sourceRect.size, how: how)
+      if stored.size != sourceRect.size {
+        notes.append("History step \(fromStep)'s mask was made on a \(Int(stored.size.width))×\(Int(stored.size.height)) image; it's stretched to fill this \(size) one.")
+      }
+      if fitted.isEmpty { notes.append("History step \(fromStep)'s mask paints nothing on this image.") }
+      strokes += fitted
+    }
     for (index, entry) in (shapes ?? []).enumerated() {
       guard let shape = entry as? [String: Any] else { throw ToolError("Shape \(index + 1) isn't an object.") }
       let stroke = try Self.stroke(shape, number: index + 1, erases: erases)
@@ -1175,8 +1218,9 @@ final class AgentTools {
         notes.append("The mask image paints nothing (no opaque pixels light enough).")
       }
     }
-    // Replacing starts from nothing; only shapes or an image replace (invert alone flips what's there).
-    let replaces = clear || (mode == "replace" && (shapes != nil || maskSource != nil))
+    // Replacing starts from nothing; only shapes, an image or a step's mask replace (invert alone
+    // flips what's there).
+    let replaces = clear || (mode == "replace" && (shapes != nil || maskSource != nil || stored != nil))
     let base = replaces ? nil : create.canvasMask
     var mask = base ?? CanvasMask()
     mask.strokes += strokes
@@ -1352,7 +1396,7 @@ final class AgentTools {
           ?? "\(create.runTargetServerName ?? "The server") can't take masks: its Atelier is older. Run on this device (Run on in the app)."
           : maskUnavailableReason())
     }
-    return try getCanvasMask(["view": "overlay"], extra: extra)
+    return try await getCanvasMask(["view": "overlay"], extra: extra)
   }
 
   private static func hint(for error: AutoMaskError) -> String {
@@ -1372,22 +1416,48 @@ final class AgentTools {
   }
 
   /// get_canvas_mask, and auto_mask's answer with its own fields (`extra`) in the summary.
-  private func getCanvasMask(_ arguments: [String: Any], extra: [String: Any] = [:]) throws -> [String: Any] {
-    let image = try canvasImage()
+  private func getCanvasMask(_ arguments: [String: Any], extra: [String: Any] = [:]) async throws -> [String: Any] {
     let view = arguments["view"] as? String ?? "overlay"
     guard ["overlay", "mask", "both"].contains(view) else { throw ToolError("`view` is \"overlay\" (the default), \"mask\" or \"both\".") }
     let maxSide = min(max(Self.int(arguments["max_size"]) ?? 1024, 256), 2048)
+    if arguments["history_step"] != nil, Self.int(arguments["history_step"]) == nil { throw ToolError("`history_step` is a history step number (see list_history).") }
+    let historyStep = Self.int(arguments["history_step"])
+    // A step's remembered mask over its own image, with no frame; else the canvas's.
+    let image: CGImage
+    let mask: CanvasMask?
+    var summary: [String: Any]
+    if let historyStep {
+      let item = try historyImage(historyStep)
+      guard let loaded = await create.history.image(for: item) else { throw ToolError("Couldn't read history step \(historyStep)'s image.") }
+      image = loaded
+      mask = create.history.hasStoredMask(tensorId: item.tensorId) ? await create.history.storedMask(tensorId: item.tensorId) : nil
+      let stats = (mask ?? CanvasMask()).stats(sourceSize: CGSize(width: image.width, height: image.height), placement: nil)
+      summary = [
+        "history_step": historyStep,
+        "has_mask": stats.paintedPixels > 0,
+        "source_size": Self.json(CGSize(width: image.width, height: image.height)),
+        "painted_pixels": stats.paintedPixels,
+        "coverage": stats.paintedFraction,
+        "bounds": stats.bounds.map(Self.json) ?? NSNull(),
+      ]
+    } else {
+      image = try canvasImage()
+      mask = create.canvasMask
+      summary = maskSummary()
+    }
     let sourceSize = CGSize(width: image.width, height: image.height)
     var views: [(name: String, image: CGImage)] = []
     if view != "mask" {
-      guard let overlay = create.canvasMaskOverlay() else { throw ToolError("Couldn't draw the overlay.") }
+      let overlay = historyStep == nil
+        ? create.canvasMaskOverlay() : CanvasMask.overlay(source: image, mask: mask, placement: nil)
+      guard let overlay else { throw ToolError("Couldn't draw the overlay.") }
       views.append(("overlay", overlay))
     }
     if view != "overlay" {
-      guard let mask = (create.canvasMask ?? CanvasMask()).image(sourceSize: sourceSize) else { throw ToolError("Couldn't draw the mask.") }
-      views.append(("mask", mask))
+      guard let maskImage = (mask ?? CanvasMask()).image(sourceSize: sourceSize) else { throw ToolError("Couldn't draw the mask.") }
+      views.append(("mask", maskImage))
     }
-    var summary = maskSummary().merging(extra) { _, new in new }
+    summary = summary.merging(extra) { _, new in new }
     if let saveTo = arguments["save_to"] as? String {
       var saved: [String: String] = [:]
       for entry in views {
@@ -1520,6 +1590,7 @@ final class AgentTools {
         "history_step": item.id.logicalTime, "prompt": Self.shortened(sidecar.prompt),
         "model": sidecar.model, "seed": Int(sidecar.seed), "width": sidecar.width, "height": sidecar.height,
         "rating": create.history.rating(of: item), "video": item.isVideo,
+        "has_mask": !item.isVideo && create.history.hasStoredMask(tensorId: item.tensorId),
         "on_canvas": create.imageItem == item || create.canvasClip == item,
       ]
     }

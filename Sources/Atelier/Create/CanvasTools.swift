@@ -203,6 +203,44 @@ extension CreateModel {
   }
 }
 
+// MARK: - Menus
+
+/// A History image's Mask submenu (History and the recent strip): its remembered mask onto the
+/// canvas image, stretched to fill it, as one ⌘Z step. Always there; disabled for an image with no
+/// mask, or when the canvas can't be painted.
+struct MaskMenu: View {
+  let item: HistoryItem
+  let undoManager: UndoManager?
+  @Environment(CreateModel.self) private var model
+
+  var body: some View {
+    Menu("Mask") {
+      Button("Replace Canvas Mask") { apply(.replace) }
+      Button("Add to Canvas Mask") { apply(.add) }
+    }
+    .disabled(!model.canApplyMask(from: item))
+  }
+
+  private func apply(_ how: CreateModel.MaskApplication) {
+    Task { await model.applyMask(from: item, how: how, undoManager: undoManager) }
+  }
+}
+
+/// Copy Mask and Paste Mask, for the Image menu and the canvas menu (iPad's way in): the mask goes
+/// between images inside Atelier, stretched to fill the one it's pasted on.
+struct MaskCopyItems: View {
+  let model: CreateModel
+  let undoManager: UndoManager?
+  var enabled = true
+
+  var body: some View {
+    Button("Copy Mask") { model.copyMask() }
+      .disabled(!enabled || !model.canCopyMask)
+    Button("Paste Mask") { model.pasteMask(undoManager: undoManager) }
+      .disabled(!enabled || !model.canPasteMask)
+  }
+}
+
 // MARK: - Overlay and statistics
 
 extension CanvasMask {
