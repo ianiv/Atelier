@@ -887,6 +887,7 @@ final class AgentTools {
   }
 
   private func setCreateScreen(_ arguments: [String: Any]) async throws -> [String: Any] {
+    await Self.settleUndo()
     if create.models.isEmpty { await create.refreshModelList() }
     var notes: [String] = []
 
@@ -916,14 +917,12 @@ final class AgentTools {
     guard var configuration = create.settings else {
       throw ToolError(create.errorMessage ?? "\(model)'s settings didn't load.")
     }
-    var changed = false
     if let settings = arguments["settings"] as? [String: Any], !settings.isEmpty {
       let data = try JSONSerialization.data(withJSONObject: settings)
       guard let pasted = DrawThingsJSON.decode(data) else {
         throw ToolError("None of the keys in `settings` are settings Atelier knows. See get_create_screen.")
       }
       SettingsRegistry.apply(dump: pasted.dump, to: &configuration)
-      changed = true
       let ignored = settings.keys.filter { pasted.dump[$0] == nil && $0 != "model" && $0 != "seed" }
       if !ignored.isEmpty { notes.append("Ignored unknown settings: \(ignored.sorted().joined(separator: ", ")).") }
     }
@@ -932,26 +931,21 @@ final class AgentTools {
     if width != nil || height != nil {
       configuration.width = Self.roundTo64(width ?? configuration.width)
       configuration.height = Self.roundTo64(height ?? configuration.height)
-      changed = true
     }
     if let steps = Self.int(arguments["steps"]) {
       configuration.steps = max(steps, 1)
-      changed = true
     }
     if let guidance = Self.double(arguments["guidance_scale"]) {
       configuration.guidanceScale = Float(guidance)
-      changed = true
     }
     if let strength = Self.double(arguments["strength"]) {
       configuration.strength = Float(min(max(strength, 0), 1))
-      changed = true
     }
     let frames = Self.int(arguments["num_frames"])
     let seconds = Self.double(arguments["seconds"])
     if frames != nil || seconds != nil {
       if let video = VideoModel(model: model, loras: configuration.loras.compactMap(\.file)) {
         configuration.numFrames = video.snapped(frames ?? Int((seconds! * video.framesPerSecond).rounded()) + 1)
-        changed = true
       } else {
         notes.append("\(model) isn't a video model, so num_frames and seconds were ignored.")
       }
@@ -959,8 +953,8 @@ final class AgentTools {
     // A preset for another model switched models: undo can't go back across that, so the step
     // starts from the new model's values, as the inspector's own undo does.
     let restoring = before?.model == configuration.model ? before : create.settings
-    if let restoring, changed || !Self.sameSettings(restoring, create.settings) {
-      await Self.asOneUndoStep {
+    if let restoring, !Self.sameSettings(restoring, configuration) {
+      Self.asOneUndoStep {
         create.replaceSettings(with: configuration, restoring: restoring, actionName: "Agent Settings", undoManager: $0)
       }
     }
@@ -1090,6 +1084,9 @@ final class AgentTools {
   }
 
   private func setCanvasMask(_ arguments: [String: Any]) async throws -> [String: Any] {
+    // Before reading the mask it builds on: nothing waits after that, so the mask can't land on
+    // another image or overwrite an edit made meanwhile.
+    await Self.settleUndo()
     let image = try canvasImage()
     let sourceRect = CGRect(x: 0, y: 0, width: image.width, height: image.height)
     let size = "\(image.width)×\(image.height)"
@@ -1145,12 +1142,8 @@ final class AgentTools {
       throw ToolError(
         "\(create.runTargetServerName ?? "The server") can't take masks: its Atelier is older. Run on this device (Run on in the app), or only clear the mask.")
     }
-    // The mask is checked against the image now: waiting for the pass to end mustn't land it on
-    // another one.
-    let imageID = ObjectIdentifier(image)
-    await Self.asOneUndoStep { undoManager in
-      guard create.image.map(ObjectIdentifier.init) == imageID else { return }
-      create.setMask(mask.strokes.isEmpty ? nil : mask, actionName: CreateModel.agentMaskActionName, undoManager: undoManager)
+    Self.asOneUndoStep {
+      create.setMask(mask.strokes.isEmpty ? nil : mask, actionName: CreateModel.agentMaskActionName, undoManager: $0)
     }
     var result = maskSummary()
     if !notes.isEmpty { result["notes"] = notes }
@@ -1244,6 +1237,7 @@ final class AgentTools {
   }
 
   private func setCanvasRegion(_ arguments: [String: Any]) async throws -> [String: Any] {
+    await Self.settleUndo()
     let image = try canvasImage()
     let sourceSize = CGSize(width: image.width, height: image.height)
     let sourceRect = CGRect(origin: .zero, size: sourceSize)
@@ -1262,14 +1256,14 @@ final class AgentTools {
     var notes: [String] = []
 
     /// Sets the output size to `area`'s shape at about the current pixel count, as one undo step.
-    func size(to area: CGSize) async {
+    func size(to area: CGSize) {
       guard sizeToRegion, var configuration = create.settings else { return }
       let size = CanvasPlacement.frameSize(
         forRegion: area, pixelCount: Double(configuration.width * configuration.height))
       guard Int(size.width) != configuration.width || Int(size.height) != configuration.height else { return }
       configuration.width = Int(size.width)
       configuration.height = Int(size.height)
-      await Self.asOneUndoStep { create.replaceSettings(with: configuration, actionName: "Agent Settings", undoManager: $0) }
+      Self.asOneUndoStep { create.replaceSettings(with: configuration, actionName: "Agent Settings", undoManager: $0) }
       notes.append("The output size is now \(configuration.width)×\(configuration.height).")
     }
 
@@ -1282,7 +1276,7 @@ final class AgentTools {
       guard region.intersects(sourceRect) else {
         throw ToolError("`region` doesn't overlap the \(image.width)×\(image.height) canvas image (its pixels from the top left).")
       }
-      await size(to: region.size)
+      size(to: region.size)
       guard let frameSize = create.frameSize else { throw ToolError("The Create screen has no output size yet.") }
       let grown = CanvasPlacement.grown(region, toShapeOf: frameSize)
       let wanted = CanvasPlacement.zoomAndOffset(showing: grown, sourceSize: sourceSize, frameSize: frameSize).scale
@@ -1296,7 +1290,7 @@ final class AgentTools {
           "Showing that region needs a zoom of \(String(format: "%.3g", wanted))×, outside the canvas's 0.05×–32×, so the frame shows `region` instead.")
       }
     } else if fit {
-      await size(to: sourceSize)
+      size(to: sourceSize)
       create.canvas.zoomToFit()
     } else if actualSize {
       create.canvas.zoom(to: 1)
@@ -1424,22 +1418,34 @@ final class AgentTools {
     return a.model == b.model && SettingsRegistry.all.allSatisfy { $0.get(a) == $0.get(b) }
   }
 
-  /// Makes `change` (which registers undo) a ⌘Z step of its own on the main window's undo
-  /// manager. It groups by event, and agent calls reach the main actor through dispatch, not as
-  /// events: with no user event between calls, AppKit never closes the event group a change
-  /// opens (`beginUndoGrouping` at level 0 opens one too), so every call until the next event
-  /// would be one step. So at level 0 the change gets a plain group, with grouping by event off
-  /// just while it's open, and leaves nothing open. A group already open belongs to the undo
-  /// manager or a user's event, which close it (closing it here would make their close throw):
-  /// this waits a moment for that, then joins it, as a change of the user's would.
-  @discardableResult
-  private static func asOneUndoStep<T>(_ change: (UndoManager?) throws -> T) async rethrows -> T {
-    guard let undoManager = mainWindowUndoManager else { return try change(nil) }
+  /// Waits a moment for an undo group still open on the main window's undo manager (a user's
+  /// event's, which the undo manager closes itself: closing it here would make that close throw),
+  /// so the change after it can be a ⌘Z step of its own. Called before a tool reads the state it
+  /// changes, so an edit the user makes meanwhile isn't overwritten. Gives up when the call is
+  /// cancelled.
+  private static func settleUndo() async {
+    guard let undoManager = mainWindowUndoManager else { return }
     let deadline = Date().addingTimeInterval(0.3)
     while undoManager.groupingLevel > 0, Date() < deadline {
-      try? await Task.sleep(for: .milliseconds(5))
+      guard (try? await Task.sleep(for: .milliseconds(5))) != nil else { break }
     }
-    guard undoManager.groupingLevel == 0 else { return try change(undoManager) }
+  }
+
+  /// Makes `change` (which registers undo) a ⌘Z step of its own on the main window's undo
+  /// manager; call `settleUndo` first. It groups by event, and agent calls reach the main actor
+  /// through dispatch, not as events: with no user event between calls, AppKit never closes the
+  /// event group a change opens (`beginUndoGrouping` at level 0 opens one too), so every call
+  /// until the next event would be one step. So at level 0 the change gets a plain group, with
+  /// grouping by event off just while it's open, and leaves nothing open. In the rare case a
+  /// user's group is still open after `settleUndo`, the change joins it, keeping its name.
+  @discardableResult
+  private static func asOneUndoStep<T>(_ change: (UndoManager?) throws -> T) rethrows -> T {
+    guard let undoManager = mainWindowUndoManager else { return try change(nil) }
+    guard undoManager.groupingLevel == 0 else {
+      let name = undoManager.undoActionName
+      defer { undoManager.setActionName(name) }
+      return try change(undoManager)
+    }
     let groupsByEvent = undoManager.groupsByEvent
     undoManager.groupsByEvent = false
     undoManager.beginUndoGrouping()

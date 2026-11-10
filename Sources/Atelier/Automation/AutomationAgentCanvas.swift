@@ -115,7 +115,7 @@ extension Automation {
         "set_create_screen sets the size, mask blur and Merge into Image")
       // A reset and the edits after it in one call are one ⌘Z step.
       _ = try? await call("set_create_screen", ["reset_settings": true, "steps": 3])
-      let resetApplied = model.settings?.steps == 3 && model.settings?.width != Int(frame.width)
+      let resetApplied = model.settings?.steps == 3 && model.settings?.width == model.recommended?.width
       try? await Task.sleep(for: .milliseconds(20))
       undoManager.undo()
       check(
