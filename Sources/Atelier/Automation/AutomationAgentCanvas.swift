@@ -10,9 +10,13 @@ extension Automation {
   /// fields, the errors each gives, and one `generate` with use_canvas: a masked run that merges,
   /// follows the input step, is stored as two layers and leaves pixels away from the mask alone.
   /// The frame is set to the input's shape at about a quarter megapixel. Image models that edit at
-  /// Strength below 1. Prints PASS/FAIL lines.
+  /// Strength below 1. Then auto_mask: its errors, Vision finding no subject in the input, and on
+  /// `--subject-input` (an image with a subject at `--subject-point`, default 620,550) Vision's
+  /// subject, with and without the point, one undo step, and SAM 2.1 Small on the point when it's
+  /// installed (skipped otherwise). Prints PASS/FAIL lines.
   ///
-  ///   Atelier --agent-canvas-check --project NAME --input FILE [--model M] [--steps N] [--quit]
+  ///   Atelier --agent-canvas-check --project NAME --input FILE [--subject-input FILE]
+  ///           [--subject-point x,y] [--model M] [--steps N] [--quit]
   static func agentCanvasCheck(_ model: CreateModel, presets: PresetStore) {
     let args = CommandLine.arguments
     func value(_ name: String) -> String? {
@@ -365,6 +369,60 @@ extension Automation {
       let changed = difference(zoomedImage, image) { $0.x < width / 2 - margin && $0.y < height / 2 - margin }
       check(rest?.maxDelta == 0, "outside the region nothing changed (max delta \(rest?.maxDelta ?? -1))")
       check((changed?.meanDelta ?? 0) > 1, "the region changed (mean delta \(String(format: "%.1f", changed?.meanDelta ?? 0)))")
+
+      // auto_mask: errors first, on the input (which has no subject Vision finds).
+      _ = try? await call("set_canvas_image", ["image": "data:image/png;base64," + png.base64EncodedString()])
+      await expectError("auto_mask", ["text": "the sky"], "text prompt", "a text prompt")
+      await expectError("auto_mask", [:], "subject", "nothing to select with")
+      await expectError("auto_mask", ["subject": true, "box": ["x": 0, "y": 0, "width": 10, "height": 10]], "no box", "subject with a box")
+      await expectError("auto_mask", ["points": [["x": width + 5, "y": 5]]], "outside", "a point off the image")
+      await expectError("auto_mask", ["subject": true, "mode": "subtract"], "no mask to subtract", "subtract with no mask")
+      await expectError("auto_mask", ["subject": true, "size": "huge"], "size", "an unknown size")
+      await expectError("auto_mask", ["subject": true], "subject", "no subject in the input")
+      _ = try? await call("set_create_screen", ["canvas_mode": "generate"])
+      await expectError("auto_mask", ["subject": true], "canvas_mode", "Generate mode")
+      _ = try? await call("set_create_screen", ["canvas_mode": "edit"])
+      model.clearCanvas()
+      await expectError("auto_mask", ["subject": true], "set_canvas_image", "empty canvas")
+
+      // Vision's subject and SAM on an image with one.
+      let subjectPoint = value("--subject-point").map { $0.split(separator: ",").compactMap { Double($0) } }
+        .flatMap { $0.count == 2 ? CGPoint(x: $0[0], y: $0[1]) : nil } ?? CGPoint(x: 620, y: 550)
+      guard let subjectPath = value("--subject-input"), let subjectImage = ImageLoader.image(at: URL(fileURLWithPath: subjectPath)),
+            let subjectPNG = ImageTensor.png(subjectImage)
+      else {
+        print("SKIP auto_mask on a subject: no --subject-input")
+        return finish()
+      }
+      _ = try? await call("set_canvas_image", ["image": "data:image/png;base64," + subjectPNG.base64EncodedString()])
+      @MainActor func paintedAtPoint() -> Bool {
+        guard let mask = model.canvasMask, let image = model.image else { return false }
+        return mask.coverage(width: image.width, height: image.height)[Int(subjectPoint.y) * image.width + Int(subjectPoint.x)] != 0
+      }
+      var selected = try? await call("auto_mask", ["subject": true])
+      let selectedPixels = (selected?["selected_pixels"] as? NSNumber)?.intValue ?? 0
+      check(
+        selected?["has_mask"] as? Bool == true && selectedPixels > 0 && paintedAtPoint() && selected?["decode_ms"] is NSNumber,
+        "auto_mask subject masks the subject (\(selectedPixels) px, coverage \(selected?["coverage"] ?? "?"), \(selected?["decode_ms"] ?? "?") ms)")
+      check(undoManager.undoActionName == CreateModel.agentMaskActionName, "it's an “Agent Mask” undo step")
+      undoManager.undo()
+      check(model.canvasMask == nil, "⌘Z takes the auto mask away")
+      selected = try? await call("auto_mask", ["subject": true, "points": [["x": subjectPoint.x, "y": subjectPoint.y]]])
+      check(selected?["has_mask"] as? Bool == true && paintedAtPoint(), "auto_mask subject with a point masks the subject under it")
+      if SAMFiles.installed(.small) != nil {
+        selected = try? await call("auto_mask", ["points": [["x": subjectPoint.x, "y": subjectPoint.y]], "size": "small"])
+        let samPixels = (selected?["selected_pixels"] as? NSNumber)?.intValue ?? 0
+        check(
+          samPixels > 0 && paintedAtPoint() && selected?["score"] is NSNumber && selected?["selected_with"] as? String == "sam 2.1 small",
+          "auto_mask with SAM 2.1 Small on the point replaces the mask with its selection (\(samPixels) px, score \(selected?["score"] ?? "?"), encode \(selected?["encode_ms"] ?? "?") ms, decode \(selected?["decode_ms"] ?? "?") ms)")
+        selected = try? await call("auto_mask", ["points": [["x": subjectPoint.x, "y": subjectPoint.y]], "size": "small", "mode": "subtract"])
+        check(
+          !paintedAtPoint() && selected?["encode_ms"] is NSNull,
+          "subtracting the same selection takes it out, without encoding the image again (coverage \(selected?["coverage"] ?? "?"))")
+      } else {
+        print("SKIP auto_mask with SAM 2.1 Small: not installed")
+        await expectError("auto_mask", ["points": [["x": subjectPoint.x, "y": subjectPoint.y]], "size": "small"], "Select tool", "SAM not downloaded")
+      }
       finish()
     }
   }

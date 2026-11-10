@@ -238,6 +238,40 @@ final class AgentTools {
       "annotations": ["readOnlyHint": true],
     ],
     [
+      "name": "auto_mask",
+      "title": "Select what to mask",
+      "description": """
+        Selects part of the canvas image and puts it into the mask, as the Select tool does: \
+        `subject: true` picks the image's subject with Apple's Vision (with one point, the \
+        subject under it), needing no download; otherwise SAM 2.1 selects what `points` (each \
+        including, or with positive false excluding, what's under it) and a `box` outline. \
+        Coordinates are the canvas image's pixels from its top left. `mode` is replace (the \
+        default), add or subtract, as for set_canvas_mask. One ⌘Z step, “Agent Mask”. Returns \
+        get_canvas_mask's overlay and summary, plus selected_pixels, SAM's score and the time \
+        taken. There's no text prompt: to select by a description, look at the image \
+        (get_image) and pass a point on what you mean.
+        """,
+      "inputSchema": [
+        "type": "object",
+        "properties": [
+          "points": [
+            "type": "array",
+            "items": [
+              "type": "object", "required": ["x", "y"],
+              "properties": ["x": ["type": "number"], "y": ["type": "number"], "positive": ["type": "boolean", "description": "false excludes what's under it. Default true."]],
+            ],
+          ],
+          "box": [
+            "type": "object", "required": ["x", "y", "width", "height"],
+            "properties": ["x": ["type": "number"], "y": ["type": "number"], "width": ["type": "number"], "height": ["type": "number"]],
+          ],
+          "subject": ["type": "boolean", "description": "Select the subject with Vision instead of SAM: all subjects, or with one point the one under it. Takes no box."],
+          "mode": ["type": "string", "enum": ["replace", "add", "subtract"], "description": "Default replace."],
+          "size": ["type": "string", "enum": ["tiny", "small", "large"], "description": "Which SAM 2.1 to use. Default: the one picked in the Select tool (Small unless changed)."],
+        ],
+      ],
+    ],
+    [
       "name": "set_canvas_region",
       "title": "Choose the canvas region",
       "description": """
@@ -403,6 +437,7 @@ final class AgentTools {
     case "set_canvas_mask": return try await setCanvasMask(arguments)
     case "get_canvas_mask": return try getCanvasMask(arguments)
     case "set_canvas_region": return try await setCanvasRegion(arguments)
+    case "auto_mask": return try await autoMask(arguments)
     case "list_history": return try Self.textResult(json: listHistory(arguments))
     case "get_image": return try await getImage(arguments)
     case "generate": return try await startGenerate(arguments, progress: progress)
@@ -1194,7 +1229,127 @@ final class AgentTools {
     return points.dropFirst().reduce(CGRect(origin: first, size: .zero)) { $0.union(CGRect(origin: $1, size: .zero)) }
   }
 
-  private func getCanvasMask(_ arguments: [String: Any]) throws -> [String: Any] {
+  /// auto_mask: a selection by SAM 2.1 or Vision, put into the mask as one undo step.
+  private func autoMask(_ arguments: [String: Any]) async throws -> [String: Any] {
+    if arguments["text"] != nil || arguments["prompt"] != nil {
+      throw ToolError(
+        "auto_mask doesn't take a text prompt. Look at the image (get_image) and pass `points` on what you mean, a `box` around it, or `subject: true`.")
+    }
+    let image = try canvasImage()
+    guard create.canEditMask else { throw ToolError(maskUnavailableReason()) }
+    let modeName = arguments["mode"] as? String ?? "replace"
+    guard let mode = AutoMaskMode(rawValue: modeName) else {
+      throw ToolError("`mode` is \"replace\" (the default), \"add\" or \"subtract\".")
+    }
+    let imageRect = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+    let size = "\(image.width)×\(image.height)"
+    var points: [SAMSegmenter.Point] = []
+    for (index, entry) in (arguments["points"] as? [Any] ?? []).enumerated() {
+      guard let point = entry as? [String: Any], let x = Self.double(point["x"]), let y = Self.double(point["y"]) else {
+        throw ToolError("Point \(index + 1) needs x and y.")
+      }
+      let location = CGPoint(x: x, y: y)
+      guard imageRect.contains(location) else {
+        throw ToolError("Point \(index + 1) is outside the \(size) canvas image (its pixels from the top left).")
+      }
+      points.append(SAMSegmenter.Point(location: location, positive: point["positive"] as? Bool ?? true))
+    }
+    var box: CGRect?
+    if let value = arguments["box"] {
+      guard let object = value as? [String: Any], let x = Self.double(object["x"]), let y = Self.double(object["y"]),
+            let width = Self.double(object["width"]), let height = Self.double(object["height"])
+      else { throw ToolError("`box` is {\"x\", \"y\", \"width\", \"height\"} in the canvas image's pixels.") }
+      guard width > 0, height > 0 else { throw ToolError("`box` has no size: width and height must be above 0.") }
+      let rect = CGRect(x: x, y: y, width: width, height: height).intersection(imageRect)
+      guard !rect.isNull, rect.width > 0, rect.height > 0 else {
+        throw ToolError("`box` doesn't overlap the \(size) canvas image.")
+      }
+      box = rect
+    }
+    let subject = arguments["subject"] as? Bool == true
+    if subject {
+      guard box == nil, points.count <= 1, points.first?.positive != false else {
+        throw ToolError("`subject` takes at most one point, to pick the subject under it, and no box. For points and boxes, leave out `subject` (SAM 2.1).")
+      }
+    } else if points.isEmpty, box == nil {
+      throw ToolError("Pass `points`, a `box`, or `subject: true`.")
+    }
+    let samSize = try (arguments["size"] as? String).map { name in
+      guard let size = SAMFiles.Size(rawValue: name) else { throw ToolError("`size` is \"tiny\", \"small\" or \"large\".") }
+      return size
+    } ?? create.autoMask.size
+    if !subject, SAMFiles.installed(samSize) == nil {
+      throw ToolError(
+        "SAM 2.1 \(samSize.title) isn't downloaded. Ask the user to download it in Atelier: on the Create screen pick the Select tool (the wand beside Brush and Eraser) and use the download in its bar. Or use `subject: true`, which needs no download.")
+    }
+    if mode == .subtract {
+      guard create.canvasMask != nil else {
+        throw ToolError("There's no mask to subtract from. Select with mode replace or add first, or paint one with set_canvas_mask.")
+      }
+    } else if !create.canPaintMask {
+      throw ToolError(
+        "\(create.runTargetServerName ?? "The server") can't take masks: its Atelier is older. Run on this device (Run on in the app).")
+    }
+
+    let selection: AutoMaskSelection
+    var extra: [String: Any] = [:]
+    do {
+      if subject {
+        let (picked, time) = try await create.subjectSelection(at: points.first?.location)
+        selection = picked
+        extra["decode_ms"] = Self.milliseconds(time)
+        extra["encode_ms"] = NSNull()
+        extra["score"] = NSNull()
+      } else {
+        let (picked, result) = try await create.samSelection(SAMSegmenter.Prompt(points: points, box: box), size: samSize)
+        selection = picked
+        extra["score"] = Double(result.score)
+        extra["encode_ms"] = result.encodeTime.map(Self.milliseconds) ?? NSNull()
+        extra["decode_ms"] = Self.milliseconds(result.decodeTime)
+      }
+    } catch let error as SubjectMask.Failure {
+      throw ToolError(
+        error.localizedDescription + " Try `subject: true` without a point, or select with SAM 2.1 (`points` or a `box`).")
+    } catch let error as AutoMaskError {
+      throw ToolError(Self.hint(for: error))
+    }
+    guard selection.selectedPixels > 0 else {
+      throw ToolError("Nothing was selected. Try another point, add a box, or use `subject: true`.")
+    }
+    extra["selected_pixels"] = selection.selectedPixels
+    extra["selected_with"] = subject ? "vision" : "sam 2.1 \(samSize.rawValue)"
+    // After the selection (which can take seconds), before the mask it builds on is read.
+    await Self.settleUndo()
+    let committed = Self.asOneUndoStep {
+      create.commitAutoMask(selection, mode: mode, actionName: CreateModel.agentMaskActionName, undoManager: $0)
+    }
+    guard committed else {
+      throw ToolError(
+        create.image !== selection.image
+          ? "The canvas changed while selecting. Call auto_mask again."
+          : mode == .subtract ? "There's no mask to subtract from any more." : maskUnavailableReason())
+    }
+    return try getCanvasMask(["view": "overlay"], extra: extra)
+  }
+
+  private static func hint(for error: AutoMaskError) -> String {
+    switch error {
+    case .notDownloaded(let size):
+      "SAM 2.1 \(size.title) isn't downloaded. Ask the user to download it from the Select tool's bar in Atelier, or use `subject: true`."
+    case .noMaskToSubtract: "There's no mask to subtract from. Select with mode replace or add first."
+    case .imageChanged: "The canvas changed while selecting. Call auto_mask again."
+    case .cannotPaint: "The mask can't be changed now: put an image on the canvas with set_canvas_image, in Edit mode, with an image model."
+    case .emptyPrompt: "Pass `points`, a `box`, or `subject: true`."
+    case .nothingSelected: "Nothing was selected. Try another point, add a box, or use `subject: true`."
+    }
+  }
+
+  private static func milliseconds(_ duration: Duration) -> Double {
+    (Double(duration.components.seconds) + Double(duration.components.attoseconds) / 1e18) * 1000
+  }
+
+  /// get_canvas_mask, and auto_mask's answer with its own fields (`extra`) in the summary.
+  private func getCanvasMask(_ arguments: [String: Any], extra: [String: Any] = [:]) throws -> [String: Any] {
     let image = try canvasImage()
     let view = arguments["view"] as? String ?? "overlay"
     guard ["overlay", "mask", "both"].contains(view) else { throw ToolError("`view` is \"overlay\" (the default), \"mask\" or \"both\".") }
@@ -1209,7 +1364,7 @@ final class AgentTools {
       guard let mask = (create.canvasMask ?? CanvasMask()).image(sourceSize: sourceSize) else { throw ToolError("Couldn't draw the mask.") }
       views.append(("mask", mask))
     }
-    var summary = maskSummary()
+    var summary = maskSummary().merging(extra) { _, new in new }
     if let saveTo = arguments["save_to"] as? String {
       var saved: [String: String] = [:]
       for entry in views {
