@@ -24,7 +24,8 @@ import SwiftUI
 /// `--styles-check` reads a style file (AutomationStyles.swift).
 ///
 /// `--project-check` exercises the project format on a scratch project, and `--edit-input-check`
-/// Use Settings on Edit steps (AutomationProject.swift). `--queue-check` runs the queue
+/// Use Settings on Edit steps (AutomationProject.swift). `--refine-check` refines part of an image
+/// and merges it back (AutomationRefine.swift). `--queue-check` runs the queue
 /// (AutomationQueue.swift).
 @MainActor
 enum Automation {
@@ -37,7 +38,7 @@ enum Automation {
   nonisolated static var isRequested: Bool {
     let flags = [
       "--show", "--resize-bench", "--inspector-check", "--library-check", "--project-check",
-      "--reuse", "--generate", "--ux-check", "--edit-input-check", "--queue-check",
+      "--reuse", "--generate", "--ux-check", "--edit-input-check", "--refine-check", "--queue-check",
       "--timeline-check", "--upscale-check", "--timeline-export-check", "--flashvsr-check",
       "--model-folders-check", "--styles-check", "--cleanup-check", "--engine-check", "--playback-check",
       "--remote-check", "--remote-net-check", "--remote-shots", "--remote-url-check", "--remote-tailnet-check",
@@ -83,6 +84,10 @@ enum Automation {
     }
     if args.contains("--edit-input-check") {
       editInputCheck(model)
+      return
+    }
+    if args.contains("--refine-check") {
+      refineCheck(model)
       return
     }
     if args.contains("--queue-check") {

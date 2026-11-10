@@ -23,6 +23,10 @@ nonisolated struct RemoteClientJob: Codable, Hashable, Sendable {
   var moodboardWeights: [Float] = []
   /// Where a run from a timeline frame goes.
   var placement: TimelinePlacement?
+  /// The canvas mask's codes, beside it as `-mask.png`.
+  var hasMask: Bool? = nil
+  /// How the result merges into its source image, beside it as `-source.png`.
+  var merge: RefineMerge.Record? = nil
 }
 
 nonisolated struct RemoteClientJobs: Sendable {
@@ -44,10 +48,12 @@ nonisolated struct RemoteClientJobs: Sendable {
       negativePrompt: request.negativePrompt, seed: request.seed, settings: JSONValue.fields(of: settings),
       parentTensorId: request.parentTensorId, hasCanvas: request.canvas != nil, canvasTensorId: request.canvasTensorId,
       canvasIsImported: request.canvasIsImported, moodboardWeights: request.moodboard.map(\.weight),
-      placement: request.placement)
+      placement: request.placement, hasMask: request.mask != nil, merge: request.merge?.record)
     Log.attempt(Log.remote, "Keeping a remote job") {
       try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
       if let canvas = request.canvas { try ImageTensor.png(canvas)?.write(to: url(job, "-canvas.png")) }
+      if let mask = request.mask { try mask.write(to: url(job, "-mask.png")) }
+      if let source = request.merge?.source { try ImageTensor.png(source)?.write(to: url(job, "-source.png")) }
       for (index, reference) in request.moodboard.enumerated() {
         try ImageTensor.png(reference.image)?.write(to: url(job, "-moodboard-\(index).png"))
       }
@@ -65,6 +71,14 @@ nonisolated struct RemoteClientJobs: Sendable {
 
   func canvas(of job: RemoteClientJob) -> CGImage? {
     job.hasCanvas ? ImageLoader.image(at: url(job.jobID, "-canvas.png")) : nil
+  }
+
+  func mask(of job: RemoteClientJob) -> Data? {
+    job.hasMask == true ? try? Data(contentsOf: url(job.jobID, "-mask.png")) : nil
+  }
+
+  func mergeSource(of job: RemoteClientJob) -> CGImage? {
+    job.merge != nil ? ImageLoader.image(at: url(job.jobID, "-source.png")) : nil
   }
 
   func moodboard(of job: RemoteClientJob) -> [GenerationEngine.Reference] {

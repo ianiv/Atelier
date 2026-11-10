@@ -155,6 +155,18 @@ struct CanvasView: View {
   @State private var droppedVideo: DroppedVideo?
   @State private var videoError: String?
   @Environment(\.undoManager) private var undoManager
+  /// The brush stroke being drawn, in image pixels, until it's added to the mask.
+  @State private var liveStroke: CanvasMask.Stroke?
+  /// The red tint of the canvas mask, redrawn when the mask changes.
+  @State private var maskTint: CGImage?
+  #if os(macOS)
+    /// Space is held: a drag moves the image whatever the tool.
+    @State private var spaceDown = false
+    @FocusState private var canvasFocused: Bool
+  #else
+    /// Where each finger's drag began, for moving with one finger.
+    @State private var touchStart: CGPoint?
+  #endif
 
   private static let margin: Double = 24
 
@@ -208,6 +220,12 @@ struct CanvasView: View {
             .opacity(0.45)
           picture
             .mask { Rectangle().frame(width: frameRect.width, height: frameRect.height).position(x: frameRect.midX, y: frameRect.midY) }
+          if model.canvasShowsImage {
+            maskOverlay(imageSize: CGSize(width: image.width, height: image.height), scale: zoom * points)
+              .frame(width: size.width, height: size.height)
+              .position(center)
+              .allowsHitTesting(false)
+          }
         }
         let isInput = model.effectiveCanvasMode == .edit && model.image != nil && model.canvasClip == nil
         Rectangle()
@@ -221,16 +239,19 @@ struct CanvasView: View {
           Color.clear
             .frame(width: frameRect.width, height: frameRect.height)
             .overlay(alignment: .topLeading) {
-              Label("Input", systemImage: "square.and.pencil")
-                .font(.caption.weight(.medium))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .glassEffect(.regular.tint(.accentColor), in: .capsule)
-                .padding(8)
-                .help("Edit mode: what's inside the frame is sent to the model. Empty areas are filled in.")
+              HStack(spacing: 6) {
+                Label("Input", systemImage: "square.and.pencil")
+                  .font(.caption.weight(.medium))
+                  .padding(.horizontal, 8)
+                  .padding(.vertical, 4)
+                  .glassEffect(.regular.tint(.accentColor), in: .capsule)
+                  .help("Edit mode: what's inside the frame is sent to the model. Empty areas are filled in; with a mask, only the painted area changes.")
+                  .allowsHitTesting(false)
+                MergeIntoImageToggle()
+              }
+              .padding(8)
             }
             .position(x: frameRect.midX, y: frameRect.midY)
-            .allowsHitTesting(false)
         }
         if model.layout != nil {
           LayoutCanvas(size: frameRect.size)
@@ -250,29 +271,40 @@ struct CanvasView: View {
       .clipped()
       .contentShape(.rect)
       .gesture(
-        panGesture(canvas, points: points)
+        dragGesture(canvas, points: points, center: center, zoom: zoom)
           .simultaneously(with: zoomGesture(canvas, frame: frameRect, points: points, in: geometry.size)))
-      .onTapGesture(count: 2) {
-        if canvas.scale == nil { canvas.zoom(to: 1) } else { canvas.zoomToFit() }
-      }
-      // The margin around a video offers its menu too, not the image one.
-      .contextMenu {
-        if let clip = model.canvasClip {
-          CanvasClipMenu(item: clip, playback: model.canvasPlayback)
-        } else {
-          contextMenu(canvas)
+      #if os(macOS)
+        .focusable(model.canPaintMask)
+        .focusEffectDisabled()
+        .focused($canvasFocused)
+        .onKeyPress(.space, phases: .all) { press in
+          spaceDown = press.phase != .up
+          return .handled
         }
-      }
-      .onDrop(of: CanvasDrop.types, isTargeted: $isTargeted) { providers in
-        guard let provider = providers.first else { return false }
-        open(dropped: provider)
-        return true
-      }
-      .onChange(of: imageFit, initial: true) { canvas.fitScale = imageFit }
+      #endif
+        .onTapGesture(count: 2) {
+          if canvas.scale == nil { canvas.zoom(to: 1) } else { canvas.zoomToFit() }
+        }
+        // The margin around a video offers its menu too, not the image one.
+        .contextMenu {
+          if let clip = model.canvasClip {
+            CanvasClipMenu(item: clip, playback: model.canvasPlayback)
+          } else {
+            contextMenu(canvas)
+          }
+        }
+        .onDrop(of: CanvasDrop.types, isTargeted: $isTargeted) { providers in
+          guard let provider = providers.first else { return false }
+          open(dropped: provider)
+          return true
+        }
+        .onChange(of: imageFit, initial: true) { canvas.fitScale = imageFit }
     }
     .background(Color.underPageBackground.ignoresSafeArea())
-    // A new image starts fitted to the frame.
-    .onChange(of: model.imageItem?.tensorId) { canvas.zoomToFit() }
+    // A new image starts fitted to the frame, unless it keeps a refined region in view.
+    .onChange(of: model.imageItem?.tensorId) { model.placeNewCanvasImage() }
+    .onChange(of: model.canvasMask, initial: true) { updateMaskTint() }
+    .onChange(of: model.image.map(ObjectIdentifier.init)) { updateMaskTint() }
     .alert(
       "Couldn't save the image",
       isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } }),
@@ -311,17 +343,115 @@ struct CanvasView: View {
     return CGSize(width: 1024, height: 1024)
   }
 
-  private func panGesture(_ canvas: CanvasState, points: Double) -> some Gesture {
-    DragGesture(minimumDistance: 2)
-      .onChanged { value in
-        let start = gestureStart ?? (canvas.effectiveScale, canvas.offset)
-        gestureStart = start
-        canvas.scale = start.scale
-        canvas.offset = CGSize(
-          width: start.offset.width + value.translation.width / points,
-          height: start.offset.height + value.translation.height / points)
+  /// Moves the image by `translation` (view points) from where the drag began.
+  private func pan(_ canvas: CanvasState, by translation: CGSize, points: Double) {
+    let start = gestureStart ?? (canvas.effectiveScale, canvas.offset)
+    gestureStart = start
+    canvas.scale = start.scale
+    canvas.offset = CGSize(
+      width: start.offset.width + translation.width / points,
+      height: start.offset.height + translation.height / points)
+  }
+
+  /// The image pixel under `location` (view points).
+  private func imagePoint(_ location: CGPoint, center: CGPoint, zoom: Double, points: Double) -> CGPoint? {
+    guard let image = model.image else { return nil }
+    let perPixel = zoom * points
+    return CGPoint(
+      x: (location.x - center.x) / perPixel + Double(image.width) / 2,
+      y: (location.y - center.y) / perPixel + Double(image.height) / 2)
+  }
+
+  /// Extends the stroke being painted (or starts one) at `location`.
+  private func paint(at location: CGPoint, erases: Bool, center: CGPoint, zoom: Double, points: Double) {
+    guard let point = imagePoint(location, center: center, zoom: zoom, points: points) else { return }
+    if liveStroke == nil {
+      // The brush is sized in frame pixels, so it covers the same part of the frame at any zoom.
+      liveStroke = CanvasMask.Stroke(kind: .brush, radius: model.brushSize / 2 / zoom, erases: erases)
+    }
+    liveStroke?.points.append(point)
+  }
+
+  private func endStroke() {
+    if let stroke = liveStroke { model.addMaskStrokes([stroke], undoManager: undoManager) }
+    liveStroke = nil
+  }
+
+  #if os(macOS)
+    /// A drag paints with Brush or Eraser and moves the image with Move or while Space is held.
+    private func dragGesture(_ canvas: CanvasState, points: Double, center: CGPoint, zoom: Double) -> some Gesture {
+      let paints = model.canPaintMask && model.canvasTool != .move
+      return DragGesture(minimumDistance: paints ? 0 : 2)
+        .onChanged { value in
+          if paints, !spaceDown, gestureStart == nil {
+            canvasFocused = true
+            paint(at: value.location, erases: model.canvasTool == .eraser, center: center, zoom: zoom, points: points)
+          } else if liveStroke == nil {
+            pan(canvas, by: value.translation, points: points)
+          }
+        }
+        .onEnded { _ in
+          gestureStart = nil
+          endStroke()
+        }
+    }
+  #else
+    /// Apple Pencil paints (Eraser erases), whatever the tool; one finger moves the image, and two
+    /// zoom (`zoomGesture`).
+    private func dragGesture(_ canvas: CanvasState, points: Double, center: CGPoint, zoom: Double) -> some Gesture {
+      SpatialEventGesture()
+        .onChanged { events in
+          let active = events.filter { $0.phase == .active }
+          if let pencil = active.first(where: { $0.kind == .pencil }) {
+            guard model.canPaintMask else { return }
+            paint(at: pencil.location, erases: model.canvasTool == .eraser, center: center, zoom: zoom, points: points)
+          } else if active.count == 1, let touch = active.first, liveStroke == nil {
+            let start = touchStart ?? touch.location
+            touchStart = start
+            pan(canvas, by: CGSize(width: touch.location.x - start.x, height: touch.location.y - start.y), points: points)
+          } else {
+            touchStart = nil
+          }
+          if events.contains(where: { $0.kind == .pencil && $0.phase != .active }) { endStroke() }
+        }
+        .onEnded { _ in
+          gestureStart = nil
+          touchStart = nil
+          endStroke()
+        }
+    }
+  #endif
+
+  /// The mask in red over the image, with the stroke being painted.
+  private func maskOverlay(imageSize _: CGSize, scale: Double) -> some View {
+    ZStack {
+      if let maskTint {
+        Image(decorative: maskTint, scale: 1)
+          .resizable()
+          .interpolation(.none)
       }
-      .onEnded { _ in gestureStart = nil }
+      if let liveStroke {
+        Canvas { context, _ in
+          var path = Path()
+          let points = liveStroke.points.map { CGPoint(x: $0.x * scale, y: $0.y * scale) }
+          if points.count == 1, let point = points.first {
+            let r = liveStroke.radius * scale
+            path.addEllipse(in: CGRect(x: point.x - r, y: point.y - r, width: 2 * r, height: 2 * r))
+            context.fill(path, with: .color(liveStroke.erases ? .white.opacity(0.5) : .red.opacity(0.45)))
+          } else {
+            path.addLines(points)
+            context.stroke(
+              path, with: .color(liveStroke.erases ? .white.opacity(0.5) : .red.opacity(0.45)),
+              style: StrokeStyle(lineWidth: liveStroke.radius * 2 * scale, lineCap: .round, lineJoin: .round))
+          }
+        }
+      }
+    }
+  }
+
+  private func updateMaskTint() {
+    guard let image = model.image, let mask = model.canvasMask else { return maskTint = nil }
+    maskTint = mask.tint(sourceSize: CGSize(width: image.width, height: image.height))
   }
 
   /// Pinch zoom, keeping the image point under the fingers in place.
@@ -631,6 +761,7 @@ struct StatusBar: View {
         ModelStatus(model: download, library: library).frame(maxWidth: 160)
       }
       QueueStatus()
+      CanvasToolControls()
       ZoomControls(canvas: model.canvas)
     }
     .font(.callout)

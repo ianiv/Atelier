@@ -284,6 +284,11 @@ nonisolated struct RemoteBackend: GenerationBackend {
       blobs.append(blob)
       remote.canvas = blob.hash
       remote.canvasIsImported = request.canvasIsImported
+      if let mask = request.mask {
+        let maskBlob = RemoteBlob(mask)
+        blobs.append(maskBlob)
+        remote.mask = maskBlob.hash
+      }
     }
     for reference in request.moodboard {
       guard let png = ImageTensor.png(reference.image) else { throw ProjectError.badImage }

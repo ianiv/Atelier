@@ -22,7 +22,7 @@ Ratings are saved in the project, so they stay with the image when you branch fr
 
 ## Reusing an image
 
-- **Use Settings** (or double-click the image) loads the image's model, prompt, seed and every setting into Create. The seed is kept, so generating again reproduces the image. If the image was made with Edit, its input image is put back on the canvas in Edit mode as well, and its moodboard is restored.
+- **Use Settings** (or double-click the image) loads the image's model, prompt, seed and every setting into Create. The seed is kept, so generating again reproduces the image. If the image was made with Edit, its input image is put back on the canvas in Edit mode as well, and its moodboard is restored. For an image made by refining part of its input and merging the result back ([Refining part of an image](creating-images.md#refining-part-of-an-image)), the input comes back zoomed on the same region, with its mask.
 - **Rerun with New Seed** does the same with a fresh seed, for a variation.
 - If the model that made an image isn't downloaded anymore, History says so and Use Settings is unavailable.
 

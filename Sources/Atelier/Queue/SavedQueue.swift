@@ -30,6 +30,10 @@ nonisolated enum SavedQueue {
     var imageUpscale: ImageUpscale?
     /// Where it runs. Optional because queues saved before there was a choice don't have it.
     var target: JobTarget?
+    /// The canvas mask's codes, beside it as `-mask.png` (`Request.mask`).
+    var hasMask: Bool?
+    /// How the result merges back into its source image, which is beside it as `-source.png`.
+    var merge: RefineMerge.Record?
   }
 
   /// A saved job, before its settings are put back on its model's defaults.
@@ -38,6 +42,8 @@ nonisolated enum SavedQueue {
     var settings: [String: JSONValue]
     fileprivate var entry: Entry
     fileprivate var canvas: CGImage?
+    fileprivate var mask: Data?
+    fileprivate var mergeSource: CGImage?
     fileprivate var moodboard: [GenerationEngine.Reference]
     fileprivate var sameProject: Bool
 
@@ -53,6 +59,11 @@ nonisolated enum SavedQueue {
       if canvas != nil {
         request.canvasTensorId = sameProject ? entry.canvasTensorId : nil
         request.canvasIsImported = entry.canvasIsImported
+        request.mask = mask
+        if let record = entry.merge, let mergeSource {
+          request.merge = RefineMerge(record: record, source: mergeSource, sameProject: sameProject)
+          request.canvasTensorId = request.merge?.sourceTensorId
+        }
       }
       request.moodboard = moodboard
       request.audio = entry.audio.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
@@ -90,6 +101,17 @@ nonisolated enum SavedQueue {
           try png.write(to: folder.appending(path: "\(job.id)-canvas.png"))
         }
       }
+      if let mask = request.mask {
+        Log.attempt(Log.queue, "Saving a queued job's mask") {
+          try mask.write(to: folder.appending(path: "\(job.id)-mask.png"))
+        }
+      }
+      if let merge = request.merge {
+        guard let png = ImageTensor.png(merge.source) else { continue }
+        Log.attempt(Log.queue, "Saving a queued job's source image") {
+          try png.write(to: folder.appending(path: "\(job.id)-source.png"))
+        }
+      }
       for (index, reference) in request.moodboard.enumerated() {
         Log.attempt(Log.queue, "Saving a queued job's moodboard") {
           try ImageTensor.png(reference.image)?.write(to: folder.appending(path: "\(job.id)-moodboard-\(index).png"))
@@ -104,7 +126,7 @@ nonisolated enum SavedQueue {
           canvasTensorId: request.canvasTensorId, canvasIsImported: request.canvasIsImported,
           moodboardWeights: request.moodboard.map(\.weight), audio: request.audio,
           placement: request.placement, upscale: request.upscale, imageUpscale: request.imageUpscale,
-          target: job.target))
+          target: job.target, hasMask: request.mask != nil, merge: request.merge?.record))
     }
     if let data = try? JSONEncoder().encode(entries) {
       Log.attempt(Log.queue, "Saving the queue") {
@@ -126,13 +148,17 @@ nonisolated enum SavedQueue {
         canvas = ImageLoader.image(at: folder.appending(path: "\(entry.id)-canvas.png"))
         if canvas == nil { return nil }
       }
+      let mask = entry.hasMask == true ? try? Data(contentsOf: folder.appending(path: "\(entry.id)-mask.png")) : nil
+      if entry.hasMask == true, mask == nil { return nil }
+      let mergeSource = entry.merge != nil ? ImageLoader.image(at: folder.appending(path: "\(entry.id)-source.png")) : nil
+      if entry.merge != nil, mergeSource == nil { return nil }
       let moodboard = entry.moodboardWeights.enumerated().compactMap { index, weight in
         ImageLoader.image(at: folder.appending(path: "\(entry.id)-moodboard-\(index).png"))
           .map { GenerationEngine.Reference(image: $0, weight: weight) }
       }
       return Job(
-        model: entry.model, settings: entry.settings, entry: entry, canvas: canvas,
-        moodboard: moodboard, sameProject: entry.project == project)
+        model: entry.model, settings: entry.settings, entry: entry, canvas: canvas, mask: mask,
+        mergeSource: mergeSource, moodboard: moodboard, sameProject: entry.project == project)
     }
     try? FileManager.default.removeItem(at: folder)
     return jobs

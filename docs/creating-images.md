@@ -125,6 +125,18 @@ Bringing in an image switches to Edit for you. Ways to bring one in:
 - **Image ▸ Open Image…** (⌘O), **Open from Photos…** or **Paste Image** (⇧⌘V). A photo saved by Atelier or Draw Things keeps its settings.
 - Right-click a recent image and choose **Use as Input**.
 
+### Refining part of an image
+
+Like Draw Things, you can redo just part of an image and have the result go back into it.
+
+- **Pick the region** by zooming and moving the image under the frame. The frame shows what the model works on, at the output size, so zooming in on a face gives the model more pixels for it.
+- **Paint a mask** to change only some of it. The tools sit in the status bar beside the zoom controls: **Move**, **Brush** and **Eraser**, the brush size (in frame pixels), **Invert Mask** and **Clear Mask**. On the Mac, drag with Brush or Eraser to paint, and hold Space while dragging to move the image. On iPad, Apple Pencil always paints (or erases, with Eraser selected) and your fingers move and zoom. Each stroke can be undone (⌘Z). Painted areas show in red. With a mask, Edit works even at 100% Strength: the painted area is made fresh and the rest is kept.
+- **Merge into Image**, next to the **Input** badge, is on by default. It's enabled when the frame shows part of the image, reaches past its edges, or there's a mask. The result is then put back into the whole image at the image's own resolution: through the mask, softened by **Mask Blur** and grown by **Mask Blur Outset** (in the inspector's Image to Image section), or without a mask, the whole frame with its edges blended over Mask Blur pixels. Parts of the image the mask doesn't reach stay exactly as they were. If the frame reaches past the image, the image grows to hold both. Turn it off to save just what's in the frame, as before.
+
+The mask stays on the canvas after a run, so you can refine again, and is cleared when another image goes on the canvas. Masks and merging aren't used with video models.
+
+When the image grows, the corners neither the image nor the frame covered are saved black: Draw Things' project format keeps each image without transparency. Fill them with another Edit run.
+
 ### Settings from an image
 
 Images made by Draw Things carry their prompt, model, seed and settings, and so do images Atelier saves. When an image you bring in has them, the status bar says so. Images made in Atelier have them too, whether they're on the canvas after a run or picked in History or the recent strip, so you can get an image's settings back after changing the inspector. A video frame put on the canvas with **Use This Frame as Input** has the video's settings. Choose **Load Settings from Image** (canvas right-click menu, or the **Image** menu) to load the prompt, negative prompt, model, seed and every setting, on top of the model's defaults like **Paste Settings**. If the image's model isn't downloaded, the settings apply to the current model. The **Random** seed checkbox stays as it is, so with Random on the next image still gets a new seed.

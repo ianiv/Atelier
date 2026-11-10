@@ -213,6 +213,10 @@ final class CreateModel {
       if request.canvas != nil {
         request.canvasTensorId = sameProject ? record.canvasTensorId : nil
         request.canvasIsImported = record.canvasIsImported
+        request.mask = clientJobs.mask(of: record)
+        if let merge = record.merge, let source = clientJobs.mergeSource(of: record) {
+          request.merge = RefineMerge(record: merge, source: source, sameProject: sameProject)
+        }
       }
       request.moodboard = clientJobs.moodboard(of: record)
       request.placement = sameProject ? record.placement : nil
@@ -335,6 +339,23 @@ final class CreateModel {
   private static var storedCanvasMode: CanvasMode {
     UserDefaults.standard.string(forKey: "canvasMode").flatMap(CanvasMode.init(rawValue:)) ?? .generate
   }
+  /// The inpainting mask painted on the canvas image (`CanvasTools.swift` changes it).
+  var canvasMask: CanvasMask?
+  /// What a drag on the canvas does (on iPad the Pencil always paints and fingers move it).
+  var canvasTool = CanvasTool.move
+  /// The brush's width in frame pixels.
+  var brushSize = UserDefaults.standard.object(forKey: "brushSize") as? Double ?? 64 {
+    didSet { UserDefaults.standard.set(brushSize, forKey: "brushSize") }
+  }
+  /// Merge into Image: an Edit run on part of the image, past its edges or with a mask merges
+  /// its result back into the whole image (`RefineMerge`) instead of saving the frame alone.
+  var mergeIntoImage = UserDefaults.standard.object(forKey: "mergeIntoImage") as? Bool ?? true {
+    didSet { UserDefaults.standard.set(mergeIntoImage, forKey: "mergeIntoImage") }
+  }
+  /// The zoom and offset to give the image with this tensor once it lands on the canvas, instead
+  /// of fitting it: a merged result keeps the refined region in the frame, and Use Settings puts
+  /// a refine step's input back as it was.
+  var pendingCanvasPlacement: (tensorId: Int64, scale: Double?, offset: CGSize)?
   /// The canvas image came from outside the project (drop, paste, Open), not yet saved as a step.
   private var canvasIsImported = false
   /// The generation settings an imported canvas image carries, with that image.
@@ -380,12 +401,24 @@ final class CreateModel {
       imageIsPreview = false
       showsFrame = false
       canvasImageLoad = nil
+      // The mask belongs to the image it was painted on (as in Draw Things, it stays through a
+      // run whose result merges back, see `keepsMaskOnce`).
+      if keepsMaskOnce {
+        keepsMaskOnce = false
+      } else {
+        canvasMask = nil
+      }
     }
   }
+  /// The next image to land keeps `canvasMask` (a merged result, or Use Settings restoring one).
+  var keepsMaskOnce = false
   /// The load the canvas is waiting on. Decoding a large image (an upscale, say) can take seconds,
   /// with the old image still showing. A newer load, or anything else landing on the canvas,
   /// takes over, so a slow older load can't end the wait for the newer one.
   private var canvasImageLoad: UUID?
+  /// The canvas shows a finished image of its own (not a step preview or a playing clip): the one
+  /// a mask is painted on.
+  var canvasShowsImage: Bool { image != nil && !imageIsPreview && canvasClip == nil }
   /// An image is on its way to the canvas and no preview has taken its place.
   var isLoadingCanvasImage: Bool { canvasImageLoad != nil && !imageIsPreview }
   /// The canvas shows one frame of a clip (`useFrame`), not the clip playing.
@@ -707,9 +740,13 @@ final class CreateModel {
     }
   }
 
-  /// Whether Edit means anything: the model reads the canvas as a reference, or Strength is below
-  /// 100% so any model starts from it.
-  var canEdit: Bool { usesReferences || videoModel?.needsImage == true || (settings?.strength ?? 1) < 1 }
+  /// Whether Edit means anything: the model reads the canvas as a reference, Strength is below
+  /// 100% so any model starts from it, or a mask is painted (inpainting regenerates it at any
+  /// Strength, as in Draw Things).
+  var canEdit: Bool {
+    usesReferences || videoModel?.needsImage == true || (settings?.strength ?? 1) < 1
+      || (videoModel == nil && canvasMask?.mayHavePaint == true)
+  }
   /// The mode runs use: Generate while Edit means nothing, keeping the chosen mode for when it does.
   /// A model that only animates an image (LongCat, Stable Video) has no Generate to fall back to.
   var effectiveCanvasMode: CanvasMode {
@@ -1041,7 +1078,17 @@ final class CreateModel {
           imageStep = (projectName, inputTensorId)
           history.setCurrent(tensorId: inputTensorId)
           image = input.image
-          canvas.zoomToFit()
+          if let refine = item.sidecar.refine, refine.offset.count == 2 {
+            // A refined region merged back: the frame on that region again, with its mask.
+            let offset = CGSize(width: refine.offset[0], height: refine.offset[1])
+            canvas.scale = refine.scale
+            canvas.offset = offset
+            pendingCanvasPlacement = (inputTensorId, refine.scale, offset)
+            canvasMask = refine.mask
+            mergeIntoImage = true
+          } else {
+            canvas.zoomToFit()
+          }
           canvasMode = .edit
           return
         }
@@ -1365,10 +1412,12 @@ final class CreateModel {
     seed = UInt32.random(in: 0...UInt32.max)
   }
 
-  /// Queues `count` images of the prompt; runs right away when nothing else is.
-  func generate() {
-    guard canGenerate, let model = selectedModel, let settings else { return }
-    statusNote = nil
+  /// The request Generate would queue now, from the Create screen: the model, styled prompts,
+  /// seed, settings, moodboard, and in Edit mode the canvas frame (with its mask, and how to merge
+  /// the result back, see `setRefineInputs`). Agents start from it too. Nil without a model or
+  /// settings. The seed is the screen's; Generate rolls or counts it per image.
+  func screenRequest() -> GenerationEngine.Request? {
+    guard let model = selectedModel, let settings else { return nil }
     // Each job snapshots the settings, canvas and moodboard, so edits made after queuing it apply
     // to the next one.
     let styled = styledPrompts
@@ -1377,21 +1426,13 @@ final class CreateModel {
       configuration: settings)
     // A clip playing on the canvas isn't an input: Use Last Frame as Input picks a frame.
     if effectiveCanvasMode == .edit, canvasClip == nil, let source = canvasSource {
-      let size = CGSize(width: settings.width, height: settings.height)
-      let placement = CanvasState()
-      placement.scale = source.scale
-      placement.offset = source.offset
-      base.canvas = placement.render(source.image, size: size)
-      base.canvasIsImported = source.isImported
-      base.canvasKey =
-        "\(ObjectIdentifier(source.image)) \(source.scale ?? 0) \(source.offset) \(settings.width)x\(settings.height)"
-      // The canvas is exactly its step's image when that's fitted at the output size.
-      if !source.isImported, !source.isPreview, let step = source.step, step.project == history.project.name,
-         source.image.width == settings.width, source.image.height == settings.height,
-         source.scale == nil || source.scale == 1, source.offset == .zero
-      {
-        base.canvasTensorId = step.tensorId
-      }
+      let step = !source.isImported && !source.isPreview && source.step?.project == history.project.name
+        ? source.step?.tensorId : nil
+      // Video models take the frame as is: they refuse a mask, and a clip has nothing to merge into.
+      let refines = videoModel == nil
+      base.setRefineInputs(
+        source: source.image, sourceTensorId: step, isImported: source.isImported, scale: source.scale,
+        offset: source.offset, mask: refines ? canvasMask : nil, merge: refines && mergeIntoImage)
       if let pending = pendingPlacement, source.step?.tensorId == pending.frameTensorId,
          source.step?.project == pending.project, !source.isPreview
       {
@@ -1400,6 +1441,13 @@ final class CreateModel {
       }
     }
     if usesReferences { base.moodboard = moodboard.references }
+    return base
+  }
+
+  /// Queues `count` images of the prompt; runs right away when nothing else is.
+  func generate() {
+    guard canGenerate, let base = screenRequest() else { return }
+    statusNote = nil
     let takesAudio = videoModel?.takesAudio == true && audio.url != nil
     remember(prompt: prompt)
     // Always random rolls a seed per image; a set seed counts up from itself, as in Draw Things.
@@ -1709,7 +1757,7 @@ final class CreateModel {
             self.deviceCallbacks[job.id]?.progress(progress)
           }
         }
-        let output: GenerationEngine.Output
+        var output: GenerationEngine.Output
         if let imageUpscale = request.imageUpscale, let image = request.canvas {
           setRunMessage("Upscaling…", job)
           output = try await upscaled(image: image, as: imageUpscale, request: request, progress: progress)
@@ -1746,6 +1794,18 @@ final class CreateModel {
           finish(job, status: status)
           return
         }
+        // A refined region goes back into the image it came from, here, where its project is.
+        var refined: Project.Refined?
+        var mergedOrigin: CGPoint?
+        if let merge = request.merge, !output.isVideo, let frame = output.frames.first {
+          setRunMessage("Merging into the image…", job)
+          let merged = try await CanvasMerge.merged(
+            frame, into: merge, maskBlur: Double(request.configuration.maskBlur),
+            maskBlurOutset: request.configuration.maskBlurOutset)
+          output.frames = [merged.tensor]
+          refined = Project.Refined(mask: merged.maskTensor, record: merged.record)
+          mergedOrigin = merged.sourceOrigin
+        }
         let returnedAt = Date()
         // Runs on a server report the server's states, so their timings would mislead.
         var timings = job.target == .local ? timingRecorders[job.id]?.timings(returnedAt: returnedAt) : nil
@@ -1755,7 +1815,7 @@ final class CreateModel {
         let item = try await oneSaveAtATime {
           try await history.save(
             output, request: request, startedAt: startedAt, finishedAt: Date(), timings: timings,
-            makeCurrent: followsRun)
+            refined: refined, makeCurrent: followsRun)
         }
         if timings != nil {
           timings?.save = Date().timeIntervalSince(returnedAt)
@@ -1765,6 +1825,11 @@ final class CreateModel {
         lastSavedTensorId = item.tensorId
         let finished = output.frames.first.flatMap(ImageTensor.cgImage(from:)) ?? runProgress(of: job)?.preview
         if followsRun() {
+          if let merge = request.merge, let mergedOrigin, let finished {
+            keepRefinePlacement(
+              for: item.tensorId, merge: merge, sourceOrigin: mergedOrigin,
+              resultSize: CGSize(width: finished.width, height: finished.height))
+          }
           imageStep = (history.project.name, item.tensorId)
           canvasIsImported = false
           if let finished { image = finished }
@@ -2145,6 +2210,25 @@ final class CreateModel {
       let full = await whileLoadingCanvasImage { await history.image(at: item.id, in: projectName) }
       if let full, imageStep?.tensorId == item.tensorId, !imageIsPreview { image = full }
     }
+  }
+
+  /// Puts a History step's image on the canvas as the input of the next Edit run (it becomes the
+  /// current step), with no mask, for callers without the view. Returns once it's there; false
+  /// for a video or an image that can't be read.
+  func placeOnCanvas(_ item: HistoryItem) async -> Bool {
+    guard !item.isVideo else { return false }
+    let projectName = history.project.name
+    guard let full = await whileLoadingCanvasImage({ await history.image(at: item.id, in: projectName) }) else {
+      return false
+    }
+    statusNote = nil
+    stopFollowingRun()
+    imageStep = (projectName, item.tensorId)
+    history.setCurrent(tensorId: item.tensorId)
+    canvasIsImported = false
+    image = full
+    canvasMode = .edit
+    return true
   }
 
   /// Runs a load of the canvas image, marking the canvas as waiting on it.

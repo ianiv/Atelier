@@ -35,6 +35,12 @@ actor GenerationEngine {
     /// Identifies the canvas `canvas` was rendered from (image, placement and size), so queued
     /// runs from the same canvas save it as a step only once.
     var canvasKey: String?
+    /// Edit mode with a painted mask: the frame's mask codes as a PNG at the output size
+    /// (`CanvasMask.frameMask`), sent as MGK's `.mask()` input. Set with `canvas`.
+    var mask: Data?
+    /// Merge the result back into the canvas image it was refined from (`CanvasMerge`), on the
+    /// device whose project holds it. Set with `canvas` (`setRefineInputs`).
+    var merge: RefineMerge?
     /// Moodboard images sent as references (weight above zero only).
     var moodboard: [Reference] = []
     /// An audio file for video models that take one (`VideoModel.takesAudio`), kept by
@@ -77,7 +83,7 @@ actor GenerationEngine {
   private var pipeline: MediaGenerationPipeline?
   /// The model and image inputs (canvas, then moodboard sizes) of the last run, see
   /// `dropCachedModelsIfInputsChanged`.
-  private var lastImageInputs: (model: String, canvas: Bool, sizes: [[Int]])?
+  private var lastImageInputs: (model: String, canvas: Bool, mask: Bool, sizes: [[Int]])?
 
   private var isRunning = false
   private var waiting: [CheckedContinuation<Void, Never>] = []
@@ -158,6 +164,7 @@ actor GenerationEngine {
     if let canvas = request.canvas {
       guard let png = ImageTensor.png(canvas) else { throw ProjectError.badImage }
       inputs.append(MediaGenerationPipeline.data(png))
+      if let mask = request.mask { inputs.append(MediaGenerationPipeline.data(mask).mask()) }
     }
     for reference in request.moodboard {
       guard let png = ImageTensor.png(reference.image) else { throw ProjectError.badImage }
@@ -575,12 +582,12 @@ actor GenerationEngine {
   private func dropCachedModelsIfInputsChanged(_ request: Request) {
     let images = [request.canvas].compactMap(\.self) + request.moodboard.map(\.image)
     let inputs = (
-      model: request.model, canvas: request.canvas != nil,
+      model: request.model, canvas: request.canvas != nil, mask: request.mask != nil,
       sizes: images.map { [$0.width, $0.height] }
     )
     defer { lastImageInputs = inputs }
     guard let last = lastImageInputs, last.model == inputs.model,
-          last.canvas != inputs.canvas || last.sizes != inputs.sizes,
+          last.canvas != inputs.canvas || last.mask != inputs.mask || last.sizes != inputs.sizes,
           var dictionary = Self.engineWorkspace()?.dictionary
     else { return }
     // The preloader applies each change in order on the generation queue, ahead of this run.

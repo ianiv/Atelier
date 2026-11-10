@@ -41,6 +41,9 @@ nonisolated enum ProjectMapping {
     var inputAudioId: Int64?
     /// How long each phase of the run took, kept as `profile_data` timings (first frame only).
     var timings: GenerationTimings?
+    /// A refined region merged back into its input (`CanvasMerge`): where the frame was and the
+    /// mask. Kept in `profile_data`.
+    var refine: RefineRecord?
   }
 
   /// `profile_data`: Draw Things' `GenerationProfile` as snake-case JSON (timings and duration),
@@ -51,7 +54,11 @@ nonisolated enum ProjectMapping {
   /// Draw Things' own rule (the step one earlier with the greatest lineage not above this one's)
   /// stops holding after a fork renumbers a branch (see `Project.append`). Video frames add
   /// `input_audio_id`: the audio file the run took (H3 Ref2VA, LongCat), which Draw Things doesn't
-  /// keep. Draw Things decodes the profile with Codable, which skips the extra keys.
+  /// keep. A step made by refining part of its input and merging the result back adds
+  /// `refine_rect` (the frame in the input's pixels), `refine_scale` and `refine_offset` (the
+  /// canvas zoom and offset) and `refine_mask` (the painted strokes), so Use Settings can put the
+  /// input back as it was; the mask itself is also the step's `binary_mask` layer, as Draw Things
+  /// keeps a canvas mask. Draw Things decodes the profile with Codable, which skips the extra keys.
   struct Profile: Codable {
     var timings: [Timing] = []
     var duration: Double
@@ -59,6 +66,23 @@ nonisolated enum ProjectMapping {
     /// The parent step's image tensor; 0 records a step with no parent.
     var parentTensorId: Int64?
     var inputAudioId: Int64?
+    var refineRect: [Double]?
+    var refineScale: Double?
+    var refineOffset: [Double]?
+    var refineMask: CanvasMask?
+
+    var refine: RefineRecord? {
+      get {
+        guard let refineRect, refineRect.count == 4 else { return nil }
+        return RefineRecord(rect: refineRect, scale: refineScale, offset: refineOffset ?? [0, 0], mask: refineMask)
+      }
+      set {
+        refineRect = newValue?.rect
+        refineScale = newValue?.scale
+        refineOffset = newValue?.offset
+        refineMask = newValue?.mask
+      }
+    }
 
     struct Timing: Codable {
       var durations: [Double]
@@ -73,13 +97,14 @@ nonisolated enum ProjectMapping {
 
     init(
       duration: Double, inputTensorId: Int64?, parentTensorId: Int64?, inputAudioId: Int64? = nil,
-      timings: [Timing] = []
+      timings: [Timing] = [], refine: RefineRecord? = nil
     ) {
       self.timings = timings
       self.duration = duration
       self.inputTensorId = inputTensorId
       self.parentTensorId = parentTensorId
       self.inputAudioId = inputAudioId
+      self.refine = refine
     }
 
     init?(_ bytes: [UInt8]) {
@@ -162,7 +187,7 @@ nonisolated enum ProjectMapping {
       profileData: Profile(
         duration: step.generationTime, inputTensorId: step.inputTensorId,
         parentTensorId: step.parentTensorId ?? 0, inputAudioId: step.inputAudioId,
-        timings: step.timings?.profileTimings ?? []
+        timings: step.timings?.profileTimings ?? [], refine: step.refine
       ).bytes,
       teaCacheStart: i32("teaCacheStart", 5), teaCacheEnd: i32("teaCacheEnd", -1),
       teaCacheThreshold: d.float("teaCacheThreshold", 0.06), teaCache: d.bool("teaCache", false),

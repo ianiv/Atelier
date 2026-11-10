@@ -69,6 +69,8 @@ final class HistoryStore {
     var configuration: [String: JSONValue]
     /// How long each phase of the run took; nil for steps saved without them.
     var timings: GenerationTimings?
+    /// For a region refined and merged back into its input: where the frame was, and the mask.
+    var refine: RefineRecord?
   }
 
   private(set) var project: Project
@@ -231,6 +233,7 @@ final class HistoryStore {
     startedAt: Date,
     finishedAt: Date,
     timings: GenerationTimings? = nil,
+    refined: Project.Refined? = nil,
     makeCurrent: () -> Bool = { true }
   ) async throws -> HistoryItem {
     var settings = request.configuration
@@ -242,10 +245,11 @@ final class HistoryStore {
     // canvas's step: an Edit run's input is its result's parent. When the canvas isn't exactly
     // a step's image (an image from outside, moved, zoomed or another size), it goes in first as
     // a step of its own after the current one: Imported for an image from outside, as Draw Things
-    // does.
+    // does. A refined region merged back (`request.merge`) follows the whole image it was
+    // refined from, so that's the input saved, not the frame.
     var parentTensorId = request.parentTensorId
     var inputTensorId: Int64?
-    if let canvas = request.canvas {
+    if let canvas = request.merge?.source ?? request.canvas {
       if let tensorId = request.canvasTensorId, await step(tensorId: tensorId, in: project) != nil {
         inputTensorId = tensorId
       } else if let tensor = ImageTensor.tensor(from: canvas) {
@@ -280,7 +284,7 @@ final class HistoryStore {
         negativePrompt: request.negativePrompt, seed: request.seed,
         settings: dump, createdAt: finishedAt,
         duration: finishedAt.timeIntervalSince(startedAt), timings: timings, moodboard: moodboard,
-        inputTensorId: inputTensorId, after: parentTensorId)
+        inputTensorId: inputTensorId, after: parentTensorId, refined: refined)
     }
     if project === self.project {
       // A fork may have renumbered other steps.

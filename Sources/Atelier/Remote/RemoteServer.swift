@@ -660,6 +660,7 @@ final class RemoteServer {
         seed: request.seed, configuration: configuration)
       engineRequest.canvas = inputs.canvas
       engineRequest.canvasIsImported = request.canvasIsImported
+      engineRequest.mask = inputs.mask
       engineRequest.moodboard = inputs.moodboard
       engineRequest.audio = inputs.audio
       engineRequest.upscale = request.upscale
@@ -680,6 +681,7 @@ final class RemoteServer {
 
   private struct Inputs: Sendable {
     var canvas: CGImage?
+    var mask: Data?
     var moodboard: [GenerationEngine.Reference] = []
     var audio: URL?
     var frames: [CGImage] = []
@@ -698,6 +700,13 @@ final class RemoteServer {
     }
     var inputs = Inputs()
     if let canvas = request.canvas { inputs.canvas = try await image(canvas) }
+    // The mask goes to the engine as the PNG it is: decoding it here could change its codes.
+    if let mask = request.mask {
+      guard let url = await store.blobURL(device: device, hash: mask), let data = try? Data(contentsOf: url) else {
+        throw RemoteError.server("The mask for this job wasn't uploaded.")
+      }
+      inputs.mask = data
+    }
     for reference in request.moodboard {
       inputs.moodboard.append(GenerationEngine.Reference(image: try await image(reference.hash), weight: reference.weight))
     }

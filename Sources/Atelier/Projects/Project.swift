@@ -197,7 +197,8 @@ final nonisolated class Project: Sendable {
       resolutionDependentShift: node.resolutionDependentShift,
       hiresFix: node.hiresFix,
       configuration: ProjectMapping.dump(of: node),
-      timings: ProjectMapping.Profile(node.profileData).flatMap(GenerationTimings.init(profile:))
+      timings: ProjectMapping.Profile(node.profileData).flatMap(GenerationTimings.init(profile:)),
+      refine: ProjectMapping.Profile(node.profileData)?.refine
     )
   }
 
@@ -299,13 +300,21 @@ final nonisolated class Project: Sendable {
     timings: GenerationTimings? = nil,
     reason: ProjectFormat.Reason = .generate, generated: Bool = true,
     moodboard: [MoodboardTensor] = [], inputTensorId: Int64? = nil,
-    after parentTensorId: Int64? = nil
+    after parentTensorId: Int64? = nil, refined: Refined? = nil
   ) async throws -> HistoryItem {
     try await append(
       frames: [tensor], clip: nil, model: model, prompt: prompt, negativePrompt: negativePrompt,
       seed: seed, settings: settings, createdAt: createdAt, duration: duration, timings: timings,
       reason: reason, generated: generated, moodboard: moodboard, inputTensorId: inputTensorId,
-      after: parentTensorId)
+      after: parentTensorId, refined: refined)
+  }
+
+  /// What a step made by refining part of its input keeps beyond its image: its canvas mask, as
+  /// Draw Things stores one (`binary_mask_<id>`, `[height, width]` of codes, the image's size), and
+  /// where the frame was (`ProjectMapping.Step.refine`).
+  struct Refined: @unchecked Sendable {
+    var mask: Tensor<UInt8>?
+    var record: RefineRecord
   }
 
   /// A moodboard image going into a step.
@@ -337,7 +346,7 @@ final nonisolated class Project: Sendable {
       frames: frames, clip: clip, model: model, prompt: prompt, negativePrompt: negativePrompt,
       seed: seed, settings: settings, createdAt: createdAt, duration: duration, timings: timings,
       reason: .generate,
-      generated: true, moodboard: moodboard, inputTensorId: inputTensorId, after: parentTensorId)
+      generated: true, moodboard: moodboard, inputTensorId: inputTensorId, after: parentTensorId, refined: nil)
   }
 
   private func append(
@@ -345,7 +354,7 @@ final nonisolated class Project: Sendable {
     negativePrompt: String, seed: UInt32, settings: [String: JSONValue], createdAt: Date,
     duration: Double, timings: GenerationTimings?, reason: ProjectFormat.Reason, generated: Bool,
     moodboard: [MoodboardTensor], inputTensorId: Int64?,
-    after parentTensorId: Int64?
+    after parentTensorId: Int64?, refined: Refined?
   ) async throws -> HistoryItem {
     // Each frame's thumbnails, a few frames at a time across the cores (a clip's frames
     // together are large, so each image is dropped once its thumbnails are made).
@@ -375,6 +384,8 @@ final nonisolated class Project: Sendable {
     // As addAudio: "audio_<id>" in the band above.
     let audioId = clip?.audio.map { _ in Int64.random(in: 1_800_000_000...2_199_999_999) }
     let inputAudioId = clip?.audioInput.map { _ in Int64.random(in: 1_800_000_000...2_199_999_999) }
+    // As ImageHistoryManager's saveImageData: "binary_mask_<id>" in its own band.
+    let maskId = refined?.mask.map { _ in Int64.random(in: 300_000_000...599_999_999) }
     var written: [String] = []
     do {
       try writeTensors(
@@ -384,6 +395,10 @@ final nonisolated class Project: Sendable {
       if let audioId, let audio = clip?.audio {
         try writeTensor(audio, name: "audio_\(audioId)")
         written.append("audio_\(audioId)")
+      }
+      if let maskId, let mask = refined?.mask {
+        try writeTensor(mask, name: "binary_mask_\(maskId)")
+        written.append("binary_mask_\(maskId)")
       }
       if let inputAudioId, let audio = clip?.audioInput {
         try writeTensor(audio, name: "audio_\(inputAudioId)")
@@ -400,7 +415,7 @@ final nonisolated class Project: Sendable {
     for (entry, shuffleId) in zip(moodboard, shuffleIds) {
       moodboardPreview &+= shuffleId &* Int64((entry.weight * 1000).rounded())
     }
-    let previewIds = tensorIds.map { $0 &+ moodboardPreview }
+    let previewIds = tensorIds.map { $0 &+ (maskId ?? 0) &+ moodboardPreview }
     let (width, height) = size
     let wallClock = Int64(createdAt.timeIntervalSince1970 * 1_000_000)
 
@@ -443,7 +458,8 @@ final nonisolated class Project: Sendable {
             parentTensorId: index == 0
               ? parent.flatMap { tree.steps[$0]?.tensorId } : tensorIds[index - 1],
             clipId: clipId, indexInAClip: index, hasAudio: audioId != nil,
-            inputAudioId: inputAudioId, timings: index == 0 ? timings : nil)
+            inputAudioId: inputAudioId, timings: index == 0 ? timings : nil,
+            refine: index == 0 ? refined?.record : nil)
           let node = ProjectMapping.node(for: step, settings: settings)
           if index == 0 { appended = node }
           transaction.try(submit: TensorHistoryNodeChangeRequest.upsertRequest(node))
@@ -451,7 +467,8 @@ final nonisolated class Project: Sendable {
             submit: ProjectFormat.TensorDataChangeRequest.upsertRequest(
               Layer(
                 lineage: id.lineage, logicalTime: id.logicalTime, index: 0, x: 0, y: 0,
-                width: width, height: height, scaleFactorBy120: 120, tensorId: tensorIds[index])))
+                width: width, height: height, scaleFactorBy120: 120, tensorId: tensorIds[index],
+                maskId: index == 0 ? maskId ?? 0 : 0)))
           for (moodIndex, (entry, shuffleId)) in zip(moodboard, shuffleIds).enumerated() {
             transaction.try(
               submit: TensorMoodboardDataChangeRequest.upsertRequest(

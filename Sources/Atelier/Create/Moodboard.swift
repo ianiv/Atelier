@@ -239,25 +239,23 @@ extension CanvasState {
   /// The canvas frame as the next Edit run sees it: `size` pixels with `image` placed by the
   /// canvas zoom and offset, transparent where it doesn't reach (the engine inpaints there).
   func render(_ image: CGImage, size: CGSize) -> CGImage? {
-    let width = Int(size.width), height = Int(size.height)
+    Self.render(
+      image,
+      placement: CanvasPlacement(
+        sourceSize: CGSize(width: image.width, height: image.height), frameSize: size, scale: scale, offset: offset))
+  }
+
+  /// `image` drawn where `placement` puts it, in a frame of its size.
+  nonisolated static func render(_ image: CGImage, placement: CanvasPlacement) -> CGImage? {
+    let width = Int(placement.frameSize.width), height = Int(placement.frameSize.height)
     guard width > 0, height > 0,
           let context = CGContext(
             data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
             space: CGColorSpace(name: CGColorSpace.sRGB)!,
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
     else { return nil }
-    let fit = min(size.width / Double(image.width), size.height / Double(image.height))
-    let zoom = scale ?? fit
-    let drawn = CGSize(width: Double(image.width) * zoom, height: Double(image.height) * zoom)
-    // Core Graphics counts y upward; the canvas offset counts it downward. `integral` grows the
-    // rect to whole pixels, so an image that covers the frame leaves no transparent sliver.
-    let rect = CGRect(
-      x: size.width / 2 + offset.width - drawn.width / 2,
-      y: size.height / 2 - offset.height - drawn.height / 2,
-      width: drawn.width, height: drawn.height
-    ).integral
     context.interpolationQuality = .high
-    context.draw(image, in: rect)
+    context.draw(image, in: placement.imageRectYUp)
     return context.makeImage()
   }
 }

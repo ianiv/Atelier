@@ -63,6 +63,9 @@ nonisolated struct RemoteJobRequest: Codable, Hashable, Sendable {
   /// The canvas as a PNG.
   var canvas: String?
   var canvasIsImported = false
+  /// The canvas mask's codes as a PNG (`GenerationEngine.Request.mask`). Merging the result back
+  /// into its image happens on the client, whose project holds it.
+  var mask: String?
   /// Moodboard images as PNGs.
   var moodboard: [Reference] = []
   var audio: Audio?

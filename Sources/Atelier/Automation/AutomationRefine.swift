@@ -1,0 +1,220 @@
+#if os(macOS)
+import SwiftUI
+
+extension Automation {
+  /// Refining part of an image, end to end with real runs (use a scratch `--project`): the input,
+  /// filled into a square at the output size, goes on the canvas, then
+  ///   (a) a rectangle mask: the result is the image's size, and pixels the feathered mask
+  ///       doesn't reach are the input's exactly; the step keeps its mask and region;
+  ///   (b) zoomed 2× on the top-left quadrant, no mask: the image's size, only that quadrant
+  ///       (and its feathered edge) changes;
+  ///   (c) the frame past the image's right edge: the result grows to hold both;
+  ///   (d) Use Settings on (b) and (a) brings back the input, the zoom and the mask;
+  ///   (e) a queued masked, merging job survives saving and loading the queue.
+  /// Image models only; one that edits at Strength below 1 (any SD/FLUX-style model) or an
+  /// inpainting model. Prints PASS/FAIL lines.
+  ///
+  ///   Atelier --refine-check --project NAME --input FILE [--model M] [--steps N] [--size S]
+  ///           [--strength S] [--quit]
+  static func refineCheck(_ model: CreateModel) {
+    let args = CommandLine.arguments
+    func value(_ name: String) -> String? {
+      guard let index = args.firstIndex(of: name), index + 1 < args.count else { return nil }
+      return args[index + 1]
+    }
+    Task { @MainActor in
+      var failures = 0
+      func check(_ ok: Bool, _ message: String) {
+        if !ok { failures += 1 }
+        print("\(ok ? "PASS" : "FAIL") \(message)")
+        fflush(stdout)
+      }
+      @MainActor func finish() {
+        print(failures == 0 ? "refine check: all passed" : "refine check: \(failures) failed")
+        fflush(stdout)
+        if args.contains("--quit") { AppLifecycle.quit() }
+      }
+      @MainActor func idle() async {
+        try? await Task.sleep(for: .milliseconds(200))
+        while model.isBusy { try? await Task.sleep(for: .milliseconds(100)) }
+      }
+      @MainActor func run() async -> HistoryItem? {
+        let previous = model.lastSavedStep
+        model.generate()
+        await idle()
+        if let error = model.errorMessage { print("error: \(error)") }
+        guard let step = model.lastSavedStep, step != previous else { return nil }
+        return model.history.item(step)
+      }
+      while !model.history.isLoaded || model.models.isEmpty || model.settings == nil || model.isBusy {
+        try? await Task.sleep(for: .milliseconds(100))
+      }
+      let size = value("--size").flatMap(Int.init) ?? 512
+      guard let path = value("--input"), let input = ImageLoader.image(at: URL(fileURLWithPath: path)),
+            let source = filled(input, size: size)
+      else {
+        check(false, "--input FILE is required and must be readable")
+        return finish()
+      }
+      if let file = value("--model") {
+        model.selectedModel = file
+        await idle()
+        model.resetToModelDefaults(undoManager: nil)
+      }
+      guard var settings = model.settings else { return finish() }
+      settings.steps = value("--steps").flatMap(Int.init) ?? 4
+      settings.width = size
+      settings.height = size
+      settings.strength = value("--strength").flatMap(Float.init) ?? 0.7
+      settings.maskBlur = 4
+      settings.maskBlurOutset = 0
+      model.settings = settings
+      model.seed = 42
+      model.seedLocked = true
+      model.mergeIntoImage = true
+      model.canvasTool = .move
+      let half = Double(size) / 2
+
+      // (a) A rectangle mask, fitted.
+      model.prompt = "a bright red flower"
+      model.placeOnCanvas(source)
+      // The canvas fits a new image as it appears (`placeNewCanvasImage`); let that happen first.
+      try? await Task.sleep(for: .milliseconds(300))
+      let maskRect = CGRect(x: half / 2, y: half / 2, width: half, height: half)
+      check(model.addMaskStrokes([.rect(maskRect)], actionName: Self.agentMaskName, undoManager: nil), "a mask can be painted on the canvas")
+      let maskA = model.canvasMask
+      check(model.canMergeIntoImage, "Merge into Image is enabled with a mask")
+      if let request = model.screenRequest() {
+        check(request.mask != nil && request.merge != nil, "the run carries the mask and merges")
+      }
+      guard let a = await run(), let imageA = await model.history.image(for: a) else {
+        check(false, "(a) the masked run saved nothing")
+        return finish()
+      }
+      check(imageA.width == size && imageA.height == size, "(a) the result is the image's size (\(imageA.width)×\(imageA.height))")
+      // Mask Blur 4 reaches about 3 sigma; leave a margin.
+      let far = maskRect.insetBy(dx: -24, dy: -24)
+      let outside = difference(imageA, source) { !far.contains($0) }
+      let inside = difference(imageA, source) { maskRect.insetBy(dx: 8, dy: 8).contains($0) }
+      check(outside?.maxDelta == 0, "(a) pixels away from the mask are the input's exactly (max delta \(outside?.maxDelta ?? -1))")
+      check((inside?.meanDelta ?? 0) > 1, "(a) the masked area changed (mean delta \(String(format: "%.1f", inside?.meanDelta ?? 0)))")
+      check(a.sidecar.refine?.mask == maskA && a.inputTensorId != nil, "(a) the step keeps its mask and region, after its input")
+      check(model.canvasMask != nil, "(a) the mask stays on the canvas after the run")
+
+      // (b) Zoomed 2× on the top-left quadrant, no mask.
+      model.prompt = "a watercolor painting"
+      model.placeOnCanvas(source)
+      // The canvas fits a new image as it appears (`placeNewCanvasImage`); let that happen first.
+      try? await Task.sleep(for: .milliseconds(300))
+      check(model.canvasMask == nil, "(b) a new image on the canvas has no mask")
+      model.showRegion(CGRect(x: 0, y: 0, width: half, height: half))
+      check(model.canvas.scale == 2 && model.canMergeIntoImage, "(b) the frame shows the quadrant at 2×, merge enabled")
+      guard let b = await run(), let imageB = await model.history.image(for: b) else {
+        check(false, "(b) the zoomed run saved nothing")
+        return finish()
+      }
+      check(imageB.width == size && imageB.height == size, "(b) the result is the image's size")
+      let rest = difference(imageB, source) { $0.x >= half + 8 || $0.y >= half + 8 }
+      let quadrant = difference(imageB, source) { $0.x < half - 8 && $0.y < half - 8 }
+      check(rest?.maxDelta == 0, "(b) outside the quadrant nothing changed (max delta \(rest?.maxDelta ?? -1))")
+      check((quadrant?.meanDelta ?? 0) > 1, "(b) the quadrant changed")
+      check(
+        model.canvas.scale.map { abs($0 - 2) < 0.01 } == true, "(b) the canvas still shows the quadrant after the run")
+
+      // (c) The frame past the right edge, at 1×.
+      model.placeOnCanvas(source)
+      // The canvas fits a new image as it appears (`placeNewCanvasImage`); let that happen first.
+      try? await Task.sleep(for: .milliseconds(300))
+      model.canvas.scale = 1
+      model.canvas.offset = CGSize(width: -half, height: 0)
+      guard let c = await run(), let imageC = await model.history.image(for: c) else {
+        check(false, "(c) the outpainting run saved nothing")
+        return finish()
+      }
+      check(
+        imageC.width == size + size / 2 && imageC.height == size,
+        "(c) the result grows to hold the image and the frame (\(imageC.width)×\(imageC.height))")
+
+      // (d) Use Settings.
+      model.clearCanvas()
+      model.use(b)
+      await idle()
+      try? await Task.sleep(for: .seconds(1))
+      let restoredB = model.image.flatMap { pixelDifference($0, source) }
+      check(
+        restoredB?.maxDelta == 0 && model.canvas.scale.map { abs($0 - 2) < 0.01 } == true
+          && model.canvasMode == .edit,
+        "(d) Use Settings on (b) puts the input back zoomed on the quadrant")
+      model.use(a)
+      await idle()
+      try? await Task.sleep(for: .seconds(1))
+      check(model.canvasMask == maskA && model.canvas.scale == nil, "(d) Use Settings on (a) brings back its mask, fitted")
+
+      // (e) A queued masked job survives the queue being saved.
+      if let request = model.screenRequest() {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "atelier-refine-check-\(UUID().uuidString)")
+        SavedQueue.save([JobQueue.Job(request: request)], project: model.history.project.name, in: folder)
+        let restored = await model.savedRequests(SavedQueue.load(project: model.history.project.name, from: folder))
+        let back = restored.first
+        check(
+          back?.mask == request.mask && back?.merge?.record == request.merge?.record
+            && back?.merge?.source.width == source.width && back?.canvasTensorId == request.canvasTensorId,
+          "(e) a queued masked job keeps its mask and merge across a saved queue")
+        try? FileManager.default.removeItem(at: folder)
+      } else {
+        check(false, "(e) no request from the screen")
+      }
+      finish()
+    }
+  }
+
+  private static let agentMaskName = CreateModel.agentMaskActionName
+
+  /// `image` scaled to fill a `size` square, cropped in the middle.
+  private static func filled(_ image: CGImage, size: Int) -> CGImage? {
+    guard let context = CGContext(
+      data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: size * 4,
+      space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+    else { return nil }
+    let scale = max(Double(size) / Double(image.width), Double(size) / Double(image.height))
+    let width = Double(image.width) * scale, height = Double(image.height) * scale
+    context.interpolationQuality = .high
+    context.draw(image, in: CGRect(x: (Double(size) - width) / 2, y: (Double(size) - height) / 2, width: width, height: height))
+    return context.makeImage()
+  }
+
+  /// The channel differences of two same-sized images over the pixels (top-left based) `where` picks.
+  private static func difference(_ a: CGImage, _ b: CGImage, where include: (CGPoint) -> Bool)
+    -> (maxDelta: Int, meanDelta: Double)?
+  {
+    guard a.width == b.width, a.height == b.height else { return nil }
+    let pa = CanvasRefineBytes.rgba(a), pb = CanvasRefineBytes.rgba(b)
+    var maxDelta = 0, sum = 0, count = 0
+    for y in 0..<a.height {
+      for x in 0..<a.width where include(CGPoint(x: Double(x) + 0.5, y: Double(y) + 0.5)) {
+        let index = (y * a.width + x) * 4
+        for c in 0..<3 {
+          let delta = abs(Int(pa[index + c]) - Int(pb[index + c]))
+          maxDelta = max(maxDelta, delta)
+          sum += delta
+        }
+        count += 3
+      }
+    }
+    return (maxDelta, count > 0 ? Double(sum) / Double(count) : 0)
+  }
+}
+
+private enum CanvasRefineBytes {
+  static func rgba(_ image: CGImage) -> [UInt8] {
+    var bytes = [UInt8](repeating: 0, count: image.width * image.height * 4)
+    bytes.withUnsafeMutableBytes { raw in
+      let context = CGContext(
+        data: raw.baseAddress, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: image.width * 4,
+        space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+      context?.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+    }
+    return bytes
+  }
+}
+#endif
