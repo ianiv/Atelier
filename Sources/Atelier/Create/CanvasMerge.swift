@@ -273,10 +273,23 @@ nonisolated enum CanvasMerge {
     var step = RefinedStep(record: record, composite: image)
     let grown = bounds != sourceRect
     if grown || merge.mask != nil, let frame = image.cropping(to: region) {
+      // The paint the stored mask keeps is what's under the frame layer: Draw Things renders a
+      // painted pixel at alpha 0xF8, so paint outside the frame would leave the image faintly
+      // see-through there. The whole mask stays in the record.
+      let frameX = x0 - originX, frameY = y0 - originY
+      let paint = merge.mask.map { mask -> [UInt8] in
+        var coverage = mask.coverage(width: sourceWidth, height: sourceHeight)
+        for y in 0..<sourceHeight {
+          let insideY = y >= frameY && y < frameY + regionHeight
+          for x in 0..<sourceWidth where !insideY || x < frameX || x >= frameX + regionWidth {
+            coverage[y * sourceWidth + x] = 0
+          }
+        }
+        return coverage
+      }
       step.layers = RefinedStep.Layers(
-        source: source, sourceTensorId: merge.sourceTensorId,
-        paint: merge.mask.map { $0.coverage(width: sourceWidth, height: sourceHeight) },
-        frame: frame, frameX: Int32(x0 - originX), frameY: Int32(y0 - originY))
+        source: source, sourceTensorId: merge.sourceTensorId, paint: paint,
+        frame: frame, frameX: Int32(frameX), frameY: Int32(frameY))
     }
     return Merged(image: image, sourceOrigin: CGPoint(x: originX, y: originY), step: step)
   }

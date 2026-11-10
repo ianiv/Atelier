@@ -317,8 +317,9 @@ struct CanvasRefineTests {
     let first = try await project.append(
       tensor: sourceTensor, model: "m", prompt: "", negativePrompt: "", seed: 1, settings: [:], createdAt: Date(),
       duration: 0, reason: .imported, generated: false)
-    // At 1× a 128 frame centered on the right edge, 32 above the top: grows right and up.
-    let mask = CanvasMask(rects: [CGRect(x: 100, y: 20, width: 20, height: 20)])
+    // At 1× a 128 frame centered on the right edge, 32 above the top: grows right and up. One
+    // rectangle is under the frame, one outside it.
+    let mask = CanvasMask(rects: [CGRect(x: 100, y: 20, width: 20, height: 20), CGRect(x: 10, y: 10, width: 20, height: 20)])
     let merge = RefineMerge(
       source: source, sourceTensorId: first.tensorId, scale: 1, offset: CGSize(width: -64, height: 32),
       frameSize: CGSize(width: 128, height: 128), mask: mask)
@@ -348,6 +349,16 @@ struct CanvasRefineTests {
     #expect(Self.pixel(bytes, width: 192, 180, 40) == [0, 255, 0, 255])
     let original = Self.rgba(source)
     #expect(Self.pixel(bytes, width: 192, 10, 100) == Self.pixel(original, width: 128, 10, 68))
+    // Opaque wherever the source was, the paint outside the frame included.
+    for y in 32..<160 {
+      for x in 0..<128 where bytes[(y * 192 + x) * 4 + 3] != 255 {
+        Issue.record("composite pixel \(x), \(y) isn't opaque")
+        return
+      }
+    }
+    // The stored paint is only what's under the frame.
+    let paint = try #require(layers.paint)
+    #expect(paint[30 * 128 + 110] == 255 && paint[20 * 128 + 20] == 0)
     // The source step itself is unchanged, and still one plain layer.
     let firstRows = await project.read { $0.layerSummary(tensorId: first.tensorId) }
     #expect(firstRows.count == 1 && firstRows[0].maskId == 0)

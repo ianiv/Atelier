@@ -39,7 +39,28 @@ extension CreateModel {
   /// of an Edit run, for an image model, with no layout editor over it. Strength needn't be below
   /// 100%: painting is what makes Edit mean something then (`canEdit`).
   var canPaintMask: Bool {
-    canvasShowsImage && canvasMode == .edit && videoModel == nil && layout == nil && runTargetTakesMasks
+    canEditMask && runTargetTakesMasks
+  }
+
+  /// A mask on the canvas can be changed without painting more (Invert, Clear), whatever the run
+  /// target takes: a mask an older server can't use can still be cleared.
+  var canEditMask: Bool {
+    canvasShowsImage && canvasMode == .edit && videoModel == nil && layout == nil
+  }
+
+  /// Whether the next Edit run from the screen would send a mask, wherever it runs: something
+  /// painted inside the frame where the canvas isn't empty (`CanvasMask.frameMask`). Rasterized
+  /// once per mask and placement.
+  var screenFrameHasPaint: Bool {
+    guard effectiveCanvasMode == .edit, videoModel == nil, let mask = canvasMask, mask.mayHavePaint,
+          let image, let placement = canvasPlacement
+    else { return false }
+    let key = "\(mask.hashValue) \(ObjectIdentifier(image)) \(placement.imageRect) \(placement.frameSize)"
+    if let cached = frameMaskCache, cached.key == key { return cached.hasPaint }
+    let rendered = CanvasState.render(image, placement: placement)
+    let hasPaint = mask.frameMask(placement, canvas: rendered) != nil
+    frameMaskCache = (key, hasPaint)
+    return hasPaint
   }
 
   /// Where runs go can inpaint with a mask: this device, or a server new enough to list it
@@ -67,9 +88,10 @@ extension CreateModel {
   /// frame showing part of the image, reaching past it, or with a mask painted.
   var canMergeIntoImage: Bool {
     guard effectiveCanvasMode == .edit, videoModel == nil, let canvasPlacement else { return false }
+    // As `setRefineInputs` decides for the request Generate would queue.
     return RefineMerge.applies(
       placement: canvasPlacement, scale: canvas.scale, offset: canvas.offset,
-      hasMask: canvasMask?.mayHavePaint == true && runTargetTakesMasks)
+      hasMask: runTargetTakesMasks && screenFrameHasPaint)
   }
 
   // MARK: Mask
@@ -78,7 +100,9 @@ extension CreateModel {
   /// erasing as it says. False when there's no image to paint on.
   @discardableResult
   func addMaskStrokes(_ strokes: [CanvasMask.Stroke], actionName: String = "Paint Mask", undoManager: UndoManager?) -> Bool {
-    guard canPaintMask, !strokes.isEmpty else { return false }
+    // Inverting an existing mask paints nothing new, so it's allowed where painting isn't.
+    let invertsOnly = canvasMask != nil && strokes.allSatisfy { $0.kind == .invert }
+    guard invertsOnly ? canEditMask : canPaintMask, !strokes.isEmpty else { return false }
     var mask = canvasMask ?? CanvasMask()
     mask.strokes += strokes
     setMask(mask, actionName: actionName, undoManager: undoManager)
@@ -102,7 +126,7 @@ extension CreateModel {
   }
 
   func clearMask(actionName: String = "Clear Mask", undoManager: UndoManager?) {
-    guard canvasMask != nil else { return }
+    guard canvasMask != nil, canEditMask else { return }
     setMask(nil, actionName: actionName, undoManager: undoManager)
   }
 
@@ -304,7 +328,9 @@ struct CanvasToolControls: View {
 
   var body: some View {
     @Bindable var model = model
-    let enabled = model.canPaintMask
+    // Painting needs a target that takes masks; changing a mask that's there doesn't.
+    let paints = model.canPaintMask
+    let edits = model.canEditMask
     HStack(spacing: 2) {
       Picker("Canvas Tool", selection: $model.canvasTool) {
         ForEach(CanvasTool.allCases) { tool in
@@ -315,6 +341,7 @@ struct CanvasToolControls: View {
       .labelsHidden()
       .fixedSize()
       .help(Self.toolHelp)
+      .disabled(!paints)
       Menu {
         ForEach(Self.sizes, id: \.self) { size in
           Button("\(Int(size)) px") { model.brushSize = size }
@@ -325,23 +352,25 @@ struct CanvasToolControls: View {
       .menuIndicator(.hidden)
       .fixedSize()
       .help("Brush Size, in frame pixels")
+      .disabled(!paints)
       Button {
         model.invertMask(undoManager: undoManager)
       } label: {
         Label("Invert Mask", systemImage: "circle.lefthalf.filled").touchTarget()
       }
       .help("Invert Mask")
+      // Inverting nothing paints everything, which needs a target that takes masks.
+      .disabled(!edits || (model.canvasMask == nil && !paints))
       Button {
         model.clearMask(undoManager: undoManager)
       } label: {
         Label("Clear Mask", systemImage: "xmark.circle").touchTarget()
       }
-      .disabled(model.canvasMask == nil)
+      .disabled(!edits || model.canvasMask == nil)
       .help("Clear Mask")
     }
     .labelStyle(.iconOnly)
     .buttonStyle(.borderless)
-    .disabled(!enabled)
     MergeIntoImageToggle()
   }
 

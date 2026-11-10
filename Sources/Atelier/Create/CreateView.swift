@@ -714,6 +714,10 @@ struct StatusBar: View {
           Label(error, systemImage: "exclamationmark.triangle")
             .foregroundStyle(.red)
             .lineLimit(2)
+        } else if let problem = model.runTargetMaskProblem {
+          Label(problem, systemImage: "info.circle")
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
         } else if let note = model.statusNote {
           Label(note, systemImage: "info.circle")
             .foregroundStyle(.secondary)

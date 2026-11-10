@@ -700,11 +700,12 @@ final nonisolated class Project: Sendable {
       images.append(("tensor_history_\(sourceTensorId)", tensor))
     }
     var sourceMaskId: Int64 = 0
-    if layers.paint != nil || !opaque {
-      let paint = layers.paint
-      let codes = alpha.indices.map { index -> UInt8 in
-        paint.map { $0[index] != 0 } == true ? CanvasMask.Stored.painted : CanvasMask.Stored.code(alpha: alpha[index])
-      }
+    let paint = layers.paint
+    let codes = alpha.indices.map { index -> UInt8 in
+      paint.map { $0[index] != 0 } == true ? CanvasMask.Stored.painted : CanvasMask.Stored.code(alpha: alpha[index])
+    }
+    // Only a mask that says something: paint (under the frame) or transparency.
+    if codes.contains(where: { $0 != CanvasMask.Stored.opaque }) {
       sourceMaskId = newMaskId()
       masks.append(("binary_mask_\(sourceMaskId)", Self.maskTensor(codes, width: width, height: height)))
     }

@@ -30,10 +30,12 @@ If the connection drops or you quit, the job carries on at the server. Atelier p
 
 | Job | What's sent | What comes back |
 | --- | --- | --- |
-| Image | Settings, canvas, moodboard | The image |
+| Image | Settings, canvas, its mask, moodboard | The image (this device merges a [refined region](creating-images.md#refining-part-of-an-image) back into its image) |
 | [Video](video.md) | Settings, reference images, audio file | Every frame, the soundtrack, the frame rate |
 | Upscale (Quality or Fast) | The clip's frames, unless the server still has them from making that clip | The upscaled frames |
 | Export Video with upscaling | The timeline's frames | The upscaled frames; this device encodes the video |
+
+Inpainting with a mask needs a server whose Atelier lists the "mask" feature, which means an Atelier at least as new as this one. With an older server the Brush and Eraser are disabled, and Generate stays off while a mask is painted inside the frame; Clear Mask and Invert Mask still work.
 
 Upscale and Export use what's on the server: FlashVSR+ has to be downloaded there, and this device doesn't need it. The server holds all of an upscale's frames in memory at once, so very long timelines need a server with memory to spare.
 

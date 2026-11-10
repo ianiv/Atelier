@@ -95,7 +95,13 @@ final class CreateModel {
     if let selectedModel, !availableModels.contains(where: { $0.file == selectedModel }) {
       return "\(name) doesn't have this model."
     }
-    return nil
+    return runTargetMaskProblem
+  }
+
+  /// Generate would send a mask to a server too old to use one (`runTargetTakesMasks`).
+  var runTargetMaskProblem: String? {
+    guard !runTargetTakesMasks, let name = runTargetServerName, screenFrameHasPaint else { return nil }
+    return "\(name) can't take masks: its Atelier is older. Clear the mask or run on this device."
   }
 
   /// This device, as Run on and the Queue call it.
@@ -343,6 +349,9 @@ final class CreateModel {
   }
   /// The inpainting mask painted on the canvas image (`CanvasTools.swift` changes it).
   var canvasMask: CanvasMask?
+  /// Whether the mask paints inside the frame, for the mask and placement it was worked out for
+  /// (`screenFrameHasPaint`).
+  @ObservationIgnored var frameMaskCache: (key: String, hasPaint: Bool)?
   /// What a drag on the canvas does (on iPad the Pencil always paints and fingers move it).
   var canvasTool = CanvasTool.move
   /// The brush's width in frame pixels.
@@ -1425,7 +1434,8 @@ final class CreateModel {
       let refines = videoModel == nil
       base.setRefineInputs(
         source: source.image, sourceTensorId: step, isImported: source.isImported, scale: source.scale,
-        offset: source.offset, mask: refines ? canvasMask : nil, merge: refines && mergeIntoImage)
+        offset: source.offset, mask: refines && runTargetTakesMasks ? canvasMask : nil,
+        merge: refines && mergeIntoImage)
       if let pending = pendingPlacement, source.step?.tensorId == pending.frameTensorId,
          source.step?.project == pending.project, !source.isPreview
       {
