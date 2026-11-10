@@ -552,6 +552,7 @@ enum Automation {
   ///            [--input FILE] [--guidance G]]
   ///           [--delete-lora FILE] [--download MODEL [--cancel-after-bytes N]]
   ///           [--import-model FILE [--model-name NAME]] [--generate-model [MODEL] [--steps N]]
+  ///           [--install-h3-image MODEL.safetensors [--h3-image-vae VAE.safetensors] [--keep-full]]
   ///           [--make-8bit MODEL [--8bit-s]] [--compare-weights REFERENCE [--compare-model MODEL]]
   ///           [--delete-model MODEL]
   ///           [--snapshot-dir DIR] [--quit]
@@ -559,6 +560,11 @@ enum Automation {
   /// Loads the catalog, imports a LoRA and checks it's registered and offered only for models of
   /// its family, generates with it in the same session, deletes a LoRA, starts (and optionally
   /// cancels) a model download, and imports a model checkpoint and generates with it.
+  /// --install-h3-image runs the guided MiniMax H3 Image install (`ModelLibrary.installH3Image`)
+  /// on the model file, with the VAE given or found beside it: imports and registers the model,
+  /// converts the VAE, makes the 8-bit S copy and, unless --keep-full is given, trashes the
+  /// full-precision copy (never the .safetensors). Needs about 90 GB free and takes many minutes;
+  /// the text encoder downloads afterwards if it's missing, and the run waits for that.
   private static func libraryCheck(
     _ model: CreateModel, navigation: Navigation, layouts: LayoutStore, presets: PresetStore,
     library: ModelLibrary
@@ -581,7 +587,11 @@ enum Automation {
         if let snapshotDir { snapshot(to: snapshotDir.appendingPathComponent(name)) }
       }
       @MainActor func finish() { if args.contains("--quit") { AppLifecycle.quit() } }
+      // An empty models folder (the guided install starts from one) never gets a model or
+      // settings, so give up waiting for them after a while.
+      let waitStarted = Date()
       while model.models.isEmpty || model.settings == nil || model.isBusy {
+        if model.models.isEmpty, !model.isBusy, Date().timeIntervalSince(waitStarted) > 15 { break }
         try? await Task.sleep(for: .milliseconds(100))
       }
       ensureWindow(model, navigation: navigation, layouts: layouts, presets: presets)
@@ -732,6 +742,10 @@ enum Automation {
         await shot("model-import-sheet.png")
         let importStart = Date()
         let canImport = library.importingModels.contains(where: \.canImport)
+        // The MiniMax H3 Image VAE adds no model; it's converted into the folder imports go to.
+        let isVAE = library.importingModels.first?.isH3ImageVAE == true
+        let vaeFile = library.addFolder.appendingPathComponent(H3ImageVAEImporter.file)
+        let vaeBefore = (try? FileManager.default.attributesOfItem(atPath: vaeFile.path)[.modificationDate]) as? Date
         library.runModelImports()
         if !canImport { library.cancelModelImports() }
         var loggedTenth = -1
@@ -744,6 +758,12 @@ enum Automation {
         }
         if let error = library.errorMessage { log("error: \(error)") }
         let added = library.catalog.filter { !before.contains($0.file) }
+        if isVAE {
+          let written = (try? FileManager.default.attributesOfItem(atPath: vaeFile.path)[.modificationDate]) as? Date
+          check(
+            added.isEmpty && written != nil && written != vaeBefore,
+            String(format: "VAE import of %@ in %.1fs: %@", source.lastPathComponent, Date().timeIntervalSince(importStart), vaeFile.path))
+        } else {
         check(
           canImport ? added.count == 1 : added.isEmpty,
           String(format: "import of %@ in %.1fs: %@", source.lastPathComponent, Date().timeIntervalSince(importStart), added.map { "\($0.file) (\($0.name), \($0.version ?? "?"))" }.joined()))
@@ -759,6 +779,54 @@ enum Automation {
           await shot("models-imported.png")
           importedModel = entry.file
         }
+        }
+      }
+
+      if let path = value("--install-h3-image") {
+        let started = Date()
+        let keepFull = args.contains("--keep-full")
+        var sources = [URL(fileURLWithPath: path)]
+        if let vae = value("--h3-image-vae") { sources.append(URL(fileURLWithPath: vae)) }
+        let install = Task { await library.installH3Image(files: sources, trashFullPrecision: !keepFull) }
+        var lastLine = ""
+        while library.h3ImageInstall.isRunning || library.h3ImageInstall == .init() {
+          let state = library.h3ImageInstall
+          let line = "install: \(state.stage?.title ?? "starting") \(state.progress.map { String(format: "%.0f%%", $0 * 100) } ?? "")"
+          if line != lastLine { log(line); lastLine = line }
+          try? await Task.sleep(for: .milliseconds(500))
+        }
+        let finished = await install.value
+        let state = library.h3ImageInstall
+        if let error = state.error { log("error: \(error)") }
+        check(finished, String(format: "install finished in %.0fs", Date().timeIntervalSince(started)))
+        let installed = library.catalog.filter {
+          ModelZoo.specificationForModel($0.file)?.version == .minimaxH3Image && library.isCustom($0)
+        }
+        let full = installed.first { $0.file.hasSuffix("_f16.ckpt") }
+        let small = installed.first { $0.file.hasSuffix("_i8x.ckpt") }
+        check(
+          !installed.isEmpty && installed.allSatisfy(\.isDownloaded),
+          "model imported and registered: \(installed.map(\.file).joined(separator: ", "))")
+        check(
+          ModelLibrary.folder(of: H3ImageVAEImporter.file, in: library.directories) != nil,
+          "VAE \(H3ImageVAEImporter.file) present")
+        check(
+          small?.isDownloaded == true && model.models.contains { $0.file == small?.file },
+          "8-bit S copy made and registered: \(small?.file ?? "missing") \(small.flatMap { library.sizes[$0.file] }.map(ModelsView.bytes) ?? "?")")
+        check(
+          keepFull ? full != nil : full == nil,
+          keepFull ? "full-precision copy kept" : "full-precision copy trashed and unregistered")
+        for source in sources {
+          check(FileManager.default.fileExists(atPath: source.path), "\(source.lastPathComponent) left in place")
+        }
+        if let file = small?.file ?? full?.file {
+          while library.downloads[file] != nil {
+            if let progress = library.downloads[file] { log("dependencies: \(ModelStatus.describe(progress))") }
+            try? await Task.sleep(for: .seconds(2))
+          }
+        }
+        navigation.section = .models
+        await shot("models-h3-image.png")
       }
 
       if let file = value("--make-8bit"), let entry = library.catalog.first(where: { $0.file == file }) {

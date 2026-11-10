@@ -21,6 +21,7 @@ struct ModelsView: View {
   @State private var pendingDelete: MediaGenerationResolvedModel?
   @State private var pendingMove: ModelLibrary.Move?
   @State private var dropTargeted = false
+  @State private var showingH3ImageInstall = false
 
   private var filtered: [MediaGenerationResolvedModel] {
     let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -81,6 +82,9 @@ struct ModelsView: View {
         }
       }
       .searchable(text: $search, placement: .toolbar, prompt: "Filter models")
+      .safeAreaBar(edge: .top, spacing: 0) {
+        if showsH3ImageInstall { h3ImageInstallRow }
+      }
       .safeAreaBar(edge: .bottom, spacing: 0) { footer }
       .detailInspector(selection: selection, isEmpty: selected == nil, clearSelection: { selection = nil }) {
         Group {
@@ -103,6 +107,10 @@ struct ModelsView: View {
       ) {
         ModelImportSheet()
       }
+      .sheet(isPresented: $showingH3ImageInstall) {
+        H3ImageInstallSheet()
+      }
+      .debugPresents("h3ImageInstall", $showingH3ImageInstall)
       #if DEBUG
         // Download checks: -AtelierDownload FILE starts that model's download once the catalog
         // is in, and logs its progress and any error.
@@ -229,6 +237,36 @@ struct ModelsView: View {
           }
         }
       }
+    }
+  }
+
+  /// MiniMax H3 Image isn't in the download catalog (it needs two manual downloads and a
+  /// conversion), so it has its own row above the list. The filter hides it like any row.
+  private var showsH3ImageInstall: Bool {
+    let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+    return query.isEmpty || "MiniMax H3 Image".localizedCaseInsensitiveContains(query)
+  }
+
+  private var h3ImageInstallRow: some View {
+    VStack(spacing: 0) {
+      HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text("MiniMax H3 Image").bold()
+          Text(
+            library.h3ImageInstalled
+              ? "Installed. It's in the list below."
+              : "Text to image and editing. Installed from two downloads."
+          )
+          .font(.caption).foregroundStyle(.secondary)
+        }
+        Spacer()
+        Button("Install…") { showingH3ImageInstall = true }
+          .disabled(library.h3ImageInstalled)
+          .help("Download the MiniMax H3 Image files and convert them on this Mac")
+      }
+      .padding(.horizontal, 12)
+      .padding(.vertical, 8)
+      Divider()
     }
   }
 
@@ -552,5 +590,111 @@ struct ModelImportSheet: View {
         .disabled(library.isImportingModels)
       }
     }
+  }
+}
+
+/// Guided install of MiniMax H3 Image: links to the two files, a picker for the downloads, and the
+/// progress of `ModelLibrary.installH3Image`.
+struct H3ImageInstallSheet: View {
+  @Environment(ModelLibrary.self) private var library
+  @Environment(\.dismiss) private var dismiss
+  @State private var choosing = false
+  @State private var trashFullPrecision = true
+
+  private var install: ModelLibrary.H3ImageInstall { library.h3ImageInstall }
+
+  private static let modelURL = URL(
+    string: "https://huggingface.co/Comfy-Org/MiniMax-H3-Image/resolve/main/diffusion_models/minimax_h3_image_pruned_bf16.safetensors")!
+  private static let vaeURL = URL(
+    string: "https://huggingface.co/Comfy-Org/MiniMax-H3-Image/resolve/main/vae/minimax_h3_image_vae_fp16.safetensors")!
+  private static let licenseURL = URL(
+    string: "https://huggingface.co/MiniMaxAI/MiniMax-H3-Image/blob/main/LICENSE")!
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Text("Install MiniMax H3 Image").font(.headline)
+      Text(
+        "MiniMax H3 Image makes images from text and edits pictures, in 6 steps. It's converted on this Mac from two downloads. The install needs about 90 GB of free space while it runs and about 50 GB afterwards: the 21 GB model, the 1.2 GB VAE and the 26 GB text encoder, if you don't have it yet. Its license, the MiniMax-H3-Image Community License, doesn't cover use in the European Union, the United Kingdom, South Korea or the United States."
+      )
+      .font(.callout).foregroundStyle(.secondary)
+      .fixedSize(horizontal: false, vertical: true)
+      Link("Read the license", destination: Self.licenseURL).font(.callout)
+
+      Divider()
+      Text("1. Download").font(.subheadline.bold())
+      VStack(alignment: .leading, spacing: 4) {
+        Link("minimax_h3_image_pruned_bf16.safetensors (40 GB)", destination: Self.modelURL)
+        Link("minimax_h3_image_vae_fp16.safetensors (1.2 GB)", destination: Self.vaeURL)
+      }
+      .font(.callout)
+
+      Divider()
+      Text("2. Import").font(.subheadline.bold())
+      HStack {
+        Button("Choose Downloaded Files…") { choosing = true }
+          .disabled(install.isRunning)
+        Spacer()
+      }
+      Toggle("Move the full-precision copy to the Trash afterwards", isOn: $trashFullPrecision)
+        .disabled(install.isRunning)
+      AddFolderPicker()
+        .disabled(install.isRunning)
+
+      VStack(alignment: .leading, spacing: 6) {
+        ForEach(ModelLibrary.H3ImageInstall.Stage.allCases, id: \.self) { stage in
+          stageRow(stage)
+        }
+        Text("The text encoder then downloads in the Models list.")
+          .font(.caption).foregroundStyle(.secondary)
+      }
+      if let error = install.error {
+        Label(error, systemImage: "exclamationmark.triangle")
+          .font(.callout)
+          .fixedSize(horizontal: false, vertical: true)
+      } else if install.isFinished {
+        Label("MiniMax H3 Image is installed.", systemImage: "checkmark.circle")
+          .font(.callout)
+      }
+
+      HStack {
+        Spacer()
+        Button(install.isFinished ? "Done" : "Cancel", role: install.isFinished ? nil : .cancel) { dismiss() }
+          .keyboardShortcut(install.isFinished ? .defaultAction : .cancelAction)
+          .disabled(install.isRunning)
+      }
+    }
+    .sheetPadding()
+    .sheetFrame(width: 520)
+    .interactiveDismissDisabled(install.isRunning)
+    .onAppear { library.resetH3ImageInstall() }
+    .fileImporter(
+      isPresented: $choosing,
+      allowedContentTypes: [UTType(filenameExtension: "safetensors") ?? .data],
+      allowsMultipleSelection: true
+    ) { result in
+      guard case .success(let urls) = result, !urls.isEmpty else { return }
+      let trash = trashFullPrecision
+      Task { await library.installH3Image(files: urls, trashFullPrecision: trash) }
+    }
+    .fileDialogDefaultDirectory(FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first)
+  }
+
+  private func stageRow(_ stage: ModelLibrary.H3ImageInstall.Stage) -> some View {
+    HStack(spacing: 8) {
+      if install.completed.contains(stage) {
+        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+      } else if install.stage == stage {
+        ProgressView().controlSize(.small)
+      } else {
+        Image(systemName: "circle").foregroundStyle(.secondary)
+      }
+      Text(stage.title)
+      Spacer()
+      if install.stage == stage, let progress = install.progress {
+        ProgressView(value: progress).frame(width: 120)
+      }
+    }
+    .font(.callout)
+    .foregroundStyle(install.completed.contains(stage) || install.stage == stage ? .primary : .secondary)
   }
 }

@@ -50,7 +50,8 @@ extension ModelLibrary {
     // `ModelResolver.primeOverrideMapping`), so its text encoders and VAE are listed too.
     _ = await MediaGenerationEnvironment.default.resolveModel(file, offline: false)
     let files = ModelZoo.specificationForModel(file).map { ModelZoo.filesToDownload($0).map(\.file) } ?? [file]
-    let missing = files.filter { !ModelZoo.isModelDownloaded($0) }
+    // The MiniMax H3 Image VAE isn't on the server; the app converts it (`H3ImageVAEImporter`).
+    let missing = files.filter { $0 != H3ImageVAEImporter.file && !ModelZoo.isModelDownloaded($0) }
     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
     for (index, name) in missing.enumerated() {
       try Task.checkCancellation()

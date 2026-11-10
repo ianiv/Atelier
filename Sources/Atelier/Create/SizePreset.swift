@@ -19,6 +19,20 @@ nonisolated enum SizePreset {
 
   static let megapixels: [Double] = [0.5, 1, 1.5, 2, 3, 4]
 
+  /// MiniMax H3 Image works from about 4 to 20 megapixels and is at its best around 16, so it gets
+  /// larger choices and a longer side (21:9 at 16 megapixels is 6272 wide).
+  static let largeMegapixels: [Double] = [1, 2, 4, 8, 12, 16]
+  static let maxSide = 4096
+  static let largeMaxSide = 6400
+
+  static func megapixels(for traits: ModelTraits) -> [Double] {
+    traits.isMiniMaxH3Image ? largeMegapixels : megapixels
+  }
+
+  static func maxSide(for traits: ModelTraits) -> Int {
+    traits.isMiniMaxH3Image ? largeMaxSide : maxSide
+  }
+
   static func snap(_ value: Double) -> Int {
     max(64, Int((value / 64).rounded()) * 64)
   }
@@ -35,7 +49,7 @@ nonisolated enum SizePreset {
   }
 
   /// The preset closest to an arbitrary size, for showing which preset (if any) is active.
-  static func match(width: Int, height: Int) -> (AspectRatio, Double)? {
+  static func match(width: Int, height: Int, megapixels: [Double] = megapixels) -> (AspectRatio, Double)? {
     for aspect in aspectRatios {
       for mp in megapixels where size(aspect: aspect, megapixels: mp) == (width, height) {
         return (aspect, mp)

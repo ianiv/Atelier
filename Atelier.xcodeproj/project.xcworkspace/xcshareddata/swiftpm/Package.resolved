@@ -22,7 +22,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ianiv/draw-things-community",
       "state" : {
-        "revision" : "60e031b204ff077ecac1f770e0a9d1d317fafe58"
+        "revision" : "e419bc6af9d0fcf0755d94cc41b56f618f209412"
       }
     },
     {

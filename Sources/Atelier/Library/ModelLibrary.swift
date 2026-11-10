@@ -80,12 +80,14 @@ final class ModelLibrary {
     /// `ModelVersion` raw value the importer detected, once the file has been inspected.
     var version: String?
     var isInspecting = true
+    /// The file is the MiniMax H3 Image VAE, converted on its own (`H3ImageVAEImporter`).
+    var isH3ImageVAE = false
     /// Why the file can't be imported, if it can't.
     var problem: String?
     var progress: Double?
 
     var canImport: Bool { !isInspecting && problem == nil }
-    var family: String? { version.map(ModelLibrary.familyName) }
+    var family: String? { isH3ImageVAE ? "MiniMax H3 Image VAE" : version.map(ModelLibrary.familyName) }
 
     init(source: URL) {
       self.source = source
@@ -112,6 +114,11 @@ final class ModelLibrary {
   private(set) var importingModels: [ModelImport] = []
   /// 8-bit copies being written, by output file, with their progress.
   private(set) var quantizing: [String: Double] = [:]
+  /// The guided MiniMax H3 Image install (`installH3Image`), for its sheet.
+  private(set) var h3ImageInstall = H3ImageInstall()
+  /// A MiniMax H3 Image model and its VAE are both in the models folders. The Models list offers
+  /// the guided install until they are.
+  private(set) var h3ImageInstalled = false
   private(set) var freeSpace: Int64?
   /// The move to another models folder running now (see `ModelMove.swift`); one at a time.
   var moving: MoveProgress?
@@ -171,6 +178,11 @@ final class ModelLibrary {
     self.sizes = sizes
     self.folders = folders
     freeSpace = free
+    h3ImageInstalled =
+      Self.folder(of: H3ImageVAEImporter.file, in: directories) != nil
+        && catalog.contains {
+          $0.isDownloaded && ModelZoo.specificationForModel($0.file)?.version == .minimaxH3Image
+        }
   }
 
   @concurrent private nonisolated static func measure(
@@ -215,7 +227,8 @@ final class ModelLibrary {
     downloads[file] = Download(
       file: file, fileIndex: 0, totalFiles: 0, bytesWritten: 0, totalBytes: 0)
     let folder = addFolder
-    let viaEngine = isEngineFolder(folder)
+    // MGK's `ensure` would try to fetch the H3 Image VAE, which the server doesn't have.
+    let viaEngine = isEngineFolder(folder) && !awaitsH3ImageVAE(file)
     downloadTasks[file] = Task {
       var finished = false
       let show: @Sendable (Download) -> Void = { progress in
@@ -399,6 +412,10 @@ final class ModelLibrary {
     }
   }
 
+  @concurrent private nonisolated static func isH3ImageVAE(_ source: URL) async -> Bool {
+    H3ImageVAEImporter.isVAE(source)
+  }
+
   @concurrent private nonisolated static func inspectedVersion(of source: URL) async -> Result<ModelVersion, Error> {
     Result {
       // ModelImporter doesn't know MOSS; MOSSImporter converts it.
@@ -411,6 +428,12 @@ final class ModelLibrary {
   }
 
   private func inspect(_ id: UUID, source: URL) async {
+    if await Self.isH3ImageVAE(source) {
+      guard let index = importingModels.firstIndex(where: { $0.id == id }) else { return }
+      importingModels[index].isInspecting = false
+      importingModels[index].isH3ImageVAE = true
+      return
+    }
     let result = await Self.inspectedVersion(of: source)
     guard let index = importingModels.firstIndex(where: { $0.id == id }) else { return }
     importingModels[index].isInspecting = false
@@ -449,10 +472,19 @@ final class ModelLibrary {
     modelImportTask = Task {
       var failures: [String] = []
       var imported: [String] = []
+      var notices: [String] = []
       while let item = importingModels.first {
         if item.canImport {
           do {
-            imported.append(try await importModel(item))
+            if item.isH3ImageVAE {
+              try await importH3ImageVAE(from: item.source, itemID: item.id)
+            } else {
+              let file = try await importModel(item)
+              imported.append(file)
+              if let notice = try await importH3ImageVAEIfNeeded(for: file, model: item) {
+                notices.append(notice)
+              }
+            }
           } catch {
             failures.append("\(item.source.lastPathComponent): \(error.localizedDescription)")
           }
@@ -466,6 +498,9 @@ final class ModelLibrary {
       modelImportTask = nil
       if !failures.isEmpty {
         errorMessage = "Couldn't import " + failures.joined(separator: "\n")
+      }
+      if !notices.isEmpty {
+        errorMessage = ([errorMessage].compactMap(\.self) + notices).joined(separator: "\n")
       }
     }
   }
@@ -519,7 +554,9 @@ final class ModelLibrary {
   }
 
   /// Imports one checkpoint into `addFolder` and returns the model file it registered.
-  private func importModel(_ item: ModelImport) async throws -> String {
+  private func importModel(
+    _ item: ModelImport, onProgress: (@MainActor @Sendable (Double) -> Void)? = nil
+  ) async throws -> String {
     let stem = item.source.deletingPathExtension().lastPathComponent
     let modelName = Self.availableModelName(for: stem, in: directories)
     let folder = addFolder
@@ -535,10 +572,11 @@ final class ModelLibrary {
     let id = item.id
     let progress: @Sendable (Float) -> Void = { [weak self] value in
       Task { @MainActor [weak self] in
-        guard let self, let index = importingModels.firstIndex(where: { $0.id == id }) else {
-          return
+        guard let self else { return }
+        if let index = importingModels.firstIndex(where: { $0.id == id }) {
+          importingModels[index].progress = Double(value)
         }
-        importingModels[index].progress = Double(value)
+        onProgress?(Double(value))
       }
     }
     if let index = importingModels.firstIndex(where: { $0.id == id }) {
@@ -559,16 +597,79 @@ final class ModelLibrary {
     return specification.file
   }
 
+  /// The progress callback for the import with `id`.
+  private func importProgress(_ id: UUID) -> @Sendable (Float) -> Void {
+    { [weak self] value in
+      Task { @MainActor [weak self] in
+        guard let self, let index = importingModels.firstIndex(where: { $0.id == id }) else {
+          return
+        }
+        importingModels[index].progress = Double(value)
+      }
+    }
+  }
+
+  /// Converts the MiniMax H3 Image VAE `source` into `addFolder` as `H3ImageVAEImporter.file`.
+  @concurrent private nonisolated static func convertH3ImageVAE(
+    _ source: URL, into folder: URL, progress: @escaping @Sendable (Float) -> Void
+  ) async throws {
+    try H3ImageVAEImporter.convert(
+      source, to: folder.appendingPathComponent(H3ImageVAEImporter.file).path, progress: progress)
+  }
+
+  /// Imports the VAE file on its own, for a MiniMax H3 Image model that is waiting on it.
+  private func importH3ImageVAE(from source: URL, itemID: UUID) async throws {
+    if let index = importingModels.firstIndex(where: { $0.id == itemID }) {
+      importingModels[index].progress = 0
+    }
+    try await Self.convertH3ImageVAE(source, into: addFolder, progress: importProgress(itemID))
+  }
+
+  /// After importing `file`: when it's MiniMax H3 Image and no models folder has its VAE, converts
+  /// the VAE found beside the checkpoint into the folder the model went to. Returns what to tell
+  /// the person when there's none. The VAE isn't on Draw Things' download server.
+  private func importH3ImageVAEIfNeeded(for file: String, model item: ModelImport) async throws -> String? {
+    guard let specification = ModelZoo.specificationForModel(file),
+          specification.version == .minimaxH3Image,
+          specification.autoencoder == H3ImageVAEImporter.file,
+          Self.folder(of: H3ImageVAEImporter.file, in: directories) == nil,
+          // The VAE file was picked too and is converted when its turn comes.
+          !importingModels.contains(where: { $0.isH3ImageVAE && $0.canImport })
+    else { return nil }
+    let source = item.source
+    guard let vae = await Self.siblingH3ImageVAE(of: source) else {
+      return "MiniMax H3 Image also needs its VAE. Import minimax_h3_image_vae_fp16.safetensors from the same download."
+    }
+    if let index = importingModels.firstIndex(where: { $0.id == item.id }) {
+      importingModels[index].progress = 0
+    }
+    try await Self.convertH3ImageVAE(vae, into: addFolder, progress: importProgress(item.id))
+    return nil
+  }
+
+  @concurrent private nonisolated static func siblingH3ImageVAE(of model: URL) async -> URL? {
+    H3ImageVAEImporter.sibling(of: model)
+  }
+
+  /// Whether `file` is a model that needs a VAE the app converts itself and no folder has it yet.
+  private func awaitsH3ImageVAE(_ file: String) -> Bool {
+    guard let specification = ModelZoo.specificationForModel(file) else { return false }
+    return specification.autoencoder == H3ImageVAEImporter.file
+      && Self.folder(of: H3ImageVAEImporter.file, in: directories) == nil
+  }
+
   /// Whether `model` can get an 8-bit copy in `format`: an imported full-precision MOSS or
-  /// MiniMax H3 model without that copy yet. MiniMax H3 only gets 8-bit S, the format Draw Things'
-  /// own H3 files use. A copy whose file exists but isn't registered was interrupted, and making it
+  /// MiniMax H3 (video or Image) model without that copy yet. MiniMax H3 only gets 8-bit S, the
+  /// format Draw Things' own H3 files use. A copy whose file exists but isn't registered was interrupted, and making it
   /// again resumes it.
   func canMake8BitCopy(_ model: MediaGenerationResolvedModel, _ format: MOSSImporter.EightBit)
     -> Bool
   {
     let output = Self.eightBitFile(for: model.file, format)
     let version = ModelZoo.specificationForModel(model.file)?.version
-    let supported = version == .mossImage || (version == .minimaxH3 && format == .rowwise)
+    let supported =
+      version == .mossImage
+        || ((version == .minimaxH3 || version == .minimaxH3Image) && format == .rowwise)
     return isCustom(model) && model.isDownloaded && model.file.hasSuffix("_f16.ckpt") && supported
       && quantizing[output] == nil && moving == nil && ModelZoo.specificationForModel(output) == nil
   }
@@ -606,7 +707,8 @@ final class ModelLibrary {
     }
     Task {
       await Self.quantize(
-        source, to: destination, format: format, miniMaxH3: specification.version == .minimaxH3,
+        source, to: destination, format: format,
+        miniMaxH3: specification.version == .minimaxH3 || specification.version == .minimaxH3Image,
         progress: progress)
       if FileManager.default.fileExists(atPath: destination) {
         specification.file = output
@@ -624,6 +726,226 @@ final class ModelLibrary {
     }
   }
 
+  // MARK: - Guided MiniMax H3 Image install
+
+  /// Where the guided install of MiniMax H3 Image is. The model isn't in the download catalog and
+  /// its license keeps Atelier from hosting converted files, so the person downloads two files and
+  /// the app does the rest.
+  struct H3ImageInstall: Equatable {
+    enum Stage: Int, CaseIterable {
+      case importingModel, convertingVAE, makingEightBit
+
+      var title: String {
+        switch self {
+        case .importingModel: "Importing model"
+        case .convertingVAE: "Converting VAE"
+        case .makingEightBit: "Making 8-bit S copy"
+        }
+      }
+    }
+
+    /// The stage running now.
+    var stage: Stage?
+    /// Progress of `stage` from 0 to 1, when it reports any.
+    var progress: Double?
+    /// Stages that are done, including ones a previous install finished.
+    var completed: Set<Stage> = []
+    var error: String?
+    var isRunning = false
+    var isFinished = false
+  }
+
+  nonisolated enum H3ImageInstallError: LocalizedError {
+    case notH3Image(String)
+    case missingModel
+    case missingVAE
+    case busy
+    case cantMakeCopy
+    case copyFailed(String?)
+    case fullInUse
+
+    var errorDescription: String? {
+      switch self {
+      case .notH3Image(let name):
+        "\(name) isn't the MiniMax H3 Image model. Choose minimax_h3_image_pruned_bf16.safetensors."
+      case .missingModel:
+        "Choose minimax_h3_image_pruned_bf16.safetensors, the model file."
+      case .missingVAE:
+        "The VAE is missing. Choose minimax_h3_image_vae_fp16.safetensors too."
+      case .busy:
+        "Another import or move is running. Try again when it has finished."
+      case .cantMakeCopy:
+        "The 8-bit S copy can't be made right now. Try again when other work on the models has finished."
+      case .copyFailed(let reason):
+        reason ?? "Couldn't write the 8-bit S copy."
+      case .fullInUse:
+        "The 8-bit S copy is installed, but the full-precision copy is in use, so it wasn't moved to the Trash. Delete it in Models when it's free."
+      }
+    }
+  }
+
+  /// Splits the picked files into the model and the VAE by reading their headers, and turns away
+  /// a model file that isn't MiniMax H3 Image.
+  @concurrent private nonisolated static func classifyH3ImageFiles(_ urls: [URL]) async throws -> (
+    model: URL?, vae: URL?
+  ) {
+    var model: URL?
+    var vae: URL?
+    for url in urls {
+      if H3ImageVAEImporter.isVAE(url) {
+        vae = vae ?? url
+        continue
+      }
+      let version = try await inspectedVersion(of: url).get()
+      guard version == .minimaxH3Image else {
+        throw H3ImageInstallError.notH3Image(url.lastPathComponent)
+      }
+      model = model ?? url
+    }
+    return (model, vae)
+  }
+
+  /// Forgets the last install's result when its sheet opens again.
+  func resetH3ImageInstall() {
+    guard !h3ImageInstall.isRunning else { return }
+    h3ImageInstall = H3ImageInstall()
+  }
+
+  private func setH3ImageStage(_ stage: H3ImageInstall.Stage) {
+    h3ImageInstall.stage = stage
+    h3ImageInstall.progress = 0
+  }
+
+  private func finishH3ImageStage(_ stage: H3ImageInstall.Stage) {
+    h3ImageInstall.completed.insert(stage)
+    h3ImageInstall.progress = nil
+  }
+
+  private func h3ImageProgress(_ stage: H3ImageInstall.Stage) -> @MainActor @Sendable (Double) -> Void {
+    { [weak self] value in
+      guard let self, h3ImageInstall.stage == stage else { return }
+      h3ImageInstall.progress = value
+    }
+  }
+
+  /// Installs MiniMax H3 Image from the two downloads: imports the model, converts the VAE, makes
+  /// the 8-bit S copy people should run, and optionally trashes the full-precision file the import
+  /// wrote (never the picked `.safetensors`). `files` holds the model, the VAE or both; a VAE not
+  /// picked is looked for beside the model. A stage a previous install finished is skipped. The
+  /// text encoder then downloads like any model's dependencies. Progress and errors are in
+  /// `h3ImageInstall`; returns whether the install finished.
+  @discardableResult
+  func installH3Image(files: [URL], trashFullPrecision: Bool) async -> Bool {
+    guard !h3ImageInstall.isRunning else { return false }
+    guard modelImportTask == nil, moving == nil else {
+      h3ImageInstall = H3ImageInstall(error: H3ImageInstallError.busy.localizedDescription)
+      return false
+    }
+    h3ImageInstall = H3ImageInstall(isRunning: true)
+    // Holds picked files open (iPad) until the install ends.
+    let held = files.map(ModelImport.init(source:))
+    defer { withExtendedLifetime(held) {} }
+    do {
+      try await runH3ImageInstall(files: files, trashFullPrecision: trashFullPrecision)
+      h3ImageInstall.isFinished = true
+    } catch {
+      h3ImageInstall.error = error.localizedDescription
+    }
+    h3ImageInstall.isRunning = false
+    h3ImageInstall.stage = nil
+    h3ImageInstall.progress = nil
+    return h3ImageInstall.isFinished
+  }
+
+  private func runH3ImageInstall(files: [URL], trashFullPrecision: Bool) async throws {
+    let picked = try await Self.classifyH3ImageFiles(files)
+    await refresh()
+    let installed = catalog.filter {
+      $0.isDownloaded && isCustom($0)
+        && ModelZoo.specificationForModel($0.file)?.version == .minimaxH3Image
+    }
+    var full = installed.first { $0.file.hasSuffix("_f16.ckpt") }
+    var small = installed.first { $0.file.hasSuffix("_" + MOSSImporter.EightBit.rowwise.fileSuffix) }
+    let needsModel = full == nil && small == nil
+    if needsModel, picked.model == nil { throw H3ImageInstallError.missingModel }
+    // Find the VAE before the long import so a missing one fails at once.
+    var vae: URL?
+    if Self.folder(of: H3ImageVAEImporter.file, in: directories) == nil {
+      if let url = picked.vae {
+        vae = url
+      } else if let model = picked.model, let url = await Self.siblingH3ImageVAE(of: model) {
+        vae = url
+      } else {
+        throw H3ImageInstallError.missingVAE
+      }
+    }
+
+    if needsModel, let source = picked.model {
+      setH3ImageStage(.importingModel)
+      var item = ModelImport(source: source)
+      item.name = "MiniMax H3 Image"
+      let file = try await importModel(item, onProgress: h3ImageProgress(.importingModel))
+      await afterChange()
+      full = catalog.first { $0.file == file }
+    }
+    finishH3ImageStage(.importingModel)
+
+    if let vae {
+      setH3ImageStage(.convertingVAE)
+      let progress = h3ImageProgress(.convertingVAE)
+      try await Self.convertH3ImageVAE(vae, into: addFolder) { value in
+        Task { @MainActor in progress(Double(value)) }
+      }
+      await afterChange()
+    }
+    finishH3ImageStage(.convertingVAE)
+
+    if small == nil, let full {
+      setH3ImageStage(.makingEightBit)
+      let output = Self.eightBitFile(for: full.file, .rowwise)
+      guard canMake8BitCopy(full, .rowwise) else { throw H3ImageInstallError.cantMakeCopy }
+      make8BitCopy(full, .rowwise)
+      while let value = quantizing[output] {
+        h3ImageInstall.progress = value
+        try? await Task.sleep(for: .milliseconds(250))
+      }
+      small = catalog.first { $0.file == output && $0.isDownloaded }
+      guard small != nil else {
+        let reason = errorMessage
+        errorMessage = nil
+        throw H3ImageInstallError.copyFailed(reason)
+      }
+    }
+    finishH3ImageStage(.makingEightBit)
+
+    var fullInUse = false
+    if trashFullPrecision, let small, let full {
+      // As `delete` does, but the copy shares the VAE and text encoder, so only the model's own
+      // files go. Create moves to the copy first: the model just imported is often the one it
+      // picked, still loading its defaults (which `canDelete` turns away), and otherwise it would
+      // fall back to whatever model `refreshModelList` picks.
+      if create.selectedModel == full.file { create.selectedModel = small.file }
+      // Whatever else was using it (a job, a download) gets a minute to let go.
+      let entry = catalog.first { $0.file == full.file } ?? full
+      let deadline = Date().addingTimeInterval(60)
+      while !canDelete(entry), Date() < deadline {
+        try? await Task.sleep(for: .milliseconds(250))
+      }
+      if canDelete(entry) {
+        for url in Self.files(of: full.file, in: directories) {
+          try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+        }
+        try unregisterModel(full.file)
+        await afterChange()
+      } else {
+        fullInUse = true
+      }
+    }
+    // The text encoder and anything else the model lists, as after any import.
+    if let model = catalog.first(where: { $0.file == small?.file ?? full?.file }) { download(model) }
+    if fullInUse { throw H3ImageInstallError.fullInUse }
+  }
+
   nonisolated enum ImportError: LocalizedError {
     case unconvertible(String)
     var errorDescription: String? {
@@ -638,6 +960,9 @@ final class ModelLibrary {
     -> UInt16
   {
     switch version {
+    case .minimaxH3Image:
+      // Tuned for about 2,048 x 2,048 pixels of area.
+      return 32
     case .hunyuanVideo, .wan21_14b, .wan22_5b, .longcatVideoAvatar1_5, .minimaxH3:
       return 12
     case .wan21_1_3b:
@@ -679,7 +1004,13 @@ final class ModelLibrary {
     let named = Set(
       [specification.autoencoder, specification.textEncoder, specification.clipEncoder]
         .compactMap(\.self) + (specification.additionalClipEncoders ?? []))
-    return suffixes.map { stem + $0 }.filter(named.contains)
+    // An 8-bit copy names the same files, and the H3 Image VAE is shared by every copy even when
+    // the model's name would make it look like the import wrote it.
+    let shared = Set(
+      ModelZoo.availableSpecifications.filter { $0.file != file }.flatMap {
+        [$0.autoencoder, $0.textEncoder, $0.clipEncoder].compactMap(\.self) + ($0.additionalClipEncoders ?? [])
+      } + [H3ImageVAEImporter.file])
+    return suffixes.map { stem + $0 }.filter { named.contains($0) && !shared.contains($0) }
   }
 
   /// Removes `file`'s custom.json entries in every models folder, keeping every other entry as
@@ -832,7 +1163,7 @@ final class ModelLibrary {
       .v1, .v2, .sdxlBase, .ssd1b, .sd3, .sd3Large, .pixart, .auraflow, .flux1, .flux2,
       .flux2_9b, .flux2_4b, .flux3_5b, .hunyuanVideo, .wan21_1_3b, .wan21_14b, .wan22_5b,
       .hiDreamI1, .hiDreamO1, .qwenImage, .qwenImage2_1, .zImage, .ernieImage, .cosmos2_5_2b,
-      .ideogram4, .krea2, .ltx2, .ltx2_3, .minimaxH3, .mossImage, .fibo2,
+      .ideogram4, .krea2, .ltx2, .ltx2_3, .minimaxH3, .minimaxH3Image, .mossImage, .fibo2,
     ]
     return versions.map { ($0.rawValue, ModelZoo.humanReadableNameForVersion($0)) }
       .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
