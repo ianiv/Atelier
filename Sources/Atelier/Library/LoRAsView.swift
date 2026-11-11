@@ -263,7 +263,7 @@ struct LoRAImportSheet: View {
     VStack(alignment: .leading, spacing: 12) {
       Text("Import LoRAs").font(.headline)
       Text(
-        "Each file is converted into the folder below and added to its custom_lora.json. Leave the name empty to use the file name and the detected model family."
+        "Each file is converted into the folder below and added to its custom_lora.json. Leave the name empty to use the file name and the detected model family. The number after the trigger words is the scale factor, which multiplies the LoRA's effect; 1 keeps it as trained."
       )
       .font(.callout).foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)
@@ -296,7 +296,7 @@ struct LoRAImportSheet: View {
           library.runImports(version: version)
         }
         .keyboardShortcut(.defaultAction)
-        .disabled(library.isImporting)
+        .disabled(library.isImporting || !library.canRunImports)
       }
     }
     .sheetPadding()
@@ -332,6 +332,16 @@ struct LoRAImportSheet: View {
           text: Binding(
             get: { item.prefix }, set: { library.updateImport(item.id, prefix: $0) }),
           prompt: Text("Trigger words"))
+        TextField(
+          "Scale",
+          value: Binding(
+            get: { item.scaleFactor }, set: { library.updateImport(item.id, scaleFactor: $0) }),
+          format: .number.precision(.fractionLength(0...3)))
+          .multilineTextAlignment(.trailing)
+          .frame(width: 60)
+          .foregroundStyle(item.hasValidScaleFactor ? Color.primary : Color.red)
+          .help("Scale factor, baked into the converted LoRA: 0.5 halves its effect, 2 doubles it. A stored alpha ÷ rank is already applied, so leave it at 1 unless the LoRA is too strong or weak at weight 100%.")
+          .accessibilityLabel("Scale factor")
       }
       .labelsHidden()
       .disabled(library.isImporting)

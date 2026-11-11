@@ -109,7 +109,17 @@ Converting a LoRA to 8-bit in Draw Things deletes the original file and leaves t
 
 1. Click **Import…** and choose `.safetensors` LoRA files, or drop them on the list.
 2. For each file, check the name, add its **trigger words** (the words it was trained on, which you add to your prompt to bring it in), and leave **Model family** on **Detect automatically** unless detection picks the wrong one.
-3. Import. The LoRA is converted, saved in the folder chosen in **Add To** and registered in that folder's `custom_lora.json`. It's usable right away; no relaunch needed.
+3. Optionally change the file's **scale factor**, the number after its trigger words (see below).
+4. Import. The LoRA is converted, saved in the folder chosen in **Add To** and registered in that folder's `custom_lora.json`. It's usable right away; no relaunch needed.
+
+#### Scale factor
+
+The scale factor multiplies the LoRA's effect and is baked into the converted file, as in Draw Things' import. 1 keeps the LoRA as trained, 0.5 halves its effect and 2 doubles it. It must be above 0.
+
+- Trainers scale a LoRA by its alpha ÷ rank (`network_alpha` ÷ `network_dim` in kohya's scripts). When the file stores alpha, as most do, the import already applies alpha ÷ rank, so a LoRA trained at rank 32 with alpha 16 needs no change. The scale factor is applied on top of that.
+- If a LoRA was trained with alpha different from rank but its file doesn't store alpha, set the scale factor to alpha ÷ rank.
+- Also use it for a LoRA that's always too strong or too weak at weight 100%. The LoRA's weight in Create multiplies it the same way at generation time; the scale factor changes what 100% means, so you don't have to set the weight each time.
+- To change the scale factor later, import the original file again.
 
 ### MOSS Image Edit LoRAs
 

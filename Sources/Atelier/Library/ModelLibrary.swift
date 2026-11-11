@@ -60,9 +60,14 @@ final class ModelLibrary {
     var source: URL
     var name = ""
     var prefix = ""
+    /// Multiplies the LoRA's effect, baked into the converted file, as Draw Things' import dialog
+    /// does. The importer applies a stored alpha ÷ rank itself; this is on top of that.
+    var scaleFactor = 1.0
     var progress: Double?
     /// Holds a picked file open until it's imported or removed (iPad).
     private let access: ScopedAccess
+
+    var hasValidScaleFactor: Bool { scaleFactor.isFinite && scaleFactor > 0 }
 
     init(source: URL) {
       self.source = source
@@ -1193,11 +1198,15 @@ final class ModelLibrary {
 
   static let loraExtensions: Set<String> = ["safetensors", "ckpt", "pt", "pth", "bin"]
 
-  func updateImport(_ id: UUID, name: String? = nil, prefix: String? = nil) {
+  func updateImport(_ id: UUID, name: String? = nil, prefix: String? = nil, scaleFactor: Double? = nil) {
     guard let index = importing.firstIndex(where: { $0.id == id }) else { return }
     if let name { importing[index].name = name }
     if let prefix { importing[index].prefix = prefix }
+    if let scaleFactor { importing[index].scaleFactor = scaleFactor }
   }
+
+  /// Every queued LoRA has a scale factor the importer can use.
+  var canRunImports: Bool { !importing.isEmpty && importing.allSatisfy(\.hasValidScaleFactor) }
 
   func removeImport(_ id: UUID) {
     guard importTask == nil else { return }
@@ -1209,7 +1218,7 @@ final class ModelLibrary {
   /// Converts the queued files one by one into `addFolder` and registers each with the
   /// engine, so it can be used right away. `version` nil means detect it from the weights.
   func runImports(version: String?) {
-    guard importTask == nil, !importing.isEmpty else { return }
+    guard importTask == nil, canRunImports else { return }
     errorMessage = nil
     let forced = version.flatMap(ModelVersion.init(rawValue:))
     importTask = Task {
@@ -1236,10 +1245,13 @@ final class ModelLibrary {
   }
 
   @concurrent private nonisolated static func importLoRAFile(
-    _ source: URL, name: String, file: String, version: String?, into folder: URL,
+    _ source: URL, name: String, file: String, version: String?, scaleFactor: Double, into folder: URL,
     progress: @escaping @Sendable (Float) -> Void
   ) async throws -> (ModelVersion, Bool, Bool) {
     // MOSS Image Edit trainer LoRAs need renamed tensors first; see MOSSEditLoRA.
+    // `scaleFactor` is baked in the way the engine's LoRAImporter.import does it: √scale on each
+    // up and down weight (on top of alpha ÷ rank when the file has alpha), the fourth root on
+    // each LoHa factor, so the LoRA's effect is multiplied by the scale.
     let converted = try MOSSEditLoRA.convertedCopy(of: source)
     defer {
       if let converted {
@@ -1247,7 +1259,7 @@ final class ModelLibrary {
       }
     }
     let result = try ModelOp.LoRAImporter.import(
-      downloadedFile: (converted?.url ?? source).path, name: name, filename: file, scaleFactor: 1,
+      downloadedFile: (converted?.url ?? source).path, name: name, filename: file, scaleFactor: scaleFactor,
       forceVersion: version.flatMap(ModelVersion.init(rawValue:)), outputDirectory: folder.path,
       progress: progress)
     return (result.0, result.3, converted?.isEdit ?? false)
@@ -1275,7 +1287,8 @@ final class ModelLibrary {
     // LoRAImporter swaps externalUrls to a temp folder instead, which would race a running
     // generation.
     let (detected, isLoHa, isEdit) = try await Self.importLoRAFile(
-      source, name: stem, file: file, version: version?.rawValue, into: folder, progress: progress)
+      source, name: stem, file: file, version: version?.rawValue, scaleFactor: item.scaleFactor,
+      into: folder, progress: progress)
     guard FileManager.default.fileExists(atPath: folder.appendingPathComponent(file).path)
     else {
       throw CocoaError(.fileNoSuchFile)
