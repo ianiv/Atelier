@@ -947,19 +947,45 @@ struct ColorMatchTests {
     // Far past the limits either way is still only less or more.
     #expect(compared(std: SIMD3(200, 100, 100)).contrast == .init(direction: .more, size: .clear))
     #expect(compared(std: SIMD3(1, 1, 1)).saturation == .init(direction: .less, size: .clear))
-    // With limits that hold the ratio near 1, a ratio far from it would be the same: what's
-    // judged is what `coefficients` scales by.
+    // What's judged is the ratio within the limits, not the one measured. An original with ten
+    // times the edit's spread, under limits that hold the ratio within 5% of 1, is only slightly
+    // more (the measured ratio would be clearly more); under limits within 1% it's the same.
+    let far = ColorMatch.Stats(mean: edit.mean, std: SIMD3(200, 100, 100))
+    let near = ColorMatch.comparison(target: edit, reference: far, chromaLimits: 0.95...1.05, lightnessLimits: 0.95...1.05)
+    #expect(near.contrast == .init(direction: .more, size: .slight) && near.saturation == .init(direction: .more, size: .slight))
+    let narrow = ColorMatch.comparison(target: edit, reference: far, chromaLimits: 0.99...1.01, lightnessLimits: 0.99...1.01)
+    #expect(narrow.contrast == nil && narrow.saturation == nil)
+    // Each channel has its own limits: lightness held near 1 leaves the color clearly more.
+    let lightOnly = ColorMatch.comparison(target: edit, reference: far, lightnessLimits: 0.99...1.01)
+    #expect(lightOnly.contrast == nil && lightOnly.saturation == .init(direction: .more, size: .clear))
+    // And they are the ones `coefficients` scales by.
     for channel in 0..<3 {
-      let reference = ColorMatch.Stats(mean: edit.mean, std: SIMD3(200, 100, 100))
-      let scale = ColorMatch.coefficients(target: edit, reference: reference, channel: channel, mean: 1, spread: 1).scale
+      let scale = ColorMatch.coefficients(target: edit, reference: far, channel: channel, mean: 1, spread: 1).scale
       let limits = channel == 0 ? ColorMatch.lightnessSpreadLimits : ColorMatch.chromaSpreadLimits
       #expect(scale == limits.upperBound)
     }
-    // A flat edit (spread near 0) doesn't make the ratio explode into anything but "more".
-    let flat = ColorMatch.comparison(
-      target: ColorMatch.Stats(mean: SIMD3(50, 0, 0), std: SIMD3(1e-6, 1e-6, 1e-6)),
-      reference: ColorMatch.Stats(mean: SIMD3(50, 0, 0), std: SIMD3(20, 10, 10)))
-    #expect(flat.contrast == .init(direction: .more, size: .clear) && flat.saturation == .init(direction: .more, size: .clear))
+  }
+
+  /// A slider that scales a spread of nothing does nothing, so it reads as the same and is
+  /// disabled, whatever the original holds.
+  @Test func aFlatEditHasNoSpreadToMatch() {
+    let colorful = ColorMatch.Stats(mean: SIMD3(50, 0, 0), std: SIMD3(20, 10, 10))
+    // A grayscale edit of a colorful original: no color to make more vivid.
+    let gray = ColorMatch.comparison(target: ColorMatch.Stats(mean: SIMD3(50, 0, 0), std: SIMD3(20, 1e-6, 1e-6)), reference: colorful)
+    #expect(gray.saturation == nil && gray.contrast == nil)
+    // An edit of one lightness throughout: no contrast to add to, while its color still compares.
+    let level = ColorMatch.comparison(target: ColorMatch.Stats(mean: SIMD3(50, 0, 0), std: SIMD3(1e-6, 5, 5)), reference: colorful)
+    #expect(level.contrast == nil && level.saturation == .init(direction: .more, size: .clear))
+    // Flat in one color channel only: the other still decides.
+    let oneAxis = ColorMatch.comparison(target: ColorMatch.Stats(mean: SIMD3(50, 0, 0), std: SIMD3(20, 0, 5)), reference: colorful)
+    #expect(oneAxis.saturation == .init(direction: .more, size: .clear))
+    // Just under the floor is flat, just over isn't.
+    typealias Limits = ColorMatch.Comparison
+    let under = Limits.flatSpread * 0.9
+    let over = Limits.flatSpread * 1.1
+    #expect(ColorMatch.comparison(target: ColorMatch.Stats(mean: SIMD3(50, 0, 0), std: SIMD3(under, under, under)), reference: colorful) == Limits())
+    let justOver = ColorMatch.comparison(target: ColorMatch.Stats(mean: SIMD3(50, 0, 0), std: SIMD3(over, over, over)), reference: colorful)
+    #expect(justOver.contrast?.direction == .more && justOver.saturation?.direction == .more)
   }
 
   @Test func hintsReadInPlainWords() {
@@ -969,8 +995,11 @@ struct ColorMatchTests {
     #expect(ColorMatchSheet.contrastHint(.init(direction: .more, size: .slight)) == "The original has slightly more contrast.")
     #expect(ColorMatchSheet.tintHint(.init(direction: .warmer, size: .clear)) == "The original is warmer.")
     #expect(ColorMatchSheet.tintHint(.init(direction: .greener, size: .slight)) == "The original is slightly greener.")
+    #expect(ColorMatchSheet.tintHint(.init(direction: .cooler, size: .clear)) == "The original is cooler.")
+    #expect(ColorMatchSheet.tintHint(.init(direction: .pinker, size: .slight)) == "The original is slightly pinker.")
     #expect(ColorMatchSheet.saturationHint(.init(direction: .more, size: .clear)) == "The original is more vivid.")
     #expect(ColorMatchSheet.saturationHint(.init(direction: .less, size: .clear)) == "The original is more muted.")
+    #expect(ColorMatchSheet.saturationHint(.init(direction: .less, size: .slight)) == "The original is slightly more muted.")
     #expect(ColorMatchSheet.contrastHint(nil) == "Same as the original.")
   }
 }

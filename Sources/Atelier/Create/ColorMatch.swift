@@ -770,18 +770,29 @@ nonisolated enum ColorMatch {
     static let sameSpread = 0.03
     /// One this close to 1 is only slightly less or more.
     static let slightSpread = 0.1
+    /// An edit whose spread (in Lab units) is under this is flat in that channel: a grayscale
+    /// picture's color, or a plain fill's lightness. Scaling next to nothing, even by the
+    /// limit, moves it by less than can be seen, so the slider would do nothing whatever the
+    /// original holds; it reads as the same, which disables it, rather than as "more vivid".
+    static let flatSpread = 0.5
   }
 
   /// `reference` (the original) beside `target` (the edit). The spreads are judged by the ratio
   /// `coefficients` uses, after its limits, since that is what the slider can do: an original
   /// far flatter than the edit is still only "less", and one whose ratio the limit brings to 1
-  /// would be "same".
-  static func comparison(target: Stats, reference: Stats) -> Comparison {
+  /// would be "same". A channel the edit is flat in (`Comparison.flatSpread`) is the same too:
+  /// there's nothing there for a ratio to scale. The limits are `coefficients`' own; they're
+  /// parameters only so a test can tell that the ratio judged is the limited one.
+  static func comparison(
+    target: Stats, reference: Stats,
+    chromaLimits: ClosedRange<Double> = chromaSpreadLimits, lightnessLimits: ClosedRange<Double> = lightnessSpreadLimits
+  ) -> Comparison {
     typealias Limits = Comparison
     func size(_ amount: Double, slight: Double) -> Comparison.Size { amount < slight ? .slight : .clear }
-    // A channel's spread ratio less 1, within its limits.
+    // A channel's spread ratio less 1, within its limits; 0 where the edit is flat.
     func spread(_ channel: Int) -> Double {
-      let limits = channel == 0 ? lightnessSpreadLimits : chromaSpreadLimits
+      guard target.std[channel] >= Limits.flatSpread else { return 0 }
+      let limits = channel == 0 ? lightnessLimits : chromaLimits
       return min(max(reference.std[channel] / target.std[channel], limits.lowerBound), limits.upperBound) - 1
     }
     func spreadDifference(_ excess: Double) -> Comparison.Difference<Comparison.Spread>? {

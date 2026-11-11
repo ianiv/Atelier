@@ -85,10 +85,10 @@ struct ColorMatchSheet: View {
     func percent(_ fraction: Double) -> Int { Int((fraction * 100).rounded()) }
     switch measurements.reason {
     case .shape:
-      return "The original has a different shape, so all of it is compared."
+      return "The original has a different shape, so the whole picture is compared."
     case .tooLittleUnchanged where unchangedOnly:
       // Most of it was edited, or the whole picture shifted: the one line reads for both.
-      return "Too little of the picture was left alone, so all of it is compared."
+      return "Too little of the picture was left alone, so the whole picture is compared."
     default:
       if unchangedOnly, let counted = measurements.unchanged?.counted {
         return "Compares only the parts the edit left alone (\(percent(counted))% of the picture)."
