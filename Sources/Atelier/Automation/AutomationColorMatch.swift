@@ -11,7 +11,11 @@ extension Automation {
   /// the canvas shows it, matching it again goes back to the same original, a match left waiting
   /// while another project opens saves into its own project and leaves the open one and the
   /// canvas alone, and the action is unavailable for a step with no original, for a video, and
-  /// for a step whose moodboard images all have weight 0.
+  /// for a step whose moodboard images all have weight 0. For Match Colors… (the sheet's
+  /// settings): the one-click match records strength 1 and lightness 0 whatever the sheet last
+  /// used, a match at strength 0.5 records that and leaves about half the shift, a match with
+  /// other settings queues beside one that's waiting while the same settings don't, and the
+  /// sheet can open while a match is pending. The sheet's remembered values are put back.
   ///
   ///   Atelier --color-match-check --project NAME [--input-image FILE] [--quit]
   ///
@@ -30,7 +34,16 @@ extension Automation {
         print("\(ok ? "PASS" : "FAIL") \(message)")
         fflush(stdout)
       }
+      // What the sheet last used, set away from the defaults for the run: the one-click match
+      // mustn't read them. Put back at the end.
+      let defaults = UserDefaults.standard
+      let sheetKeys = ["colorMatchStrength", "colorMatchLightness"]
+      let savedSheetValues = sheetKeys.map { defaults.object(forKey: $0) }
+      for key in sheetKeys { defaults.set(0.5, forKey: key) }
       @MainActor func finish() {
+        for (key, value) in zip(sheetKeys, savedSheetValues) {
+          if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
+        }
         print(failures == 0 ? "color match check: all passed" : "color match check: \(failures) failed")
         fflush(stdout)
         if args.contains("--quit") { AppLifecycle.quit() }
@@ -172,7 +185,11 @@ extension Automation {
       check(
         match.project == projectName && match.sourceTensorId == edit.tensorId && queued.target == .local,
         "the match joined the queue, on this device, for the edit in its project")
+      check(
+        match.strength == 1 && match.luminance == 0,
+        "the one-click match uses strength 1 and lightness 0, not what the sheet last used (\(match.strength), \(match.luminance))")
       check(!model.canMatchCanvasColors, "the menu item is disabled while the match is waiting")
+      check(model.canOpenMatchColors, "Match Colors… can still open while the match is waiting")
       let again = try? model.queueColorMatch(edit)
       check(
         again == queued.id && model.queue.waiting.count(where: { $0.request?.colorMatch != nil }) == 1,
@@ -197,7 +214,7 @@ extension Automation {
         history.parent(of: result)?.tensorId == edit.tensorId && result.inputTensorId == edit.tensorId,
         "the result is a new step after the edit")
       check(
-        result.sidecar.colorMatch.map { $0.strength == 1 && !$0.luminance && $0.originalTensorId == originalTensorId && $0.shift != nil } == true,
+        result.sidecar.colorMatch.map { $0.strength == 1 && $0.luminance == 0 && $0.originalTensorId == originalTensorId && $0.shift != nil } == true,
         "the result records the match and its original (\(result.sidecar.colorMatch.map { "\($0)" } ?? "none"))")
       check(result.sidecar.prompt == edit.sidecar.prompt && result.sidecar.seed == edit.sidecar.seed, "the result keeps the edit's settings")
       let note = model.statusNote ?? ""
@@ -231,6 +248,51 @@ extension Automation {
       } catch {
         check(false, "matching the result again: \(error.localizedDescription)")
       }
+
+      // Match Colors…: other settings queue beside a match that's waiting, the same ones don't.
+      model.setQueuePaused(true)
+      let half = ColorMatch.Options(strength: 0.5)
+      guard let fullID = try? model.queueColorMatch(edit), let halfID = try? model.queueColorMatch(edit, options: half) else {
+        check(false, "matches of the edit could be queued again once the first was done")
+        return finish()
+      }
+      let halfAgain = try? model.queueColorMatch(edit, options: ColorMatch.Options(strength: 0.1 + 0.4))
+      check(
+        halfID != fullID && model.queue.waiting.count(where: { $0.request?.colorMatch?.sourceTensorId == edit.tensorId }) == 2,
+        "a match with other settings queues beside the one waiting")
+      check(halfAgain == halfID, "a match with the same settings as one waiting isn't queued again")
+      check(
+        model.pendingColorMatch(for: edit, options: half)?.id == halfID && model.pendingColorMatch(for: edit)?.id == fullID
+          && model.pendingColorMatch(for: edit, options: ColorMatch.Options(strength: 0.5, luminance: 0.5)) == nil,
+        "a pending match is found by its settings")
+      model.show(edit)
+      check(
+        await shown(edit) && model.canOpenMatchColors && !model.canMatchCanvasColors,
+        "while they wait, Match Colors… can open and the one-click item can't be chosen")
+      // The sheet opens for the canvas image, as its menu item does, and keeps its step.
+      model.colorMatchSheetItem = model.imageItem
+      try? await Task.sleep(for: .seconds(1))
+      check(model.colorMatchSheetItem?.tensorId == edit.tensorId, "the Match Colors… sheet opens for the canvas image")
+      model.colorMatchSheetItem = nil
+      try? await Task.sleep(for: .milliseconds(500))
+      model.setQueuePaused(false)
+      _ = await ended(fullID)
+      let (halfJob, _) = await ended(halfID)
+      guard let halfJob, case .finished(let halfTensorId) = halfJob.status,
+            let halfResult = history.item(tensorId: halfTensorId),
+            let halfImage = await history.image(tensorId: halfTensorId, in: projectName), let halfPixels = ColorMatch.rgba(halfImage)
+      else {
+        check(false, "the match at strength 0.5 finished (\(halfJob.map { "\($0.status)" } ?? "still running"), \(model.errorMessage ?? "no error"))")
+        return finish()
+      }
+      check(
+        halfResult.sidecar.colorMatch.map { $0.strength == 0.5 && $0.luminance == 0 && $0.originalTensorId == originalTensorId } == true,
+        "the match at strength 0.5 records it (\(halfResult.sidecar.colorMatch.map { "\($0)" } ?? "none"))")
+      let halfStats = ColorMatch.stats(rgba: ColorMatch.downsampled(halfPixels, width: halfImage.width, height: halfImage.height))
+      let left = halfStats.mean - originalStats.mean
+      check(
+        abs(left.z - injected.z / 2) < 0.4 && abs(left.y - injected.y / 2) < 0.4,
+        String(format: "the match at strength 0.5 leaves about half the shift (mean a %+.2f, b %+.2f off)", left.y, left.z))
 
       // Left waiting while another project opens: it saves into its own, not the open one, and
       // leaves the canvas alone.

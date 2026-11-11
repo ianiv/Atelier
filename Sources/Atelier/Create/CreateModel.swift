@@ -2232,19 +2232,44 @@ final class CreateModel {
   /// (not a video) that has an original to match, and that isn't waiting or being matched already
   /// (matching it twice would make the same image).
   var canMatchCanvasColors: Bool {
-    guard canvasShowsImage, let item = imageItem, hasOriginal(item) else { return false }
+    guard canOpenMatchColors, let item = imageItem else { return false }
     return pendingColorMatch(for: item) == nil
   }
 
-  /// The waiting or running Match Colors to Original job for `item`, a step of the current project.
-  func pendingColorMatch(for item: HistoryItem) -> JobQueue.Job? {
-    queue.pendingColorMatch(colorMatchJob(for: item, options: ColorMatch.Options()))
+  /// The step the Match Colors… sheet (`ColorMatchSheet`) is open for. The sheet keeps it: the
+  /// canvas can change while it's open.
+  var colorMatchSheetItem: HistoryItem?
+
+  /// Whether Match Colors… can open for the canvas: a finished image saved in the project (not a
+  /// video) that has an original to match. A match already waiting or running doesn't keep it
+  /// shut, since the sheet can queue one with other settings.
+  var canOpenMatchColors: Bool {
+    guard canvasShowsImage, let item = imageItem else { return false }
+    return hasOriginal(item)
   }
 
+  /// The waiting or running Match Colors to Original job for `item`, a step of the current
+  /// project, with the same settings as `options` (by default the one-click item's).
+  func pendingColorMatch(for item: HistoryItem, options: ColorMatch.Options = ColorMatch.Options()) -> JobQueue.Job? {
+    queue.pendingColorMatch(colorMatchJob(for: item, options: options))
+  }
+
+  /// Its settings in whole percents, so the same ones always make the same job (`isSameMatch`).
   private func colorMatchJob(for item: HistoryItem, options: ColorMatch.Options) -> ColorMatch.Job {
-    ColorMatch.Job(
+    let options = options.snapped
+    return ColorMatch.Job(
       project: history.project.name, sourceTensorId: item.tensorId, strength: options.strength,
-      luminance: options.matchLuminance)
+      luminance: options.luminance)
+  }
+
+  /// What the Match Colors… sheet previews `item` with: the step and its original, read and
+  /// measured as the job does (`run(_:request:job:)`); nil when either can't be read.
+  func colorMatchPreview(for item: HistoryItem) async -> ColorMatch.Preview? {
+    let project = history.project
+    guard let original = await originalImage(for: item, in: project),
+          let edited = await project.read({ $0.image(tensorId: item.tensorId) })
+    else { return nil }
+    return await ColorMatch.Preview.make(edited: edited, original: original.image)
   }
 
   /// Whether a step has an image its colors can be matched to (see `originalImage(for:)`). A
@@ -2287,7 +2312,8 @@ final class CreateModel {
   /// project. It runs on this device whatever Run on says (it needs no model or GPU), in turn with
   /// the other jobs, and saves into that project even if another is open by then
   /// (`run(_:request:job:)`). Returns the job's id: the one already waiting or running for the
-  /// same step when there is one, since a second would make the same image.
+  /// same step with the same settings when there is one, since a second would make the same
+  /// image. Other settings make another image, so they queue beside it.
   @discardableResult
   func queueColorMatch(_ item: HistoryItem, options: ColorMatch.Options = ColorMatch.Options(), fromAgent: Bool = false) throws
     -> UUID
@@ -2320,13 +2346,22 @@ final class CreateModel {
     }
   }
 
+  /// Match Colors… on `item` with the sheet's settings.
+  func matchColors(_ item: HistoryItem, options: ColorMatch.Options) {
+    do {
+      try queueColorMatch(item, options: options)
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
+
   /// Queues a match for an agent (AgentTools), or joins the one already waiting or running for the
-  /// step, and returns the step it saved. `progress` hears the step (of 1,000) and what it's
+  /// step with the same settings, and returns the step it saved. `progress` hears the step (of 1,000) and what it's
   /// doing. Cancelling the caller cancels the job.
   func matchColors(
     forAgent item: HistoryItem, options: ColorMatch.Options, progress: @escaping (Int, String) -> Void
   ) async throws -> HistoryItem {
-    let pending = pendingColorMatch(for: item)?.id
+    let pending = pendingColorMatch(for: item, options: options)?.id
     let id = try queueColorMatch(item, options: options, fromAgent: true)
     // A match someone else queued (the canvas menu) is theirs: giving up on it only ends this wait.
     let joined = id == pending
@@ -2829,9 +2864,9 @@ final class CreateModel {
 
   /// Queues a finished, failed or cancelled job again, same settings and seed.
   func retry(_ id: UUID) {
-    // A match already waiting or running for the same step would make the same image.
+    // A match already waiting or running for the same step and settings would make the same image.
     if let match = queue.recent.first(where: { $0.id == id })?.request?.colorMatch, queue.pendingColorMatch(match) != nil {
-      statusNote = "Colors are already being matched for that image, so it wasn't queued again."
+      statusNote = "Colors are already being matched for that image with those settings, so it wasn't queued again."
       return
     }
     queue.retry(id)

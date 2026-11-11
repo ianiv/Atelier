@@ -146,7 +146,7 @@ struct QueueRow: View {
           .foregroundStyle(.secondary)
           .lineLimit(1)
         if let match = request.colorMatch, case .finished = job.status, let shift = match.record?.shift {
-          Text(Self.shiftText(shift, luminance: match.luminance))
+          Text(Self.shiftText(shift, luminance: match.luminance > 0))
             .font(.caption)
             .foregroundStyle(.secondary)
             .lineLimit(1)
@@ -271,7 +271,7 @@ struct QueueRow: View {
     let size = "\(configuration.width)×\(configuration.height)"
     if let match = request.colorMatch {
       var parts = [create.runLocationName(of: job), size, "strength \(Int((match.strength * 100).rounded()))%",
-                   match.luminance ? "lightness matched" : "lightness kept"]
+                   Self.lightnessText(match.luminance)]
       // Its project, when it isn't the one open.
       if match.project != create.history.project.name { parts.insert("in “\(match.project)”", at: 1) }
       return (parts + [took]).compactMap(\.self).joined(separator: " · ")
@@ -281,6 +281,13 @@ struct QueueRow: View {
       video.map { length($0, configuration) }, "seed \(request.seed)",
       "\(configuration.steps) steps", took,
     ].compactMap(\.self).joined(separator: " · ")
+  }
+
+  /// How much of the lightness a colour match moves: "lightness kept" at none, "lightness matched"
+  /// at all of it, else the amount.
+  private static func lightnessText(_ luminance: Double) -> String {
+    let percent = Int((luminance * 100).rounded())
+    return percent <= 0 ? "lightness kept" : percent >= 100 ? "lightness matched" : "lightness \(percent)%"
   }
 
   /// "Δa −0.4, Δb +5.9 taken out".

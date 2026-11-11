@@ -1,3 +1,4 @@
+import Accelerate
 @testable import Atelier
 import CoreGraphics
 import Foundation
@@ -96,7 +97,7 @@ struct ColorMatchTests {
     #expect(abs(kept.mean.x - target.mean.x) < 0.3)
     #expect(abs(kept.mean.z - reference.mean.z) < 0.3)
     let matched = ColorMatch.stats(
-      rgba: ColorMatch.transferred(rgba: brighter, target: target, reference: reference, options: .init(matchLuminance: true)))
+      rgba: ColorMatch.transferred(rgba: brighter, target: target, reference: reference, options: .init(luminance: 1)))
     #expect(abs(matched.mean.x - reference.mean.x) < 0.3)
   }
 
@@ -165,7 +166,7 @@ struct ColorMatchTests {
 
   /// What a step records survives `profile_data`'s snake-case coding, shift included.
   @Test func recordRoundTripsWithItsShift() throws {
-    let record = ColorMatch.Record(strength: 0.5, luminance: true, originalTensorId: 7, shift: .init(l: 1, a: -2, b: 3.5))
+    let record = ColorMatch.Record(strength: 0.5, luminance: 0.25, originalTensorId: 7, shift: .init(l: 1, a: -2, b: 3.5))
     let encoder = JSONEncoder()
     encoder.keyEncodingStrategy = .convertToSnakeCase
     let decoder = JSONDecoder()
@@ -174,5 +175,142 @@ struct ColorMatchTests {
     // Saved before the shift was recorded.
     let old = try decoder.decode(ColorMatch.Record.self, from: Data(#"{"strength":1,"luminance":false}"#.utf8))
     #expect(old.shift == nil && old.originalTensorId == nil)
+  }
+
+  /// The default options (the one-click item's) make the bytes they made before lightness became
+  /// an amount: a and b moved by the full transfer, L not touched.
+  @Test func defaultOptionsMakeTheSamePixelsAsBefore() {
+    let original = pixels(3000, seed: 13)
+    let edited = shifted(original, by: SIMD3(5, -1.5, 6))
+    let target = ColorMatch.stats(rgba: edited)
+    let reference = ColorMatch.stats(rgba: original)
+    // The transfer as it was written then, at strength 1 with lightness off.
+    var planes = ColorMatch.lab(rgba: edited)
+    func moved(_ values: [Double], _ channel: Int) -> [Double] {
+      let k = reference.std[channel] / target.std[channel]
+      let scale = 1 + 1.0 * (k - 1)
+      let offset = 1.0 * (reference.mean[channel] - k * target.mean[channel])
+      return vDSP.add(offset, vDSP.multiply(scale, values))
+    }
+    planes.a = moved(planes.a, 1)
+    planes.b = moved(planes.b, 2)
+    let before = ColorMatch.encoded(lab: planes, alpha: [UInt8](repeating: 255, count: planes.l.count))
+    #expect(ColorMatch.transferred(rgba: edited, target: target, reference: reference, options: .init()) == before)
+    #expect(ColorMatch.Options() == ColorMatch.Options(strength: 1, luminance: 0))
+  }
+
+  @Test func halfStrengthTakesOutHalfTheShift() {
+    let original = pixels(4096, seed: 15)
+    let warm = shifted(original, by: SIMD3(0, 2, 8))
+    let target = ColorMatch.stats(rgba: warm)
+    let reference = ColorMatch.stats(rgba: original)
+    let half = ColorMatch.stats(
+      rgba: ColorMatch.transferred(rgba: warm, target: target, reference: reference, options: .init(strength: 0.5)))
+    #expect(abs((half.mean.z - reference.mean.z) - 4) < 0.3)
+    #expect(abs((half.mean.y - reference.mean.y) - 1) < 0.3)
+    #expect(abs(half.mean.x - target.mean.x) < 0.3)
+  }
+
+  /// Lightness is an amount: half of it moves mean L halfway, and all of it is what matching
+  /// lightness did when it was on or off (the same coefficients, so the same bytes).
+  @Test func lightnessMovesByItsAmount() {
+    let original = pixels(4096, seed: 17)
+    let brighter = shifted(original, by: SIMD3(8, 0, 4))
+    let target = ColorMatch.stats(rgba: brighter)
+    let reference = ColorMatch.stats(rgba: original)
+    let half = ColorMatch.stats(
+      rgba: ColorMatch.transferred(rgba: brighter, target: target, reference: reference, options: .init(luminance: 0.5)))
+    #expect(abs((half.mean.x - reference.mean.x) - 4) < 0.3)
+    // Colors still move all the way.
+    #expect(abs(half.mean.z - reference.mean.z) < 0.3)
+    // Lightness moves by strength × luminance.
+    let quarter = ColorMatch.stats(
+      rgba: ColorMatch.transferred(
+        rgba: brighter, target: target, reference: reference, options: .init(strength: 0.5, luminance: 0.5)))
+    #expect(abs((quarter.mean.x - reference.mean.x) - 6) < 0.3)
+    // All of it, as it was written when it was on: every channel by `strength`.
+    let strength = 0.75
+    var planes = ColorMatch.lab(rgba: brighter)
+    func moved(_ values: [Double], _ channel: Int) -> [Double] {
+      let k = reference.std[channel] / target.std[channel]
+      let scale = 1 + strength * (k - 1)
+      let offset = strength * (reference.mean[channel] - k * target.mean[channel])
+      return vDSP.add(offset, vDSP.multiply(scale, values))
+    }
+    planes.l = moved(planes.l, 0)
+    planes.a = moved(planes.a, 1)
+    planes.b = moved(planes.b, 2)
+    let before = ColorMatch.encoded(lab: planes, alpha: [UInt8](repeating: 255, count: planes.l.count))
+    let full = ColorMatch.transferred(
+      rgba: brighter, target: target, reference: reference, options: .init(strength: strength, luminance: 1))
+    #expect(full == before)
+  }
+
+  /// The sheet's preview is the job's transfer on the small image, with the full images' statistics.
+  @Test func previewRendersAsTheTransferDoes() async throws {
+    // Larger than the preview on one side and than the statistics' 512, so both are downsampled.
+    let width = 1000
+    let height = 400
+    var original: [UInt8] = []
+    for y in 0..<height {
+      for x in 0..<width {
+        original += [UInt8(60 + x * 120 / width), UInt8(70 + y * 100 / height), UInt8(90 + (x + y) % 80), 255]
+      }
+    }
+    let warm = shifted(original, by: SIMD3(3, 0, 6))
+    let originalImage = try #require(ColorMatch.cgImage(rgba: original, width: width, height: height))
+    let warmImage = try #require(ColorMatch.cgImage(rgba: warm, width: width, height: height))
+    let preview = try #require(await ColorMatch.Preview.make(edited: warmImage, original: originalImage))
+    #expect(preview.width == ColorMatch.Preview.side && preview.height == 307)
+    #expect(preview.original.width == preview.width && preview.original.height == preview.height)
+    // The statistics the job takes.
+    let warmPixels = try #require(ColorMatch.rgba(warmImage))
+    let originalPixels = try #require(ColorMatch.rgba(originalImage))
+    #expect(preview.target == ColorMatch.stats(rgba: ColorMatch.downsampled(warmPixels, width: width, height: height)))
+    #expect(preview.reference == ColorMatch.stats(rgba: ColorMatch.downsampled(originalPixels, width: width, height: height)))
+    #expect(abs(preview.shift.b - 6) < 0.5)
+    for options in [ColorMatch.Options(), ColorMatch.Options(strength: 0.4, luminance: 0.7)] {
+      let rendered = try #require(preview.render(options))
+      let expected = ColorMatch.transferred(rgba: preview.pixels, target: preview.target, reference: preview.reference, options: options)
+      #expect(ColorMatch.rgba(rendered) == expected)
+      let concurrent = try #require(try await preview.rendering(options))
+      #expect(ColorMatch.rgba(concurrent) == expected)
+    }
+  }
+
+  /// Steps saved while lightness was on or off hold `luminance` as true or false; they read as
+  /// all or none of it. All and none are still written that way, for copies of Atelier from then.
+  @Test func recordReadsLuminanceAsBoolOrAmount() throws {
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    func record(_ luminance: String) throws -> ColorMatch.Record {
+      try decoder.decode(
+        ColorMatch.Record.self, from: Data(#"{"strength":0.5,"luminance":\#(luminance),"original_tensor_id":7}"#.utf8))
+    }
+    #expect(try record("true") == ColorMatch.Record(strength: 0.5, luminance: 1, originalTensorId: 7))
+    #expect(try record("false") == ColorMatch.Record(strength: 0.5, luminance: 0, originalTensorId: 7))
+    #expect(try record("0.35") == ColorMatch.Record(strength: 0.5, luminance: 0.35, originalTensorId: 7))
+    func written(_ luminance: Double) throws -> String {
+      try #require(String(data: JSONEncoder().encode(ColorMatch.Record(strength: 1, luminance: luminance)), encoding: .utf8))
+    }
+    #expect(try written(0).contains(#""luminance":false"#))
+    #expect(try written(1).contains(#""luminance":true"#))
+    #expect(try written(0.35).contains(#""luminance":0.35"#))
+  }
+
+  /// The same step with other settings is another match, and may queue beside the first; the same
+  /// settings, however their numbers were arrived at, are the same match.
+  @Test func isSameMatchComparesSettings() {
+    let match = ColorMatch.Job(project: "P", sourceTensorId: 4, strength: 1, luminance: 0)
+    #expect(match.isSameMatch(as: match))
+    #expect(!match.isSameMatch(as: ColorMatch.Job(project: "P", sourceTensorId: 4, strength: 0.5, luminance: 0)))
+    #expect(!match.isSameMatch(as: ColorMatch.Job(project: "P", sourceTensorId: 4, strength: 1, luminance: 0.5)))
+    #expect(!match.isSameMatch(as: ColorMatch.Job(project: "P", sourceTensorId: 5, strength: 1, luminance: 0)))
+    #expect(!match.isSameMatch(as: ColorMatch.Job(project: "Q", sourceTensorId: 4, strength: 1, luminance: 0)))
+    // Within the same whole percent.
+    let third = ColorMatch.Job(project: "P", sourceTensorId: 4, strength: 0.1 + 0.2, luminance: 0.7)
+    #expect(third.isSameMatch(as: ColorMatch.Job(project: "P", sourceTensorId: 4, strength: 0.3, luminance: 0.7000001)))
+    #expect(ColorMatch.Options(strength: 1.4, luminance: -1).snapped == ColorMatch.Options(strength: 1, luminance: 0))
+    #expect(ColorMatch.Options(strength: 0.256, luminance: 0.254).snapped == ColorMatch.Options(strength: 0.26, luminance: 0.25))
   }
 }

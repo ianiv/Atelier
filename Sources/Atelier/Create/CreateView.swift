@@ -361,6 +361,9 @@ struct CanvasView: View {
     .sheet(isPresented: Bindable(model).upscalingCanvasImage) {
       ImageUpscaleSheet(width: model.image?.width ?? 0, height: model.image?.height ?? 0)
     }
+    .sheet(item: Bindable(model).colorMatchSheetItem) { item in
+      ColorMatchSheet(item: item)
+    }
     .sheet(item: $droppedVideo) { video in
       VideoExportSheet(
         width: video.composition.width, height: video.composition.height,
@@ -623,6 +626,8 @@ struct CanvasView: View {
       .disabled(!model.canUpscaleCanvasImage)
     Button("Match Colors to Original") { model.matchCanvasColors() }
       .disabled(!model.canMatchCanvasColors)
+    Button("Match Colors…") { model.colorMatchSheetItem = model.imageItem }
+      .disabled(!model.canOpenMatchColors)
     Divider()
     MaskCopyItems(model: model, undoManager: undoManager)
     Divider()

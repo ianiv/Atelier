@@ -349,13 +349,16 @@ final class AgentTools {
       "name": "match_colors",
       "title": "Match colors to original",
       "description":
-        "Matches an edited image's colors to the image it was made from (Reinhard color transfer in Lab), taking out the warm or cool shift edit models often add, like Match Colors to Original in the canvas menu. The original is the step's input (the canvas it was edited from), else its first moodboard image; a step this tool made goes back to that same original. Runs as a job in Atelier's Queue on this device, after what's queued there: by default it waits and returns the new history step (saved after it in the step's project, and shown on the canvas when that follows the queue), the shift removed (delta_b > 0: the edit had come out warmer/yellower; delta_a > 0: more magenta) and job_id. With background: true it returns a job_id at once for get_job, list_jobs and cancel_job. A step already waiting or being matched isn't queued twice: the call joins that job (and its options). Not for videos.",
+        "Matches an edited image's colors to the image it was made from (Reinhard color transfer in Lab), taking out the warm or cool shift edit models often add, like Match Colors to Original in the canvas menu. The original is the step's input (the canvas it was edited from), else its first moodboard image; a step this tool made goes back to that same original. Runs as a job in Atelier's Queue on this device, after what's queued there: by default it waits and returns the new history step (saved after it in the step's project, and shown on the canvas when that follows the queue), the shift removed (delta_b > 0: the edit had come out warmer/yellower; delta_a > 0: more magenta) and job_id. With background: true it returns a job_id at once for get_job, list_jobs and cancel_job. A step already waiting or being matched with the same strength and luminance isn't queued twice: the call joins that job. Other settings queue another job. Not for videos.",
       "inputSchema": [
         "type": "object",
         "properties": [
           "history_step": ["type": "integer", "description": "A history step from list_history or generate. Omit for the canvas image."],
           "strength": ["type": "number", "minimum": 0, "maximum": 1, "description": "How far to move the colors, 0–1. Default 1."],
-          "luminance": ["type": "boolean", "description": "Also match lightness. Default false: edits often mean to change brightness."],
+          "luminance": [
+            "type": ["boolean", "number"], "minimum": 0, "maximum": 1,
+            "description": "How much of the lightness to match as well: true (all of it), false (none), or a number 0–1. Default false: edits often mean to change brightness.",
+          ],
           "background": ["type": "boolean", "description": "Return a job_id at once instead of waiting. Default false."],
         ],
       ],
@@ -1740,8 +1743,9 @@ final class AgentTools {
   }
 
   /// match_colors: queues Match Colors to Original as a job like generate's (waiting for it, or
-  /// with `background` answering with its id). A step already waiting or being matched isn't
-  /// queued again, since the result would be the same: the call joins that job instead.
+  /// with `background` answering with its id). A step already waiting or being matched with the
+  /// same settings isn't queued again, since the result would be the same: the call joins that job
+  /// instead.
   private func matchColors(_ arguments: [String: Any], progress: @escaping (Progress) -> Void) async throws -> [String: Any] {
     if arguments["history_step"] != nil, Self.int(arguments["history_step"]) == nil { throw ToolError("`history_step` is a history step number (see list_history).") }
     if let background = arguments["background"], !Self.isBoolean(background) { throw ToolError("`background` must be true or false.") }
@@ -1770,13 +1774,21 @@ final class AgentTools {
       options.strength = value
     }
     if let luminance = arguments["luminance"] {
-      guard Self.isBoolean(luminance), let value = luminance as? Bool else { throw ToolError("`luminance` must be true or false.") }
-      options.matchLuminance = value
+      // True or false, as it was before it could be an amount, or how much.
+      if Self.isBoolean(luminance), let value = luminance as? Bool {
+        options.luminance = value ? 1 : 0
+      } else if let value = (luminance as? NSNumber)?.doubleValue, (0...1).contains(value) {
+        options.luminance = value
+      } else {
+        throw ToolError("`luminance` must be true or false, or a number from 0 to 1.")
+      }
     }
+    // In whole percents, as the job is queued, so the same settings find the same job below.
+    options = options.snapped
     let project = create.history.project.name
     let match = ColorMatch.Job(
-      project: project, sourceTensorId: item.tensorId, strength: options.strength, luminance: options.matchLuminance)
-    // Another call's job for the same step: this call answers with it.
+      project: project, sourceTensorId: item.tensorId, strength: options.strength, luminance: options.luminance)
+    // Another call's job for the same step and settings: this call answers with it.
     if let existing = jobs.values.first(where: { $0.finishedAt == nil && $0.colorMatch?.isSameMatch(as: match) == true }) {
       return try await answer(existing, background: background, progress: progress)
     }
@@ -1790,18 +1802,21 @@ final class AgentTools {
       let saved = try await self.create.matchColors(forAgent: item, options: options) { step, message in
         update(Progress(step: step, total: 1_000, message: message))
       }
-      // What the saved step records: a job already pending for the step may have had other options.
+      // What the saved step records.
       let record = saved.sidecar.colorMatch
       func rounded(_ value: Double) -> Double { (value * 100).rounded() / 100 }
+      // True or false when it's all or nothing, as before it could be an amount.
+      let luminance = record?.luminance ?? options.luminance
       var result: [String: Any] = [
         "project": project, "history_step": saved.id.logicalTime, "matched_step": matchedStep,
-        "strength": record?.strength ?? options.strength, "luminance": record?.luminance ?? options.matchLuminance,
+        "strength": record?.strength ?? options.strength,
+        "luminance": luminance == 0 || luminance == 1 ? luminance == 1 : luminance,
       ]
       if let shift = record?.shift {
         result["delta_a"] = rounded(shift.a)
         result["delta_b"] = rounded(shift.b)
         result["summary"] = shift.summary
-        if record?.luminance == true { result["delta_l"] = rounded(shift.l) }
+        if luminance > 0 { result["delta_l"] = rounded(shift.l) }
       }
       if project != self.create.history.project.name {
         result["note"] = "Saved into “\(project)”, the project the step is in; another project is open now."

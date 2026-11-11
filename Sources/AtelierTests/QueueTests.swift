@@ -92,7 +92,7 @@ struct SavedQueueTests {
   /// open, with its step, options and the step after which it saves.
   @Test func aColorMatchComesBackInAnyProject() throws {
     try withTestFolder { folder in
-      let match = ColorMatch.Job(project: "P", sourceTensorId: 12, strength: 0.75, luminance: true)
+      let match = ColorMatch.Job(project: "P", sourceTensorId: 12, strength: 0.75, luminance: 0.4)
       let json = try #require(String(data: JSONEncoder().encode(match), encoding: .utf8))
       try write([entry(colorMatch: json)], to: folder)
       let jobs = SavedQueue.load(project: "Other", from: folder)
@@ -103,8 +103,29 @@ struct SavedQueueTests {
 
   /// `ColorMatch.Job` round-trips through the queue's JSON, its record and shift included.
   @Test func aColorMatchJobRoundTrips() throws {
-    var match = ColorMatch.Job(project: "My Project", sourceTensorId: 3, strength: 1, luminance: false)
-    match.record = ColorMatch.Record(strength: 1, luminance: false, originalTensorId: 2, shift: .init(l: 0, a: 1, b: -4))
+    var match = ColorMatch.Job(project: "My Project", sourceTensorId: 3, strength: 1, luminance: 0)
+    match.record = ColorMatch.Record(strength: 1, luminance: 0, originalTensorId: 2, shift: .init(l: 0, a: 1, b: -4))
     #expect(try JSONDecoder().decode(ColorMatch.Job.self, from: JSONEncoder().encode(match)) == match)
+    match.luminance = 0.6
+    match.record?.luminance = 0.6
+    #expect(try JSONDecoder().decode(ColorMatch.Job.self, from: JSONEncoder().encode(match)) == match)
+  }
+
+  /// A queue saved while matching lightness was on or off holds `luminance` as true or false, in
+  /// the job and in its record: both read as all or none of it.
+  @Test func aColorMatchSavedWithLuminanceOnOrOffComesBack() throws {
+    try withTestFolder { folder in
+      let on = #"{"project":"P","sourceTensorId":12,"strength":0.75,"luminance":true,"record":{"strength":0.75,"luminance":true,"originalTensorId":3}}"#
+      let off = #"{"project":"P","sourceTensorId":13,"strength":1,"luminance":false}"#
+      try write([entry(colorMatch: on), entry(colorMatch: off)], to: folder)
+      let jobs = SavedQueue.load(project: "Other", from: folder)
+      #expect(jobs.count == 2)
+      #expect(
+        jobs.first?.colorMatch
+          == ColorMatch.Job(
+            project: "P", sourceTensorId: 12, strength: 0.75, luminance: 1,
+            record: ColorMatch.Record(strength: 0.75, luminance: 1, originalTensorId: 3)))
+      #expect(jobs.last?.colorMatch == ColorMatch.Job(project: "P", sourceTensorId: 13, strength: 1, luminance: 0))
+    }
   }
 }
