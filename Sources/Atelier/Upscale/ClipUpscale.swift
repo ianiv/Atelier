@@ -183,25 +183,10 @@ nonisolated struct ClipUpscale: Codable, Sendable, Hashable {
   /// with the square of the size, so past this it takes minutes a frame.
   static let flashVSRPixelLimit = 1920 * 1152
 
-  /// ReCaVSR's largest output, in pixels per frame: 1920×1088 on a Mac (about 1.3 s a frame and a
-  /// 33 GB peak at full precision, 30 GB 8-bit, on an M5 Max). On an iPad, which runs it 8-bit
-  /// only, 640×384: the 8-bit weights alone take about 9 GB and 640×360 peaked at 11.7 GB.
-  static var recaVSRPixelLimit: Int {
-    #if os(macOS)
-      1920 * 1088
-    #else
-      640 * 384
-    #endif
-  }
-
-  /// The ReCaVSR weights a job may use here: on an iPad only the 8-bit copy.
-  static var recaVSRFullAllowed: Bool {
-    #if os(macOS)
-      true
-    #else
-      false
-    #endif
-  }
+  /// ReCaVSR's largest output, in pixels per frame: 1920×1088 (about 1.3 s a frame and a 33 GB
+  /// peak at full precision, 30 GB 8-bit, on an M5 Max). It runs on Macs only
+  /// (`ReCaVSRFiles.runsHere`); an iPad sends it to a paired Mac, whose limit this is.
+  static let recaVSRPixelLimit = 1920 * 1088
 
   /// The result's size for a `width`×`height` clip. FlashVSR+ works on a 128-pixel grid;
   /// ReCaVSR makes the exact multiple (padding inside).
@@ -253,15 +238,14 @@ nonisolated struct ClipUpscale: Codable, Sendable, Hashable {
           : "FlashVSR+ makes videos up to 1920×1152; pick a smaller scale."
       }
     case .recaVSR:
+      guard ReCaVSRFiles.runsHere else { return "ReCaVSR runs on a paired Mac: choose one that has it in Run on." }
       guard ReCaVSRFiles.downloaded else { return "Download ReCaVSR to use it." }
-      guard weights == .eightBit || recaVSRFullAllowed else { return "This device runs ReCaVSR 8-bit only." }
       guard ReCaVSRFiles.installed(weights) != nil else { return "Make ReCaVSR's 8-bit copy to use 8-bit." }
       let size = outputSize(width: width, height: height, scale: scale, method: method)
       guard size.width * size.height <= recaVSRPixelLimit else {
-        let limit = recaVSRFullAllowed ? "1920×1088" : "640×384"
         return offeredScales(width: width, height: height, method: method).isEmpty
-          ? "ReCaVSR makes videos up to \(limit) here, so this one is too large to upscale."
-          : "ReCaVSR makes videos up to \(limit) here; pick a smaller scale."
+          ? "ReCaVSR makes videos up to 1920×1088, so this one is too large to upscale."
+          : "ReCaVSR makes videos up to 1920×1088; pick a smaller scale."
       }
     }
     return nil

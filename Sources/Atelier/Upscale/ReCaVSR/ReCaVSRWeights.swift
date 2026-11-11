@@ -27,9 +27,33 @@ nonisolated struct ReCaVSRFiles {
   }
 
   enum Failure: LocalizedError {
-    case missing
+    case missing, missingEightBit, notOnThisDevice
 
-    var errorDescription: String? { "ReCaVSR isn't downloaded." }
+    var errorDescription: String? {
+      switch self {
+      case .missing: "ReCaVSR isn't downloaded."
+      case .missingEightBit: "ReCaVSR's 8-bit copy isn't made yet. Click Make 8-bit Copy in the Upscale sheet."
+      case .notOnThisDevice: "ReCaVSR doesn't run on iPad. Choose a paired Mac that has it in Run on."
+      }
+    }
+  }
+
+  /// Whether this device runs ReCaVSR itself: Macs only. An iPad can still send it to a paired
+  /// Mac that has it.
+  static var runsHere: Bool {
+    #if os(macOS)
+      true
+    #else
+      false
+    #endif
+  }
+
+  /// The files a job with `weights` reads, or why it can't run here.
+  static func forJob(_ weights: Weights) throws -> ReCaVSRFiles {
+    guard runsHere else { throw Failure.notOnThisDevice }
+    guard downloaded else { throw Failure.missing }
+    guard let files = installed(weights) else { throw Failure.missingEightBit }
+    return files
   }
 
   static let folderName = "ReCaVSR"
@@ -129,7 +153,9 @@ nonisolated enum ReCaVSRConfig {
   /// Runs `body` with MFA attention's Neural Accelerator path off (when `enabled`). On an M5 Max
   /// (2026-11) that path returned all zeros for some of the DiT's half-precision calls and wrong
   /// values for every one of FlashDecoder's float32 calls; the plain MFA kernels match the
-  /// reference (`--recavsr-check`). Process-wide, so it's restored after.
+  /// reference (`--recavsr-check`). The flag is process-wide, so it's restored after; that's safe
+  /// only because the engine runs one job at a time on this device (`GenerationEngine`'s turn),
+  /// so nothing else is running attention while it's off.
   static func withAttentionWorkaround<R>(_ enabled: Bool = true, _ body: () throws -> R) rethrows -> R {
     guard enabled, !DynamicGraph.flags.contains(.disableMFANeuralAccelerators) else { return try body() }
     DynamicGraph.flags.insert(.disableMFANeuralAccelerators)

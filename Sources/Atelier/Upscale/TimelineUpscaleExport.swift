@@ -179,7 +179,7 @@ nonisolated extension TimelineComposition {
       guard let files = FlashVSRFiles.installed(upscale.variant) else { throw FlashVSRFiles.Failure.missing }
       upscaler = FlashVSRUpscaler(files: files, width: size.width, height: size.height)
     case .recaVSR:
-      guard let files = ReCaVSRFiles.installed(upscale.weights) else { throw ReCaVSRFiles.Failure.missing }
+      let files = try ReCaVSRFiles.forJob(upscale.weights)
       upscaler = ReCaVSRUpscaler(files: files, width: size.width, height: size.height)
     case .system:
       preconditionFailure("Apple Super Resolution isn't a streaming upscaler")

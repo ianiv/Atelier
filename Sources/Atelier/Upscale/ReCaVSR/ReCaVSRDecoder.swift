@@ -165,14 +165,16 @@ final nonisolated class ReCaVSRDecoder {
   }
 
   /// RoPE for `frames` frames from absolute frame `start`, `[1, frames * tokens, 1, 64]`: 8 pairs
-  /// for time, 12 for rows, 12 for columns, interleaved; float32 frequencies and angles
-  /// (`_RotaryEmbedding3D`, flashdecoder_wan22.py:158-246).
+  /// for time, 12 for rows, 12 for columns, interleaved (`_RotaryEmbedding3D`,
+  /// flashdecoder_wan22.py:158-246). Frequencies and angles in float64, as the DiT's rotary: the
+  /// positions here are absolute frames, which grow without bound, where the reference's float32
+  /// angles only ever see positions 0 … 7.
   private func rotary(start: Int, frames: Int) -> DynamicGraph.Tensor<Float> {
     let h = latentHeight, w = latentWidth
     let HD = Self.headDimension
     var tensor = Tensor<Float>(.CPU, .NHWC(1, frames * h * w, 1, HD))
     let frequencies = [16, 24, 24].map { dimension in
-      (0..<(dimension / 2)).map { i in 1 / powf(10_000, Float(2 * i) / Float(dimension)) }
+      (0..<(dimension / 2)).map { i in 1 / pow(10_000.0, Double(2 * i) / Double(dimension)) }
     }
     tensor.withUnsafeMutableBytes { raw in
       let out = raw.bindMemory(to: Float.self)
@@ -183,9 +185,9 @@ final nonisolated class ReCaVSRDecoder {
             var pair = 0
             for (axis, position) in [start + f, y, x].enumerated() {
               for frequency in frequencies[axis] {
-                let angle = Float(position) * frequency
-                out[token * HD + pair * 2] = cos(angle)
-                out[token * HD + pair * 2 + 1] = sin(angle)
+                let angle = Double(position) * frequency
+                out[token * HD + pair * 2] = Float(cos(angle))
+                out[token * HD + pair * 2 + 1] = Float(sin(angle))
                 pair += 1
               }
             }

@@ -86,6 +86,9 @@ nonisolated struct ReCaVSRQuantizedSource: ReCaVSRWeightSource {
 /// vectors) half precision, vectors compressed (ezm7). It writes to a `.part` file and keeps
 /// what an interrupted copy wrote, so it resumes; the finished file is renamed into place.
 nonisolated enum ReCaVSRQuantizer {
+  /// Where the .part records the size of the transformer it's copying.
+  static let sourceKey = "__recavsr_source_bytes__"
+
   /// Whether `name` is a layer matrix the copy stores 8-bit: those the denoiser multiplies by
   /// (`ReCaVSRDenoiser.matrices`) and the cross-attention keys' and values' projections.
   static func isEightBit(_ name: String) -> Bool {
@@ -102,9 +105,26 @@ nonisolated enum ReCaVSRQuantizer {
     let names = source.names
     let part = files.eightBitTransformer.path + ".part"
     let graph = DynamicGraph()
+    // The source's size is recorded in the .part, so a copy started from other weights (a
+    // replaced or partly downloaded transformer) starts over instead of resuming.
+    let sourceBytes = ((try? FileManager.default.attributesOfItem(atPath: files.transformer.path)[.size] as? Int64) ?? nil) ?? 0
+    let marker = Tensor<Int32>([Int32(sourceBytes >> 31), Int32(sourceBytes & 0x7fff_ffff)], .CPU, .C(2))
+    if FileManager.default.fileExists(atPath: part) {
+      var matches = false
+      graph.openStore(part, flags: .readOnly) { store in
+        if let recorded = store.read(sourceKey, kind: .CPU) {
+          let values = Tensor<Int32>(recorded)
+          matches = values.shape == [2] && values[0] == marker[0] && values[1] == marker[1]
+        }
+      }
+      if !matches {
+        for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: part + suffix) }
+      }
+    }
     var failure: Error?
     var finished = true
     graph.openStore(part) { out in
+      if out.read(sourceKey, kind: .CPU) == nil { out.write(sourceKey, tensor: marker) }
       let written = Set(out.keys)
       for (index, name) in names.enumerated() {
         guard shouldContinue() else {

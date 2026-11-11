@@ -336,13 +336,16 @@ struct UpscaleControls: View {
     // Read while they change, so the controls follow the downloads and the copy.
     let downloading = download.variant
     let missing = FlashVSRFiles.installed(variant) == nil
-    let recaVSRDownloaded = recaVSR.copies >= 0 && !recaVSR.downloading && ReCaVSRFiles.downloaded
-    let hasEightBit = ReCaVSRFiles.installed(.eightBit) != nil
+    let recaVSRDownloaded = !recaVSR.downloading && recaVSR.isDownloaded
+    let hasEightBit = recaVSR.hasEightBitCopy
+    // An iPad doesn't run ReCaVSR; it can send it to a paired Mac that has it.
+    let recaVSROffered =
+      ReCaVSRFiles.runsHere ? true : !(server?.upscalers.recaVSR ?? []).isEmpty
     Group {
       Picker(offersNone ? "Upscale" : "Method", selection: $method) {
         if offersNone { Text("None").tag(ClipUpscale.Method?.none) }
         Text("Quality").tag(ClipUpscale.Method?.some(.flashVSR))
-        Text("ReCaVSR").tag(ClipUpscale.Method?.some(.recaVSR))
+        Text("ReCaVSR").tag(ClipUpscale.Method?.some(.recaVSR)).selectionDisabled(!recaVSROffered)
         Text("Fast").tag(ClipUpscale.Method?.some(.system))
       }
       .pickerStyle(.segmented)
@@ -357,6 +360,10 @@ struct UpscaleControls: View {
       )
       .font(.caption).foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)
+      if !recaVSROffered {
+        Text("ReCaVSR runs on a paired Mac that has it: choose one in Run on.")
+          .font(.caption).foregroundStyle(.secondary)
+      }
       Picker("Version", selection: $variant) {
         ForEach(FlashVSRFiles.Variant.allCases, id: \.self) { Text($0.title).tag($0) }
       }
@@ -367,8 +374,8 @@ struct UpscaleControls: View {
         ForEach(ReCaVSRFiles.Weights.allCases, id: \.self) { Text($0.title).tag($0) }
       }
       .pickerStyle(.segmented)
-      .disabled(method != .recaVSR || !ClipUpscale.recaVSRFullAllowed)
-      .help("8-bit uses about 4.5 GB less memory and looks nearly the same; it needs the 8-bit copy")
+      .disabled(method != .recaVSR || !recaVSROffered)
+      .help("8-bit uses about 3–4 GB less memory and looks nearly the same; it needs the 8-bit copy")
       HStack {
         if method == .recaVSR {
           if recaVSR.downloading {
@@ -376,7 +383,7 @@ struct UpscaleControls: View {
             Button("Cancel") { recaVSR.cancel() }
           } else {
             Button("Download ReCaVSR (\(Self.bytes(ReCaVSRDownload.remainingBytes)))") { recaVSR.start() }
-              .disabled(recaVSRDownloaded || server != nil)
+              .disabled(recaVSRDownloaded || server != nil || !ReCaVSRFiles.runsHere)
               .help("Downloads it into \(ReCaVSRFiles.folderName) in the models folder, from Hugging Face")
           }
         } else if let downloading, downloading == variant {
@@ -400,7 +407,8 @@ struct UpscaleControls: View {
           Button("Stop") { recaVSR.cancelEightBitCopy() }
         } else {
           Button("Make 8-bit Copy (\(Self.bytes(ReCaVSRDownload.eightBitBytes)))") { recaVSR.makeEightBitCopy() }
-            .disabled(method != .recaVSR || !recaVSRDownloaded || hasEightBit || server != nil)
+            .disabled(
+              method != .recaVSR || !recaVSRDownloaded || hasEightBit || server != nil || !ReCaVSRFiles.runsHere)
             .help("Writes an 8-bit copy of ReCaVSR beside it in the models folder, for the 8-bit weights")
         }
       }
@@ -425,14 +433,9 @@ struct UpscaleControls: View {
     // On each control, which is harmless: the first sets things right.
     .onAppear {
       offerScale()
-      offerWeights()
+      recaVSR.refresh()
     }
     .onChange(of: method) { offerScale() }
-  }
-
-  /// Keeps the weights to what this device runs: 8-bit only on an iPad.
-  private func offerWeights() {
-    if !ClipUpscale.recaVSRFullAllowed, weights == .full { weights = .eightBit }
   }
 
   /// Keeps the scale to one the method offers at this size.

@@ -602,9 +602,8 @@ final class RemoteServer {
     let upscalers = RemoteUpscalers(
       flashVSR: FlashVSRFiles.Variant.allCases.filter { FlashVSRFiles.installed($0) != nil },
       superResolution: SystemSuperResolution.isSupported,
-      recaVSR: ReCaVSRFiles.Weights.allCases.filter {
-        ReCaVSRFiles.installed($0) != nil && ($0 == .eightBit || ClipUpscale.recaVSRFullAllowed)
-      })
+      // An iPad doesn't run ReCaVSR, so it never offers it.
+      recaVSR: ReCaVSRFiles.runsHere ? ReCaVSRFiles.Weights.allCases.filter { ReCaVSRFiles.installed($0) != nil } : [])
     return .catalog(
       models: models, loras: loras, files: create?.modelFiles ?? [], upscalers: upscalers,
       features: RemoteProtocol.features)

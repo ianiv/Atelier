@@ -11,6 +11,15 @@ final class ReCaVSRDownload {
   static let shared = ReCaVSRDownload()
 
   private(set) var downloading = false
+  /// Whether the published files and the 8-bit copy are there, as last looked (`refresh`).
+  private(set) var isDownloaded = ReCaVSRFiles.downloaded
+  private(set) var hasEightBitCopy = ReCaVSRFiles.installed(.eightBit) != nil
+
+  /// Looks at the models folder again (it may have changed, or files been placed by hand).
+  func refresh() {
+    isDownloaded = ReCaVSRFiles.downloaded
+    hasEightBitCopy = ReCaVSRFiles.installed(.eightBit) != nil
+  }
   private(set) var fraction: Double = 0
   private(set) var failure: String?
   private var task: Task<Void, Never>?
@@ -54,6 +63,7 @@ final class ReCaVSRDownload {
       }
       downloading = false
       task = nil
+      refresh()
     }
   }
 
@@ -71,8 +81,6 @@ final class ReCaVSRDownload {
   private final nonisolated class StopFlag: Sendable {
     let value = Mutex(false)
   }
-  /// Bumped when the copy appears, so views that ask `ReCaVSRFiles.installed` look again.
-  private(set) var copies = 0
 
   /// The 8-bit copy's expected size, for the button.
   static let eightBitBytes: Int64 = 5_711_630_336
@@ -93,7 +101,7 @@ final class ReCaVSRDownload {
     Task {
       do {
         let done = try await Self.quantize(files, progress: progress) { [stopCopy] in !stopCopy.value.withLock { $0 } }
-        if done { copies += 1 }
+        if done { refresh() }
       } catch {
         copyFailure = "Couldn't make ReCaVSR's 8-bit copy: \(error.localizedDescription)"
       }

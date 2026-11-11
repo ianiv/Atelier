@@ -399,9 +399,7 @@ actor GenerationEngine {
         return Output(frames: tensors)
       }
     case .recaVSR:
-      guard let files = ReCaVSRFiles.installed(upscale.weights ?? .full) else {
-        throw ReCaVSRFiles.Failure.missing
-      }
+      let files = try ReCaVSRFiles.forJob(upscale.weights ?? .full)
       let upscaler = ReCaVSRUpscaler(
         files: files, width: request.configuration.width, height: request.configuration.height,
         seed: UInt64(request.seed))
