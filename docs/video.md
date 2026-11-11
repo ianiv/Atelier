@@ -84,6 +84,7 @@ Videos are stored in the project the way Draw Things stores them: one step per f
 To make a larger, sharper copy of a video, right-click it in History and choose **Upscale…**, or click **Upscale…** in its detail panel. Pick a method and a scale; the sheet shows the size it will make.
 
 - **Quality** uses FlashVSR+, which restores the whole video as one stream, each part with the parts before it in view, so detail stays steady from frame to frame instead of shimmering. Pick **Turbo** (faster) or **Base** (slower, a little more detail). The first time, click **Download FlashVSR+** in the sheet: it downloads about 7 GB per version from Hugging Face into a **FlashVSR+** folder in the models folder. It makes videos up to 1920×1152 and takes a few seconds a frame.
+- **ReCaVSR** restores the video with a large model (built on Wan2.2) a few frames at a time, reusing what it made for the frames before, so it stays steady too. Pick **Full** or **8-bit** weights: 8-bit uses about 4.5 GB less memory and looks nearly the same. The first time, click **Download ReCaVSR** (about 10.8 GB from Hugging Face, into a **ReCaVSR** folder in the models folder); for 8-bit, then click **Make 8-bit Copy**, which writes a 5.7 GB copy beside it in about a minute (stopping it keeps what's written, and the next copy carries on). On a Mac it makes videos up to 1920×1088, about 0.6 s a frame at 1280×720 and 1.3 s at 1920×1080 on an M5 Max; on an iPad it runs 8-bit only, up to 640×384. It uses a lot of memory: on a Mac, about 23 GB at 720p and 30 GB at 1080p with 8-bit (27 and 33 GB full). It upscales videos, not images.
 - **Fast** uses Apple Super Resolution on the Neural Engine and takes seconds. macOS downloads its model the first time you use it. It offers only the scales your device supports (on some Macs, only 4×), for videos up to 1920×1080.
 
 ### Getting FlashVSR+
@@ -107,6 +108,21 @@ You only need the folder for the version you use (`turbo/` or `base/`), plus the
 
 FlashVSR+ is by OpenImagingLab, and Atelier's version follows T-Go LLC's vpipe port; both are Apache-2.0 (see **Settings ▸ About**).
 
+### Getting ReCaVSR
+
+Atelier looks for ReCaVSR in a **ReCaVSR** folder inside your models folder, and it's available once its three files are there at full size. **Download ReCaVSR** in the Upscale or Export Video sheet fetches whatever is missing, skipping files already there. To download them yourself, get these from [kopper/ReCaVSR](https://huggingface.co/kopper/ReCaVSR) (the VAE it also lists isn't needed):
+
+```
+Models/
+  ReCaVSR/
+    transformer.safetensors   (10.6 GB)
+    prompt.safetensors        (4 MB)
+    flashdecoder.safetensors  (229 MB)
+    transformer_i8x.ckpt      (5.7 GB, written by Make 8-bit Copy)
+```
+
+ReCaVSR is by Xijun Wang and others at the University of Science and Technology of China, Apache-2.0 (see **Settings ▸ About**).
+
 ### When it runs
 
 The upscale runs in the Queue like any other job. The result is a new video after the original, with the same prompt and settings at the new size, and the soundtrack kept.
@@ -117,7 +133,7 @@ The upscale runs in the Queue like any other job. The result is a new video afte
 
 **Export Video…**, on a video in History (its menu or the detail panel) and in the Video Editor, opens one sheet:
 
-- **Upscale**: **None** (as it is), **Fast** or **Quality**, as above, with Quality's **Turbo** or **Base**.
+- **Upscale**: **None** (as it is), **Quality**, **ReCaVSR** or **Fast**, as above, with Quality's **Turbo** or **Base** and ReCaVSR's **Full** or **8-bit**.
 - **Scale**: the scales that work for the video (disabled with None). The sheet shows the size it makes and, when upscaling, about how long it takes.
 
 Then you choose where to save it. As it is, it exports right away. Upscaled, it's a job in the [Queue](queue.md#exports): it waits its turn after what's already queued, shows its progress in the status bar and the Queue, and writes the file when it's done. The video in History (or the timeline) is left as it is.
@@ -126,7 +142,7 @@ To upscale a video from outside Atelier, drop its file on the Create canvas. The
 
 ## On another device
 
-Videos, upscales and exports can run on a [paired server](remote.md), chosen with **Run on** in the inspector. A video sends its reference images and audio file and brings back every frame, the soundtrack and the frame rate, and is saved like one made here. **Upscale…** uses the server's FlashVSR+ or Apple Super Resolution rather than this device's: a clip made on that server doesn't need its frames sent back while the server still has them, for up to 7 days. **Export Video…** with an upscale sends the frames there and encodes the file on this device. Upscales and exports aren't picked up again after a quit.
+Videos, upscales and exports can run on a [paired server](remote.md), chosen with **Run on** in the inspector. A video sends its reference images and audio file and brings back every frame, the soundtrack and the frame rate, and is saved like one made here. **Upscale…** uses the server's FlashVSR+, ReCaVSR or Apple Super Resolution rather than this device's: a clip made on that server doesn't need its frames sent back while the server still has them, for up to 7 days. **Export Video…** with an upscale sends the frames there and encodes the file on this device. Upscales and exports aren't picked up again after a quit.
 
 ## Files
 

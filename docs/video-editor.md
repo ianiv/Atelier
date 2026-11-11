@@ -36,7 +36,7 @@ Only the first video made from that Generate goes on the timeline; with ×2 or m
 
 ## Exporting
 
-**Export Video…** writes the timeline as one MP4, in the format chosen in **Settings ▸ Images ▸ Video Format** (H.264 or HEVC), with AAC sound, as it is or upscaled. Pick **Upscale** **None**, **Fast** (Apple Super Resolution) or **Quality** (FlashVSR+) and a scale in its sheet, as for [exporting a video](video.md#exporting-videos). As it is, it shows its progress over the viewer and can be cancelled; then it asks where to save the file. Upscaled, it first asks where to save the file, then runs as a job in the [Queue](queue.md#exports); the frames are upscaled as they're composed, after trims and crossfades, and the sound is the same.
+**Export Video…** writes the timeline as one MP4, in the format chosen in **Settings ▸ Images ▸ Video Format** (H.264 or HEVC), with AAC sound, as it is or upscaled. Pick **Upscale** **None**, **Quality** (FlashVSR+), **ReCaVSR** or **Fast** (Apple Super Resolution) and a scale in its sheet, as for [exporting a video](video.md#exporting-videos). As it is, it shows its progress over the viewer and can be cancelled; then it asks where to save the file. Upscaled, it first asks where to save the file, then runs as a job in the [Queue](queue.md#exports); the frames are upscaled as they're composed, after trims and crossfades, and the sound is the same.
 
 
 ## Deleting videos
