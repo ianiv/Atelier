@@ -157,6 +157,57 @@ enum AppLifecycle {
   }
 }
 
+/// The screen, which SwiftUI doesn't describe to a view on the Mac.
+@MainActor
+enum ScreenSpace {
+  /// The room on the screen the app's front window is on, the menu bar and Dock aside, for
+  /// fitting a sheet that opens at a remembered size; nil with no screen.
+  static var visibleSize: CGSize? {
+    ((NSApp.keyWindow ?? NSApp.mainWindow)?.screen ?? NSScreen.main)?.visibleFrame.size
+  }
+}
+
+/// Reports the size of the view it's behind each time the person finishes dragging its window
+/// (a sheet) to a new size. SwiftUI can say a view's size changed, but not why, and a sheet's
+/// size also changes when it opens and when the system fits it to a screen; only AppKit's live
+/// resize, which is a drag by hand and nothing else, says the size is one the person chose.
+struct SheetResizeObserver: NSViewRepresentable {
+  let onResize: @MainActor (CGSize) -> Void
+
+  func makeNSView(context _: Context) -> Probe { Probe(onResize: onResize) }
+  func updateNSView(_ view: Probe, context _: Context) { view.onResize = onResize }
+
+  final class Probe: NSView {
+    var onResize: @MainActor (CGSize) -> Void
+    private var observation: (any NSObjectProtocol)?
+
+    init(onResize: @escaping @MainActor (CGSize) -> Void) {
+      self.onResize = onResize
+      super.init(frame: .zero)
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) { fatalError("not used") }
+
+    /// Follows the window it's in, and stops when it leaves it (the sheet closed).
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      if let observation { NotificationCenter.default.removeObserver(observation) }
+      observation = nil
+      guard let window else { return }
+      // A nil queue runs it as the notification posts, which AppKit does on the main thread.
+      observation = NotificationCenter.default.addObserver(
+        forName: NSWindow.didEndLiveResizeNotification, object: window, queue: nil
+      ) { [weak self] _ in
+        MainActor.assumeIsolated {
+          guard let self, self.bounds.width > 0, self.bounds.height > 0 else { return }
+          self.onResize(self.bounds.size)
+        }
+      }
+    }
+  }
+}
+
 /// Finder. SwiftUI's `openURL` opens a folder but can't select files in it.
 @MainActor
 enum Finder {
@@ -211,6 +262,9 @@ enum AutomationWindows {
   static var sheetWindowNumber: Int {
     NSApp.windows.first { $0.isSheet && $0.isVisible }?.windowNumber ?? 0
   }
+
+  /// The size of the sheet on screen, or nil when there's none.
+  static var sheetSize: CGSize? { NSApp.windows.first { $0.isSheet && $0.isVisible }?.frame.size }
 
   static var isSheetUp: Bool { NSApp.windows.contains { $0.isSheet && $0.isVisible } }
 

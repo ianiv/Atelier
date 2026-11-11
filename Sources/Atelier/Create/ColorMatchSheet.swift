@@ -37,6 +37,11 @@ struct ColorMatchSheet: View {
   /// removed something gets matched, which is what it's for.
   @AppStorage("colorMatchUnchangedOnly") private var unchangedOnly = true
   @AppStorage("colorMatchCompareMode") private var compareMode = CompareMode.sideBySide
+  /// The size the sheet opens at until it's been dragged to another, and the smallest it goes.
+  static let defaultSize = CGSize(width: 1000, height: 800)
+  static let minSize = CGSize(width: 640, height: 560)
+  /// What the size it was last dragged to is remembered under (`resizableSheetFrame`).
+  static let sizeKey = "colorMatchSheet"
   /// The height the controls take when all of them show, which is as tall as their scroll view
   /// may grow: the pictures get the rest.
   @State private var controlsHeight: CGFloat = 280
@@ -210,7 +215,8 @@ struct ColorMatchSheet: View {
       }
     }
     .sheetPadding()
-    .resizableSheetFrame(minWidth: 640, minHeight: 560, idealSize: CGSize(width: 1000, height: 800))
+    .resizableSheetFrame(
+      minWidth: Self.minSize.width, minHeight: Self.minSize.height, idealSize: Self.defaultSize, rememberedAs: Self.sizeKey)
     // Once: the images don't change under the sheet.
     .task {
       preview = await create.colorMatchPreview(for: item) { original = $0 }

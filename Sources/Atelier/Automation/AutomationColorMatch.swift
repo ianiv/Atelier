@@ -22,7 +22,10 @@ extension Automation {
   /// fifth of it: matched from its unchanged areas only, the step records how much of the image
   /// that was and the background's colors are the original's; matched with tint alone, the
   /// colors' mean is the original's and their spread the edit's. The sheet's remembered values
-  /// are never written: the run's are set over them for this launch only. It also prints how
+  /// are never written: the run's are set over them for this launch only, its size among them,
+  /// so the pictures come out at the default 1000×800 whatever size the sheet was last dragged
+  /// to. For that size: a remembered one is what the sheet opens at, one larger than the screen
+  /// opens fitted to it, and neither is written to the settings. It also prints how
   /// long the sheet's preview takes to make and to draw once on the check's image (plain lines,
   /// neither PASS nor FAIL), for measuring it in a Release build.
   ///
@@ -53,7 +56,17 @@ extension Automation {
       for key in ["colorMatchTint", "colorMatchSaturation", "colorMatchBrightness", "colorMatchContrast"] { runValues[key] = 0.5 }
       runValues["colorMatchUnchangedOnly"] = true
       runValues["colorMatchCompareMode"] = ColorMatchSheet.CompareMode.sideBySide.rawValue
+      // The sheet's size too, at its default: one the user dragged it to mustn't size the pictures.
+      let sizeKeys = [RememberedSheetSize.widthKey(ColorMatchSheet.sizeKey), RememberedSheetSize.heightKey(ColorMatchSheet.sizeKey)]
+      runValues[sizeKeys[0]] = Double(ColorMatchSheet.defaultSize.width)
+      runValues[sizeKeys[1]] = Double(ColorMatchSheet.defaultSize.height)
       defaults.setVolatileDomain(runValues, forName: UserDefaults.argumentDomain)
+      /// What the settings file holds for the sheet's size, which the run must leave as it is.
+      func savedSize() -> [Double?] {
+        let saved = Bundle.main.bundleIdentifier.flatMap { defaults.persistentDomain(forName: $0) } ?? [:]
+        return sizeKeys.map { saved[$0] as? Double }
+      }
+      let savedSizeBefore = savedSize()
       @MainActor func finish() {
         defaults.setVolatileDomain(launchValues, forName: UserDefaults.argumentDomain)
         print(failures == 0 ? "color match check: all passed" : "color match check: \(failures) failed")
@@ -360,6 +373,49 @@ extension Automation {
         let url = URL(fileURLWithPath: folder).appendingPathComponent("color-match-sheet-slider-shape.png")
         print("\(AutomationWindows.snapshotSheet(to: url) ? "saved" : "couldn't save") \(url.path)")
       }
+      // The sheet's size. It opens at the remembered one, read as it opens; nothing in the run
+      // drags it, so nothing is remembered anew.
+      @MainActor func sizeOpened(remembering size: CGSize) async -> CGSize? {
+        model.colorMatchSheetItem = nil
+        try? await Task.sleep(for: .seconds(1))
+        runValues[sizeKeys[0]] = Double(size.width)
+        runValues[sizeKeys[1]] = Double(size.height)
+        defaults.setVolatileDomain(runValues, forName: UserDefaults.argumentDomain)
+        model.colorMatchSheetItem = edit
+        try? await Task.sleep(for: .seconds(2))
+        return AutomationWindows.sheetSize
+      }
+      func text(_ size: CGSize?) -> String { size.map { "\(Int($0.width))×\(Int($0.height))" } ?? "no sheet" }
+      if let screen = ScreenSpace.visibleSize {
+        let room = CGSize(width: screen.width - RememberedSheetSize.screenMargin, height: screen.height - RememberedSheetSize.screenMargin)
+        // One that fits any screen the default does.
+        let small = CGSize(width: ColorMatchSheet.minSize.width + 60, height: ColorMatchSheet.minSize.height + 40)
+        if small.width <= room.width, small.height <= room.height {
+          let opened = await sizeOpened(remembering: small)
+          check(opened == small, "the sheet opens at the size remembered (\(text(small))): \(text(opened))")
+        } else {
+          print("skipped: the screen (\(text(screen))) has no room for a sheet of \(text(small))")
+        }
+        let huge = CGSize(width: screen.width + 2000, height: screen.height + 2000)
+        let expected = RememberedSheetSize.fitted(huge, minSize: ColorMatchSheet.minSize, screen: screen)
+        let opened = await sizeOpened(remembering: huge)
+        // No larger than the fit asked for, and no smaller than the minimum: the system may take
+        // a little more off, for where the window is on the screen.
+        let fits = opened.map {
+          $0.width <= expected.width && $0.height <= expected.height
+            && $0.width >= ColorMatchSheet.minSize.width && $0.height >= ColorMatchSheet.minSize.height
+        } ?? false
+        check(
+          fits && (expected.width <= room.width || expected.width == ColorMatchSheet.minSize.width)
+            && (expected.height <= room.height || expected.height == ColorMatchSheet.minSize.height),
+          "a remembered size larger than the screen (\(text(huge)) on \(text(screen))) opens fitted to it: \(text(opened))")
+        check(
+          defaults.double(forKey: sizeKeys[0]) == Double(huge.width) && defaults.double(forKey: sizeKeys[1]) == Double(huge.height),
+          "and the remembered size is still what it was")
+      } else {
+        print("skipped: no screen to fit the sheet to")
+      }
+      check(savedSize() == savedSizeBefore, "the sheet's size in the settings is untouched by the run")
       model.colorMatchSheetItem = nil
       try? await Task.sleep(for: .milliseconds(500))
       model.setQueuePaused(false)
