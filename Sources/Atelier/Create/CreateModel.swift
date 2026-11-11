@@ -2256,10 +2256,7 @@ final class CreateModel {
 
   /// Its settings in whole percents, so the same ones always make the same job (`isSameMatch`).
   private func colorMatchJob(for item: HistoryItem, options: ColorMatch.Options) -> ColorMatch.Job {
-    let options = options.snapped
-    return ColorMatch.Job(
-      project: history.project.name, sourceTensorId: item.tensorId, strength: options.strength,
-      luminance: options.luminance)
+    ColorMatch.Job(project: history.project.name, sourceTensorId: item.tensorId, options: options.snapped)
   }
 
   /// What the Match Colors… sheet previews `item` with: the step and its original, read and
@@ -2449,7 +2446,8 @@ final class CreateModel {
         try Task.checkCancellation()
         setRunMessage("Saving…", job)
         if job.id == foregroundJobID { step = 950 }
-        let (matched, shift) = result
+        let matched = result.image
+        let shift = result.shift
         var request = queued
         SettingsRegistry.apply(dump: item.sidecar.configuration, to: &request.configuration)
         request.configuration.width = matched.width
@@ -2461,7 +2459,7 @@ final class CreateModel {
         // A moodboard original goes along, so matching the result again finds it there.
         request.moodboard = original.moodboard.map { [$0] } ?? []
         let record = ColorMatch.Record(
-          strength: match.strength, luminance: match.luminance, originalTensorId: original.tensorId, shift: shift)
+          options: match.options, counted: result.counted, originalTensorId: original.tensorId, shift: shift)
         request.colorMatch?.record = record
         let followsRun = { self.canvasFollowsRun && job.id == self.foregroundJobID && project === self.history.project }
         let history = history

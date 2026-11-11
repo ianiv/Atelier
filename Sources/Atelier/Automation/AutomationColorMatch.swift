@@ -12,12 +12,17 @@ extension Automation {
   /// while another project opens saves into its own project and leaves the open one and the
   /// canvas alone, and the action is unavailable for a step with no original, for a video, and
   /// for a step whose moodboard images all have weight 0. For Match Colors… (the sheet's
-  /// settings): the one-click match records strength 1 and lightness 0 whatever the sheet last
-  /// used, a match at strength 0.5 records that and leaves about half the shift, a match with
-  /// other settings queues beside one that's waiting while the same settings don't, and the
-  /// sheet can open while a match is pending. The sheet's remembered values are put back.
+  /// settings): the one-click match records the default settings whatever the sheet last used, a
+  /// match at half tint and saturation records that and leaves about half the shift, a match
+  /// with other settings queues beside one that's waiting while the same settings don't, and the
+  /// sheet can open while a match is pending (`--snapshot-dir DIR` saves a picture of it,
+  /// color-match-sheet.png). For a second edit, the warm copy with a green block pasted over a
+  /// fifth of it: matched from its unchanged areas only, the step records how much of the image
+  /// that was and the background's colors are the original's; matched with tint alone, the
+  /// colors' mean is the original's and their spread the edit's. The sheet's remembered values
+  /// are put back.
   ///
-  ///   Atelier --color-match-check --project NAME [--input-image FILE] [--quit]
+  ///   Atelier --color-match-check --project NAME [--input-image FILE] [--snapshot-dir DIR] [--quit]
   ///
   /// Always pass a scratch `--project`: it adds steps to it, and opens (creating it) the project
   /// "NAME other" for the other-project case.
@@ -37,9 +42,10 @@ extension Automation {
       // What the sheet last used, set away from the defaults for the run: the one-click match
       // mustn't read them. Put back at the end.
       let defaults = UserDefaults.standard
-      let sheetKeys = ["colorMatchStrength", "colorMatchLightness"]
+      let sheetKeys = ["colorMatchTint", "colorMatchSaturation", "colorMatchBrightness", "colorMatchContrast", "colorMatchUnchangedOnly"]
       let savedSheetValues = sheetKeys.map { defaults.object(forKey: $0) }
-      for key in sheetKeys { defaults.set(0.5, forKey: key) }
+      for key in sheetKeys.dropLast() { defaults.set(0.5, forKey: key) }
+      defaults.set(true, forKey: "colorMatchUnchangedOnly")
       @MainActor func finish() {
         for (key, value) in zip(sheetKeys, savedSheetValues) {
           if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
@@ -106,7 +112,24 @@ extension Automation {
         model: modelFile, prompt: "color match check: warmer", negativePrompt: "", seed: 1, configuration: configuration)
       request.canvas = original
       request.canvasIsImported = true
+      // A second edit: the warm copy with a saturated green block pasted over a fifth of it, as an
+      // edit that added something. Measured whole, the block reads as a shift of the whole image.
+      let blockX = original.width / 10..<original.width * 6 / 10
+      let blockY = original.height * 2 / 10..<original.height * 6 / 10
+      var pastedPixels = warmPixels
+      var background = [Bool](repeating: true, count: original.width * original.height)
+      for y in blockY {
+        for x in blockX {
+          let index = y * original.width + x
+          pastedPixels.replaceSubrange(index * 4..<index * 4 + 3, with: [20, 220, 40])
+          background[index] = false
+        }
+      }
+      guard let pastedImage = ColorMatch.cgImage(rgba: pastedPixels, width: original.width, height: original.height),
+            let pastedTensor = ImageTensor.tensor(from: pastedImage)
+      else { return finish() }
       let edit: HistoryItem
+      let pasted: HistoryItem
       let plain: HistoryItem
       let video: HistoryItem
       var unweighted: HistoryItem
@@ -114,6 +137,10 @@ extension Automation {
       do {
         edit = try await history.save(
           GenerationEngine.Output(frames: [warmTensor]), request: request, startedAt: Date(), finishedAt: Date())
+        var pastedRequest = request
+        pastedRequest.prompt = "color match check: warmer, with a block added"
+        pasted = try await history.save(
+          GenerationEngine.Output(frames: [pastedTensor]), request: pastedRequest, startedAt: Date(), finishedAt: Date())
         // A step made from the prompt alone, and a two-frame video: neither has an original.
         let generated = GenerationEngine.Request(
           model: modelFile, prompt: "color match check: no original", negativePrompt: "", seed: 2, configuration: configuration)
@@ -186,8 +213,8 @@ extension Automation {
         match.project == projectName && match.sourceTensorId == edit.tensorId && queued.target == .local,
         "the match joined the queue, on this device, for the edit in its project")
       check(
-        match.strength == 1 && match.luminance == 0,
-        "the one-click match uses strength 1 and lightness 0, not what the sheet last used (\(match.strength), \(match.luminance))")
+        match.options == ColorMatch.Options() && !match.options.unchangedOnly,
+        "the one-click match uses the default settings and the whole image, not what the sheet last used (\(match.options))")
       check(!model.canMatchCanvasColors, "the menu item is disabled while the match is waiting")
       check(model.canOpenMatchColors, "Match Colors… can still open while the match is waiting")
       let again = try? model.queueColorMatch(edit)
@@ -214,8 +241,10 @@ extension Automation {
         history.parent(of: result)?.tensorId == edit.tensorId && result.inputTensorId == edit.tensorId,
         "the result is a new step after the edit")
       check(
-        result.sidecar.colorMatch.map { $0.strength == 1 && $0.luminance == 0 && $0.originalTensorId == originalTensorId && $0.shift != nil } == true,
-        "the result records the match and its original (\(result.sidecar.colorMatch.map { "\($0)" } ?? "none"))")
+        result.sidecar.colorMatch.map {
+          $0.options == ColorMatch.Options() && $0.counted == nil && $0.originalTensorId == originalTensorId && $0.shift != nil
+        } == true,
+        "the result records the match with the default settings and its original (\(result.sidecar.colorMatch.map { "\($0)" } ?? "none"))")
       check(result.sidecar.prompt == edit.sidecar.prompt && result.sidecar.seed == edit.sidecar.seed, "the result keeps the edit's settings")
       let note = model.statusNote ?? ""
       let reported = note.range(of: "Δb ").flatMap { range in
@@ -251,19 +280,21 @@ extension Automation {
 
       // Match Colors…: other settings queue beside a match that's waiting, the same ones don't.
       model.setQueuePaused(true)
-      let half = ColorMatch.Options(strength: 0.5)
+      let half = ColorMatch.Options(tint: 0.5, saturation: 0.5)
       guard let fullID = try? model.queueColorMatch(edit), let halfID = try? model.queueColorMatch(edit, options: half) else {
         check(false, "matches of the edit could be queued again once the first was done")
         return finish()
       }
-      let halfAgain = try? model.queueColorMatch(edit, options: ColorMatch.Options(strength: 0.1 + 0.4))
+      let halfAgain = try? model.queueColorMatch(edit, options: ColorMatch.Options(tint: 0.1 + 0.4, saturation: 0.5))
       check(
         halfID != fullID && model.queue.waiting.count(where: { $0.request?.colorMatch?.sourceTensorId == edit.tensorId }) == 2,
         "a match with other settings queues beside the one waiting")
       check(halfAgain == halfID, "a match with the same settings as one waiting isn't queued again")
       check(
         model.pendingColorMatch(for: edit, options: half)?.id == halfID && model.pendingColorMatch(for: edit)?.id == fullID
-          && model.pendingColorMatch(for: edit, options: ColorMatch.Options(strength: 0.5, luminance: 0.5)) == nil,
+          && model.pendingColorMatch(for: edit, options: ColorMatch.Options(tint: 0.5, saturation: 0.5, brightness: 0.25)) == nil
+          && model.pendingColorMatch(for: edit, options: ColorMatch.Options(tint: 0.5)) == nil
+          && model.pendingColorMatch(for: edit, options: ColorMatch.Options(unchangedOnly: true)) == nil,
         "a pending match is found by its settings")
       model.show(edit)
       check(
@@ -273,6 +304,13 @@ extension Automation {
       model.colorMatchSheetItem = model.imageItem
       try? await Task.sleep(for: .seconds(1))
       check(model.colorMatchSheetItem?.tensorId == edit.tensorId, "the Match Colors… sheet opens for the canvas image")
+      if let folder = value("--snapshot-dir") {
+        // Once its preview is drawn.
+        try? await Task.sleep(for: .seconds(8))
+        let url = URL(fileURLWithPath: folder).appendingPathComponent("color-match-sheet.png")
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        print("\(AutomationWindows.snapshotSheet(to: url) ? "saved" : "couldn't save") \(url.path)")
+      }
       model.colorMatchSheetItem = nil
       try? await Task.sleep(for: .milliseconds(500))
       model.setQueuePaused(false)
@@ -282,17 +320,70 @@ extension Automation {
             let halfResult = history.item(tensorId: halfTensorId),
             let halfImage = await history.image(tensorId: halfTensorId, in: projectName), let halfPixels = ColorMatch.rgba(halfImage)
       else {
-        check(false, "the match at strength 0.5 finished (\(halfJob.map { "\($0.status)" } ?? "still running"), \(model.errorMessage ?? "no error"))")
+        check(false, "the match at half tint and saturation finished (\(halfJob.map { "\($0.status)" } ?? "still running"), \(model.errorMessage ?? "no error"))")
         return finish()
       }
       check(
-        halfResult.sidecar.colorMatch.map { $0.strength == 0.5 && $0.luminance == 0 && $0.originalTensorId == originalTensorId } == true,
-        "the match at strength 0.5 records it (\(halfResult.sidecar.colorMatch.map { "\($0)" } ?? "none"))")
+        halfResult.sidecar.colorMatch.map { $0.options == half && $0.originalTensorId == originalTensorId } == true,
+        "the match at half tint and saturation records it (\(halfResult.sidecar.colorMatch.map { "\($0)" } ?? "none"))")
       let halfStats = ColorMatch.stats(rgba: ColorMatch.downsampled(halfPixels, width: halfImage.width, height: halfImage.height))
       let left = halfStats.mean - originalStats.mean
       check(
         abs(left.z - injected.z / 2) < 0.4 && abs(left.y - injected.y / 2) < 0.4,
-        String(format: "the match at strength 0.5 leaves about half the shift (mean a %+.2f, b %+.2f off)", left.y, left.z))
+        String(format: "the match at half tint and saturation leaves about half the shift (mean a %+.2f, b %+.2f off)", left.y, left.z))
+
+      // The edit that added a block. From its unchanged areas only, the shift measured is the one
+      // put in and the background goes back to the original's colors; measured whole it doesn't.
+      func backgroundOff(_ pixels: [UInt8]) -> SIMD3<Double> {
+        ColorMatch.stats(rgba: pixels, where: background).mean - ColorMatch.stats(rgba: originalPixels, where: background).mean
+      }
+      do {
+        let saved = try await model.matchColors(forAgent: pasted, options: ColorMatch.Options(unchangedOnly: true)) { _, _ in }
+        let record = saved.sidecar.colorMatch
+        let counted = record?.counted ?? -1
+        check(
+          record?.options.unchangedOnly == true && counted > ColorMatch.minimumUnchangedFraction && counted < 1,
+          String(format: "a match from the unchanged areas records how much of the image they are (%.1f%%)", counted * 100))
+        let shift = record?.shift ?? ColorMatch.Shift(l: 99, a: 99, b: 99)
+        check(
+          abs(shift.b - injected.z) < 0.5 && abs(shift.a - injected.y) < 0.5,
+          String(format: "its shift is the one put in, not the block's (Δa %+.2f, Δb %+.2f)", shift.a, shift.b))
+        if let image = await history.image(tensorId: saved.tensorId, in: projectName), let pixels = ColorMatch.rgba(image) {
+          let off = backgroundOff(pixels)
+          check(
+            abs(off.y) < 0.5 && abs(off.z) < 0.5,
+            String(format: "the background's colors are the original's (mean a %+.2f, b %+.2f off)", off.y, off.z))
+        } else {
+          check(false, "the match from the unchanged areas can be read back")
+        }
+        let whole = try await model.matchColors(forAgent: pasted, options: ColorMatch.Options()) { _, _ in }
+        if let image = await history.image(tensorId: whole.tensorId, in: projectName), let pixels = ColorMatch.rgba(image) {
+          let off = backgroundOff(pixels)
+          check(
+            whole.sidecar.colorMatch?.counted == nil && max(abs(off.y), abs(off.z)) > 2,
+            String(format: "measured whole, the block throws the background's colors off (mean a %+.2f, b %+.2f off)", off.y, off.z))
+        } else {
+          check(false, "the whole-image match of the same edit can be read back")
+        }
+        // Tint alone: the colors' mean goes to the original's, their spread stays the edit's.
+        let tinted = try await model.matchColors(forAgent: pasted, options: ColorMatch.Options(saturation: 0)) { _, _ in }
+        if let image = await history.image(tensorId: tinted.tensorId, in: projectName), let pixels = ColorMatch.rgba(image) {
+          let made = ColorMatch.stats(rgba: ColorMatch.downsampled(pixels, width: image.width, height: image.height))
+          let before = ColorMatch.stats(rgba: ColorMatch.downsampled(pastedPixels, width: original.width, height: original.height))
+          let mean = made.mean - originalStats.mean
+          let spread = made.std - before.std
+          check(
+            tinted.sidecar.colorMatch?.options == ColorMatch.Options(saturation: 0) && abs(mean.y) < 0.5 && abs(mean.z) < 0.5,
+            String(format: "a tint-only match moves the colors' mean to the original's (a %+.2f, b %+.2f off)", mean.y, mean.z))
+          check(
+            abs(spread.y) < 0.5 && abs(spread.z) < 0.5 && max(abs(before.std.y - originalStats.std.y), abs(before.std.z - originalStats.std.z)) > 2,
+            String(format: "and leaves their spread the edit's (a %+.2f, b %+.2f off it)", spread.y, spread.z))
+        } else {
+          check(false, "the tint-only match can be read back")
+        }
+      } catch {
+        check(false, "matching the edit with a block added: \(error.localizedDescription)")
+      }
 
       // Left waiting while another project opens: it saves into its own, not the open one, and
       // leaves the canvas alone.

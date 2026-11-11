@@ -92,7 +92,8 @@ struct SavedQueueTests {
   /// open, with its step, options and the step after which it saves.
   @Test func aColorMatchComesBackInAnyProject() throws {
     try withTestFolder { folder in
-      let match = ColorMatch.Job(project: "P", sourceTensorId: 12, strength: 0.75, luminance: 0.4)
+      let match = ColorMatch.Job(
+        project: "P", sourceTensorId: 12, options: .init(tint: 0.75, saturation: 0.5, brightness: 0.4, contrast: 0.2, unchangedOnly: true))
       let json = try #require(String(data: JSONEncoder().encode(match), encoding: .utf8))
       try write([entry(colorMatch: json)], to: folder)
       let jobs = SavedQueue.load(project: "Other", from: folder)
@@ -103,16 +104,18 @@ struct SavedQueueTests {
 
   /// `ColorMatch.Job` round-trips through the queue's JSON, its record and shift included.
   @Test func aColorMatchJobRoundTrips() throws {
-    var match = ColorMatch.Job(project: "My Project", sourceTensorId: 3, strength: 1, luminance: 0)
-    match.record = ColorMatch.Record(strength: 1, luminance: 0, originalTensorId: 2, shift: .init(l: 0, a: 1, b: -4))
+    var match = ColorMatch.Job(project: "My Project", sourceTensorId: 3)
+    match.record = ColorMatch.Record(options: .init(), originalTensorId: 2, shift: .init(l: 0, a: 1, b: -4))
     #expect(try JSONDecoder().decode(ColorMatch.Job.self, from: JSONEncoder().encode(match)) == match)
-    match.luminance = 0.6
-    match.record?.luminance = 0.6
+    match.options = .init(tint: 0.9, saturation: 0.3, brightness: 0.6, contrast: 0.1, unchangedOnly: true)
+    match.record?.options = match.options
+    match.record?.counted = 0.82
     #expect(try JSONDecoder().decode(ColorMatch.Job.self, from: JSONEncoder().encode(match)) == match)
   }
 
-  /// A queue saved while matching lightness was on or off holds `luminance` as true or false, in
-  /// the job and in its record: both read as all or none of it.
+  /// A queue saved while there were only strength and lightness (on or off) holds `strength` and
+  /// `luminance` as true or false, in the job and in its record: the colors read as the strength,
+  /// the light as all or none of it.
   @Test func aColorMatchSavedWithLuminanceOnOrOffComesBack() throws {
     try withTestFolder { folder in
       let on = #"{"project":"P","sourceTensorId":12,"strength":0.75,"luminance":true,"record":{"strength":0.75,"luminance":true,"originalTensorId":3}}"#
@@ -123,9 +126,9 @@ struct SavedQueueTests {
       #expect(
         jobs.first?.colorMatch
           == ColorMatch.Job(
-            project: "P", sourceTensorId: 12, strength: 0.75, luminance: 1,
-            record: ColorMatch.Record(strength: 0.75, luminance: 1, originalTensorId: 3)))
-      #expect(jobs.last?.colorMatch == ColorMatch.Job(project: "P", sourceTensorId: 13, strength: 1, luminance: 0))
+            project: "P", sourceTensorId: 12, options: .init(tint: 0.75, saturation: 0.75, brightness: 0.75, contrast: 0.75),
+            record: ColorMatch.Record(options: .init(strength: 0.75, luminance: 1), originalTensorId: 3)))
+      #expect(jobs.last?.colorMatch == ColorMatch.Job(project: "P", sourceTensorId: 13, options: .init()))
     }
   }
 }

@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// Match Colors… on the canvas image: Match Colors to Original with its strength and how much of
-/// the lightness to match chosen, beside a preview of what they make, then queue it. The result is
-/// a new image in History after the edited one, as the one-click item's is.
+/// Match Colors… on the canvas image: Match Colors to Original with how far the colors and the
+/// light move chosen, and whether to measure only what the edit left alone, beside a preview of
+/// what they make; then queue it. The result is a new image in History after the edited one, as
+/// the one-click item's is.
 ///
 /// The preview is the edited image at a small size, matched with the statistics of the full
 /// images (`ColorMatch.Preview`), so it shows what the job will make.
@@ -11,16 +12,21 @@ struct ColorMatchSheet: View {
   @Environment(\.dismiss) private var dismiss
   /// The step it was opened for, kept here: the canvas can change while the sheet is open.
   let item: HistoryItem
-  /// Last used, as fractions from 0 to 1. The one-click menu item doesn't read them.
-  @AppStorage("colorMatchStrength") private var strength = 1.0
-  @AppStorage("colorMatchLightness") private var lightness = 0.0
+  /// Last used, the amounts as fractions from 0 to 1. The one-click menu item doesn't read them.
+  @AppStorage("colorMatchTint") private var tint = 1.0
+  @AppStorage("colorMatchSaturation") private var saturation = 1.0
+  @AppStorage("colorMatchBrightness") private var brightness = 0.0
+  @AppStorage("colorMatchContrast") private var contrast = 0.0
+  /// On here, though off for the one-click item: the sheet is where an edit that added or
+  /// removed something gets matched, which is what it's for.
+  @AppStorage("colorMatchUnchangedOnly") private var unchangedOnly = true
   @State private var preview: ColorMatch.Preview?
   /// The preview has been asked for and came back, with or without one.
   @State private var loaded = false
   @State private var matched: CGImage?
 
   private var options: ColorMatch.Options {
-    ColorMatch.Options(strength: strength, luminance: lightness).snapped
+    ColorMatch.Options(tint: tint, saturation: saturation, brightness: brightness, contrast: contrast, unchangedOnly: unchangedOnly).snapped
   }
 
   /// Why Match can't be pressed, if it can't.
@@ -35,6 +41,25 @@ struct ColorMatchSheet: View {
     return nil
   }
 
+  /// The original has another shape, so there are no unchanged areas to find: the toggle can't
+  /// do anything.
+  private var shapesDiffer: Bool { preview?.measurements.reason == .shape }
+
+  /// What the colors are measured from, under the toggle: how much of the image, or why all of it.
+  private var measuredNote: String {
+    guard let measurements = preview?.measurements else { return " " }
+    func percent(_ fraction: Double) -> Int { Int((fraction * 100).rounded()) }
+    switch measurements.reason {
+    case .shape:
+      return "The original has a different shape, so the whole image is measured."
+    case .mostlyChanged(let fraction) where unchangedOnly:
+      return "Only \(percent(fraction))% of the image is unchanged, so the whole image is measured."
+    default:
+      if unchangedOnly, let counted = measurements.unchanged?.counted { return "Measured from \(percent(counted))% of the image." }
+      return "Measured from the whole image."
+    }
+  }
+
   var body: some View {
     let options = self.options
     let problem = self.problem
@@ -44,26 +69,35 @@ struct ColorMatchSheet: View {
         picture(preview?.original, title: "Original")
         picture(matched, title: "Matched")
       }
-      Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 10) {
-        GridRow {
-          Text("Strength").gridColumnAlignment(.trailing)
-          Slider(value: percentSteps($strength), in: 0...1)
-            .accessibilityLabel("Strength")
-          percent(options.strength)
+      // Scrolls when the window is too short for all of it (a small iPad window); the pictures
+      // and the buttons stay put.
+      ScrollView {
+        VStack(alignment: .leading, spacing: 12) {
+          Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 8) {
+            heading("Color")
+            slider("Tint", $tint, shown: options.tint)
+            slider("Saturation", $saturation, shown: options.saturation)
+            heading("Light").padding(.top, 4)
+            slider("Brightness", $brightness, shown: options.brightness)
+            slider("Contrast", $contrast, shown: options.contrast)
+          }
+          VStack(alignment: .leading, spacing: 4) {
+            Toggle("Measure unchanged areas only", isOn: $unchangedOnly)
+              .disabled(shapesDiffer)
+            // Room for it always, so nothing moves when it arrives or changes.
+            Text(measuredNote)
+              .font(.caption).foregroundStyle(.secondary)
+              .lineLimit(1, reservesSpace: true)
+          }
+          // Room for two lines always, so the sheet doesn't move when the note changes.
+          Text(problem ?? "Tint and Brightness move the average to the original's; Saturation and Contrast move the range around it.")
+            .font(.caption).foregroundStyle(.secondary)
+            .lineLimit(2, reservesSpace: true)
+            .fixedSize(horizontal: false, vertical: true)
         }
-        GridRow {
-          Text("Lightness")
-          Slider(value: percentSteps($lightness), in: 0...1)
-            .accessibilityLabel("Lightness")
-          percent(options.luminance)
-        }
+        .frame(maxWidth: .infinity, alignment: .leading)
       }
-      // Room for two lines always, so the sheet doesn't move when the note changes.
-      Text(problem ?? "Strength is how far the colors move to the original's. Lightness is how much of its brightness is matched too.")
-        .font(.caption).foregroundStyle(.secondary)
-        .lineLimit(2, reservesSpace: true)
-        .fixedSize(horizontal: false, vertical: true)
-      Spacer(minLength: 0)
+      .scrollBounceBehavior(.basedOnSize)
       HStack {
         Spacer()
         Button("Cancel", role: .cancel) { dismiss() }
@@ -77,17 +111,33 @@ struct ColorMatchSheet: View {
       }
     }
     .sheetPadding()
-    .sheetFrame(width: 560, height: 440)
+    .sheetFrame(width: 560, height: 550)
     // Once: the images don't change under the sheet.
     .task {
       preview = await create.colorMatchPreview(for: item)
       loaded = true
     }
-    // Again whenever a slider moves (or the preview arrives), away from the main actor; a newer
-    // one cancels this one.
+    // Again whenever a setting changes (or the preview arrives), away from the main actor; a
+    // newer one cancels this one.
     .task(id: Rendering(options: options, ready: preview != nil)) {
       guard let preview, let image = try? await preview.rendering(options), !Task.isCancelled else { return }
       matched = image
+    }
+  }
+
+  /// The name of a group of sliders, across the grid.
+  private func heading(_ title: String) -> some View {
+    Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+      .accessibilityAddTraits(.isHeader)
+  }
+
+  /// One amount's row: its name, its slider and its value.
+  private func slider(_ title: String, _ amount: Binding<Double>, shown: Double) -> some View {
+    GridRow {
+      Text(title).gridColumnAlignment(.trailing)
+      Slider(value: percentSteps(amount), in: 0...1)
+        .accessibilityLabel(title)
+      percent(shown)
     }
   }
 
@@ -109,7 +159,7 @@ struct ColorMatchSheet: View {
         }
       }
       .frame(maxWidth: .infinity)
-      .frame(height: 230)
+      .frame(height: 190)
       .accessibilityElement()
       .accessibilityLabel(title)
       Text(title).font(.caption).foregroundStyle(.secondary)

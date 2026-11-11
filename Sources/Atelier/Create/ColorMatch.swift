@@ -17,19 +17,83 @@ import simd
 /// Pixels are RGBA, 8 bits per channel, not premultiplied. Alpha passes through; fully transparent
 /// pixels count toward no statistics.
 nonisolated enum ColorMatch {
-  /// How strongly to match. The Match Colors… sheet (`ColorMatchSheet`) and agents set these; the
-  /// one-click menu item uses the defaults.
+  /// How to match. The Match Colors… sheet (`ColorMatchSheet`) and agents set these; the
+  /// one-click menu item uses the defaults. Each amount runs from 0 (leave it) to 1 (match fully).
+  /// Mean and spread are separate because they go wrong separately: an edit model's cast is a
+  /// moved mean, while a matched spread is what over- or under-saturates when the edit added or
+  /// removed something colorful.
   struct Options: Sendable, Hashable {
-    /// 0 leaves the image as it is, 1 matches fully.
-    var strength: Double = 1
-    /// How much of the lightness (L) to match as well, 0 to 1: L moves by `strength × luminance`.
-    /// 0 by default: an edit often means to change brightness.
-    var luminance: Double = 0
+    /// How far the color balance (the means of a and b) moves to the original's.
+    var tint: Double = 1
+    /// How far the saturation (the spreads of a and b) moves to the original's.
+    var saturation: Double = 1
+    /// How far the brightness (the mean of L) moves. 0 by default, as `contrast` is: an edit
+    /// often means to change the light.
+    var brightness: Double = 0
+    /// How far the contrast (the spread of L) moves.
+    var contrast: Double = 0
+    /// Measure both images only where the edit left the picture alone (`measurements`), so what
+    /// it added or removed doesn't count as a color shift. Off for the one-click item and agents,
+    /// whose results stay what they were; the sheet turns it on.
+    var unchangedOnly = false
 
-    /// Both in whole percents from 0 to 100%, as the sheet's sliders step, so two matches with
-    /// the same settings compare equal (`Job.isSameMatch`) however their numbers were arrived at.
+    init(tint: Double = 1, saturation: Double = 1, brightness: Double = 0, contrast: Double = 0, unchangedOnly: Bool = false) {
+      self.tint = tint
+      self.saturation = saturation
+      self.brightness = brightness
+      self.contrast = contrast
+      self.unchangedOnly = unchangedOnly
+    }
+
+    /// The settings from when there were two: `strength` for the colors, and `luminance` for how
+    /// much of that the lightness moved by. Saved steps and queues, and agents, still give them.
+    init(strength: Double, luminance: Double = 0) {
+      self.init(tint: strength, saturation: strength, brightness: strength * luminance, contrast: strength * luminance)
+    }
+
+    /// Whether L is touched at all.
+    var matchesLightness: Bool { brightness > 0 || contrast > 0 }
+
+    /// The amounts in whole percents from 0 to 100%, as the sheet's sliders step, so two matches
+    /// with the same settings compare equal (`Job.isSameMatch`) however their numbers were
+    /// arrived at.
     var snapped: Options {
-      Options(strength: ColorMatch.snapped(strength), luminance: ColorMatch.snapped(luminance))
+      Options(
+        tint: ColorMatch.snapped(tint), saturation: ColorMatch.snapped(saturation), brightness: ColorMatch.snapped(brightness),
+        contrast: ColorMatch.snapped(contrast), unchangedOnly: unchangedOnly)
+    }
+
+    /// The keys a saved step or queue holds the settings under, beside the record's or job's own.
+    /// `strength` and `luminance` are the two settings there were before these.
+    private enum CodingKeys: String, CodingKey { case tint, saturation, brightness, contrast, unchangedOnly, strength, luminance }
+
+    /// Reads the settings from among a record's or job's keys. One saved before there were four
+    /// has only `strength` and `luminance` (true, false, or for a while an amount), which give
+    /// them as `init(strength:luminance:)` does.
+    init(savedIn decoder: Decoder) throws {
+      let container = try decoder.container(keyedBy: CodingKeys.self)
+      let strength = try container.decodeIfPresent(Double.self, forKey: .strength) ?? 1
+      let luminance = try container.decodeIfPresent(Amount.self, forKey: .luminance)?.value ?? 0
+      let legacy = Options(strength: strength, luminance: luminance)
+      tint = try container.decodeIfPresent(Double.self, forKey: .tint) ?? legacy.tint
+      saturation = try container.decodeIfPresent(Double.self, forKey: .saturation) ?? legacy.saturation
+      brightness = try container.decodeIfPresent(Double.self, forKey: .brightness) ?? legacy.brightness
+      contrast = try container.decodeIfPresent(Double.self, forKey: .contrast) ?? legacy.contrast
+      unchangedOnly = try container.decodeIfPresent(Bool.self, forKey: .unchangedOnly) ?? false
+    }
+
+    /// Writes the settings among a record's or job's keys, and always `strength` as a number and
+    /// `luminance` as true or false as well: a copy of Atelier from before these settings needs
+    /// both in those types, or it fails to read the step's whole profile. It ignores the rest.
+    func save(in encoder: Encoder) throws {
+      var container = encoder.container(keyedBy: CodingKeys.self)
+      try container.encode(tint, forKey: .tint)
+      try container.encode(saturation, forKey: .saturation)
+      try container.encode(brightness, forKey: .brightness)
+      try container.encode(contrast, forKey: .contrast)
+      try container.encode(unchangedOnly, forKey: .unchangedOnly)
+      try container.encode(tint, forKey: .strength)
+      try container.encode(matchesLightness, forKey: .luminance)
     }
   }
 
@@ -62,10 +126,11 @@ nonisolated enum ColorMatch {
   /// What a step made by Match Colors records (`profile_data` `color_match`), so matching it again
   /// goes back to the same original rather than to the image it was matched from.
   struct Record: Codable, Hashable, Sendable {
-    var strength: Double
-    /// How much of the lightness was matched, 0 to 1 (`Options.luminance`). Written as it was
-    /// when this was on or off, true or false, when it's all or nothing (`Amount`).
-    var luminance: Double
+    /// How it was matched. Saved among the record's own keys (`Options.save(in:)`).
+    var options: Options
+    /// The fraction of the image that was measured, when only its unchanged areas were
+    /// (`Options.unchangedOnly`); nil when the whole image was, asked for or not.
+    var counted: Double?
     /// The original's image tensor; nil when the original was the step's first moodboard image
     /// (carried over with it).
     var originalTensorId: Int64?
@@ -73,40 +138,36 @@ nonisolated enum ColorMatch {
     /// Optional: steps saved before it was recorded don't have it.
     var shift: Shift?
 
-    private enum CodingKeys: String, CodingKey { case strength, luminance, originalTensorId, shift }
+    private enum CodingKeys: String, CodingKey { case counted, originalTensorId, shift }
 
-    init(strength: Double, luminance: Double, originalTensorId: Int64? = nil, shift: Shift? = nil) {
-      self.strength = strength
-      self.luminance = luminance
+    init(options: Options, counted: Double? = nil, originalTensorId: Int64? = nil, shift: Shift? = nil) {
+      self.options = options
+      self.counted = counted
       self.originalTensorId = originalTensorId
       self.shift = shift
     }
 
     init(from decoder: Decoder) throws {
       let container = try decoder.container(keyedBy: CodingKeys.self)
-      strength = try container.decode(Double.self, forKey: .strength)
-      luminance = try container.decode(Amount.self, forKey: .luminance).value
+      options = try Options(savedIn: decoder)
+      counted = try container.decodeIfPresent(Double.self, forKey: .counted)
       originalTensorId = try container.decodeIfPresent(Int64.self, forKey: .originalTensorId)
       shift = try container.decodeIfPresent(Shift.self, forKey: .shift)
     }
 
     func encode(to encoder: Encoder) throws {
+      try options.save(in: encoder)
       var container = encoder.container(keyedBy: CodingKeys.self)
-      try container.encode(strength, forKey: .strength)
-      try container.encode(Amount(value: luminance), forKey: .luminance)
+      try container.encodeIfPresent(counted, forKey: .counted)
       try container.encodeIfPresent(originalTensorId, forKey: .originalTensorId)
       try container.encodeIfPresent(shift, forKey: .shift)
     }
   }
 
-  /// `luminance` as saved queues and steps' `profile_data` hold it. It was a Bool before it became
-  /// an amount, so true reads as 1 and false as 0; and 1 and 0 are still written as true and
-  /// false, so a default match's step stays readable by a copy of Atelier from before the change
-  /// (which would otherwise fail to read the step's whole profile).
-  private struct Amount: Codable {
+  /// `luminance` as saved queues and steps' `profile_data` held it before there were four
+  /// settings: true or false at first, then an amount. True reads as 1 and false as 0.
+  private struct Amount: Decodable {
     var value: Double
-
-    init(value: Double) { self.value = value }
 
     init(from decoder: Decoder) throws {
       let container = try decoder.singleValueContainer()
@@ -114,15 +175,6 @@ nonisolated enum ColorMatch {
         value = flag ? 1 : 0
       } else {
         value = try container.decode(Double.self)
-      }
-    }
-
-    func encode(to encoder: Encoder) throws {
-      var container = encoder.singleValueContainer()
-      if value == 0 || value == 1 {
-        try container.encode(value == 1)
-      } else {
-        try container.encode(value)
       }
     }
   }
@@ -135,13 +187,10 @@ nonisolated enum ColorMatch {
     var project: String
     /// The edited step's image tensor, which stays the same when steps are renumbered.
     var sourceTensorId: Int64
-    var strength: Double
-    /// As `Record.luminance`, and read and written the same way.
-    var luminance: Double
+    /// As `Record.options`, and read and written the same way.
+    var options: Options
     /// What the saved step records, once the job has run.
     var record: Record?
-
-    var options: Options { Options(strength: strength, luminance: luminance) }
 
     /// The same match: the same step with the same settings, whose result would be the same
     /// image, so it's never queued twice. Other settings make another image, and may queue.
@@ -149,13 +198,12 @@ nonisolated enum ColorMatch {
       project == other.project && sourceTensorId == other.sourceTensorId && options.snapped == other.options.snapped
     }
 
-    private enum CodingKeys: String, CodingKey { case project, sourceTensorId, strength, luminance, record }
+    private enum CodingKeys: String, CodingKey { case project, sourceTensorId, record }
 
-    init(project: String, sourceTensorId: Int64, strength: Double, luminance: Double, record: Record? = nil) {
+    init(project: String, sourceTensorId: Int64, options: Options = Options(), record: Record? = nil) {
       self.project = project
       self.sourceTensorId = sourceTensorId
-      self.strength = strength
-      self.luminance = luminance
+      self.options = options
       self.record = record
     }
 
@@ -163,8 +211,7 @@ nonisolated enum ColorMatch {
       let container = try decoder.container(keyedBy: CodingKeys.self)
       project = try container.decode(String.self, forKey: .project)
       sourceTensorId = try container.decode(Int64.self, forKey: .sourceTensorId)
-      strength = try container.decode(Double.self, forKey: .strength)
-      luminance = try container.decode(Amount.self, forKey: .luminance).value
+      options = try Options(savedIn: decoder)
       record = try container.decodeIfPresent(Record.self, forKey: .record)
     }
 
@@ -172,20 +219,18 @@ nonisolated enum ColorMatch {
       var container = encoder.container(keyedBy: CodingKeys.self)
       try container.encode(project, forKey: .project)
       try container.encode(sourceTensorId, forKey: .sourceTensorId)
-      try container.encode(strength, forKey: .strength)
-      try container.encode(Amount(value: luminance), forKey: .luminance)
+      try options.save(in: encoder)
       try container.encodeIfPresent(record, forKey: .record)
     }
   }
 
   /// What the Match Colors… sheet previews with: the statistics exactly as the job takes them
-  /// (from the full images, each downsampled to fit 512), and the edited image at a size small
-  /// enough to transfer again on every slider move. Rendering the small image with the full
-  /// images' statistics shows what the job will make, rather than a match of the small image.
+  /// (`measurements`, from the full images), and the edited image at a size small enough to
+  /// transfer again on every slider move. Rendering the small image with the full images'
+  /// statistics shows what the job will make, rather than a match of the small image.
   struct Preview: Sendable {
-    /// The edited image's statistics, and the original's.
-    var target: Stats
-    var reference: Stats
+    /// Both ways of measuring, taken once, so switching between them only draws again.
+    var measurements: Measurements
     /// The edited image fit to `side`, as RGBA8.
     var pixels: [UInt8]
     var width: Int
@@ -196,13 +241,19 @@ nonisolated enum ColorMatch {
     /// The longer side of the previewed image, in pixels.
     static let side = 768
 
-    /// The shift a full match takes out.
-    var shift: Shift { ColorMatch.shift(target: target, reference: reference) }
+    /// The whole edited image's statistics, and the whole original's.
+    var target: Stats { measurements.whole.target }
+    var reference: Stats { measurements.whole.reference }
+
+    /// The shift a full match of the whole images takes out.
+    var shift: Shift { measurements.whole.shift }
 
     /// The small edited image matched with `options`, as the job would the full one. `progress`
     /// is `transferred`'s, and can throw to stop.
     func render(_ options: Options, progress: (Double) throws -> Void) rethrows -> CGImage? {
-      let out = try ColorMatch.transferred(rgba: pixels, target: target, reference: reference, options: options, progress: progress)
+      let measured = measurements.measurement(unchangedOnly: options.unchangedOnly)
+      let out = try ColorMatch.transferred(
+        rgba: pixels, target: measured.target, reference: measured.reference, options: options, progress: progress)
       return ColorMatch.cgImage(rgba: out, width: width, height: height)
     }
 
@@ -220,8 +271,9 @@ nonisolated enum ColorMatch {
     /// Reads both images and measures them, away from the main actor; nil when either can't be read.
     @concurrent static func make(edited: CGImage, original: CGImage) async -> Preview? {
       guard let pixels = rgba(edited), let referencePixels = rgba(original) else { return nil }
-      let target = stats(rgba: downsampled(pixels, width: edited.width, height: edited.height))
-      let reference = stats(rgba: downsampled(referencePixels, width: original.width, height: original.height))
+      let measurements = ColorMatch.measurements(
+        edited: pixels, width: edited.width, height: edited.height,
+        original: referencePixels, width: original.width, height: original.height)
       let size = fitSize(width: edited.width, height: edited.height, side: side)
       let originalSize = fitSize(width: original.width, height: original.height, side: side)
       guard let small = cgImage(
@@ -229,7 +281,7 @@ nonisolated enum ColorMatch {
         width: originalSize.width, height: originalSize.height)
       else { return nil }
       return Preview(
-        target: target, reference: reference, pixels: downsampled(pixels, width: edited.width, height: edited.height, fit: side),
+        measurements: measurements, pixels: downsampled(pixels, width: edited.width, height: edited.height, fit: side),
         width: size.width, height: size.height, original: small)
     }
   }
@@ -238,6 +290,43 @@ nonisolated enum ColorMatch {
   struct Stats: Sendable, Hashable {
     var mean: SIMD3<Double>
     var std: SIMD3<Double>
+  }
+
+  /// The statistics a match is made with, and what they were taken from.
+  struct Measurement: Sendable, Hashable {
+    /// The edited image's statistics, and the original's.
+    var target: Stats
+    var reference: Stats
+    /// The fraction of the visible image they were taken from, when that's only its unchanged
+    /// areas; nil when it's the whole image.
+    var counted: Double?
+
+    /// The shift a full match takes out.
+    var shift: Shift { ColorMatch.shift(target: target, reference: reference) }
+  }
+
+  /// Why only the whole image could be measured, when the unchanged areas were asked for.
+  enum WholeImageReason: Sendable, Hashable {
+    /// The original has another shape, so no pixel of it lies under one of the edit's.
+    case shape
+    /// Too little of the image is unchanged (this fraction of it) to speak for its colors.
+    case mostlyChanged(Double)
+  }
+
+  /// Both ways of measuring a pair of images (`measurements`).
+  struct Measurements: Sendable, Hashable {
+    /// Each whole image.
+    var whole: Measurement
+    /// Only where the edit left the picture alone; nil when that can't be used, or wasn't taken.
+    var unchanged: Measurement?
+    /// Why `unchanged` can't be used, when it can't.
+    var reason: WholeImageReason?
+
+    /// What a match with `Options.unchangedOnly` set so is made with: the whole image when the
+    /// unchanged areas can't be used.
+    func measurement(unchangedOnly: Bool) -> Measurement {
+      unchangedOnly ? unchanged ?? whole : whole
+    }
   }
 
   /// Lab channels, one array each.
@@ -249,24 +338,29 @@ nonisolated enum ColorMatch {
 
   // MARK: Images
 
-  /// `image` with its colors matched to `reference`'s, and the shift taken out; nil when either
-  /// can't be read. `progress` hears how far it is, 0 to 1, mostly through the transfer, which
+  /// `image` with its colors matched to `reference`'s, the shift taken out, and the fraction of
+  /// the image measured when that was only its unchanged areas; nil when either can't be read. `progress` hears how far it is, 0 to 1, mostly through the transfer, which
   /// takes the time; it can throw to stop.
   static func matched(
     _ image: CGImage, to reference: CGImage, options: Options = Options(), progress: (Double) throws -> Void
-  ) rethrows -> (image: CGImage, shift: Shift)? {
+  ) rethrows -> (image: CGImage, shift: Shift, counted: Double?)? {
     guard let pixels = rgba(image), let referencePixels = rgba(reference) else { return nil }
-    let target = stats(rgba: downsampled(pixels, width: image.width, height: image.height))
-    let source = stats(rgba: downsampled(referencePixels, width: reference.width, height: reference.height))
+    let measured = measure(
+      edited: pixels, width: image.width, height: image.height,
+      original: referencePixels, width: reference.width, height: reference.height, unchangedOnly: options.unchangedOnly)
     try progress(0.05)
-    let out = try transferred(rgba: pixels, target: target, reference: source, options: options) { try progress(0.05 + 0.9 * $0) }
+    let out = try transferred(rgba: pixels, target: measured.target, reference: measured.reference, options: options) {
+      try progress(0.05 + 0.9 * $0)
+    }
     guard let result = cgImage(rgba: out, width: image.width, height: image.height) else { return nil }
     try progress(1)
-    return (result, shift(target: target, reference: source))
+    return (result, measured.shift, measured.counted)
   }
 
   /// `matched` with no progress. (A defaulted closure would make every `rethrows` call throwing.)
-  static func matched(_ image: CGImage, to reference: CGImage, options: Options = Options()) -> (image: CGImage, shift: Shift)? {
+  static func matched(
+    _ image: CGImage, to reference: CGImage, options: Options = Options()
+  ) -> (image: CGImage, shift: Shift, counted: Double?)? {
     matched(image, to: reference, options: options) { _ in }
   }
 
@@ -274,7 +368,7 @@ nonisolated enum ColorMatch {
   /// `CancellationError` when the task is cancelled, between slices of the transfer.
   @concurrent static func matching(
     _ image: CGImage, to reference: CGImage, options: Options, progress: @escaping @Sendable (Double) -> Void = { _ in }
-  ) async throws -> (image: CGImage, shift: Shift)? {
+  ) async throws -> (image: CGImage, shift: Shift, counted: Double?)? {
     try matched(image, to: reference, options: options) { fraction in
       try Task.checkCancellation()
       progress(fraction)
@@ -319,9 +413,14 @@ nonisolated enum ColorMatch {
 
   /// The pixels scaled down to fit 512×512, where the statistics are taken (unchanged when they
   /// already fit).
-  static func downsampled(_ rgba: [UInt8], width: Int, height: Int, fit side: Int = 512) -> [UInt8] {
+  static func downsampled(_ rgba: [UInt8], width: Int, height: Int, fit side: Int = statsSide) -> [UInt8] {
     guard width > side || height > side else { return rgba }
     let (newWidth, newHeight) = fitSize(width: width, height: height, side: side)
+    return scaled(rgba, width: width, height: height, toWidth: newWidth, height: newHeight) ?? rgba
+  }
+
+  /// The pixels resampled to another size; nil when that fails.
+  static func scaled(_ rgba: [UInt8], width: Int, height: Int, toWidth newWidth: Int, height newHeight: Int) -> [UInt8]? {
     var out = [UInt8](repeating: 0, count: newWidth * newHeight * 4)
     var input = rgba
     let error = input.withUnsafeMutableBytes { inBytes in
@@ -332,7 +431,7 @@ nonisolated enum ColorMatch {
         return vImageScale_ARGB8888(&source, &destination, nil, vImage_Flags(kvImageHighQualityResampling))
       }
     }
-    return error == kvImageNoError ? out : rgba
+    return error == kvImageNoError ? out : nil
   }
 
   /// The size `downsampled` makes: scaled down to fit `side`×`side`, or as it is when it fits.
@@ -342,13 +441,14 @@ nonisolated enum ColorMatch {
     return (max(1, Int((Double(width) * scale).rounded())), max(1, Int((Double(height) * scale).rounded())))
   }
 
-  // MARK: Statistics and transfer
+  // MARK: Statistics
 
-  /// Lab statistics of the pixels that aren't fully transparent.
-  static func stats(rgba: [UInt8]) -> Stats {
+  /// Lab statistics of the pixels that aren't fully transparent; with `counted` (one per pixel),
+  /// only of those it holds true for.
+  static func stats(rgba: [UInt8], where counted: [Bool]? = nil) -> Stats {
     var visible: [UInt8] = []
     visible.reserveCapacity(rgba.count)
-    for index in stride(from: 0, to: rgba.count, by: 4) where rgba[index + 3] > 0 {
+    for index in stride(from: 0, to: rgba.count, by: 4) where rgba[index + 3] > 0 && counted?[index / 4] != false {
       visible.append(contentsOf: rgba[index..<(index + 4)])
     }
     let planes = lab(rgba: visible)
@@ -364,32 +464,209 @@ nonisolated enum ColorMatch {
     return Stats(mean: SIMD3(l.0, a.0, b.0), std: SIMD3(l.1, a.1, b.1))
   }
 
+  // MARK: Measuring
+
+  /// The side the statistics are taken at: each image scaled down to fit it (`downsampled`).
+  static let statsSide = 512
+  /// How far around each pixel the Lab planes are averaged before the two images are compared,
+  /// in pixels each way (a 5×5 box): an edit model's VAE gives even untouched areas new fine
+  /// texture, which pixel by pixel would read as change.
+  static let unchangedBlurRadius = 2
+  /// The most a pixel may differ from the original's (ΔE76, once the image-wide shift is taken
+  /// off) and still count as unchanged. Around 2 is just visible; 10 is well past what a cast's
+  /// unevenness and the blurred texture add, and well short of new content.
+  static let unchangedDeltaE = 10.0
+  /// The least of the visible image that must be unchanged for it to be measured alone. Under a
+  /// quarter, what's left is too little to speak for the picture (and when most of it changed,
+  /// "unchanged" is likelier a coincidence than a background).
+  static let minimumUnchangedFraction = 0.25
+
+  /// The statistics a match of `edited` to `original` is made with (tightly packed RGBA8 of the
+  /// full images). The job and the sheet's preview both take them here, so the preview can't
+  /// show another match than the job makes.
+  static func measure(
+    edited: [UInt8], width: Int, height: Int, original: [UInt8], width originalWidth: Int, height originalHeight: Int,
+    unchangedOnly: Bool
+  ) -> Measurement {
+    measurements(
+      edited: edited, width: width, height: height, original: original, width: originalWidth, height: originalHeight,
+      unchanged: unchangedOnly
+    ).measurement(unchangedOnly: unchangedOnly)
+  }
+
+  /// `measure` both ways at once (the unchanged areas only with `unchanged`, which takes longer).
+  ///
+  /// The whole images are measured as they always were, each scaled down to fit 512. The
+  /// unchanged areas are found at that size: both images go to Lab and are blurred a little, the
+  /// median difference between them is taken off (that's the cast being matched, which would
+  /// otherwise mark every pixel changed), and a pixel whose remaining difference is small is
+  /// unchanged. The statistics are then those of the same pixels of both images, unblurred. An
+  /// edit that adds a red coat then no longer reads as the image having turned red. It falls
+  /// back to the whole images when the original has another shape (nothing lines up) or too
+  /// little is unchanged.
+  static func measurements(
+    edited: [UInt8], width: Int, height: Int, original: [UInt8], width originalWidth: Int, height originalHeight: Int,
+    unchanged: Bool = true
+  ) -> Measurements {
+    let target = downsampled(edited, width: width, height: height, fit: statsSide)
+    let reference = downsampled(original, width: originalWidth, height: originalHeight, fit: statsSide)
+    var result = Measurements(whole: Measurement(target: stats(rgba: target), reference: stats(rgba: reference)))
+    guard unchanged else { return result }
+    let size = fitSize(width: width, height: height, side: statsSide)
+    let originalSize = fitSize(width: originalWidth, height: originalHeight, side: statsSide)
+    // More than a pixel's rounding apart: another shape.
+    guard abs(size.width - originalSize.width) <= 1, abs(size.height - originalSize.height) <= 1,
+          target.count == size.width * size.height * 4, reference.count == originalSize.width * originalSize.height * 4
+    else {
+      result.reason = .shape
+      return result
+    }
+    var aligned = reference
+    if originalSize != size {
+      guard let scaled = scaled(reference, width: originalSize.width, height: originalSize.height, toWidth: size.width, height: size.height)
+      else {
+        result.reason = .shape
+        return result
+      }
+      aligned = scaled
+    }
+    let (mask, fraction) = unchangedPixels(edited: target, original: aligned, width: size.width, height: size.height)
+    guard fraction >= minimumUnchangedFraction else {
+      result.reason = .mostlyChanged(fraction)
+      return result
+    }
+    result.unchanged = Measurement(
+      target: stats(rgba: target, where: mask), reference: stats(rgba: aligned, where: mask), counted: fraction)
+    return result
+  }
+
+  /// Which pixels of two images of the same size the edit left alone (see `measurements`), and
+  /// the fraction they are of the edited image's visible pixels.
+  static func unchangedPixels(edited: [UInt8], original: [UInt8], width: Int, height: Int) -> (mask: [Bool], fraction: Double) {
+    let count = width * height
+    func blurredLab(_ rgba: [UInt8]) -> Planes {
+      let planes = lab(rgba: rgba)
+      return Planes(
+        l: boxBlurred(planes.l, width: width, height: height, radius: unchangedBlurRadius),
+        a: boxBlurred(planes.a, width: width, height: height, radius: unchangedBlurRadius),
+        b: boxBlurred(planes.b, width: width, height: height, radius: unchangedBlurRadius))
+    }
+    let target = blurredLab(edited)
+    let reference = blurredLab(original)
+    // Seen in both images: a pixel either doesn't show has nothing to compare.
+    var both = [Bool](repeating: false, count: count)
+    var visible = 0
+    for index in 0..<count {
+      let shows = edited[index * 4 + 3] > 0
+      if shows { visible += 1 }
+      both[index] = shows && original[index * 4 + 3] > 0
+    }
+    guard visible > 0 else { return ([Bool](repeating: false, count: count), 0) }
+    func difference(_ a: [Double], _ b: [Double]) -> [Double] {
+      var d = vDSP.subtract(a, b)
+      var seen = [Double]()
+      seen.reserveCapacity(count)
+      for index in 0..<count where both[index] { seen.append(d[index]) }
+      guard !seen.isEmpty else { return d }
+      seen.sort()
+      let median = seen.count % 2 == 1 ? seen[seen.count / 2] : (seen[seen.count / 2 - 1] + seen[seen.count / 2]) / 2
+      d = vDSP.add(-median, d)
+      return d
+    }
+    let dl = difference(target.l, reference.l)
+    let da = difference(target.a, reference.a)
+    let db = difference(target.b, reference.b)
+    let limit = unchangedDeltaE * unchangedDeltaE
+    var mask = [Bool](repeating: false, count: count)
+    var unchanged = 0
+    for index in 0..<count where both[index] {
+      if dl[index] * dl[index] + da[index] * da[index] + db[index] * db[index] <= limit {
+        mask[index] = true
+        unchanged += 1
+      }
+    }
+    return (mask, Double(unchanged) / Double(visible))
+  }
+
+  /// A plane averaged over the (2·`radius` + 1)-wide box around each value, the box cut off at
+  /// the plane's edges.
+  static func boxBlurred(_ values: [Double], width: Int, height: Int, radius: Int) -> [Double] {
+    guard radius > 0, values.count == width * height else { return values }
+    // Rows, then columns, each from running sums.
+    var rows = values
+    var sums = [Double](repeating: 0, count: max(width, height) + 1)
+    for y in 0..<height {
+      let base = y * width
+      for x in 0..<width { sums[x + 1] = sums[x] + values[base + x] }
+      for x in 0..<width {
+        let low = max(0, x - radius)
+        let high = min(width - 1, x + radius)
+        rows[base + x] = (sums[high + 1] - sums[low]) / Double(high - low + 1)
+      }
+    }
+    var out = rows
+    for x in 0..<width {
+      for y in 0..<height { sums[y + 1] = sums[y] + rows[y * width + x] }
+      for y in 0..<height {
+        let low = max(0, y - radius)
+        let high = min(height - 1, y + radius)
+        out[y * width + x] = (sums[high + 1] - sums[low]) / Double(high - low + 1)
+      }
+    }
+    return out
+  }
+
+  // MARK: Transfer
+
+  /// How far a channel's spread may be stretched or squeezed, as the ratio of the original's
+  /// spread to the edit's, for a and b and for L. Always on, with no setting. Doubling chroma
+  /// doubles chroma noise with it, and 1.5× the L contrast already clips 8-bit highlights; past
+  /// these a ratio says the two images hold different things, not that the colors drifted. It
+  /// also keeps a flat image, whose spread is near 0, from making the ratio explode.
+  static let chromaSpreadLimits = 0.5...2.0
+  static let lightnessSpreadLimits = 0.67...1.5
+
+  /// One channel's transfer (0 is L, 1 a, 2 b) as x · scale + offset, with its mean moved by
+  /// `mean` of the way to the reference's and its spread by `spread` of the way:
+  ///
+  ///   k = reference std / target std, kept within the channel's limits
+  ///   scale = 1 + spread · (k − 1)
+  ///   offset = mean · (reference mean − k · target mean) + (mean − spread) · (k − 1) · target mean
+  ///
+  /// With the two amounts equal the last term is nothing and is left out, so this is to the bit
+  /// the one-amount transfer there was before (x + amount · (matched − x)) whenever k is within
+  /// its limits: the default match, and steps matched then, come out with the same pixels.
+  static func coefficients(
+    target: Stats, reference: Stats, channel: Int, mean: Double, spread: Double
+  ) -> (scale: Double, offset: Double) {
+    let limits = channel == 0 ? lightnessSpreadLimits : chromaSpreadLimits
+    let k = min(max(reference.std[channel] / target.std[channel], limits.lowerBound), limits.upperBound)
+    let scale = 1 + spread * (k - 1)
+    let offset = mean * (reference.mean[channel] - k * target.mean[channel])
+    guard mean != spread else { return (scale, offset) }
+    return (scale, offset + (mean - spread) * (k - 1) * target.mean[channel])
+  }
+
   /// The shift `transferred` removes: the target's mean minus the reference's.
   static func shift(target: Stats, reference: Stats) -> Shift {
     let delta = target.mean - reference.mean
     return Shift(l: delta.x, a: delta.y, b: delta.z)
   }
 
-  /// The pixels with a and b (and L, by `luminance`) moved from `target`'s statistics to
-  /// `reference`'s: matched = (x − target mean) · (reference std / target std) + reference mean,
-  /// then x + amount · (matched − x), where amount is `strength` for a and b and
-  /// `strength × luminance` for L. At `luminance` 0 L isn't touched at all, rather than moved by
-  /// nothing, so the default's pixels stay what they were before lightness was an amount. Done a
-  /// slice at a time, so a large image's Lab planes
-  /// never all exist at once. `progress` hears the fraction done after each slice (at least 1%
-  /// apart, and 1 at the end); it can throw to stop.
+  /// The pixels moved from `target`'s statistics toward `reference`'s, each channel by
+  /// `coefficients`: a and b by `tint` (mean) and `saturation` (spread), L by `brightness` and
+  /// `contrast`. With both of those 0, L isn't touched at all, rather than moved by nothing, so
+  /// the default's pixels stay what they always were. Done a slice at a time, so a large image's
+  /// Lab planes never all exist at once. `progress` hears the fraction done after each slice (at
+  /// least 1% apart, and 1 at the end); it can throw to stop.
   static func transferred(
     rgba: [UInt8], target: Stats, reference: Stats, options: Options, progress: (Double) throws -> Void
   ) rethrows -> [UInt8] {
-    // matched − x is linear in x, so the whole step is x · scale + offset per channel.
-    func coefficients(_ channel: Int, amount s: Double) -> (scale: Double, offset: Double) {
-      let k = reference.std[channel] / target.std[channel]
-      return (1 + s * (k - 1), s * (reference.mean[channel] - k * target.mean[channel]))
-    }
-    let matchesLightness = options.luminance > 0
-    let l: (scale: Double, offset: Double) = matchesLightness ? coefficients(0, amount: options.strength * options.luminance) : (1, 0)
-    let a = coefficients(1, amount: options.strength)
-    let b = coefficients(2, amount: options.strength)
+    let matchesLightness = options.matchesLightness
+    let l: (scale: Double, offset: Double) = matchesLightness
+      ? coefficients(target: target, reference: reference, channel: 0, mean: options.brightness, spread: options.contrast) : (1, 0)
+    let a = coefficients(target: target, reference: reference, channel: 1, mean: options.tint, spread: options.saturation)
+    let b = coefficients(target: target, reference: reference, channel: 2, mean: options.tint, spread: options.saturation)
     var out = [UInt8](repeating: 0, count: rgba.count)
     let slice = 65536 * 4
     var reported = 0.0
