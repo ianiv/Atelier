@@ -20,7 +20,9 @@ extension Automation {
   /// fifth of it: matched from its unchanged areas only, the step records how much of the image
   /// that was and the background's colors are the original's; matched with tint alone, the
   /// colors' mean is the original's and their spread the edit's. The sheet's remembered values
-  /// are put back.
+  /// are never written: the run's are set over them for this launch only. It also prints how
+  /// long the sheet's preview takes to make and to draw once on the check's image (plain lines,
+  /// neither PASS nor FAIL), for measuring it in a Release build.
   ///
   ///   Atelier --color-match-check --project NAME [--input-image FILE] [--snapshot-dir DIR] [--quit]
   ///
@@ -40,16 +42,17 @@ extension Automation {
         fflush(stdout)
       }
       // What the sheet last used, set away from the defaults for the run: the one-click match
-      // mustn't read them. Put back at the end.
+      // mustn't read them. They go in the launch arguments' domain, which is read ahead of the
+      // saved values and is never saved itself, so the user's own are untouched however the run
+      // ends, a crash included.
       let defaults = UserDefaults.standard
-      let sheetKeys = ["colorMatchTint", "colorMatchSaturation", "colorMatchBrightness", "colorMatchContrast", "colorMatchUnchangedOnly"]
-      let savedSheetValues = sheetKeys.map { defaults.object(forKey: $0) }
-      for key in sheetKeys.dropLast() { defaults.set(0.5, forKey: key) }
-      defaults.set(true, forKey: "colorMatchUnchangedOnly")
+      let launchValues = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
+      var runValues = launchValues
+      for key in ["colorMatchTint", "colorMatchSaturation", "colorMatchBrightness", "colorMatchContrast"] { runValues[key] = 0.5 }
+      runValues["colorMatchUnchangedOnly"] = true
+      defaults.setVolatileDomain(runValues, forName: UserDefaults.argumentDomain)
       @MainActor func finish() {
-        for (key, value) in zip(sheetKeys, savedSheetValues) {
-          if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
-        }
+        defaults.setVolatileDomain(launchValues, forName: UserDefaults.argumentDomain)
         print(failures == 0 ? "color match check: all passed" : "color match check: \(failures) failed")
         fflush(stdout)
         if args.contains("--quit") { AppLifecycle.quit() }
@@ -102,6 +105,22 @@ extension Automation {
       guard let warm = ColorMatch.cgImage(rgba: warmPixels, width: original.width, height: original.height),
             let warmTensor = ImageTensor.tensor(from: warm)
       else { return finish() }
+
+      // How long the sheet's preview takes: reading and measuring both images, then one draw.
+      let clock = ContinuousClock()
+      func milliseconds(_ duration: Duration) -> String {
+        String(format: "%.1f ms", Double(duration.components.seconds) * 1000 + Double(duration.components.attoseconds) / 1e15)
+      }
+      let makeStart = clock.now
+      let timed = await ColorMatch.Preview.make(edited: warm, original: original)
+      let makeTime = clock.now - makeStart
+      if let timed {
+        let renderTime = clock.measure { _ = timed.render(ColorMatch.Options(unchangedOnly: true)) }
+        print("timing: Preview.make \(milliseconds(makeTime)) for \(warm.width)×\(warm.height); render \(milliseconds(renderTime)) at \(timed.width)×\(timed.height)")
+      } else {
+        print("timing: the preview couldn't be made")
+      }
+      fflush(stdout)
 
       // The original goes in as an Imported step, the warm copy as an Edit step after it.
       var configuration = settings

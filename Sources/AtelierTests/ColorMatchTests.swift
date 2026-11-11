@@ -265,7 +265,7 @@ struct ColorMatchTests {
     let originalImage = try #require(ColorMatch.cgImage(rgba: original, width: width, height: height))
     let warmImage = try #require(ColorMatch.cgImage(rgba: warm, width: width, height: height))
     let preview = try #require(await ColorMatch.Preview.make(edited: warmImage, original: originalImage))
-    #expect(preview.width == ColorMatch.Preview.side && preview.height == 307)
+    #expect(preview.width == ColorMatch.Preview.side && preview.height == 205)
     #expect(preview.original.width == preview.width && preview.original.height == preview.height)
     // The statistics the job takes.
     let warmPixels = try #require(ColorMatch.rgba(warmImage))
@@ -538,8 +538,8 @@ struct ColorMatchTests {
     let original = picture(width: width, height: height)
     let covered = pasted(shifted(original, by: SIMD3(0, 1, 6)), width: width, height: height, over: 0.8)
     let mostly = ColorMatch.measurements(edited: covered, width: width, height: height, original: original, width: width, height: height)
-    #expect(mostly.unchanged == nil)
-    if case .mostlyChanged(let fraction) = mostly.reason { #expect(fraction < 0.25) } else { Issue.record("\(String(describing: mostly.reason))") }
+    // The block is most of the image, so the shift between the two is the block's, not a cast.
+    #expect(mostly.unchanged == nil && mostly.reason == .changedTogether)
     #expect(mostly.measurement(unchangedOnly: true) == mostly.whole)
     #expect(
       ColorMatch.measure(edited: covered, width: width, height: height, original: original, width: width, height: height, unchangedOnly: true)
@@ -557,6 +557,168 @@ struct ColorMatchTests {
     let plain = ColorMatch.measurements(
       edited: warm, width: width, height: height, original: original, width: width, height: height, unchanged: false)
     #expect(plain.unchanged == nil && plain.reason == nil)
+  }
+
+  /// More than half the image changed, all the same way: a kept subject with a slight warm cast
+  /// over 40% of it, and a grey backdrop swapped for blue over the rest. The median difference
+  /// is then the backdrop's, and taking it off would call the backdrop unchanged and the subject
+  /// changed (60% "unchanged", a Δb near −70). It's too large to be a cast, so the whole image is
+  /// measured, with a reason.
+  @Test func aBackdropSwappedOverMostOfTheImageFallsBack() {
+    let side = 512
+    let kept = side * 4 / 10
+    var original = picture(width: side, height: side)
+    for y in 0..<side {
+      for x in kept..<side { original.replaceSubrange((y * side + x) * 4..<(y * side + x) * 4 + 3, with: [128, 128, 128]) }
+    }
+    var edited = shifted(original, by: SIMD3(0, 1, 4))
+    for y in 0..<side {
+      for x in kept..<side { edited.replaceSubrange((y * side + x) * 4..<(y * side + x) * 4 + 3, with: [40, 80, 220]) }
+    }
+    let both = ColorMatch.measurements(edited: edited, width: side, height: side, original: original, width: side, height: side)
+    #expect(both.unchanged == nil && both.reason == .changedTogether)
+    #expect(both.measurement(unchangedOnly: true) == both.whole)
+    let measured = ColorMatch.measure(
+      edited: edited, width: side, height: side, original: original, width: side, height: side, unchangedOnly: true)
+    #expect(measured == both.whole && measured.counted == nil)
+    // What it would have been taken for: the mask is the backdrop, not the subject.
+    let found = ColorMatch.unchangedPixels(
+      edited: edited, lab: ColorMatch.lab(rgba: edited), original: original, lab: ColorMatch.lab(rgba: original), width: side, height: side)
+    #expect(found.cast > ColorMatch.maximumCastDeltaE && found.fraction > ColorMatch.minimumUnchangedFraction)
+    #expect(!found.mask[side * 100 + 10] && found.mask[side * 100 + side - 10])
+  }
+
+  /// Between 30 and 50% unchanged, with the rest changed in different ways (so the median is
+  /// still the cast): under the floor of just over half, so the whole image is measured and the
+  /// reason says how much was unchanged.
+  @Test func underHalfUnchangedFallsBack() {
+    let side = 512
+    let original = picture(width: side, height: side)
+    var edited = shifted(original, by: SIMD3(0, 1, 6))
+    // Lighter, redder and yellower than anything in the picture, then darker, greener and bluer.
+    for y in 0..<side {
+      for x in side * 4 / 10..<side {
+        let color: [UInt8] = x < side * 7 / 10 ? [255, 170, 90] : [0, 50, 110]
+        edited.replaceSubrange((y * side + x) * 4..<(y * side + x) * 4 + 3, with: color)
+      }
+    }
+    let both = ColorMatch.measurements(edited: edited, width: side, height: side, original: original, width: side, height: side)
+    #expect(both.unchanged == nil && both.measurement(unchangedOnly: true) == both.whole)
+    if case .mostlyChanged(let fraction) = both.reason {
+      #expect(fraction > 0.3 && fraction < 0.5 && fraction < ColorMatch.minimumUnchangedFraction)
+    } else {
+      Issue.record("\(String(describing: both.reason))")
+    }
+    // Just over half unchanged is enough.
+    let less = pasted(shifted(original, by: SIMD3(0, 1, 6)), width: side, height: side, over: 0.4)
+    let most = ColorMatch.measurements(edited: less, width: side, height: side, original: original, width: side, height: side)
+    #expect(most.reason == nil && abs((most.unchanged?.counted ?? 0) - 0.6) < 0.02)
+  }
+
+  /// A small edit of a larger original of the same shape lines up, though only the original is
+  /// scaled down to 512 for its statistics; another shape still doesn't.
+  @Test func aSmallEditOfALargerOriginalLinesUp() throws {
+    let original = picture(width: 800, height: 800)
+    let edited = shifted(picture(width: 400, height: 400), by: SIMD3(0, 0, 5))
+    let both = ColorMatch.measurements(edited: edited, width: 400, height: 400, original: original, width: 800, height: 800)
+    let unchanged = try #require(both.unchanged)
+    #expect(both.reason == nil && (unchanged.counted ?? 0) > 0.95 && abs(unchanged.shift.b - 5) < 0.5)
+    // And the other way around.
+    let small = ColorMatch.measurements(
+      edited: shifted(original, by: SIMD3(0, 0, 5)), width: 800, height: 800, original: picture(width: 400, height: 400), width: 400,
+      height: 400)
+    #expect(small.reason == nil && (small.unchanged?.counted ?? 0) > 0.95)
+    let wide = ColorMatch.measurements(
+      edited: shifted(picture(width: 400, height: 300), by: SIMD3(0, 0, 5)), width: 400, height: 300, original: original, width: 800,
+      height: 800)
+    #expect(wide.unchanged == nil && wide.reason == .shape)
+  }
+
+  /// An original a pixel off the edit's shape (their 512 fits are 512×342 and 512×341) is scaled
+  /// that pixel and lines up.
+  @Test func anOriginalAPixelOffIsRealigned() throws {
+    let edited = shifted(picture(width: 1024, height: 683), by: SIMD3(0, 1, 6))
+    let original = picture(width: 1024, height: 682)
+    #expect(ColorMatch.fitSize(width: 1024, height: 683, side: 512) == (512, 342))
+    #expect(ColorMatch.fitSize(width: 1024, height: 682, side: 512) == (512, 341))
+    let both = ColorMatch.measurements(edited: edited, width: 1024, height: 683, original: original, width: 1024, height: 682)
+    let unchanged = try #require(both.unchanged)
+    #expect(both.reason == nil && (unchanged.counted ?? 0) > 0.95)
+    #expect(abs(unchanged.shift.b - 6) < 0.5 && abs(unchanged.shift.a - 1) < 0.5)
+    // The whole images' statistics are each image's own 512 fit, as ever.
+    #expect(both.whole.reference == ColorMatch.stats(rgba: ColorMatch.downsampled(original, width: 1024, height: 682)))
+  }
+
+  /// Fully transparent pixels hold whatever color was left under them. Blurred in, it would
+  /// mark the visible pixels beside them changed; they're left out of the blur, so everything
+  /// that shows of an edit that only shifted the colors is unchanged.
+  @Test func hiddenPixelsDontBleedIntoTheUnchangedAreas() throws {
+    let side = 256
+    var original = picture(width: side, height: side)
+    for y in 0..<side {
+      for x in 0..<side {
+        let index = (y * side + x) * 4
+        if (100..<150).contains(x) {
+          // Hidden, with a loud color under it.
+          original.replaceSubrange(index..<index + 4, with: [255, 0, 255, 0])
+        } else if y < 40 {
+          original[index + 3] = 128
+        }
+      }
+    }
+    var edited = shifted(original, by: SIMD3(0, 1, 6))
+    for index in stride(from: 0, to: edited.count, by: 4) where edited[index + 3] == 0 {
+      edited.replaceSubrange(index..<index + 3, with: [0, 255, 0])
+    }
+    let both = ColorMatch.measurements(edited: edited, width: side, height: side, original: original, width: side, height: side)
+    let unchanged = try #require(both.unchanged)
+    #expect(both.reason == nil && unchanged.counted == 1)
+    #expect(abs(unchanged.shift.b - 6) < 0.5)
+    // Measured from all that shows, it's the whole image's statistics.
+    #expect(unchanged.target == both.whole.target && unchanged.reference == both.whole.reference)
+  }
+
+  /// Statistics from Lab planes made once are, to the bit, those from the pixels: whole, masked,
+  /// and with transparent pixels left out.
+  @Test func statisticsFromKeptPlanesAreTheSame() {
+    var rgba = pixels(5000, seed: 23)
+    var generator = Generator(state: 29)
+    var mask: [Bool] = []
+    for index in 0..<5000 {
+      mask.append(Int.random(in: 0..<3, using: &generator) > 0)
+      if index % 7 == 0 { rgba[index * 4 + 3] = 0 }
+      if index % 11 == 0 { rgba[index * 4 + 3] = 90 }
+    }
+    let planes = ColorMatch.lab(rgba: rgba)
+    #expect(ColorMatch.stats(lab: planes, rgba: rgba) == ColorMatch.stats(rgba: rgba))
+    #expect(ColorMatch.stats(lab: planes, rgba: rgba, where: mask) == ColorMatch.stats(rgba: rgba, where: mask))
+    let opaque = pixels(5000, seed: 31)
+    let opaquePlanes = ColorMatch.lab(rgba: opaque)
+    #expect(ColorMatch.stats(lab: opaquePlanes, rgba: opaque) == ColorMatch.stats(rgba: opaque))
+    #expect(ColorMatch.stats(lab: opaquePlanes, rgba: opaque, where: mask) == ColorMatch.stats(rgba: opaque, where: mask))
+  }
+
+  /// With the mean and the spread moved by different amounts, a capped spread still leaves the
+  /// mean where its amount puts it: all the way, halfway, or not at all.
+  @Test func cappedSpreadKeepsTheMeanWhereItsAmountPutsIt() {
+    let target = ColorMatch.Stats(mean: SIMD3(50, 4, 8), std: SIMD3(10, 6, 6))
+    // Five times the spread: capped at 2× for a and b, 1.5× for L.
+    let reference = ColorMatch.Stats(mean: SIMD3(56, 1, 2), std: SIMD3(50, 30, 30))
+    for channel in 0...2 {
+      let cap = channel == 0 ? 1.5 : 2.0
+      for (mean, spread) in [(1.0, 0.5), (0.0, 1.0), (0.5, 0.0), (0.25, 0.75), (1.0, 0.0)] {
+        let made = ColorMatch.coefficients(target: target, reference: reference, channel: channel, mean: mean, spread: spread)
+        #expect(abs(made.scale - (1 + spread * (cap - 1))) < 1e-12)
+        let moved = target.mean[channel] * made.scale + made.offset
+        #expect(abs(moved - (target.mean[channel] + mean * (reference.mean[channel] - target.mean[channel]))) < 1e-9)
+      }
+    }
+    // On pixels: saturation alone, capped, doubles the colors' spread and leaves their mean.
+    let (edited, measured, _) = stretched()
+    let wide = ColorMatch.Stats(mean: measured.mean + SIMD3(0, 3, 3), std: measured.std * 5)
+    let made = ColorMatch.stats(
+      rgba: ColorMatch.transferred(rgba: edited, target: measured, reference: wide, options: .init(tint: 0, saturation: 1)))
+    #expect(abs(made.std.z / measured.std.z - 2) < 0.1 && abs(made.mean.z - measured.mean.z) < 0.3)
   }
 
   /// The sheet's preview with the toggle on draws the job's transfer: the same measurement, from

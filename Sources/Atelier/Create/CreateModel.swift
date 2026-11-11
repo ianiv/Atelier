@@ -2260,12 +2260,14 @@ final class CreateModel {
   }
 
   /// What the Match Colors… sheet previews `item` with: the step and its original, read and
-  /// measured as the job does (`run(_:request:job:)`); nil when either can't be read.
-  func colorMatchPreview(for item: HistoryItem) async -> ColorMatch.Preview? {
+  /// measured as the job does (`run(_:request:job:)`); nil when either can't be read. `read`
+  /// hears the original as soon as it's read, before the measuring, which takes longer: the
+  /// sheet shows it meanwhile.
+  func colorMatchPreview(for item: HistoryItem, read: (CGImage) -> Void = { _ in }) async -> ColorMatch.Preview? {
     let project = history.project
-    guard let original = await originalImage(for: item, in: project),
-          let edited = await project.read({ $0.image(tensorId: item.tensorId) })
-    else { return nil }
+    guard let original = await originalImage(for: item, in: project) else { return nil }
+    read(original.image)
+    guard let edited = await project.read({ $0.image(tensorId: item.tensorId) }) else { return nil }
     return await ColorMatch.Preview.make(edited: edited, original: original.image)
   }
 

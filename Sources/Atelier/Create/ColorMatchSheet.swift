@@ -21,6 +21,9 @@ struct ColorMatchSheet: View {
   /// removed something gets matched, which is what it's for.
   @AppStorage("colorMatchUnchangedOnly") private var unchangedOnly = true
   @State private var preview: ColorMatch.Preview?
+  /// The original as read, shown while the two images are still being measured: only the
+  /// Matched side has to wait for that.
+  @State private var original: CGImage?
   /// The preview has been asked for and came back, with or without one.
   @State private var loaded = false
   @State private var matched: CGImage?
@@ -29,13 +32,23 @@ struct ColorMatchSheet: View {
     ColorMatch.Options(tint: tint, saturation: saturation, brightness: brightness, contrast: contrast, unchangedOnly: unchangedOnly).snapped
   }
 
+  /// What Match queues: `options`, but measuring the whole image when that's what a match from
+  /// the unchanged areas would come to anyway (`measurements` fell back, which the preview
+  /// already knows). The two make the same image, so they're the same job, and one of each
+  /// can't wait side by side. The toggle itself stays as it was set.
+  private var queuedOptions: ColorMatch.Options {
+    var options = self.options
+    if let measurements = preview?.measurements, measurements.unchanged == nil { options.unchangedOnly = false }
+    return options
+  }
+
   /// Why Match can't be pressed, if it can't.
   private var problem: String? {
     if !loaded { return "Reading the image and its original…" }
     if preview == nil { return "The image or its original couldn't be read." }
     // Another project was opened under the sheet: the match would be queued for the wrong one.
     if create.history.item(tensorId: item.tensorId) == nil { return "That image isn't in the open project any more." }
-    if create.pendingColorMatch(for: item, options: options) != nil {
+    if create.pendingColorMatch(for: item, options: queuedOptions) != nil {
       return "A match with these settings is already waiting or running for this image."
     }
     return nil
@@ -54,6 +67,8 @@ struct ColorMatchSheet: View {
       return "The original has a different shape, so the whole image is measured."
     case .mostlyChanged(let fraction) where unchangedOnly:
       return "Only \(percent(fraction))% of the image is unchanged, so the whole image is measured."
+    case .changedTogether where unchangedOnly:
+      return "Most of the image changed, so the whole image is measured."
     default:
       if unchangedOnly, let counted = measurements.unchanged?.counted { return "Measured from \(percent(counted))% of the image." }
       return "Measured from the whole image."
@@ -66,7 +81,7 @@ struct ColorMatchSheet: View {
     VStack(alignment: .leading, spacing: 14) {
       Text("Match Colors").font(.headline)
       HStack(alignment: .top, spacing: 12) {
-        picture(preview?.original, title: "Original")
+        picture(preview?.original ?? original, title: "Original")
         picture(matched, title: "Matched")
       }
       // Scrolls when the window is too short for all of it (a small iPad window); the pictures
@@ -103,7 +118,7 @@ struct ColorMatchSheet: View {
         Button("Cancel", role: .cancel) { dismiss() }
           .keyboardShortcut(.cancelAction)
         Button("Match") {
-          create.matchColors(item, options: options)
+          create.matchColors(item, options: queuedOptions)
           dismiss()
         }
         .keyboardShortcut(.defaultAction)
@@ -114,7 +129,7 @@ struct ColorMatchSheet: View {
     .sheetFrame(width: 560, height: 550)
     // Once: the images don't change under the sheet.
     .task {
-      preview = await create.colorMatchPreview(for: item)
+      preview = await create.colorMatchPreview(for: item) { original = $0 }
       loaded = true
     }
     // Again whenever a setting changes (or the preview arrives), away from the main actor; a

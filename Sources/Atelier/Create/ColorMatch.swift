@@ -235,11 +235,20 @@ nonisolated enum ColorMatch {
     var pixels: [UInt8]
     var width: Int
     var height: Int
+    /// `pixels` in Lab, their alpha, and whether all of it is opaque, kept so that a slider move
+    /// only moves the planes and encodes them: going to Lab again each time was half of a
+    /// render. The planes are made a slice at a time as `transferred` makes them
+    /// (`ColorMatch.slicedLab`), so a render has the very bytes the transfer of `pixels` has.
+    var planes: Planes
+    var alpha: [UInt8]
+    var opaque: Bool
     /// The original at the same fit, to show beside it.
     var original: CGImage
 
-    /// The longer side of the previewed image, in pixels.
-    static let side = 768
+    /// The longer side of the previewed image, in pixels: twice the sheet's picture box (190
+    /// points high) covers it on a Retina display, and each render takes time with its pixel
+    /// count. Only what's shown is this size; the statistics come from the full images.
+    static let side = 512
 
     /// The whole edited image's statistics, and the whole original's.
     var target: Stats { measurements.whole.target }
@@ -252,9 +261,12 @@ nonisolated enum ColorMatch {
     /// is `transferred`'s, and can throw to stop.
     func render(_ options: Options, progress: (Double) throws -> Void) rethrows -> CGImage? {
       let measured = measurements.measurement(unchangedOnly: options.unchangedOnly)
-      let out = try ColorMatch.transferred(
-        rgba: pixels, target: measured.target, reference: measured.reference, options: options, progress: progress)
-      return ColorMatch.cgImage(rgba: out, width: width, height: height)
+      let out = try ColorMatch.transfer(
+        count: alpha.count, target: measured.target, reference: measured.reference, options: options, progress: progress
+      ) { range in
+        (Planes(l: Array(planes.l[range]), a: Array(planes.a[range]), b: Array(planes.b[range])), Array(alpha[range]))
+      }
+      return ColorMatch.cgImage(rgba: out, width: width, height: height, opaque: opaque)
     }
 
     /// `render` with no progress.
@@ -280,9 +292,11 @@ nonisolated enum ColorMatch {
         rgba: downsampled(referencePixels, width: original.width, height: original.height, fit: side),
         width: originalSize.width, height: originalSize.height)
       else { return nil }
+      let shown = downsampled(pixels, width: edited.width, height: edited.height, fit: side)
+      let alpha = stride(from: 3, to: shown.count, by: 4).map { shown[$0] }
       return Preview(
-        measurements: measurements, pixels: downsampled(pixels, width: edited.width, height: edited.height, fit: side),
-        width: size.width, height: size.height, original: small)
+        measurements: measurements, pixels: shown, width: size.width, height: size.height,
+        planes: slicedLab(rgba: shown), alpha: alpha, opaque: !alpha.contains { $0 != 255 }, original: small)
     }
   }
 
@@ -311,6 +325,9 @@ nonisolated enum ColorMatch {
     case shape
     /// Too little of the image is unchanged (this fraction of it) to speak for its colors.
     case mostlyChanged(Double)
+    /// Most of the image changed, and the same way: the shift between the two is too large to
+    /// be a cast (`maximumCastDeltaE`), so there's no telling the unchanged areas from it.
+    case changedTogether
   }
 
   /// Both ways of measuring a pair of images (`measurements`).
@@ -397,12 +414,16 @@ nonisolated enum ColorMatch {
   }
 
   /// An sRGB image of tightly packed RGBA8 pixels, not premultiplied; opaque ones drop alpha.
-  static func cgImage(rgba: [UInt8], width: Int, height: Int) -> CGImage? {
+  /// `opaque` says whether they are when the caller already knows (the sheet's preview, drawn
+  /// again and again from the same alpha); otherwise it's looked for.
+  static func cgImage(rgba: [UInt8], width: Int, height: Int, opaque known: Bool? = nil) -> CGImage? {
     guard rgba.count == width * height * 4, let provider = CGDataProvider(data: Data(rgba) as CFData) else { return nil }
-    var opaque = true
-    for index in stride(from: 3, to: rgba.count, by: 4) where rgba[index] != 255 {
-      opaque = false
-      break
+    var opaque = known ?? true
+    if known == nil {
+      for index in stride(from: 3, to: rgba.count, by: 4) where rgba[index] != 255 {
+        opaque = false
+        break
+      }
     }
     return CGImage(
       width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
@@ -451,7 +472,35 @@ nonisolated enum ColorMatch {
     for index in stride(from: 0, to: rgba.count, by: 4) where rgba[index + 3] > 0 && counted?[index / 4] != false {
       visible.append(contentsOf: rgba[index..<(index + 4)])
     }
-    let planes = lab(rgba: visible)
+    return stats(lab: lab(rgba: visible))
+  }
+
+  /// `stats(rgba:where:)` of pixels whose Lab planes are already made (`planes` is `rgba`'s), so
+  /// an image measured more than one way goes to Lab once. The same numbers to the bit: each
+  /// pixel's Lab doesn't depend on its neighbors, and the same values are averaged in the same
+  /// order.
+  static func stats(lab planes: Planes, rgba: [UInt8], where counted: [Bool]? = nil) -> Stats {
+    let count = rgba.count / 4
+    var included = planes
+    if counted != nil || stride(from: 3, to: rgba.count, by: 4).contains(where: { rgba[$0] == 0 }) {
+      var l: [Double] = []
+      var a: [Double] = []
+      var b: [Double] = []
+      l.reserveCapacity(count)
+      a.reserveCapacity(count)
+      b.reserveCapacity(count)
+      for index in 0..<count where rgba[index * 4 + 3] > 0 && counted?[index] != false {
+        l.append(planes.l[index])
+        a.append(planes.a[index])
+        b.append(planes.b[index])
+      }
+      included = Planes(l: l, a: a, b: b)
+    }
+    return stats(lab: included)
+  }
+
+  /// Each plane's mean and spread.
+  private static func stats(lab planes: Planes) -> Stats {
     func meanAndStd(_ values: [Double]) -> (Double, Double) {
       guard !values.isEmpty else { return (0, 1e-6) }
       let mean = vDSP.mean(values)
@@ -476,10 +525,18 @@ nonisolated enum ColorMatch {
   /// off) and still count as unchanged. Around 2 is just visible; 10 is well past what a cast's
   /// unevenness and the blurred texture add, and well short of new content.
   static let unchangedDeltaE = 10.0
-  /// The least of the visible image that must be unchanged for it to be measured alone. Under a
-  /// quarter, what's left is too little to speak for the picture (and when most of it changed,
-  /// "unchanged" is likelier a coincidence than a background).
-  static let minimumUnchangedFraction = 0.25
+  /// The least of the visible image that must be unchanged for it to be measured alone: just
+  /// over half. The shift taken off before comparing is the median difference, and a median
+  /// speaks for the unchanged pixels only while they're the majority. Under half, it's whatever
+  /// the changed ones did, and "unchanged" is then the part that changed.
+  static let minimumUnchangedFraction = 0.51
+  /// The largest image-wide shift (the median difference, as ΔE76) that's taken for a cast. An
+  /// edit model's cast is a few units (a b of 6 is a plainly warmer image) and a strong one
+  /// around 10; 20 is another color. A median past it isn't a cast but new content over most of
+  /// the image, all changed the same way (a grey backdrop swapped for a blue one): taking it off
+  /// would mark the backdrop unchanged and the subject the edit kept as changed, with more than
+  /// half the image "unchanged", so the floor alone wouldn't catch it.
+  static let maximumCastDeltaE = 20.0
 
   /// The statistics a match of `edited` to `original` is made with (tightly packed RGBA8 of the
   /// full images). The job and the sheet's preview both take them here, so the preview can't
@@ -497,31 +554,42 @@ nonisolated enum ColorMatch {
   /// `measure` both ways at once (the unchanged areas only with `unchanged`, which takes longer).
   ///
   /// The whole images are measured as they always were, each scaled down to fit 512. The
-  /// unchanged areas are found at that size: both images go to Lab and are blurred a little, the
-  /// median difference between them is taken off (that's the cast being matched, which would
-  /// otherwise mark every pixel changed), and a pixel whose remaining difference is small is
-  /// unchanged. The statistics are then those of the same pixels of both images, unblurred. An
-  /// edit that adds a red coat then no longer reads as the image having turned red. It falls
-  /// back to the whole images when the original has another shape (nothing lines up) or too
-  /// little is unchanged.
+  /// unchanged areas are found at that size: both images go to Lab (once each, for this and for
+  /// the statistics) and are blurred a little, the median difference between them is taken off
+  /// (that's the cast being matched, which would otherwise mark every pixel changed), and a
+  /// pixel whose remaining difference is small is unchanged. The statistics are then those of the
+  /// same pixels of both images, unblurred. An edit that adds a red coat then no longer reads as
+  /// the image having turned red. It falls back to the whole images when the original has
+  /// another shape (nothing lines up), when the median is too large to be a cast, or when half
+  /// the image or more changed (`minimumUnchangedFraction`, `maximumCastDeltaE`).
   static func measurements(
     edited: [UInt8], width: Int, height: Int, original: [UInt8], width originalWidth: Int, height originalHeight: Int,
     unchanged: Bool = true
   ) -> Measurements {
     let target = downsampled(edited, width: width, height: height, fit: statsSide)
     let reference = downsampled(original, width: originalWidth, height: originalHeight, fit: statsSide)
-    var result = Measurements(whole: Measurement(target: stats(rgba: target), reference: stats(rgba: reference)))
+    let targetLab = lab(rgba: target)
+    let referenceLab = lab(rgba: reference)
+    var result = Measurements(
+      whole: Measurement(target: stats(lab: targetLab, rgba: target), reference: stats(lab: referenceLab, rgba: reference)))
     guard unchanged else { return result }
     let size = fitSize(width: width, height: height, side: statsSide)
     let originalSize = fitSize(width: originalWidth, height: originalHeight, side: statsSide)
-    // More than a pixel's rounding apart: another shape.
-    guard abs(size.width - originalSize.width) <= 1, abs(size.height - originalSize.height) <= 1,
+    // The same shape when the original, scaled so its longer side is the edit's, comes to the
+    // edit's size, give or take the rounding of both (what two images a pixel apart, each fit to
+    // 512, can differ by). Comparing the two fitted sizes instead would call a small edit of a
+    // large original another shape: 400×400 stays 400, while its 800×800 original fits to 512.
+    let scale = Double(max(size.width, size.height)) / Double(max(originalWidth, originalHeight))
+    guard abs(Double(originalWidth) * scale - Double(size.width)) <= 1.5,
+          abs(Double(originalHeight) * scale - Double(size.height)) <= 1.5,
           target.count == size.width * size.height * 4, reference.count == originalSize.width * originalSize.height * 4
     else {
       result.reason = .shape
       return result
     }
+    // The original at the edit's size, so each pixel lies under one of the edit's.
     var aligned = reference
+    var alignedLab = referenceLab
     if originalSize != size {
       guard let scaled = scaled(reference, width: originalSize.width, height: originalSize.height, toWidth: size.width, height: size.height)
       else {
@@ -529,30 +597,55 @@ nonisolated enum ColorMatch {
         return result
       }
       aligned = scaled
+      alignedLab = lab(rgba: scaled)
     }
-    let (mask, fraction) = unchangedPixels(edited: target, original: aligned, width: size.width, height: size.height)
-    guard fraction >= minimumUnchangedFraction else {
-      result.reason = .mostlyChanged(fraction)
+    let found = unchangedPixels(
+      edited: target, lab: targetLab, original: aligned, lab: alignedLab, width: size.width, height: size.height)
+    guard found.cast <= maximumCastDeltaE else {
+      result.reason = .changedTogether
+      return result
+    }
+    guard found.fraction >= minimumUnchangedFraction else {
+      result.reason = .mostlyChanged(found.fraction)
       return result
     }
     result.unchanged = Measurement(
-      target: stats(rgba: target, where: mask), reference: stats(rgba: aligned, where: mask), counted: fraction)
+      target: stats(lab: targetLab, rgba: target, where: found.mask),
+      reference: stats(lab: alignedLab, rgba: aligned, where: found.mask), counted: found.fraction)
     return result
   }
 
-  /// Which pixels of two images of the same size the edit left alone (see `measurements`), and
-  /// the fraction they are of the edited image's visible pixels.
-  static func unchangedPixels(edited: [UInt8], original: [UInt8], width: Int, height: Int) -> (mask: [Bool], fraction: Double) {
+  /// Which pixels of two images of the same size the edit left alone (see `measurements`), the
+  /// fraction they are of the edited image's visible pixels, and how large the image-wide shift
+  /// taken off first was (the median difference, as ΔE76). `lab` and `originalLab` are the two
+  /// images' Lab planes.
+  static func unchangedPixels(
+    edited: [UInt8], lab: Planes, original: [UInt8], lab originalLab: Planes, width: Int, height: Int
+  ) -> (mask: [Bool], fraction: Double, cast: Double) {
     let count = width * height
-    func blurredLab(_ rgba: [UInt8]) -> Planes {
-      let planes = lab(rgba: rgba)
-      return Planes(
-        l: boxBlurred(planes.l, width: width, height: height, radius: unchangedBlurRadius),
-        a: boxBlurred(planes.a, width: width, height: height, radius: unchangedBlurRadius),
-        b: boxBlurred(planes.b, width: width, height: height, radius: unchangedBlurRadius))
+    /// Blurred over the pixels that show only. A fully transparent pixel's color is whatever was
+    /// left under it, and would otherwise bleed into the visible ones beside it and mark them
+    /// changed. An image with none is blurred as it is.
+    func blurred(_ planes: Planes, _ rgba: [UInt8]) -> Planes {
+      func plain(_ values: [Double]) -> [Double] {
+        boxBlurred(values, width: width, height: height, radius: unchangedBlurRadius)
+      }
+      guard stride(from: 3, to: rgba.count, by: 4).contains(where: { rgba[$0] == 0 }) else {
+        return Planes(l: plain(planes.l), a: plain(planes.a), b: plain(planes.b))
+      }
+      var shows = [Double](repeating: 0, count: count)
+      for index in 0..<count where rgba[index * 4 + 3] > 0 { shows[index] = 1 }
+      // How much of each pixel's box shows; the sums of 0s and 1s are exact, so none is exactly 0.
+      let share = plain(shows)
+      func weighted(_ values: [Double]) -> [Double] {
+        var out = plain(vDSP.multiply(values, shows))
+        for index in 0..<count { out[index] = share[index] > 0 ? out[index] / share[index] : 0 }
+        return out
+      }
+      return Planes(l: weighted(planes.l), a: weighted(planes.a), b: weighted(planes.b))
     }
-    let target = blurredLab(edited)
-    let reference = blurredLab(original)
+    let target = blurred(lab, edited)
+    let reference = blurred(originalLab, original)
     // Seen in both images: a pixel either doesn't show has nothing to compare.
     var both = [Bool](repeating: false, count: count)
     var visible = 0
@@ -561,21 +654,21 @@ nonisolated enum ColorMatch {
       if shows { visible += 1 }
       both[index] = shows && original[index * 4 + 3] > 0
     }
-    guard visible > 0 else { return ([Bool](repeating: false, count: count), 0) }
-    func difference(_ a: [Double], _ b: [Double]) -> [Double] {
-      var d = vDSP.subtract(a, b)
+    guard visible > 0 else { return ([Bool](repeating: false, count: count), 0, 0) }
+    /// The difference with its median taken off, and that median.
+    func difference(_ a: [Double], _ b: [Double]) -> (values: [Double], median: Double) {
+      let d = vDSP.subtract(a, b)
       var seen = [Double]()
       seen.reserveCapacity(count)
       for index in 0..<count where both[index] { seen.append(d[index]) }
-      guard !seen.isEmpty else { return d }
+      guard !seen.isEmpty else { return (d, 0) }
       seen.sort()
       let median = seen.count % 2 == 1 ? seen[seen.count / 2] : (seen[seen.count / 2 - 1] + seen[seen.count / 2]) / 2
-      d = vDSP.add(-median, d)
-      return d
+      return (vDSP.add(-median, d), median)
     }
-    let dl = difference(target.l, reference.l)
-    let da = difference(target.a, reference.a)
-    let db = difference(target.b, reference.b)
+    let (dl, medianL) = difference(target.l, reference.l)
+    let (da, medianA) = difference(target.a, reference.a)
+    let (db, medianB) = difference(target.b, reference.b)
     let limit = unchangedDeltaE * unchangedDeltaE
     var mask = [Bool](repeating: false, count: count)
     var unchanged = 0
@@ -585,7 +678,8 @@ nonisolated enum ColorMatch {
         unchanged += 1
       }
     }
-    return (mask, Double(unchanged) / Double(visible))
+    let cast = (medianL * medianL + medianA * medianA + medianB * medianB).squareRoot()
+    return (mask, Double(unchanged) / Double(visible), cast)
   }
 
   /// A plane averaged over the (2·`radius` + 1)-wide box around each value, the box cut off at
@@ -662,33 +756,63 @@ nonisolated enum ColorMatch {
   static func transferred(
     rgba: [UInt8], target: Stats, reference: Stats, options: Options, progress: (Double) throws -> Void
   ) rethrows -> [UInt8] {
+    try transfer(count: rgba.count / 4, target: target, reference: reference, options: options, progress: progress) { range in
+      let pixels = Array(rgba[range.lowerBound * 4..<range.upperBound * 4])
+      var alpha = [UInt8](repeating: 0, count: pixels.count / 4)
+      for index in alpha.indices { alpha[index] = pixels[index * 4 + 3] }
+      return (lab(rgba: pixels), alpha)
+    }
+  }
+
+  /// How many pixels `transferred` moves at a time.
+  private static let transferSlice = 65536
+
+  /// `transferred`'s work on `count` pixels, whose Lab planes and alpha `slice` gives a range at
+  /// a time: from RGBA for the job, and for the sheet's preview from planes it keeps
+  /// (`Preview.planes`). One loop for both, so they can't come apart.
+  private static func transfer(
+    count: Int, target: Stats, reference: Stats, options: Options, progress: (Double) throws -> Void,
+    slice: (Range<Int>) -> (planes: Planes, alpha: [UInt8])
+  ) rethrows -> [UInt8] {
     let matchesLightness = options.matchesLightness
     let l: (scale: Double, offset: Double) = matchesLightness
       ? coefficients(target: target, reference: reference, channel: 0, mean: options.brightness, spread: options.contrast) : (1, 0)
     let a = coefficients(target: target, reference: reference, channel: 1, mean: options.tint, spread: options.saturation)
     let b = coefficients(target: target, reference: reference, channel: 2, mean: options.tint, spread: options.saturation)
-    var out = [UInt8](repeating: 0, count: rgba.count)
-    let slice = 65536 * 4
+    var out = [UInt8](repeating: 0, count: count * 4)
     var reported = 0.0
-    for start in stride(from: 0, to: rgba.count, by: slice) {
-      let end = min(start + slice, rgba.count)
-      let pixels = Array(rgba[start..<end])
-      var planes = lab(rgba: pixels)
+    for start in stride(from: 0, to: count, by: transferSlice) {
+      let end = min(start + transferSlice, count)
+      var (planes, alpha) = slice(start..<end)
       if matchesLightness { planes.l = vDSP.add(l.offset, vDSP.multiply(l.scale, planes.l)) }
       planes.a = vDSP.add(a.offset, vDSP.multiply(a.scale, planes.a))
       planes.b = vDSP.add(b.offset, vDSP.multiply(b.scale, planes.b))
-      var alpha = [UInt8](repeating: 0, count: pixels.count / 4)
-      for index in alpha.indices { alpha[index] = pixels[index * 4 + 3] }
-      let converted = encoded(lab: planes, alpha: alpha)
-      out.replaceSubrange(start..<end, with: converted)
-      let fraction = Double(end) / Double(rgba.count)
-      if fraction - reported >= 0.01 || end == rgba.count {
+      out.replaceSubrange(start * 4..<end * 4, with: encoded(lab: planes, alpha: alpha))
+      let fraction = Double(end) / Double(count)
+      if fraction - reported >= 0.01 || end == count {
         reported = fraction
         try progress(fraction)
       }
     }
-    if rgba.isEmpty { try progress(1) }
+    if count == 0 { try progress(1) }
     return out
+  }
+
+  /// The Lab planes of `rgba`, made a slice at a time as `transferred` makes them, so planes
+  /// kept from here hold the very numbers it works with.
+  static func slicedLab(rgba: [UInt8]) -> Planes {
+    let count = rgba.count / 4
+    var planes = Planes(l: [], a: [], b: [])
+    planes.l.reserveCapacity(count)
+    planes.a.reserveCapacity(count)
+    planes.b.reserveCapacity(count)
+    for start in stride(from: 0, to: count, by: transferSlice) {
+      let part = lab(rgba: Array(rgba[start * 4..<min(start + transferSlice, count) * 4]))
+      planes.l += part.l
+      planes.a += part.a
+      planes.b += part.b
+    }
+    return planes
   }
 
   /// `transferred` with no progress.
