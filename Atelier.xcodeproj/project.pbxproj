@@ -103,6 +103,7 @@
 		367D99D75A579BE7CCD45664 /* CanvasTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = C45342E9A57349CA90D164A4 /* CanvasTools.swift */; };
 		E838320792CDDEE1493BB1B9 /* CanvasMerge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5CF3B40616D4C363F989DF /* CanvasMerge.swift */; };
 		C0104A7C11A0000000000001 /* ColorMatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0104A7C11A0000000000002 /* ColorMatch.swift */; };
+		C0104A7C11A0000000000007 /* ColorMatchSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0104A7C11A0000000000008 /* ColorMatchSheet.swift */; };
 		693B6168E7ADD1442187E373 /* CanvasMask.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CC92B19664FFDC3183089CE /* CanvasMask.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E103 /* LayoutEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E104 /* LayoutEditor.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E101 /* LayoutPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E102 /* LayoutPrompt.swift */; };
@@ -291,6 +292,7 @@
 		C45342E9A57349CA90D164A4 /* CanvasTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasTools.swift; sourceTree = "<group>"; };
 		5B5CF3B40616D4C363F989DF /* CanvasMerge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasMerge.swift; sourceTree = "<group>"; };
 		C0104A7C11A0000000000002 /* ColorMatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorMatch.swift; sourceTree = "<group>"; };
+		C0104A7C11A0000000000008 /* ColorMatchSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorMatchSheet.swift; sourceTree = "<group>"; };
 		3CC92B19664FFDC3183089CE /* CanvasMask.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasMask.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E104 /* LayoutEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutEditor.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E102 /* LayoutPrompt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutPrompt.swift; sourceTree = "<group>"; };
@@ -516,6 +518,7 @@
 				C45342E9A57349CA90D164A4 /* CanvasTools.swift */,
 				5B5CF3B40616D4C363F989DF /* CanvasMerge.swift */,
 				C0104A7C11A0000000000002 /* ColorMatch.swift */,
+				C0104A7C11A0000000000008 /* ColorMatchSheet.swift */,
 				3CC92B19664FFDC3183089CE /* CanvasMask.swift */,
 				A1B2C3D4E5F6A7B8C9D0E104 /* LayoutEditor.swift */,
 				A1B2C3D4E5F6A7B8C9D0E102 /* LayoutPrompt.swift */,
@@ -1051,6 +1054,7 @@
 				2A6072AF219230DBEA3909DA /* SAMFiles.swift in Sources */,
 				E838320792CDDEE1493BB1B9 /* CanvasMerge.swift in Sources */,
 				C0104A7C11A0000000000001 /* ColorMatch.swift in Sources */,
+				C0104A7C11A0000000000007 /* ColorMatchSheet.swift in Sources */,
 				693B6168E7ADD1442187E373 /* CanvasMask.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E103 /* LayoutEditor.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E101 /* LayoutPrompt.swift in Sources */,

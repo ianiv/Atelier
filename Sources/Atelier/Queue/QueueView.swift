@@ -146,7 +146,7 @@ struct QueueRow: View {
           .foregroundStyle(.secondary)
           .lineLimit(1)
         if let match = request.colorMatch, case .finished = job.status, let shift = match.record?.shift {
-          Text(Self.shiftText(shift, luminance: match.luminance))
+          Text(Self.shiftText(shift, luminance: match.options.matchesLightness))
             .font(.caption)
             .foregroundStyle(.secondary)
             .lineLimit(1)
@@ -270,8 +270,8 @@ struct QueueRow: View {
     let took = job.elapsed.map { "took \(GenerationTime.text($0))" }
     let size = "\(configuration.width)×\(configuration.height)"
     if let match = request.colorMatch {
-      var parts = [create.runLocationName(of: job), size, "strength \(Int((match.strength * 100).rounded()))%",
-                   match.luminance ? "lightness matched" : "lightness kept"]
+      var parts = [create.runLocationName(of: job), size, Self.colorText(match.options), Self.lightnessText(match.options)]
+      if let unchanged = Self.unchangedText(match) { parts.append(unchanged) }
       // Its project, when it isn't the one open.
       if match.project != create.history.project.name { parts.insert("in “\(match.project)”", at: 1) }
       return (parts + [took]).compactMap(\.self).joined(separator: " · ")
@@ -281,6 +281,32 @@ struct QueueRow: View {
       video.map { length($0, configuration) }, "seed \(request.seed)",
       "\(configuration.steps) steps", took,
     ].compactMap(\.self).joined(separator: " · ")
+  }
+
+  /// How far a colour match moves the colours: one amount when tint and saturation agree, else both.
+  private static func colorText(_ options: ColorMatch.Options) -> String {
+    func percent(_ amount: Double) -> Int { Int((amount * 100).rounded()) }
+    return options.tint == options.saturation
+      ? "color \(percent(options.tint))%" : "tint \(percent(options.tint))%, saturation \(percent(options.saturation))%"
+  }
+
+  /// How much of the lightness a colour match moves: "lightness kept" at none, "lightness matched"
+  /// at all of it, else brightness and contrast each.
+  private static func lightnessText(_ options: ColorMatch.Options) -> String {
+    func percent(_ amount: Double) -> Int { Int((amount * 100).rounded()) }
+    if options.brightness == options.contrast {
+      if percent(options.brightness) <= 0 { return "lightness kept" }
+      if percent(options.brightness) >= 100 { return "lightness matched" }
+    }
+    return "brightness \(percent(options.brightness))%, contrast \(percent(options.contrast))%"
+  }
+
+  /// "unchanged areas 82%" for a match measured from them: how much of the image that was, once
+  /// it has run. Nothing when the whole image was measured, asked for or fallen back to.
+  private static func unchangedText(_ match: ColorMatch.Job) -> String? {
+    guard match.options.unchangedOnly else { return nil }
+    guard let record = match.record else { return "unchanged areas" }
+    return record.counted.map { "unchanged areas \(Int(($0 * 100).rounded()))%" }
   }
 
   /// "Δa −0.4, Δb +5.9 taken out".

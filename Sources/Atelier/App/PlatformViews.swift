@@ -110,13 +110,22 @@ extension View {
 
   /// The size of a sheet that opens at `idealSize`. The Mac's can be dragged larger or down to the
   /// minimums; an iPad sheet can't be dragged, so it's `sheetFrame` there.
-  func resizableSheetFrame(minWidth: CGFloat, minHeight: CGFloat, idealSize: CGSize) -> some View {
+  ///
+  /// With `rememberedAs`, the Mac's opens next time at the size it was last dragged to, kept in
+  /// the settings under that name (`RememberedSheetSize`). An iPad's has no size of its own to
+  /// remember.
+  @ViewBuilder
+  func resizableSheetFrame(minWidth: CGFloat, minHeight: CGFloat, idealSize: CGSize, rememberedAs key: String? = nil) -> some View {
     #if os(macOS)
-      frame(
-        minWidth: minWidth, idealWidth: idealSize.width, maxWidth: .infinity,
-        minHeight: minHeight, idealHeight: idealSize.height, maxHeight: .infinity
-      )
-      .presentationSizing(.fitted)
+      if let key {
+        modifier(RememberedSheetSize(key: key, minSize: CGSize(width: minWidth, height: minHeight), idealSize: idealSize))
+      } else {
+        frame(
+          minWidth: minWidth, idealWidth: idealSize.width, maxWidth: .infinity,
+          minHeight: minHeight, idealHeight: idealSize.height, maxHeight: .infinity
+        )
+        .presentationSizing(.fitted)
+      }
     #else
       sheetFrame(width: idealSize.width, height: idealSize.height)
     #endif
@@ -298,5 +307,68 @@ let inspectorPopoverEdge: Edge? = {
     @ViewBuilder var content: Content
 
     var body: some View { content }
+  }
+#endif
+
+#if os(macOS)
+  /// A resizable sheet that opens at the size it was last dragged to, or at `idealSize` until it
+  /// has been, made smaller when that no longer fits the screen (a smaller display, or the
+  /// laptop's own after a desk's).
+  ///
+  /// Only a drag is remembered (`SheetResizeObserver` hears the end of one): the size a small
+  /// screen brought it down to isn't written back, so the sheet is its remembered size again on
+  /// a screen with room for it.
+  struct RememberedSheetSize: ViewModifier {
+    let minSize: CGSize
+    /// 0 until the sheet has been dragged to a size.
+    @AppStorage private var width: Double
+    @AppStorage private var height: Double
+    /// Decided once, as the sheet opens: a sheet takes its size from the ideal then, and one
+    /// that changed under it as a drag is remembered could move it again.
+    @State private var opening: CGSize
+
+    /// The settings a sheet's size is remembered in, under its name.
+    static func widthKey(_ key: String) -> String { "\(key)Width" }
+    static func heightKey(_ key: String) -> String { "\(key)Height" }
+
+    /// The room left around a sheet at its largest, in all, each way: enough that its edges
+    /// stay clear of the screen's, where they can still be dragged.
+    static let screenMargin: CGFloat = 40
+
+    init(key: String, minSize: CGSize, idealSize: CGSize) {
+      self.minSize = minSize
+      _width = AppStorage(wrappedValue: 0, Self.widthKey(key))
+      _height = AppStorage(wrappedValue: 0, Self.heightKey(key))
+      let defaults = UserDefaults.standard
+      let stored = CGSize(width: defaults.double(forKey: Self.widthKey(key)), height: defaults.double(forKey: Self.heightKey(key)))
+      let wanted = stored.width > 0 && stored.height > 0 ? stored : idealSize
+      _opening = State(initialValue: Self.fitted(wanted, minSize: minSize, screen: ScreenSpace.visibleSize))
+    }
+
+    /// `size` brought within the screen less the margin, and never under the minimum, which
+    /// wins on a screen smaller than it. With no screen known, it's only kept to the minimum.
+    static func fitted(_ size: CGSize, minSize: CGSize, screen: CGSize?) -> CGSize {
+      var size = size
+      if let screen {
+        size.width = min(size.width, screen.width - screenMargin)
+        size.height = min(size.height, screen.height - screenMargin)
+      }
+      return CGSize(width: max(size.width, minSize.width).rounded(), height: max(size.height, minSize.height).rounded())
+    }
+
+    func body(content: Content) -> some View {
+      content
+        .frame(
+          minWidth: minSize.width, idealWidth: opening.width, maxWidth: .infinity,
+          minHeight: minSize.height, idealHeight: opening.height, maxHeight: .infinity
+        )
+        .background {
+          SheetResizeObserver { size in
+            width = size.width.rounded()
+            height = size.height.rounded()
+          }
+        }
+        .presentationSizing(.fitted)
+    }
   }
 #endif

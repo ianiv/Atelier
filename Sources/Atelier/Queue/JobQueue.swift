@@ -112,7 +112,8 @@ final class JobQueue {
     return running.map(uses) == true || waiting.contains(where: uses)
   }
 
-  /// The waiting or running Match Colors to Original job for the same step as `match`, if any.
+  /// The waiting or running Match Colors to Original job for the same step and settings as
+  /// `match`, if any.
   func pendingColorMatch(_ match: ColorMatch.Job) -> Job? {
     ((running.map { [$0] } ?? []) + waiting).first { $0.request?.colorMatch?.isSameMatch(as: match) == true }
   }
