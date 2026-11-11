@@ -16,7 +16,9 @@ extension Automation {
   /// match at half tint and saturation records that and leaves about half the shift, a match
   /// with other settings queues beside one that's waiting while the same settings don't, and the
   /// sheet can open while a match is pending (`--snapshot-dir DIR` saves a picture of it in each
-  /// comparison mode, color-match-sheet-side.png and color-match-sheet-slider.png). For a second edit, the warm copy with a green block pasted over a
+  /// comparison mode, color-match-sheet-side.png and color-match-sheet-slider.png, and one of the
+  /// Slider mode for a step whose original has another shape, color-match-sheet-slider-shape.png,
+  /// where the bands beside the original must be plain, not the match). For a second edit, the warm copy with a green block pasted over a
   /// fifth of it: matched from its unchanged areas only, the step records how much of the image
   /// that was and the background's colors are the original's; matched with tint alone, the
   /// colors' mean is the original's and their spread the edit's. The sheet's remembered values
@@ -154,6 +156,8 @@ extension Automation {
       let video: HistoryItem
       var unweighted: HistoryItem
       var weighted: HistoryItem
+      /// Made from a moodboard image of another shape (a square out of the original's middle).
+      let reshaped: HistoryItem
       do {
         edit = try await history.save(
           GenerationEngine.Output(frames: [warmTensor]), request: request, startedAt: Date(), finishedAt: Date())
@@ -176,6 +180,12 @@ extension Automation {
           GenerationEngine.Output(frames: [warmTensor]), request: moodboarded, startedAt: Date(), finishedAt: Date())
         moodboarded.moodboard = [GenerationEngine.Reference(image: original, weight: 1)]
         weighted = try await history.save(
+          GenerationEngine.Output(frames: [warmTensor]), request: moodboarded, startedAt: Date(), finishedAt: Date())
+        let side = min(original.width, original.height)
+        let square = original.cropping(to: CGRect(x: (original.width - side) / 2, y: (original.height - side) / 2, width: side, height: side))
+        moodboarded.prompt = "color match check: an original of another shape"
+        moodboarded.moodboard = [GenerationEngine.Reference(image: square ?? original, weight: 1)]
+        reshaped = try await history.save(
           GenerationEngine.Output(frames: [warmTensor]), request: moodboarded, startedAt: Date(), finishedAt: Date())
       } catch {
         check(false, "saving the check's steps: \(error.localizedDescription)")
@@ -341,6 +351,14 @@ extension Automation {
           try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
           print("\(AutomationWindows.snapshotSheet(to: url) ? "saved" : "couldn't save") \(url.path)")
         }
+        // The Slider mode once more, for the step whose original has another shape: left of the
+        // divider, the bands beside the original are a plain fill and not the match.
+        model.colorMatchSheetItem = nil
+        try? await Task.sleep(for: .seconds(1))
+        model.colorMatchSheetItem = reshaped
+        try? await Task.sleep(for: .seconds(8))
+        let url = URL(fileURLWithPath: folder).appendingPathComponent("color-match-sheet-slider-shape.png")
+        print("\(AutomationWindows.snapshotSheet(to: url) ? "saved" : "couldn't save") \(url.path)")
       }
       model.colorMatchSheetItem = nil
       try? await Task.sleep(for: .milliseconds(500))
