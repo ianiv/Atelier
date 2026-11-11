@@ -184,6 +184,10 @@
 		C0104A7C11A0000000000005 /* ColorMatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0104A7C11A0000000000006 /* ColorMatchTests.swift */; };
 		A1B2C3D4E5F60718293A4B5C /* MaskMemoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E4F5A60718293A4B5D /* MaskMemoryTests.swift */; };
 		C11DDE1E7E57000000000001 /* ClipDeleteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11DDE1E7E57000000000002 /* ClipDeleteTests.swift */; };
+		2A05F48827FD4DE65A99F665 /* ReCaVSRWeights.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8F1CB5990A8A39715A331D1 /* ReCaVSRWeights.swift */; };
+		3B39EB61034D8D57DC9373DD /* ReCaVSRDownload.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2732EB193DD8D208A0C54CC /* ReCaVSRDownload.swift */; };
+		BBEE5836B422ED7DB34A2C13 /* ReCaVSRRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD096253A1745C553D8EBA94 /* ReCaVSRRouter.swift */; };
+		21E31F9C3FD8B3C49DB10302 /* ReCaVSRTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9716C5CC927EB4F63FBFC0A9 /* ReCaVSRTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -392,6 +396,10 @@
 		C0104A7C11A0000000000006 /* ColorMatchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorMatchTests.swift; sourceTree = "<group>"; };
 		B1C2D3E4F5A60718293A4B5D /* MaskMemoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaskMemoryTests.swift; sourceTree = "<group>"; };
 		C11DDE1E7E57000000000002 /* ClipDeleteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipDeleteTests.swift; sourceTree = "<group>"; };
+		A8F1CB5990A8A39715A331D1 /* ReCaVSRWeights.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReCaVSRWeights.swift; sourceTree = "<group>"; };
+		B2732EB193DD8D208A0C54CC /* ReCaVSRDownload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReCaVSRDownload.swift; sourceTree = "<group>"; };
+		CD096253A1745C553D8EBA94 /* ReCaVSRRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReCaVSRRouter.swift; sourceTree = "<group>"; };
+		9716C5CC927EB4F63FBFC0A9 /* ReCaVSRTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReCaVSRTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -714,6 +722,7 @@
 			isa = PBXGroup;
 			children = (
 				C41D9DC9E410980018EFA07F /* FlashVSR */,
+				ED81B468D186EE7439C02EE0 /* ReCaVSR */,
 				3A8E4692BF6E0B02895EE031 /* ClipUpscale.swift */,
 				177D8A305B3B202F8A318C82 /* SystemSuperResolution.swift */,
 				705B33C92E12A854209C6682 /* TimelineUpscaleExport.swift */,
@@ -741,6 +750,7 @@
 			children = (
 				CC3541FFA68BA7C5424778CE /* AutoMaskTests.swift */,
 				C0104A7C11A0000000000006 /* ColorMatchTests.swift */,
+				9716C5CC927EB4F63FBFC0A9 /* ReCaVSRTests.swift */,
 				B1C2D3E4F5A60718293A4B5D /* MaskMemoryTests.swift */,
 				C11DDE1E7E57000000000002 /* ClipDeleteTests.swift */,
 				B7A1F0C2B3D4A59687786300 /* ProjectMappingTests.swift */,
@@ -771,6 +781,16 @@
 				392C9CDF31D729905C3E1867 /* SAMFiles.swift */,
 			);
 			path = AutoMask;
+			sourceTree = "<group>";
+		};
+		ED81B468D186EE7439C02EE0 /* ReCaVSR */ = {
+			isa = PBXGroup;
+			children = (
+				A8F1CB5990A8A39715A331D1 /* ReCaVSRWeights.swift */,
+				B2732EB193DD8D208A0C54CC /* ReCaVSRDownload.swift */,
+				CD096253A1745C553D8EBA94 /* ReCaVSRRouter.swift */,
+			);
+			path = ReCaVSR;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -957,6 +977,9 @@
 				F1F29ECD79C50D354E0EE7E2 /* ClipUpscale.swift in Sources */,
 				E360F3396B8D19F63D2D7763 /* SystemSuperResolution.swift in Sources */,
 				4E97E7417B4FBD4C0A2D4F5F /* FlashVSRWeights.swift in Sources */,
+				BBEE5836B422ED7DB34A2C13 /* ReCaVSRRouter.swift in Sources */,
+				3B39EB61034D8D57DC9373DD /* ReCaVSRDownload.swift in Sources */,
+				2A05F48827FD4DE65A99F665 /* ReCaVSRWeights.swift in Sources */,
 				FDD55D34BA326FA4A99271BF /* FlashVSRDownload.swift in Sources */,
 				81757968C9588EE3EE6A6ECA /* FlashVSRSourceProjection.swift in Sources */,
 				399404404C42798FDF78F390 /* FlashVSRTinyDecoder.swift in Sources */,
@@ -1133,6 +1156,7 @@
 				EB6EC16C5C8D9C4C67D558FA /* CanvasRefineTests.swift in Sources */,
 				39581119081A4BFFD6967A0B /* AutoMaskTests.swift in Sources */,
 				C0104A7C11A0000000000005 /* ColorMatchTests.swift in Sources */,
+				21E31F9C3FD8B3C49DB10302 /* ReCaVSRTests.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* MaskMemoryTests.swift in Sources */,
 				C11DDE1E7E57000000000001 /* ClipDeleteTests.swift in Sources */,
 			);
