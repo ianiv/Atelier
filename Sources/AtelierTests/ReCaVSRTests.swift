@@ -1,4 +1,5 @@
 @testable import Atelier
+import Foundation
 import Testing
 
 /// ReCaVSR's streaming bookkeeping (`ReCaVSRRouter`) against sequences worked out from the
@@ -138,5 +139,26 @@ struct ReCaVSRTests {
     #expect(ReCaVSRRouter.padded(120) == 128)
     #expect(ReCaVSRRouter.padded(1080) == 1088)
     #expect(ReCaVSRRouter.padded(1920) == 1920)
+  }
+
+  @Test func olderPeersDecode() throws {
+    // A server or saved queue from before ReCaVSR: no weights, no recaVSR list.
+    let upscale = try JSONDecoder().decode(
+      ClipUpscale.self, from: Data(#"{"method":"flashVSR","scale":2,"sourceTensorId":7}"#.utf8))
+    #expect(upscale.weights == nil)
+    let upscalers = try JSONDecoder().decode(
+      RemoteUpscalers.self, from: Data(#"{"flashVSR":["turbo"],"superResolution":true}"#.utf8))
+    #expect(upscalers.recaVSR == nil)
+    let new = ClipUpscale(method: .recaVSR, scale: 4, sourceTensorId: 1, weights: .eightBit)
+    let decoded = try JSONDecoder().decode(ClipUpscale.self, from: JSONEncoder().encode(new))
+    #expect(decoded == new)
+  }
+
+  @Test func clipSizesAndScales() {
+    #expect(ClipUpscale.outputSize(width: 448, height: 320, scale: 2, method: .recaVSR) == (896, 640))
+    #expect(ClipUpscale.outputSize(width: 480, height: 270, scale: 4, method: .recaVSR) == (1920, 1080))
+    // 4× of 448×320 is past 1920×1088.
+    #expect(ClipUpscale.offeredScales(width: 448, height: 320, method: .recaVSR) == [2])
+    #expect(ClipUpscale.offeredScales(width: 480, height: 272, method: .recaVSR) == [2, 4])
   }
 }

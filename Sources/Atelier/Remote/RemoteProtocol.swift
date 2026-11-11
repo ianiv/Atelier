@@ -37,6 +37,8 @@ nonisolated struct RemoteUpscalers: Codable, Hashable, Sendable {
   /// The FlashVSR+ variants it has, by raw value.
   var flashVSR: [FlashVSRFiles.Variant] = []
   var superResolution = false
+  /// The ReCaVSR weights it has. Optional: older servers don't send it.
+  var recaVSR: [ReCaVSRFiles.Weights]?
 }
 
 nonisolated struct RemoteLoRAInfo: Codable, Hashable, Sendable {

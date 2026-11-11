@@ -2199,11 +2199,12 @@ final class CreateModel {
     track(task, for: job)
   }
 
-  /// Queues upscaling `item`, a clip, `scale` times with `method` (FlashVSR+ as `variant`). The
+  /// Queues upscaling `item`, a clip, `scale` times with `method` (FlashVSR+ as `variant`, ReCaVSR
+  /// with `weights`). The
   /// result is a new clip after it, with its model, prompt, seed and settings at the new size.
   func upscale(
     _ item: HistoryItem, method: ClipUpscale.Method, scale: Int,
-    variant: FlashVSRFiles.Variant = .turbo, frameLimit: Int? = nil
+    variant: FlashVSRFiles.Variant = .turbo, weights: ReCaVSRFiles.Weights = .full, frameLimit: Int? = nil
   ) async {
     guard item.isVideo else { return }
     let sidecar = item.sidecar
@@ -2228,7 +2229,7 @@ final class CreateModel {
     request.parentTensorId = HistoryStore.tip(of: item)
     request.upscale = ClipUpscale(
       method: method, scale: scale, sourceTensorId: item.tensorId, frameLimit: frameLimit,
-      variant: method == .flashVSR ? variant : nil)
+      variant: method == .flashVSR ? variant : nil, weights: method == .recaVSR ? weights : nil)
     statusNote = nil
     queue.append([request], currentTensorId: history.currentTensorId, target: target)
     runNext()

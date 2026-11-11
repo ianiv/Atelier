@@ -601,7 +601,10 @@ final class RemoteServer {
     }
     let upscalers = RemoteUpscalers(
       flashVSR: FlashVSRFiles.Variant.allCases.filter { FlashVSRFiles.installed($0) != nil },
-      superResolution: SystemSuperResolution.isSupported)
+      superResolution: SystemSuperResolution.isSupported,
+      recaVSR: ReCaVSRFiles.Weights.allCases.filter {
+        ReCaVSRFiles.installed($0) != nil && ($0 == .eightBit || ClipUpscale.recaVSRFullAllowed)
+      })
     return .catalog(
       models: models, loras: loras, files: create?.modelFiles ?? [], upscalers: upscalers,
       features: RemoteProtocol.features)

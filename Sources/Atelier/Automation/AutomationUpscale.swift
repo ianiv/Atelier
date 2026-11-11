@@ -8,10 +8,10 @@ extension Automation {
   /// or `--clip STEP_TENSOR_ID`) and prints how long it took and what came out. With
   /// `--export DIR`, writes the result as an MP4 there.
   ///
-  ///   Atelier --upscale-check --project NAME [--method flashVSR|system] [--scale 2]
-  ///           [--variant turbo|base] [--clip ID] [--frames N] [--export DIR]
+  ///   Atelier --upscale-check --project NAME [--method flashVSR|recaVSR|system] [--scale 2]
+  ///           [--variant turbo|base] [--weights full|eightBit] [--clip ID] [--frames N] [--export DIR]
   ///           [--export-clip ID|latest] [--image] [--upscaler FILE] [--seedvr FILE] [--limit-pixels N]
-  ///           [--image-sheet-shots DIR --input-image FILE] [--quit]
+  ///           [--image-sheet-shots DIR --input-image FILE] [--upscale-sheet-shots DIR] [--quit]
   static func upscaleCheck(_ model: CreateModel) {
     let args = CommandLine.arguments
     func value(_ name: String) -> String? {
@@ -28,6 +28,10 @@ extension Automation {
         if args.contains("--quit") { AppLifecycle.quit() }
       }
       while !model.history.isLoaded || model.models.isEmpty || model.isBusy {
+        try? await Task.sleep(for: .milliseconds(100))
+      }
+      // A large project can still be reading in.
+      for _ in 0..<300 where model.history.items.isEmpty {
         try? await Task.sleep(for: .milliseconds(100))
       }
       // `--image`: the smallest image instead, with `--method`, `--upscaler FILE` or the first
@@ -53,6 +57,46 @@ extension Automation {
         }
         model.upscalingCanvasImage = false
         if let saved { defaults.set(saved, forKey: "imageUpscaler") } else { defaults.removeObject(forKey: "imageUpscaler") }
+        return finish()
+      }
+      // `--upscale-sheet-shots DIR [--clip ID]`: Upscale Video and Export Video with each method
+      // chosen, for the clip (or the project's shortest), as PNGs. What was chosen is put back.
+      if let directory = value("--upscale-sheet-shots") {
+        let clips = model.history.items.filter { $0.isVideo && $0.clip != nil }
+        guard
+          let item = value("--clip").flatMap(Int64.init).flatMap({ id in clips.first { $0.tensorId == id } })
+            ?? clips.min(by: { $0.clip!.frames.count < $1.clip!.frames.count })
+        else {
+          log("FAIL no clip in \(model.history.project.name)")
+          return finish()
+        }
+        let defaults = UserDefaults.standard
+        let keys = ["upscaleMethod", "exportUpscale", "upscaleReCaVSRWeights"]
+        let saved = keys.map { defaults.object(forKey: $0) }
+        for method in ClipUpscale.Method.allCases {
+          defaults.set(method.rawValue, forKey: "upscaleMethod")
+          defaults.set(method.rawValue, forKey: "exportUpscale")
+          let weights: [ReCaVSRFiles.Weights] = method == .recaVSR ? ReCaVSRFiles.Weights.allCases : [.full]
+          for weight in weights {
+            defaults.set(weight.rawValue, forKey: "upscaleReCaVSRWeights")
+            try? await Task.sleep(for: .milliseconds(300))
+            let suffix = method == .recaVSR ? "-\(weight.rawValue)" : ""
+            let upscaleURL = URL(fileURLWithPath: directory).appending(path: "upscale-\(method.rawValue)\(suffix).png")
+            let shot = AutomationWindows.snapshot(
+              UpscaleSheet(item: item).environment(model), size: CGSize(width: 500, height: 440), to: upscaleURL)
+            log("\(shot ? "PASS" : "FAIL") \(upscaleURL.path)")
+            let exportURL = URL(fileURLWithPath: directory).appending(path: "export-\(method.rawValue)\(suffix).png")
+            let exportShot = AutomationWindows.snapshot(
+              VideoExportSheet(
+                width: item.sidecar.width, height: item.sidecar.height, frameCount: item.clip?.frames.count ?? 0
+              ) { _ in }.environment(model),
+              size: CGSize(width: 500, height: 520), to: exportURL)
+            log("\(exportShot ? "PASS" : "FAIL") \(exportURL.path)")
+          }
+        }
+        for (key, value) in zip(keys, saved) {
+          if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
+        }
         return finish()
       }
       if args.contains("--image") {
@@ -127,28 +171,35 @@ extension Automation {
             < ($1.clip!.frames.count, $1.sidecar.width * $1.sidecar.height)
         }
       guard let source, let clip = source.clip else {
-        log("FAIL no clip in \(model.history.project.name)")
+        log("FAIL no clip in \(model.history.project.name) (\(model.history.items.count) items, \(clips.count) clips)")
         return finish()
       }
       let method = value("--method").flatMap(ClipUpscale.Method.init(rawValue:)) ?? .flashVSR
       let scale = value("--scale").flatMap(Int.init) ?? 2
       let variant = value("--variant").flatMap(FlashVSRFiles.Variant.init(rawValue:)) ?? .turbo
+      let weights = value("--weights").flatMap(ReCaVSRFiles.Weights.init(rawValue:)) ?? .full
       log(
         "source \(source.tensorId): \(clip.frames.count) frames, \(source.sidecar.width)x\(source.sidecar.height), \(source.sidecar.model)"
       )
       if let problem = ClipUpscale.problem(
         width: source.sidecar.width, height: source.sidecar.height, scale: scale, method: method,
-        variant: variant)
+        variant: variant, weights: weights)
       {
         log("FAIL \(problem)")
         return finish()
       }
-      log("upscaling \(scale)x with \(method == .flashVSR ? "FlashVSR+ \(variant.title)" : "Apple Super Resolution")")
+      let methodName =
+        switch method {
+        case .flashVSR: "FlashVSR+ \(variant.title)"
+        case .recaVSR: "ReCaVSR \(weights.title)"
+        case .system: "Apple Super Resolution"
+        }
+      log("upscaling \(scale)x with \(methodName)")
       let before = model.queue.recent.count
       let upscaleStarted = Date()
       let frameLimit = value("--frames").flatMap(Int.init)
       await model.upscale(
-        source, method: method, scale: scale, variant: variant, frameLimit: frameLimit)
+        source, method: method, scale: scale, variant: variant, weights: weights, frameLimit: frameLimit)
       var lastPhase = ""
       while model.queue.recent.count == before || !model.queue.isEmpty {
         if case .running(let text) = model.phase, text != lastPhase {
@@ -200,8 +251,8 @@ extension Automation {
   /// `--method none` exports as it is, as Export Video… does without upscaling. `--input FILE`
   /// upscales a video file as dropping it on the canvas does, with no timeline needed.
   ///
-  ///   Atelier --timeline-export-check --project NAME [--method none|system|flashVSR] [--scale 4]
-  ///           [--variant turbo|base] [--clip ID] [--input FILE] [--crossfade N] [--trim N]
+  ///   Atelier --timeline-export-check --project NAME [--method none|system|flashVSR|recaVSR] [--scale 4]
+  ///           [--variant turbo|base] [--weights full|eightBit] [--clip ID] [--input FILE] [--crossfade N] [--trim N]
   ///           [--cancel-at PERCENT] --export DIR [--quit]
   ///
   /// `--cancel-at` stops the export once it's that far along and checks that nothing was written.
@@ -232,11 +283,12 @@ extension Automation {
           let method = value("--method").flatMap(ClipUpscale.Method.init(rawValue:)) ?? .system
           let upscale = TimelineUpscale(
             method: method, scale: value("--scale").flatMap(Int.init) ?? 2,
-            variant: value("--variant").flatMap(FlashVSRFiles.Variant.init(rawValue:)) ?? .turbo)
+            variant: value("--variant").flatMap(FlashVSRFiles.Variant.init(rawValue:)) ?? .turbo,
+            weights: value("--weights").flatMap(ReCaVSRFiles.Weights.init(rawValue:)) ?? .full)
           log("file: \(composition.frameCount) frames at \(composition.width)x\(composition.height), \(composition.framesPerSecond) fps")
           if let problem = ClipUpscale.problem(
             width: composition.width, height: composition.height, scale: upscale.scale,
-            method: method, variant: upscale.variant)
+            method: method, variant: upscale.variant, weights: upscale.weights)
           {
             log("FAIL \(problem)")
             return finish()
@@ -289,7 +341,8 @@ extension Automation {
       let method = value("--method").flatMap(ClipUpscale.Method.init(rawValue:)) ?? .system
       let upscale = TimelineUpscale(
         method: method, scale: value("--scale").flatMap(Int.init) ?? (method == .system ? 4 : 2),
-        variant: value("--variant").flatMap(FlashVSRFiles.Variant.init(rawValue:)) ?? .turbo)
+        variant: value("--variant").flatMap(FlashVSRFiles.Variant.init(rawValue:)) ?? .turbo,
+        weights: value("--weights").flatMap(ReCaVSRFiles.Weights.init(rawValue:)) ?? .full)
       do {
         var files: [URL] = []
         for segment in layout.segments {

@@ -23,8 +23,6 @@ nonisolated struct ReCaVSRUpscaler {
   var seed: UInt64 = 0
   /// The wavelet color fix against the source (color_fix.py `wavelet_color_fix`).
   var colorFix = true
-  /// Called with each block's intermediates, for `--recavsr-check`.
-  var inspect: ((String, DynamicGraph.Tensor<Float>) -> Void)?
 
   var paddedWidth: Int { ReCaVSRRouter.padded(width) }
   var paddedHeight: Int { ReCaVSRRouter.padded(height) }
@@ -81,7 +79,6 @@ nonisolated struct ReCaVSRUpscaler {
             }
             Profile.mark("read+resize")
             let lq = graph.variable(prepared.toGPU(0))
-            inspect?("lq", DynamicGraph.Tensor<Float>(from: lq))
             let rows = projection.next(projection.unshuffled(lq))
             Profile.mark("projection", wait: rows)
             let noise = graph.variable(

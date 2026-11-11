@@ -57,7 +57,8 @@ nonisolated struct ImageUpscale: Codable, Sendable, Hashable {
     switch upscaler {
     case .seedVR2: (Self.pixelLimitForChecks ?? Self.seedVR2PixelLimit, 64, "SeedVR2 goes up to 4096 × 4096")
     case .video(.flashVSR, _): (Self.pixelLimitForChecks ?? Self.flashVSRPixelLimit, 128, "FlashVSR+ goes up to 1920 × 1920")
-    case .model, .video(.system, _): nil
+    // ReCaVSR isn't offered for images (a still would pay for its 21-frame first block).
+    case .model, .video(.system, _), .video(.recaVSR, _): nil
     }
   }
 
@@ -103,6 +104,7 @@ nonisolated struct ImageUpscale: Codable, Sendable, Hashable {
       if method == .flashVSR, FlashVSRFiles.installed(variant ?? .turbo) == nil {
         return "FlashVSR+ \((variant ?? .turbo).title) isn't downloaded yet."
       }
+      if method == .recaVSR { return "ReCaVSR upscales videos, not images." }
       if method == .system {
         guard SystemSuperResolution.isSupported else { return "This device doesn't support Apple Super Resolution." }
         guard SystemSuperResolution.fits(width: width, height: height, input: .image) else {
@@ -159,6 +161,8 @@ nonisolated struct ClipUpscale: Codable, Sendable, Hashable {
     case flashVSR
     /// Apple's video super resolution (`SystemSuperResolution`).
     case system
+    /// ReCaVSR, one step of a Wan2.2 DiT a few frames at a time (`ReCaVSRUpscaler`).
+    case recaVSR
   }
 
   var method: Method
@@ -171,17 +175,41 @@ nonisolated struct ClipUpscale: Codable, Sendable, Hashable {
   var variant: FlashVSRFiles.Variant?
   /// A still image as one frame, which Apple Super Resolution takes at larger sizes than video.
   var isImage: Bool?
+  /// ReCaVSR's weights; nil for full. Optional, so older peers and saved queues still decode.
+  var weights: ReCaVSRFiles.Weights?
 
   static let scales = [2, 4]
   /// FlashVSR+'s largest output, in pixels per frame: 1920×1152. Its wide layers' attention grows
   /// with the square of the size, so past this it takes minutes a frame.
   static let flashVSRPixelLimit = 1920 * 1152
 
-  /// The result's size for a `width`×`height` clip. FlashVSR+ works on a 128-pixel grid.
+  /// ReCaVSR's largest output, in pixels per frame: 1920×1088 on a Mac (about 1.3 s a frame and a
+  /// 33 GB peak at full precision, 30 GB 8-bit, on an M5 Max). On an iPad, which runs it 8-bit
+  /// only, 640×384: the 8-bit weights alone take about 9 GB and 640×360 peaked at 11.7 GB.
+  static var recaVSRPixelLimit: Int {
+    #if os(macOS)
+      1920 * 1088
+    #else
+      640 * 384
+    #endif
+  }
+
+  /// The ReCaVSR weights a job may use here: on an iPad only the 8-bit copy.
+  static var recaVSRFullAllowed: Bool {
+    #if os(macOS)
+      true
+    #else
+      false
+    #endif
+  }
+
+  /// The result's size for a `width`×`height` clip. FlashVSR+ works on a 128-pixel grid;
+  /// ReCaVSR makes the exact multiple (padding inside).
   static func outputSize(width: Int, height: Int, scale: Int, method: Method) -> (width: Int, height: Int) {
     switch method {
     case .system: (width * scale, height * scale)
     case .flashVSR: FlashVSRUpscaler.outputSize(width: width, height: height, scale: scale)
+    case .recaVSR: ReCaVSRUpscaler.outputSize(width: width, height: height, scale: scale)
     }
   }
 
@@ -191,17 +219,18 @@ nonisolated struct ClipUpscale: Codable, Sendable, Hashable {
     switch method {
     case .system:
       SystemSuperResolution.scaleFactors(width: width, height: height)
-    case .flashVSR:
+    case .flashVSR, .recaVSR:
       scales.filter { scale in
         let size = outputSize(width: width, height: height, scale: scale, method: method)
-        return size.width * size.height <= flashVSRPixelLimit
+        return size.width * size.height <= (method == .flashVSR ? flashVSRPixelLimit : recaVSRPixelLimit)
       }
     }
   }
 
   /// Why `method` can't upscale a `width`×`height` clip by `scale`; nil when it can.
   static func problem(
-    width: Int, height: Int, scale: Int, method: Method, variant: FlashVSRFiles.Variant = .turbo
+    width: Int, height: Int, scale: Int, method: Method, variant: FlashVSRFiles.Variant = .turbo,
+    weights: ReCaVSRFiles.Weights = .full
   ) -> String? {
     switch method {
     case .system:
@@ -222,6 +251,17 @@ nonisolated struct ClipUpscale: Codable, Sendable, Hashable {
         return offeredScales(width: width, height: height, method: method).isEmpty
           ? "FlashVSR+ makes videos up to 1920×1152, so this one is too large to upscale."
           : "FlashVSR+ makes videos up to 1920×1152; pick a smaller scale."
+      }
+    case .recaVSR:
+      guard ReCaVSRFiles.downloaded else { return "Download ReCaVSR to use it." }
+      guard weights == .eightBit || recaVSRFullAllowed else { return "This device runs ReCaVSR 8-bit only." }
+      guard ReCaVSRFiles.installed(weights) != nil else { return "Make ReCaVSR's 8-bit copy to use 8-bit." }
+      let size = outputSize(width: width, height: height, scale: scale, method: method)
+      guard size.width * size.height <= recaVSRPixelLimit else {
+        let limit = recaVSRFullAllowed ? "1920×1088" : "640×384"
+        return offeredScales(width: width, height: height, method: method).isEmpty
+          ? "ReCaVSR makes videos up to \(limit) here, so this one is too large to upscale."
+          : "ReCaVSR makes videos up to \(limit) here; pick a smaller scale."
       }
     }
     return nil

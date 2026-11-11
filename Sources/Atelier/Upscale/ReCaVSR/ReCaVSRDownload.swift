@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import Synchronization
 
 /// Downloads ReCaVSR's published files from Hugging Face into the models folder's "ReCaVSR",
 /// one at a time, skipping ones already there at full size. One download at a time for the app.
@@ -58,5 +59,57 @@ final class ReCaVSRDownload {
 
   func cancel() {
     task?.cancel()
+  }
+
+  // MARK: - 8-bit copy
+
+  /// The 8-bit copy's progress, 0…1; nil when it isn't being written.
+  private(set) var copying: Double?
+  private(set) var copyFailure: String?
+  private let stopCopy = StopFlag()
+
+  private final nonisolated class StopFlag: Sendable {
+    let value = Mutex(false)
+  }
+  /// Bumped when the copy appears, so views that ask `ReCaVSRFiles.installed` look again.
+  private(set) var copies = 0
+
+  /// The 8-bit copy's expected size, for the button.
+  static let eightBitBytes: Int64 = 5_711_630_336
+
+  /// Writes the 8-bit copy of the DiT beside it (`ReCaVSRQuantizer`), resuming one that was
+  /// stopped.
+  func makeEightBitCopy() {
+    guard copying == nil, let files = ReCaVSRFiles.installed(.full) else { return }
+    copying = 0
+    copyFailure = nil
+    stopCopy.value.withLock { $0 = false }
+    let progress: @Sendable (Double) -> Void = { value in
+      Task { @MainActor in
+        guard ReCaVSRDownload.shared.copying != nil else { return }
+        ReCaVSRDownload.shared.copying = value
+      }
+    }
+    Task {
+      do {
+        let done = try await Self.quantize(files, progress: progress) { [stopCopy] in !stopCopy.value.withLock { $0 } }
+        if done { copies += 1 }
+      } catch {
+        copyFailure = "Couldn't make ReCaVSR's 8-bit copy: \(error.localizedDescription)"
+      }
+      copying = nil
+    }
+  }
+
+  /// Stops the copy; what's written is kept, and the next copy resumes it.
+  func cancelEightBitCopy() {
+    stopCopy.value.withLock { $0 = true }
+  }
+
+  @concurrent private nonisolated static func quantize(
+    _ files: ReCaVSRFiles, progress: @escaping @Sendable (Double) -> Void,
+    shouldContinue: @escaping @Sendable () -> Bool
+  ) async throws -> Bool {
+    try ReCaVSRQuantizer.quantize(files, progress: progress, shouldContinue: shouldContinue)
   }
 }

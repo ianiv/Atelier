@@ -356,7 +356,7 @@ actor GenerationEngine {
   }
 
   /// Upscales a clip's `frames` as `request.upscale` says, to `request.configuration`'s size
-  /// (FlashVSR+, with the request's seed) or by its scale (Apple Super Resolution).
+  /// (FlashVSR+ or ReCaVSR, with the request's seed) or by its scale (Apple Super Resolution).
   func upscale(
     _ request: Request, frames: [CGImage],
     progress: @escaping @Sendable (Progress) -> Void
@@ -398,6 +398,24 @@ actor GenerationEngine {
         ) { tensors.append($0) }
         return Output(frames: tensors)
       }
+    case .recaVSR:
+      guard let files = ReCaVSRFiles.installed(upscale.weights ?? .full) else {
+        throw ReCaVSRFiles.Failure.missing
+      }
+      let upscaler = ReCaVSRUpscaler(
+        files: files, width: request.configuration.width, height: request.configuration.height,
+        seed: UInt64(request.seed))
+      return try await onEngineQueue { shouldContinue in
+        var tensors: [Tensor<FloatType>] = []
+        try upscaler.run(
+          count: frames.count, frame: { frames[$0] },
+          progress: { phase, done, total in
+            progress(.state(phase == .loading ? .preparing : .generating(step: done, totalSteps: total)))
+          },
+          shouldContinue: shouldContinue
+        ) { tensors.append($0) }
+        return Output(frames: tensors)
+      }
     }
   }
 
@@ -414,9 +432,9 @@ actor GenerationEngine {
         try await composition.writeWithSystemSuperResolution(to: url, codec: codec, scale: upscale.scale) {
           progress(Double($0) / frames)
         }
-      case .flashVSR:
+      case .flashVSR, .recaVSR:
         try await self.onEngineQueue { shouldContinue in
-          try composition.writeWithFlashVSR(to: url, codec: codec, upscale: upscale, shouldContinue: shouldContinue) {
+          try composition.writeStreamed(to: url, codec: codec, upscale: upscale, shouldContinue: shouldContinue) {
             progress(Double($0) / frames)
           }
         }
