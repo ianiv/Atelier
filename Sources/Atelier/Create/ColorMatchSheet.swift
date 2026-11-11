@@ -5,9 +5,25 @@ import SwiftUI
 /// what they make; then queue it. The result is a new image in History after the edited one, as
 /// the one-click item's is.
 ///
-/// The preview is the edited image at a small size, matched with the statistics of the full
-/// images (`ColorMatch.Preview`), so it shows what the job will make.
+/// The preview is the edited image at a reduced size, matched with the statistics of the full
+/// images (`ColorMatch.Preview`), so it shows what the job will make. The pictures take all the
+/// room the controls leave, and the sheet opens large: a color cast is hard to judge small.
 struct ColorMatchSheet: View {
+  /// How the original and the match are laid out to compare them.
+  enum CompareMode: String, CaseIterable {
+    /// Next to each other.
+    case sideBySide = "side"
+    /// One picture, the original to the left of a divider that's dragged across it.
+    case slider
+
+    var title: String {
+      switch self {
+      case .sideBySide: "Side by Side"
+      case .slider: "Slider"
+      }
+    }
+  }
+
   @Environment(CreateModel.self) private var create
   @Environment(\.dismiss) private var dismiss
   /// The step it was opened for, kept here: the canvas can change while the sheet is open.
@@ -20,6 +36,13 @@ struct ColorMatchSheet: View {
   /// On here, though off for the one-click item: the sheet is where an edit that added or
   /// removed something gets matched, which is what it's for.
   @AppStorage("colorMatchUnchangedOnly") private var unchangedOnly = true
+  @AppStorage("colorMatchCompareMode") private var compareMode = CompareMode.sideBySide
+  /// Where the Slider mode's divider is, as a fraction of the picture's width. Not remembered:
+  /// the middle is where a comparison starts.
+  @State private var divider = 0.5
+  /// The height the controls take when all of them show, which is as tall as their scroll view
+  /// may grow: the pictures get the rest.
+  @State private var controlsHeight: CGFloat = 280
   @State private var preview: ColorMatch.Preview?
   /// The original as read, shown while the two images are still being measured: only the
   /// Matched side has to wait for that.
@@ -79,12 +102,18 @@ struct ColorMatchSheet: View {
     let problem = self.problem
     VStack(alignment: .leading, spacing: 14) {
       Text("Match Colors").font(.headline)
-      HStack(alignment: .top, spacing: 12) {
-        picture(preview?.original ?? original, title: "Original")
-        picture(matched, title: "Matched")
+      Picker("Comparison", selection: $compareMode) {
+        ForEach(CompareMode.allCases, id: \.self) { Text($0.title).tag($0) }
       }
-      // Scrolls when the window is too short for all of it (a small iPad window); the pictures
-      // and the buttons stay put.
+      .pickerStyle(.segmented)
+      .labelsHidden()
+      .fixedSize()
+      .frame(maxWidth: .infinity)
+      pictures
+        .frame(maxWidth: .infinity, minHeight: Self.minPicturesHeight, maxHeight: .infinity)
+      // No taller than what's in it, and ahead of the pictures for room, so they shrink (to
+      // `minPicturesHeight`) before it does; then it scrolls (a short iPad window), with the
+      // pictures and the buttons staying put.
       ScrollView {
         VStack(alignment: .leading, spacing: 12) {
           Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 8) {
@@ -109,9 +138,15 @@ struct ColorMatchSheet: View {
             .lineLimit(2, reservesSpace: true)
             .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // Capped, and centred under the pictures: sliders as wide as a large sheet are no
+        // finer to set, only further to drag. A narrower sheet's fill it.
+        .frame(maxWidth: Self.maxControlsWidth, alignment: .leading)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { controlsHeight = $0 }
+        .frame(maxWidth: .infinity)
       }
       .scrollBounceBehavior(.basedOnSize)
+      .frame(maxHeight: controlsHeight)
+      .layoutPriority(1)
       HStack {
         Spacer()
         Button("Cancel", role: .cancel) { dismiss() }
@@ -125,7 +160,7 @@ struct ColorMatchSheet: View {
       }
     }
     .sheetPadding()
-    .sheetFrame(width: 560, height: 550)
+    .resizableSheetFrame(minWidth: 640, minHeight: 560, idealSize: CGSize(width: 1000, height: 800))
     // Once: the images don't change under the sheet.
     .task {
       preview = await create.colorMatchPreview(for: item) { original = $0 }
@@ -161,23 +196,163 @@ struct ColorMatchSheet: View {
     var ready: Bool
   }
 
-  /// One of the two pictures in a box of a fixed height, which is there before the picture is, so
-  /// nothing moves when it arrives.
-  private func picture(_ image: CGImage?, title: String) -> some View {
+  /// The most width the controls (the sliders, the toggle and the notes) take, however wide the
+  /// sheet is.
+  private static let maxControlsWidth: CGFloat = 460
+
+  /// The least height the pictures (with their labels) keep when the sheet is short.
+  private static let minPicturesHeight: CGFloat = 150
+
+  /// The original as shown: at the preview's size once that's made, as read until then.
+  private var shownOriginal: CGImage? { preview?.original ?? original }
+
+  /// What stands in for the matched picture while there's none; nil when it's only being drawn.
+  private var matchedNote: String? {
+    if matched != nil { return nil }
+    if !loaded { return "Reading the image and its original…" }
+    return preview == nil ? "The image or its original couldn't be read." : nil
+  }
+
+  /// The two pictures, arranged as `compareMode` says, each arrangement with a row of labels
+  /// under it so the pictures are the same height in both.
+  @ViewBuilder private var pictures: some View {
+    switch compareMode {
+    case .sideBySide:
+      HStack(alignment: .top, spacing: 12) {
+        picture(shownOriginal, note: nil, title: "Original")
+        picture(matched, note: matchedNote, title: "Matched")
+      }
+    case .slider:
+      comparison
+    }
+  }
+
+  private func label(_ title: String) -> some View {
+    Text(title).font(.caption).foregroundStyle(.secondary)
+  }
+
+  /// The text in a picture's place while it isn't there.
+  private func note(_ text: String?) -> some View {
+    Text(text ?? "").font(.caption).foregroundStyle(.secondary)
+      .multilineTextAlignment(.center).padding(8)
+  }
+
+  /// One of the two pictures in a box that takes the room it's given, which is there before the
+  /// picture is, so nothing moves when it arrives.
+  private func picture(_ image: CGImage?, note text: String?, title: String) -> some View {
     VStack(spacing: 6) {
       ZStack {
         RoundedRectangle(cornerRadius: 6).fill(.quaternary)
         if let image {
           Image(decorative: image, scale: 1).resizable().aspectRatio(contentMode: .fit)
             .clipShape(.rect(cornerRadius: 6))
+        } else {
+          note(text)
         }
       }
-      .frame(maxWidth: .infinity)
-      .frame(height: 190)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
       .accessibilityElement()
       .accessibilityLabel(title)
-      Text(title).font(.caption).foregroundStyle(.secondary)
+      label(title)
     }
+  }
+
+  /// The Slider mode's picture: the match, with the original over it to the left of the divider.
+  /// Both are laid in one rectangle of the edited image's shape, worked out here rather than
+  /// left to each image's own fit, so they line up pixel for pixel whatever rounding either
+  /// would do (and an original of another shape is fit inside the same rectangle). The labels
+  /// sit under the picture's own corners, not the box's, so each is by the side it names.
+  private var comparison: some View {
+    GeometryReader { geometry in
+      let box = CGSize(width: geometry.size.width, height: max(0, geometry.size.height - Self.labelsHeight))
+      let shape = preview.map { CGSize(width: $0.width, height: $0.height) }
+        ?? shownOriginal.map { CGSize(width: $0.width, height: $0.height) }
+      let size = Self.fitted(shape, in: box)
+      VStack(spacing: 0) {
+        ZStack {
+          RoundedRectangle(cornerRadius: 6).fill(.quaternary)
+          comparedPictures(size: size)
+        }
+        .frame(width: box.width, height: box.height)
+        HStack {
+          label("Original")
+          Spacer()
+          label("Matched")
+        }
+        .frame(width: size.width, height: Self.labelsHeight, alignment: .bottom)
+      }
+    }
+  }
+
+  /// The room under the Slider mode's picture for its labels: a caption's line and the gap above
+  /// it, as under the Side by Side pictures.
+  private static let labelsHeight: CGFloat = 22
+
+  /// The match and, over it left of the divider, the original, both `size`, with the divider.
+  private func comparedPictures(size: CGSize) -> some View {
+    let x = size.width * divider
+    return ZStack(alignment: .leading) {
+      if let matched {
+        Image(decorative: matched, scale: 1).resizable().frame(width: size.width, height: size.height)
+      } else {
+        // In the half the match will show in.
+        note(matchedNote)
+          .frame(width: max(0, size.width - x), height: size.height)
+          .frame(width: size.width, height: size.height, alignment: .trailing)
+      }
+      if let shownOriginal {
+        Image(decorative: shownOriginal, scale: 1).resizable().aspectRatio(contentMode: .fit)
+          .frame(width: size.width, height: size.height)
+          .mask(alignment: .leading) { Rectangle().frame(width: x) }
+      }
+      dividerHandle(height: size.height).offset(x: x - Self.handleSize / 2)
+    }
+    .frame(width: size.width, height: size.height)
+    .clipShape(.rect(cornerRadius: 6))
+    .contentShape(.rect)
+    // From the first touch, so a click anywhere on the picture brings the divider there.
+    .gesture(
+      DragGesture(minimumDistance: 0).onChanged { value in
+        guard size.width > 0 else { return }
+        divider = min(1, max(0, value.location.x / size.width))
+      })
+  }
+
+  private static let handleSize: CGFloat = 28
+
+  /// The divider and its handle, `handleSize` wide with the line down its middle. Light with a
+  /// dark edge, so it shows on any picture.
+  private func dividerHandle(height: CGFloat) -> some View {
+    ZStack {
+      Rectangle().fill(.white).frame(width: 2, height: height)
+        .shadow(color: .black.opacity(0.6), radius: 1)
+      Circle().fill(.white)
+        .shadow(color: .black.opacity(0.5), radius: 2)
+        .overlay {
+          Image(systemName: "chevron.left.chevron.right")
+            .font(.system(size: 11, weight: .bold)).foregroundStyle(.black.opacity(0.7))
+        }
+        .frame(width: Self.handleSize, height: Self.handleSize)
+    }
+    .frame(width: Self.handleSize, height: height)
+    .accessibilityElement()
+    .accessibilityLabel("Comparison position")
+    .accessibilityValue("\(Int((divider * 100).rounded())) percent")
+    .accessibilityAdjustableAction { direction in
+      switch direction {
+      case .increment: divider = min(1, divider + 0.05)
+      case .decrement: divider = max(0, divider - 0.05)
+      @unknown default: break
+      }
+    }
+  }
+
+  /// The largest size of `shape`'s proportions inside `bounds`, in whole points so both pictures
+  /// land on the same pixels; all of `bounds` when there's no shape yet.
+  private static func fitted(_ shape: CGSize?, in bounds: CGSize) -> CGSize {
+    guard let shape, shape.width > 0, shape.height > 0, bounds.width > 0, bounds.height > 0 else { return bounds }
+    let scale = min(bounds.width / shape.width, bounds.height / shape.height)
+    return CGSize(width: max(1, (shape.width * scale).rounded(.down)), height: max(1, (shape.height * scale).rounded(.down)))
   }
 
   /// `amount` set in whole percents. The slider's own `step` would do it, but draws a tick mark

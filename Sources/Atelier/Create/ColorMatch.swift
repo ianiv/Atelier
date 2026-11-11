@@ -245,10 +245,11 @@ nonisolated enum ColorMatch {
     /// The original at the same fit, to show beside it.
     var original: CGImage
 
-    /// The longer side of the previewed image, in pixels: twice the sheet's picture box (190
-    /// points high) covers it on a Retina display, and each render takes time with its pixel
-    /// count. Only what's shown is this size; the statistics come from the full images.
-    static let side = 512
+    /// The longer side of the previewed image, in pixels (a smaller image is left its own size):
+    /// enough that the sheet's pictures, which fill a large sheet, aren't soft, and no more,
+    /// since each render takes time with its pixel count. Only what's shown is this size; the
+    /// statistics come from the full images' own downsamples (`statsSide`).
+    static let side = 1280
 
     /// The whole edited image's statistics, and the whole original's.
     var target: Stats { measurements.whole.target }

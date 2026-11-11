@@ -15,8 +15,8 @@ extension Automation {
   /// settings): the one-click match records the default settings whatever the sheet last used, a
   /// match at half tint and saturation records that and leaves about half the shift, a match
   /// with other settings queues beside one that's waiting while the same settings don't, and the
-  /// sheet can open while a match is pending (`--snapshot-dir DIR` saves a picture of it,
-  /// color-match-sheet.png). For a second edit, the warm copy with a green block pasted over a
+  /// sheet can open while a match is pending (`--snapshot-dir DIR` saves a picture of it in each
+  /// comparison mode, color-match-sheet-side.png and color-match-sheet-slider.png). For a second edit, the warm copy with a green block pasted over a
   /// fifth of it: matched from its unchanged areas only, the step records how much of the image
   /// that was and the background's colors are the original's; matched with tint alone, the
   /// colors' mean is the original's and their spread the edit's. The sheet's remembered values
@@ -50,6 +50,7 @@ extension Automation {
       var runValues = launchValues
       for key in ["colorMatchTint", "colorMatchSaturation", "colorMatchBrightness", "colorMatchContrast"] { runValues[key] = 0.5 }
       runValues["colorMatchUnchangedOnly"] = true
+      runValues["colorMatchCompareMode"] = ColorMatchSheet.CompareMode.sideBySide.rawValue
       defaults.setVolatileDomain(runValues, forName: UserDefaults.argumentDomain)
       @MainActor func finish() {
         defaults.setVolatileDomain(launchValues, forName: UserDefaults.argumentDomain)
@@ -324,11 +325,22 @@ extension Automation {
       try? await Task.sleep(for: .seconds(1))
       check(model.colorMatchSheetItem?.tensorId == edit.tensorId, "the Match Colors… sheet opens for the canvas image")
       if let folder = value("--snapshot-dir") {
-        // Once its preview is drawn.
-        try? await Task.sleep(for: .seconds(8))
-        let url = URL(fileURLWithPath: folder).appendingPathComponent("color-match-sheet.png")
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        print("\(AutomationWindows.snapshotSheet(to: url) ? "saved" : "couldn't save") \(url.path)")
+        // One picture per comparison mode. The sheet reads the mode when it opens, so it's opened
+        // again for the second, with the mode set where the run's other values are.
+        for mode in ColorMatchSheet.CompareMode.allCases {
+          if mode != .sideBySide {
+            model.colorMatchSheetItem = nil
+            try? await Task.sleep(for: .seconds(1))
+            runValues["colorMatchCompareMode"] = mode.rawValue
+            defaults.setVolatileDomain(runValues, forName: UserDefaults.argumentDomain)
+            model.colorMatchSheetItem = edit
+          }
+          // Once its preview is drawn.
+          try? await Task.sleep(for: .seconds(8))
+          let url = URL(fileURLWithPath: folder).appendingPathComponent("color-match-sheet-\(mode.rawValue).png")
+          try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+          print("\(AutomationWindows.snapshotSheet(to: url) ? "saved" : "couldn't save") \(url.path)")
+        }
       }
       model.colorMatchSheetItem = nil
       try? await Task.sleep(for: .milliseconds(500))

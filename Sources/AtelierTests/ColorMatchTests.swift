@@ -253,8 +253,8 @@ struct ColorMatchTests {
   /// The sheet's preview is the job's transfer on the small image, with the full images' statistics.
   @Test func previewRendersAsTheTransferDoes() async throws {
     // Larger than the preview on one side and than the statistics' 512, so both are downsampled.
-    let width = 1000
-    let height = 400
+    let width = 2000
+    let height = 800
     var original: [UInt8] = []
     for y in 0..<height {
       for x in 0..<width {
@@ -265,7 +265,7 @@ struct ColorMatchTests {
     let originalImage = try #require(ColorMatch.cgImage(rgba: original, width: width, height: height))
     let warmImage = try #require(ColorMatch.cgImage(rgba: warm, width: width, height: height))
     let preview = try #require(await ColorMatch.Preview.make(edited: warmImage, original: originalImage))
-    #expect(preview.width == ColorMatch.Preview.side && preview.height == 205)
+    #expect(preview.width == ColorMatch.Preview.side && preview.height == 512)
     #expect(preview.original.width == preview.width && preview.original.height == preview.height)
     // The statistics the job takes.
     let warmPixels = try #require(ColorMatch.rgba(warmImage))
