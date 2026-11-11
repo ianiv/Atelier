@@ -65,10 +65,9 @@ struct ColorMatchSheet: View {
     switch measurements.reason {
     case .shape:
       return "The original has a different shape, so the whole image is measured."
-    case .mostlyChanged(let fraction) where unchangedOnly:
-      return "Only \(percent(fraction))% of the image is unchanged, so the whole image is measured."
-    case .changedTogether where unchangedOnly:
-      return "Most of the image changed, so the whole image is measured."
+    case .tooLittleUnchanged where unchangedOnly:
+      // Most of it was edited, or the whole picture shifted: the one line reads for both.
+      return "Too little of the image is unchanged, so the whole image is measured."
     default:
       if unchangedOnly, let counted = measurements.unchanged?.counted { return "Measured from \(percent(counted))% of the image." }
       return "Measured from the whole image."

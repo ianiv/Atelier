@@ -538,8 +538,13 @@ struct ColorMatchTests {
     let original = picture(width: width, height: height)
     let covered = pasted(shifted(original, by: SIMD3(0, 1, 6)), width: width, height: height, over: 0.8)
     let mostly = ColorMatch.measurements(edited: covered, width: width, height: height, original: original, width: width, height: height)
-    // The block is most of the image, so the shift between the two is the block's, not a cast.
-    #expect(mostly.unchanged == nil && mostly.reason == .changedTogether)
+    // The block is most of the image: what's left is under a quarter of it.
+    #expect(mostly.unchanged == nil)
+    if case .tooLittleUnchanged(let fraction) = mostly.reason {
+      #expect(abs(fraction - 0.2) < 0.02 && fraction < ColorMatch.minimumUnchangedFraction)
+    } else {
+      Issue.record("\(String(describing: mostly.reason))")
+    }
     #expect(mostly.measurement(unchangedOnly: true) == mostly.whole)
     #expect(
       ColorMatch.measure(edited: covered, width: width, height: height, original: original, width: width, height: height, unchangedOnly: true)
@@ -559,35 +564,6 @@ struct ColorMatchTests {
     #expect(plain.unchanged == nil && plain.reason == nil)
   }
 
-  /// More than half the image changed, all the same way: a kept subject with a slight warm cast
-  /// over 40% of it, and a grey backdrop swapped for blue over the rest. The median difference
-  /// is then the backdrop's, and the pixels near it are the backdrop. The subject moved together
-  /// too, and far less, so it's the part the edit kept: the cast is measured from it.
-  @Test func aBackdropSwappedOverMostOfTheImageIsMeasuredFromTheSubject() throws {
-    let side = 512
-    let kept = side * 4 / 10
-    var original = picture(width: side, height: side)
-    for y in 0..<side {
-      for x in kept..<side { original.replaceSubrange((y * side + x) * 4..<(y * side + x) * 4 + 3, with: [128, 128, 128]) }
-    }
-    var edited = shifted(original, by: SIMD3(0, 1, 4))
-    for y in 0..<side {
-      for x in kept..<side { edited.replaceSubrange((y * side + x) * 4..<(y * side + x) * 4 + 3, with: [40, 80, 220]) }
-    }
-    let both = ColorMatch.measurements(edited: edited, width: side, height: side, original: original, width: side, height: side)
-    let unchanged = try #require(both.unchanged)
-    #expect(both.reason == nil && abs((unchanged.counted ?? 0) - 0.4) < 0.02)
-    #expect(abs(unchanged.shift.b - 4) < 0.5 && abs(unchanged.shift.a - 1) < 0.5)
-    let measured = ColorMatch.measure(
-      edited: edited, width: side, height: side, original: original, width: side, height: side, unchangedOnly: true)
-    #expect(measured == unchanged)
-    // The mask is the subject, not the backdrop, and its shift is a cast's.
-    let found = ColorMatch.unchangedPixels(
-      edited: edited, lab: ColorMatch.lab(rgba: edited), original: original, lab: ColorMatch.lab(rgba: original), width: side, height: side)
-    #expect(found.cast < ColorMatch.maximumCastDeltaE && found.floor == ColorMatch.minimumRegionFraction)
-    #expect(found.mask[side * 100 + 10] && !found.mask[side * 100 + side - 10])
-  }
-
   /// A picture with fine texture over its gradients, as a photograph has: every pixel a little
   /// off its neighbors, the same each time.
   private func textured(side: Int, seed: UInt64 = 7) -> [UInt8] {
@@ -599,135 +575,160 @@ struct ColorMatchTests {
     return out
   }
 
-  /// `rgba` with its Lab channels moved by `subject` left of `fraction` of its width and by
-  /// `backdrop` right of it: an edit that kept a subject (with the model's cast) and recolored
-  /// the rest evenly.
-  private func recolored(_ rgba: [UInt8], side: Int, subject: SIMD3<Double>, over fraction: Double, backdrop: SIMD3<Double>) -> [UInt8] {
-    var out = shifted(rgba, by: subject)
-    let other = shifted(rgba, by: backdrop)
-    let edge = Int((Double(side) * fraction).rounded())
+  /// What an edit did to one band of a picture.
+  private enum Change {
+    /// Its Lab channels moved by this much: a cast, or an even recoloring.
+    case moved(SIMD3<Double>)
+    /// Something new in its place.
+    case replaced
+    /// Its b moved by an amount running from the first to the second, left to right.
+    case graded(Double, Double)
+  }
+
+  /// `rgba` (`side` square) edited in vertical bands, left to right, each this fraction of its
+  /// width.
+  private func edit(_ rgba: [UInt8], side: Int, _ bands: [(fraction: Double, change: Change)]) -> [UInt8] {
+    var planes = ColorMatch.lab(rgba: rgba)
+    var replaced = [Bool](repeating: false, count: side)
+    // Columns the edit left as they were keep their very pixels, not a round trip through Lab.
+    var same = [Bool](repeating: false, count: side)
+    var start = 0.0
+    for (index, band) in bands.enumerated() {
+      let low = Int((Double(side) * start).rounded())
+      start += band.fraction
+      let high = index == bands.count - 1 ? side : Int((Double(side) * start).rounded())
+      for x in low..<high {
+        var move = SIMD3<Double>(0, 0, 0)
+        switch band.change {
+        case .moved(let by): move = by
+        case .replaced: replaced[x] = true
+        case .graded(let from, let to): move.z = from + (to - from) * Double(x - low) / Double(max(1, high - low - 1))
+        }
+        if case .moved(let by) = band.change, by == SIMD3(0, 0, 0) { same[x] = true }
+        for y in 0..<side {
+          planes.l[y * side + x] += move.x
+          planes.a[y * side + x] += move.y
+          planes.b[y * side + x] += move.z
+        }
+      }
+    }
+    var out = ColorMatch.encoded(lab: planes, alpha: [UInt8](repeating: 255, count: side * side))
     for y in 0..<side {
-      out.replaceSubrange((y * side + edge) * 4..<(y * side + side) * 4, with: other[(y * side + edge) * 4..<(y * side + side) * 4])
+      for x in 0..<side {
+        let at = (y * side + x) * 4
+        if replaced[x] { out.replaceSubrange(at..<at + 3, with: [20, 220, 40]) }
+        if same[x] { out.replaceSubrange(at..<at + 4, with: rgba[at..<at + 4]) }
+      }
     }
     return out
   }
 
-  /// More than half the image moved by a moderate, even amount (too little to be past a cast):
-  /// the median is the edit's and the pixels near it are the edited ones. The part left out is
-  /// the kept subject, which moved together and less, so it's what's measured.
-  @Test func anEvenlyRecoloredMajorityIsNotTakenForUnchanged() throws {
+  /// Both measures of an edit of the textured picture, in bands as `edit` takes them.
+  private func measurements(of bands: [(fraction: Double, change: Change)]) -> ColorMatch.Measurements {
     let side = 512
     let original = textured(side: side)
-    for backdrop in [-12.0, -16.0, -18.0] {
-      let edited = recolored(original, side: side, subject: SIMD3(0, 0, 3), over: 0.4, backdrop: SIMD3(0, 0, backdrop))
-      let both = ColorMatch.measurements(edited: edited, width: side, height: side, original: original, width: side, height: side)
-      let unchanged = try #require(both.unchanged, "backdrop b\(backdrop): \(String(describing: both.reason))")
-      #expect(both.reason == nil && abs((unchanged.counted ?? 0) - 0.4) < 0.02)
-      #expect(abs(unchanged.shift.b - 3) < 0.5 && abs(unchanged.shift.a) < 0.5)
-      // The match then leaves the backdrop's edit in and takes the subject's cast out.
-      let measured = ColorMatch.measure(
-        edited: edited, width: side, height: side, original: original, width: side, height: side, unchangedOnly: true)
-      #expect(measured == unchanged)
-    }
-    // 70% changed, in two channels.
-    let edited = recolored(original, side: side, subject: SIMD3(0, 1, 3), over: 0.3, backdrop: SIMD3(0, 10, -13))
+    let edited = edit(original, side: side, bands)
     let both = ColorMatch.measurements(edited: edited, width: side, height: side, original: original, width: side, height: side)
+    // The job's measure is the same one.
+    #expect(
+      ColorMatch.measure(edited: edited, width: side, height: side, original: original, width: side, height: side, unchangedOnly: true)
+        == both.measurement(unchangedOnly: true))
+    return both
+  }
+
+  /// That the unchanged areas were measured, are `fraction` of the image, and carry `cast`.
+  private func expectKept(
+    _ both: ColorMatch.Measurements, _ fraction: Double, cast: SIMD3<Double>, _ name: Comment, sourceLocation: SourceLocation = #_sourceLocation
+  ) {
+    guard let unchanged = both.unchanged, both.reason == nil else {
+      Issue.record("\(name): \(String(describing: both.reason))", sourceLocation: sourceLocation)
+      return
+    }
+    #expect(abs((unchanged.counted ?? 0) - fraction) < 0.02, name, sourceLocation: sourceLocation)
+    let shift = unchanged.shift
+    #expect(
+      abs(shift.l - cast.x) < 0.5 && abs(shift.a - cast.y) < 0.5 && abs(shift.b - cast.z) < 0.5, "\(name): \(shift)",
+      sourceLocation: sourceLocation)
+  }
+
+  /// A block pasted over a fifth of a copy with a cast: the cast is measured from the rest.
+  @Test func aPastedBlockIsLeftOut() {
+    expectKept(measurements(of: [(0.2, .replaced), (0.8, .moved(SIMD3(0, 1, 6)))]), 0.8, cast: SIMD3(0, 1, 6), "pasted block")
+  }
+
+  /// A backdrop recolored evenly behind a kept subject, however much of the image it is: the
+  /// subject barely moved and the backdrop moved further, so the subject is what's measured.
+  /// (Taking the commonest shift for the cast, as this once did, measured the backdrop.)
+  @Test func aRecoloredBackdropIsMeasuredFromTheKeptSubject() {
+    for backdrop in [-12.0, -16.0, -18.0, -45.0] {
+      expectKept(
+        measurements(of: [(0.4, .moved(SIMD3(0, 0, 3))), (0.6, .moved(SIMD3(0, 0, backdrop)))]), 0.4, cast: SIMD3(0, 0, 3),
+        "backdrop b\(backdrop)")
+    }
+    // With something new in the picture too.
+    expectKept(
+      measurements(of: [(0.3, .moved(SIMD3(0, 1, 3))), (0.6, .moved(SIMD3(0, -3, -14))), (0.1, .replaced)]), 0.3, cast: SIMD3(0, 1, 3),
+      "recolored backdrop and a new object")
+    // An edit against the cast, close to it in size.
+    expectKept(
+      measurements(of: [(0.4, .moved(SIMD3(0, 0, 6))), (0.6, .moved(SIMD3(0, 0, -11)))]), 0.4, cast: SIMD3(0, 0, 6), "cast b+6, edit b-11")
+    expectKept(
+      measurements(of: [(0.4, .moved(SIMD3(0, 0, 8))), (0.6, .moved(SIMD3(0, 0, -12)))]), 0.4, cast: SIMD3(0, 0, 8), "cast b+8, edit b-12")
+    // Two edited regions, each its own way.
+    expectKept(
+      measurements(of: [(0.3, .moved(SIMD3(0, 1, 3))), (0.55, .moved(SIMD3(0, 0, -15))), (0.15, .moved(SIMD3(0, -25, 0)))]), 0.3,
+      cast: SIMD3(0, 1, 3), "three regions")
+    // An edit of the light alone.
+    expectKept(
+      measurements(of: [(0.4, .moved(SIMD3(0, 1, 3))), (0.6, .moved(SIMD3(-20, 0, 0)))]), 0.4, cast: SIMD3(0, 1, 3), "L-only edit")
+  }
+
+  /// An edit that fades in (b −6 to −26 across 73% of the image) beside a kept 27%: the start
+  /// of the fade is within reach of the original and counts with the subject, so what's
+  /// measured is the subject's cast pulled a little toward the edit. It's still far nearer the
+  /// cast than the whole image's measure is.
+  @Test func aGradedEditIsMeasuredFromWhatBarelyMoved() throws {
+    let both = measurements(of: [(0.27, .moved(SIMD3(0, 0, 3))), (0.73, .graded(-6, -26))])
     let unchanged = try #require(both.unchanged)
-    #expect(both.reason == nil && abs((unchanged.counted ?? 0) - 0.3) < 0.02)
-    #expect(abs(unchanged.shift.b - 3) < 0.5 && abs(unchanged.shift.a - 1) < 0.5)
+    let counted = try #require(unchanged.counted)
+    // The subject and the part of the fade under ΔE 10, and no more.
+    #expect(both.reason == nil && counted > 0.27 && counted < 0.5)
+    #expect(abs(unchanged.shift.b - 3) < abs(both.whole.shift.b - 3))
+    #expect(unchanged.shift.b > both.whole.shift.b)
   }
 
-  /// A kept subject that's under a quarter of the image is too little to speak for it, however
-  /// evenly the rest moved: the whole image is measured, and the reason says how much was kept.
-  @Test func aSmallKeptSubjectFallsBack() {
-    let side = 512
-    let original = textured(side: side)
-    let edited = recolored(original, side: side, subject: SIMD3(0, 0, 3), over: 0.15, backdrop: SIMD3(0, 0, -14))
-    let both = ColorMatch.measurements(edited: edited, width: side, height: side, original: original, width: side, height: side)
-    #expect(both.unchanged == nil && both.measurement(unchangedOnly: true) == both.whole)
-    if case .mostlyChanged(let fraction) = both.reason {
-      #expect(abs(fraction - 0.15) < 0.02 && fraction < ColorMatch.minimumRegionFraction)
-    } else {
-      Issue.record("\(String(describing: both.reason))")
-    }
-  }
-
-  /// Most of the image changed, each patch its own way: the pixels the median leaves out didn't
-  /// move together, so there's no second region, and what's near the median is under half.
-  @Test func aMajorityChangedEveryWhichWayFallsBack() {
-    let side = 512
-    let original = textured(side: side)
-    var planes = ColorMatch.lab(rgba: shifted(original, by: SIMD3(0, 0, 3)))
-    var generator = Generator(state: 41)
-    let edge = side * 4 / 10
-    // 16-pixel patches (well over the blur), each moved by its own amount.
-    var moves: [SIMD3<Double>] = []
-    for _ in 0..<(side / 16) * (side / 16) {
-      moves.append(
-        SIMD3(Double.random(in: -12...12, using: &generator), Double.random(in: -35...35, using: &generator), Double.random(in: -35...35, using: &generator)))
-    }
-    for y in 0..<side {
-      for x in edge..<side {
-        let move = moves[(y / 16) * (side / 16) + x / 16]
-        planes.l[y * side + x] += move.x
-        planes.a[y * side + x] += move.y
-        planes.b[y * side + x] += move.z
+  /// Under a quarter of the image within reach of the original: the whole image is measured,
+  /// and the reason says how much there was. Either most of it was edited, or all of it shifted
+  /// too far.
+  @Test func tooLittleUnchangedFallsBack() {
+    func expectFallback(_ both: ColorMatch.Measurements, _ expected: Double, _ name: Comment) {
+      #expect(both.unchanged == nil && both.measurement(unchangedOnly: true) == both.whole, name)
+      if case .tooLittleUnchanged(let fraction) = both.reason {
+        #expect(abs(fraction - expected) < 0.02 && fraction < ColorMatch.minimumUnchangedFraction, name)
+      } else {
+        Issue.record("\(name): \(String(describing: both.reason))")
       }
     }
-    let edited = ColorMatch.encoded(lab: planes, alpha: [UInt8](repeating: 255, count: side * side))
-    let both = ColorMatch.measurements(edited: edited, width: side, height: side, original: original, width: side, height: side)
-    #expect(both.unchanged == nil && both.measurement(unchangedOnly: true) == both.whole)
-    if case .mostlyChanged(let fraction) = both.reason {
-      #expect(fraction < ColorMatch.minimumUnchangedFraction)
-    } else {
-      Issue.record("\(String(describing: both.reason))")
-    }
-    let found = ColorMatch.unchangedPixels(
-      edited: edited, lab: ColorMatch.lab(rgba: edited), original: original, lab: ColorMatch.lab(rgba: original), width: side, height: side)
-    #expect(found.floor == ColorMatch.minimumUnchangedFraction)
+    expectFallback(measurements(of: [(0.15, .moved(SIMD3(0, 0, 3))), (0.85, .moved(SIMD3(0, 0, -14)))]), 0.15, "a small kept subject")
+    // A strong cast on everything, and a new object: nothing is within reach.
+    expectFallback(measurements(of: [(0.9, .moved(SIMD3(0, 0, 12))), (0.1, .replaced)]), 0, "the whole picture shifted")
   }
 
-  /// A fifth of the image recolored evenly (ΔE 30) over a background with a cast of 6: two
-  /// regions that each moved together, and the background moved less, so it stays the one
-  /// measured.
-  @Test func anEvenlyRecoloredMinorityIsLeftOut() throws {
-    let side = 512
-    let original = textured(side: side)
-    let edited = recolored(original, side: side, subject: SIMD3(0, 0, 6), over: 0.8, backdrop: SIMD3(0, 18, -24))
-    let both = ColorMatch.measurements(edited: edited, width: side, height: side, original: original, width: side, height: side)
+  /// A backdrop edit so slight it's within reach of the original counts as unchanged with the
+  /// rest: everything is measured, which is the whole image's measure.
+  @Test func aSlightEditCountsAsUnchanged() throws {
+    let both = measurements(of: [(0.4, .moved(SIMD3(0, 0, 3))), (0.6, .moved(SIMD3(0, 0, -8)))])
     let unchanged = try #require(both.unchanged)
-    #expect(both.reason == nil && abs((unchanged.counted ?? 0) - 0.8) < 0.02)
-    #expect(abs(unchanged.shift.b - 6) < 0.5 && abs(unchanged.shift.a) < 0.5)
-    let found = ColorMatch.unchangedPixels(
-      edited: edited, lab: ColorMatch.lab(rgba: edited), original: original, lab: ColorMatch.lab(rgba: original), width: side, height: side)
-    #expect(found.floor == ColorMatch.minimumRegionFraction && found.mask[side * 100 + 10] && !found.mask[side * 100 + side - 10])
+    #expect(both.reason == nil && (unchanged.counted ?? 0) > 0.99)
+    #expect(abs(unchanged.shift.b - both.whole.shift.b) < 0.1 && abs(unchanged.shift.a - both.whole.shift.a) < 0.1)
   }
 
-  /// Between 30 and 50% unchanged, with the rest changed in different ways (so the median is
-  /// still the cast): under the floor of just over half, so the whole image is measured and the
-  /// reason says how much was unchanged.
-  @Test func underHalfUnchangedFallsBack() {
-    let side = 512
-    let original = picture(width: side, height: side)
-    var edited = shifted(original, by: SIMD3(0, 1, 6))
-    // Lighter, redder and yellower than anything in the picture, then darker, greener and bluer.
-    for y in 0..<side {
-      for x in side * 4 / 10..<side {
-        let color: [UInt8] = x < side * 7 / 10 ? [255, 170, 90] : [0, 50, 110]
-        edited.replaceSubrange((y * side + x) * 4..<(y * side + x) * 4 + 3, with: color)
-      }
-    }
-    let both = ColorMatch.measurements(edited: edited, width: side, height: side, original: original, width: side, height: side)
-    #expect(both.unchanged == nil && both.measurement(unchangedOnly: true) == both.whole)
-    if case .mostlyChanged(let fraction) = both.reason {
-      #expect(fraction > 0.3 && fraction < 0.5 && fraction < ColorMatch.minimumUnchangedFraction)
-    } else {
-      Issue.record("\(String(describing: both.reason))")
-    }
-    // Just over half unchanged is enough.
-    let less = pasted(shifted(original, by: SIMD3(0, 1, 6)), width: side, height: side, over: 0.4)
-    let most = ColorMatch.measurements(edited: less, width: side, height: side, original: original, width: side, height: side)
-    #expect(most.reason == nil && abs((most.unchanged?.counted ?? 0) - 0.6) < 0.02)
+  /// An inpaint: a fifth of the image made anew and the rest the very same pixels. The rest is
+  /// what's measured, and there's no shift in it.
+  @Test func anInpaintedPartIsLeftOut() {
+    let both = measurements(of: [(0.8, .moved(SIMD3(0, 0, 0))), (0.2, .replaced)])
+    expectKept(both, 0.8, cast: SIMD3(0, 0, 0), "inpaint")
+    #expect(abs(both.whole.shift.b) > 2)
   }
 
   /// A small edit of a larger original of the same shape lines up, though only the original is

@@ -323,13 +323,10 @@ nonisolated enum ColorMatch {
   enum WholeImageReason: Sendable, Hashable {
     /// The original has another shape, so no pixel of it lies under one of the edit's.
     case shape
-    /// Too little of the image is unchanged (this fraction of it) to speak for its colors: under
-    /// a quarter when the rest moved together, under just over half when it didn't
-    /// (`minimumRegionFraction`, `minimumUnchangedFraction`).
-    case mostlyChanged(Double)
-    /// The image changed everywhere: even the part that moved least moved too far for that to
-    /// be a cast (`maximumCastDeltaE`), so there's no telling unchanged areas from the edit.
-    case changedTogether
+    /// Too little of the image is unchanged (this fraction of it, under
+    /// `minimumUnchangedFraction`) to speak for its colors: most of it was edited, or the whole
+    /// picture shifted too far for any of it to count.
+    case tooLittleUnchanged(Double)
   }
 
   /// Both ways of measuring a pair of images (`measurements`).
@@ -523,36 +520,14 @@ nonisolated enum ColorMatch {
   /// in pixels each way (a 5×5 box): an edit model's VAE gives even untouched areas new fine
   /// texture, which pixel by pixel would read as change.
   static let unchangedBlurRadius = 2
-  /// The most a pixel may differ from the original's (ΔE76, once the image-wide shift is taken
-  /// off) and still count as unchanged. Around 2 is just visible; 10 is well past what a cast's
-  /// unevenness and the blurred texture add, and well short of new content.
+  /// The most a pixel may differ from the original's (ΔE76) and still count as unchanged. Around
+  /// 2 is just visible; an edit model's cast on what it keeps is a few units (a b of 6 is a
+  /// plainly warmer image), so 10 takes in a cast with its unevenness and the blurred texture,
+  /// and is well short of new content.
   static let unchangedDeltaE = 10.0
-  /// The least of the visible image that must be unchanged for it to be measured alone, when
-  /// the rest didn't move together: just over half. The shift taken off before comparing is the
-  /// median difference, and a median speaks for the unchanged pixels only while they're the
-  /// majority. Under half, it's whatever the changed ones did, and "unchanged" is then the part
-  /// that changed. (When the rest did move together there are two regions to tell apart
-  /// instead, and `minimumRegionFraction` is the floor.)
-  static let minimumUnchangedFraction = 0.51
-  /// How much of the pixels the median left out must lie within `unchangedDeltaE` of their own
-  /// median difference for them to be a second region that moved together, rather than a
-  /// scatter of changes. An edit that recolors a backdrop evenly moves over half the image by
-  /// one amount: the image-wide median is then the edit and the pixels near it are the edited
-  /// ones, while what it left out is the subject the edit kept, all of it carrying the same
-  /// cast. Most of it, not all: the blur mixes the two regions along their border, and those
-  /// pixels belong to neither.
-  static let coherentRegionFraction = 0.8
-  /// The least of the visible image the unchanged region must be when the image is two regions
-  /// that each moved together, and the one that moved less is taken as unchanged. It needn't be
-  /// the majority then (the other region's own median vouches for it), but under a quarter it's
-  /// too little of the picture to speak for the colors of all of it.
-  static let minimumRegionFraction = 0.25
-  /// The largest shift of the areas taken as unchanged (their median difference, as ΔE76)
-  /// that's taken for a cast. An edit model's cast is a few units (a b of 6 is a plainly warmer
-  /// image) and a strong one around 10; 20 is another color. A median past it isn't a cast but
-  /// new content, all changed the same way, and with nothing that moved less there's no part of
-  /// the image the edit can be said to have kept.
-  static let maximumCastDeltaE = 20.0
+  /// The least of the visible image that must be unchanged for it to be measured alone: under a
+  /// quarter it's too little of the picture to speak for the colors of all of it.
+  static let minimumUnchangedFraction = 0.25
 
   /// The statistics a match of `edited` to `original` is made with (tightly packed RGBA8 of the
   /// full images). The job and the sheet's preview both take them here, so the preview can't
@@ -571,16 +546,12 @@ nonisolated enum ColorMatch {
   ///
   /// The whole images are measured as they always were, each scaled down to fit 512. The
   /// unchanged areas are found at that size: both images go to Lab (once each, for this and for
-  /// the statistics) and are blurred a little, the median difference between them is taken off
-  /// (that's the cast being matched, which would otherwise mark every pixel changed), and a
-  /// pixel whose remaining difference is small is unchanged. The statistics are then those of the
-  /// same pixels of both images, unblurred. An edit that adds a red coat then no longer reads as
-  /// the image having turned red. When the pixels that leaves out moved together too (an evenly
-  /// recolored backdrop, which as the larger part is what the median follows), the unchanged
-  /// areas are whichever of the two regions moved less (`unchangedPixels`). It falls back to the
-  /// whole images when the original has another shape (nothing lines up), when even those areas
-  /// moved too far for a cast, or when they're too little of the image
-  /// (`maximumCastDeltaE`, `minimumUnchangedFraction`, `minimumRegionFraction`).
+  /// the statistics) and are blurred a little, and a pixel that's within `unchangedDeltaE` of
+  /// the original's is unchanged (`unchangedPixels`). The statistics are then those of the same
+  /// pixels of both images, unblurred. An edit that adds a red coat then no longer reads as the
+  /// image having turned red. It falls back to the whole images when the original has another
+  /// shape (nothing lines up), or when the unchanged areas are too little of the image
+  /// (`minimumUnchangedFraction`).
   static func measurements(
     edited: [UInt8], width: Int, height: Int, original: [UInt8], width originalWidth: Int, height originalHeight: Int,
     unchanged: Bool = true
@@ -620,12 +591,8 @@ nonisolated enum ColorMatch {
     }
     let found = unchangedPixels(
       edited: target, lab: targetLab, original: aligned, lab: alignedLab, width: size.width, height: size.height)
-    guard found.cast <= maximumCastDeltaE else {
-      result.reason = .changedTogether
-      return result
-    }
-    guard found.fraction >= found.floor else {
-      result.reason = .mostlyChanged(found.fraction)
+    guard found.fraction >= minimumUnchangedFraction else {
+      result.reason = .tooLittleUnchanged(found.fraction)
       return result
     }
     result.unchanged = Measurement(
@@ -634,23 +601,19 @@ nonisolated enum ColorMatch {
     return result
   }
 
-  /// Which pixels of two images of the same size the edit left alone (see `measurements`), the
-  /// fraction they are of the edited image's visible pixels, how large the shift taken off them
-  /// was (their median difference, as ΔE76), and the least that fraction may be for them to be
-  /// used. `lab` and `originalLab` are the two images' Lab planes.
+  /// Which pixels of two images of the same size the edit left alone (see `measurements`), and
+  /// the fraction they are of the edited image's visible pixels. `lab` and `originalLab` are the
+  /// two images' Lab planes.
   ///
-  /// First they're the pixels near the image-wide median difference. That's right while the
-  /// unchanged pixels are the majority, but an edit that moves more than half the image evenly
-  /// (a backdrop made cooler) makes the median its own, and the pixels near it the edited ones.
-  /// So the pixels left out are tested too: when most of them lie near their own median
-  /// (`coherentRegionFraction`) the image is two regions that each moved together, and the one
-  /// that moved less from the original is the unchanged one, since an edit moves pixels further
-  /// than the cast the model leaves on what it kept. That region need only be a quarter of the
-  /// image (`minimumRegionFraction`). Otherwise the median is trusted only as a majority
-  /// (`minimumUnchangedFraction`).
+  /// A pixel is unchanged when it barely moved from the original's: within `unchangedDeltaE`,
+  /// with nothing taken off first. It's this simple on purpose. An edit model leaves a small
+  /// cast on what it keeps and moves what it edits much further, so the distance alone tells
+  /// them apart; and when the whole picture shifted so strongly that nothing is within reach,
+  /// the whole-image measure is the right one anyway. Guessing the cast first, from the
+  /// commonest shift, picked the edit whenever the edit was the larger part of the image.
   static func unchangedPixels(
     edited: [UInt8], lab: Planes, original: [UInt8], lab originalLab: Planes, width: Int, height: Int
-  ) -> (mask: [Bool], fraction: Double, cast: Double, floor: Double) {
+  ) -> (mask: [Bool], fraction: Double) {
     let count = width * height
     /// Blurred over the pixels that show only. A fully transparent pixel's color is whatever was
     /// left under it, and would otherwise bleed into the visible ones beside it and mark them
@@ -683,61 +646,18 @@ nonisolated enum ColorMatch {
       if shows { visible += 1 }
       both[index] = shows && original[index * 4 + 3] > 0
     }
-    guard visible > 0 else { return ([Bool](repeating: false, count: count), 0, 0, minimumUnchangedFraction) }
+    guard visible > 0 else { return ([Bool](repeating: false, count: count), 0) }
     let dl = vDSP.subtract(target.l, reference.l)
     let da = vDSP.subtract(target.a, reference.a)
     let db = vDSP.subtract(target.b, reference.b)
-    /// The median difference, each channel's own, over the pixels of `among` `included` holds
-    /// `holds` for (all of them with none).
-    func median(among: [Bool], where included: [Bool]? = nil, is holds: Bool = true) -> SIMD3<Double> {
-      func median(_ d: [Double]) -> Double {
-        var seen = [Double]()
-        seen.reserveCapacity(count)
-        for index in 0..<count where among[index] && (included == nil || included?[index] == holds) { seen.append(d[index]) }
-        guard !seen.isEmpty else { return 0 }
-        seen.sort()
-        return seen.count % 2 == 1 ? seen[seen.count / 2] : (seen[seen.count / 2 - 1] + seen[seen.count / 2]) / 2
-      }
-      return SIMD3(median(dl), median(da), median(db))
-    }
     let limit = unchangedDeltaE * unchangedDeltaE
-    /// Whether a pixel's difference is within `unchangedDeltaE` of `shift`.
-    func near(_ index: Int, _ shift: SIMD3<Double>) -> Bool {
-      let l = dl[index] - shift.x
-      let a = da[index] - shift.y
-      let b = db[index] - shift.z
-      return l * l + a * a + b * b <= limit
-    }
-    func length(_ shift: SIMD3<Double>) -> Double { (shift.x * shift.x + shift.y * shift.y + shift.z * shift.z).squareRoot() }
-    let shift = median(among: both)
     var mask = [Bool](repeating: false, count: count)
     var unchanged = 0
-    for index in 0..<count where both[index] && near(index, shift) {
+    for index in 0..<count where both[index] && dl[index] * dl[index] + da[index] * da[index] + db[index] * db[index] <= limit {
       mask[index] = true
       unchanged += 1
     }
-    // The pixels that left out: a second region that moved together, when most are near their
-    // own median.
-    let otherShift = median(among: both, where: mask, is: false)
-    var other = [Bool](repeating: false, count: count)
-    var left = 0
-    var together = 0
-    for index in 0..<count where both[index] && !mask[index] {
-      left += 1
-      if near(index, otherShift) {
-        other[index] = true
-        together += 1
-      }
-    }
-    guard left > 0, Double(together) >= coherentRegionFraction * Double(left) else {
-      return (mask, Double(unchanged) / Double(visible), length(shift), minimumUnchangedFraction)
-    }
-    // Two regions: the one that moved less is the one the edit kept. Of the second, the pixels
-    // near its median (the rest, along the border, are neither's).
-    if length(otherShift) < length(shift) {
-      return (other, Double(together) / Double(visible), length(otherShift), minimumRegionFraction)
-    }
-    return (mask, Double(unchanged) / Double(visible), length(shift), minimumRegionFraction)
+    return (mask, Double(unchanged) / Double(visible))
   }
 
   /// A plane averaged over the (2·`radius` + 1)-wide box around each value, the box cut off at
