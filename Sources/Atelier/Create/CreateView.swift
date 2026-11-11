@@ -191,7 +191,7 @@ struct CanvasView: View {
         x: (geometry.size.width - frame.width * points) / 2,
         y: (geometry.size.height - frame.height * points) / 2,
         width: frame.width * points, height: frame.height * points)
-      let imageFit = model.image.map {
+      let imageFit = model.canvasDisplayImage.map {
         min(frame.width / Double($0.width), frame.height / Double($0.height))
       } ?? 1
       let zoom = canvas.scale ?? imageFit
@@ -204,7 +204,7 @@ struct CanvasView: View {
           ClipPlayer(item: clip, onCanvas: true)
             .frame(width: frameRect.width, height: frameRect.height)
             .position(x: frameRect.midX, y: frameRect.midY)
-        } else if let image = model.image {
+        } else if let image = model.canvasDisplayImage {
           let size = CGSize(
             width: Double(image.width) * zoom * points, height: Double(image.height) * zoom * points)
           let frames = model.canvasPreviewFrames

@@ -330,8 +330,22 @@ final nonisolated class Project: Sendable {
     tensor(named: "tensor_history_\(id)")
   }
 
+  /// Set for a read the canvas may stop wanting (`CreateModel.show`). Decoding a large image
+  /// (fpzip, for an upscale) takes seconds and can't be stopped once it starts, so such a read
+  /// opens the store on its own, outside `storeAccess`: the image clicked next doesn't wait for
+  /// it. A read that's already cancelled skips the decode.
+  @TaskLocal static var isCanvasRead = false
+
   private func tensor(named name: String) -> Tensor<FloatType>? {
-    storeAccess.withLock { _ in
+    if Self.isCanvasRead {
+      guard !Task.isCancelled else { return nil }
+      var tensor: Tensor<FloatType>?
+      DynamicGraph().openStore(url.path, flags: [.readOnly]) {
+        tensor = $0.read(name, codec: [.fpzip, .zip]).map { Tensor<FloatType>(from: $0) }
+      }
+      return tensor
+    }
+    return storeAccess.withLock { _ in
       var tensor: Tensor<FloatType>?
       graph.openStore(url.path, flags: [.readOnly]) {
         tensor = $0.read(name, codec: [.fpzip, .zip]).map { Tensor<FloatType>(from: $0) }

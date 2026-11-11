@@ -405,8 +405,23 @@ final class CreateModel {
   private(set) var step = 0
   private(set) var totalSteps = 0
   private(set) var image: CGImage? {
-    didSet { awaitsStepImage = false }
+    didSet {
+      awaitsStepImage = false
+      canvasPlaceholder = nil
+    }
   }
+  /// The step's stored full-size JPEG, shown in place of `image` while its exact pixels decode
+  /// (`showStoredJPEG`). Only for display: everything that uses the canvas image waits for
+  /// `image`.
+  private(set) var canvasPlaceholder: CGImage?
+  /// What the canvas draws: the placeholder while the step's image loads, else `image`.
+  var canvasDisplayImage: CGImage? {
+    if let canvasPlaceholder, !imageIsPreview { return canvasPlaceholder }
+    return image
+  }
+  /// The running `show` load, cancelled when another image takes its place, so a decode that
+  /// hasn't started is skipped (`Project.isCanvasRead`).
+  @ObservationIgnored private var showTask: Task<Void, Never>?
   /// `imageStep` changed and its image hasn't landed yet: the canvas still shows the one before,
   /// which is no longer the step's, so nothing is painted or selected on it meanwhile.
   private var awaitsStepImage = false
@@ -444,6 +459,8 @@ final class CreateModel {
       imageIsPreview = false
       showsFrame = false
       canvasImageLoad = nil
+      canvasPlaceholder = nil
+      showTask?.cancel()
       // The mask belongs to the image it was painted on, which remembers it; the new image's own
       // comes back once it's there (`restoreCanvasMask`). A run whose result merges back puts the
       // source's back on the result, as Draw Things keeps it.
@@ -2660,8 +2677,13 @@ final class CreateModel {
     history.setCurrent(tensorId: item.tensorId)
     canvasIsImported = false
     canvas.zoomToFit()
-    Task {
-      let full = await whileLoadingCanvasImage { await history.image(at: item.id, in: projectName) }
+    showStoredJPEG(of: item, in: projectName)
+    showTask = Task {
+      let full = await whileLoadingCanvasImage {
+        await Project.$isCanvasRead.withValue(true) { await history.image(at: item.id, in: projectName) }
+      }
+      // Another image took its place: it's that one's turn now.
+      guard !Task.isCancelled else { return }
       if let full, imageStep?.tensorId == item.tensorId, !imageIsPreview {
         image = full
         await restoreCanvasMask()
@@ -2703,8 +2725,39 @@ final class CreateModel {
     let id = UUID()
     canvasImageLoad = id
     let result = await load()
-    if canvasImageLoad == id { canvasImageLoad = nil }
+    if canvasImageLoad == id {
+      canvasImageLoad = nil
+      // Whatever the load brought (or didn't), the stand-in is done.
+      canvasPlaceholder = nil
+    }
     return result
+  }
+
+  /// Puts `item`'s stored full-size JPEG on the canvas while its exact pixels decode. The project
+  /// keeps one beside every image (Draw Things' `ThumbnailHistoryNode`), and it decodes in tens of
+  /// milliseconds where the image's tensor can take seconds (fpzip, for an upscale). Only when it's
+  /// the image's own size, so the canvas's fit doesn't move when the exact pixels replace it.
+  private func showStoredJPEG(of item: HistoryItem, in projectName: String) {
+    guard !item.isVideo else { return }
+    Task {
+      guard let jpeg = await history.thumbnail(for: item, half: false),
+            jpeg.width == item.sidecar.width, jpeg.height == item.sidecar.height,
+            let decoded = await Self.decoded(jpeg),
+            awaitsStepImage, isLoadingCanvasImage, !imageIsPreview,
+            imageStep?.project == projectName, imageStep?.tensorId == item.tensorId
+      else { return }
+      canvasPlaceholder = decoded
+    }
+  }
+
+  /// `image` with its pixels decoded now, off the main actor, so drawing it doesn't stall.
+  @concurrent private static func decoded(_ image: CGImage) async -> CGImage? {
+    guard let context = CGContext(
+      data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: image.width * 4,
+      space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+    else { return nil }
+    context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+    return context.makeImage()
   }
 
   /// The canvas is about to show something else: the running job's previews and result stop
