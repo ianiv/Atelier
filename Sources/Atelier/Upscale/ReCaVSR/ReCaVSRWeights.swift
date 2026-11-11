@@ -188,6 +188,9 @@ final nonisolated class ReCaVSRCheckpoint {
 
   func contains(_ name: String) -> Bool { entries[name] != nil }
 
+  /// Every tensor's name, in file order.
+  var names: [String] { entries.sorted { $0.value.start < $1.value.start }.map(\.key) }
+
   /// The tensor, float32 on the CPU, in its checkpoint shape (BF16, F16 and F32 files).
   func tensor(_ name: String) throws -> Tensor<Float> {
     // The read's buffer is autoreleased; on a queue with no pool of its own it would stay until

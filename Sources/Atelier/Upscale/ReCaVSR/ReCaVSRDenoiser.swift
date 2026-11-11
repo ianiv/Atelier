@@ -10,9 +10,7 @@ import Foundation
 /// spatial window around each token.
 ///
 /// The 30 layers share one compiled set of models, whose activations are held once; each layer's
-/// weights are copied in before it runs, as FlashVSRDenoiser does. (Moving them in and out with
-/// `Model.Parameters.attach(consuming:)` / `detach` doesn't work on a model that has run: its
-/// compiled graph keeps the tensors bound when it first ran, `ccv_cnnp_model_dry_run`.)
+/// weights are copied in before it runs (see `holders`).
 final nonisolated class ReCaVSRDenoiser {
   enum Failure: LocalizedError {
     case badCheckpoint(String)
@@ -50,9 +48,11 @@ final nonisolated class ReCaVSRDenoiser {
   private let crossQuery: Model
   private let postAttention: Model
   private var pieces: [Model] { [preAttention, crossQuery, postAttention] }
-  /// The pieces' parameters, and each layer's weights for them, copied in before the layer runs.
-  private var blockSlots: [Model.Parameters] = []
-  private var layerWeights: [[AnyTensor]] = []
+  /// Each layer's weights, held by a copy of the pieces that is compiled but never run (so it
+  /// has weights and no activations), and copied into the pieces before the layer runs: copying
+  /// keeps the tensors the pieces' compiled graph is bound to, which moving weights in and out
+  /// (`attach` / `detach`) doesn't, and it copies 8-bit weights as they are.
+  private var holders: [[Model]] = []
   /// Folded at load: each layer's 6 modulation rows, the head's 2, and each layer's cross
   /// attention keys and values over the fixed prompt.
   private var modulations: [[DynamicGraph.Tensor<Float>]] = []
@@ -71,7 +71,7 @@ final nonisolated class ReCaVSRDenoiser {
 
   /// Builds the DiT for a `height`×`width` frame (padded, multiples of 32).
   init(
-    graph: DynamicGraph, checkpoint: ReCaVSRCheckpoint, prompt: ReCaVSRCheckpoint, height: Int,
+    graph: DynamicGraph, checkpoint: ReCaVSRWeightSource, prompt: ReCaVSRCheckpoint, height: Int,
     width: Int, window: (height: Int, width: Int) = ReCaVSRConfig.window
   ) throws {
     precondition(height % 32 == 0 && width % 32 == 0)
@@ -82,26 +82,12 @@ final nonisolated class ReCaVSRDenoiser {
     let D = Self.D
     let C = ReCaVSRConfig.latentChannels
 
-    // Where each parameter's weights come from: the checkpoint name and whether it stays
-    // float32 (the norms, which run in float32). Layer names are relative to "blocks.N.".
     var outer: [(Model.Parameters, String, Bool)] = []
-    var inner: [(Model.Parameters, String, Bool)] = []
-    func dense(_ count: Int, _ name: String, into list: inout [(Model.Parameters, String, Bool)]) -> Dense {
+    func dense(_ count: Int, _ name: String) -> Dense {
       let layer = Dense(count: count, name: name)
-      list.append((layer.weight, "\(name).weight", false))
-      list.append((layer.bias, "\(name).bias", false))
+      outer.append((layer.weight, "\(name).weight", false))
+      outer.append((layer.bias, "\(name).bias", false))
       return layer
-    }
-    func rmsNorm(_ name: String, into list: inout [(Model.Parameters, String, Bool)]) -> RMSNorm {
-      let norm = RMSNorm(epsilon: 1e-6, axis: [1], name: name)
-      list.append((norm.weight, "\(name).weight", true))
-      return norm
-    }
-    func layerNorm(_ name: String, into list: inout [(Model.Parameters, String, Bool)]) -> LayerNorm {
-      let norm = LayerNorm(epsilon: 1e-6, axis: [1], name: name)
-      list.append((norm.weight, "\(name).weight", true))
-      list.append((norm.bias, "\(name).bias", true))
-      return norm
     }
 
     // Patch embedding of the noise and of the recycled latents (one shared conv (1,2,2) as a
@@ -111,8 +97,8 @@ final nonisolated class ReCaVSRDenoiser {
       let noise = Input()
       let recycle = Input()
       let rows = Input()
-      let patch = dense(D, "patch_embedding", into: &outer)
-      let sr = dense(D, "sr_proj", into: &outer)
+      let patch = dense(D, "patch_embedding")
+      let sr = dense(D, "sr_proj")
       let noiseTerm = patch(noise).to(.Float32)
       let srTerm = sr(patch(recycle)).to(.Float32)
       embed = Model([noise, recycle, rows], [noiseTerm + rows.to(.Float32) + srTerm, noiseTerm, srTerm])
@@ -123,56 +109,11 @@ final nonisolated class ReCaVSRDenoiser {
       let shift = Input()
       let scale = Input()
       let norm = LayerNorm(epsilon: 1e-6, axis: [1], elementwiseAffine: false)
-      let proj = dense(4 * C, "proj_out", into: &outer)
+      let proj = dense(4 * C, "proj_out")
       head = Model([x, shift, scale], [proj((norm(x) .* (1 + scale) + shift).to(.Float16)).to(.Float32)])
     }
-    // Before self-attention (transformer.py:78-92): q and k come out RMS-normed over the whole
-    // width in float32, for RoPE in float32 outside.
-    do {
-      let x = Input()
-      let shift = Input()
-      let scale = Input()
-      let norm = LayerNorm(epsilon: 1e-6, axis: [1], elementwiseAffine: false)
-      let y = (norm(x) .* (1 + scale) + shift).to(.Float16)
-      let q = dense(D, "attn1.to_q", into: &inner)
-      let k = dense(D, "attn1.to_k", into: &inner)
-      let v = dense(D, "attn1.to_v", into: &inner)
-      let normQ = rmsNorm("attn1.norm_q", into: &inner)
-      let normK = rmsNorm("attn1.norm_k", into: &inner)
-      preAttention = Model([x, shift, scale], [normQ(q(y).to(.Float32)), normK(k(y).to(.Float32)), v(y)])
-    }
-    // Output projection and gate in float32, then the cross-attention query: affine norm2,
-    // to_q, RMS norm (transformer.py:107-112).
-    do {
-      let x = Input()
-      let attention = Input()
-      let gate = Input()
-      let o = dense(D, "attn1.to_out.0", into: &inner)
-      let out = x + gate .* o(attention).to(.Float32)
-      let norm2 = layerNorm("norm2", into: &inner)
-      let q = dense(D, "attn2.to_q", into: &inner)
-      let normQ = rmsNorm("attn2.norm_q", into: &inner)
-      crossQuery = Model([x, attention, gate], [out, normQ(q(norm2(out).to(.Float16)).to(.Float32)).to(.Float16)])
-    }
-    // Cross output (ungated), then the feed-forward and its gate (transformer.py:113-130).
-    do {
-      let x = Input()
-      let cross = Input()
-      let shift = Input()
-      let scale = Input()
-      let gate = Input()
-      let o = dense(D, "attn2.to_out.0", into: &inner)
-      var out = x + o(cross).to(.Float32)
-      let norm3 = LayerNorm(epsilon: 1e-6, axis: [1], elementwiseAffine: false)
-      let y = (norm3(out) .* (1 + scale) + shift).to(.Float16)
-      let up = dense(ReCaVSRConfig.feedForward, "ffn.net.0.proj", into: &inner)
-      let down = dense(D, "ffn.net.2", into: &inner)
-      // Scaled down by 8 around the second projection (its bias too, at load), so its sums
-      // stay in half-float range; scaled back in float32 (as FlashVSRDenoiser does).
-      let hidden = (1.0 / 8) * up(y).GELU(approximate: .tanh)
-      out = out + gate .* (8 * down(hidden).to(.Float32))
-      postAttention = Model([x, cross, shift, scale, gate], [out])
-    }
+    let template = Self.pieces()
+    (preAttention, crossQuery, postAttention) = (template.models[0], template.models[1], template.models[2])
     windowedAttention =
       gridHeight > window.height || gridWidth > window.width
         ? ReCaVSRLocalAttention(
@@ -180,7 +121,6 @@ final nonisolated class ReCaVSRDenoiser {
           windowWidth: window.width)
         : nil
 
-    // Compile at the prefix's size, then read the weights in.
     func zeros<T: TensorNumeric>(_ shape: TensorShape, _: T.Type) -> DynamicGraph.Tensor<T> {
       let tensor = graph.variable(.GPU(0), format: .NHWC, shape: shape, of: T.self)
       tensor.full(0)
@@ -192,40 +132,136 @@ final nonisolated class ReCaVSRDenoiser {
       inputs: zeros([seq, 4 * C], FloatType.self), zeros([seq, 4 * C], FloatType.self),
       zeros([seq, D], FloatType.self))
     head.compile(inputs: zeros([seq, D], Float.self), row, row)
-    preAttention.compile(inputs: zeros([seq, D], Float.self), row, row)
-    crossQuery.compile(inputs: zeros([seq, D], Float.self), zeros([seq, D], FloatType.self), row)
-    postAttention.compile(inputs: zeros([seq, D], Float.self), zeros([seq, D], FloatType.self), row, row, row)
-
+    Self.compile(pieces, tokens: seq, graph: graph)
+    // Each layer's holder, read in; the pieces start with layer 0's.
+    for layer in 0..<Self.layers {
+      let holder = Self.pieces()
+      Self.compile(holder.models, tokens: 1, graph: graph)
+      try checkpoint.load(holder.models, slots: holder.slots, layer: layer)
+      holders.append(holder.models)
+    }
+    try checkpoint.load(pieces, slots: template.slots, layer: 0)
     // Weights outside the layers, read straight into place.
     for (parameter, name, isFloat) in outer {
-      parameter.copy(from: try Self.weight(name, isFloat: isFloat, checkpoint: checkpoint))
-    }
-    // Each layer's, kept on the GPU and copied into the pieces before the layer runs.
-    blockSlots = inner.map(\.0)
-    for layer in 0..<Self.layers {
-      layerWeights.append(
-        try inner.map { try Self.weight("blocks.\(layer).\($0.1)", isFloat: $0.2, checkpoint: checkpoint) })
+      parameter.copy(from: try Self.outerWeight(name, isFloat: isFloat, source: checkpoint))
     }
     try fold(checkpoint: checkpoint, prompt: prompt)
     reset()
   }
 
-  /// The checkpoint tensor `name` on the GPU, float32 or half precision, conv weights
-  /// (`[3072, 48, 1, 2, 2]`) as the matrix over the patch.
-  private static func weight(_ name: String, isFloat: Bool, checkpoint: ReCaVSRCheckpoint) throws -> AnyTensor {
-    var tensor = try checkpoint.tensor(name)
-    // The feed-forward's second bias is scaled down with its input (see `postAttention`).
-    if name.hasSuffix("ffn.net.2.bias") {
-      tensor.withUnsafeMutableBytes { raw in
-        let values = raw.bindMemory(to: Float.self)
-        for i in values.indices { values[i] /= 8 }
-      }
+  /// A layer's parameter, its checkpoint name relative to "blocks.N.", and whether it's float32
+  /// (the norms, which run in float32).
+  typealias Slot = (parameter: Model.Parameters, name: String, isFloat: Bool)
+
+  /// One layer's pieces (before self-attention, before cross-attention, after), their
+  /// parameters named as the checkpoint's modules.
+  static func pieces() -> (models: [Model], slots: [Slot]) {
+    let D = Self.D
+    var slots: [Slot] = []
+    func Dense(count: Int, name: String) -> NNC.Dense {
+      let layer = NNC.Dense(count: count, name: name)
+      slots.append((layer.weight, "\(name).weight", false))
+      slots.append((layer.bias, "\(name).bias", false))
+      return layer
     }
+    func RMSNorm(epsilon: Float, axis: [Int], name: String) -> NNC.RMSNorm {
+      let norm = NNC.RMSNorm(epsilon: epsilon, axis: axis, name: name)
+      slots.append((norm.weight, "\(name).weight", true))
+      return norm
+    }
+    // Before self-attention (transformer.py:78-92): q and k come out RMS-normed over the whole
+    // width in float32, for RoPE in float32 outside.
+    let preAttention: Model
+    do {
+      let x = Input()
+      let shift = Input()
+      let scale = Input()
+      let norm = LayerNorm(epsilon: 1e-6, axis: [1], elementwiseAffine: false)
+      let y = (norm(x) .* (1 + scale) + shift).to(.Float16)
+      let q = Dense(count: D, name: "attn1.to_q")
+      let k = Dense(count: D, name: "attn1.to_k")
+      let v = Dense(count: D, name: "attn1.to_v")
+      let normQ = RMSNorm(epsilon: 1e-6, axis: [1], name: "attn1.norm_q")
+      let normK = RMSNorm(epsilon: 1e-6, axis: [1], name: "attn1.norm_k")
+      preAttention = Model([x, shift, scale], [normQ(q(y).to(.Float32)), normK(k(y).to(.Float32)), v(y)])
+    }
+    // Output projection and gate in float32, then the cross-attention query: affine norm2,
+    // to_q, RMS norm (transformer.py:107-112).
+    let crossQuery: Model
+    do {
+      let x = Input()
+      let attention = Input()
+      let gate = Input()
+      let o = Dense(count: D, name: "attn1.to_out.0")
+      let out = x + gate .* o(attention).to(.Float32)
+      let norm2 = LayerNorm(epsilon: 1e-6, axis: [1], name: "norm2")
+      slots.append((norm2.weight, "norm2.weight", true))
+      slots.append((norm2.bias, "norm2.bias", true))
+      let q = Dense(count: D, name: "attn2.to_q")
+      let normQ = RMSNorm(epsilon: 1e-6, axis: [1], name: "attn2.norm_q")
+      crossQuery = Model([x, attention, gate], [out, normQ(q(norm2(out).to(.Float16)).to(.Float32)).to(.Float16)])
+    }
+    // Cross output (ungated), then the feed-forward and its gate (transformer.py:113-130).
+    let postAttention: Model
+    do {
+      let x = Input()
+      let cross = Input()
+      let shift = Input()
+      let scale = Input()
+      let gate = Input()
+      let o = Dense(count: D, name: "attn2.to_out.0")
+      var out = x + o(cross).to(.Float32)
+      let norm3 = LayerNorm(epsilon: 1e-6, axis: [1], elementwiseAffine: false)
+      let y = (norm3(out) .* (1 + scale) + shift).to(.Float16)
+      let up = Dense(count: ReCaVSRConfig.feedForward, name: "ffn.net.0.proj")
+      let down = Dense(count: D, name: "ffn.net.2")
+      // Scaled down by 8 around the second projection (its bias too, at load), so its sums
+      // stay in half-float range; scaled back in float32 (as FlashVSRDenoiser does).
+      let hidden = (1.0 / 8) * up(y).GELU(approximate: .tanh)
+      out = out + gate .* (8 * down(hidden).to(.Float32))
+      postAttention = Model([x, cross, shift, scale, gate], [out])
+    }
+    return ([preAttention, crossQuery, postAttention], slots)
+  }
+
+  /// Compiles a layer's pieces for `tokens` tokens.
+  static func compile(_ pieces: [Model], tokens: Int, graph: DynamicGraph) {
+    func zeros<T: TensorNumeric>(_ shape: TensorShape, _: T.Type) -> DynamicGraph.Tensor<T> {
+      let tensor = graph.variable(.GPU(0), format: .NHWC, shape: shape, of: T.self)
+      tensor.full(0)
+      return tensor
+    }
+    let row = zeros([1, D], Float.self)
+    pieces[0].compile(inputs: zeros([tokens, D], Float.self), row, row)
+    pieces[1].compile(inputs: zeros([tokens, D], Float.self), zeros([tokens, D], FloatType.self), row)
+    pieces[2].compile(inputs: zeros([tokens, D], Float.self), zeros([tokens, D], FloatType.self), row, row, row)
+  }
+
+  /// The layer weights the copy stores 8-bit and the pieces multiply by.
+  static let matrices = [
+    "attn1.to_q", "attn1.to_k", "attn1.to_v", "attn1.to_out.0", "attn2.to_q", "attn2.to_out.0", "ffn.net.0.proj",
+    "ffn.net.2",
+  ]
+
+  /// The checkpoint name for a piece's parameter `key` (s4nnc names it `t-<layer>-<n>-<i>`, i = 0
+  /// the weight, 1 the bias; reads may wrap it as `__name__[…]`) in layer `layer`.
+  static func checkpointName(_ key: String, layer: Int) -> String? {
+    var key = Substring(key)
+    if let open = key.firstIndex(of: "["), key.hasSuffix("]") { key = key[key.index(after: open)..<key.index(before: key.endIndex)] }
+    let parts = key.split(separator: "-")
+    guard parts.count >= 4, parts[0] == "t", let index = Int(parts[parts.count - 1]) else { return nil }
+    let module = parts[1..<(parts.count - 2)].joined(separator: "-")
+    return "blocks.\(layer).\(module)" + (index == 0 ? ".weight" : ".bias")
+  }
+
+  /// The outer weight `name`, half precision (float32 for `isFloat`), conv weights
+  /// (`[3072, 48, 1, 2, 2]`) as the matrix over the patch.
+  static func outerWeight(_ name: String, isFloat: Bool, source: ReCaVSRWeightSource) throws -> AnyTensor {
+    let tensor = try source.tensor(name)
     let count = tensor.shape.reduce(1, *)
     let rows = tensor.shape[0]
     let shaped = tensor.reshaped(format: .NCHW, shape: tensor.shape.count > 1 ? [rows, count / rows] : [count])
-    if isFloat { return shaped.toGPU(0) }
-    return Tensor<FloatType>(from: shaped).toGPU(0)
+    return isFloat ? shaped : Tensor<FloatType>(from: shaped)
   }
 
   // MARK: - Folding the constants
@@ -234,7 +270,7 @@ final nonisolated class ReCaVSRDenoiser {
   /// layers' modulations (`scale_shift_table + timestep_proj`, transformer.py:45-48), the head's
   /// (`scale_shift_table + temb`, :275-277), and each layer's cross-attention keys
   /// (`norm_k(to_k(context))`) and values (transformer_wan.py:613-626).
-  private func fold(checkpoint: ReCaVSRCheckpoint, prompt: ReCaVSRCheckpoint) throws {
+  private func fold(checkpoint: ReCaVSRWeightSource, prompt: ReCaVSRCheckpoint) throws {
     let D = Self.D
     func load(_ dense: Dense, _ name: String) throws {
       dense.weight.copy(from: try checkpoint.tensor("\(name).weight"))
@@ -354,8 +390,8 @@ final nonisolated class ReCaVSRDenoiser {
     for layer in 0..<Self.layers {
       guard shouldContinue() else { return nil }
       let m = modulations[layer]
-      for (slot, weight) in zip(blockSlots, layerWeights[layer]) { slot.copy(from: weight) }
       Profile.mark("copy", wait: x)
+      for (piece, holder) in zip(pieces, holders[layer]) { piece.parameters.copy(from: holder.parameters) }
       let qkv = preAttention(inputs: x, m[0], m[1])
       // RoPE on q and k in float32: time (at the absolute latent; only differences of
       // positions matter), rows, columns.

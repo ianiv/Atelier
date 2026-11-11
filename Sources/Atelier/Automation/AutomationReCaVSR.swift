@@ -12,12 +12,16 @@ extension Automation {
   /// every intermediate the dump has, printing max abs, relative L2 and cosine per tensor and
   /// the worst relative L2 per stage, then PASS or FAIL against the thresholds.
   ///
-  ///   Atelier --recavsr-check --reference DIR [--blocks N] [--own-latents] [--verbose] [--quit]
+  ///   Atelier --recavsr-check --reference DIR [--weights full|eightBit] [--blocks N] [--own-latents]
+  ///           [--verbose] [--quit]
+  ///
+  /// With `--weights eightBit` it decodes its own latents and needs the pictures above 32 dB.
+  /// `Atelier --recavsr-check --make-8bit [--quit]` writes the 8-bit copy.
   ///
   /// Or upscales the first frames of a real clip, printing seconds per frame and peak memory,
   /// and with `--export DIR` writes the result there as an MP4:
   ///
-  ///   Atelier --recavsr-check --input FILE [--frames 45] [--scale 4] [--source-size WxH]
+  ///   Atelier --recavsr-check --input FILE [--weights full|eightBit] [--frames 45] [--scale 4] [--source-size WxH]
   ///           [--export DIR] [--no-color-fix] [--quit]
   ///
   /// Loads only the ReCaVSR folder of the models directory.
@@ -35,8 +39,34 @@ extension Automation {
     let finish: @Sendable () -> Void = {
       if args.contains("--quit") { Task { @MainActor in AppLifecycle.quit() } }
     }
-    guard let files = ReCaVSRFiles.installed(.full) else {
+    guard let fullFiles = ReCaVSRFiles.installed(.full) else {
       log("FAIL ReCaVSR isn't in \(AppSettings.modelsDirectory)/\(ReCaVSRFiles.folderName)")
+      return finish()
+    }
+    if args.contains("--make-8bit") {
+      DispatchQueue.global(qos: .userInitiated).async {
+        do {
+          let started = Date()
+          var last = -1
+          let done = try ReCaVSRQuantizer.quantize(
+            fullFiles,
+            progress: { fraction in
+              let percent = Int(fraction * 100)
+              if percent / 10 != last / 10 { log("8-bit copy \(percent)%") }
+              last = percent
+            }, shouldContinue: { true })
+          let size = (try? FileManager.default.attributesOfItem(atPath: fullFiles.eightBitTransformer.path)[.size] as? Int64) ?? 0
+          log(String(format: "%@ 8-bit copy in %.0fs, %.2f GB", done ? "PASS" : "FAIL", Date().timeIntervalSince(started), Double(size ?? 0) / 1e9))
+        } catch {
+          log("FAIL \(error)")
+        }
+        finish()
+      }
+      return
+    }
+    let weights = value("--weights").flatMap(ReCaVSRFiles.Weights.init(rawValue:)) ?? .full
+    guard let files = ReCaVSRFiles.installed(weights) else {
+      log("FAIL ReCaVSR \(weights.title) isn't installed; for 8-bit, run --make-8bit first")
       return finish()
     }
     if let input = value("--input") {
@@ -127,7 +157,7 @@ extension Automation {
         }
         guard let first = sources.first else { throw ClipVideoError.noFrames }
         let size = ReCaVSRUpscaler.outputSize(width: first.width, height: first.height, scale: scale)
-        log("\(sources.count) frames at \(first.width)x\(first.height) -> \(size.width)x\(size.height), full weights")
+        log("\(sources.count) frames at \(first.width)x\(first.height) -> \(size.width)x\(size.height), \(files.weights.title) weights")
         var upscaler = ReCaVSRUpscaler(files: files, width: size.width, height: size.height)
         upscaler.colorFix = colorFix
         var frames: [CGImage] = []
@@ -314,7 +344,8 @@ nonisolated struct ReCaVSRReferenceCheck {
       let cosine = dot / max((norm * ourNorm).squareRoot(), 1e-30)
       let stage = Self.stage(String(name.split(separator: ".", maxSplits: 1).last!))
       if rel > (worst[stage]?.0 ?? -1) { worst[stage] = (rel, name) }
-      let bad = nonFinite > 0 || !(rel < Self.threshold(stage))
+      // The 8-bit copy is judged by its pictures alone.
+      let bad = nonFinite > 0 || (files.weights == .full && !(rel < Self.threshold(stage)))
       if bad { failed = true }
       if verbose || bad {
         log(String(format: "%@ %@ maxabs %.4g relL2 %.3e cos %.6f%@", bad ? "BAD" : "ok ", name, maxAbs, rel, cosine, nonFinite > 0 ? " NONFINITE \(nonFinite)" : ""))
@@ -353,12 +384,9 @@ nonisolated struct ReCaVSRReferenceCheck {
     try ReCaVSRConfig.withAttentionWorkaround(keepAccelerators ? false : true) {
     try graph.withNoGrad {
       var loadStarted = Date()
-      let checkpoint = try ReCaVSRCheckpoint(files.transformer)
-      let projection = try ReCaVSRSourceProjection(
-        graph: graph, checkpoint: checkpoint, height: height, width: width)
-      let denoiser = try ReCaVSRDenoiser(
-        graph: graph, checkpoint: checkpoint, prompt: ReCaVSRCheckpoint(files.prompt), height: height,
-        width: width, window: (manifest.dit_window_tokens[0], manifest.dit_window_tokens[1]))
+      let (projection, denoiser) = try ReCaVSRUpscaler.load(
+        files, graph: graph, height: height, width: width,
+        window: (manifest.dit_window_tokens[0], manifest.dit_window_tokens[1]))
       let decoder = try ReCaVSRDecoder(
         graph: graph, checkpoint: ReCaVSRCheckpoint(files.decoder), latentHeight: height / 16,
         latentWidth: width / 16)
@@ -391,7 +419,7 @@ nonisolated struct ReCaVSRReferenceCheck {
         compare("b\(block.index).x0", floats(x0), floats(channelsLast(try dump.tensor("x0"))))
         // FlashDecoder on the reference's x0 (ours with --own-latents), each latent with the
         // source frames it covers.
-        let latents = ownLatents ? x0 : channelsLast(try dump.tensor("x0"))
+        let latents = ownLatents || files.weights == .eightBit ? x0 : channelsLast(try dump.tensor("x0"))
         let source = DynamicGraph.Tensor<Float>(from: frames)
         var decoded: [DynamicGraph.Tensor<Float>] = []
         var next = 0
@@ -421,8 +449,10 @@ nonisolated struct ReCaVSRReferenceCheck {
       log(String(format: "worst %@ relL2 %.3e (%@)", stage, value.0, value.1))
     }
     if let lowest = psnrs.min() {
-      log(String(format: "lowest decoder PSNR %.2f dB (needs > %.0f)", lowest, Self.minimumPSNR))
-      if lowest <= Self.minimumPSNR { failed = true }
+      // 8-bit: end to end against the reference, which must stay above 32 dB.
+      let minimum = files.weights == .eightBit ? 32 : Self.minimumPSNR
+      log(String(format: "lowest decoder PSNR %.2f dB (needs > %.0f)", lowest, minimum))
+      if lowest <= minimum { failed = true }
     }
     log(failed ? "FAIL" : "PASS")
   }

@@ -55,10 +55,7 @@ nonisolated struct ReCaVSRUpscaler {
       graph.withNoGrad {
         do {
           progress(.loading, 0, blocks.count)
-          let checkpoint = try ReCaVSRCheckpoint(files.transformer)
-          let projection = try ReCaVSRSourceProjection(graph: graph, checkpoint: checkpoint, height: Hp, width: Wp)
-          let denoiser = try ReCaVSRDenoiser(
-            graph: graph, checkpoint: checkpoint, prompt: ReCaVSRCheckpoint(files.prompt), height: Hp, width: Wp)
+          let (projection, denoiser) = try Self.load(files, graph: graph, height: Hp, width: Wp)
           let decoder = try ReCaVSRDecoder(
             graph: graph, checkpoint: ReCaVSRCheckpoint(files.decoder), latentHeight: h, latentWidth: w)
           let fix = colorFix ? FlashVSRImages.ColorFix(graph: graph, width: width, height: height) : nil
@@ -133,6 +130,31 @@ nonisolated struct ReCaVSRUpscaler {
       }
     }
     if let failure { throw failure }
+  }
+
+  /// The source projection and the DiT for a padded `height`×`width`, from the published
+  /// weights or the 8-bit copy as `files` says.
+  static func load(_ files: ReCaVSRFiles, graph: DynamicGraph, height: Int, width: Int, window: (height: Int, width: Int) = ReCaVSRConfig.window) throws
+    -> (ReCaVSRSourceProjection, ReCaVSRDenoiser)
+  {
+    let prompt = try ReCaVSRCheckpoint(files.prompt)
+    func build(_ source: ReCaVSRWeightSource) throws -> (ReCaVSRSourceProjection, ReCaVSRDenoiser) {
+      (
+        try ReCaVSRSourceProjection(graph: graph, checkpoint: source, height: height, width: width),
+        try ReCaVSRDenoiser(
+          graph: graph, checkpoint: source, prompt: prompt, height: height, width: width, window: window)
+      )
+    }
+    switch files.weights {
+    case .full:
+      return try build(ReCaVSRCheckpoint(files.transformer))
+    case .eightBit:
+      var result: Result<(ReCaVSRSourceProjection, ReCaVSRDenoiser), Error> = .failure(ReCaVSRFiles.Failure.missing)
+      graph.openStore(files.eightBitTransformer.path, flags: .readOnly) { store in
+        result = Result { try build(ReCaVSRQuantizedSource(store: store)) }
+      }
+      return try result.get()
+    }
   }
 
   /// `rgb` (interleaved u8, `width`×`height`) stretched to `targetWidth`×`targetHeight` as

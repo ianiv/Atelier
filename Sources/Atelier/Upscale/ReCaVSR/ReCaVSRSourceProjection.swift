@@ -27,7 +27,7 @@ final nonisolated class ReCaVSRSourceProjection {
   private var carry2: DynamicGraph.Tensor<FloatType>?
 
   /// For a padded output of `height`×`width` pixels (multiples of 32).
-  init(graph: DynamicGraph, checkpoint: ReCaVSRCheckpoint, height: Int, width: Int) throws {
+  init(graph: DynamicGraph, checkpoint: ReCaVSRWeightSource, height: Int, width: Int) throws {
     self.graph = graph
     self.height = height / 16
     self.width = width / 16
