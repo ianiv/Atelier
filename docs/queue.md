@@ -39,6 +39,8 @@ On a server, a paired device's job joins the queue with that device's name besid
 
 An upscaled **Export Video…** (from History or the Video Editor; see [Exporting videos](video.md#exporting-videos)) is a job in the queue too, after the images already waiting. Its row shows the timeline or video's name, the method, scale, size, frames, about how long it takes (how long it took, once done), and the file it writes; while it runs, the status bar shows its progress like an image's. You can reorder it, Cancel it or Stop it like any job; a stopped export leaves no file. When it's done, **Show in Finder** (**Show in Files** on iPad) shows the file, and **Export Again** runs it again. Exports aren't kept when you quit: the file you chose is only open to Atelier until then.
 
+**Match Colors to Original** (see [Creating images](creating-images.md)) is a job in the queue too, on this device. Its row shows the size, the strength and whether lightness is kept or matched (and how long it took, once done, with the shift it took out: Δa and Δb). While it runs, the status bar shows its progress: reading the images, measuring the colors, then saving. It saves into the project the image is in, even if you open another project before it runs; the row says which project when it isn't the open one. Only one match per image waits or runs at a time. Matches are kept when you quit, like images, and come back in any project.
+
 ## Stop
 
 **Stop** under the prompt (or Esc) stops only the image being made; the queue goes on with the next one. To stop and hold everything, press Pause Queue first, then Stop.

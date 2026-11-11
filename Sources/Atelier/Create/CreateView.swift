@@ -621,6 +621,8 @@ struct CanvasView: View {
     Divider()
     Button("Upscale…") { model.upscalingCanvasImage = true }
       .disabled(!model.canUpscaleCanvasImage)
+    Button("Match Colors to Original") { model.matchCanvasColors() }
+      .disabled(!model.canMatchCanvasColors)
     Divider()
     MaskCopyItems(model: model, undoManager: undoManager)
     Divider()

@@ -86,7 +86,10 @@ struct QueueView: View {
         create.history.setCurrent(tensorId: tensorId)
         navigation.section = .history
       }
-      .disabled(create.history.item(tensorId: tensorId) == nil)
+      // A colour match saves into its own project, which may not be the one open.
+      .disabled(
+        create.history.item(tensorId: tensorId) == nil
+          || job.request?.colorMatch.map { $0.project != create.history.project.name } == true)
       Button("Run Again") { create.retry(job.id) }
       Button("Remove from List") { queue.removeRecent(job.id) }
     case .exported(let url):
@@ -136,18 +139,18 @@ struct QueueRow: View {
         .frame(width: 48, height: 48)
         .clipShape(.rect(cornerRadius: 4))
       VStack(alignment: .leading, spacing: 2) {
-        Text(request.imageUpscale.map { $0.scale == ImageUpscale.maxScale ? "Upscale to the largest size" : "Upscale \($0.scale)×" } ?? (request.prompt.isEmpty ? "No prompt" : request.prompt))
+        Text(title(request))
           .lineLimit(2)
-        Text(
-          [
-            create.runLocationName(of: job), modelName(request.model), "\(configuration.width)×\(configuration.height)",
-            video.map { length($0, configuration) }, "seed \(request.seed)",
-            "\(configuration.steps) steps", job.elapsed.map { "took \(GenerationTime.text($0))" },
-          ].compactMap(\.self).joined(separator: " · ")
-        )
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .lineLimit(1)
+        Text(caption(request, configuration: configuration, video: video))
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+        if let match = request.colorMatch, case .finished = job.status, let shift = match.record?.shift {
+          Text(Self.shiftText(shift, luminance: match.luminance))
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
         if case .failed(let message) = job.status {
           Text(message)
             .font(.caption)
@@ -169,6 +172,12 @@ struct QueueRow: View {
           .foregroundStyle(.secondary)
           .help(request.audio != nil ? "Video, with an audio file" : "Video")
           .accessibilityLabel(request.audio != nil ? "Video, with an audio file" : "Video")
+      }
+      if request.colorMatch != nil {
+        Image(systemName: "eyedropper.halffull")
+          .foregroundStyle(.secondary)
+          .help("Match Colors to Original")
+          .accessibilityLabel("Match Colors to Original")
       }
       if request.canvas != nil {
         Image(systemName: "photo")
@@ -202,7 +211,15 @@ struct QueueRow: View {
   private var preview: some View {
     ZStack {
       Color.quaternaryLabel
-      if case .finished(let tensorId) = job.status, let item = create.history.item(tensorId: tensorId) {
+      if let match = job.request?.colorMatch {
+        // Its steps are in its own project, which may not be the one open.
+        let tensorId = if case .finished(let tensorId) = job.status { tensorId } else { match.sourceTensorId }
+        if match.project == create.history.project.name, let item = create.history.item(tensorId: tensorId) {
+          Thumbnail(item: item)
+        } else {
+          Image(systemName: "eyedropper.halffull").foregroundStyle(.secondary).accessibilityHidden(true)
+        }
+      } else if case .finished(let tensorId) = job.status, let item = create.history.item(tensorId: tensorId) {
         Thumbnail(item: item)
       } else if job.status == .running, let image = create.runProgress(of: job)?.preview {
         Image(decorative: image, scale: 1).resizable().aspectRatio(contentMode: .fill)
@@ -237,6 +254,40 @@ struct QueueRow: View {
     case .cancelled:
       Image(systemName: "xmark.circle").foregroundStyle(.secondary).help("Cancelled").accessibilityLabel("Cancelled")
     }
+  }
+
+  private func title(_ request: GenerationEngine.Request) -> String {
+    if request.colorMatch != nil { return "Match colors to original" }
+    if let upscale = request.imageUpscale {
+      return upscale.scale == ImageUpscale.maxScale ? "Upscale to the largest size" : "Upscale \(upscale.scale)×"
+    }
+    return request.prompt.isEmpty ? "No prompt" : request.prompt
+  }
+
+  /// Where it runs, the size and how it's made, then how long it took. A colour match names no
+  /// model, seed or steps: it uses none of them.
+  private func caption(_ request: GenerationEngine.Request, configuration: PipelineConfiguration, video: VideoModel?) -> String {
+    let took = job.elapsed.map { "took \(GenerationTime.text($0))" }
+    let size = "\(configuration.width)×\(configuration.height)"
+    if let match = request.colorMatch {
+      var parts = [create.runLocationName(of: job), size, "strength \(Int((match.strength * 100).rounded()))%",
+                   match.luminance ? "lightness matched" : "lightness kept"]
+      // Its project, when it isn't the one open.
+      if match.project != create.history.project.name { parts.insert("in “\(match.project)”", at: 1) }
+      return (parts + [took]).compactMap(\.self).joined(separator: " · ")
+    }
+    return [
+      create.runLocationName(of: job), modelName(request.model), size,
+      video.map { length($0, configuration) }, "seed \(request.seed)",
+      "\(configuration.steps) steps", took,
+    ].compactMap(\.self).joined(separator: " · ")
+  }
+
+  /// "Δa −0.4, Δb +5.9 taken out".
+  private static func shiftText(_ shift: ColorMatch.Shift, luminance: Bool) -> String {
+    func signed(_ value: Double) -> String { String(format: "%+.1f", value) }
+    let lightness = luminance ? "ΔL \(signed(shift.l)), " : ""
+    return "\(lightness)Δa \(signed(shift.a)), Δb \(signed(shift.b)) taken out"
   }
 
   private func modelName(_ file: String) -> String {

@@ -24,13 +24,19 @@ final class AgentTools {
     var isQueued = false
   }
 
-  /// One `generate` run. A run outlives the call that started it: `background` returns its id
-  /// at once, and a waiting call whose client hangs up leaves it running for `get_job`.
+  /// One `generate` or `match_colors` run. A run outlives the call that started it: `background`
+  /// returns its id at once, and a waiting call whose client hangs up leaves it running for
+  /// `get_job`.
   @MainActor
   @Observable
   final class Job {
     let id: String
-    let prompt: String
+    /// The tool that started it.
+    let tool: String
+    /// What list_jobs shows: a generate job's prompt, else what it does ("Match colors of step 12").
+    let label: String
+    /// A match_colors job's step, so a second call for it joins this one.
+    let colorMatch: ColorMatch.Job?
     let startedAt = Date()
     var progress = Progress(step: 0, total: nil, message: "Starting", isQueued: true)
     /// Checked its arguments and joined the queue (or failed doing so).
@@ -43,9 +49,11 @@ final class AgentTools {
     /// The waiting call's progress stream, while there is one.
     @ObservationIgnored var onProgress: ((Progress) -> Void)?
 
-    init(id: String, prompt: String) {
+    init(id: String, tool: String, label: String, colorMatch: ColorMatch.Job? = nil) {
       self.id = id
-      self.prompt = prompt
+      self.tool = tool
+      self.label = label
+      self.colorMatch = colorMatch
     }
 
     var status: String {
@@ -338,6 +346,21 @@ final class AgentTools {
       "annotations": ["readOnlyHint": true],
     ],
     [
+      "name": "match_colors",
+      "title": "Match colors to original",
+      "description":
+        "Matches an edited image's colors to the image it was made from (Reinhard color transfer in Lab), taking out the warm or cool shift edit models often add, like Match Colors to Original in the canvas menu. The original is the step's input (the canvas it was edited from), else its first moodboard image; a step this tool made goes back to that same original. Runs as a job in Atelier's Queue on this device, after what's queued there: by default it waits and returns the new history step (saved after it in the step's project, and shown on the canvas when that follows the queue), the shift removed (delta_b > 0: the edit had come out warmer/yellower; delta_a > 0: more magenta) and job_id. With background: true it returns a job_id at once for get_job, list_jobs and cancel_job. A step already waiting or being matched isn't queued twice: the call joins that job (and its options). Not for videos.",
+      "inputSchema": [
+        "type": "object",
+        "properties": [
+          "history_step": ["type": "integer", "description": "A history step from list_history or generate. Omit for the canvas image."],
+          "strength": ["type": "number", "minimum": 0, "maximum": 1, "description": "How far to move the colors, 0–1. Default 1."],
+          "luminance": ["type": "boolean", "description": "Also match lightness. Default false: edits often mean to change brightness."],
+          "background": ["type": "boolean", "description": "Return a job_id at once instead of waiting. Default false."],
+        ],
+      ],
+    ],
+    [
       "name": "generate",
       "title": "Generate image or video",
       "description": """
@@ -397,8 +420,8 @@ final class AgentTools {
       "name": "get_job",
       "title": "Get job",
       "description": """
-        Checks on a generate job: waiting (queued behind other runs), running (with step and \
-        total), done (with everything generate returns: text, image and structured result), \
+        Checks on a generate or match_colors job: waiting (queued behind other runs), running (with step and \
+        total), done (with everything the job's tool returns: for generate text, image and structured result), \
         failed or cancelled. Waits up to wait_seconds for it to finish first, so calling it in a \
         loop checks in periodically without busy polling.
         """,
@@ -415,14 +438,14 @@ final class AgentTools {
     [
       "name": "list_jobs",
       "title": "List jobs",
-      "description": "Lists generate jobs from the last hour, newest first: job_id, status, progress, elapsed time and prompt. A generate call that timed out, was cancelled or lost its connection keeps running and shows here.",
+      "description": "Lists generate and match_colors jobs from the last hour, newest first: job_id, tool, status, progress, elapsed time and prompt (label for match_colors). A generate call that timed out, was cancelled or lost its connection keeps running and shows here.",
       "inputSchema": ["type": "object", "properties": [String: Any]()],
       "annotations": ["readOnlyHint": true],
     ],
     [
       "name": "cancel_job",
       "title": "Cancel job",
-      "description": "Stops a generate job, like Cancel in Atelier's Queue: a waiting job leaves the queue and a running one stops.",
+      "description": "Stops a generate or match_colors job, like Cancel in Atelier's Queue: a waiting job leaves the queue and a running one stops.",
       "inputSchema": [
         "type": "object",
         "required": ["job_id"],
@@ -449,6 +472,7 @@ final class AgentTools {
     case "auto_mask": return try await autoMask(arguments)
     case "list_history": return try Self.textResult(json: listHistory(arguments))
     case "get_image": return try await getImage(arguments)
+    case "match_colors": return try await matchColors(arguments, progress: progress)
     case "generate": return try await startGenerate(arguments, progress: progress)
     case "get_job": return try await getJob(arguments, progress: progress)
     case "list_jobs": return try Self.textResult(json: jobs.values.sorted { $0.startedAt > $1.startedAt }.map(Self.summary))
@@ -816,16 +840,30 @@ final class AgentTools {
   private func startGenerate(
     _ arguments: [String: Any], progress: @escaping (Progress) -> Void
   ) async throws -> [String: Any] {
+    try await startJob(
+      tool: "generate", label: (arguments["prompt"] as? String) ?? create.prompt,
+      background: arguments["background"] as? Bool == true, progress: progress
+    ) { [weak self] update in
+      guard let self else { throw CancellationError() }
+      return try await self.generate(arguments, progress: update)
+    }
+  }
+
+  /// Runs `work` as a job (see `startGenerate`): `work` reports progress, and its first report
+  /// means its arguments checked out.
+  private func startJob(
+    tool: String, label: String, colorMatch: ColorMatch.Job? = nil, background: Bool,
+    progress: @escaping (Progress) -> Void,
+    work: @escaping (@escaping (Progress) -> Void) async throws -> [String: Any]
+  ) async throws -> [String: Any] {
     pruneJobs()
     jobCount += 1
-    let job = Job(id: "job-\(jobCount)", prompt: (arguments["prompt"] as? String) ?? create.prompt)
+    let job = Job(id: "job-\(jobCount)", tool: tool, label: label, colorMatch: colorMatch)
     jobs[job.id] = job
-    let background = arguments["background"] as? Bool == true
     if !background { job.onProgress = progress }
-    job.task = Task { [weak self] in
+    job.task = Task {
       do {
-        guard let self else { return }
-        let result = try await self.generate(arguments) { update in
+        let result = try await work { update in
           job.accepted = true
           job.progress = update
           job.onProgress?(update)
@@ -841,6 +879,12 @@ final class AgentTools {
       job.onProgress = nil
     }
 
+    return try await answer(job, background: background, progress: progress)
+  }
+
+  /// A job call's answer: in the background its summary once its arguments check out, else its
+  /// outcome once it ends.
+  private func answer(_ job: Job, background: Bool, progress: @escaping (Progress) -> Void) async throws -> [String: Any] {
     if background {
       // Bad arguments fail here rather than in the first get_job.
       await waitUntil { job.accepted }
@@ -849,6 +893,7 @@ final class AgentTools {
       summary["note"] = "Running in the background. Call get_job with this job_id to wait for it."
       return try Self.textResult(json: summary)
     }
+    if job.onProgress == nil { job.onProgress = progress }
     // A cancelled call only stops waiting: clients cancel calls they give up on (Claude's
     // bridge does at three minutes), so only cancel_job and the Queue stop the run itself.
     await waitUntil { job.finishedAt != nil }
@@ -910,6 +955,8 @@ final class AgentTools {
     guard var result = job.result else { throw ToolError("\(job.id) hasn't finished.") }
     if var structured = result["structuredContent"] as? [String: Any] {
       structured["job_id"] = job.id
+      // match_colors answers in JSON, which says it too.
+      if job.tool == "match_colors" { result = try textResult(json: structured) }
       result["structuredContent"] = structured
     }
     return result
@@ -917,7 +964,7 @@ final class AgentTools {
 
   private static func summary(_ job: Job) -> [String: Any] {
     var summary: [String: Any] = [
-      "job_id": job.id, "status": job.status, "prompt": shortened(job.prompt),
+      "job_id": job.id, "tool": job.tool, job.tool == "generate" ? "prompt" : "label": shortened(job.label),
       "elapsed_seconds": Int((job.finishedAt ?? Date()).timeIntervalSince(job.startedAt)),
     ]
     if job.finishedAt == nil {
@@ -1692,6 +1739,80 @@ final class AgentTools {
     return ["content": content]
   }
 
+  /// match_colors: queues Match Colors to Original as a job like generate's (waiting for it, or
+  /// with `background` answering with its id). A step already waiting or being matched isn't
+  /// queued again, since the result would be the same: the call joins that job instead.
+  private func matchColors(_ arguments: [String: Any], progress: @escaping (Progress) -> Void) async throws -> [String: Any] {
+    if arguments["history_step"] != nil, Self.int(arguments["history_step"]) == nil { throw ToolError("`history_step` is a history step number (see list_history).") }
+    if let background = arguments["background"], !Self.isBoolean(background) { throw ToolError("`background` must be true or false.") }
+    let background = arguments["background"] as? Bool == true
+    let item: HistoryItem
+    if let step = Self.int(arguments["history_step"]) {
+      guard let found = create.history.items.first(where: { $0.id.logicalTime == step }) else {
+        throw ToolError("No history step \(step) in “\(create.history.project.name)”. See list_history.")
+      }
+      item = found
+    } else {
+      guard let onCanvas = create.imageItem else {
+        throw ToolError("The canvas doesn't show a saved image. Pass history_step (see list_history).")
+      }
+      item = onCanvas
+    }
+    guard !item.isVideo else { throw ToolError("History step \(item.id.logicalTime) is a video; match_colors takes images.") }
+    guard create.hasOriginal(item) else {
+      throw ToolError("History step \(item.id.logicalTime) has no original to match: it wasn't made from the canvas or a moodboard image.")
+    }
+    var options = ColorMatch.Options()
+    if let strength = arguments["strength"] {
+      guard !Self.isBoolean(strength), let value = (strength as? NSNumber)?.doubleValue, (0...1).contains(value) else {
+        throw ToolError("`strength` must be a number from 0 to 1.")
+      }
+      options.strength = value
+    }
+    if let luminance = arguments["luminance"] {
+      guard Self.isBoolean(luminance), let value = luminance as? Bool else { throw ToolError("`luminance` must be true or false.") }
+      options.matchLuminance = value
+    }
+    let project = create.history.project.name
+    let match = ColorMatch.Job(
+      project: project, sourceTensorId: item.tensorId, strength: options.strength, luminance: options.matchLuminance)
+    // Another call's job for the same step: this call answers with it.
+    if let existing = jobs.values.first(where: { $0.finishedAt == nil && $0.colorMatch?.isSameMatch(as: match) == true }) {
+      return try await answer(existing, background: background, progress: progress)
+    }
+    let matchedStep = item.id.logicalTime
+    return try await startJob(
+      tool: "match_colors", label: "Match colors of step \(matchedStep)", colorMatch: match, background: background,
+      progress: progress
+    ) { [weak self] update in
+      guard let self else { throw CancellationError() }
+      update(Progress(step: 0, total: nil, message: "Waiting for the current run to finish", isQueued: true))
+      let saved = try await self.create.matchColors(forAgent: item, options: options) { step, message in
+        update(Progress(step: step, total: 1_000, message: message))
+      }
+      // What the saved step records: a job already pending for the step may have had other options.
+      let record = saved.sidecar.colorMatch
+      func rounded(_ value: Double) -> Double { (value * 100).rounded() / 100 }
+      var result: [String: Any] = [
+        "project": project, "history_step": saved.id.logicalTime, "matched_step": matchedStep,
+        "strength": record?.strength ?? options.strength, "luminance": record?.luminance ?? options.matchLuminance,
+      ]
+      if let shift = record?.shift {
+        result["delta_a"] = rounded(shift.a)
+        result["delta_b"] = rounded(shift.b)
+        result["summary"] = shift.summary
+        if record?.luminance == true { result["delta_l"] = rounded(shift.l) }
+      }
+      if project != self.create.history.project.name {
+        result["note"] = "Saved into “\(project)”, the project the step is in; another project is open now."
+      }
+      self.lastResult = "Matched colors of step \(matchedStep) in \(project)"
+      var answer = try Self.textResult(json: result)
+      answer["structuredContent"] = result
+      return answer
+    }
+  }
+
   private static func shortened(_ prompt: String) -> String {
     let line = prompt.split(whereSeparator: \.isNewline).joined(separator: " ")
     return line.count > 160 ? String(line.prefix(160)) + "…" : line
@@ -1882,6 +2003,12 @@ final class AgentTools {
 
   private static func int(_ value: Any?) -> Int? {
     (value as? NSNumber).map(\.intValue) ?? (value as? String).flatMap { Int($0) }
+  }
+
+  /// Whether a JSON value is true or false rather than a number: both arrive as `NSNumber`, and
+  /// `as? Bool` / `as? NSNumber` take either.
+  private static func isBoolean(_ value: Any) -> Bool {
+    (value as? NSNumber).map { CFGetTypeID($0) == CFBooleanGetTypeID() } ?? false
   }
 
   private static func double(_ value: Any?) -> Double? {

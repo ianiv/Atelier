@@ -102,6 +102,7 @@
 		F37644302DD33DAC7A1E63B0 /* SizePreset.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A3DAA7DA03971183D18CEAA /* SizePreset.swift */; };
 		367D99D75A579BE7CCD45664 /* CanvasTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = C45342E9A57349CA90D164A4 /* CanvasTools.swift */; };
 		E838320792CDDEE1493BB1B9 /* CanvasMerge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5CF3B40616D4C363F989DF /* CanvasMerge.swift */; };
+		C0104A7C11A0000000000001 /* ColorMatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0104A7C11A0000000000002 /* ColorMatch.swift */; };
 		693B6168E7ADD1442187E373 /* CanvasMask.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CC92B19664FFDC3183089CE /* CanvasMask.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E103 /* LayoutEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E104 /* LayoutEditor.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E101 /* LayoutPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E102 /* LayoutPrompt.swift */; };
@@ -155,6 +156,7 @@
 		4D4DA740C5B076119D7E2DC9 /* UpscaleSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F1F88CE15A4A3DD562DD72C /* UpscaleSheet.swift */; };
 		E8B7558C1BC967172061F95A /* TimelineUpscaleExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 705B33C92E12A854209C6682 /* TimelineUpscaleExport.swift */; };
 		58D2F5882DA905D40744609C /* AutomationUpscale.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2FF5ECF7B3949AB28ABC1A2 /* AutomationUpscale.swift */; };
+		C0104A7C11A0000000000003 /* AutomationColorMatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0104A7C11A0000000000004 /* AutomationColorMatch.swift */; };
 		4E97E7417B4FBD4C0A2D4F5F /* FlashVSRWeights.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E49E0979AF32A5D8D048181 /* FlashVSRWeights.swift */; };
 		81757968C9588EE3EE6A6ECA /* FlashVSRSourceProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = A08CCF40C7CF25F4BF8BAFCF /* FlashVSRSourceProjection.swift */; };
 		399404404C42798FDF78F390 /* FlashVSRTinyDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09EC439DFB06AF76584E0D97 /* FlashVSRTinyDecoder.swift */; };
@@ -176,6 +178,7 @@
 		A22FE4A30B0DC7FF13ACDCE6 /* AutoMaskBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8038A15556420887CF8415C5 /* AutoMaskBar.swift */; };
 		CA9420258E514629F01CC732 /* AutomationAutoMask.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60B649AE442AE955874615B1 /* AutomationAutoMask.swift */; };
 		39581119081A4BFFD6967A0B /* AutoMaskTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC3541FFA68BA7C5424778CE /* AutoMaskTests.swift */; };
+		C0104A7C11A0000000000005 /* ColorMatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0104A7C11A0000000000006 /* ColorMatchTests.swift */; };
 		A1B2C3D4E5F60718293A4B5C /* MaskMemoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E4F5A60718293A4B5D /* MaskMemoryTests.swift */; };
 /* End PBXBuildFile section */
 
@@ -287,6 +290,7 @@
 		5A3DAA7DA03971183D18CEAA /* SizePreset.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SizePreset.swift; sourceTree = "<group>"; };
 		C45342E9A57349CA90D164A4 /* CanvasTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasTools.swift; sourceTree = "<group>"; };
 		5B5CF3B40616D4C363F989DF /* CanvasMerge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasMerge.swift; sourceTree = "<group>"; };
+		C0104A7C11A0000000000002 /* ColorMatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorMatch.swift; sourceTree = "<group>"; };
 		3CC92B19664FFDC3183089CE /* CanvasMask.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasMask.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E104 /* LayoutEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutEditor.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E102 /* LayoutPrompt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutPrompt.swift; sourceTree = "<group>"; };
@@ -356,6 +360,7 @@
 		5F1F88CE15A4A3DD562DD72C /* UpscaleSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpscaleSheet.swift; sourceTree = "<group>"; };
 		705B33C92E12A854209C6682 /* TimelineUpscaleExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineUpscaleExport.swift; sourceTree = "<group>"; };
 		D2FF5ECF7B3949AB28ABC1A2 /* AutomationUpscale.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationUpscale.swift; sourceTree = "<group>"; };
+		C0104A7C11A0000000000004 /* AutomationColorMatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationColorMatch.swift; sourceTree = "<group>"; };
 		9E49E0979AF32A5D8D048181 /* FlashVSRWeights.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlashVSRWeights.swift; sourceTree = "<group>"; };
 		A08CCF40C7CF25F4BF8BAFCF /* FlashVSRSourceProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlashVSRSourceProjection.swift; sourceTree = "<group>"; };
 		09EC439DFB06AF76584E0D97 /* FlashVSRTinyDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlashVSRTinyDecoder.swift; sourceTree = "<group>"; };
@@ -377,6 +382,7 @@
 		8038A15556420887CF8415C5 /* AutoMaskBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoMaskBar.swift; sourceTree = "<group>"; };
 		60B649AE442AE955874615B1 /* AutomationAutoMask.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationAutoMask.swift; sourceTree = "<group>"; };
 		CC3541FFA68BA7C5424778CE /* AutoMaskTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoMaskTests.swift; sourceTree = "<group>"; };
+		C0104A7C11A0000000000006 /* ColorMatchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorMatchTests.swift; sourceTree = "<group>"; };
 		B1C2D3E4F5A60718293A4B5D /* MaskMemoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaskMemoryTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -492,6 +498,7 @@
 				B7D4E6F80C1D2E3F40516283 /* AutomationAddFolder.swift */,
 				D70A1100000000000000000B /* AutomationDrawThings.swift */,
 				D2FF5ECF7B3949AB28ABC1A2 /* AutomationUpscale.swift */,
+				C0104A7C11A0000000000004 /* AutomationColorMatch.swift */,
 				E5D760BDEB2FA5F04BDAF779 /* AutomationTimeline.swift */,
 			);
 			path = Automation;
@@ -508,6 +515,7 @@
 				5A3DAA7DA03971183D18CEAA /* SizePreset.swift */,
 				C45342E9A57349CA90D164A4 /* CanvasTools.swift */,
 				5B5CF3B40616D4C363F989DF /* CanvasMerge.swift */,
+				C0104A7C11A0000000000002 /* ColorMatch.swift */,
 				3CC92B19664FFDC3183089CE /* CanvasMask.swift */,
 				A1B2C3D4E5F6A7B8C9D0E104 /* LayoutEditor.swift */,
 				A1B2C3D4E5F6A7B8C9D0E102 /* LayoutPrompt.swift */,
@@ -722,6 +730,7 @@
 			isa = PBXGroup;
 			children = (
 				CC3541FFA68BA7C5424778CE /* AutoMaskTests.swift */,
+				C0104A7C11A0000000000006 /* ColorMatchTests.swift */,
 				B1C2D3E4F5A60718293A4B5D /* MaskMemoryTests.swift */,
 				B7A1F0C2B3D4A59687786300 /* ProjectMappingTests.swift */,
 				B7A1F0C2B3D4A59687786301 /* StyleTests.swift */,
@@ -963,6 +972,7 @@
 				B7D4E6F80C1D2E3F40516284 /* AutomationAddFolder.swift in Sources */,
 				D70A1100000000000000000A /* AutomationDrawThings.swift in Sources */,
 				58D2F5882DA905D40744609C /* AutomationUpscale.swift in Sources */,
+				C0104A7C11A0000000000003 /* AutomationColorMatch.swift in Sources */,
 				70E8E18439D847EA73F0D5DD /* AutomationTimeline.swift in Sources */,
 				02980CB68834C5E6EA77013B /* ContentView.swift in Sources */,
 				90D46F51CBD101C88E0BD1B0 /* CreateModel.swift in Sources */,
@@ -1040,6 +1050,7 @@
 				9DC808D389DA848DBB3FF679 /* SAMDownload.swift in Sources */,
 				2A6072AF219230DBEA3909DA /* SAMFiles.swift in Sources */,
 				E838320792CDDEE1493BB1B9 /* CanvasMerge.swift in Sources */,
+				C0104A7C11A0000000000001 /* ColorMatch.swift in Sources */,
 				693B6168E7ADD1442187E373 /* CanvasMask.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E103 /* LayoutEditor.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E101 /* LayoutPrompt.swift in Sources */,
@@ -1106,6 +1117,7 @@
 				C7A1F0C2B3D4A59687786206 /* CanvasDropTests.swift in Sources */,
 				EB6EC16C5C8D9C4C67D558FA /* CanvasRefineTests.swift in Sources */,
 				39581119081A4BFFD6967A0B /* AutoMaskTests.swift in Sources */,
+				C0104A7C11A0000000000005 /* ColorMatchTests.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* MaskMemoryTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

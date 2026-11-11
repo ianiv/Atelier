@@ -1,8 +1,9 @@
 import Foundation
 import Observation
 
-/// Generations (and upscaled timeline exports) waiting to run, the one running and the recent
-/// ones, in order. Each generation holds its own snapshot of the prompt, settings, seed, canvas
+/// Generations (with image and clip upscales and Match Colors to Original, which are
+/// generation jobs too) and upscaled timeline exports waiting to run, the one running and the
+/// recent ones, in order. Each generation holds its own snapshot of the prompt, settings, seed, canvas
 /// and moodboard, taken when it was queued. CreateModel runs them one at a time.
 @MainActor
 @Observable
@@ -104,9 +105,33 @@ final class JobQueue {
 
   var isEmpty: Bool { waiting.isEmpty && running == nil && runningRemote.isEmpty }
 
-  /// Whether a waiting or running job uses `model`.
+  /// Whether a waiting or running job uses `model`. A Match Colors to Original job only names the
+  /// model its step was made with; it never loads it.
   func uses(_ model: String) -> Bool {
-    running?.request?.model == model || waiting.contains { $0.request?.model == model }
+    func uses(_ job: Job) -> Bool { job.request?.model == model && job.request?.colorMatch == nil }
+    return running.map(uses) == true || waiting.contains(where: uses)
+  }
+
+  /// The waiting or running Match Colors to Original job for the same step as `match`, if any.
+  func pendingColorMatch(_ match: ColorMatch.Job) -> Job? {
+    ((running.map { [$0] } ?? []) + waiting).first { $0.request?.colorMatch?.isSameMatch(as: match) == true }
+  }
+
+  /// Waiting Match Colors to Original jobs for a project that was renamed follow it.
+  func renameColorMatchProject(from old: String, to name: String) {
+    for index in waiting.indices {
+      guard case .generation(var request) = waiting[index].work, request.colorMatch?.project == old else { continue }
+      request.colorMatch?.project = name
+      waiting[index].work = .generation(request)
+    }
+  }
+
+  /// Records what a running Match Colors to Original job saved, so its row can say so whichever
+  /// project is open.
+  func setColorMatchRecord(_ record: ColorMatch.Record, id: UUID) {
+    guard running?.id == id, case .generation(var request)? = running?.work else { return }
+    request.colorMatch?.record = record
+    running?.work = .generation(request)
   }
 
   /// Adds jobs at the end. Ones without a step to follow go on the line being queued, or start
@@ -212,7 +237,11 @@ final class JobQueue {
     if running?.id == id { running?.timings = timings }
   }
 
-  func finishRunning(_ status: Job.Status, id: UUID, inputTensorId: Int64? = nil, tipTensorId: Int64? = nil) {
+  /// `inOpenProject` false: the result was saved into a project that isn't open (a Match Colors
+  /// to Original job's own), so it's no step to follow here.
+  func finishRunning(
+    _ status: Job.Status, id: UUID, inputTensorId: Int64? = nil, tipTensorId: Int64? = nil, inOpenProject: Bool = true
+  ) {
     guard var job = running?.id == id ? running : runningRemote.first(where: { $0.id == id }) else { return }
     if running?.id == id {
       running = nil
@@ -221,7 +250,7 @@ final class JobQueue {
     }
     job.status = status
     job.finishedAt = Date()
-    if case .finished(let tensorId) = status {
+    if case .finished(let tensorId) = status, inOpenProject {
       // Saving a result makes it the current step.
       let tip = tipTensorId ?? tensorId
       expectedCurrent = tip

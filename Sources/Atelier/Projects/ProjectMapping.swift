@@ -44,6 +44,9 @@ nonisolated enum ProjectMapping {
     /// A refined region merged back into its input (`CanvasMerge`): where the frame was and the
     /// mask. Kept in `profile_data`.
     var refine: RefineRecord?
+    /// A step made by Match Colors to Original: how, and from which original. Kept in
+    /// `profile_data`.
+    var colorMatch: ColorMatch.Record?
     /// A layered step (a merged refine): how many layers it has (`data_stored`) and the top
     /// layer's position, which Draw Things keeps as the node's content offset.
     var layerCount: Int32?
@@ -62,7 +65,9 @@ nonisolated enum ProjectMapping {
   /// `refine_rect` (the frame in the input's pixels), `refine_scale` and `refine_offset` (the
   /// canvas zoom and offset) and `refine_mask` (the painted strokes), so Use Settings can put the
   /// input back as it was; the mask itself is also the step's `binary_mask` layer, as Draw Things
-  /// keeps a canvas mask. Draw Things decodes the profile with Codable, which skips the extra keys.
+  /// keeps a canvas mask. A step made by Match Colors to Original adds `color_match` (strength,
+  /// luminance and the original's tensor), so matching it again uses that original rather than its
+  /// input, the image it was matched from. Draw Things decodes the profile with Codable, which skips the extra keys.
   struct Profile: Codable {
     var timings: [Timing] = []
     var duration: Double
@@ -74,6 +79,7 @@ nonisolated enum ProjectMapping {
     var refineScale: Double?
     var refineOffset: [Double]?
     var refineMask: CanvasMask?
+    var colorMatch: ColorMatch.Record?
 
     var refine: RefineRecord? {
       get {
@@ -101,7 +107,7 @@ nonisolated enum ProjectMapping {
 
     init(
       duration: Double, inputTensorId: Int64?, parentTensorId: Int64?, inputAudioId: Int64? = nil,
-      timings: [Timing] = [], refine: RefineRecord? = nil
+      timings: [Timing] = [], refine: RefineRecord? = nil, colorMatch: ColorMatch.Record? = nil
     ) {
       self.timings = timings
       self.duration = duration
@@ -109,6 +115,7 @@ nonisolated enum ProjectMapping {
       self.parentTensorId = parentTensorId
       self.inputAudioId = inputAudioId
       self.refine = refine
+      self.colorMatch = colorMatch
     }
 
     init?(_ bytes: [UInt8]) {
@@ -192,7 +199,8 @@ nonisolated enum ProjectMapping {
       profileData: Profile(
         duration: step.generationTime, inputTensorId: step.inputTensorId,
         parentTensorId: step.parentTensorId ?? 0, inputAudioId: step.inputAudioId,
-        timings: step.timings?.profileTimings ?? [], refine: step.refine
+        timings: step.timings?.profileTimings ?? [], refine: step.refine,
+        colorMatch: step.colorMatch
       ).bytes,
       teaCacheStart: i32("teaCacheStart", 5), teaCacheEnd: i32("teaCacheEnd", -1),
       teaCacheThreshold: d.float("teaCacheThreshold", 0.06), teaCache: d.bool("teaCache", false),

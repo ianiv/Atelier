@@ -36,6 +36,9 @@ nonisolated enum SavedQueue {
     var merge: RefineMerge.Record?
     /// The mask the canvas image remembers (`Request.canvasSourceMask`).
     var canvasSourceMask: CanvasSourceMask?
+    /// A Match Colors to Original job: the step and its project, which it reads from and saves
+    /// into whichever project is open.
+    var colorMatch: ColorMatch.Job?
   }
 
   /// A saved job, before its settings are put back on its model's defaults.
@@ -50,6 +53,7 @@ nonisolated enum SavedQueue {
     fileprivate var sameProject: Bool
 
     var target: JobTarget { entry.target ?? .local }
+    var colorMatch: ColorMatch.Job? { entry.colorMatch }
 
     /// The job's request, with `configuration` (the model's defaults with `settings` applied).
     func request(configuration: PipelineConfiguration) -> GenerationEngine.Request {
@@ -77,6 +81,9 @@ nonisolated enum SavedQueue {
       request.placement = sameProject ? entry.placement : nil
       request.upscale = entry.upscale
       request.imageUpscale = entry.imageUpscale
+      // It names its own project, so its step follows it there whichever project this is.
+      request.colorMatch = entry.colorMatch
+      if entry.colorMatch != nil { request.parentTensorId = entry.parentTensorId }
       return request
     }
   }
@@ -136,7 +143,7 @@ nonisolated enum SavedQueue {
           moodboardWeights: request.moodboard.map(\.weight), audio: request.audio,
           placement: request.placement, upscale: request.upscale, imageUpscale: request.imageUpscale,
           target: job.target, hasMask: request.mask != nil, merge: mergeRecord,
-          canvasSourceMask: request.canvasSourceMask))
+          canvasSourceMask: request.canvasSourceMask, colorMatch: request.colorMatch))
     }
     if let data = try? JSONEncoder().encode(entries) {
       Log.attempt(Log.queue, "Saving the queue") {
@@ -151,7 +158,8 @@ nonisolated enum SavedQueue {
           let entries = try? JSONDecoder().decode([Entry].self, from: data)
     else { return [] }
     let jobs = entries.compactMap { entry -> Job? in
-      // An upscale's source clip is a step of its own project.
+      // An upscale's source clip is a step of its own project. A Match Colors job names its
+      // project, so it comes back in any.
       if entry.upscale != nil, entry.project != project { return nil }
       var canvas: CGImage?
       if entry.hasCanvas {

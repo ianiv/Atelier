@@ -594,7 +594,10 @@ final class CreateModel {
   var workUnderway: String? {
     var parts: [String] = []
     if let running = queue.running {
-      parts.append(running.export != nil ? "an upscaled export is running" : "a generation is running")
+      parts.append(
+        running.export != nil
+          ? "an upscaled export is running"
+          : running.request?.colorMatch != nil ? "colors are being matched" : "a generation is running")
     }
     if !queue.isPaused, !queue.waiting.isEmpty {
       parts.append(queue.waiting.count == 1 ? "1 job is queued" : "\(queue.waiting.count) jobs are queued")
@@ -1044,15 +1047,19 @@ final class CreateModel {
     queue.append(requests, currentTensorId: history.currentTensorId)
   }
 
-  /// Saved jobs' requests, their settings put back on their models' defaults.
+  /// Saved jobs' requests, their settings put back on their models' defaults. A Match Colors to
+  /// Original job never loads its model, so it stays when the model is gone, on the current
+  /// settings instead.
   func savedRequests(_ saved: [SavedQueue.Job]) async -> [GenerationEngine.Request] {
     var defaults: [String: PipelineConfiguration] = [:]
     var requests: [GenerationEngine.Request] = []
-    for job in saved where models.contains(where: { $0.file == job.model }) {
-      if defaults[job.model] == nil, let configuration = try? await engine.loadPipeline(for: job.model) {
+    for job in saved {
+      let downloaded = models.contains(where: { $0.file == job.model })
+      guard downloaded || job.colorMatch != nil else { continue }
+      if downloaded, defaults[job.model] == nil, let configuration = try? await engine.loadPipeline(for: job.model) {
         defaults[job.model] = ModelDefaults.recommended(for: job.model, configuration: configuration)
       }
-      guard var configuration = defaults[job.model] else { continue }
+      guard var configuration = defaults[job.model] ?? (job.colorMatch != nil ? settings : nil) else { continue }
       SettingsRegistry.apply(dump: job.settings, to: &configuration)
       requests.append(job.request(configuration: configuration))
     }
@@ -1742,6 +1749,8 @@ final class CreateModel {
       let title =
         if job.export != nil {
           "Exporting a video"
+        } else if job.request?.colorMatch != nil {
+          "Matching colors"
         } else if job.request?.configuration.videoModel != nil {
           "Generating a video"
         } else {
@@ -1898,6 +1907,7 @@ final class CreateModel {
   private func run(_ job: JobQueue.Job) {
     if let export = job.export { return run(export, job: job) }
     guard let request = job.request else { return }
+    if let match = request.colorMatch { return run(match, request: request, job: job) }
     let startedAt = Date()
     beginRun(job, message: "Preparing…", totalSteps: request.configuration.steps, startedAt: startedAt)
     let backend = self.backend(for: job.target)
@@ -2054,9 +2064,10 @@ final class CreateModel {
 
   /// Ends the running job and starts the next.
   private func finish(
-    _ job: JobQueue.Job, status: JobQueue.Job.Status, inputTensorId: Int64? = nil, tipTensorId: Int64? = nil
+    _ job: JobQueue.Job, status: JobQueue.Job.Status, inputTensorId: Int64? = nil, tipTensorId: Int64? = nil,
+    inOpenProject: Bool = true
   ) {
-    queue.finishRunning(status, id: job.id, inputTensorId: inputTensorId, tipTensorId: tipTensorId)
+    queue.finishRunning(status, id: job.id, inputTensorId: inputTensorId, tipTensorId: tipTensorId, inOpenProject: inOpenProject)
     timingRecorders[job.id] = nil
     remoteRuns[job.id] = nil
     runTasks[job.id] = nil
@@ -2196,6 +2207,269 @@ final class CreateModel {
     statusNote = nil
     queue.append([request], currentTensorId: history.currentTensorId, target: .local)
     runNext()
+  }
+
+  // MARK: - Match Colors to Original
+
+  /// Whether Match Colors to Original can take the canvas: a finished image saved in the project
+  /// (not a video) that has an original to match, and that isn't waiting or being matched already
+  /// (matching it twice would make the same image).
+  var canMatchCanvasColors: Bool {
+    guard canvasShowsImage, let item = imageItem, hasOriginal(item) else { return false }
+    return pendingColorMatch(for: item) == nil
+  }
+
+  /// The waiting or running Match Colors to Original job for `item`, a step of the current project.
+  func pendingColorMatch(for item: HistoryItem) -> JobQueue.Job? {
+    queue.pendingColorMatch(colorMatchJob(for: item, options: ColorMatch.Options()))
+  }
+
+  private func colorMatchJob(for item: HistoryItem, options: ColorMatch.Options) -> ColorMatch.Job {
+    ColorMatch.Job(
+      project: history.project.name, sourceTensorId: item.tensorId, strength: options.strength,
+      luminance: options.matchLuminance)
+  }
+
+  /// Whether a step has an image its colors can be matched to (see `originalImage(for:)`). A
+  /// moodboard counts only with an image of weight above 0, the one `originalImage` would take.
+  func hasOriginal(_ item: HistoryItem) -> Bool {
+    !item.isVideo && (item.sidecar.colorMatch != nil || item.inputTensorId != nil || item.weightedMoodboardCount > 0)
+  }
+
+  /// The image an edit was made from: a Match Colors result's own original, else the step's input
+  /// (the canvas it was edited from), else its first moodboard image with weight. The parent isn't
+  /// used: a step that took no canvas wasn't made from it. Also says which tensor it is (nil for a
+  /// moodboard image), which the result records, and the moodboard image to carry along. Read from
+  /// `project`, the step's own, which by default is the current one.
+  func originalImage(for item: HistoryItem, in project: Project? = nil) async -> (
+    image: CGImage, tensorId: Int64?, moodboard: GenerationEngine.Reference?
+  )? {
+    guard !item.isVideo else { return nil }
+    let project = project ?? history.project
+    func firstMoodboardImage() async -> (image: CGImage, tensorId: Int64?, moodboard: GenerationEngine.Reference?)? {
+      guard item.weightedMoodboardCount > 0,
+            let entry = await project.read({ $0.moodboard(at: item.id) }).first(where: { $0.weight > 0 })
+      else { return nil }
+      return (entry.image, nil, GenerationEngine.Reference(image: entry.image, weight: entry.weight))
+    }
+    // Matching a match again goes back to its original, not to the image it was matched from.
+    if let record = item.sidecar.colorMatch {
+      if let tensorId = record.originalTensorId {
+        return await project.read { $0.image(tensorId: tensorId) }.map { ($0, tensorId, nil) }
+      }
+      return await firstMoodboardImage()
+    }
+    if let tensorId = item.inputTensorId {
+      if let input = await project.read({ $0.input(of: item.id, tensorId: tensorId) }) { return (input.image, tensorId, nil) }
+      if let image = await project.read({ $0.image(tensorId: tensorId) }) { return (image, tensorId, nil) }
+    }
+    return await firstMoodboardImage()
+  }
+
+  /// Queues matching `item`'s colors to its original's (`ColorMatch`), a step of the current
+  /// project. It runs on this device whatever Run on says (it needs no model or GPU), in turn with
+  /// the other jobs, and saves into that project even if another is open by then
+  /// (`run(_:request:job:)`). Returns the job's id: the one already waiting or running for the
+  /// same step when there is one, since a second would make the same image.
+  @discardableResult
+  func queueColorMatch(_ item: HistoryItem, options: ColorMatch.Options = ColorMatch.Options(), fromAgent: Bool = false) throws
+    -> UUID
+  {
+    guard !item.isVideo else { throw ColorMatchError.video }
+    guard hasOriginal(item) else { throw ColorMatchError.noOriginal }
+    let match = colorMatchJob(for: item, options: options)
+    if let pending = queue.pendingColorMatch(match) { return pending.id }
+    guard var configuration = settings else { throw ColorMatchError.noSettings }
+    // Its settings, as an upscale carries them; the size is the step's own.
+    SettingsRegistry.apply(dump: item.sidecar.configuration, to: &configuration)
+    var request = GenerationEngine.Request(
+      model: item.sidecar.model, prompt: item.sidecar.prompt, negativePrompt: item.sidecar.negativePrompt,
+      seed: item.sidecar.seed, configuration: configuration)
+    request.parentTensorId = HistoryStore.tip(of: item)
+    request.colorMatch = match
+    statusNote = nil
+    let id = queue.append([request], currentTensorId: history.currentTensorId, target: .local, fromAgent: fromAgent)[0]
+    runNext()
+    return id
+  }
+
+  /// Match Colors to Original on the canvas image, with the default options.
+  func matchCanvasColors() {
+    guard canMatchCanvasColors, let item = imageItem else { return }
+    do {
+      try queueColorMatch(item)
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
+
+  /// Queues a match for an agent (AgentTools), or joins the one already waiting or running for the
+  /// step, and returns the step it saved. `progress` hears the step (of 1,000) and what it's
+  /// doing. Cancelling the caller cancels the job.
+  func matchColors(
+    forAgent item: HistoryItem, options: ColorMatch.Options, progress: @escaping (Int, String) -> Void
+  ) async throws -> HistoryItem {
+    let pending = pendingColorMatch(for: item)?.id
+    let id = try queueColorMatch(item, options: options, fromAgent: true)
+    // A match someone else queued (the canvas menu) is theirs: giving up on it only ends this wait.
+    let joined = id == pending
+    return try await withTaskCancellationHandler {
+      try await colorMatchResult(of: id, progress: progress)
+    } onCancel: {
+      if !joined { Task { @MainActor in self.cancel(id) } }
+    }
+  }
+
+  /// Waits for Match Colors job `id` to end, and returns the step it saved, read from its own project.
+  private func colorMatchResult(of id: UUID, progress: (Int, String) -> Void) async throws -> HistoryItem {
+    var reported: (Int, String)?
+    while true {
+      if let job = queue.recent.first(where: { $0.id == id }) {
+        switch job.status {
+        case .finished(let tensorId):
+          guard let name = job.request?.colorMatch?.project, let project = history.project(named: name) else {
+            throw ColorMatchError.unreadable
+          }
+          if project === history.project, let item = history.item(tensorId: tensorId) { return item }
+          let tree = await project.read { $0.tree() }
+          guard let item = tree.step(tensorId: tensorId).flatMap({ tree.items[$0] }) else { throw ColorMatchError.unreadable }
+          return item
+        case .failed(let message): throw ColorMatchError.failed(message)
+        default: throw CancellationError()
+        }
+      }
+      if let job = queue.running, job.id == id, let run = runProgress(of: job) {
+        let message = if case .running(let message) = phase { message } else { "Matching colors" }
+        if reported?.0 != run.step || reported?.1 != message {
+          reported = (run.step, message)
+          progress(run.step, message)
+        }
+      } else if !queue.waiting.contains(where: { $0.id == id }) {
+        // Taken off the lists without ending here (Clear Finished, say).
+        throw CancellationError()
+      }
+      try await Task.sleep(for: .milliseconds(100))
+    }
+  }
+
+  /// Runs a Match Colors to Original job on this device: reads the step and its original from the
+  /// job's own project, matches off the main actor with progress (step out of 1,000, as an export
+  /// reports), and saves the result as a new step after it with its settings. Into the open
+  /// project it saves as a generation does, showing on the canvas when that follows the queue;
+  /// into another it saves through `HistoryStore.project(named:)` and leaves the screen alone, so
+  /// the step is there when that project is opened.
+  private func run(_ match: ColorMatch.Job, request queued: GenerationEngine.Request, job: JobQueue.Job) {
+    let startedAt = Date()
+    beginRun(job, message: "Reading images…", totalSteps: 1_000, startedAt: startedAt)
+    let task = Task {
+      var status = JobQueue.Job.Status.cancelled
+      var inputTensorId: Int64?
+      var inOpenProject = true
+      do {
+        guard let project = history.project(named: match.project), project.isOpen else {
+          throw ColorMatchError.projectMissing(match.project)
+        }
+        let item: HistoryItem
+        if project === history.project, let listed = history.item(tensorId: match.sourceTensorId) {
+          item = listed
+        } else {
+          let tree = await project.read { $0.tree() }
+          guard let found = tree.step(tensorId: match.sourceTensorId).flatMap({ tree.items[$0] }) else {
+            throw ColorMatchError.stepMissing(match.project)
+          }
+          item = found
+        }
+        guard !item.isVideo else { throw ColorMatchError.video }
+        guard let original = await originalImage(for: item, in: project) else { throw ColorMatchError.noOriginal }
+        guard let edited = await project.read({ $0.image(tensorId: item.tensorId) }) else { throw ColorMatchError.unreadable }
+        try Task.checkCancellation()
+        setRunMessage("Measuring colors…", job)
+        let report: @Sendable (Double) -> Void = { fraction in
+          Task { @MainActor in
+            guard job.id == self.foregroundJobID, self.phase != .cancelling else { return }
+            self.step = Int(fraction * 950)
+            self.syncBackgroundTask()
+          }
+        }
+        guard let result = try await ColorMatch.matching(edited, to: original.image, options: match.options, progress: report),
+              let tensor = ImageTensor.tensor(from: result.image)
+        else { throw ColorMatchError.unreadable }
+        try Task.checkCancellation()
+        setRunMessage("Saving…", job)
+        if job.id == foregroundJobID { step = 950 }
+        let (matched, shift) = result
+        var request = queued
+        SettingsRegistry.apply(dump: item.sidecar.configuration, to: &request.configuration)
+        request.configuration.width = matched.width
+        request.configuration.height = matched.height
+        request.canvas = edited
+        request.canvasTensorId = item.tensorId
+        request.canvasIsImported = false
+        request.parentTensorId = HistoryStore.tip(of: item)
+        // A moodboard original goes along, so matching the result again finds it there.
+        request.moodboard = original.moodboard.map { [$0] } ?? []
+        let record = ColorMatch.Record(
+          strength: match.strength, luminance: match.luminance, originalTensorId: original.tensorId, shift: shift)
+        request.colorMatch?.record = record
+        let followsRun = { self.canvasFollowsRun && job.id == self.foregroundJobID && project === self.history.project }
+        let history = history
+        let saved = try await oneSaveAtATime {
+          // A rename since it started closed the project it read from (`renameCurrent`): saving
+          // there would write to a closed file.
+          guard history.project(named: match.project) === project, project.isOpen else {
+            throw ColorMatchError.projectMissing(match.project)
+          }
+          return try await history.save(
+            GenerationEngine.Output(frames: [tensor]), request: request, startedAt: startedAt, finishedAt: Date(),
+            into: project, makeCurrent: followsRun)
+        }
+        queue.setColorMatchRecord(record, id: job.id)
+        if job.id == foregroundJobID { step = 1_000 }
+        if project === history.project {
+          lastSavedTensorId = saved.tensorId
+          if followsRun() {
+            imageStep = (history.project.name, saved.tensorId)
+            canvasBeforePreview = nil
+            previewCoversCanvas = false
+            canvasIsImported = false
+            image = matched
+            canvas.zoomToFit()
+            // A new step, with no mask of its own yet.
+            landedMask = (saved.tensorId, canvasMask)
+            maskPendingTensorId = nil
+          }
+          statusNote = shift.summary
+        }
+        if let failure = await history.writeToOutputFolder(saved, image: matched, in: project) { errorMessage = failure }
+        saveSession()
+        FinishedNotice.post(prompt: shift.summary, seconds: Date().timeIntervalSince(startedAt), title: "Colors matched")
+        status = .finished(tensorId: saved.tensorId)
+        inputTensorId = saved.inputTensorId
+        inOpenProject = project === history.project
+      } catch is CancellationError {
+      } catch {
+        errorMessage = error.localizedDescription
+        status = .failed(error.localizedDescription)
+      }
+      finish(job, status: status, inputTensorId: inputTensorId, inOpenProject: inOpenProject)
+    }
+    track(task, for: job)
+  }
+
+  nonisolated enum ColorMatchError: LocalizedError {
+    case video, noOriginal, unreadable, noSettings, projectMissing(String), stepMissing(String), failed(String)
+
+    var errorDescription: String? {
+      switch self {
+      case .video: "Match Colors to Original works on images, not videos."
+      case .noOriginal: "This image has no original to match: it wasn't made from the canvas or a moodboard image, or that image is no longer in the project."
+      case .unreadable: "The image or its original couldn't be read."
+      case .noSettings: "There are no settings to save the result with yet: wait for the model list to load."
+      case .projectMissing(let name): "The project “\(name)” the image was in is no longer there."
+      case .stepMissing(let name): "The image is no longer in the project “\(name)”."
+      case .failed(let message): message
+      }
+    }
   }
 
   /// Runs an image upscale job on this device: with a model, or as a video upscaler's one-frame clip.
@@ -2502,6 +2776,11 @@ final class CreateModel {
 
   /// Queues a finished, failed or cancelled job again, same settings and seed.
   func retry(_ id: UUID) {
+    // A match already waiting or running for the same step would make the same image.
+    if let match = queue.recent.first(where: { $0.id == id })?.request?.colorMatch, queue.pendingColorMatch(match) != nil {
+      statusNote = "Colors are already being matched for that image, so it wasn't queued again."
+      return
+    }
     queue.retry(id)
     runNext()
   }
@@ -2609,7 +2888,8 @@ enum FinishedNotice {
   private static var unseen = 0
   private static var observing = false
 
-  static func post(prompt: String, seconds: Double, isVideo: Bool = false) {
+  /// `title` replaces "Image ready" / "Video ready" for work that isn't a generation.
+  static func post(prompt: String, seconds: Double, isVideo: Bool = false, title: String? = nil) {
     guard !AppLifecycle.isActive, AppSettings.notifies else { return }
     let center = UNUserNotificationCenter.current()
     unseen += 1
@@ -2622,7 +2902,7 @@ enum FinishedNotice {
       }
     }
     let content = UNMutableNotificationContent()
-    content.title = isVideo ? "Video ready" : "Image ready"
+    content.title = title ?? (isVideo ? "Video ready" : "Image ready")
     content.body = "\(prompt.prefix(120)) (\(GenerationTime.text(seconds)))"
     let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
     Task {
@@ -2697,6 +2977,7 @@ extension CreateModel {
   /// The step on the canvas is in the project now called `name`, renamed from `old`: it's the same
   /// image, so nothing about it changes.
   func projectRenamed(from old: String, to name: String) {
+    queue.renameColorMatchProject(from: old, to: name)
     guard let step = imageStep, step.project == old else { return }
     relabelsImageStep = true
     imageStep = (name, step.tensorId)
