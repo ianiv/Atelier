@@ -459,11 +459,11 @@ struct ColorMatchTests {
     let capped = ColorMatch.coefficients(
       target: target, reference: ColorMatch.Stats(mean: SIMD3(52, 1, 2), std: wide), channel: 2, mean: 1, spread: 1)
     #expect(abs(target.mean.z * capped.scale + capped.offset - 2) < 1e-9)
-    // A flat edit (spread near 0) no longer blows up.
+    // A flat edit (spread near 0) doesn't blow up: its spread isn't scaled at all.
     let flat = ColorMatch.coefficients(
       target: ColorMatch.Stats(mean: SIMD3(50, 4, 8), std: SIMD3(1e-6, 1e-6, 1e-6)),
       reference: ColorMatch.Stats(mean: SIMD3(52, 1, 2), std: wide), channel: 1, mean: 1, spread: 1)
-    #expect(flat.scale == 2.0)
+    #expect(flat.scale == 1)
   }
 
   // MARK: Unchanged areas
@@ -981,11 +981,120 @@ struct ColorMatchTests {
     #expect(oneAxis.saturation == .init(direction: .more, size: .clear))
     // Just under the floor is flat, just over isn't.
     typealias Limits = ColorMatch.Comparison
-    let under = Limits.flatSpread * 0.9
-    let over = Limits.flatSpread * 1.1
+    let under = ColorMatch.flatSpread * 0.9
+    let over = ColorMatch.flatSpread * 1.1
     #expect(ColorMatch.comparison(target: ColorMatch.Stats(mean: SIMD3(50, 0, 0), std: SIMD3(under, under, under)), reference: colorful) == Limits())
     let justOver = ColorMatch.comparison(target: ColorMatch.Stats(mean: SIMD3(50, 0, 0), std: SIMD3(over, over, over)), reference: colorful)
     #expect(justOver.contrast?.direction == .more && justOver.saturation?.direction == .more)
+  }
+
+  // MARK: Flat channels aren't rescaled
+
+  /// A gray backdrop the edit kept, with something colorful added in front, measured where the
+  /// edit left the picture alone: the backdrop's color is only noise, so the added subject's
+  /// colors keep their spread, and the sheet says Saturation is the same. (The ratio of the two
+  /// noise-level spreads, capped, once halved the subject's saturation under a disabled slider.)
+  @Test func aNeutralKeptAreaDoesNotRescaleWhatTheEditAdded() throws {
+    let side = 512
+    let edge = side * 3 / 10
+    var generator = Generator(state: 41)
+    var original: [UInt8] = []
+    var edited: [UInt8] = []
+    var subject: [Bool] = []
+    for _ in 0..<side {
+      for x in 0..<side {
+        // A gray backdrop with texture in its lightness and none in its color.
+        let grey = UInt8(Int.random(in: 110...150, using: &generator))
+        original += [grey, grey, grey, 255]
+        if x < edge {
+          // The added subject: saturated, and varied in both a and b.
+          edited += [
+            UInt8(Int.random(in: 150...210, using: &generator)), UInt8(60 + x * 90 / edge), UInt8(Int.random(in: 50...110, using: &generator)), 255,
+          ]
+        } else {
+          // The kept backdrop, with a little color noise the original doesn't have.
+          edited += [grey, grey, UInt8(Int(grey) + Int.random(in: -1...1, using: &generator)), 255]
+        }
+        subject.append(x < edge)
+      }
+    }
+    let measured = ColorMatch.measure(
+      edited: edited, width: side, height: side, original: original, width: side, height: side, unchangedOnly: true)
+    #expect(abs(try #require(measured.counted) - 0.7) < 0.02)
+    let options = ColorMatch.Options(tint: 1, saturation: 1, unchangedOnly: true)
+    for channel in 1...2 {
+      // Flat in the edit's kept area, and a ratio that would have squeezed it.
+      #expect(measured.target.std[channel] < ColorMatch.flatSpread)
+      #expect(measured.reference.std[channel] / measured.target.std[channel] < 0.9)
+      let made = ColorMatch.coefficients(
+        target: measured.target, reference: measured.reference, channel: channel, mean: options.tint, spread: options.saturation)
+      #expect(made.scale == 1)
+    }
+    #expect(measured.comparison.saturation == nil)
+    let before = ColorMatch.stats(rgba: edited, where: subject)
+    let after = ColorMatch.stats(
+      rgba: ColorMatch.transferred(rgba: edited, target: measured.target, reference: measured.reference, options: options), where: subject)
+    #expect(before.std.y > 5 && before.std.z > 5)
+    #expect(abs(after.std.y - before.std.y) < 0.05 && abs(after.std.z - before.std.z) < 0.05, "\(before.std) \(after.std)")
+  }
+
+  /// A kept area of one lightness, with a contrast amount remembered from another picture: L is
+  /// moved to the original's mean and not rescaled.
+  @Test func aFlatLightnessIsNotRescaledByARememberedContrast() {
+    let target = ColorMatch.Stats(mean: SIMD3(60, 4, 8), std: SIMD3(0.45, 6, 6))
+    let reference = ColorMatch.Stats(mean: SIMD3(55, 4, 8), std: SIMD3(0.2, 6, 6))
+    let made = ColorMatch.coefficients(target: target, reference: reference, channel: 0, mean: 1, spread: 1)
+    #expect(made.scale == 1 && made.offset == -5)
+    // Brightness at 0 with contrast at 1: nothing moves.
+    let contrastOnly = ColorMatch.coefficients(target: target, reference: reference, channel: 0, mean: 0, spread: 1)
+    #expect(contrastOnly.scale == 1 && contrastOnly.offset == 0)
+    #expect(ColorMatch.comparison(target: target, reference: reference).contrast == nil)
+  }
+
+  /// a and b are judged apart: flat in a only, a keeps its spread and b is rescaled as ever.
+  @Test func onlyTheFlatColorChannelIsLeftAlone() {
+    let target = ColorMatch.Stats(mean: SIMD3(50, 1, 8), std: SIMD3(20, 0.45, 6))
+    let reference = ColorMatch.Stats(mean: SIMD3(50, 0, 5), std: SIMD3(20, 0.2, 9))
+    let a = ColorMatch.coefficients(target: target, reference: reference, channel: 1, mean: 1, spread: 1)
+    let b = ColorMatch.coefficients(target: target, reference: reference, channel: 2, mean: 1, spread: 1)
+    #expect(a.scale == 1 && a.offset == -1)
+    #expect(b.scale == 1.5 && abs(target.mean.z * b.scale + b.offset - reference.mean.z) < 1e-12)
+    #expect(ColorMatch.comparison(target: target, reference: reference).saturation == .init(direction: .more, size: .clear))
+  }
+
+  /// What the sheet says of a slider and what the slider does agree, over many measurements:
+  /// a flat channel is never rescaled; where Saturation or Contrast reads "same", a full match
+  /// scales by under the "same" threshold; and where it doesn't, the match does scale.
+  @Test func theHintAndTheScaleAgree() {
+    let spreads = [1e-6, 0.2, 0.45, 0.499, 0.5, 0.55, 3, 10, 40]
+    var flat = 0
+    var same = 0
+    for targetL in spreads {
+      for targetA in spreads {
+        for targetB in [0.3, 6.0] {
+          for referenceStd in [SIMD3<Double>(1e-6, 1e-6, 1e-6), SIMD3(0.2, 0.3, 0.1), SIMD3(8, 5, 6.1), SIMD3(30, 25, 40)] {
+            let target = ColorMatch.Stats(mean: SIMD3(50, 4, 8), std: SIMD3(targetL, targetA, targetB))
+            let reference = ColorMatch.Stats(mean: SIMD3(45, 0, 2), std: referenceStd)
+            let comparison = ColorMatch.comparison(target: target, reference: reference)
+            let scale = (0..<3).map { ColorMatch.coefficients(target: target, reference: reference, channel: $0, mean: 1, spread: 1).scale }
+            for channel in 0..<3 where target.std[channel] < ColorMatch.flatSpread {
+              flat += 1
+              #expect(scale[channel] == 1, "\(target.std) \(reference.std) channel \(channel)")
+            }
+            let name: Comment = "\(target.std) \(reference.std) \(scale)"
+            let limit = ColorMatch.Comparison.sameSpread
+            #expect((comparison.contrast == nil) == (abs(scale[0] - 1) < limit), name)
+            #expect((comparison.saturation == nil) == (abs(scale[1] - 1) < limit && abs(scale[2] - 1) < limit), name)
+            if comparison.saturation == nil, targetA < ColorMatch.flatSpread, targetB < ColorMatch.flatSpread {
+              same += 1
+              #expect(scale[1] == 1 && scale[2] == 1, name)
+            }
+            if comparison.contrast == nil, targetL < ColorMatch.flatSpread { #expect(scale[0] == 1, name) }
+          }
+        }
+      }
+    }
+    #expect(flat > 100 && same > 50)
   }
 
   @Test func hintsReadInPlainWords() {

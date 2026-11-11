@@ -697,15 +697,33 @@ nonisolated enum ColorMatch {
   /// How far a channel's spread may be stretched or squeezed, as the ratio of the original's
   /// spread to the edit's, for a and b and for L. Always on, with no setting. Doubling chroma
   /// doubles chroma noise with it, and 1.5× the L contrast already clips 8-bit highlights; past
-  /// these a ratio says the two images hold different things, not that the colors drifted. It
-  /// also keeps a flat image, whose spread is near 0, from making the ratio explode.
+  /// these a ratio says the two images hold different things, not that the colors drifted.
   static let chromaSpreadLimits = 0.5...2.0
   static let lightnessSpreadLimits = 0.67...1.5
+
+  /// An edit whose measured spread (in Lab units) is under this is flat in that channel: a
+  /// grayscale picture's color, a neutral backdrop's, or a plain fill's lightness. Its spread
+  /// isn't matched (`spreadRatio` is 1). What little there is is noise, and a ratio of two
+  /// noise-level spreads says nothing about the picture; rescaling by it would change parts that
+  /// weren't measured, such as something colorful the edit added in front of a gray backdrop
+  /// when only the unchanged areas are measured. The slider has nothing to do then, so the
+  /// sheet says "Same as the original." and disables it (`comparison`).
+  static let flatSpread = 0.5
+
+  /// The ratio a channel's spread is scaled by at a full match: the reference's over the
+  /// target's, kept within `limits`, and 1 where the target is flat (`flatSpread`). The one rule
+  /// for both `coefficients` and `comparison`, so what the sheet says of a slider and what the
+  /// slider does can't disagree.
+  static func spreadRatio(target: Stats, reference: Stats, channel: Int, limits: ClosedRange<Double>) -> Double {
+    guard target.std[channel] >= flatSpread else { return 1 }
+    return min(max(reference.std[channel] / target.std[channel], limits.lowerBound), limits.upperBound)
+  }
 
   /// One channel's transfer (0 is L, 1 a, 2 b) as x · scale + offset, with its mean moved by
   /// `mean` of the way to the reference's and its spread by `spread` of the way:
   ///
-  ///   k = reference std / target std, kept within the channel's limits
+  ///   k = reference std / target std, kept within the channel's limits; 1 where the target is
+  ///       flat (`spreadRatio`), which leaves only the mean to move
   ///   scale = 1 + spread · (k − 1)
   ///   offset = mean · (reference mean − k · target mean) + (mean − spread) · (k − 1) · target mean
   ///
@@ -715,8 +733,8 @@ nonisolated enum ColorMatch {
   static func coefficients(
     target: Stats, reference: Stats, channel: Int, mean: Double, spread: Double
   ) -> (scale: Double, offset: Double) {
-    let limits = channel == 0 ? lightnessSpreadLimits : chromaSpreadLimits
-    let k = min(max(reference.std[channel] / target.std[channel], limits.lowerBound), limits.upperBound)
+    let k = spreadRatio(
+      target: target, reference: reference, channel: channel, limits: channel == 0 ? lightnessSpreadLimits : chromaSpreadLimits)
     let scale = 1 + spread * (k - 1)
     let offset = mean * (reference.mean[channel] - k * target.mean[channel])
     guard mean != spread else { return (scale, offset) }
@@ -770,18 +788,13 @@ nonisolated enum ColorMatch {
     static let sameSpread = 0.03
     /// One this close to 1 is only slightly less or more.
     static let slightSpread = 0.1
-    /// An edit whose spread (in Lab units) is under this is flat in that channel: a grayscale
-    /// picture's color, or a plain fill's lightness. Scaling next to nothing, even by the
-    /// limit, moves it by less than can be seen, so the slider would do nothing whatever the
-    /// original holds; it reads as the same, which disables it, rather than as "more vivid".
-    static let flatSpread = 0.5
   }
 
   /// `reference` (the original) beside `target` (the edit). The spreads are judged by the ratio
   /// `coefficients` uses, after its limits, since that is what the slider can do: an original
   /// far flatter than the edit is still only "less", and one whose ratio the limit brings to 1
-  /// would be "same". A channel the edit is flat in (`Comparison.flatSpread`) is the same too:
-  /// there's nothing there for a ratio to scale. The limits are `coefficients`' own; they're
+  /// would be "same". A channel the edit is flat in (`flatSpread`) is the same too: its
+  /// spread isn't scaled (`spreadRatio`, the rule both share). The limits are `coefficients`' own; they're
   /// parameters only so a test can tell that the ratio judged is the limited one.
   static func comparison(
     target: Stats, reference: Stats,
@@ -791,9 +804,7 @@ nonisolated enum ColorMatch {
     func size(_ amount: Double, slight: Double) -> Comparison.Size { amount < slight ? .slight : .clear }
     // A channel's spread ratio less 1, within its limits; 0 where the edit is flat.
     func spread(_ channel: Int) -> Double {
-      guard target.std[channel] >= Limits.flatSpread else { return 0 }
-      let limits = channel == 0 ? lightnessLimits : chromaLimits
-      return min(max(reference.std[channel] / target.std[channel], limits.lowerBound), limits.upperBound) - 1
+      spreadRatio(target: target, reference: reference, channel: channel, limits: channel == 0 ? lightnessLimits : chromaLimits) - 1
     }
     func spreadDifference(_ excess: Double) -> Comparison.Difference<Comparison.Spread>? {
       guard abs(excess) >= Limits.sameSpread else { return nil }
