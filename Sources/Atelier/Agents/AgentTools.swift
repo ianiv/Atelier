@@ -358,7 +358,7 @@ final class AgentTools {
           "saturation": ["type": "number", "minimum": 0, "maximum": 1, "description": "How far the saturation (the spread of Lab a and b) moves to the original's, 0–1. Default 1. Lower it when the edit added or removed something colorful."],
           "brightness": ["type": "number", "minimum": 0, "maximum": 1, "description": "How far the brightness (the average of L) moves to the original's, 0–1. Default 0: edits often mean to change the light."],
           "contrast": ["type": "number", "minimum": 0, "maximum": 1, "description": "How far the contrast (the spread of L) moves to the original's, 0–1. Default 0."],
-          "unchanged_only": ["type": "boolean", "description": "Measure both images only where the edit left the picture alone, so what it added or removed isn't taken for a color shift. Falls back to the whole image when the original has another shape or about half the image or more has changed. Default false."],
+          "unchanged_only": ["type": "boolean", "description": "Measure both images only where the edit left the picture alone, so what it added or removed isn't taken for a color shift. Measures the part that changed least, and falls back to the whole image when that part is under a quarter of the picture, when the picture changed everywhere, or when the original has another shape. Default false."],
           "strength": ["type": "number", "minimum": 0, "maximum": 1, "description": "Shortcut: sets tint and saturation together, 0–1. tint and saturation override it."],
           "luminance": [
             "type": ["boolean", "number"], "minimum": 0, "maximum": 1,
