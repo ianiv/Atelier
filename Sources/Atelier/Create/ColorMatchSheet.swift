@@ -78,25 +78,70 @@ struct ColorMatchSheet: View {
   /// do anything.
   private var shapesDiffer: Bool { preview?.measurements.reason == .shape }
 
-  /// What the colors are measured from, under the toggle: how much of the image, or why all of it.
+  /// What the two pictures are compared from, under the toggle: how much of the picture, or why
+  /// all of it.
   private var measuredNote: String {
     guard let measurements = preview?.measurements else { return " " }
     func percent(_ fraction: Double) -> Int { Int((fraction * 100).rounded()) }
     switch measurements.reason {
     case .shape:
-      return "The original has a different shape, so the whole image is measured."
+      return "The original has a different shape, so all of it is compared."
     case .tooLittleUnchanged where unchangedOnly:
       // Most of it was edited, or the whole picture shifted: the one line reads for both.
-      return "Too little of the image is unchanged, so the whole image is measured."
+      return "Too little of the picture was left alone, so all of it is compared."
     default:
-      if unchangedOnly, let counted = measurements.unchanged?.counted { return "Measured from \(percent(counted))% of the image." }
-      return "Measured from the whole image."
+      if unchangedOnly, let counted = measurements.unchanged?.counted {
+        return "Compares only the parts the edit left alone (\(percent(counted))% of the picture)."
+      }
+      return "Compares the whole picture."
     }
+  }
+
+  /// How the original differs from the edit, as measured the way the toggle says (so the hints
+  /// change with it, as the preview does); nil until the two are measured.
+  private var comparison: ColorMatch.Comparison? {
+    preview?.measurements.measurement(unchangedOnly: unchangedOnly).comparison
+  }
+
+  /// What a slider's hint says when there's nothing for it to match.
+  static let sameHint = "Same as the original."
+
+  /// "The original is slightly darker.": what a slider's far end holds, in plain words, since
+  /// the sliders only go toward the original and never past the edit.
+  private static func hint(_ lead: String, _ size: ColorMatch.Comparison.Size, _ word: String) -> String {
+    "The original \(lead) \(size == .slight ? "slightly " : "")\(word)."
+  }
+
+  static func tintHint(_ difference: ColorMatch.Comparison.Difference<ColorMatch.Comparison.Cast>?) -> String {
+    guard let difference else { return sameHint }
+    let word = switch difference.direction {
+    case .warmer: "warmer"
+    case .cooler: "cooler"
+    case .pinker: "pinker"
+    case .greener: "greener"
+    }
+    return hint("is", difference.size, word)
+  }
+
+  static func saturationHint(_ difference: ColorMatch.Comparison.Difference<ColorMatch.Comparison.Spread>?) -> String {
+    guard let difference else { return sameHint }
+    return hint("is", difference.size, difference.direction == .more ? "more vivid" : "more muted")
+  }
+
+  static func brightnessHint(_ difference: ColorMatch.Comparison.Difference<ColorMatch.Comparison.Light>?) -> String {
+    guard let difference else { return sameHint }
+    return hint("is", difference.size, difference.direction == .darker ? "darker" : "brighter")
+  }
+
+  static func contrastHint(_ difference: ColorMatch.Comparison.Difference<ColorMatch.Comparison.Spread>?) -> String {
+    guard let difference else { return sameHint }
+    return hint("has", difference.size, difference.direction == .more ? "more contrast" : "less contrast")
   }
 
   var body: some View {
     let options = self.options
     let problem = self.problem
+    let comparison = self.comparison
     VStack(alignment: .leading, spacing: 14) {
       Text("Match Colors").font(.headline)
       Picker("Comparison", selection: $compareMode) {
@@ -113,26 +158,34 @@ struct ColorMatchSheet: View {
       // pictures and the buttons staying put.
       ScrollView {
         VStack(alignment: .leading, spacing: 12) {
-          Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 8) {
-            heading("Color")
-            slider("Tint", $tint, shown: options.tint)
-            slider("Saturation", $saturation, shown: options.saturation)
-            heading("Light").padding(.top, 4)
-            slider("Brightness", $brightness, shown: options.brightness)
-            slider("Contrast", $contrast, shown: options.contrast)
+          // One heading over all four: with each slider's ends named, the heading and a row's
+          // name read together ("Match the original's Brightness").
+          Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 2) {
+            heading("Match the original's")
+            slider("Tint", $tint, shown: options.tint, same: comparison.map { $0.tint == nil }, hint: comparison.map { Self.tintHint($0.tint) })
+            slider(
+              "Saturation", $saturation, shown: options.saturation,
+              same: comparison.map { $0.saturation == nil }, hint: comparison.map { Self.saturationHint($0.saturation) })
+            slider(
+              "Brightness", $brightness, shown: options.brightness,
+              same: comparison.map { $0.brightness == nil }, hint: comparison.map { Self.brightnessHint($0.brightness) })
+            slider(
+              "Contrast", $contrast, shown: options.contrast,
+              same: comparison.map { $0.contrast == nil }, hint: comparison.map { Self.contrastHint($0.contrast) })
           }
           VStack(alignment: .leading, spacing: 4) {
-            Toggle("Measure unchanged areas only", isOn: $unchangedOnly)
+            Toggle("Ignore edited areas", isOn: $unchangedOnly)
               .disabled(shapesDiffer)
             // Room for it always, so nothing moves when it arrives or changes.
             Text(measuredNote)
               .font(.caption).foregroundStyle(.secondary)
               .lineLimit(1, reservesSpace: true)
           }
-          // Room for two lines always, so the sheet doesn't move when the note changes.
-          Text(problem ?? "Tint and Brightness move the average to the original's; Saturation and Contrast move the range around it.")
+          // Room for a line always, so the sheet doesn't move when a problem comes or goes; the
+          // sliders' hints say what each does, so there's nothing else to put here.
+          Text(problem ?? " ")
             .font(.caption).foregroundStyle(.secondary)
-            .lineLimit(2, reservesSpace: true)
+            .lineLimit(1...2)
             .fixedSize(horizontal: false, vertical: true)
         }
         // Capped, and centred under the pictures: sliders as wide as a large sheet are no
@@ -171,19 +224,46 @@ struct ColorMatchSheet: View {
     }
   }
 
-  /// The name of a group of sliders, across the grid.
+  /// The name of the sliders, across the grid.
   private func heading(_ title: String) -> some View {
     Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
       .accessibilityAddTraits(.isHeader)
   }
 
-  /// One amount's row: its name, its slider and its value.
-  private func slider(_ title: String, _ amount: Binding<Double>, shown: Double) -> some View {
+  /// One amount's rows: its name, its slider and its value, and under the slider what the
+  /// original is like beside the edit (`hint`; nil while that's being measured, with its room
+  /// kept). The slider's ends are named for the two pictures, so it reads as a blend between
+  /// them and not as an adjustment that could go either way. `same` is that there's nothing to
+  /// match: the slider would do nothing, so it's disabled, with its amount left as it was.
+  @ViewBuilder private func slider(_ title: String, _ amount: Binding<Double>, shown: Double, same: Bool?, hint: String?) -> some View {
     GridRow {
       Text(title).gridColumnAlignment(.trailing)
-      Slider(value: percentSteps(amount), in: 0...1)
-        .accessibilityLabel(title)
+      Slider(value: percentSteps(amount), in: 0...1) {
+        Text(title)
+      } minimumValueLabel: {
+        Self.label("Edit")
+      } maximumValueLabel: {
+        Self.label("Original")
+      }
+      .labelsHidden()
+      // All the width the row has: with its ends labelled a slider keeps to its own size, and
+      // the hint under it would be cut to that.
+      .frame(maxWidth: .infinity)
+      .disabled(same == true)
+      .accessibilityLabel(title)
+      .accessibilityHint(hint.map { "From the edit to the original. \($0)" } ?? "From the edit to the original.")
       percent(shown)
+    }
+    .padding(.top, 6)
+    GridRow {
+      // Nothing under the name. Not a clear color: that makes a column of its own share the
+      // width, and the sliders come out short.
+      Text("").accessibilityHidden(true)
+      // Read with the slider, as its hint.
+      Text(hint ?? " ")
+        .font(.caption).foregroundStyle(.secondary)
+        .lineLimit(1, reservesSpace: true)
+        .accessibilityHidden(true)
     }
   }
 
@@ -195,7 +275,7 @@ struct ColorMatchSheet: View {
 
   /// The most width the controls (the sliders, the toggle and the notes) take, however wide the
   /// sheet is.
-  private static let maxControlsWidth: CGFloat = 460
+  private static let maxControlsWidth: CGFloat = 680
 
   /// The least height the pictures (with their labels) keep when the sheet is short.
   private static let minPicturesHeight: CGFloat = 150

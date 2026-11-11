@@ -868,4 +868,109 @@ struct ColorMatchTests {
         == ColorMatch.transferred(
           rgba: try #require(ColorMatch.rgba(editedImage)), target: measured.target, reference: measured.reference, options: options))
   }
+
+  // MARK: Comparison (the sheet's hints)
+
+  /// The edit's statistics in these tests; the original's are given beside them.
+  private let edit = ColorMatch.Stats(mean: SIMD3(50, 4, 8), std: SIMD3(20, 10, 10))
+
+  private func compared(mean: SIMD3<Double> = SIMD3(50, 4, 8), std: SIMD3<Double> = SIMD3(20, 10, 10)) -> ColorMatch.Comparison {
+    ColorMatch.comparison(target: edit, reference: ColorMatch.Stats(mean: mean, std: std))
+  }
+
+  @Test func identicalPicturesHaveNothingToMatch() {
+    #expect(compared() == ColorMatch.Comparison())
+  }
+
+  @Test func brightnessSaysDarkerOrBrighter() {
+    #expect(compared(mean: SIMD3(40, 4, 8)).brightness == .init(direction: .darker, size: .clear))
+    #expect(compared(mean: SIMD3(60, 4, 8)).brightness == .init(direction: .brighter, size: .clear))
+    #expect(compared(mean: SIMD3(48, 4, 8)).brightness == .init(direction: .darker, size: .slight))
+    #expect(compared(mean: SIMD3(52, 4, 8)).brightness == .init(direction: .brighter, size: .slight))
+    // Only brightness: the rest is the same.
+    var only = ColorMatch.Comparison()
+    only.brightness = .init(direction: .darker, size: .clear)
+    #expect(compared(mean: SIMD3(40, 4, 8)) == only)
+  }
+
+  @Test func contrastSaysLessOrMore() {
+    #expect(compared(std: SIMD3(16, 10, 10)).contrast == .init(direction: .less, size: .clear))
+    #expect(compared(std: SIMD3(26, 10, 10)).contrast == .init(direction: .more, size: .clear))
+    #expect(compared(std: SIMD3(19, 10, 10)).contrast == .init(direction: .less, size: .slight))
+    #expect(compared(std: SIMD3(21, 10, 10)).contrast == .init(direction: .more, size: .slight))
+    #expect(compared(std: SIMD3(16, 10, 10)).saturation == nil)
+  }
+
+  @Test func tintIsNamedByTheAxisItLiesAlongMore() {
+    #expect(compared(mean: SIMD3(50, 4, 18)).tint == .init(direction: .warmer, size: .clear))
+    #expect(compared(mean: SIMD3(50, 4, -2)).tint == .init(direction: .cooler, size: .clear))
+    #expect(compared(mean: SIMD3(50, 14, 8)).tint == .init(direction: .pinker, size: .clear))
+    #expect(compared(mean: SIMD3(50, -6, 8)).tint == .init(direction: .greener, size: .clear))
+    // Both moved: the larger names it, whichever way the smaller went.
+    #expect(compared(mean: SIMD3(50, 7, 2)).tint?.direction == .cooler)
+    #expect(compared(mean: SIMD3(50, 10, 5)).tint?.direction == .pinker)
+    #expect(compared(mean: SIMD3(50, -3, 10)).tint?.direction == .greener)
+    #expect(compared(mean: SIMD3(50, 2, 11)).tint?.direction == .warmer)
+    // Level: warm or cool.
+    #expect(compared(mean: SIMD3(50, 7, 11)).tint?.direction == .warmer)
+    #expect(compared(mean: SIMD3(50, 4, 10)).tint == .init(direction: .warmer, size: .slight))
+  }
+
+  @Test func saturationSaysVividOrMuted() {
+    #expect(compared(std: SIMD3(20, 14, 14)).saturation == .init(direction: .more, size: .clear))
+    #expect(compared(std: SIMD3(20, 7, 7)).saturation == .init(direction: .less, size: .clear))
+    #expect(compared(std: SIMD3(20, 10.6, 10.6)).saturation == .init(direction: .more, size: .slight))
+    #expect(compared(std: SIMD3(20, 9.4, 9.4)).saturation == .init(direction: .less, size: .slight))
+    // One channel off is enough for the slider to do something, and the one further off says
+    // which way.
+    #expect(compared(std: SIMD3(20, 10, 13)).saturation?.direction == .more)
+    #expect(compared(std: SIMD3(20, 6, 12)).saturation?.direction == .less)
+    #expect(compared(std: SIMD3(20, 14, 14)).contrast == nil)
+  }
+
+  @Test func differencesTooSmallToSeeAreTheSame() {
+    typealias Limits = ColorMatch.Comparison
+    let near = compared(
+      mean: SIMD3(50 - Limits.sameLightness * 0.9, 4 + 0.6, 8 - 0.6),
+      std: SIMD3(20 * (1 + Limits.sameSpread * 0.9), 10 * (1 - Limits.sameSpread * 0.9), 10 * (1 + Limits.sameSpread * 0.9)))
+    #expect(near == ColorMatch.Comparison())
+    // Just past each.
+    #expect(compared(mean: SIMD3(50 + Limits.sameLightness * 1.1, 4, 8)).brightness != nil)
+    #expect(compared(mean: SIMD3(50, 4, 8 + Limits.sameTint * 1.1)).tint != nil)
+    #expect(compared(std: SIMD3(20 * (1 - Limits.sameSpread * 1.1), 10, 10)).contrast != nil)
+    #expect(compared(std: SIMD3(20, 10, 10 * (1 + Limits.sameSpread * 1.1))).saturation != nil)
+    // The tint's whole length counts, not each axis: 0.8 along both is past 1.
+    #expect(compared(mean: SIMD3(50, 4.8, 8.8)).tint == .init(direction: .warmer, size: .slight))
+  }
+
+  @Test func theSpreadJudgedIsTheCappedOne() {
+    // Far past the limits either way is still only less or more.
+    #expect(compared(std: SIMD3(200, 100, 100)).contrast == .init(direction: .more, size: .clear))
+    #expect(compared(std: SIMD3(1, 1, 1)).saturation == .init(direction: .less, size: .clear))
+    // With limits that hold the ratio near 1, a ratio far from it would be the same: what's
+    // judged is what `coefficients` scales by.
+    for channel in 0..<3 {
+      let reference = ColorMatch.Stats(mean: edit.mean, std: SIMD3(200, 100, 100))
+      let scale = ColorMatch.coefficients(target: edit, reference: reference, channel: channel, mean: 1, spread: 1).scale
+      let limits = channel == 0 ? ColorMatch.lightnessSpreadLimits : ColorMatch.chromaSpreadLimits
+      #expect(scale == limits.upperBound)
+    }
+    // A flat edit (spread near 0) doesn't make the ratio explode into anything but "more".
+    let flat = ColorMatch.comparison(
+      target: ColorMatch.Stats(mean: SIMD3(50, 0, 0), std: SIMD3(1e-6, 1e-6, 1e-6)),
+      reference: ColorMatch.Stats(mean: SIMD3(50, 0, 0), std: SIMD3(20, 10, 10)))
+    #expect(flat.contrast == .init(direction: .more, size: .clear) && flat.saturation == .init(direction: .more, size: .clear))
+  }
+
+  @Test func hintsReadInPlainWords() {
+    #expect(ColorMatchSheet.brightnessHint(.init(direction: .darker, size: .clear)) == "The original is darker.")
+    #expect(ColorMatchSheet.brightnessHint(.init(direction: .brighter, size: .slight)) == "The original is slightly brighter.")
+    #expect(ColorMatchSheet.contrastHint(.init(direction: .less, size: .clear)) == "The original has less contrast.")
+    #expect(ColorMatchSheet.contrastHint(.init(direction: .more, size: .slight)) == "The original has slightly more contrast.")
+    #expect(ColorMatchSheet.tintHint(.init(direction: .warmer, size: .clear)) == "The original is warmer.")
+    #expect(ColorMatchSheet.tintHint(.init(direction: .greener, size: .slight)) == "The original is slightly greener.")
+    #expect(ColorMatchSheet.saturationHint(.init(direction: .more, size: .clear)) == "The original is more vivid.")
+    #expect(ColorMatchSheet.saturationHint(.init(direction: .less, size: .clear)) == "The original is more muted.")
+    #expect(ColorMatchSheet.contrastHint(nil) == "Same as the original.")
+  }
 }

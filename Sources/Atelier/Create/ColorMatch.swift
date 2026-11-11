@@ -318,6 +318,9 @@ nonisolated enum ColorMatch {
 
     /// The shift a full match takes out.
     var shift: Shift { ColorMatch.shift(target: target, reference: reference) }
+
+    /// How the original differs from the edit, in words.
+    var comparison: Comparison { ColorMatch.comparison(target: target, reference: reference) }
   }
 
   /// Why only the whole image could be measured, when the unchanged areas were asked for.
@@ -724,6 +727,86 @@ nonisolated enum ColorMatch {
   static func shift(target: Stats, reference: Stats) -> Shift {
     let delta = target.mean - reference.mean
     return Shift(l: delta.x, a: delta.y, b: delta.z)
+  }
+
+  // MARK: Comparison
+
+  /// How the original differs from the edit in each of the four things a match can move, in
+  /// words a person would use, for the hints under the Match Colors… sliders. Someone who reads
+  /// Brightness as an adjustment finds it only ever darkens, or that Contrast does nothing;
+  /// this is what says why: the original is darker, or the two have the same contrast. nil
+  /// means the difference is too small to see, so there's nothing for that slider to match.
+  struct Comparison: Sendable, Hashable {
+    /// How much of a difference there is, when there is one.
+    enum Size: Sendable, Hashable { case slight, clear }
+    /// The original's lightness beside the edit's.
+    enum Light: Sendable, Hashable { case darker, brighter }
+    /// The original's range (of lightness, or of color) beside the edit's.
+    enum Spread: Sendable, Hashable { case less, more }
+    /// The original's color balance beside the edit's: along b (warmer, cooler) or a (pinker,
+    /// greener).
+    enum Cast: Sendable, Hashable { case warmer, cooler, pinker, greener }
+
+    struct Difference<Direction: Sendable & Hashable>: Sendable, Hashable {
+      var direction: Direction
+      var size: Size
+    }
+
+    var tint: Difference<Cast>?
+    var saturation: Difference<Spread>?
+    var brightness: Difference<Light>?
+    var contrast: Difference<Spread>?
+
+    /// Under this much difference of the L means (of 100), the two are as bright as each other.
+    static let sameLightness = 1.0
+    /// Under this much, the original is only slightly darker or brighter.
+    static let slightLightness = 4.0
+    /// Under this length of the difference of the (a, b) means, the two have the same tint.
+    static let sameTint = 1.0
+    /// Under this length, the tints differ only slightly.
+    static let slightTint = 4.0
+    /// A spread ratio (the original's over the edit's) this close to 1 is the same contrast, or
+    /// the same saturation.
+    static let sameSpread = 0.03
+    /// One this close to 1 is only slightly less or more.
+    static let slightSpread = 0.1
+  }
+
+  /// `reference` (the original) beside `target` (the edit). The spreads are judged by the ratio
+  /// `coefficients` uses, after its limits, since that is what the slider can do: an original
+  /// far flatter than the edit is still only "less", and one whose ratio the limit brings to 1
+  /// would be "same".
+  static func comparison(target: Stats, reference: Stats) -> Comparison {
+    typealias Limits = Comparison
+    func size(_ amount: Double, slight: Double) -> Comparison.Size { amount < slight ? .slight : .clear }
+    // A channel's spread ratio less 1, within its limits.
+    func spread(_ channel: Int) -> Double {
+      let limits = channel == 0 ? lightnessSpreadLimits : chromaSpreadLimits
+      return min(max(reference.std[channel] / target.std[channel], limits.lowerBound), limits.upperBound) - 1
+    }
+    func spreadDifference(_ excess: Double) -> Comparison.Difference<Comparison.Spread>? {
+      guard abs(excess) >= Limits.sameSpread else { return nil }
+      return .init(direction: excess < 0 ? .less : .more, size: size(abs(excess), slight: Limits.slightSpread))
+    }
+    var out = Comparison()
+    let delta = reference.mean - target.mean
+    if abs(delta.x) >= Limits.sameLightness {
+      out.brightness = .init(direction: delta.x < 0 ? .darker : .brighter, size: size(abs(delta.x), slight: Limits.slightLightness))
+    }
+    out.contrast = spreadDifference(spread(0))
+    // The whole shift decides whether there is one to see; the axis it lies along more names
+    // it (b when they're level: warm and cool are the commoner words).
+    let cast = (delta.y * delta.y + delta.z * delta.z).squareRoot()
+    if cast >= Limits.sameTint {
+      let direction: Comparison.Cast = abs(delta.y) > abs(delta.z) ? (delta.y > 0 ? .pinker : .greener) : (delta.z > 0 ? .warmer : .cooler)
+      out.tint = .init(direction: direction, size: size(cast, slight: Limits.slightTint))
+    }
+    // a and b are scaled each by its own ratio, so the slider has something to do when either
+    // is off; the one further off says which way.
+    let a = spread(1)
+    let b = spread(2)
+    out.saturation = spreadDifference(abs(a) > abs(b) ? a : b)
+    return out
   }
 
   /// The pixels moved from `target`'s statistics toward `reference`'s, each channel by
