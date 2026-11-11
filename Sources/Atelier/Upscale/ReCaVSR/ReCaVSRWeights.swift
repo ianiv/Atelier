@@ -137,3 +137,90 @@ nonisolated enum ReCaVSRConfig {
     return try body()
   }
 }
+
+/// A safetensors file read a tensor at a time (`FileHandle`), so a checkpoint never sits in
+/// memory whole. `Data(contentsOf:options: .mappedIfSafe)`, which `SafeTensors` uses, reads the
+/// file in full when it's on an external volume, as models folders often are: 10.6 GB for
+/// ReCaVSR's DiT, held while the weights it fills are on the GPU too.
+final nonisolated class ReCaVSRCheckpoint {
+  enum Failure: LocalizedError {
+    case unreadable(String), missing(String)
+
+    var errorDescription: String? {
+      switch self {
+      case .unreadable(let file): "Couldn't read \(file)."
+      case .missing(let name): "The ReCaVSR checkpoint has no \(name)."
+      }
+    }
+  }
+
+  private struct Entry {
+    var dtype: String
+    var shape: [Int]
+    var start: UInt64
+    var end: UInt64
+  }
+
+  private let handle: FileHandle
+  private let file: String
+  private let entries: [String: Entry]
+
+  init(_ url: URL) throws {
+    file = url.lastPathComponent
+    guard let handle = try? FileHandle(forReadingFrom: url) else { throw Failure.unreadable(file) }
+    self.handle = handle
+    guard let prefix = try handle.read(upToCount: 8), prefix.count == 8 else { throw Failure.unreadable(file) }
+    let length = prefix.withUnsafeBytes { $0.loadUnaligned(as: UInt64.self) }
+    guard length < 100_000_000, let header = try handle.read(upToCount: Int(length)),
+          let json = try JSONSerialization.jsonObject(with: header) as? [String: Any]
+    else { throw Failure.unreadable(file) }
+    var entries: [String: Entry] = [:]
+    for (name, value) in json {
+      guard let value = value as? [String: Any], let dtype = value["dtype"] as? String,
+            let shape = value["shape"] as? [Int], let offsets = value["data_offsets"] as? [Int], offsets.count == 2
+      else { continue }
+      entries[name] = Entry(
+        dtype: dtype, shape: shape.isEmpty ? [1] : shape, start: 8 + length + UInt64(offsets[0]),
+        end: 8 + length + UInt64(offsets[1]))
+    }
+    self.entries = entries
+  }
+
+  func contains(_ name: String) -> Bool { entries[name] != nil }
+
+  /// The tensor, float32 on the CPU, in its checkpoint shape (BF16, F16 and F32 files).
+  func tensor(_ name: String) throws -> Tensor<Float> {
+    // The read's buffer is autoreleased; on a queue with no pool of its own it would stay until
+    // the whole load ends, as much again as the weights.
+    try autoreleasepool { try read(name) }
+  }
+
+  private func read(_ name: String) throws -> Tensor<Float> {
+    guard let entry = entries[name] else { throw Failure.missing(name) }
+    try handle.seek(toOffset: entry.start)
+    guard let data = try handle.read(upToCount: Int(entry.end - entry.start)) else { throw Failure.unreadable(file) }
+    let count = entry.shape.reduce(1, *)
+    var tensor = Tensor<Float>(.CPU, format: .NCHW, shape: TensorShape(entry.shape))
+    try tensor.withUnsafeMutableBytes { raw in
+      let out = raw.bindMemory(to: Float.self)
+      try data.withUnsafeBytes { source in
+        switch entry.dtype {
+        case "BF16":
+          guard source.count == count * 2 else { throw Failure.unreadable(file) }
+          let bits = source.bindMemory(to: UInt16.self)
+          for i in 0..<count { out[i] = Float(bitPattern: UInt32(bits[i]) << 16) }
+        case "F16":
+          guard source.count == count * 2 else { throw Failure.unreadable(file) }
+          let halves = source.bindMemory(to: Float16.self)
+          for i in 0..<count { out[i] = Float(halves[i]) }
+        case "F32":
+          guard source.count == count * 4 else { throw Failure.unreadable(file) }
+          _ = memcpy(out.baseAddress!, source.baseAddress!, count * 4)
+        default:
+          throw Failure.unreadable("\(file) (\(name) is \(entry.dtype))")
+        }
+      }
+    }
+    return tensor
+  }
+}

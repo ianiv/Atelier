@@ -27,7 +27,7 @@ final nonisolated class ReCaVSRSourceProjection {
   private var carry2: DynamicGraph.Tensor<FloatType>?
 
   /// For a padded output of `height`×`width` pixels (multiples of 32).
-  init(graph: DynamicGraph, checkpoint: FlashVSRCheckpoint, height: Int, width: Int) throws {
+  init(graph: DynamicGraph, checkpoint: ReCaVSRCheckpoint, height: Int, width: Int) throws {
     self.graph = graph
     self.height = height / 16
     self.width = width / 16
@@ -52,13 +52,13 @@ final nonisolated class ReCaVSRSourceProjection {
     stage2.compile(inputs: graph.variable(.GPU(0), .NHWC(6, h, w, 4 * 2048), of: FloatType.self))
     output.compile(inputs: graph.variable(.GPU(0), .WC(6 * (h / 2) * (w / 2), 3072), of: FloatType.self))
     conv1.weight.copy(from: try Self.tapMajor(checkpoint.tensor("lq_proj.conv1.weight"), out: 2048, in: 768, graph: graph))
-    conv1.bias.copy(from: try checkpoint.tensor("lq_proj.conv1.bias", shape: [2048]))
+    conv1.bias.copy(from: Tensor<FloatType>(from: try checkpoint.tensor("lq_proj.conv1.bias").reshaped(format: .NCHW, shape: [2048])))
     norm1.weight.copy(from: try checkpoint.tensor("lq_proj.norm1.weight").reshaped(format: .NCHW, shape: [2048]))
     conv2.weight.copy(from: try Self.tapMajor(checkpoint.tensor("lq_proj.conv2.weight"), out: 3072, in: 2048, graph: graph))
-    conv2.bias.copy(from: try checkpoint.tensor("lq_proj.conv2.bias", shape: [3072]))
+    conv2.bias.copy(from: Tensor<FloatType>(from: try checkpoint.tensor("lq_proj.conv2.bias").reshaped(format: .NCHW, shape: [3072])))
     norm2.weight.copy(from: try checkpoint.tensor("lq_proj.norm2.weight").reshaped(format: .NCHW, shape: [3072]))
-    linear.weight.copy(from: try checkpoint.tensor("lq_proj.out_proj.weight", shape: [3072, 3072]))
-    linear.bias.copy(from: try checkpoint.tensor("lq_proj.out_proj.bias", shape: [3072]))
+    linear.weight.copy(from: Tensor<FloatType>(from: try checkpoint.tensor("lq_proj.out_proj.weight").reshaped(format: .NCHW, shape: [3072, 3072])))
+    linear.bias.copy(from: Tensor<FloatType>(from: try checkpoint.tensor("lq_proj.out_proj.bias").reshaped(format: .NCHW, shape: [3072])))
   }
 
   /// A conv3d weight `[O, C, 4, 3, 3]` as the 2D weight `[O, 4C, 3, 3]` over tap-major stacked

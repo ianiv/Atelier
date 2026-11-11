@@ -193,6 +193,7 @@
 		DBA854E23C87D5B72AF0C16A /* ReCaVSRLocalAttention.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4341D80DCB6B00217FEFD8C8 /* ReCaVSRLocalAttention.swift */; };
 		D5010C7DFC2D65069E88C1EA /* ReCaVSRDenoiser.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4E40705F359250BDEE3C391 /* ReCaVSRDenoiser.swift */; };
 		6A58FD8E0BFFC6506DB5BE81 /* ReCaVSRDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF8A91B638D18A58BB90D54D /* ReCaVSRDecoder.swift */; };
+		23FB2D3DAD4EA4ADC51AD5FE /* ReCaVSRUpscaler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 485E0CAE10562C2B9DB6066E /* ReCaVSRUpscaler.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -410,6 +411,7 @@
 		4341D80DCB6B00217FEFD8C8 /* ReCaVSRLocalAttention.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReCaVSRLocalAttention.swift; sourceTree = "<group>"; };
 		F4E40705F359250BDEE3C391 /* ReCaVSRDenoiser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReCaVSRDenoiser.swift; sourceTree = "<group>"; };
 		AF8A91B638D18A58BB90D54D /* ReCaVSRDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReCaVSRDecoder.swift; sourceTree = "<group>"; };
+		485E0CAE10562C2B9DB6066E /* ReCaVSRUpscaler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReCaVSRUpscaler.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -804,6 +806,7 @@
 				4341D80DCB6B00217FEFD8C8 /* ReCaVSRLocalAttention.swift */,
 				F4E40705F359250BDEE3C391 /* ReCaVSRDenoiser.swift */,
 				AF8A91B638D18A58BB90D54D /* ReCaVSRDecoder.swift */,
+				485E0CAE10562C2B9DB6066E /* ReCaVSRUpscaler.swift */,
 			);
 			path = ReCaVSR;
 			sourceTree = "<group>";
@@ -992,6 +995,7 @@
 				F1F29ECD79C50D354E0EE7E2 /* ClipUpscale.swift in Sources */,
 				E360F3396B8D19F63D2D7763 /* SystemSuperResolution.swift in Sources */,
 				4E97E7417B4FBD4C0A2D4F5F /* FlashVSRWeights.swift in Sources */,
+				23FB2D3DAD4EA4ADC51AD5FE /* ReCaVSRUpscaler.swift in Sources */,
 				6A58FD8E0BFFC6506DB5BE81 /* ReCaVSRDecoder.swift in Sources */,
 				D5010C7DFC2D65069E88C1EA /* ReCaVSRDenoiser.swift in Sources */,
 				DBA854E23C87D5B72AF0C16A /* ReCaVSRLocalAttention.swift in Sources */,

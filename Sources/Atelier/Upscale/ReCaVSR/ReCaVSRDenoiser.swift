@@ -71,7 +71,7 @@ final nonisolated class ReCaVSRDenoiser {
 
   /// Builds the DiT for a `height`×`width` frame (padded, multiples of 32).
   init(
-    graph: DynamicGraph, checkpoint: FlashVSRCheckpoint, prompt: FlashVSRCheckpoint, height: Int,
+    graph: DynamicGraph, checkpoint: ReCaVSRCheckpoint, prompt: ReCaVSRCheckpoint, height: Int,
     width: Int, window: (height: Int, width: Int) = ReCaVSRConfig.window
   ) throws {
     precondition(height % 32 == 0 && width % 32 == 0)
@@ -212,7 +212,7 @@ final nonisolated class ReCaVSRDenoiser {
 
   /// The checkpoint tensor `name` on the GPU, float32 or half precision, conv weights
   /// (`[3072, 48, 1, 2, 2]`) as the matrix over the patch.
-  private static func weight(_ name: String, isFloat: Bool, checkpoint: FlashVSRCheckpoint) throws -> AnyTensor {
+  private static func weight(_ name: String, isFloat: Bool, checkpoint: ReCaVSRCheckpoint) throws -> AnyTensor {
     var tensor = try checkpoint.tensor(name)
     // The feed-forward's second bias is scaled down with its input (see `postAttention`).
     if name.hasSuffix("ffn.net.2.bias") {
@@ -234,7 +234,7 @@ final nonisolated class ReCaVSRDenoiser {
   /// layers' modulations (`scale_shift_table + timestep_proj`, transformer.py:45-48), the head's
   /// (`scale_shift_table + temb`, :275-277), and each layer's cross-attention keys
   /// (`norm_k(to_k(context))`) and values (transformer_wan.py:613-626).
-  private func fold(checkpoint: FlashVSRCheckpoint, prompt: FlashVSRCheckpoint) throws {
+  private func fold(checkpoint: ReCaVSRCheckpoint, prompt: ReCaVSRCheckpoint) throws {
     let D = Self.D
     func load(_ dense: Dense, _ name: String) throws {
       dense.weight.copy(from: try checkpoint.tensor("\(name).weight"))
@@ -355,6 +355,7 @@ final nonisolated class ReCaVSRDenoiser {
       guard shouldContinue() else { return nil }
       let m = modulations[layer]
       for (slot, weight) in zip(blockSlots, layerWeights[layer]) { slot.copy(from: weight) }
+      Profile.mark("copy", wait: x)
       let qkv = preAttention(inputs: x, m[0], m[1])
       // RoPE on q and k in float32: time (at the absolute latent; only differences of
       // positions matter), rows, columns.
@@ -379,12 +380,15 @@ final nonisolated class ReCaVSRDenoiser {
         attention = ScaledDotProductAttention(scale: 1 / Float(HD).squareRoot())(
           queries: q, keys: keys, values: values)
       }
+      Profile.mark("self-attention", wait: attention)
       let mid = crossQuery(inputs: x, attention.reshaped(.WC(seq, Self.D)), m[2])
       let crossOut = ScaledDotProductAttention(scale: 1 / Float(HD).squareRoot())(
         queries: mid[1].as(of: FloatType.self).reshaped(.NHWC(1, seq, H, HD)), keys: crossKeys[layer],
         values: crossValues[layer]
       ).reshaped(.WC(seq, Self.D))
+      Profile.mark("cross", wait: crossOut)
       x = postAttention(inputs: mid[0], crossOut, m[3], m[4], m[5])[0].as(of: Float.self)
+      Profile.mark("ffn", wait: x)
       inspect?("layer_\(layer)_out", x)
 
       // Keep what the router says for the blocks after (cache.py:100-134).
@@ -411,6 +415,7 @@ final nonisolated class ReCaVSRDenoiser {
     let x0 = noise - latent
     recycled = DynamicGraph.Tensor<FloatType>(
       from: x0[(F - ReCaVSRConfig.bodyLatents)..<F, 0..<h, 0..<w, 0..<C].copied())
+    if latentOffset == 0 { windowedAttention?.forget(frames: F) }
     latentOffset += F
     return x0
   }

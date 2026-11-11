@@ -1,7 +1,9 @@
 #if os(macOS)
+import AVFoundation
 @preconcurrency import Diffusion
 import Foundation
 @preconcurrency import NNC
+import VideoToolbox
 
 extension Automation {
   /// Checks the ReCaVSR port against the reference's dumps (a PyTorch run of
@@ -11,6 +13,12 @@ extension Automation {
   /// the worst relative L2 per stage, then PASS or FAIL against the thresholds.
   ///
   ///   Atelier --recavsr-check --reference DIR [--blocks N] [--own-latents] [--verbose] [--quit]
+  ///
+  /// Or upscales the first frames of a real clip, printing seconds per frame and peak memory,
+  /// and with `--export DIR` writes the result there as an MP4:
+  ///
+  ///   Atelier --recavsr-check --input FILE [--frames 45] [--scale 4] [--source-size WxH]
+  ///           [--export DIR] [--no-color-fix] [--quit]
   ///
   /// Loads only the ReCaVSR folder of the models directory.
   static func recaVSRCheck() {
@@ -31,8 +39,15 @@ extension Automation {
       log("FAIL ReCaVSR isn't in \(AppSettings.modelsDirectory)/\(ReCaVSRFiles.folderName)")
       return finish()
     }
+    if let input = value("--input") {
+      return recaVSRRun(
+        files: files, input: input, frames: value("--frames").flatMap(Int.init) ?? 45,
+        scale: value("--scale").flatMap(Int.init) ?? 4, export: value("--export"),
+        sourceSize: value("--source-size").map { $0.split(separator: "x").compactMap { Int($0) } },
+        colorFix: !args.contains("--no-color-fix"), log: log, finish: finish)
+    }
     guard let reference = value("--reference") else {
-      log("FAIL --reference DIR is needed")
+      log("FAIL --reference DIR or --input FILE is needed")
       return finish()
     }
     DispatchQueue.global(qos: .userInitiated).async {
@@ -50,6 +65,125 @@ extension Automation {
   }
 }
 
+extension Automation {
+  /// The process's peak memory footprint so far, GPU allocations included.
+  nonisolated static func peakFootprint() -> UInt64 { footprint().peak }
+
+  /// The process's memory footprint now and at its peak.
+  nonisolated static func footprint() -> (now: UInt64, peak: UInt64) {
+    var info = task_vm_info_data_t()
+    var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+    let result = withUnsafeMutablePointer(to: &info) {
+      $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+        task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+      }
+    }
+    guard result == KERN_SUCCESS else { return (0, 0) }
+    return (UInt64(info.phys_footprint), UInt64(max(0, info.ledger_phys_footprint_peak)))
+  }
+
+  /// `--recavsr-check --input`: a real clip through `ReCaVSRUpscaler`.
+  nonisolated static func recaVSRRun(
+    files: ReCaVSRFiles, input: String, frames limit: Int, scale: Int, export: String?, sourceSize: [Int]?,
+    colorFix: Bool,
+    log: @escaping @Sendable (String) -> Void, finish: @escaping @Sendable () -> Void
+  ) {
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        let asset = AVURLAsset(url: URL(fileURLWithPath: input))
+        let reader = try AVAssetReader(asset: asset)
+        let semaphore = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) var track: AVAssetTrack?
+        nonisolated(unsafe) var fps: Double = 24
+        Task {
+          track = try? await asset.loadTracks(withMediaType: .video).first
+          if let track, let rate = try? await track.load(.nominalFrameRate) { fps = Double(rate) }
+          semaphore.signal()
+        }
+        semaphore.wait()
+        guard let track else { throw ClipVideoError.noFrames }
+        let output = AVAssetReaderTrackOutput(
+          track: track,
+          outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)])
+        reader.add(output)
+        reader.startReading()
+        var sources: [CGImage] = []
+        while sources.count < limit, let sample = output.copyNextSampleBuffer(), let buffer = sample.imageBuffer {
+          var image: CGImage?
+          VTCreateCGImageFromCVPixelBuffer(buffer, options: nil, imageOut: &image)
+          guard let image else { continue }
+          if let sourceSize, sourceSize.count == 2,
+            let context = CGContext(
+              data: nil, width: sourceSize[0], height: sourceSize[1], bitsPerComponent: 8, bytesPerRow: 0,
+              space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+          {
+            // Shrunk first (`--source-size`), to benchmark an output size.
+            context.interpolationQuality = .high
+            context.draw(image, in: CGRect(x: 0, y: 0, width: sourceSize[0], height: sourceSize[1]))
+            if let small = context.makeImage() { sources.append(small) }
+          } else if let copy = image.copy() {
+            sources.append(copy)
+          }
+        }
+        guard let first = sources.first else { throw ClipVideoError.noFrames }
+        let size = ReCaVSRUpscaler.outputSize(width: first.width, height: first.height, scale: scale)
+        log("\(sources.count) frames at \(first.width)x\(first.height) -> \(size.width)x\(size.height), full weights")
+        var upscaler = ReCaVSRUpscaler(files: files, width: size.width, height: size.height)
+        upscaler.colorFix = colorFix
+        var frames: [CGImage] = []
+        let started = Date()
+        var upscaleStarted = Date()
+        var blockStarted = Date()
+        try upscaler.run(
+          count: sources.count, frame: { sources[$0] },
+          progress: { phase, done, total in
+            if phase == .upscaling, done == 0 {
+              upscaleStarted = Date()
+              let memory = footprint()
+              log(
+                String(
+                  format: "loaded in %.1fs, memory %.1f GB (peak %.1f GB)", Date().timeIntervalSince(started),
+                  Double(memory.now) / 1e9, Double(memory.peak) / 1e9))
+            } else if phase == .upscaling {
+              let memory = footprint()
+              log(
+                String(
+                  format: "block %d/%d in %.1fs, memory %.1f GB (peak %.1f GB)", done, total,
+                  Date().timeIntervalSince(blockStarted), Double(memory.now) / 1e9, Double(memory.peak) / 1e9))
+            }
+            blockStarted = Date()
+          },
+          shouldContinue: { true }
+        ) { tensor in
+          if let image = ImageTensor.cgImage(from: tensor) { frames.append(image) }
+        }
+        let seconds = Date().timeIntervalSince(upscaleStarted)
+        log(
+          String(
+            format: "PASS %d frames in %.1fs after loading (%.2fs a frame), peak memory %.1f GB", frames.count, seconds,
+            seconds / Double(max(frames.count, 1)), Double(peakFootprint()) / 1e9))
+        guard let export else { return finish() }
+        let url = URL(fileURLWithPath: export).appending(path: "recavsr-\(size.width)x\(size.height)-\(frames.count)f.mp4")
+        let written = frames
+        Task {
+          do {
+            try await ClipVideo.write(
+              to: url, count: written.count, frame: { written[$0] }, framesPerSecond: fps, audio: nil,
+              audioSampleRate: 0, codec: .h264, metadata: nil)
+            log("exported \(url.path)")
+          } catch {
+            log("FAIL export \(error)")
+          }
+          finish()
+        }
+      } catch {
+        log("FAIL \(error)")
+        finish()
+      }
+    }
+  }
+}
+
 /// The comparison `--recavsr-check --reference` runs.
 nonisolated struct ReCaVSRReferenceCheck {
   var files: ReCaVSRFiles
@@ -62,6 +196,8 @@ nonisolated struct ReCaVSRReferenceCheck {
   struct Manifest: Decodable {
     var frames: Int
     var padded_hw: [Int]
+    var out_hw: [Int]
+    var lr_hw: [Int]
     var dit_window_tokens: [Int]
   }
 
@@ -84,6 +220,67 @@ nonisolated struct ReCaVSRReferenceCheck {
     return name
   }
 
+  /// A u8 tensor from a safetensors file, as bytes.
+  static func bytes(_ url: URL, name: String) throws -> [UInt8] {
+    let data = try Data(contentsOf: url)
+    let length = data.prefix(8).withUnsafeBytes { Int($0.loadUnaligned(as: UInt64.self)) }
+    let header = try JSONSerialization.jsonObject(with: data.subdata(in: 8..<(8 + length))) as? [String: Any]
+    guard let entry = header?[name] as? [String: Any], let offsets = entry["data_offsets"] as? [Int] else {
+      throw ReCaVSRDenoiser.Failure.badCheckpoint("no \(name) in \(url.lastPathComponent)")
+    }
+    return [UInt8](data.subdata(in: (8 + length + offsets[0])..<(8 + length + offsets[1])))
+  }
+
+  /// The source preparation against the reference's: OpenCV's bilinear on frame 0 (to 1 LSB),
+  /// then each block's normalized, padded frames.
+  func checkPreparation(_ manifest: Manifest, blocks: [ReCaVSRRouter.Block], failed: inout Bool) throws {
+    let lrHeight = manifest.lr_hw[0], lrWidth = manifest.lr_hw[1]
+    let outHeight = manifest.out_hw[0], outWidth = manifest.out_hw[1]
+    let frames = try Self.bytes(directory.appending(path: "lr_frames.safetensors"), name: "lr_frames_uint8_THWC")
+    let frameBytes = lrHeight * lrWidth * 3
+    func source(_ i: Int) -> [UInt8] { Array(frames[(i * frameBytes)..<((i + 1) * frameBytes)]) }
+    let resized = try Self.bytes(directory.appending(path: "resize_frame0.safetensors"), name: "resized_uint8_HWC")
+    let ours = ReCaVSRUpscaler.bilinear(source(0), width: lrWidth, height: lrHeight, targetWidth: outWidth, targetHeight: outHeight)
+    let differences = zip(ours, resized).map { abs(Int($0) - Int($1)) }
+    let off = differences.filter { $0 > 0 }.count
+    let maxDifference = differences.max() ?? 0
+    if maxDifference > 1 { failed = true }
+    log("\(maxDifference > 1 ? "BAD" : "ok ") bilinear frame 0: max diff \(maxDifference) LSB, \(off) of \(ours.count) values differ")
+    let Hp = manifest.padded_hw[0], Wp = manifest.padded_hw[1]
+    var worstLSB: Float = 0
+    for block in blocks {
+      var prepared = Tensor<FloatType>(.CPU, .NHWC(block.frames, Hp, Wp, 3))
+      for offset in 0..<block.frames {
+        let index = block.start + min(offset, block.valid - 1)
+        ReCaVSRUpscaler.prepare(
+          ReCaVSRUpscaler.bilinear(source(index), width: lrWidth, height: lrHeight, targetWidth: outWidth, targetHeight: outHeight),
+          width: outWidth, height: outHeight, into: &prepared, frame: offset)
+      }
+      // The dump is [1, 3, T, H, W].
+      let lq = try ReCaVSRCheckpoint(directory.appending(path: "block_\(block.index).safetensors")).tensor("lq")
+      lq.withUnsafeBytes { raw in
+        let theirs = raw.bindMemory(to: Float.self)
+        prepared.withUnsafeBytes { raw in
+          let ours = raw.bindMemory(to: FloatType.self)
+          let plane = block.frames * Hp * Wp
+          for t in 0..<block.frames {
+            for y in 0..<Hp {
+              for x in 0..<Wp {
+                for c in 0..<3 {
+                  let a = Float(ours[((t * Hp + y) * Wp + x) * 3 + c])
+                  let b = theirs[c * plane + (t * Hp + y) * Wp + x]
+                  worstLSB = max(worstLSB, abs(a - b) * 127.5)
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    if worstLSB > 1.1 { failed = true }
+    log(String(format: "%@ prepared source (bilinear, normalize, pad, repeat): worst %.2f LSB", worstLSB > 1.1 ? "BAD" : "ok ", worstLSB))
+  }
+
   func run() throws {
     let manifest = try JSONDecoder().decode(
       Manifest.self, from: Data(contentsOf: directory.appending(path: "manifest.json")))
@@ -93,6 +290,7 @@ nonisolated struct ReCaVSRReferenceCheck {
     let graph = DynamicGraph()
     var worst: [String: (Float, String)] = [:]
     var failed = false
+    try checkPreparation(manifest, blocks: Array(blockList), failed: &failed)
     var psnrs: [Double] = []
     func compare(_ name: String, _ ours: [Float], _ theirs: [Float]) {
       guard ours.count == theirs.count else {
@@ -155,20 +353,20 @@ nonisolated struct ReCaVSRReferenceCheck {
     try ReCaVSRConfig.withAttentionWorkaround(keepAccelerators ? false : true) {
     try graph.withNoGrad {
       var loadStarted = Date()
-      let checkpoint = try FlashVSRCheckpoint(files.transformer)
+      let checkpoint = try ReCaVSRCheckpoint(files.transformer)
       let projection = try ReCaVSRSourceProjection(
         graph: graph, checkpoint: checkpoint, height: height, width: width)
       let denoiser = try ReCaVSRDenoiser(
-        graph: graph, checkpoint: checkpoint, prompt: FlashVSRCheckpoint(files.prompt), height: height,
+        graph: graph, checkpoint: checkpoint, prompt: ReCaVSRCheckpoint(files.prompt), height: height,
         width: width, window: (manifest.dit_window_tokens[0], manifest.dit_window_tokens[1]))
       let decoder = try ReCaVSRDecoder(
-        graph: graph, checkpoint: FlashVSRCheckpoint(files.decoder), latentHeight: height / 16,
+        graph: graph, checkpoint: ReCaVSRCheckpoint(files.decoder), latentHeight: height / 16,
         latentWidth: width / 16)
       graph.garbageCollect()
       log(String(format: "loaded in %.1fs, attention %@", Date().timeIntervalSince(loadStarted), denoiser.isWindowed ? "windowed" : "full"))
       for block in blockList {
         loadStarted = Date()
-        let dump = try FlashVSRCheckpoint(directory.appending(path: "block_\(block.index).safetensors"))
+        let dump = try ReCaVSRCheckpoint(directory.appending(path: "block_\(block.index).safetensors"))
         // The source, [1, 3, T, H, W] → [T, H, W, 3].
         let lq = try dump.tensor("lq")
         let T = lq.shape[2]
