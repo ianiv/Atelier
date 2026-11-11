@@ -716,7 +716,7 @@ struct H3ImageInstallSheet: View {
       }
       Picker("Install", selection: $format) {
         Text("8-bit S (\(Self.size(.rowwise)))").tag(MOSSImporter.EightBit.rowwise)
-        Text("4-bit S (\(Self.size(.rowwise4Bit)), for Macs with less memory)").tag(MOSSImporter.EightBit.rowwise4Bit)
+        Text("4-bit S (\(Self.size(.rowwise4Bit)), for Macs with less memory; takes a few hours to write)").tag(MOSSImporter.EightBit.rowwise4Bit)
       }
       .disabled(install.isRunning)
       Toggle("Move the full-precision copy to the Trash afterwards", isOn: $trashFullPrecision)
