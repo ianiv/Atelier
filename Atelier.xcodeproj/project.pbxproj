@@ -188,6 +188,11 @@
 		3B39EB61034D8D57DC9373DD /* ReCaVSRDownload.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2732EB193DD8D208A0C54CC /* ReCaVSRDownload.swift */; };
 		BBEE5836B422ED7DB34A2C13 /* ReCaVSRRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD096253A1745C553D8EBA94 /* ReCaVSRRouter.swift */; };
 		21E31F9C3FD8B3C49DB10302 /* ReCaVSRTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9716C5CC927EB4F63FBFC0A9 /* ReCaVSRTests.swift */; };
+		2F5E204A6500D7675B33E763 /* AutomationReCaVSR.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7BD68E493CDB95E8BB1788B /* AutomationReCaVSR.swift */; };
+		216720036236C936CA9144AD /* ReCaVSRSourceProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70CDCD0504E19F9764A0E5FA /* ReCaVSRSourceProjection.swift */; };
+		DBA854E23C87D5B72AF0C16A /* ReCaVSRLocalAttention.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4341D80DCB6B00217FEFD8C8 /* ReCaVSRLocalAttention.swift */; };
+		D5010C7DFC2D65069E88C1EA /* ReCaVSRDenoiser.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4E40705F359250BDEE3C391 /* ReCaVSRDenoiser.swift */; };
+		6A58FD8E0BFFC6506DB5BE81 /* ReCaVSRDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF8A91B638D18A58BB90D54D /* ReCaVSRDecoder.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -400,6 +405,11 @@
 		B2732EB193DD8D208A0C54CC /* ReCaVSRDownload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReCaVSRDownload.swift; sourceTree = "<group>"; };
 		CD096253A1745C553D8EBA94 /* ReCaVSRRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReCaVSRRouter.swift; sourceTree = "<group>"; };
 		9716C5CC927EB4F63FBFC0A9 /* ReCaVSRTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReCaVSRTests.swift; sourceTree = "<group>"; };
+		B7BD68E493CDB95E8BB1788B /* AutomationReCaVSR.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationReCaVSR.swift; sourceTree = "<group>"; };
+		70CDCD0504E19F9764A0E5FA /* ReCaVSRSourceProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReCaVSRSourceProjection.swift; sourceTree = "<group>"; };
+		4341D80DCB6B00217FEFD8C8 /* ReCaVSRLocalAttention.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReCaVSRLocalAttention.swift; sourceTree = "<group>"; };
+		F4E40705F359250BDEE3C391 /* ReCaVSRDenoiser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReCaVSRDenoiser.swift; sourceTree = "<group>"; };
+		AF8A91B638D18A58BB90D54D /* ReCaVSRDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReCaVSRDecoder.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -514,6 +524,7 @@
 				B7D4E6F80C1D2E3F40516283 /* AutomationAddFolder.swift */,
 				D70A1100000000000000000B /* AutomationDrawThings.swift */,
 				D2FF5ECF7B3949AB28ABC1A2 /* AutomationUpscale.swift */,
+				B7BD68E493CDB95E8BB1788B /* AutomationReCaVSR.swift */,
 				C0104A7C11A0000000000004 /* AutomationColorMatch.swift */,
 				E5D760BDEB2FA5F04BDAF779 /* AutomationTimeline.swift */,
 			);
@@ -789,6 +800,10 @@
 				A8F1CB5990A8A39715A331D1 /* ReCaVSRWeights.swift */,
 				B2732EB193DD8D208A0C54CC /* ReCaVSRDownload.swift */,
 				CD096253A1745C553D8EBA94 /* ReCaVSRRouter.swift */,
+				70CDCD0504E19F9764A0E5FA /* ReCaVSRSourceProjection.swift */,
+				4341D80DCB6B00217FEFD8C8 /* ReCaVSRLocalAttention.swift */,
+				F4E40705F359250BDEE3C391 /* ReCaVSRDenoiser.swift */,
+				AF8A91B638D18A58BB90D54D /* ReCaVSRDecoder.swift */,
 			);
 			path = ReCaVSR;
 			sourceTree = "<group>";
@@ -977,6 +992,10 @@
 				F1F29ECD79C50D354E0EE7E2 /* ClipUpscale.swift in Sources */,
 				E360F3396B8D19F63D2D7763 /* SystemSuperResolution.swift in Sources */,
 				4E97E7417B4FBD4C0A2D4F5F /* FlashVSRWeights.swift in Sources */,
+				6A58FD8E0BFFC6506DB5BE81 /* ReCaVSRDecoder.swift in Sources */,
+				D5010C7DFC2D65069E88C1EA /* ReCaVSRDenoiser.swift in Sources */,
+				DBA854E23C87D5B72AF0C16A /* ReCaVSRLocalAttention.swift in Sources */,
+				216720036236C936CA9144AD /* ReCaVSRSourceProjection.swift in Sources */,
 				BBEE5836B422ED7DB34A2C13 /* ReCaVSRRouter.swift in Sources */,
 				3B39EB61034D8D57DC9373DD /* ReCaVSRDownload.swift in Sources */,
 				2A05F48827FD4DE65A99F665 /* ReCaVSRWeights.swift in Sources */,
@@ -1007,6 +1026,7 @@
 				B7D4E6F80C1D2E3F40516284 /* AutomationAddFolder.swift in Sources */,
 				D70A1100000000000000000A /* AutomationDrawThings.swift in Sources */,
 				58D2F5882DA905D40744609C /* AutomationUpscale.swift in Sources */,
+				2F5E204A6500D7675B33E763 /* AutomationReCaVSR.swift in Sources */,
 				C0104A7C11A0000000000003 /* AutomationColorMatch.swift in Sources */,
 				70E8E18439D847EA73F0D5DD /* AutomationTimeline.swift in Sources */,
 				02980CB68834C5E6EA77013B /* ContentView.swift in Sources */,

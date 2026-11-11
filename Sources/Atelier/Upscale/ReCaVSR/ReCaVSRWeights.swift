@@ -1,4 +1,5 @@
 import Foundation
+@preconcurrency import NNC
 
 /// ReCaVSR's files, as the model page (huggingface.co/kopper/ReCaVSR, Apache-2.0) publishes
 /// them, in a "ReCaVSR" folder of the models directory: the DiT `transformer.safetensors`
@@ -124,4 +125,15 @@ nonisolated enum ReCaVSRConfig {
     0.7069, 0.5338, 0.4889, 0.4917, 0.4069, 0.4999, 0.6866, 0.4093, 0.5709, 0.6065, 0.6415, 0.4944,
     0.5726, 1.2042, 0.5458, 1.6887, 0.3971, 1.06, 0.3943, 0.5537, 0.5444, 0.4089, 0.7468, 0.7744,
   ]
+
+  /// Runs `body` with MFA attention's Neural Accelerator path off (when `enabled`). On an M5 Max
+  /// (2026-11) that path returned all zeros for some of the DiT's half-precision calls and wrong
+  /// values for every one of FlashDecoder's float32 calls; the plain MFA kernels match the
+  /// reference (`--recavsr-check`). Process-wide, so it's restored after.
+  static func withAttentionWorkaround<R>(_ enabled: Bool = true, _ body: () throws -> R) rethrows -> R {
+    guard enabled, !DynamicGraph.flags.contains(.disableMFANeuralAccelerators) else { return try body() }
+    DynamicGraph.flags.insert(.disableMFANeuralAccelerators)
+    defer { DynamicGraph.flags.remove(.disableMFANeuralAccelerators) }
+    return try body()
+  }
 }
