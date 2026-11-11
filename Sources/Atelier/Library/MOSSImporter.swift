@@ -76,20 +76,47 @@ nonisolated enum MOSSImporter {
     }
   }
 
-  /// Draw Things' two 8-bit formats for MOSS.
+  /// Draw Things' two 8-bit formats for MOSS, and its 4-bit S format, which only the MiniMax H3
+  /// Image install writes.
   enum EightBit: CaseIterable {
     /// Palettized ("8-bit", `_q8p.ckpt`): slow to write (k-means per tensor).
     case palettized
     /// Row-wise integer ("8-bit S", `_i8x.ckpt`): quick to write.
     case rowwise
+    /// Row-wise 4-bit ("4-bit S", `_i4x.ckpt`, the i8x codec's Q4_K format, as Draw Things'
+    /// `moss_image_sft_i4x.ckpt`): about half the size of 8-bit S, for Macs with less memory.
+    case rowwise4Bit
 
-    var fileSuffix: String { self == .palettized ? "q8p.ckpt" : "i8x.ckpt" }
-    var title: String { self == .palettized ? "8-bit" : "8-bit S" }
+    var fileSuffix: String {
+      switch self {
+      case .palettized: "q8p.ckpt"
+      case .rowwise: "i8x.ckpt"
+      case .rowwise4Bit: "i4x.ckpt"
+      }
+    }
+
+    var title: String {
+      switch self {
+      case .palettized: "8-bit"
+      case .rowwise: "8-bit S"
+      case .rowwise4Bit: "4-bit S"
+      }
+    }
+
+    /// The codecs a matrix is written with. Q4_K packs rows in 256-value blocks; a matrix whose
+    /// rows don't divide into them is turned away by that encoder and written by the next one.
+    var matrixCodec: DynamicGraph.Store.Codec {
+      switch self {
+      case .palettized: [.q8p, .ezm7]
+      case .rowwise: [.i8x, .ezm7]
+      case .rowwise4Bit: [.i8x(.q4k), .ezm7]
+      }
+    }
   }
 
-  /// Writes an 8-bit copy of the MOSS weights at `path` to `output`, matching Draw Things' own
-  /// files: `palettized` as draw-things' ModelQuantizer makes `moss_image_sft_q8p.ckpt`, `rowwise`
-  /// as `moss_image_sft_i8x.ckpt` stores its tensors (row-wise 8-bit matrices, the modulation
+  /// Writes an 8-bit (or 4-bit S) copy of the MOSS weights at `path` to `output`, matching Draw
+  /// Things' own files: `palettized` as draw-things' ModelQuantizer makes
+  /// `moss_image_sft_q8p.ckpt`, `rowwise` as `moss_image_sft_i8x.ckpt` stores its tensors (row-wise 8-bit matrices, the modulation
   /// matrices palettized). Both keep the embedders and final linear layer in FP16, FP32 tensors
   /// as they are, and compress vectors (ezm7). An interrupted copy resumes: tensors already in
   /// `output` are kept (each write is its own transaction).
@@ -97,7 +124,7 @@ nonisolated enum MOSSImporter {
   /// `miniMaxH3` writes MiniMax H3 checkpoints (stock imports and compressed ones such as HyperFlow
   /// H3 Flash) the way Draw Things' own `minimax_h3_*_i8x.ckpt` files store them: block linears
   /// (including the factored `*_down` / `*_up` pairs) and the input patch projections row-wise
-  /// 8-bit, the AdaLN matrices palettized, the token refiner, timestep / endpoint embedders, text
+  /// 8-bit (4-bit for `rowwise4Bit`), the AdaLN matrices palettized, the token refiner, timestep / endpoint embedders, text
   /// projection and output projections in FP16, and vectors (norms, biases) ezm7. The AdaLN
   /// matrices of a curve-form checkpoint (MiniMax H3 Image from ComfyUI) are a few columns wide,
   /// where a palette would cost precision and save nothing, so they stay FP16.
@@ -133,16 +160,14 @@ nonisolated enum MOSSImporter {
             } else if !isMatrix {
               out.write(key, tensor: fp16, codec: .ezm7)
             } else {
-              let rowwise = format == .rowwise && !key.contains("adaln")
-              out.write(key, tensor: fp16, codec: rowwise ? [.i8x, .ezm7] : [.q8p, .ezm7])
+              out.write(key, tensor: fp16, codec: key.contains("adaln") ? [.q8p, .ezm7] : format.matrixCodec)
             }
             continue
           }
           if key.contains("embedder") || key.contains("final_linear") {
             out.write(key, tensor: fp16)
           } else if fp16.shape.filter({ $0 > 1 }).count > 1 {
-            let rowwise = format == .rowwise && !key.contains("ada_ln")
-            out.write(key, tensor: fp16, codec: rowwise ? [.i8x, .ezm7] : [.q8p, .ezm7])
+            out.write(key, tensor: fp16, codec: key.contains("ada_ln") ? [.q8p, .ezm7] : format.matrixCodec)
           } else {
             out.write(key, tensor: fp16, codec: .ezm7)
           }

@@ -557,8 +557,8 @@ enum Automation {
   ///            [--input FILE] [--guidance G]]
   ///           [--delete-lora FILE] [--download MODEL [--cancel-after-bytes N]]
   ///           [--import-model FILE [--model-name NAME]] [--generate-model [MODEL] [--steps N]]
-  ///           [--install-h3-image MODEL.safetensors [--h3-image-vae VAE.safetensors] [--keep-full]]
-  ///           [--make-8bit MODEL [--8bit-s]] [--compare-weights REFERENCE [--compare-model MODEL]]
+  ///           [--install-h3-image MODEL.safetensors [--h3-image-vae VAE.safetensors] [--keep-full] [--4bit-s]]
+  ///           [--make-8bit MODEL [--8bit-s | --4bit-s]] [--compare-weights REFERENCE [--compare-model MODEL]]
   ///           [--delete-model MODEL]
   ///           [--snapshot-dir DIR] [--quit]
   ///
@@ -567,7 +567,7 @@ enum Automation {
   /// cancels) a model download, and imports a model checkpoint and generates with it.
   /// --install-h3-image runs the guided MiniMax H3 Image install (`ModelLibrary.installH3Image`)
   /// on the model file, with the VAE given or found beside it: imports and registers the model,
-  /// converts the VAE, makes the 8-bit S copy and, unless --keep-full is given, trashes the
+  /// converts the VAE, makes the 8-bit S copy (4-bit S with --4bit-s) and, unless --keep-full is given, trashes the
   /// full-precision copy (never the .safetensors). Needs about 90 GB free and takes many minutes;
   /// the text encoder downloads afterwards if it's missing, and the run waits for that.
   private static func libraryCheck(
@@ -792,11 +792,12 @@ enum Automation {
         let keepFull = args.contains("--keep-full")
         var sources = [URL(fileURLWithPath: path)]
         if let vae = value("--h3-image-vae") { sources.append(URL(fileURLWithPath: vae)) }
-        let install = Task { await library.installH3Image(files: sources, trashFullPrecision: !keepFull) }
+        let format: MOSSImporter.EightBit = args.contains("--4bit-s") ? .rowwise4Bit : .rowwise
+        let install = Task { await library.installH3Image(files: sources, format: format, trashFullPrecision: !keepFull) }
         var lastLine = ""
         while library.h3ImageInstall.isRunning || library.h3ImageInstall == .init() {
           let state = library.h3ImageInstall
-          let line = "install: \(state.stage?.title ?? "starting") \(state.progress.map { String(format: "%.0f%%", $0 * 100) } ?? "")"
+          let line = "install: \(state.stage?.title(state.format) ?? "starting") \(state.progress.map { String(format: "%.0f%%", $0 * 100) } ?? "")"
           if line != lastLine { log(line); lastLine = line }
           try? await Task.sleep(for: .milliseconds(500))
         }
@@ -808,7 +809,7 @@ enum Automation {
           ModelZoo.specificationForModel($0.file)?.version == .minimaxH3Image && library.isCustom($0)
         }
         let full = installed.first { $0.file.hasSuffix("_f16.ckpt") }
-        let small = installed.first { $0.file.hasSuffix("_i8x.ckpt") }
+        let small = installed.first { $0.file.hasSuffix("_" + format.fileSuffix) }
         check(
           !installed.isEmpty && installed.allSatisfy(\.isDownloaded),
           "model imported and registered: \(installed.map(\.file).joined(separator: ", "))")
@@ -817,7 +818,7 @@ enum Automation {
           "VAE \(H3ImageVAEImporter.file) present")
         check(
           small?.isDownloaded == true && model.models.contains { $0.file == small?.file },
-          "8-bit S copy made and registered: \(small?.file ?? "missing") \(small.flatMap { library.sizes[$0.file] }.map(ModelsView.bytes) ?? "?")")
+          "\(format.title) copy made and registered: \(small?.file ?? "missing") \(small.flatMap { library.sizes[$0.file] }.map(ModelsView.bytes) ?? "?")")
         check(
           keepFull ? full != nil : full == nil,
           keepFull ? "full-precision copy kept" : "full-precision copy trashed and unregistered")
@@ -835,7 +836,8 @@ enum Automation {
       }
 
       if let file = value("--make-8bit"), let entry = library.catalog.first(where: { $0.file == file }) {
-        let format: MOSSImporter.EightBit = args.contains("--8bit-s") ? .rowwise : .palettized
+        let format: MOSSImporter.EightBit =
+          args.contains("--4bit-s") ? .rowwise4Bit : args.contains("--8bit-s") ? .rowwise : .palettized
         let started = Date()
         let copy = ModelLibrary.eightBitFile(for: file, format)
         library.make8BitCopy(entry, format)

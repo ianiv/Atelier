@@ -660,7 +660,7 @@ final class ModelLibrary {
 
   /// Whether `model` can get an 8-bit copy in `format`: an imported full-precision MOSS or
   /// MiniMax H3 (video or Image) model without that copy yet. MiniMax H3 only gets 8-bit S, the
-  /// format Draw Things' own H3 files use. A copy whose file exists but isn't registered was interrupted, and making it
+  /// format Draw Things' own H3 files use, and MiniMax H3 Image 4-bit S too, for its install. A copy whose file exists but isn't registered was interrupted, and making it
   /// again resumes it.
   func canMake8BitCopy(_ model: MediaGenerationResolvedModel, _ format: MOSSImporter.EightBit)
     -> Bool
@@ -670,6 +670,7 @@ final class ModelLibrary {
     let supported =
       version == .mossImage
         || ((version == .minimaxH3 || version == .minimaxH3Image) && format == .rowwise)
+        || (version == .minimaxH3Image && format == .rowwise4Bit)
     return isCustom(model) && model.isDownloaded && model.file.hasSuffix("_f16.ckpt") && supported
       && quantizing[output] == nil && moving == nil && ModelZoo.specificationForModel(output) == nil
   }
@@ -687,7 +688,8 @@ final class ModelLibrary {
   }
 
   /// Writes `<name>_q8p.ckpt` or `<name>_i8x.ckpt` to `addFolder`, about half the model's size,
-  /// and registers it there as "<name> (8-bit)" or "(8-bit S)" with the same specification.
+  /// and registers it there as "<name> (8-bit)" or "(8-bit S)" with the same specification
+  /// (`<name>_i4x.ckpt` and "(4-bit S)" for 4-bit S).
   func make8BitCopy(_ model: MediaGenerationResolvedModel, _ format: MOSSImporter.EightBit) {
     guard canMake8BitCopy(model, format),
           var specification = ModelZoo.specificationForModel(model.file)
@@ -728,6 +730,9 @@ final class ModelLibrary {
 
   // MARK: - Guided MiniMax H3 Image install
 
+  /// The family name MiniMax H3 Image models show, for its row before it's installed.
+  nonisolated static var h3ImageFamily: String { ModelZoo.humanReadableNameForVersion(.minimaxH3Image) }
+
   /// Where the guided install of MiniMax H3 Image is. The model isn't in the download catalog and
   /// its license keeps Atelier from hosting converted files, so the person downloads two files and
   /// the app does the rest.
@@ -735,14 +740,18 @@ final class ModelLibrary {
     enum Stage: Int, CaseIterable {
       case importingModel, convertingVAE, makingEightBit
 
-      var title: String {
+      /// `format` is the copy the install makes.
+      func title(_ format: MOSSImporter.EightBit) -> String {
         switch self {
         case .importingModel: "Importing model"
         case .convertingVAE: "Converting VAE"
-        case .makingEightBit: "Making 8-bit S copy"
+        case .makingEightBit: "Making \(format.title) copy"
         }
       }
     }
+
+    /// The smaller copy the install makes: 8-bit S, or 4-bit S for Macs with less memory.
+    var format = MOSSImporter.EightBit.rowwise
 
     /// The stage running now.
     var stage: Stage?
@@ -760,9 +769,9 @@ final class ModelLibrary {
     case missingModel
     case missingVAE
     case busy
-    case cantMakeCopy
-    case copyFailed(String?)
-    case fullInUse
+    case cantMakeCopy(String)
+    case copyFailed(String, reason: String?)
+    case fullInUse(String)
 
     var errorDescription: String? {
       switch self {
@@ -774,12 +783,12 @@ final class ModelLibrary {
         "The VAE is missing. Choose minimax_h3_image_vae_fp16.safetensors too."
       case .busy:
         "Another import or move is running. Try again when it has finished."
-      case .cantMakeCopy:
-        "The 8-bit S copy can't be made right now. Try again when other work on the models has finished."
-      case .copyFailed(let reason):
-        reason ?? "Couldn't write the 8-bit S copy."
-      case .fullInUse:
-        "The 8-bit S copy is installed, but the full-precision copy is in use, so it wasn't moved to the Trash. Delete it in Models when it's free."
+      case .cantMakeCopy(let title):
+        "The \(title) copy can't be made right now. Try again when other work on the models has finished."
+      case .copyFailed(let title, let reason):
+        reason ?? "Couldn't write the \(title) copy."
+      case .fullInUse(let title):
+        "The \(title) copy is installed, but the full-precision copy is in use, so it wasn't moved to the Trash. Delete it in Models when it's free."
       }
     }
   }
@@ -829,24 +838,26 @@ final class ModelLibrary {
   }
 
   /// Installs MiniMax H3 Image from the two downloads: imports the model, converts the VAE, makes
-  /// the 8-bit S copy people should run, and optionally trashes the full-precision file the import
+  /// the smaller copy people should run in `format` (8-bit S, or 4-bit S), and optionally trashes the full-precision file the import
   /// wrote (never the picked `.safetensors`). `files` holds the model, the VAE or both; a VAE not
   /// picked is looked for beside the model. A stage a previous install finished is skipped. The
   /// text encoder then downloads like any model's dependencies. Progress and errors are in
   /// `h3ImageInstall`; returns whether the install finished.
   @discardableResult
-  func installH3Image(files: [URL], trashFullPrecision: Bool) async -> Bool {
+  func installH3Image(
+    files: [URL], format: MOSSImporter.EightBit = .rowwise, trashFullPrecision: Bool
+  ) async -> Bool {
     guard !h3ImageInstall.isRunning else { return false }
     guard modelImportTask == nil, moving == nil else {
-      h3ImageInstall = H3ImageInstall(error: H3ImageInstallError.busy.localizedDescription)
+      h3ImageInstall = H3ImageInstall(format: format, error: H3ImageInstallError.busy.localizedDescription)
       return false
     }
-    h3ImageInstall = H3ImageInstall(isRunning: true)
+    h3ImageInstall = H3ImageInstall(format: format, isRunning: true)
     // Holds picked files open (iPad) until the install ends.
     let held = files.map(ModelImport.init(source:))
     defer { withExtendedLifetime(held) {} }
     do {
-      try await runH3ImageInstall(files: files, trashFullPrecision: trashFullPrecision)
+      try await runH3ImageInstall(files: files, format: format, trashFullPrecision: trashFullPrecision)
       h3ImageInstall.isFinished = true
     } catch {
       h3ImageInstall.error = error.localizedDescription
@@ -857,7 +868,9 @@ final class ModelLibrary {
     return h3ImageInstall.isFinished
   }
 
-  private func runH3ImageInstall(files: [URL], trashFullPrecision: Bool) async throws {
+  private func runH3ImageInstall(
+    files: [URL], format: MOSSImporter.EightBit, trashFullPrecision: Bool
+  ) async throws {
     let picked = try await Self.classifyH3ImageFiles(files)
     await refresh()
     let installed = catalog.filter {
@@ -865,7 +878,7 @@ final class ModelLibrary {
         && ModelZoo.specificationForModel($0.file)?.version == .minimaxH3Image
     }
     var full = installed.first { $0.file.hasSuffix("_f16.ckpt") }
-    var small = installed.first { $0.file.hasSuffix("_" + MOSSImporter.EightBit.rowwise.fileSuffix) }
+    var small = installed.first { $0.file.hasSuffix("_" + format.fileSuffix) }
     let needsModel = full == nil && small == nil
     if needsModel, picked.model == nil { throw H3ImageInstallError.missingModel }
     // Find the VAE before the long import so a missing one fails at once.
@@ -902,9 +915,9 @@ final class ModelLibrary {
 
     if small == nil, let full {
       setH3ImageStage(.makingEightBit)
-      let output = Self.eightBitFile(for: full.file, .rowwise)
-      guard canMake8BitCopy(full, .rowwise) else { throw H3ImageInstallError.cantMakeCopy }
-      make8BitCopy(full, .rowwise)
+      let output = Self.eightBitFile(for: full.file, format)
+      guard canMake8BitCopy(full, format) else { throw H3ImageInstallError.cantMakeCopy(format.title) }
+      make8BitCopy(full, format)
       while let value = quantizing[output] {
         h3ImageInstall.progress = value
         try? await Task.sleep(for: .milliseconds(250))
@@ -913,7 +926,7 @@ final class ModelLibrary {
       guard small != nil else {
         let reason = errorMessage
         errorMessage = nil
-        throw H3ImageInstallError.copyFailed(reason)
+        throw H3ImageInstallError.copyFailed(format.title, reason: reason)
       }
     }
     finishH3ImageStage(.makingEightBit)
@@ -943,7 +956,7 @@ final class ModelLibrary {
     }
     // The text encoder and anything else the model lists, as after any import.
     if let model = catalog.first(where: { $0.file == small?.file ?? full?.file }) { download(model) }
-    if fullInUse { throw H3ImageInstallError.fullInUse }
+    if fullInUse { throw H3ImageInstallError.fullInUse(format.title) }
   }
 
   nonisolated enum ImportError: LocalizedError {

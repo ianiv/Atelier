@@ -44,6 +44,32 @@ struct ModelsView: View {
     library.catalog.first { $0.file == selection }
   }
 
+  /// MiniMax H3 Image isn't in the download catalog (it needs two manual downloads and a
+  /// conversion), so until it's installed it has a row of its own, shown like a model that isn't
+  /// downloaded: under Available and All, under Downloaded while it installs, and by the filter.
+  private var showsH3ImageRow: Bool {
+    let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+    let shown =
+      switch filter {
+      case .downloaded: library.h3ImageInstall.isRunning
+      case .available, .all: true
+      }
+    return !library.h3ImageInstalled && shown
+      && (query.isEmpty || ModelRow.h3ImageName.localizedCaseInsensitiveContains(query))
+  }
+
+  /// The filtered catalog, with the MiniMax H3 Image row in its place by name.
+  private var rows: [ModelRow] {
+    var rows = filtered.map(ModelRow.model)
+    if showsH3ImageRow {
+      let index = rows.firstIndex {
+        $0.name.localizedCaseInsensitiveCompare(ModelRow.h3ImageName) == .orderedDescending
+      } ?? rows.endIndex
+      rows.insert(.h3Image, at: index)
+    }
+    return rows
+  }
+
   var body: some View {
     table
       .overlay {
@@ -82,13 +108,15 @@ struct ModelsView: View {
         }
       }
       .searchable(text: $search, placement: .toolbar, prompt: "Filter models")
-      .safeAreaBar(edge: .top, spacing: 0) {
-        if showsH3ImageInstall { h3ImageInstallRow }
-      }
       .safeAreaBar(edge: .bottom, spacing: 0) { footer }
-      .detailInspector(selection: selection, isEmpty: selected == nil, clearSelection: { selection = nil }) {
+      .detailInspector(
+        selection: selection, isEmpty: selected == nil && selection != ModelRow.h3ImageID,
+        clearSelection: { selection = nil }
+      ) {
         Group {
-          if let selected {
+          if selection == ModelRow.h3ImageID {
+            H3ImageDetail { showingH3ImageInstall = true }
+          } else if let selected {
             ModelDetail(
               model: selected, delete: { pendingDelete = selected },
               move: { pendingMove = library.planMove(selected, to: $0) })
@@ -180,46 +208,51 @@ struct ModelsView: View {
           "No models", systemImage: "shippingbox",
           description: Text("The model catalog couldn't be loaded."))
       }
-    } else if filtered.isEmpty, !search.isEmpty {
+    } else if rows.isEmpty, !search.isEmpty {
       ContentUnavailableView.search(text: search)
     } else {
-      Table(filtered, selection: $selection) {
-        TableColumn("Name") { model in
+      Table(rows, selection: $selection) {
+        TableColumn("Name") { row in
           HStack(spacing: 6) {
-            Text(model.name).lineLimit(1)
-            if library.isCustom(model) {
+            Text(row.name).lineLimit(1)
+            if case .model(let model) = row, library.isCustom(model) {
               Text("Imported").font(.caption).foregroundStyle(.secondary)
             }
             #if os(iOS)
               // A compact-width table shows only this column, so it carries the status too.
               if horizontalSizeClass == .compact {
                 Spacer()
-                ModelStatus(model: model, library: library)
+                status(row)
               }
             #endif
           }
-          .help(model.file)
+          .help(row.model?.file ?? "")
         }
-        TableColumn("Family") { model in
-          Text(model.version ?? "").foregroundStyle(.secondary)
+        TableColumn("Family") { row in
+          Text(row.model.map { $0.version ?? "" } ?? ModelLibrary.h3ImageFamily)
+            .foregroundStyle(.secondary)
         }
         .width(min: 90, ideal: 140)
-        TableColumn("Size") { model in
-          Text(library.sizes[model.file].map(Self.bytes) ?? "")
+        TableColumn("Size") { row in
+          Text(row.model.flatMap { library.sizes[$0.file] }.map(Self.bytes) ?? "")
             .monospacedDigit().foregroundStyle(.secondary)
         }
         .width(min: 60, ideal: 80)
-        TableColumn("Folder") { model in
-          Text(library.folders[model.file].map(library.folderName) ?? "").foregroundStyle(.secondary)
+        TableColumn("Folder") { row in
+          Text(row.model.flatMap { library.folders[$0.file] }.map(library.folderName) ?? "")
+            .foregroundStyle(.secondary)
         }
         .width(min: 70, ideal: 110)
-        TableColumn("") { model in
-          ModelStatus(model: model, library: library)
+        TableColumn("") { row in
+          status(row)
         }
         .width(min: 130, ideal: 150)
       }
       .contextMenu(forSelectionType: String.self) { files in
-        if let file = files.first, let model = library.catalog.first(where: { $0.file == file }) {
+        if files.first == ModelRow.h3ImageID {
+          Button("Install…") { showingH3ImageInstall = true }
+            .disabled(library.h3ImageInstall.isRunning)
+        } else if let file = files.first, let model = library.catalog.first(where: { $0.file == file }) {
           if model.isDownloaded {
             Button(Finder.revealTitle) { library.reveal(model.file) }
             MoveToFolderMenu(library: library, file: model.file, folder: library.folders[model.file], enabled: library.canMove(model)) {
@@ -240,33 +273,13 @@ struct ModelsView: View {
     }
   }
 
-  /// MiniMax H3 Image isn't in the download catalog (it needs two manual downloads and a
-  /// conversion), so it has its own row above the list. The filter hides it like any row.
-  private var showsH3ImageInstall: Bool {
-    let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
-    return query.isEmpty || "MiniMax H3 Image".localizedCaseInsensitiveContains(query)
-  }
-
-  private var h3ImageInstallRow: some View {
-    VStack(spacing: 0) {
-      HStack(spacing: 10) {
-        VStack(alignment: .leading, spacing: 2) {
-          Text("MiniMax H3 Image").bold()
-          Text(
-            library.h3ImageInstalled
-              ? "Installed. It's in the list below."
-              : "Text to image and editing. Installed from two downloads."
-          )
-          .font(.caption).foregroundStyle(.secondary)
-        }
-        Spacer()
-        Button("Install…") { showingH3ImageInstall = true }
-          .disabled(library.h3ImageInstalled)
-          .help("Download the MiniMax H3 Image files and convert them on this Mac")
-      }
-      .padding(.horizontal, 12)
-      .padding(.vertical, 8)
-      Divider()
+  @ViewBuilder
+  private func status(_ row: ModelRow) -> some View {
+    switch row {
+    case .model(let model):
+      ModelStatus(model: model, library: library)
+    case .h3Image:
+      H3ImageStatus(library: library) { showingH3ImageInstall = true }
     }
   }
 
@@ -297,6 +310,70 @@ struct ModelsView: View {
 
   static func bytes(_ count: Int64) -> String {
     count.formatted(.byteCount(style: .file))
+  }
+}
+
+/// A row of the Models list: a catalog model, or MiniMax H3 Image before it's installed, which
+/// isn't in the catalog until its install (`H3ImageInstallSheet`) has imported it.
+enum ModelRow: Identifiable {
+  case model(MediaGenerationResolvedModel)
+  case h3Image
+
+  static let h3ImageID = "minimax-h3-image-install"
+  static let h3ImageName = "MiniMax H3 Image"
+
+  var id: String { model?.file ?? Self.h3ImageID }
+  var name: String { model?.name ?? Self.h3ImageName }
+  var model: MediaGenerationResolvedModel? {
+    if case .model(let model) = self { model } else { nil }
+  }
+}
+
+/// The MiniMax H3 Image row's Install button, or the install's progress while it runs.
+struct H3ImageStatus: View {
+  let library: ModelLibrary
+  let install: () -> Void
+
+  var body: some View {
+    let state = library.h3ImageInstall
+    if state.isRunning {
+      Group {
+        if let progress = state.progress {
+          ProgressView(value: progress).controlSize(.small)
+        } else {
+          ProgressView().controlSize(.small)
+        }
+      }
+      .help(state.stage.map { $0.title(state.format) } ?? "Installing…")
+    } else {
+      Button("Install…", action: install)
+        .controlSize(.small)
+        .formRowButtons()
+        .help("Download the MiniMax H3 Image files and convert them on this Mac")
+    }
+  }
+}
+
+/// The detail of the MiniMax H3 Image row, before it's installed.
+struct H3ImageDetail: View {
+  let install: () -> Void
+  @Environment(ModelLibrary.self) private var library
+
+  var body: some View {
+    Form {
+      Section {
+        Text(ModelRow.h3ImageName).font(.headline)
+        LabeledContent("Family", value: ModelLibrary.h3ImageFamily)
+        Button("Install…", action: install)
+          .disabled(library.h3ImageInstall.isRunning)
+        Text("Installed from two downloads, converted on this Mac.")
+          .font(.caption).foregroundStyle(.secondary)
+      }
+      Section("Description") {
+        Text("Text to image and editing, in 6 steps.").textSelection(.enabled)
+      }
+    }
+    .formStyle(.grouped)
   }
 }
 
@@ -382,7 +459,8 @@ struct ModelDetail: View {
               .disabled(!library.canDelete(model))
           }
           MoveProgressRow(file: model.file)
-          ForEach(MOSSImporter.EightBit.allCases, id: \.self) { format in
+          // 4-bit S is only made by the MiniMax H3 Image install.
+          ForEach([MOSSImporter.EightBit.palettized, .rowwise], id: \.self) { format in
             let output = ModelLibrary.eightBitFile(for: model.file, format)
             if let progress = library.quantizing[output] {
               VStack(alignment: .leading) {
@@ -600,6 +678,7 @@ struct H3ImageInstallSheet: View {
   @Environment(\.dismiss) private var dismiss
   @State private var choosing = false
   @State private var trashFullPrecision = true
+  @State private var format = MOSSImporter.EightBit.rowwise
 
   private var install: ModelLibrary.H3ImageInstall { library.h3ImageInstall }
 
@@ -614,7 +693,7 @@ struct H3ImageInstallSheet: View {
     VStack(alignment: .leading, spacing: 12) {
       Text("Install MiniMax H3 Image").font(.headline)
       Text(
-        "MiniMax H3 Image makes images from text and edits pictures, in 6 steps. It's converted on this Mac from two downloads. The install needs about 90 GB of free space while it runs and about 50 GB afterwards: the 21 GB model, the 1.2 GB VAE and the 26 GB text encoder, if you don't have it yet. Its license, the MiniMax-H3-Image Community License, doesn't cover use in the European Union, the United Kingdom, South Korea or the United States."
+        "MiniMax H3 Image makes images from text and edits pictures, in 6 steps. It's converted on this Mac from two downloads. The install needs about 90 GB of free space while it runs and about \(format == .rowwise4Bit ? "40" : "50") GB afterwards: the \(Self.size(format)) model, the 1.2 GB VAE and the 26 GB text encoder, if you don't have it yet. Its license, the MiniMax-H3-Image Community License, doesn't cover use in the European Union, the United Kingdom, South Korea or the United States."
       )
       .font(.callout).foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)
@@ -635,6 +714,11 @@ struct H3ImageInstallSheet: View {
           .disabled(install.isRunning)
         Spacer()
       }
+      Picker("Install", selection: $format) {
+        Text("8-bit S (\(Self.size(.rowwise)))").tag(MOSSImporter.EightBit.rowwise)
+        Text("4-bit S (\(Self.size(.rowwise4Bit)), for Macs with less memory)").tag(MOSSImporter.EightBit.rowwise4Bit)
+      }
+      .disabled(install.isRunning)
       Toggle("Move the full-precision copy to the Trash afterwards", isOn: $trashFullPrecision)
         .disabled(install.isRunning)
       AddFolderPicker()
@@ -674,9 +758,15 @@ struct H3ImageInstallSheet: View {
     ) { result in
       guard case .success(let urls) = result, !urls.isEmpty else { return }
       let trash = trashFullPrecision
-      Task { await library.installH3Image(files: urls, trashFullPrecision: trash) }
+      let format = format
+      Task { await library.installH3Image(files: urls, format: format, trashFullPrecision: trash) }
     }
     .fileDialogDefaultDirectory(FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first)
+  }
+
+  /// The size of the copy the install makes in `format`.
+  private static func size(_ format: MOSSImporter.EightBit) -> String {
+    format == .rowwise4Bit ? "12 GB" : "21 GB"
   }
 
   private func stageRow(_ stage: ModelLibrary.H3ImageInstall.Stage) -> some View {
@@ -688,7 +778,7 @@ struct H3ImageInstallSheet: View {
       } else {
         Image(systemName: "circle").foregroundStyle(.secondary)
       }
-      Text(stage.title)
+      Text(stage.title(install.isRunning || install.isFinished ? install.format : format))
       Spacer()
       if install.stage == stage, let progress = install.progress {
         ProgressView(value: progress).frame(width: 120)
