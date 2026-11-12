@@ -331,7 +331,8 @@ struct PresetImportPlan {
 
 /// What to do with an imported preset whose name is already taken.
 nonisolated enum PresetConflictResolution: Hashable {
-  /// Overwrite it in place; model defaults refer to presets by name, so they still point at it.
+  /// Overwrite it in place. Model defaults refer to presets by name, so they still point at it,
+  /// except for models the replacement no longer belongs to.
   case replace
   /// Save the imported one under the next free numbered name, "Name 2" and so on.
   case keepBoth
@@ -454,6 +455,13 @@ final class PresetStore {
       switch resolutions[conflict.id] ?? .skip {
       case .replace:
         try save(preset)
+        // `defaultPreset(for:)` goes by name alone, so a model whose default now belongs to another
+        // model would get that model's values on Reset. One for every model still suits them all.
+        if let model = preset.model {
+          for (other, name) in defaults where name == preset.name && other != model {
+            setDefault(nil, for: other)
+          }
+        }
         result.replaced.append(preset.name)
       case .keepBoth:
         var name = preset.name

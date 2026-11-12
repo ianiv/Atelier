@@ -299,11 +299,18 @@ struct DrawThingsImportTests {
 }
 
 /// Importing presets again: the name is the identity, as in Draw Things'
-/// `ConfigurationZoo.appendCustomSpecification`. Every store lives in a temporary folder.
+/// `ConfigurationZoo.appendCustomSpecification`. Every store lives in a temporary folder, removed
+/// when the test ends.
 @MainActor
-struct PresetImportTests {
+final class PresetImportTests {
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+
+  deinit {
+    try? FileManager.default.removeItem(at: root)
+  }
+
   func store() -> PresetStore {
-    PresetStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true))
+    PresetStore(directory: root.appendingPathComponent(UUID().uuidString, isDirectory: true))
   }
 
   /// `DrawThingsImportTests.export` with Krea portrait's steps changed.
@@ -322,16 +329,29 @@ struct PresetImportTests {
     return presets
   }
 
+  /// From a fresh store, as after a relaunch: what was saved must decode to what the file gives.
   @Test func importingTheSameFileAgainAddsNothing() throws {
-    let presets = try storeWithExport()
+    let presets = try PresetStore(directory: storeWithExport().directory)
+    #expect(presets.presets.map(\.name) == ["Krea portrait", "Second"])
     let plan = try presets.importPlan(imported(DrawThingsImportTests.export))
     #expect(plan.added.isEmpty)
     #expect(plan.conflicts.isEmpty)
     #expect(plan.unchanged.count == 2)
     #expect(try presets.apply(plan, resolutions: [:]).summary == nil)
     #expect(presets.presets.count == 2)
-    let reloaded = PresetStore(directory: presets.directory)
-    #expect(reloaded.presets.map(\.name) == ["Krea portrait", "Second"])
+  }
+
+  /// A default for one model mustn't keep pointing at a preset replaced by one for another model.
+  @Test func replacingWithAnotherModelClearsTheOldDefault() throws {
+    let presets = try storeWithExport()
+    let existing = try #require(presets.presets.first { $0.name == "Second" })
+    presets.setDefault(existing, for: "other.ckpt")
+    presets.setDefault(existing, for: "third.ckpt")
+    let file = Data(#"[{"name": "Second", "configuration": {"steps": 8, "model": "third.ckpt"}}]"#.utf8)
+    let plan = try presets.importPlan(imported(file))
+    try presets.apply(plan, resolutions: ["Second": .replace])
+    #expect(presets.defaultPreset(for: "other.ckpt") == nil)
+    #expect(presets.defaultPreset(for: "third.ckpt")?.model == "third.ckpt")
   }
 
   @Test func anEditedEntryIsOneConflict() throws {

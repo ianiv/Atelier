@@ -319,7 +319,7 @@ struct PresetConflictSheet: View {
           .help("Saves the imported one as “\(conflict.incoming.name) 2” or the next free number.")
         Button("Replace") { choose(.replace) }
           .keyboardShortcut(.defaultAction)
-          .help("Overwrites the preset here. A model that uses it as its defaults keeps using it.")
+          .help("Overwrites the preset here. A model that uses it as its defaults keeps using it, unless the imported one is for another model.")
       }
     }
     .sheetPadding()
