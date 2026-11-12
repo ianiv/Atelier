@@ -12,6 +12,7 @@ struct PresetMenu: View {
   @State private var saving = false
   @State private var offeredDownload: ModelLibrary.PresetDownload?
   @State private var pasteFailed = false
+  @State private var importing: PendingPresetImport?
 
   var body: some View {
     let modelName = model.selectedModelInfo?.name ?? "This Model"
@@ -82,7 +83,17 @@ struct PresetMenu: View {
           guard let url = urls.first else { return }
           let access = url.startAccessingSecurityScopedResource()
           defer { if access { url.stopAccessingSecurityScopedResource() } }
-          let failure = Log.attempt(Log.inspector, "Importing presets") { _ = try presets.importPresets(from: url) }
+          let failure = Log.attempt(Log.inspector, "Importing presets") {
+            let plan = try presets.importPlan(from: url)
+            if plan.conflicts.isEmpty {
+              try presets.apply(plan, resolutions: [:])
+            } else {
+              importing = PendingPresetImport(plan: plan) { resolutions in
+                let failure = Log.attempt(Log.inspector, "Importing presets") { try presets.apply(plan, resolutions: resolutions) }
+                if let failure { model.errorMessage = "Couldn't import the preset: \(failure.localizedDescription)" }
+              }
+            }
+          }
           if let failure { model.errorMessage = "Couldn't import the preset: \(failure.localizedDescription)" }
         }
       }
@@ -104,8 +115,8 @@ struct PresetMenu: View {
       }
       Button("Show Presets Folder") {
         try? FileManager.default.createDirectory(
-          at: PresetStore.directory, withIntermediateDirectories: true)
-        openURL(PresetStore.directory)
+          at: presets.directory, withIntermediateDirectories: true)
+        openURL(presets.directory)
       }
     } label: {
       Label("Presets", systemImage: "square.stack.3d.up")
@@ -129,6 +140,7 @@ struct PresetMenu: View {
     }
     .sheet(isPresented: $saving) { SavePresetSheet() }
     .debugPresents("savePreset", $saving)
+    .presetImportConflicts($importing)
     .alert("The clipboard has no settings", isPresented: $pasteFailed) {
       Button("OK") {}
     } message: {
@@ -252,6 +264,94 @@ struct SavePresetSheet: View {
       included = Set(candidates.map(\.id))
     }
     .onChange(of: allSettings) { included = Set(candidates.map(\.id)) }
+  }
+}
+
+// MARK: - Import conflicts
+
+/// An import waiting on the user to settle its conflicts, then finished by `finish`.
+struct PendingPresetImport: Identifiable {
+  let id = UUID()
+  var plan: PresetImportPlan
+  var finish: @MainActor ([String: PresetConflictResolution]) -> Void
+}
+
+extension View {
+  /// Asks about each conflict in `pending`'s plan, then calls its `finish`. Import Preset… and
+  /// Import from Draw Things both go through this, so they ask the same way.
+  func presetImportConflicts(_ pending: Binding<PendingPresetImport?>) -> some View {
+    sheet(item: pending) { pending in
+      PresetConflictSheet(plan: pending.plan, finish: pending.finish)
+    }
+  }
+}
+
+/// One conflict at a time: an imported preset whose name is taken by one with other settings.
+/// Draw Things would replace it (`ConfigurationZoo.appendCustomSpecification`), but a preset here
+/// may have been edited since, so the user chooses.
+struct PresetConflictSheet: View {
+  @Environment(CreateModel.self) private var create
+  @Environment(\.dismiss) private var dismiss
+  let plan: PresetImportPlan
+  let finish: @MainActor ([String: PresetConflictResolution]) -> Void
+  @State private var index = 0
+  @State private var resolutions: [String: PresetConflictResolution] = [:]
+  @State private var forAll = false
+
+  var body: some View {
+    let conflicts = plan.conflicts
+    let conflict = conflicts[min(index, conflicts.count - 1)]
+    VStack(alignment: .leading, spacing: 12) {
+      Text(conflicts.count > 1 ? "Preset Already Exists (\(index + 1) of \(conflicts.count))" : "Preset Already Exists")
+        .font(.headline)
+      Text("A preset named “\(conflict.incoming.name)” is already here with different settings.")
+      LabeledContent("Model", value: modelName(conflict.incoming.model))
+      Text(differences(conflict)).foregroundStyle(.secondary)
+      if conflicts.count > 1 {
+        Toggle("Do this for all remaining conflicts", isOn: $forAll)
+          .disabled(index >= conflicts.count - 1)
+      }
+      HStack {
+        Spacer()
+        Button("Skip", role: .cancel) { choose(.skip) }
+          .keyboardShortcut(.cancelAction)
+        Button("Keep Both") { choose(.keepBoth) }
+          .help("Saves the imported one as “\(conflict.incoming.name) 2” or the next free number.")
+        Button("Replace") { choose(.replace) }
+          .keyboardShortcut(.defaultAction)
+          .help("Overwrites the preset here. A model that uses it as its defaults keeps using it.")
+      }
+    }
+    .sheetPadding()
+    .sheetFrame(width: 420)
+    .interactiveDismissDisabled()
+  }
+
+  private func choose(_ resolution: PresetConflictResolution) {
+    index = plan.resolve(at: index, as: resolution, forRemaining: forAll, in: &resolutions)
+    guard index >= plan.conflicts.count else { return }
+    finish(resolutions)
+    dismiss()
+  }
+
+  private func modelName(_ file: String?) -> String {
+    guard let file else { return "All models" }
+    return create.availableModels.first { $0.file == file }?.name ?? file
+  }
+
+  private func differences(_ conflict: PresetImportPlan.Conflict) -> String {
+    var parts: [String] = []
+    if conflict.modelDiffers {
+      parts.append("The model differs (here: \(modelName(conflict.existing.model))).")
+    }
+    let titles = conflict.differingSettings.map { SettingsRegistry.byID[$0]?.title ?? $0 }
+    switch titles.count {
+    case 0: break
+    case 1: parts.append("\(titles[0]) differs.")
+    case 2...3: parts.append("\(titles.dropLast().joined(separator: ", ")) and \(titles.last!) differ.")
+    default: parts.append("\(titles.count) settings differ.")
+    }
+    return parts.joined(separator: " ")
   }
 }
 

@@ -96,7 +96,7 @@ Open the **Presets** menu in the toolbar:
 - Pick a preset from the list to apply it. Presets for other models are under **Other Models**; picking one switches to its model. If its model isn't downloaded and is in the model catalog, Atelier offers to download it, then switches and applies the preset when the download finishes; the status bar shows the progress and a way to cancel. A preset whose model can't be downloaded is listed but disabled. To use those settings on another model, switch back to it afterwards: your settings carry over.
 - **Default for [model]**: choose which preset (or **Model Defaults Only**) Reset uses for a model.
 - **Copy Settings as JSON** copies every setting, the model and the seed in Draw Things' configuration format. **Paste Settings** applies settings copied from Draw Things or Atelier.
-- **Import Preset…**, **Export**, **Delete** and **Show Presets Folder** manage presets as files. Import Preset also takes a `custom_configs.json` exported from Draw Things, and adds each configuration in it as a preset.
+- **Import Preset…**, **Export**, **Delete** and **Show Presets Folder** manage presets as files. Import Preset also takes a `custom_configs.json` exported from Draw Things, and adds each configuration in it as a preset. The name is what matches an import to a preset: one that's already here with the same settings is skipped, and when a preset with that name has other settings or another model, Atelier asks whether to **Replace** it, **Keep Both** (the import becomes “Name 2”) or **Skip** it. With more than one such preset, **Do this for all remaining conflicts** answers for the rest. If a file lists a name twice, the last one counts.
 
 ## The canvas
 

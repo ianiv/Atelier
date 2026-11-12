@@ -1107,7 +1107,7 @@ enum Automation {
       model.set(guidance, to: .number(2.5), undoManager: nil)
       let preset = Preset(name: "Inspector Check", values: model.values(for: ["steps", "guidanceScale"]))
       do { try presets.save(preset) } catch { check(false, "save preset: \(error)") }
-      check(FileManager.default.fileExists(atPath: PresetStore.url(for: preset.name).path), "preset saved")
+      check(FileManager.default.fileExists(atPath: presets.url(for: preset.name).path), "preset saved")
       let modelB = value("--model-b") ?? model.models.first { $0.file != modelA }?.file
       if let modelB {
         model.selectedModel = modelB

@@ -14,6 +14,8 @@ struct DrawThingsImportSheet: View {
   /// Runs once this sheet is gone: a sheet can't open while another is still up.
   @State private var afterDismiss: (() -> Void)?
   @State private var isDropTargeted = false
+  /// Configurations whose names are already presets with other settings, asked about before Import runs.
+  @State private var importingPresets: PendingPresetImport?
 
   var body: some View {
     @Bindable var importer = importer
@@ -36,6 +38,7 @@ struct DrawThingsImportSheet: View {
     }
     .fileDialogDefaultDirectory(DrawThingsApp.documents)
     .onDisappear { afterDismiss?() }
+    .presetImportConflicts($importingPresets)
     #if DEBUG
       // For layout checks: -AtelierDrawThingsFolders '(A, B)' goes straight to reviewing them.
       .task {
@@ -289,7 +292,13 @@ struct DrawThingsImportSheet: View {
           .keyboardShortcut(.cancelAction)
           .disabled(importer.isImporting)
         Button("Import") {
-          Task { await importer.run(create: create, presets: presets, history: history, library: library) }
+          if let plan = importer.presetPlan(presets: presets), !plan.conflicts.isEmpty {
+            importingPresets = PendingPresetImport(plan: plan) { resolutions in
+              Task { await importer.run(create: create, presets: presets, history: history, library: library, resolutions: resolutions) }
+            }
+          } else {
+            Task { await importer.run(create: create, presets: presets, history: history, library: library) }
+          }
         }
         .keyboardShortcut(.defaultAction)
         .disabled(!importer.canImport)

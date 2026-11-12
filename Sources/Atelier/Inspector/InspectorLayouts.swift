@@ -267,6 +267,103 @@ nonisolated enum PresetImportError: LocalizedError {
   }
 }
 
+/// What importing a file of presets would do, worked out before anything is written so the
+/// conflicts can be put to the user first. The name is a preset's identity, as it is for Draw Things'
+/// saved configurations (`ConfigurationZoo.appendCustomSpecification` replaces the one with the same
+/// name), so importing the same file again adds nothing.
+struct PresetImportPlan {
+  /// An incoming preset whose name is taken by one with other values or another model.
+  struct Conflict: Identifiable {
+    var incoming: Preset
+    var existing: Preset
+    /// Ids of the settings set differently, or set in only one of the two.
+    var differingSettings: [String]
+    var modelDiffers: Bool { incoming.model != existing.model }
+    var id: String { incoming.name }
+  }
+
+  /// Names nothing here has.
+  var added: [Preset] = []
+  /// Already here with the same values and model, so they're skipped without asking.
+  var unchanged: [Preset] = []
+  var conflicts: [Conflict] = []
+
+  /// Settings Atelier doesn't know are dropped first, as they'd be on save, so a file with extra
+  /// keys still matches what an earlier import saved. A name listed twice keeps its last entry,
+  /// the one Draw Things would end up with after appending them in order.
+  init(existing: [Preset], incoming: [Preset]) {
+    var collapsed: [Preset] = []
+    var index: [String: Int] = [:]
+    for var preset in incoming {
+      preset.values = preset.values.filter { SettingsRegistry.byID[$0.key] != nil }
+      if let at = index[preset.name] {
+        collapsed[at] = preset
+      } else {
+        index[preset.name] = collapsed.count
+        collapsed.append(preset)
+      }
+    }
+    for preset in collapsed {
+      guard let current = existing.first(where: { $0.name == preset.name }) else {
+        added.append(preset)
+        continue
+      }
+      if current == preset {
+        unchanged.append(preset)
+      } else {
+        let keys = Set(current.values.keys).union(preset.values.keys)
+        let differing = keys.filter { current.values[$0] != preset.values[$0] }.sorted()
+        conflicts.append(Conflict(incoming: preset, existing: current, differingSettings: differing))
+      }
+    }
+  }
+
+  /// Records the user's choice for the conflict at `index`, or for it and every one after it when
+  /// `forRemaining` ("Do this for all remaining conflicts"). Returns the next conflict to ask about.
+  func resolve(at index: Int, as resolution: PresetConflictResolution, forRemaining: Bool, in resolutions: inout [String: PresetConflictResolution]) -> Int {
+    let chosen = forRemaining ? conflicts[index...] : conflicts[index...index]
+    for conflict in chosen {
+      resolutions[conflict.id] = resolution
+    }
+    return index + chosen.count
+  }
+}
+
+/// What to do with an imported preset whose name is already taken.
+nonisolated enum PresetConflictResolution: Hashable {
+  /// Overwrite it in place; model defaults refer to presets by name, so they still point at it.
+  case replace
+  /// Save the imported one under the next free numbered name, "Name 2" and so on.
+  case keepBoth
+  case skip
+}
+
+/// What an import did, for the callers that report it.
+nonisolated struct PresetImportResult: Equatable {
+  var added: [String] = []
+  var replaced: [String] = []
+  /// The numbered names the imported copies were saved under.
+  var keptBoth: [String] = []
+  /// Conflicts the user chose to skip.
+  var skipped: [String] = []
+  /// Already here unchanged.
+  var unchanged: [String] = []
+
+  /// One line, or nil when nothing changed.
+  var summary: String? {
+    var parts: [String] = []
+    if !added.isEmpty { parts.append("added \(added.count) preset\(added.count == 1 ? "" : "s")") }
+    if !replaced.isEmpty { parts.append("replaced \(replaced.count)") }
+    if !keptBoth.isEmpty { parts.append("kept both copies of \(keptBoth.count)") }
+    if !skipped.isEmpty { parts.append("skipped \(skipped.count)") }
+    guard let first = parts.first else { return nil }
+    let rest = parts.dropFirst()
+    var line = first.prefix(1).uppercased() + first.dropFirst()
+    if !rest.isEmpty { line += ", " + rest.joined(separator: ", ") }
+    return line + "."
+  }
+}
+
 /// Presets stored as JSON next to the layouts.
 @MainActor
 @Observable
@@ -275,15 +372,25 @@ final class PresetStore {
   /// Model file → name of the preset applied as that model's defaults.
   private(set) var defaults: [String: String] = [:]
   private static let defaultsKey = "defaultPresets"
+  /// Where the preset files are.
+  let directory: URL
+  /// Whether this is the user's own store, the only one that reads and writes the defaults in
+  /// UserDefaults; a test's store in a temporary folder leaves them alone.
+  private let isUserData: Bool
 
-  static var directory: URL {
+  static var defaultDirectory: URL {
     FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
       .appendingPathComponent("Atelier/Presets", isDirectory: true)
   }
 
-  init() {
-    presets = LayoutStore.loadAll(from: Self.directory)
-    defaults = UserDefaults.standard.dictionary(forKey: Self.defaultsKey) as? [String: String] ?? [:]
+  /// `directory` is for tests; the default is Application Support (like `StyleStore(root:)`).
+  init(directory: URL? = nil) {
+    self.directory = directory ?? Self.defaultDirectory
+    isUserData = directory == nil
+    presets = LayoutStore.loadAll(from: self.directory)
+    if isUserData {
+      defaults = UserDefaults.standard.dictionary(forKey: Self.defaultsKey) as? [String: String] ?? [:]
+    }
   }
 
   /// Presets that can be used with `model`: its own, then the ones for every model.
@@ -297,12 +404,12 @@ final class PresetStore {
 
   func setDefault(_ preset: Preset?, for model: String) {
     defaults[model] = preset?.name
-    UserDefaults.standard.set(defaults, forKey: Self.defaultsKey)
+    if isUserData { UserDefaults.standard.set(defaults, forKey: Self.defaultsKey) }
   }
 
   func save(_ preset: Preset) throws {
-    try FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true)
-    try LayoutStore.encoder.encode(preset).write(to: Self.url(for: preset.name))
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try LayoutStore.encoder.encode(preset).write(to: url(for: preset.name))
     presets.removeAll { $0.name == preset.name }
     presets.append(preset)
     presets.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
@@ -310,7 +417,7 @@ final class PresetStore {
 
   func delete(_ preset: Preset) {
     Log.attempt(Log.inspector, "Deleting a preset's file") {
-      try FileManager.default.trashItem(at: Self.url(for: preset.name), resultingItemURL: nil)
+      try FileManager.default.trashItem(at: url(for: preset.name), resultingItemURL: nil)
     }
     presets.removeAll { $0.name == preset.name }
     for (model, name) in defaults where name == preset.name { setDefault(nil, for: model) }
@@ -320,37 +427,52 @@ final class PresetStore {
     try LayoutStore.encoder.encode(preset)
   }
 
-  /// Imports every preset in a file: an Atelier preset, or Draw Things' custom_configs.json.
-  @discardableResult
-  func importPresets(from url: URL) throws -> [Preset] {
+  /// The plan for importing every preset in a file: an Atelier preset, or Draw Things'
+  /// custom_configs.json.
+  func importPlan(from url: URL) throws -> PresetImportPlan {
     let name = url.deletingPathExtension().lastPathComponent
-    return try importPresets(DrawThingsJSON.presets(fromFile: Data(contentsOf: url), named: name))
+    return try importPlan(DrawThingsJSON.presets(fromFile: Data(contentsOf: url), named: name))
   }
 
-  /// Saves `imported`, numbering a name that's taken. One that's already here unchanged is skipped,
-  /// so importing the same file again doesn't fill the menu with copies. Throws if there was
-  /// nothing to read; an empty result means everything was already here.
-  @discardableResult
-  func importPresets(_ imported: [Preset]) throws -> [Preset] {
+  /// Throws if there was nothing to read; a plan with nothing added means everything was here.
+  func importPlan(_ imported: [Preset]) throws -> PresetImportPlan {
     guard !imported.isEmpty else { throw PresetImportError.noSettings }
-    var saved: [Preset] = []
-    for var preset in imported {
-      preset.values = preset.values.filter { SettingsRegistry.byID[$0.key] != nil }
-      guard !presets.contains(preset) else { continue }
-      var name = preset.name
-      var n = 2
-      while presets.contains(where: { $0.name == name }) {
-        name = "\(preset.name) \(n)"
-        n += 1
-      }
-      preset.name = name
-      try save(preset)
-      saved.append(preset)
-    }
-    return saved
+    return PresetImportPlan(existing: presets, incoming: imported)
   }
 
-  static func url(for name: String) -> URL {
+  /// Saves what `plan` adds, and each conflict as `resolutions` says; a conflict with no
+  /// resolution is skipped. Copies an earlier import numbered ("Name 2") are left alone.
+  @discardableResult
+  func apply(_ plan: PresetImportPlan, resolutions: [String: PresetConflictResolution]) throws -> PresetImportResult {
+    var result = PresetImportResult(unchanged: plan.unchanged.map(\.name))
+    for preset in plan.added {
+      try save(preset)
+      result.added.append(preset.name)
+    }
+    for conflict in plan.conflicts {
+      var preset = conflict.incoming
+      switch resolutions[conflict.id] ?? .skip {
+      case .replace:
+        try save(preset)
+        result.replaced.append(preset.name)
+      case .keepBoth:
+        var name = preset.name
+        var n = 2
+        while presets.contains(where: { $0.name == name }) {
+          name = "\(preset.name) \(n)"
+          n += 1
+        }
+        preset.name = name
+        try save(preset)
+        result.keptBoth.append(name)
+      case .skip:
+        result.skipped.append(preset.name)
+      }
+    }
+    return result
+  }
+
+  func url(for name: String) -> URL {
     directory.appendingPathComponent(LayoutStore.fileName(name)).appendingPathExtension("json")
   }
 }
