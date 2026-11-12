@@ -412,7 +412,15 @@ final class DrawThingsImporter {
     return !names.contains { ModelLibrary.checkpointExtensions.contains(($0 as NSString).pathExtension.lowercased()) }
   }
 
-  func run(create: CreateModel, presets: PresetStore, history: HistoryStore, library: ModelLibrary) async {
+  /// The plan for the saved configurations Import would bring over, so the sheet can ask about
+  /// conflicts before it starts; nil when none are being imported.
+  func presetPlan(presets: PresetStore) -> PresetImportPlan? {
+    usesConfigurations ? try? presets.importPlan(configurations) : nil
+  }
+
+  /// `resolutions` settles the configurations whose names are already presets with other settings
+  /// (`presetPlan(presets:)`'s conflicts); any left out are skipped.
+  func run(create: CreateModel, presets: PresetStore, history: HistoryStore, library: ModelLibrary, resolutions: [String: PresetConflictResolution] = [:]) async {
     guard canImport else { return }
     isImporting = true
     defer { isImporting = false }
@@ -435,8 +443,8 @@ final class DrawThingsImporter {
     }
     if usesConfigurations {
       do {
-        let saved = try presets.importPresets(configurations)
-        lines.append(saved.isEmpty ? "All the saved configurations were already presets." : "Added \(saved.count) preset\(saved.count == 1 ? "" : "s").")
+        let result = try presets.apply(presets.importPlan(configurations), resolutions: resolutions)
+        lines.append(result.summary ?? "All the saved configurations were already presets.")
       } catch {
         lines.append("Couldn't add the presets: \(error.localizedDescription)")
       }

@@ -13,5 +13,4 @@ Planned work that isn't built yet. Items marked **User request** or **User-repor
 
 ## Presets
 
-- **User-reported bug:** Presets ▸ Import Preset from `custom_configs.json` creates duplicate copies of many presets when importing again (for example after editing the JSON). The imported presets show under "Other Models", Export and Delete.
 - **User request:** allow choosing a greyed-out preset whose model isn't installed, then switching to a local model, as Draw Things allows. Atelier already lets you pick a preset whose LoRAs are missing and then download them or change the selection, but not a preset whose model is missing.
