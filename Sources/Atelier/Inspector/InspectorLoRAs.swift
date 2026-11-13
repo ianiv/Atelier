@@ -49,6 +49,7 @@ struct LoRAEditor: View {
         Text("No LoRAs").foregroundStyle(.secondary)
       }
       ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+        let range = weightRange(item)
         VStack(alignment: .leading, spacing: 2) {
           HStack {
             Text(name(item.file)).lineLimit(1).truncationMode(.middle)
@@ -80,7 +81,7 @@ struct LoRAEditor: View {
                   var items = items
                   items[index].weight = (weight * 100).rounded() / 100
                   write(items)
-                }), in: -1.5...2.5
+                }), in: range
             ) { editing in
               if editing {
                 model.beginCoalescedEdit(descriptor, undoManager: undoManager)
@@ -111,12 +112,21 @@ struct LoRAEditor: View {
             catalog: model.availableLoRAs(in: library).filter(\.isDownloaded), compatible: compatible,
             modelFamily: model.selectedModelInfo?.version
           ) { lora in
-            write(items + [Item(file: lora.file, weight: 1, mode: .string("all"))])
+            write(items + [Item(file: lora.file, weight: lora.defaultWeight, mode: .string("all"))])
             picking = false
           }
         }
     }
     .onAppear { library.reloadLoRAs() }
+  }
+
+  /// The slider range custom_lora.json gives the LoRA, widened to take a weight typed or loaded
+  /// outside it, so the slider doesn't pin it to an end.
+  private func weightRange(_ item: Item) -> ClosedRange<Double> {
+    let range = model.availableLoRAs(in: library).first { $0.file == item.file }?.weightRange
+      ?? ModelLibrary.Weight.defaultRange
+    guard item.weight.isFinite else { return range }
+    return min(range.lowerBound, item.weight)...max(range.upperBound, item.weight)
   }
 
   private func name(_ file: String) -> String {

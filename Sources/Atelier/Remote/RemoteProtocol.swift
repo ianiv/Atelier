@@ -45,6 +45,8 @@ nonisolated struct RemoteLoRAInfo: Codable, Hashable, Sendable {
   var version: String
   var prefix: String
   var modifier: String
+  /// Its custom_lora.json weight and range; absent from servers before they were sent.
+  var weight: ModelLibrary.Weight?
 }
 
 /// A `GenerationEngine.Request` as it travels: images and audio by SHA-256 of what was uploaded.

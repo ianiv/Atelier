@@ -597,7 +597,7 @@ final class RemoteServer {
       RemoteModelInfo(file: $0.file, name: $0.name, version: $0.version, traits: RemoteModelTraits(file: $0.file))
     }
     let loras = (library?.loras ?? []).filter(\.isDownloaded).map {
-      RemoteLoRAInfo(file: $0.file, name: $0.name, version: $0.version, prefix: $0.prefix, modifier: RemoteModelTraits.modifier(ofLoRA: $0.file).rawValue)
+      RemoteLoRAInfo(file: $0.file, name: $0.name, version: $0.version, prefix: $0.prefix, modifier: RemoteModelTraits.modifier(ofLoRA: $0.file).rawValue, weight: $0.weight)
     }
     let upscalers = RemoteUpscalers(
       flashVSR: FlashVSRFiles.Variant.allCases.filter { FlashVSRFiles.installed($0) != nil },
