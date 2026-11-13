@@ -560,6 +560,83 @@ struct CanvasRefineTests {
     }
   }
 
+  /// A masked refine at 4×: the layer is see-through wherever the mask doesn't reach, so the
+  /// source there is exactly as it was, at its own pixels, both as merged and as read back.
+  @Test func aMaskedZoomedRefineLeavesTheRestExactly() async throws {
+    let folder = FileManager.default.temporaryDirectory.appending(path: "CanvasRefineTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let project = Project(url: folder.appending(path: "Masked.sqlite3"))
+    let source = try Self.pattern(width: 128, height: 128)
+    let first = try await project.append(
+      tensor: try #require(ImageTensor.tensor(from: source)), model: "m", prompt: "", negativePrompt: "", seed: 1,
+      settings: [:], createdAt: Date(), duration: 0, reason: .imported, generated: false)
+    let result = try Self.solid(width: 128, height: 128, red: 255, green: 0, blue: 0)
+    let maskRect = CGRect(x: 40, y: 40, width: 12, height: 12)
+    let merge = RefineMerge(
+      source: source, sourceTensorId: first.tensorId, scale: 4, offset: CGSize(width: 64, height: 64),
+      frameSize: CGSize(width: 128, height: 128), mask: CanvasMask(rects: [maskRect]))
+    let merged = try #require(CanvasMerge.merge(result, into: merge, maskBlur: 4, maskBlurOutset: 2))
+    let layers = try #require(merged.step.layers)
+    #expect(layers.frameScaleFactorBy120 == 480)
+    let alpha = try #require(layers.frameAlpha)
+    // Layer pixels: (base - 32) × 4. Far from the mask, transparent; inside it, opaque.
+    let corner = 2 * 128 + 2, away = 100 * 128 + 100, inside = 56 * 128 + 56
+    #expect(alpha[corner] == 0)
+    #expect(alpha[away] == 0)
+    #expect(alpha[inside] == 255)
+    let item = try await project.append(
+      tensor: try #require(ImageTensor.tensor(from: layers.frame)), model: "m", prompt: "", negativePrompt: "", seed: 1,
+      settings: [:], createdAt: Date(), duration: 0, inputTensorId: first.tensorId, after: first.tensorId,
+      refined: merged.step)
+    let rows = await project.read { $0.layerSummary(tensorId: item.tensorId) }
+    #expect(rows.count == 2 && (rows.last?.maskId ?? 0) > 0 && rows.last?.scale == 480)
+    let read = try #require(await project.read { $0.image(for: item) })
+    let original = Self.rgba(source)
+    // The mask with Outset 2 and Mask Blur 4 frame pixels reaches about 4 source pixels past it.
+    let far = maskRect.insetBy(dx: -6, dy: -6)
+    for (name, image) in [("merged", merged.image), ("read back", read)] {
+      let bytes = Self.rgba(image)
+      var changed = 0
+      for y in 0..<128 {
+        for x in 0..<128 where !far.contains(CGPoint(x: x, y: y)) {
+          if Self.pixel(bytes, width: 128, x, y) != Self.pixel(original, width: 128, x, y) { changed += 1 }
+        }
+      }
+      #expect(changed == 0, "\(name): \(changed) pixels away from the mask changed")
+      #expect(Self.pixel(bytes, width: 128, 46, 46) == [255, 0, 0, 255], "\(name)")
+    }
+    await project.close()
+  }
+
+  /// A zoom of 3.97 runs at 4×, about the same point, its image edge on a whole frame pixel: the
+  /// kept layer is the result's pixels one for one.
+  @Test func aNearWholeZoomSnapsThePlacement() throws {
+    let size = CGSize(width: 128, height: 128)
+    let snapped = RefineMerge.snapped(scale: 3.97, offset: CGSize(width: 63.3, height: 64.9), sourceSize: size, frameSize: size)
+    #expect(snapped.scale == 4)
+    let expectedX = 63.3 * 4 / 3.97, expectedY = 64.9 * 4 / 3.97
+    #expect(abs(snapped.offset.width - expectedX) < 1)
+    #expect(abs(snapped.offset.height - expectedY) < 1)
+    #expect(RefineMerge.snapped(scale: 2.7, offset: CGSize(width: 3.3, height: 0), sourceSize: size, frameSize: size).scale == 2.7)
+    #expect(RefineMerge.snapped(scale: nil, offset: .zero, sourceSize: size, frameSize: size).scale == nil)
+    let source = try Self.pattern(width: 128, height: 128)
+    let result = try Self.pattern(width: 128, height: 128)
+    let merge = RefineMerge(
+      source: source, sourceTensorId: nil, scale: snapped.scale, offset: snapped.offset, frameSize: size, mask: nil)
+    let placement = merge.placement
+    #expect(placement.zoom.x == 4 && placement.zoom.y == 4)
+    let layers = try #require(CanvasMerge.merge(result, into: merge, maskBlur: 0, maskBlurOutset: 0)?.step.layers)
+    #expect(layers.frameScaleFactorBy120 == 480)
+    let crop = placement.cropRect
+    let dx = Int(((crop.minX - crop.minX.rounded(.down)) * 4).rounded())
+    let dy = Int(((crop.minY - crop.minY.rounded(.down)) * 4).rounded())
+    let frameBytes = Self.rgba(layers.frame), resultBytes = Self.rgba(result)
+    for (x, y) in [(0, 0), (50, 77), (120, 120)] {
+      #expect(Self.pixel(frameBytes, width: layers.frame.width, x + dx, y + dy) == Self.pixel(resultBytes, width: 128, x, y))
+    }
+  }
+
   @Test func otherZoomsPickTheirDensity() throws {
     let source = try Self.pattern(width: 256, height: 256)
     let result = try Self.solid(width: 128, height: 128, red: 255, green: 0, blue: 0)
@@ -604,9 +681,10 @@ struct CanvasRefineTests {
     #expect(rows[1].tensorId == a.tensorId && rows[1].x == 32 && rows[1].y == 32)
     #expect(rows[0].tensorId != first.tensorId)
     #expect(await project.read { $0.detailLayers(tensorId: b.tensorId) }.count == 2)
-    // 2× over the top-left quadrant covers a's frame at less than its density: kept.
+    // 2× over the top-left quadrant covers a's frame opaquely: dropped, though it was finer
+    // (it could never show again).
     let c = try await refine(a, scale: 2, offset: CGSize(width: 64, height: 64))
-    #expect(await project.read { $0.layerSummary(tensorId: c.tensorId) }.map(\.scale) == [120, 480, 240])
+    #expect(await project.read { $0.layerSummary(tensorId: c.tensorId) }.map(\.scale) == [120, 240])
     // 4× over the same region at the same density: dropped.
     let d = try await refine(a, scale: 4, offset: CGSize(width: 64, height: 64))
     #expect(await project.read { $0.layerSummary(tensorId: d.tensorId) }.map(\.scale) == [120, 480])

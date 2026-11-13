@@ -481,6 +481,13 @@ final nonisolated class Project: Sendable {
   /// A full-detail read's density: its finest layer's (`canvasSize` never goes past that).
   static let finestDensity = Int.max
 
+  /// The most pixels a canvas finer than its image may have: an iPad has much less memory.
+  #if os(iOS)
+    static let fullDetailPixels: Double = 64 * 1024 * 1024
+  #else
+    static let fullDetailPixels: Double = 256 * 1024 * 1024
+  #endif
+
   /// A layer row's rectangle in canvas units, from its fields alone (nothing decoded).
   private static func units(_ row: Layer) -> CGRect {
     let scale = Double(max(row.scaleFactorBy120, 1)) / 120
@@ -499,7 +506,7 @@ final nonisolated class Project: Sendable {
 
   /// The canvas the layers make at `density`: their union in units, the pixels per unit, and the
   /// size in pixels. Never finer than the finest layer (more pixels would add no detail), and a
-  /// finer canvas than the image's own stays within 16384 pixels a side and 256 megapixels,
+  /// finer canvas than the image's own stays within 16384 pixels a side and `fullDetailPixels`,
   /// coarser if need be (a 4× refine of a large image is a lot of memory, on an iPad above all).
   /// Nil when empty or impossibly large.
   static func canvasSize(_ layers: [CompositeLayer], density: Int = 120) -> (
@@ -512,7 +519,7 @@ final nonisolated class Project: Sendable {
     var by120 = max(min(density, finest), 1)
     if by120 > 120 {
       let limit = min(
-        16384 / union.width, 16384 / union.height, (256 * 1024 * 1024 / (union.width * union.height)).squareRoot())
+        16384 / union.width, 16384 / union.height, (fullDetailPixels / (union.width * union.height)).squareRoot())
       by120 = max(min(by120, Int((limit * 120).rounded(.down))), 120)
     }
     let scale = Double(by120) / 120
@@ -899,7 +906,7 @@ final nonisolated class Project: Sendable {
     let source = layers.source
     let width = source.width, height = source.height
     guard let alpha = CanvasMask.alpha(of: source, width: width, height: height),
-          let frameAlpha = CanvasMask.alpha(of: layers.frame, width: layers.frame.width, height: layers.frame.height)
+          let frameAlpha = layers.frameAlpha ?? CanvasMask.alpha(of: layers.frame, width: layers.frame.width, height: layers.frame.height)
     else { return nil }
     var images: [(String, Tensor<FloatType>)] = []
     var masks: [(String, Tensor<UInt8>)] = []
@@ -952,8 +959,8 @@ final nonisolated class Project: Sendable {
   /// The detail layers of the source's step (`detailLayers`'s: from its lowest layer finer than
   /// 120 up), carried into a refine of it so its detail outlives the next refine: the same
   /// tensors and masks (deleting a step only removes names no other step uses), moved by where
-  /// the source's top left was on its canvas. One the new frame covers wholly and opaquely at the
-  /// same or a finer density is dropped. Past `maxRefineLayers` the oldest go: the source layer
+  /// the source's top left was on its canvas. One the new frame covers wholly and opaquely is
+  /// dropped, whatever its density: it could never show again. Past `maxRefineLayers` the oldest go: the source layer
   /// below them already has them, at its own pixels (it's the step's image), so dropping one
   /// flattens it into the source.
   private func carriedDetail(from sourceTensorId: Int64, under frame: LayerRow, frameAlpha: [UInt8], frameWidth: Int) -> [LayerRow] {
@@ -968,7 +975,7 @@ final nonisolated class Project: Sendable {
     var carried: [LayerRow] = []
     for row in layers[start...] {
       let rect = Self.units(row).offsetBy(dx: -union.minX, dy: -union.minY)
-      if frame.scaleFactorBy120 >= row.scaleFactorBy120, frameUnits.contains(rect) {
+      if frameUnits.contains(rect) {
         // Covered when every frame pixel over it is opaque.
         let x0 = Int(((rect.minX - frameUnits.minX) * frameScale).rounded(.down))
         let x1 = min(Int(((rect.maxX - frameUnits.minX) * frameScale).rounded(.up)), Int(frame.width))
