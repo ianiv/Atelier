@@ -254,7 +254,11 @@ final class CreateModel {
   var models: [MediaGenerationResolvedModel] = []
   var selectedModel: String? {
     didSet {
-      if selectedModel != oldValue, let selectedModel { loadDefaults(for: selectedModel) }
+      if selectedModel != oldValue, let selectedModel {
+        loadDefaults(for: selectedModel)
+        // Before the inspector asks, so Strength's hint rarely waits on it.
+        startFixedGridCheck(selectedModel)
+      }
       // The open layout follows to the new model's format, or closes for one without layouts.
       if selectedModel != oldValue, layout != nil {
         if layoutFormat == nil { closeLayout() } else { writeLayout() }

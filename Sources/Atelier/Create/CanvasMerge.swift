@@ -479,7 +479,8 @@ nonisolated enum CanvasMerge {
       let coverage = Int(frameBytes[index * 4 + 3])
       guard coverage < 255 else { continue }
       for c in 0..<3 {
-        frameBytes[index * 4 + c] = coverage > 0 ? UInt8(min(Int(frameBytes[index * 4 + c]) * 255 / coverage, 255)) : 0
+        frameBytes[index * 4 + c] = coverage > 0
+          ? UInt8(min((Int(frameBytes[index * 4 + c]) * 255 + coverage / 2) / coverage, 255)) : 0
       }
       frameBytes[index * 4 + 3] = 255
     }
@@ -517,7 +518,11 @@ nonisolated enum CanvasMerge {
   /// layer pixel over the source pixel and its neighbours stored at alpha 255. The source keeps a painted pixel as
   /// 0xF9, which Draw Things and `Project.composite` show at alpha 0xF8, so anywhere the layer is
   /// see-through (around the frame, a stroke's edge) paint would leave the image faintly
-  /// see-through; there the source keeps its opaque code instead.
+  /// see-through; there the source keeps its opaque code instead. The trade-off: the outermost
+  /// ring of painted source pixels along the mask's edges, and one pixel inside the frame's edge,
+  /// lose 0xF9, so Draw Things' paint overlay and its next inpainting mask from this step are
+  /// about one source pixel smaller. Atelier's own kept mask (`storedMask`) is unaffected. It's
+  /// what keeps the resample at 120 from leaking alpha.
   private static func paintCovered(
     _ paint: [UInt8], width: Int, units: CGRect, scale: Double, layerAlpha: [UInt8], layerWidth: Int, layerHeight: Int
   ) -> [UInt8] {

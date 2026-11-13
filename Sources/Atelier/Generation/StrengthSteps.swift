@@ -184,18 +184,22 @@ extension CreateModel {
     guard let settings, let file = selectedModel,
           let sampler = DataModels.SamplerType(rawValue: settings.sampler.rawValue)
     else { return nil }
-    // An H3 file's schedule is read from it once, in the background; the hint shows once it's in.
-    let version = ModelZoo.versionForModel(file)
-    if version == .minimaxH3 || version == .minimaxH3Image, StrengthSteps.knownFixedGrid(file) == nil {
+    // An H3 file's schedule is read from it once, in the background (`startFixedGridCheck`, as
+    // it's selected). The line stays put meanwhile, and for a fixed schedule says so.
+    if Self.mayRunFixedGrid(file) {
       _ = fixedGridChecks
-      if !fixedGridsChecking.contains(file) {
-        fixedGridsChecking.insert(file)
-        Task {
-          _ = await StrengthSteps.checkFixedGrid(file)
-          fixedGridChecks += 1
-        }
+      switch StrengthSteps.knownFixedGrid(file) {
+      case nil:
+        startFixedGridCheck(file)
+        return SettingHint(text: "Counting steps…", help: "Reading the model's schedule.", dimmed: true)
+      case true?:
+        return SettingHint(
+          text: "Runs the model's fixed schedule",
+          help: "This model runs its own fixed schedule of steps whatever the sampler, so they aren't counted here.",
+          dimmed: true)
+      case false?:
+        break
       }
-      return nil
     }
     let steps = Int(settings.steps)
     let tile = settings.tiledDiffusion ? (width: settings.diffusionTileWidth, height: settings.diffusionTileHeight) : nil
@@ -213,5 +217,23 @@ extension CreateModel {
     let takesShift = SettingsRegistry.byID["shift"]?.applies(traits) == true
     let hint = StrengthSteps.hint(start, strength: settings.strength, shift: takesShift ? Double(settings.shift) : nil)
     return SettingHint(text: hint.text, help: hint.help)
+  }
+
+  /// A MiniMax H3 model `ModelZoo` knows, whose file may run its own sigma grid.
+  static func mayRunFixedGrid(_ file: String) -> Bool {
+    let version = ModelZoo.versionForModel(file)
+    return (version == .minimaxH3 || version == .minimaxH3Image) && ModelZoo.specificationForModel(file) != nil
+  }
+
+  /// Reads whether an H3 file runs a fixed schedule (`StrengthSteps.checkFixedGrid`), off the main
+  /// actor, once per file; Strength's hint redraws when it's in.
+  func startFixedGridCheck(_ file: String) {
+    guard Self.mayRunFixedGrid(file), StrengthSteps.knownFixedGrid(file) == nil, !fixedGridsChecking.contains(file)
+    else { return }
+    fixedGridsChecking.insert(file)
+    Task {
+      _ = await StrengthSteps.checkFixedGrid(file)
+      fixedGridChecks += 1
+    }
   }
 }
