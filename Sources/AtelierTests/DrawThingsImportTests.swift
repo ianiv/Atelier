@@ -168,6 +168,39 @@ struct DrawThingsImportTests {
     #expect(byName[0].prefix == "in style ")
   }
 
+  /// A custom_lora.json weight entry, as Draw Things' LoRA Config Editor script writes it, sets the
+  /// LoRA's starting weight and slider range in Create.
+  @Test func customLoRAWeightSetsTheDefaultAndRange() throws {
+    func weighted(_ weight: String?) throws -> ModelLibrary.LoRA {
+      let field = weight.map { ", \"weight\": \($0)" } ?? ""
+      let json = "{\"name\": \"Style\", \"file\": \"style_lora_f16.ckpt\", \"prefix\": \"\", \"version\": \"flux1\"\(field)}"
+      // Snake case, as LoRAZoo writes and reads custom_lora.json.
+      let decoder = JSONDecoder()
+      decoder.keyDecodingStrategy = .convertFromSnakeCase
+      let specification = try decoder.decode(LoRAZoo.Specification.self, from: Data(json.utf8))
+      var lora = lora("Style", "style_lora_f16.ckpt")
+      lora.weight = ModelLibrary.Weight(specification.weight)
+      return lora
+    }
+    let set = try weighted("{\"value\": 0.6, \"lower_bound\": 0, \"upper_bound\": 1.2}")
+    #expect(set.defaultWeight == Double(Float(0.6)))
+    #expect(set.weightRange == 0...Double(Float(1.2)))
+    let rangeOnly = try weighted("{\"lower_bound\": -1, \"upper_bound\": 1}")
+    #expect(rangeOnly.defaultWeight == 1)
+    #expect(rangeOnly.weightRange == -1...1)
+    let none = try weighted(nil)
+    #expect(none.defaultWeight == 1)
+    #expect(none.weightRange == -1.5...2.5)
+    let backwards = try weighted("{\"value\": 0.5, \"lower_bound\": 2, \"upper_bound\": 1}")
+    #expect(backwards.weightRange == -1.5...2.5)
+    // An 8-bit copy, whose entry has no weight, takes its deleted original's.
+    var original = lora("Style", "style_lora_f16.ckpt", here: false)
+    original.weight = set.weight
+    let linked = ModelLibrary.linkingLoRACopies([original, lora("Style Small", "style_lora_q8p.ckpt")])
+    #expect(linked.map(\.file) == ["style_lora_q8p.ckpt"])
+    #expect(linked[0].weight == set.weight)
+  }
+
   /// As one user's custom_lora.json shows them.
   @Test func aRealEightBitCopyGetsItsOriginalsNameAndTriggerWords() {
     for original in ["age_slider_v1_krea_lora_f16.ckpt", "renamed_on_import_lora_f16.ckpt"] {

@@ -30,10 +30,39 @@ final class ModelLibrary {
     var registry: URL
     /// The models folder its file is in (the first that has it), if any has.
     var folder: URL?
+    /// The weight and slider range custom_lora.json gives it, if it gives any (Draw Things' LoRA
+    /// Config Editor script sets them, for example).
+    var weight: Weight?
 
     var id: String { file }
     var isDownloaded: Bool { size != nil }
     var family: String { ModelLibrary.familyName(version) }
+    /// The weight it starts at when added in Create.
+    var defaultWeight: Double { weight?.value ?? 1 }
+    /// The range of its Weight slider in Create.
+    var weightRange: ClosedRange<Double> { weight?.range ?? Weight.defaultRange }
+  }
+
+  /// A LoRA's `weight` entry in custom_lora.json, read as Draw Things reads it
+  /// (`LoRAZoo.weightForModel`): no value means 1, the default of every LoRA.
+  nonisolated struct Weight: Codable, Hashable, Sendable {
+    /// `LoRAZoo.Specification.WeightRange`'s range when an entry doesn't give one.
+    static let defaultRange: ClosedRange<Double> = -1.5...2.5
+    var value: Double?
+    var lowerBound: Double
+    var upperBound: Double
+
+    init?(_ weight: LoRAZoo.Specification.WeightRange?) {
+      guard let weight else { return nil }
+      value = weight.value.map(Double.init)
+      lowerBound = Double(weight.lowerBound)
+      upperBound = Double(weight.upperBound)
+    }
+
+    /// The default range when an entry's bounds are unusable.
+    var range: ClosedRange<Double> {
+      lowerBound.isFinite && upperBound.isFinite && lowerBound < upperBound ? lowerBound...upperBound : Self.defaultRange
+    }
   }
 
   nonisolated struct Download: Equatable {
@@ -1115,7 +1144,7 @@ final class ModelLibrary {
             name: specification.name, file: specification.file, prefix: specification.prefix,
             version: specification.version.rawValue,
             size: Self.size(of: specification.file, in: directories), registry: directory,
-            folder: Self.folder(of: specification.file, in: directories)))
+            folder: Self.folder(of: specification.file, in: directories), weight: Weight(specification.weight)))
       }
     }
     self.loras = Self.linkingLoRACopies(loras).sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -1144,6 +1173,7 @@ final class ModelLibrary {
       let copy = result[index]
       guard let match = missing.firstIndex(where: { $0.version == copy.version && !keys($0).isDisjoint(with: keys(copy)) }) else { continue }
       if copy.prefix.trimmingCharacters(in: .whitespaces).isEmpty { result[index].prefix = missing[match].prefix }
+      if copy.weight == nil { result[index].weight = missing[match].weight }
       // A name that's only the file name says less than the one its owner chose.
       if normalized(copy.name) == normalized(copy.file), normalized(copy.name) != copy.name.lowercased() || copy.name.contains("_") {
         result[index].name = missing[match].name

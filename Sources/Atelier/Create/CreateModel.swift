@@ -137,8 +137,8 @@ final class CreateModel {
         MediaGenerationResolvedModel(file: $0.file, name: $0.name, description: "", version: $0.version, isDownloaded: true)
       },
       loras: catalog.loras.map {
-        // Only its name and family are read here: it lives on the server.
-        ModelLibrary.LoRA(name: $0.name, file: $0.file, prefix: $0.prefix, version: $0.version, size: 1, registry: URL(filePath: "/"))
+        // Only its name, family and weight are read here: it lives on the server.
+        ModelLibrary.LoRA(name: $0.name, file: $0.file, prefix: $0.prefix, version: $0.version, size: 1, registry: URL(filePath: "/"), weight: $0.weight)
       },
       files: catalog.files, upscalers: catalog.upscalers, features: catalog.features)
     reconcileModel()
