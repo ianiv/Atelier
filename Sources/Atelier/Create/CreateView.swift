@@ -216,6 +216,12 @@ struct CanvasView: View {
               Image(decorative: image, scale: 1)
                 .resizable()
                 .interpolation(zoom * points > 2 ? .none : .high)
+                .overlay(alignment: .topLeading) {
+                  // Zoomed in past the image's own pixels, its finer layers show their detail.
+                  if zoom * points > 1 {
+                    detailOverlay(model.canvasDisplayDetail, scale: zoom * points)
+                  }
+                }
                 .accessibilityElement()
                 .accessibilityLabel("Canvas image")
                 .accessibilityAddTraits(.isImage)
@@ -374,9 +380,7 @@ struct CanvasView: View {
     }
     // The canvas's image as it is now: a run that finishes while it's open shows its result here.
     .sheet(isPresented: Bindable(model).viewingCanvasImage) {
-      ImageViewer(
-        image: model.image, imageID: model.imageItem?.tensorId, accessibilityLabel: "Canvas image, full size",
-        emptyTitle: "No Image")
+      CanvasImageViewer()
     }
   }
 
@@ -530,6 +534,23 @@ struct CanvasView: View {
         }
     }
   #endif
+
+  /// The canvas image's detail layers (`CreateModel.canvasDetail`) over it, each at its rectangle
+  /// in image pixels times `scale` (points per image pixel).
+  private func detailOverlay(_ layers: [Project.DetailLayer], scale: Double) -> some View {
+    ZStack(alignment: .topLeading) {
+      ForEach(layers.indices, id: \.self) { index in
+        let layer = layers[index]
+        Image(decorative: layer.image, scale: 1)
+          .resizable()
+          .interpolation(layer.rect.width * scale / Double(max(layer.image.width, 1)) > 2 ? .none : .high)
+          .frame(width: layer.rect.width * scale, height: layer.rect.height * scale)
+          .offset(x: layer.rect.minX * scale, y: layer.rect.minY * scale)
+      }
+    }
+    .allowsHitTesting(false)
+    .accessibilityHidden(true)
+  }
 
   /// The mask in red over the image, with the stroke being painted.
   private func maskOverlay(imageSize _: CGSize, scale: Double) -> some View {
@@ -1624,10 +1645,34 @@ private struct AdditionalModelFoldersSection: View {
   }
 #endif
 
+/// The canvas image full size (Show Image Full Size, ⌘Y): at full detail when its step has layers
+/// finer than the image (`HistoryStore.fullDetailImage`), read as the sheet opens, else the image.
+private struct CanvasImageViewer: View {
+  @Environment(CreateModel.self) private var model
+  @State private var full: (tensorId: Int64, image: CGImage)?
+
+  var body: some View {
+    let tensorId = model.canvasShowsImage ? model.imageItem?.tensorId : nil
+    let detailed = full.flatMap { $0.tensorId == tensorId ? $0.image : nil }
+    ImageViewer(
+      image: detailed ?? model.image, imageID: "\(tensorId ?? 0) \(detailed != nil)",
+      accessibilityLabel: "Canvas image, full size", emptyTitle: "No Image")
+      // A run that finishes while it's open shows its result here.
+      .task(id: tensorId) {
+        // Read even before the canvas's detail has loaded: it may not have yet.
+        guard let tensorId,
+              let image = await model.history.fullDetailImage(tensorId: tensorId)
+        else { return }
+        full = (tensorId, image)
+      }
+  }
+}
+
 /// Settings ▸ Images: what saved images carry, how videos are written, the output folder, and
 /// notifications.
 struct ImagesSettingsView: View {
   @AppStorage(AppSettings.embedsSettingsKey) private var embedsSettings = true
+  @AppStorage(AppSettings.exportsFullDetailKey) private var exportsFullDetail = true
   @AppStorage(VideoCodec.key) private var videoCodec = VideoCodec.h264
   @AppStorage(AppSettings.savesToOutputFolderKey) private var savesToOutputFolder = false
   @AppStorage(AppSettings.outputFolderKey) private var outputFolder = AppSettings.defaultOutputFolder
@@ -1641,6 +1686,15 @@ struct ImagesSettingsView: View {
           Text("Include Generation Settings in Saved Images")
           Text(
             "Exported, saved and dragged images carry their prompt, model, seed and settings, in the format Draw Things reads. Videos carry them too."
+          )
+        }
+        Picker(selection: $exportsFullDetail) {
+          Text("Full Detail").tag(true)
+          Text("Image Size").tag(false)
+        } label: {
+          Text("Export Refined Images At")
+          Text(
+            "A region refined zoomed in keeps the detail it was made at. Full Detail exports, copies, drags and saves to the output folder at that detail, larger than the image; Image Size at the size the canvas and History show."
           )
         }
         Picker(selection: $videoCodec) {

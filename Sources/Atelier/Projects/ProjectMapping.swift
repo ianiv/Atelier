@@ -48,9 +48,11 @@ nonisolated enum ProjectMapping {
     /// `profile_data`.
     var colorMatch: ColorMatch.Record?
     /// A layered step (a merged refine): how many layers it has (`data_stored`) and the top
-    /// layer's position, which Draw Things keeps as the node's content offset.
+    /// layer's position and density, which Draw Things keeps as the node's content offset and
+    /// `scale_factor_by_120` (`ImageHistoryManager` reads both back with the step's layers).
     var layerCount: Int32?
     var contentOffset: (x: Int32, y: Int32)?
+    var canvasScale: Int32?
   }
 
   /// `profile_data`: Draw Things' `GenerationProfile` as snake-case JSON (timings and duration),
@@ -159,6 +161,7 @@ nonisolated enum ProjectMapping {
       imagePriorSteps: u32("imagePriorSteps", 5),
       dataStored: step.layerCount ?? (step.tensorId != 0 ? 1 : 0), previewId: step.previewId,
       contentOffsetX: step.contentOffset?.x ?? 0, contentOffsetY: step.contentOffset?.y ?? 0,
+      scaleFactorBy120: step.canvasScale ?? 120,
       refinerModel: d.string("refinerModel"),
       originalImageHeight: u32("originalImageHeight", 0),
       originalImageWidth: u32("originalImageWidth", 0),

@@ -166,8 +166,16 @@ struct SettingDescriptor: Identifiable {
   let set: (inout PipelineConfiguration, JSONValue) -> Void
   /// Reads this setting from a sidecar's configuration dump (keyed by property name).
   var read: ([String: JSONValue]) -> JSONValue? = { _ in nil }
+  /// A line the inspector shows under the row, worked out from the screen (Strength's steps).
+  var hint: (@MainActor (CreateModel) -> SettingHint?)?
 
   var isFeatureToggle: Bool { section.featureToggle == id }
+
+  func hinted(_ hint: @escaping @MainActor (CreateModel) -> SettingHint?) -> SettingDescriptor {
+    var descriptor = self
+    descriptor.hint = hint
+    return descriptor
+  }
 
   func matches(_ query: String) -> Bool {
     ([title, id, help, section.title] + keywords).contains {
@@ -572,7 +580,8 @@ enum SettingsRegistry {
       float(
         "strength", \.strength, "Strength", .imageToImage,
         "How much an input image may change. 1 ignores it.", range: 0...1, step: 0.01, digits: 2,
-        keywords: ["denoise", "img2img"]),
+        keywords: ["denoise", "img2img"]
+      ).hinted { $0.strengthHint },
       float(
         "imageGuidanceScale", \.imageGuidanceScale, "Image Guidance", .imageToImage,
         "How closely edit models follow the input image.", range: 0...30, step: 0.1),

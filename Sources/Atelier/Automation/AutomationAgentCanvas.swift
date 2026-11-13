@@ -8,7 +8,8 @@ extension Automation {
   /// set_canvas_region (region, fit, actual size, scale, the region returned and clamping,
   /// size_to_region), the `canvas` object in get_create_screen and its set_create_screen
   /// fields, the errors each gives, and one `generate` with use_canvas: a masked run that merges,
-  /// follows the input step, is stored as two layers and leaves pixels away from the mask alone.
+  /// follows the input step, is stored as two layers and leaves pixels away from the mask alone;
+  /// a zoomed run's frame kept at its density, and get_image full_detail.
   /// Then masks kept per image: set_canvas_image bringing a step's mask back (and `mask: false`),
   /// list_history's has_mask, get_canvas_mask on a step, and set_canvas_mask from_history_step
   /// (replace, add, subtract, invert, one ⌘Z step each, and its errors).
@@ -381,6 +382,8 @@ extension Automation {
       _ = try? await call("set_create_screen", ["prompt": "a watercolor painting"])
       state = try? await call("set_canvas_region", ["region": ["x": 0, "y": 0, "width": width / 2, "height": height / 2]])
       check(model.imageItem == item && same(rect(state?["region"]), quadrant), "set_canvas_image puts the History step on the canvas, and the region zooms onto its quadrant")
+      // Zoomed in, the frame is kept at its own density (`CanvasMerge.frameDensity`).
+      let zoomedDensity = model.canvasPlacement.map { CanvasMerge.frameDensity(zoom: ($0.zoom.x + $0.zoom.y) / 2) } ?? 120
       guard let zoomed = try? await call("generate", ["use_app_settings": true, "use_canvas": true]),
             let zoomedStep = (zoomed["history_step"] as? NSNumber)?.int64Value,
             let zoomedItem = model.history.items.first(where: { $0.id.logicalTime == zoomedStep }),
@@ -398,6 +401,33 @@ extension Automation {
       check(rest?.maxDelta == 0, "outside the region nothing changed (max delta \(rest?.maxDelta ?? -1))")
       check((changed?.meanDelta ?? 0) > 1, "the region changed (mean delta \(String(format: "%.1f", changed?.meanDelta ?? 0)))")
       check((await listed(step))?["has_mask"] as? Bool == true, "leaving the result with mask: false didn't clear the mask it remembers")
+      // Its detail: a layer at the zoom's density, and get_image full_detail at that density.
+      @MainActor func imageText(_ arguments: [String: Any]) async -> String {
+        let answer = try? await tools.call("get_image", arguments: arguments) { _ in }
+        return (answer?["content"] as? [[String: Any]])?.first?["text"] as? String ?? ""
+      }
+      let zoomedLayers = await model.history.project.read { $0.layerSummary(tensorId: zoomedItem.tensorId) }
+      if zoomedDensity > 120 {
+        let fullWidth = Int((width * Double(zoomedDensity) / 120).rounded(.up))
+        let fullHeight = Int((height * Double(zoomedDensity) / 120).rounded(.up))
+        check(
+          zoomedLayers.count >= 2 && zoomedLayers.last?.scale == Int32(zoomedDensity),
+          "the zoomed run's frame is a layer at \(zoomedDensity) (\(zoomedLayers.map { "\($0.width)×\($0.height)@\($0.scale)" }))")
+        let text = await imageText(["history_step": zoomedStep, "full_detail": true])
+        check(
+          text.contains("At full detail: \(fullWidth)×\(fullHeight)"),
+          "get_image full_detail returns it at \(fullWidth)×\(fullHeight) (\(text.split(separator: "\n").last ?? ""))")
+        let plain = await imageText(["history_step": zoomedStep])
+        check(!plain.contains("At full detail"), "get_image without full_detail is the image's own size")
+      } else {
+        check(zoomedLayers.last.map { $0.scale == 120 } ?? true, "at or below 1× the zoomed run stays at the image's pixels")
+      }
+      if layers.last?.scale == 120 {
+        check(
+          await imageText(["history_step": step, "full_detail": true]).contains("no finer detail"),
+          "get_image full_detail on a step with no finer layers says so")
+      }
+      await expectError("get_image", ["full_detail": "yes"], "true or false", "a full_detail that isn't a boolean")
 
       // set_canvas_mask from_history_step, on the zoomed result (which has no mask of its own).
       check((await listed(zoomedStep))?["has_mask"] as? Bool == false, "list_history says the zoomed result has no mask")

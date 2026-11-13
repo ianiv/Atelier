@@ -218,35 +218,20 @@ final nonisolated class Project: Sendable {
   /// stroke in the composited image's pixels (`Self.paintedMask`); nil when no layer paints.
   /// Read-only: Atelier keeps its own masks as `storedMask`.
   func layerMask(tensorId: Int64) -> CanvasMask? {
-    guard let layers = canvasLayers(imageTensorId: tensorId), layers.contains(where: { $0.maskId > 0 }) else { return nil }
-    let drawn: [CompositeLayer] = layers.compactMap { layer in
-      guard let image = tensor(id: layer.tensorId).flatMap(ImageTensor.cgImage(from:)) else { return nil }
-      let mask = layer.maskId > 0 ? self.mask(id: layer.maskId) : nil
-      return CompositeLayer(
-        image: image, mask: mask?.codes, maskWidth: mask?.width ?? 0, maskHeight: mask?.height ?? 0,
-        x: Int(layer.x), y: Int(layer.y), scaleFactorBy120: Int(layer.scaleFactorBy120))
-    }
-    guard drawn.count == layers.count else { return nil }
+    guard let layers = canvasLayers(imageTensorId: tensorId), layers.contains(where: { $0.maskId > 0 }),
+          let drawn = compositeLayers(layers)
+    else { return nil }
     return Self.paintedMask(drawn)
   }
 
   /// Where Draw Things' layers are painted with its inpainting brush, laid out as `composite` lays
   /// them out: a pixel is painted where any layer's mask code there is other than 0 or 3
   /// (`CanvasMask.Stored`; the brush writes 0xF9, code 1), the mask read nearest-neighbour at the
-  /// layer's size as `masked` reads it. One bitmap stroke at the composite's size, nil when nothing
-  /// is painted.
-  static func paintedMask(_ layers: [CompositeLayer]) -> CanvasMask? {
-    guard !layers.isEmpty else { return nil }
-    func units(_ layer: CompositeLayer) -> CGRect {
-      let scale = Double(max(layer.scaleFactorBy120, 1)) / 120
-      return CGRect(
-        x: Double(layer.x), y: Double(layer.y), width: Double(layer.image.width) / scale,
-        height: Double(layer.image.height) / scale)
-    }
-    let union = layers.dropFirst().reduce(units(layers[0])) { $0.union(units($1)) }
-    let density = Double(layers.map(\.scaleFactorBy120).max() ?? 120) / 120
-    let width = Int((union.width * density).rounded(.up)), height = Int((union.height * density).rounded(.up))
-    guard width > 0, height > 0, width <= 32768, height <= 32768 else { return nil }
+  /// layer's size as `masked` reads it. One bitmap stroke at the composite's size for `density`
+  /// (`canvasSize`), nil when nothing is painted.
+  static func paintedMask(_ layers: [CompositeLayer], density: Int = 120) -> CanvasMask? {
+    guard let size = canvasSize(layers, density: density) else { return nil }
+    let (union, density, width, height) = (size.union, size.scale, size.width, size.height)
     var painted = [UInt8](repeating: 0, count: width * height)
     for layer in layers {
       let rect = units(layer)
@@ -372,23 +357,56 @@ final nonisolated class Project: Sendable {
 
   /// The full-resolution image of a step, if it has one.
   func image(at id: StepID) -> CGImage? {
-    imageTensorId(at: id).flatMap(image(tensorId:))
+    imageTensorId(at: id).flatMap { image(tensorId: $0) }
   }
 
   /// The image of the step whose image layer is `tensorId`: for a step of several layers (a
-  /// merged refine, or a Draw Things canvas), all of them composited (`Self.composite`).
-  func image(tensorId: Int64) -> CGImage? {
-    if let layers = canvasLayers(imageTensorId: tensorId) {
-      let drawn: [CompositeLayer] = layers.compactMap { layer in
-        guard let image = tensor(id: layer.tensorId).flatMap(ImageTensor.cgImage(from:)) else { return nil }
-        let mask = layer.maskId > 0 ? self.mask(id: layer.maskId) : nil
-        return CompositeLayer(
-          image: image, mask: mask?.codes, maskWidth: mask?.width ?? 0, maskHeight: mask?.height ?? 0,
-          x: Int(layer.x), y: Int(layer.y), scaleFactorBy120: Int(layer.scaleFactorBy120))
-      }
-      if drawn.count == layers.count, let composite = Self.composite(drawn) { return composite }
+  /// merged refine, or a Draw Things canvas), all of them composited (`Self.composite`) at
+  /// `density` (`scale_factor_by_120`: 120 is one pixel per canvas unit, the image's own size;
+  /// `Self.finestDensity` keeps its finest layer's detail). The canvas, masks and placement work
+  /// at 120; full detail is for showing and exporting.
+  func image(tensorId: Int64, density: Int = 120) -> CGImage? {
+    if let layers = canvasLayers(imageTensorId: tensorId), let drawn = compositeLayers(layers),
+       let composite = Self.composite(drawn, density: density)
+    {
+      return composite
     }
     return tensor(id: tensorId).flatMap(ImageTensor.cgImage(from:))
+  }
+
+  /// Whether the step whose image is `tensorId` has a layer finer than its image's own pixels (a
+  /// zoomed refine, or a Draw Things upscale), so a full-detail read differs from the image.
+  func hasDetail(tensorId: Int64) -> Bool {
+    canvasLayers(imageTensorId: tensorId)?.contains { $0.scaleFactorBy120 > 120 } == true
+  }
+
+  /// The layers of the step whose image is `tensorId` that the image (at 120) loses detail of, to
+  /// draw over it at their own resolution where the canvas is zoomed in (`Self.detailLayers`).
+  /// Empty for a step with none.
+  func detailLayers(tensorId: Int64) -> [DetailLayer] {
+    guard let layers = canvasLayers(imageTensorId: tensorId),
+          let start = layers.firstIndex(where: { $0.scaleFactorBy120 > 120 }),
+          let drawn = compositeLayers(Array(layers[start...]))
+    else { return [] }
+    // Placed on the whole canvas's union, from the rows (only the detail is decoded).
+    let union = layers.dropFirst().reduce(Self.units(layers[0])) { $0.union(Self.units($1)) }
+    return drawn.compactMap { layer in
+      Self.masked(layer).map {
+        DetailLayer(image: $0, rect: Self.units(layer).offsetBy(dx: -union.minX, dy: -union.minY))
+      }
+    }
+  }
+
+  /// Layer rows read for compositing; nil when any tensor is missing.
+  private func compositeLayers(_ layers: [Layer]) -> [CompositeLayer]? {
+    let drawn: [CompositeLayer] = layers.compactMap { layer in
+      guard let image = tensor(id: layer.tensorId).flatMap(ImageTensor.cgImage(from:)) else { return nil }
+      let mask = layer.maskId > 0 ? self.mask(id: layer.maskId) : nil
+      return CompositeLayer(
+        image: image, mask: mask?.codes, maskWidth: mask?.width ?? 0, maskHeight: mask?.height ?? 0,
+        x: Int(layer.x), y: Int(layer.y), scaleFactorBy120: Int(layer.scaleFactorBy120))
+    }
+    return drawn.count == layers.count ? drawn : nil
   }
 
   /// The layers, bottom to top, of the step whose image (top) layer is `tensorId`, when they're
@@ -406,14 +424,31 @@ final nonisolated class Project: Sendable {
     return nil
   }
 
-  /// The layers of the step whose image is `tensorId`, bottom to top, for checks.
-  func layerSummary(tensorId: Int64) -> [(tensorId: Int64, maskId: Int64, x: Int32, y: Int32)] {
+  /// The layers of the step whose image is `tensorId`, bottom to top, for checks: ids, place in
+  /// units, size in the tensor's pixels and density (`scale_factor_by_120`).
+  func layerSummary(tensorId: Int64) -> [(
+    tensorId: Int64, maskId: Int64, x: Int32, y: Int32, width: Int32, height: Int32, scale: Int32
+  )] {
     for row in workspace.fetch(for: Layer.self).where(Layer.tensorId == tensorId) {
       let layers = workspace.fetch(for: Layer.self).where(
         Layer.lineage == row.lineage && Layer.logicalTime == row.logicalTime, orderBy: [Layer.index.ascending])
-      if layers.last?.tensorId == tensorId { return layers.map { ($0.tensorId, $0.maskId, $0.x, $0.y) } }
+      if layers.last?.tensorId == tensorId {
+        return layers.map { ($0.tensorId, $0.maskId, $0.x, $0.y, $0.width, $0.height, $0.scaleFactorBy120) }
+      }
     }
     return []
+  }
+
+  /// The step's own `scale_factor_by_120` (the top layer's density), for checks.
+  func stepScale(tensorId: Int64) -> Int32? {
+    for row in workspace.fetch(for: Layer.self).where(Layer.tensorId == tensorId) {
+      if let node = workspace.fetch(for: TensorHistoryNode.self).where(
+        TensorHistoryNode.lineage == row.lineage && TensorHistoryNode.logicalTime == row.logicalTime
+      ).first {
+        return node.scaleFactorBy120
+      }
+    }
+    return nil
   }
 
   /// A layer's mask (`binary_mask_<id>`, `[height, width]` codes).
@@ -443,27 +478,68 @@ final nonisolated class Project: Sendable {
     var scaleFactorBy120: Int
   }
 
-  /// Layers composited as Draw Things draws its canvas: each covers (x, y, width·120/s, height·120/s)
-  /// in canvas units, drawn in order bottom to top, its mask's codes giving its alpha (0 and 3
-  /// opaque, any other `byte & 0xF8`, `ImageConverter.image(from:scaleFactor:binaryMask:)`, the
-  /// mask read nearest-neighbour at the layer's size). The result spans the layers' union, at the
-  /// finest layer's density (1 pixel per unit when all are at 120); what no layer covers is
-  /// transparent.
-  static func composite(_ layers: [CompositeLayer]) -> CGImage? {
-    guard !layers.isEmpty else { return nil }
-    func units(_ layer: CompositeLayer) -> CGRect {
-      let scale = Double(max(layer.scaleFactorBy120, 1)) / 120
-      return CGRect(
-        x: Double(layer.x), y: Double(layer.y), width: Double(layer.image.width) / scale,
-        height: Double(layer.image.height) / scale)
+  /// A full-detail read's density: its finest layer's (`canvasSize` never goes past that).
+  static let finestDensity = Int.max
+
+  /// The most pixels a canvas finer than its image may have: an iPad has much less memory.
+  #if os(iOS)
+    static let fullDetailPixels: Double = 64 * 1024 * 1024
+  #else
+    static let fullDetailPixels: Double = 256 * 1024 * 1024
+  #endif
+
+  /// A layer row's rectangle in canvas units, from its fields alone (nothing decoded).
+  private static func units(_ row: Layer) -> CGRect {
+    let scale = Double(max(row.scaleFactorBy120, 1)) / 120
+    return CGRect(x: Double(row.x), y: Double(row.y), width: Double(row.width) / scale, height: Double(row.height) / scale)
+  }
+
+  /// A layer's rectangle in canvas units: (x, y, width·120/s, height·120/s), as
+  /// `ImageHistoryManager` keeps `TensorData` (width and height in the tensor's pixels,
+  /// `scale_factor_by_120` its pixels per unit ×120).
+  static func units(_ layer: CompositeLayer) -> CGRect {
+    let scale = Double(max(layer.scaleFactorBy120, 1)) / 120
+    return CGRect(
+      x: Double(layer.x), y: Double(layer.y), width: Double(layer.image.width) / scale,
+      height: Double(layer.image.height) / scale)
+  }
+
+  /// The canvas the layers make at `density`: their union in units, the pixels per unit, and the
+  /// size in pixels. Never finer than the finest layer (more pixels would add no detail), and a
+  /// finer canvas than the image's own stays within 16384 pixels a side and `fullDetailPixels`,
+  /// coarser if need be (a 4× refine of a large image is a lot of memory, on an iPad above all).
+  /// Nil when empty or impossibly large.
+  static func canvasSize(_ layers: [CompositeLayer], density: Int = 120) -> (
+    union: CGRect, scale: Double, width: Int, height: Int
+  )? {
+    guard let first = layers.first else { return nil }
+    let union = layers.dropFirst().reduce(units(first)) { $0.union(units($1)) }
+    guard union.width > 0, union.height > 0 else { return nil }
+    let finest = layers.map(\.scaleFactorBy120).max() ?? 120
+    var by120 = max(min(density, finest), 1)
+    if by120 > 120 {
+      let limit = min(
+        16384 / union.width, 16384 / union.height, (fullDetailPixels / (union.width * union.height)).squareRoot())
+      by120 = max(min(by120, Int((limit * 120).rounded(.down))), 120)
     }
-    let union = layers.dropFirst().reduce(units(layers[0])) { $0.union(units($1)) }
-    let density = Double(layers.map(\.scaleFactorBy120).max() ?? 120) / 120
-    let width = Int((union.width * density).rounded(.up)), height = Int((union.height * density).rounded(.up))
-    guard width > 0, height > 0, width <= 32768, height <= 32768,
-          let context = CGContext(
-            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
-            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    let scale = Double(by120) / 120
+    let width = Int((union.width * scale).rounded(.up)), height = Int((union.height * scale).rounded(.up))
+    guard width > 0, height > 0, width <= 32768, height <= 32768 else { return nil }
+    return (union, scale, width, height)
+  }
+
+  /// Layers composited as Draw Things draws its canvas: each covers its `units` rectangle, drawn
+  /// in order bottom to top, its mask's codes giving its alpha (0 and 3 opaque, any other
+  /// `byte & 0xF8`, `ImageConverter.image(from:scaleFactor:binaryMask:)`, the mask read
+  /// nearest-neighbour at the layer's size). The result spans the layers' union at `density`
+  /// (`canvasSize`; 120 is 1 pixel per unit, the image's own size); what no layer covers is
+  /// transparent.
+  static func composite(_ layers: [CompositeLayer], density: Int = 120) -> CGImage? {
+    guard let size = canvasSize(layers, density: density) else { return nil }
+    let (union, density, width, height) = (size.union, size.scale, size.width, size.height)
+    guard let context = CGContext(
+      data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+      space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
     else { return nil }
     context.interpolationQuality = .high
     for layer in layers {
@@ -476,6 +552,26 @@ final nonisolated class Project: Sendable {
         image, in: CGRect(x: drawn.minX, y: Double(height) - drawn.maxY, width: drawn.width, height: drawn.height))
     }
     return context.makeImage()
+  }
+
+  /// A layer drawn over the image where the canvas shows more pixels than the image has: its
+  /// image (mask applied) and its rectangle in the image's pixels.
+  struct DetailLayer: @unchecked Sendable {
+    var image: CGImage
+    var rect: CGRect
+  }
+
+  /// The layers from the lowest one finer than 120 to the top, masked, each placed in the
+  /// composite's pixels at 120 (`composite`'s union from its top left). Drawn in order over that
+  /// composite, they give its finer detail at any zoom; layers above a fine one come too, so they
+  /// still cover it as they do in the composite.
+  static func detailLayers(_ layers: [CompositeLayer]) -> [DetailLayer] {
+    guard let start = layers.firstIndex(where: { $0.scaleFactorBy120 > 120 }),
+          let union = canvasSize(layers)?.union
+    else { return [] }
+    return layers[start...].compactMap { layer in
+      masked(layer).map { DetailLayer(image: $0, rect: units(layer).offsetBy(dx: -union.minX, dy: -union.minY)) }
+    }
   }
 
   /// A layer's image with its mask's alpha applied.
@@ -722,7 +818,8 @@ final nonisolated class Project: Sendable {
             refine: index == 0 ? refined?.record : nil,
             colorMatch: index == 0 ? colorMatch : nil,
             layerCount: index == 0 ? layered.map { Int32($0.rows.count) } : nil,
-            contentOffset: index == 0 ? layered.map { ($0.rows.last!.x, $0.rows.last!.y) } : nil)
+            contentOffset: index == 0 ? layered.map { ($0.rows.last!.x, $0.rows.last!.y) } : nil,
+            canvasScale: index == 0 ? layered.map { $0.rows.last!.scaleFactorBy120 } : nil)
           let node = ProjectMapping.node(for: step, settings: settings)
           if index == 0 { appended = node }
           transaction.try(submit: TensorHistoryNodeChangeRequest.upsertRequest(node))
@@ -732,7 +829,7 @@ final nonisolated class Project: Sendable {
                 submit: ProjectFormat.TensorDataChangeRequest.upsertRequest(
                   Layer(
                     lineage: id.lineage, logicalTime: id.logicalTime, index: Int64(layerIndex), x: row.x, y: row.y,
-                    width: row.width, height: row.height, scaleFactorBy120: 120, tensorId: row.tensorId,
+                    width: row.width, height: row.height, scaleFactorBy120: row.scaleFactorBy120, tensorId: row.tensorId,
                     maskId: row.maskId)))
             }
           } else {
@@ -785,7 +882,8 @@ final nonisolated class Project: Sendable {
           audioId: audioId, inputAudioId: inputAudioId, previewOffset: moodboardPreview) : nil)
   }
 
-  /// One layer row of a layered step, in source pixels at 120 (1 pixel per canvas unit).
+  /// One layer row of a layered step (`TensorData`): x and y in canvas units (the source's
+  /// pixels), width and height in the tensor's pixels, `scaleFactorBy120` its pixels per unit ×120.
   struct LayerRow {
     var tensorId: Int64
     var maskId: Int64
@@ -793,20 +891,22 @@ final nonisolated class Project: Sendable {
     var y: Int32
     var width: Int32
     var height: Int32
+    var scaleFactorBy120: Int32 = 120
   }
 
   /// The layers of a merged refine (`RefinedStep.Layers`) and the tensors they need written: the
   /// source at the origin, reusing its step's tensor when that step is one plain layer of the same
   /// image there, carrying the paint mask (0xF9 painted, else its alpha's code, as Draw Things'
-  /// brush and `ImageConverter.imageAndMask(from:)` write them); then the frame, `frameTensorId`,
-  /// with a mask only where it isn't opaque.
+  /// brush and `ImageConverter.imageAndMask(from:)` write them); then the source step's own
+  /// detail layers (`carriedDetail`); then the frame, `frameTensorId`, at its density, with a
+  /// mask only where it isn't opaque.
   private func layeredRefine(_ layers: RefinedStep.Layers, frameTensorId: Int64) -> (
     rows: [LayerRow], images: [(String, Tensor<FloatType>)], masks: [(String, Tensor<UInt8>)]
   )? {
     let source = layers.source
     let width = source.width, height = source.height
     guard let alpha = CanvasMask.alpha(of: source, width: width, height: height),
-          let frameAlpha = CanvasMask.alpha(of: layers.frame, width: layers.frame.width, height: layers.frame.height)
+          let frameAlpha = layers.frameAlpha ?? CanvasMask.alpha(of: layers.frame, width: layers.frame.width, height: layers.frame.height)
     else { return nil }
     var images: [(String, Tensor<FloatType>)] = []
     var masks: [(String, Tensor<UInt8>)] = []
@@ -839,15 +939,57 @@ final nonisolated class Project: Sendable {
         "binary_mask_\(frameMaskId)",
         Self.maskTensor(frameAlpha.map(CanvasMask.Stored.code(alpha:)), width: layers.frame.width, height: layers.frame.height)))
     }
+    let frame = LayerRow(
+      tensorId: frameTensorId, maskId: frameMaskId, x: layers.frameX, y: layers.frameY,
+      width: Int32(layers.frame.width), height: Int32(layers.frame.height),
+      scaleFactorBy120: layers.frameScaleFactorBy120)
+    let carried = layers.sourceTensorId.map {
+      carriedDetail(from: $0, under: frame, frameAlpha: frameAlpha, frameWidth: layers.frame.width)
+    } ?? []
     return (
-      [
-        LayerRow(tensorId: sourceTensorId, maskId: sourceMaskId, x: 0, y: 0, width: Int32(width), height: Int32(height)),
-        LayerRow(
-          tensorId: frameTensorId, maskId: frameMaskId, x: layers.frameX, y: layers.frameY,
-          width: Int32(layers.frame.width), height: Int32(layers.frame.height)),
-      ],
+      [LayerRow(tensorId: sourceTensorId, maskId: sourceMaskId, x: 0, y: 0, width: Int32(width), height: Int32(height))]
+        + carried + [frame],
       images, masks
     )
+  }
+
+  /// Most layers a merged refine keeps: the source, its carried detail, the frame.
+  static let maxRefineLayers = 8
+
+  /// The detail layers of the source's step (`detailLayers`'s: from its lowest layer finer than
+  /// 120 up), carried into a refine of it so its detail outlives the next refine: the same
+  /// tensors and masks (deleting a step only removes names no other step uses), moved by where
+  /// the source's top left was on its canvas. One the new frame covers wholly and opaquely is
+  /// dropped, whatever its density: it could never show again. Past `maxRefineLayers` the oldest go: the source layer
+  /// below them already has them, at its own pixels (it's the step's image), so dropping one
+  /// flattens it into the source.
+  private func carriedDetail(from sourceTensorId: Int64, under frame: LayerRow, frameAlpha: [UInt8], frameWidth: Int) -> [LayerRow] {
+    guard let layers = canvasLayers(imageTensorId: sourceTensorId),
+          let start = layers.firstIndex(where: { $0.scaleFactorBy120 > 120 })
+    else { return [] }
+    let union = layers.dropFirst().reduce(Self.units(layers[0])) { $0.union(Self.units($1)) }
+    let frameScale = Double(frame.scaleFactorBy120) / 120
+    let frameUnits = CGRect(
+      x: Double(frame.x), y: Double(frame.y), width: Double(frame.width) / frameScale,
+      height: Double(frame.height) / frameScale)
+    var carried: [LayerRow] = []
+    for row in layers[start...] {
+      let rect = Self.units(row).offsetBy(dx: -union.minX, dy: -union.minY)
+      if frameUnits.contains(rect) {
+        // Covered when every frame pixel over it is opaque.
+        let x0 = Int(((rect.minX - frameUnits.minX) * frameScale).rounded(.down))
+        let x1 = min(Int(((rect.maxX - frameUnits.minX) * frameScale).rounded(.up)), Int(frame.width))
+        let y0 = Int(((rect.minY - frameUnits.minY) * frameScale).rounded(.down))
+        let y1 = min(Int(((rect.maxY - frameUnits.minY) * frameScale).rounded(.up)), Int(frame.height))
+        let opaque = (y0..<max(y1, y0)).allSatisfy { y in (x0..<max(x1, x0)).allSatisfy { frameAlpha[y * frameWidth + $0] == 255 } }
+        if opaque { continue }
+      }
+      carried.append(
+        LayerRow(
+          tensorId: row.tensorId, maskId: row.maskId, x: row.x - Int32(union.minX), y: row.y - Int32(union.minY),
+          width: row.width, height: row.height, scaleFactorBy120: row.scaleFactorBy120))
+    }
+    return Array(carried.suffix(Self.maxRefineLayers - 2))
   }
 
   /// Whether `tensorId` is some step's only layer, a plain image at the origin of this size.
