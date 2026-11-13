@@ -10,6 +10,8 @@ struct PresetMenu: View {
   @Environment(FileDialogs.self) private var fileDialogs
   @State private var saving = false
   @State private var offeredDownload: ModelLibrary.PresetDownload?
+  /// A preset whose model isn't here, to apply to the selected model instead.
+  @State private var offeredMissing: Preset?
   @State private var pasteFailed = false
   @State private var importing: PendingPresetImport?
 
@@ -133,9 +135,20 @@ struct PresetMenu: View {
       presenting: offeredDownload
     ) { download in
       Button("Download") { library.download(download) }
+      Button("Use with \(modelName)") { model.apply(download.preset, keepingModel: true, undoManager: undoManager) }
       Button("Cancel", role: .cancel) {}
     } message: { download in
-      Text("“\(download.preset.name)” is for this model, which isn't downloaded. Atelier switches to it and applies the preset when the download finishes.")
+      Text("“\(download.preset.name)” is for this model, which isn't downloaded. Atelier switches to it and applies the preset when the download finishes. Or apply its settings to \(modelName) now; they stay when you switch to another model.")
+    }
+    .alert(
+      "Use “\(offeredMissing?.name ?? "this preset")” with \(modelName)?",
+      isPresented: Binding(get: { offeredMissing != nil }, set: { if !$0 { offeredMissing = nil } }),
+      presenting: offeredMissing
+    ) { preset in
+      Button("Use with \(modelName)") { model.apply(preset, keepingModel: true, undoManager: undoManager) }
+      Button("Cancel", role: .cancel) {}
+    } message: { preset in
+      Text("It's for \(name(of: preset.model)), which \(missingReason(preset)). Its settings apply to \(modelName) and stay when you switch to another model.")
     }
     .sheet(isPresented: $saving) { SavePresetSheet() }
     .debugPresents("savePreset", $saving)
@@ -151,21 +164,29 @@ struct PresetMenu: View {
     !model.availableModels.contains { $0.file == preset.model }
   }
 
-  /// A preset's model may not be here. If this device can download it, offer that; otherwise say
-  /// why not, rather than leave the model as it is.
+  /// A preset's model may not be here. If this device can download it, offer that; either way it
+  /// can apply to the selected model instead, as Draw Things allows.
   @ViewBuilder private func otherModelButton(_ preset: Preset) -> some View {
     let title = "\(preset.name) (\(name(of: preset.model))"
     if !isMissing(preset) {
       Button(title + ")") { model.apply(preset, undoManager: undoManager) }
-    } else if model.runTarget != .local {
-      Button(title + ", not on \(model.runTargetServerName ?? "the server"))") {}.disabled(true)
-    } else if library.downloads[preset.model ?? ""] != nil {
-      Button(title + ", downloading)") {}.disabled(true)
-    } else if let download = library.presetDownload(for: preset) {
+    } else if model.runTarget == .local, library.downloads[preset.model ?? ""] == nil,
+              let download = library.presetDownload(for: preset)
+    {
       Button(title + ", not downloaded)…") { offeredDownload = download }
     } else {
-      Button(title + ", not downloaded)") {}.disabled(true)
+      Button(title + ", \(missingLabel(preset)))…") { offeredMissing = preset }
     }
+  }
+
+  private func missingLabel(_ preset: Preset) -> String {
+    if model.runTarget != .local { return "not on \(model.runTargetServerName ?? "the server")" }
+    return library.downloads[preset.model ?? ""] != nil ? "downloading" : "not downloaded"
+  }
+
+  private func missingReason(_ preset: Preset) -> String {
+    if model.runTarget != .local { return "isn't on \(model.runTargetServerName ?? "the server")" }
+    return library.downloads[preset.model ?? ""] != nil ? "is still downloading" : "isn't downloaded"
   }
 
   private func presetButtons(_ list: [Preset], default current: Preset?) -> some View {
