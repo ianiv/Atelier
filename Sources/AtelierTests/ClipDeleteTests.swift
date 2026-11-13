@@ -253,6 +253,57 @@ struct ClipDeleteTests {
     try await Self.expectSameDeletes([clip], in: built)
   }
 
+  /// Appends a zoomed refine (its frame at 2× density, as Create's merge writes it) of the step
+  /// whose image is `source`, reusing that image as the bottom layer and carrying its detail.
+  @discardableResult
+  private static func refine(
+    _ project: Project, _ name: String, of source: Int64, at offset: Int32 = 2, into built: inout Built
+  ) async throws
+    -> Int64
+  {
+    let image = try CanvasRefineTests.pattern(width: 8, height: 8)
+    let frame = try CanvasRefineTests.solid(width: 8, height: 8, red: 255, green: 0, blue: 0)
+    var step = RefinedStep(record: RefineRecord(rect: [Double(offset), Double(offset), 4, 4], scale: 2, offset: [0, 0]), composite: image)
+    step.layers = RefinedStep.Layers(
+      source: image, sourceTensorId: source, paint: nil, frame: frame, frameX: offset, frameY: offset, frameScaleFactorBy120: 240)
+    let item = try await project.append(
+      tensor: tensor(), model: "m", prompt: name, negativePrompt: "", seed: 1, settings: [:], createdAt: Date(),
+      duration: 0, inputTensorId: source, after: source, refined: step)
+    built.images[name] = item.tensorId
+    return item.tensorId
+  }
+
+  /// Zoomed refines after C3 on its lineage, the second carrying the first's dense frame (one
+  /// tensor on two steps), move down with their density and shared tensors as frame by frame.
+  @Test(arguments: [false, true])
+  func refinesAfterAClipMoveTheSame(unlinked: Bool) async throws {
+    var built = try await Self.build()
+    defer { try? FileManager.default.removeItem(at: built.folder) }
+    let template = Project(url: built.url)
+    let first = try await Self.refine(template, "R1", of: #require(built.images["H"]), into: &built)
+    try await Self.refine(template, "R2", of: first, at: 4, into: &built)
+    let rows = template.contents().layers
+    let r1Frame = try #require(rows.first { $0.tensorId == first })
+    #expect(r1Frame.scaleFactorBy120 == 240)
+    // R2 holds R1's dense frame as carried detail.
+    #expect(rows.filter { $0.tensorId == first }.count == 2)
+    await template.close()
+    try await Self.expectSameDeletes(["C3"], in: built, unlinked: unlinked)
+  }
+
+  /// A refine of a clip frame (Use Last Frame as Input, then Edit with an image model) keeps the
+  /// frame's image as its bottom layer: a frame image on another step, so its clip goes frame by
+  /// frame.
+  @Test func aRefinedClipFrameDeletesFrameByFrame() async throws {
+    var built = try await Self.build()
+    defer { try? FileManager.default.removeItem(at: built.folder) }
+    let frames = try #require(built.clips["C2"])
+    let template = Project(url: built.url)
+    try await Self.refine(template, "R", of: #require(frames.last), into: &built)
+    await template.close()
+    try await Self.expectFallback(frames, in: built)
+  }
+
   /// A deleted step that recorded no parent isn't written back: the last step on its lineage, so
   /// no step moves into its key to cover it.
   @Test func deletingAStepWithoutAParentLinkLeavesItGone() async throws {
