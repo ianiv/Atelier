@@ -468,11 +468,23 @@ nonisolated enum CanvasMerge {
     let frameInLayer = CGRect(
       x: snapped((crop.minX - units.minX) * scale), y: snapped((crop.minY - units.minY) * scale),
       width: snapped(crop.width * scale), height: snapped(crop.height * scale))
-    guard let frame = composed([(straight, frameInLayer)], width: layerWidth, height: layerHeight),
-          let layerAlpha = grayDrawn(alphaImage, width: layerWidth, height: layerHeight, in: frameInLayer)
+    guard let covered = composed([(straight, frameInLayer)], width: layerWidth, height: layerHeight),
+          let layerAlpha = grayDrawn(alphaImage, width: layerWidth, height: layerHeight, in: frameInLayer),
+          var frameBytes = draw(covered, width: layerWidth, height: layerHeight, in: CGRect(x: 0, y: 0, width: layerWidth, height: layerHeight))
     else { return nil }
+    // Pixels the frame only partly covers (its edges, at a fractional zoom) come premultiplied by
+    // that coverage, which the alpha already carries: back to the straight color, opaque, so the
+    // stored tensor isn't darkened there and then faded again.
+    for index in 0..<(layerWidth * layerHeight) {
+      let coverage = Int(frameBytes[index * 4 + 3])
+      guard coverage < 255 else { continue }
+      for c in 0..<3 {
+        frameBytes[index * 4 + c] = coverage > 0 ? UInt8(min(Int(frameBytes[index * 4 + c]) * 255 / coverage, 255)) : 0
+      }
+      frameBytes[index * 4 + 3] = 255
+    }
+    guard let frame = makeImage(frameBytes, width: layerWidth, height: layerHeight) else { return nil }
     // What the layer shows once stored: its color at its mask codes' alpha (`Project.masked`).
-    let frameBytes = draw(frame, width: layerWidth, height: layerHeight, in: CGRect(x: 0, y: 0, width: layerWidth, height: layerHeight)) ?? []
     var shown = [UInt8](repeating: 0, count: layerWidth * layerHeight * 4)
     for index in 0..<(layerWidth * layerHeight) {
       let a = Int(CanvasMask.Stored.alpha(CanvasMask.Stored.code(alpha: layerAlpha[index])))
@@ -491,10 +503,43 @@ nonisolated enum CanvasMerge {
     var step = RefinedStep(record: record, composite: image)
     step.layers = RefinedStep.Layers(
       source: source, sourceTensorId: merge.sourceTensorId,
-      paint: merge.mask.map { paintUnder($0, width: sourceWidth, height: sourceHeight, frame: units) },
+      paint: merge.mask.map {
+        paintCovered(
+          paintUnder($0, width: sourceWidth, height: sourceHeight, frame: units), width: sourceWidth, units: units,
+          scale: scale, layerAlpha: layerAlpha, layerWidth: layerWidth, layerHeight: layerHeight)
+      },
       frame: frame, frameX: Int32(units.minX), frameY: Int32(units.minY), frameScaleFactorBy120: Int32(density),
       frameAlpha: layerAlpha)
     return Merged(image: image, sourceOrigin: .zero, step: step)
+  }
+
+  /// `paint` (source pixels) kept only where the dense layer over it is wholly opaque: every
+  /// layer pixel over the source pixel and its neighbours stored at alpha 255. The source keeps a painted pixel as
+  /// 0xF9, which Draw Things and `Project.composite` show at alpha 0xF8, so anywhere the layer is
+  /// see-through (around the frame, a stroke's edge) paint would leave the image faintly
+  /// see-through; there the source keeps its opaque code instead.
+  private static func paintCovered(
+    _ paint: [UInt8], width: Int, units: CGRect, scale: Double, layerAlpha: [UInt8], layerWidth: Int, layerHeight: Int
+  ) -> [UInt8] {
+    var paint = paint
+    for index in paint.indices where paint[index] != 0 {
+      let x = index % width, y = index / width
+      // With the source pixels on either side: drawn at the source's size the layer is resampled,
+      // and its neighbours' alpha reaches into this pixel.
+      let x0 = Int(((Double(x - 1) - units.minX) * scale).rounded(.down)), x1 = Int(((Double(x + 2) - units.minX) * scale).rounded(.up))
+      let y0 = Int(((Double(y - 1) - units.minY) * scale).rounded(.down)), y1 = Int(((Double(y + 2) - units.minY) * scale).rounded(.up))
+      var opaque = x0 >= 0 && y0 >= 0 && x1 <= layerWidth && y1 <= layerHeight && x0 < x1 && y0 < y1
+      if opaque {
+        check: for ly in y0..<y1 {
+          for lx in x0..<x1 where CanvasMask.Stored.alpha(CanvasMask.Stored.code(alpha: layerAlpha[ly * layerWidth + lx])) != 255 {
+            opaque = false
+            break check
+          }
+        }
+      }
+      if !opaque { paint[index] = 0 }
+    }
+    return paint
   }
 
   /// One byte per pixel as a gray image, top row first.

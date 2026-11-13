@@ -609,6 +609,44 @@ struct CanvasRefineTests {
     await project.close()
   }
 
+  /// Paint the stored source keeps (0xF9, shown at alpha 0xF8) only goes where the layer is
+  /// wholly opaque over it, so a stroke crossing the frame's edge at a fractional crop, with no
+  /// outset or blur, leaves the image opaque everywhere.
+  @Test func paintAcrossAFractionalFrameEdgeStaysOpaque() async throws {
+    let folder = FileManager.default.temporaryDirectory.appending(path: "CanvasRefineTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let project = Project(url: folder.appending(path: "Opaque.sqlite3"))
+    let source = try Self.pattern(width: 128, height: 128)
+    let first = try await project.append(
+      tensor: try #require(ImageTensor.tensor(from: source)), model: "m", prompt: "", negativePrompt: "", seed: 1,
+      settings: [:], createdAt: Date(), duration: 0, reason: .imported, generated: false)
+    let result = try Self.solid(width: 128, height: 128, red: 255, green: 0, blue: 0)
+    // The crop starts at x 31.5; the stroke crosses it and has fractional edges of its own.
+    let mask = CanvasMask(strokes: [
+      .init(kind: .brush, points: [CGPoint(x: 26.3, y: 44.6), CGPoint(x: 40.7, y: 47.2)], radius: 3.3),
+      .rect(CGRect(x: 28.3, y: 52.6, width: 10.2, height: 7.7)),
+    ])
+    let merge = RefineMerge(
+      source: source, sourceTensorId: first.tensorId, scale: 4, offset: CGSize(width: 66, height: 64),
+      frameSize: CGSize(width: 128, height: 128), mask: mask)
+    #expect(merge.placement.cropRect.minX == 31.5)
+    let merged = try #require(CanvasMerge.merge(result, into: merge, maskBlur: 0, maskBlurOutset: 0))
+    let layers = try #require(merged.step.layers)
+    #expect(layers.paint?.contains(255) == true)
+    let item = try await project.append(
+      tensor: try #require(ImageTensor.tensor(from: layers.frame)), model: "m", prompt: "", negativePrompt: "", seed: 1,
+      settings: [:], createdAt: Date(), duration: 0, inputTensorId: first.tensorId, after: first.tensorId,
+      refined: merged.step)
+    let read = try #require(await project.read { $0.image(for: item) })
+    for (name, image) in [("merged", merged.image), ("read back", read)] {
+      let alpha = try #require(CanvasMask.alpha(of: image, width: image.width, height: image.height))
+      let seeThrough = alpha.count { $0 != 255 }
+      #expect(seeThrough == 0, "\(name): \(seeThrough) pixels aren't opaque")
+    }
+    await project.close()
+  }
+
   /// A zoom of 3.97 runs at 4×, about the same point, its image edge on a whole frame pixel: the
   /// kept layer is the result's pixels one for one.
   @Test func aNearWholeZoomSnapsThePlacement() throws {
