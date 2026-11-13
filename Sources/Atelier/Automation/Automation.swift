@@ -1213,6 +1213,13 @@ enum Automation {
         check(model.selectedModel == modelA && model.settings?.steps == 14 && model.errorMessage != nil,
           "a preset for a model that isn't downloaded changed nothing and said so")
         model.errorMessage = nil
+        // Use with the current model: its values go on the selected model and stay after a switch.
+        model.apply(absent, keepingModel: true, undoManager: nil)
+        check(model.selectedModel == modelA && model.settings?.steps == 15 && model.errorMessage == nil,
+          "a preset for a missing model applied to \(modelA) when asked (steps \(model.settings?.steps ?? -1))")
+        model.selectedModel = modelB
+        await settle()
+        check(model.settings?.steps == 15, "its settings stayed after switching to \(modelB) (steps \(model.settings?.steps ?? -1))")
       }
       presets.delete(own)
       check(presets.defaultPreset(for: modelA) == nil, "deleting the preset cleared the default")
