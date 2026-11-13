@@ -6,7 +6,6 @@ struct LayoutMenu: View {
   @Environment(CreateModel.self) private var model
   @Environment(LayoutStore.self) private var layouts
   @Environment(FileDialogs.self) private var fileDialogs
-  @Environment(\.openURL) private var openURL
 
   var body: some View {
     @Bindable var layouts = layouts
@@ -50,7 +49,7 @@ struct LayoutMenu: View {
       Button("Show Layouts Folder") {
         try? FileManager.default.createDirectory(
           at: LayoutStore.directory, withIntermediateDirectories: true)
-        openURL(LayoutStore.directory)
+        Finder.reveal([LayoutStore.directory])
       }
     } label: {
       Text(layouts.current.name)
