@@ -615,6 +615,21 @@ struct CanvasRefineTests {
     await project.close()
   }
 
+  /// The next run's frame takes the canvas image's detail layers at their own resolution: at 2×
+  /// over a 240 layer, the frame is that layer's pixels.
+  @Test func theFrameRendersWithDetail() throws {
+    let base = try Self.solid(width: 64, height: 64, red: 0, green: 0, blue: 255)
+    let fine = try Self.pattern(width: 64, height: 64)
+    let detail = [Project.DetailLayer(image: fine, rect: CGRect(x: 16, y: 16, width: 32, height: 32))]
+    let placement = CanvasPlacement(
+      sourceSize: CGSize(width: 64, height: 64), frameSize: CGSize(width: 64, height: 64),
+      showing: CGRect(x: 16, y: 16, width: 32, height: 32))
+    let plain = try #require(CanvasState.render(base, placement: placement))
+    #expect(Self.pixel(Self.rgba(plain), width: 64, 30, 30) == [0, 0, 255, 255])
+    let rendered = try #require(CanvasState.render(base, placement: placement, detail: detail))
+    #expect(Self.rgba(rendered) == Self.rgba(fine))
+  }
+
   @Test func blurKeepsItsTotal() {
     var values = [Float](repeating: 0, count: 50 * 50)
     values[25 * 50 + 25] = 1

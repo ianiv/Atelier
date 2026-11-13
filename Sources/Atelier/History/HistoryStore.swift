@@ -635,6 +635,14 @@ final class HistoryStore {
     return await project.read { $0.imageTensorId(at: id) }
   }
 
+  /// The step's layers finer than its image (`Project.detailLayers`), in `projectName` (when
+  /// that's the current project); empty for most steps.
+  func detailLayers(tensorId: Int64, in projectName: String) async -> [Project.DetailLayer] {
+    guard projectName == project.name else { return [] }
+    let project = project
+    return await project.read { $0.detailLayers(tensorId: tensorId) }
+  }
+
   /// The full-resolution image `tensorId` in `projectName` (when that's the current project).
   func image(tensorId: Int64, in projectName: String) async -> CGImage? {
     guard projectName == project.name else { return nil }

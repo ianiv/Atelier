@@ -96,16 +96,18 @@ extension GenerationEngine.Request {
   /// image's center from the frame's, frame pixels, y down; see `CanvasPlacement.zoomAndOffset`
   /// to show a region instead), the mask's codes when anything painted is in the frame, and with
   /// `merge`, how to merge the result back into `source`. Returns false when `source` couldn't be
-  /// drawn. Merge only applies when it changes anything (`RefineMerge.applies`).
+  /// drawn. Merge only applies when it changes anything (`RefineMerge.applies`). `detail` is the
+  /// source step's finer layers (`Project.detailLayers`), drawn into the frame at their own
+  /// resolution.
   @discardableResult
   mutating func setRefineInputs(
     source: CGImage, sourceTensorId: Int64?, isImported: Bool, scale: Double?, offset: CGSize,
-    mask: CanvasMask?, merge: Bool
+    mask: CanvasMask?, merge: Bool, detail: [Project.DetailLayer] = []
   ) -> Bool {
     let frame = CGSize(width: configuration.width, height: configuration.height)
     let placement = CanvasPlacement(
       sourceSize: CGSize(width: source.width, height: source.height), frameSize: frame, scale: scale, offset: offset)
-    guard let rendered = CanvasState.render(source, placement: placement) else { return false }
+    guard let rendered = CanvasState.render(source, placement: placement, detail: detail) else { return false }
     canvas = rendered
     canvasIsImported = isImported
     let maskPNG = mask.flatMap { $0.mayHavePaint ? $0.frameMask(placement, canvas: rendered) : nil }

@@ -216,6 +216,12 @@ struct CanvasView: View {
               Image(decorative: image, scale: 1)
                 .resizable()
                 .interpolation(zoom * points > 2 ? .none : .high)
+                .overlay(alignment: .topLeading) {
+                  // Zoomed in past the image's own pixels, its finer layers show their detail.
+                  if zoom * points > 1 {
+                    detailOverlay(model.canvasDisplayDetail, scale: zoom * points)
+                  }
+                }
                 .accessibilityElement()
                 .accessibilityLabel("Canvas image")
                 .accessibilityAddTraits(.isImage)
@@ -530,6 +536,23 @@ struct CanvasView: View {
         }
     }
   #endif
+
+  /// The canvas image's detail layers (`CreateModel.canvasDetail`) over it, each at its rectangle
+  /// in image pixels times `scale` (points per image pixel).
+  private func detailOverlay(_ layers: [Project.DetailLayer], scale: Double) -> some View {
+    ZStack(alignment: .topLeading) {
+      ForEach(layers.indices, id: \.self) { index in
+        let layer = layers[index]
+        Image(decorative: layer.image, scale: 1)
+          .resizable()
+          .interpolation(layer.rect.width * scale / Double(max(layer.image.width, 1)) > 2 ? .none : .high)
+          .frame(width: layer.rect.width * scale, height: layer.rect.height * scale)
+          .offset(x: layer.rect.minX * scale, y: layer.rect.minY * scale)
+      }
+    }
+    .allowsHitTesting(false)
+    .accessibilityHidden(true)
+  }
 
   /// The mask in red over the image, with the stroke being painted.
   private func maskOverlay(imageSize _: CGSize, scale: Double) -> some View {

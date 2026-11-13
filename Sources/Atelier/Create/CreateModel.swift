@@ -408,7 +408,32 @@ final class CreateModel {
     didSet {
       awaitsStepImage = false
       canvasPlaceholder = nil
+      // The detail belongs to the image it was loaded with.
+      if image !== canvasDetailImage, !canvasDetail.isEmpty {
+        canvasDetail = []
+        canvasDetailImage = nil
+      }
     }
+  }
+  /// The canvas image's layers finer than its pixels (a zoomed refine's frame, a Draw Things
+  /// upscale; `Project.detailLayers`), in its pixels: the canvas draws them over it where it's
+  /// zoomed in, and the next Edit run's frame takes them (`setRefineInputs`). Only with the
+  /// image they were loaded for (`loadCanvasDetail`); any other image clears them.
+  private(set) var canvasDetail: [Project.DetailLayer] = []
+  @ObservationIgnored private var canvasDetailImage: CGImage?
+  /// The detail to draw over what the canvas shows: none over a placeholder or preview.
+  var canvasDisplayDetail: [Project.DetailLayer] {
+    canvasDisplayImage === image && !imageIsPreview ? canvasDetail : []
+  }
+
+  /// Loads the detail layers of the step whose image is on the canvas now, `image` loaded from
+  /// it, unless another image has taken its place meanwhile. Most steps have none.
+  private func loadCanvasDetail(tensorId: Int64, project: String) async {
+    guard let shown = image else { return }
+    let detail = await history.detailLayers(tensorId: tensorId, in: project)
+    guard image === shown, !detail.isEmpty else { return }
+    canvasDetailImage = shown
+    canvasDetail = detail
   }
   /// The step's stored full-size JPEG, shown in place of `image` while its exact pixels decode
   /// (`showStoredJPEG`). Only for display: everything that uses the canvas image waits for
@@ -1145,6 +1170,7 @@ final class CreateModel {
           imageStep = (projectName, inputTensorId)
           history.setCurrent(tensorId: inputTensorId)
           image = input.image
+          Task { await loadCanvasDetail(tensorId: inputTensorId, project: projectName) }
           if let refine = item.sidecar.refine, refine.offset.count == 2 {
             // A refined region merged back: the frame on that region again, with its mask.
             let offset = CGSize(width: refine.offset[0], height: refine.offset[1])
@@ -1167,6 +1193,7 @@ final class CreateModel {
       if let full, imageStep?.tensorId == item.tensorId {
         image = full
         await restoreCanvasMask()
+        await loadCanvasDetail(tensorId: item.tensorId, project: projectName)
       } else if full == nil, imageStep?.tensorId == item.tensorId {
         canvasImageDidNotLoad("This image couldn't be read from the project.")
       }
@@ -1513,7 +1540,7 @@ final class CreateModel {
       base.setRefineInputs(
         source: source.image, sourceTensorId: step, isImported: source.isImported, scale: source.scale,
         offset: source.offset, mask: refines && runTargetTakesMasks ? canvasMask : nil,
-        merge: refines && mergeIntoImage)
+        merge: refines && mergeIntoImage, detail: source.detail)
       // The image remembers its mask even when this run can't take it (a video model, an older
       // server).
       base.canvasSourceMask = canvasMask.map {
@@ -1657,6 +1684,8 @@ final class CreateModel {
   /// The canvas as a run would take it.
   private struct CanvasSnapshot {
     var image: CGImage
+    /// `canvasDetail`, with the image it's for.
+    var detail: [Project.DetailLayer]
     var step: (project: String, tensorId: Int64)?
     var isImported: Bool
     var isPreview: Bool
@@ -1669,7 +1698,7 @@ final class CreateModel {
     if previewCoversCanvas { return canvasBeforePreview }
     return image.map {
       CanvasSnapshot(
-        image: $0, step: imageStep, isImported: canvasIsImported, isPreview: imageIsPreview,
+        image: $0, detail: canvasDetail, step: imageStep, isImported: canvasIsImported, isPreview: imageIsPreview,
         scale: canvas.scale, offset: canvas.offset)
     }
   }
@@ -2039,6 +2068,9 @@ final class CreateModel {
           // Saved with it just now (or none, for a result that isn't merged).
           landedMask = (item.tensorId, canvasMask)
           maskPendingTensorId = nil
+          if refined?.layers?.frameScaleFactorBy120 ?? 120 > 120 {
+            await loadCanvasDetail(tensorId: item.tensorId, project: history.project.name)
+          }
         }
         if let placement = request.placement, item.isVideo { timelines.place(item, at: placement) }
         if let failure = await history.writeToOutputFolder(item, image: finished) {
@@ -2722,6 +2754,7 @@ final class CreateModel {
       if let full, imageStep?.tensorId == item.tensorId, !imageIsPreview {
         image = full
         await restoreCanvasMask()
+        await loadCanvasDetail(tensorId: item.tensorId, project: projectName)
       } else if full == nil, imageStep?.tensorId == item.tensorId {
         canvasImageDidNotLoad("This image couldn't be read from the project.")
       }
@@ -2745,6 +2778,7 @@ final class CreateModel {
     image = full
     canvas.zoomToFit()
     canvasMode = .edit
+    await loadCanvasDetail(tensorId: item.tensorId, project: projectName)
     if restoresMask {
       await restoreCanvasMask()
     } else {
@@ -3100,6 +3134,7 @@ extension CreateModel {
     image = restoredImage
     canvas.zoomToFit()
     await restoreCanvasMask()
+    await loadCanvasDetail(tensorId: tensorId, project: project)
   }
 
   /// Whether `item` has a mask that can go on the canvas now (`applyMask(from:how:undoManager:)`).

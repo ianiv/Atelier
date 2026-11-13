@@ -384,10 +384,17 @@ final nonisolated class Project: Sendable {
   /// draw over it at their own resolution where the canvas is zoomed in (`Self.detailLayers`).
   /// Empty for a step with none.
   func detailLayers(tensorId: Int64) -> [DetailLayer] {
-    guard let layers = canvasLayers(imageTensorId: tensorId), layers.contains(where: { $0.scaleFactorBy120 > 120 }),
-          let drawn = compositeLayers(layers)
+    guard let layers = canvasLayers(imageTensorId: tensorId),
+          let start = layers.firstIndex(where: { $0.scaleFactorBy120 > 120 }),
+          let drawn = compositeLayers(Array(layers[start...]))
     else { return [] }
-    return Self.detailLayers(drawn)
+    // Placed on the whole canvas's union, from the rows (only the detail is decoded).
+    let union = layers.dropFirst().reduce(Self.units(layers[0])) { $0.union(Self.units($1)) }
+    return drawn.compactMap { layer in
+      Self.masked(layer).map {
+        DetailLayer(image: $0, rect: Self.units(layer).offsetBy(dx: -union.minX, dy: -union.minY))
+      }
+    }
   }
 
   /// Layer rows read for compositing; nil when any tensor is missing.
@@ -473,6 +480,12 @@ final nonisolated class Project: Sendable {
 
   /// A full-detail read's density: its finest layer's (`canvasSize` never goes past that).
   static let finestDensity = Int.max
+
+  /// A layer row's rectangle in canvas units, from its fields alone (nothing decoded).
+  private static func units(_ row: Layer) -> CGRect {
+    let scale = Double(max(row.scaleFactorBy120, 1)) / 120
+    return CGRect(x: Double(row.x), y: Double(row.y), width: Double(row.width) / scale, height: Double(row.height) / scale)
+  }
 
   /// A layer's rectangle in canvas units: (x, y, width·120/s, height·120/s), as
   /// `ImageHistoryManager` keeps `TensorData` (width and height in the tensor's pixels,
@@ -947,18 +960,14 @@ final nonisolated class Project: Sendable {
     guard let layers = canvasLayers(imageTensorId: sourceTensorId),
           let start = layers.firstIndex(where: { $0.scaleFactorBy120 > 120 })
     else { return [] }
-    func units(_ row: Layer) -> CGRect {
-      let scale = Double(max(row.scaleFactorBy120, 1)) / 120
-      return CGRect(x: Double(row.x), y: Double(row.y), width: Double(row.width) / scale, height: Double(row.height) / scale)
-    }
-    let union = layers.dropFirst().reduce(units(layers[0])) { $0.union(units($1)) }
+    let union = layers.dropFirst().reduce(Self.units(layers[0])) { $0.union(Self.units($1)) }
     let frameScale = Double(frame.scaleFactorBy120) / 120
     let frameUnits = CGRect(
       x: Double(frame.x), y: Double(frame.y), width: Double(frame.width) / frameScale,
       height: Double(frame.height) / frameScale)
     var carried: [LayerRow] = []
     for row in layers[start...] {
-      let rect = units(row).offsetBy(dx: -union.minX, dy: -union.minY)
+      let rect = Self.units(row).offsetBy(dx: -union.minX, dy: -union.minY)
       if frame.scaleFactorBy120 >= row.scaleFactorBy120, frameUnits.contains(rect) {
         // Covered when every frame pixel over it is opaque.
         let x0 = Int(((rect.minX - frameUnits.minX) * frameScale).rounded(.down))
