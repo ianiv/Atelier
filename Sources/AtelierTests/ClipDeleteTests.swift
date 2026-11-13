@@ -225,6 +225,34 @@ struct ClipDeleteTests {
     try await Self.expectFallback(frames, in: built)
   }
 
+  /// A step after C2 on its lineage records a parent that's no step's image: its parent is the
+  /// rule's step alone, which a renumbering can make one of C2's frames, so the frame-by-frame
+  /// deletes decide.
+  @Test func aLostParentAfterTheClipDeletesFrameByFrame() async throws {
+    let built = try await Self.build()
+    defer { try? FileManager.default.removeItem(at: built.folder) }
+    let frames = try #require(built.clips["C2"])
+    let image = try #require(built.images["D"])
+    try await Self.edit(built) { await $0.setRecordedParentForTests(123_456_789, ofStepOf: image) }
+    try await Self.expectFallback(frames, in: built)
+  }
+
+  /// One before the clip, or on a lower lineage past it, never has a frame for the rule's step:
+  /// the clip goes at once.
+  @Test(arguments: [("C2", "A"), ("C3", "F")])
+  func aLostParentElsewhereDeletesAtOnce(clip: String, step: String) async throws {
+    let built = try await Self.build()
+    defer { try? FileManager.default.removeItem(at: built.folder) }
+    let frames = try #require(built.clips[clip])
+    let image = try #require(built.images[step])
+    let tree = Project(url: built.url).tree(items: false)
+    let (first, other) = try (#require(tree.step(tensorId: frames[0])), #require(tree.step(tensorId: image)))
+    // Before the clip's start, or below its lineage past it.
+    #expect(other.logicalTime <= first.logicalTime || (other.lineage < first.lineage && other.logicalTime > first.logicalTime))
+    try await Self.edit(built) { await $0.setRecordedParentForTests(123_456_789, ofStepOf: image) }
+    try await Self.expectSameDeletes([clip], in: built)
+  }
+
   /// A deleted step that recorded no parent isn't written back: the last step on its lineage, so
   /// no step moves into its key to cover it.
   @Test func deletingAStepWithoutAParentLinkLeavesItGone() async throws {

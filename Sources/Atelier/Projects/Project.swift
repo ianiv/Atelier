@@ -1035,8 +1035,11 @@ final nonisolated class Project: Sendable {
   ///   that only that frame holds, or only it and its parent, whose image it is (a source reused
   ///   from the step refined). A step recording such a tensor finds the parent or, when the frame
   ///   is the rule's step, the frame, whose delete hands it the parent's image: what it recorded.
-  /// - No step left records a tensor that's no other step's image: its parent is the rule's step
-  ///   alone, which renumbering can make a frame.
+  /// - No step that renumbering can put right after a frame records a tensor that's no other
+  ///   step's image: its parent is the rule's step alone. The rule's step is a frame only for a
+  ///   step on the run's lineage or above, numbered one past a frame; steps only move down, never
+  ///   off their lineage, so that takes a lineage at or above the run's and a number past its
+  ///   start. Others (older history, lower branches) never have a frame as the rule's step.
   /// Anything else (a frame's image shared, a frame holding another frame's image or another
   /// step's image beyond its parent's, a step recording a lost image) falls back frame by frame.
   /// Steps recording nothing get their rule parent recorded first, as the first delete does.
@@ -1061,8 +1064,11 @@ final nonisolated class Project: Sendable {
         else { return false }
       }
     }
+    guard let start = run.first else { return false }
     return !tree.steps.values.contains { step in
-      guard !deleted.contains(step.id), let recorded = step.recordedParent, recorded != 0 else { return false }
+      guard !deleted.contains(step.id), step.id.lineage >= start.lineage, step.id.logicalTime > start.logicalTime,
+            let recorded = step.recordedParent, recorded != 0
+      else { return false }
       return tree.steps(tensorId: recorded).allSatisfy { $0 == step.id }
     }
   }
@@ -1336,6 +1342,7 @@ final nonisolated class Project: Sendable {
     }
   }
 
+  #if DEBUG
   /// For tests: adds a layer of image `tensorId` at index `index` to the step whose image is
   /// `imageOf`, as a refined canvas's source or as Draw Things projects share tensors, with a new
   /// mask `maskId`; `writing` writes a new tensor for it.
@@ -1384,6 +1391,24 @@ final nonisolated class Project: Sendable {
     }
   }
 
+  /// For tests: records `parentTensorId` as the parent of the step whose image is `imageOf`.
+  @concurrent func setRecordedParentForTests(_ parentTensorId: Int64, ofStepOf imageOf: Int64) async {
+    let workspace = workspace
+    _ = await withCheckedContinuation { continuation in
+      workspace.performChanges([TensorHistoryNode.self, Layer.self, TensorMoodboardData.self]) { transaction in
+        let rows = Rows(workspace)
+        let tree = ProjectTree(nodes: rows.nodes, layers: rows.layers, items: false)
+        guard let id = tree.step(tensorId: imageOf), let node = rows.byID[id],
+              var profile = ProjectMapping.Profile(node.profileData)
+        else { return }
+        profile.parentTensorId = parentTensorId
+        var builder = TensorHistoryNodeBuilder(from: node)
+        builder.profileData = profile.bytes
+        transaction.try(submit: TensorHistoryNodeChangeRequest.upsertRequest(builder.build()))
+      } completionHandler: { continuation.resume(returning: $0) }
+    }
+  }
+
   /// For tests: every row a delete changes, in key order, and the tensor store's names.
   nonisolated struct Contents: Equatable {
     var nodes: [TensorHistoryNode]
@@ -1424,6 +1449,8 @@ final nonisolated class Project: Sendable {
         tensorNames: tensorNames)
     }
   }
+
+  #endif
 
   private static func tensorNames(of layer: Layer) -> [String] {
     [
