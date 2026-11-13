@@ -5,6 +5,8 @@ Every image you generate is saved to the **current project**. Click **History** 
 ## Browsing
 
 - The grid shows the current project's images, every branch, newest first.
+- The slider in the toolbar sets the thumbnail size, and the small and large picture icons beside it step it down or up; on iPad it's the **Thumbnail Size** menu. Pinching on the grid does the same.
+- Drag the edge of the detail panel on the right to make it wider or narrower.
 - **Grid / Graph** in the toolbar switches to a graph: one row per image with its prompt, model and time, and a column of lines showing which image each one follows, so you can see where the history branches. The current image has a ring around its dot.
 - **Filter by prompt**: type in the search field in the toolbar.
 - **Model**: show only images made with one model.

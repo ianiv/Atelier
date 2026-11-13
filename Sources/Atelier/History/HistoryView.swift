@@ -28,6 +28,7 @@ struct HistoryView: View {
   @State private var pendingDelete: [HistoryItem]?
   @State private var deleteError: String?
   @State private var columns = 1
+  @State private var gridWidth: CGFloat = 0
   @State private var viewportHeight: CGFloat = 0
   /// Each cell's frame in the grid, for marquee selection.
   @State private var frames: [Int64: CGRect] = [:]
@@ -38,6 +39,24 @@ struct HistoryView: View {
   @State private var exportingVideo: HistoryItem?
   @FocusState private var gridFocused: Bool
   @AppStorage("historyLayout") private var layout = Layout.grid
+  /// The grid's smallest thumbnail width, in points; cells grow up to `maximumCellRatio` of it
+  /// to fill each row.
+  @AppStorage("historyThumbnailSize") private var thumbnailSize = Self.defaultThumbnailSize
+  /// The size when a pinch began.
+  @State private var pinchStart: Double?
+
+  static let defaultThumbnailSize = 150.0
+  static let thumbnailSizes = 90.0...400.0
+  private static let maximumCellRatio = 220.0 / 150.0
+  /// The grid's cell width limits for the current thumbnail size.
+  private var cellRange: ClosedRange<Double> {
+    let minimum = min(max(thumbnailSize, Self.thumbnailSizes.lowerBound), Self.thumbnailSizes.upperBound)
+    return minimum...(minimum * Self.maximumCellRatio)
+  }
+
+  /// Whether the grid shows the small JPEG previews: they're at least 384 px on the short side
+  /// (`ImageTensor.downsampled`), enough for cells up to about 200 points on a Retina display.
+  private var usesHalfPreviews: Bool { cellRange.upperBound <= 200 * 1.1 }
 
   enum Layout: String {
     case grid, graph
@@ -94,6 +113,7 @@ struct HistoryView: View {
           .help("Show the images as a grid, or as a graph of their branches")
         }
         .segmentedToolbarItem()
+        ToolbarItem { thumbnailSizeControl }
         #if os(iOS)
           ToolbarSpacer(.fixed)
           // One button: a picker for each would run out of room in anything but a wide window.
@@ -141,7 +161,7 @@ struct HistoryView: View {
               description: Text("Select an image to see its settings."))
           }
         }
-        .inspectorColumnWidth(min: 300, ideal: 340, max: 480)
+        .inspectorColumnWidth(min: 300, ideal: 340, max: 900)
       }
       .sheet(item: $upscaling) { UpscaleSheet(item: $0) }
       .sheet(item: $exportingVideo) { item in
@@ -224,10 +244,11 @@ struct HistoryView: View {
           .dragContainerSelection(selectedItems.map(\.tensorId))
         }
         .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
-          // The adaptive grid's column count: 150 pt minimum, 10 pt spacing, 12 pt padding.
-          columns = max(1, Int((size.width - 24 + 10) / 160))
+          gridWidth = size.width
           viewportHeight = size.height
         }
+        .onChange(of: columnCount, initial: true) { columns = columnCount }
+        .simultaneousGesture(pinchGesture, including: layout == .grid ? .all : .subviews)
         .focusable()
         .focusEffectDisabled()
         .focused($gridFocused)
@@ -275,14 +296,77 @@ struct HistoryView: View {
 
   private nonisolated static let gridSpace = "HistoryGrid"
 
+  /// The adaptive grid's column count, for the arrow keys: 10 pt spacing, 12 pt padding.
+  private var columnCount: Int {
+    max(1, Int((gridWidth - 24 + 10) / (cellRange.lowerBound + 10)))
+  }
+
+  /// A slider on the Mac, as in Photos; a menu of sizes on iPad, where a toolbar has less room.
+  /// Both also follow a pinch on the grid.
+  private var thumbnailSizeControl: some View {
+    #if os(macOS)
+      HStack(spacing: 8) {
+        Button("Smaller Thumbnails", systemImage: "photo") { stepThumbnailSize(by: -1) }
+          .font(.system(size: 9))
+        Slider(value: $thumbnailSize, in: Self.thumbnailSizes)
+          .frame(width: 130)
+          .accessibilityLabel("Thumbnail Size")
+        Button("Larger Thumbnails", systemImage: "photo") { stepThumbnailSize(by: 1) }
+          .font(.system(size: 14))
+      }
+      .buttonStyle(.borderless)
+      .labelStyle(.iconOnly)
+      .controlSize(.mini)
+      .padding(.horizontal, 6)
+      .foregroundStyle(.secondary)
+      .disabled(layout != .grid)
+      .help("Thumbnail size")
+    #else
+      Menu {
+        Picker("Thumbnail Size", selection: $thumbnailSize) {
+          Text("Small").tag(100.0)
+          Text("Medium").tag(Self.defaultThumbnailSize)
+          Text("Large").tag(220.0)
+          Text("Extra Large").tag(320.0)
+        }
+        .pickerStyle(.inline)
+      } label: {
+        Label("Thumbnail Size", systemImage: "arrow.up.left.and.arrow.down.right")
+      }
+      .disabled(layout != .grid)
+      .help("Thumbnail size")
+    #endif
+  }
+
+  /// The icons beside the slider move it a tenth of its range, as in Photos.
+  private func stepThumbnailSize(by direction: Double) {
+    let range = Self.thumbnailSizes
+    let step = (range.upperBound - range.lowerBound) / 10
+    thumbnailSize = min(max(thumbnailSize + direction * step, range.lowerBound), range.upperBound)
+  }
+
+  private var pinchGesture: some Gesture {
+    MagnifyGesture()
+      .onChanged { value in
+        let start = pinchStart ?? thumbnailSize
+        pinchStart = start
+        thumbnailSize = min(max(start * value.magnification, Self.thumbnailSizes.lowerBound), Self.thumbnailSizes.upperBound)
+      }
+      .onEnded { _ in pinchStart = nil }
+  }
+
   private var gridCells: some View {
-    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 10)], spacing: 10) {
+    LazyVGrid(columns: [GridItem(.adaptive(minimum: cellRange.lowerBound, maximum: cellRange.upperBound), spacing: 10)], spacing: 10) {
       ForEach(filtered, id: \.tensorId) { item in
         cell(
           Color.clear
             .aspectRatio(1, contentMode: .fit)
             .overlay {
-              if item.isVideo { ClipThumbnail(item: item) } else { Thumbnail(item: item) }
+              if item.isVideo {
+                ClipThumbnail(item: item, half: usesHalfPreviews)
+              } else {
+                Thumbnail(item: item, half: usesHalfPreviews)
+              }
             }
             .overlay(alignment: .bottomLeading) {
               if let clip = item.clip { ClipBadge(clip: clip).padding(5) }
@@ -976,6 +1060,8 @@ struct ClipBadge: View {
 /// frames.
 struct ClipThumbnail: View {
   let item: HistoryItem
+  /// The small grid preview, or the full-size one.
+  var half = true
   @State private var shown: Int?
 
   var body: some View {
@@ -983,7 +1069,7 @@ struct ClipThumbnail: View {
     if let clip = item.clip, let shown, clip.frames.indices.contains(shown) {
       frame.previewId = clip.previewId(shown)
     }
-    return Thumbnail(item: frame)
+    return Thumbnail(item: frame, half: half)
       .onContinuousHover { phase in
         guard let count = item.clip?.frames.count, count > 1 else { return }
         switch phase {
