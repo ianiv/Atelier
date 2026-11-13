@@ -153,19 +153,33 @@ struct ClipDeleteTests {
     try await Self.expectSameDeletes(["C1", "C2"], in: built, unlinked: true)
   }
 
-  /// A clip frame's image also on another step, on top (that step's image) or below (a canvas
-  /// drawn over it): the frame-by-frame deletes decide.
-  @Test(arguments: [1, -1] as [Int64])
-  func sharedFrameTensorsDeleteFrameByFrame(index: Int64) async throws {
+  /// Changes the template the copies are made from.
+  private static func edit(_ built: Built, _ body: (Project) async throws -> Void) async throws {
+    let template = Project(url: built.url)
+    try await body(template)
+    await template.close()
+  }
+
+  /// Clip C3's first frame as a refined canvas: over a source layer of its own (a new tensor and
+  /// paint mask), or over its parent D's image, as a refine of D reuses it.
+  @Test(arguments: [false, true], [false, true])
+  func refinedClipsDeleteAtOnce(reusedSource: Bool, unlinked: Bool) async throws {
     let built = try await Self.build()
     defer { try? FileManager.default.removeItem(at: built.folder) }
-    let frames = try #require(built.clips["C2"])
-    let template = Project(url: built.url)
-    let image = try #require(built.images["F"])
-    await template.addLayerForTests(tensorId: frames[1], index: index, toStepOf: image)
-    await template.close()
-    let old = try Self.copy(built, "old")
-    let new = try Self.copy(built, "new")
+    let frames = try #require(built.clips["C3"])
+    let source = try reusedSource ? #require(built.images["D"]) : 1_500_000_001
+    try await Self.edit(built) {
+      try await $0.addLayerForTests(
+        tensorId: source, index: -1, toStepOf: frames[0], maskId: 400_000_001, writing: !reusedSource)
+    }
+    try await Self.expectSameDeletes(["C3"], in: built, unlinked: unlinked)
+  }
+
+  /// Deletes `frames` from two copies, expecting the run to decline, and compares the fallback
+  /// with deleting frame by frame.
+  private static func expectFallback(_ frames: [Int64], in built: Built) async throws {
+    let old = try copy(built, "old")
+    let new = try copy(built, "new")
     #expect(try await new.deleteRun(tensorIds: frames) == nil)
     let oldParent = try await old.deleteFrameByFrame(frames)
     let newParent = try await new.deleteClip(frames: frames)
@@ -175,28 +189,159 @@ struct ClipDeleteTests {
     await new.close()
   }
 
-  /// A deleted step that recorded no parent isn't written back over the step moving into its
-  /// key. Repeated, since which write came last followed a Set's order.
+  /// A clip frame's image also on another step, on top (that step's image) or below (a canvas
+  /// drawn over it): the frame-by-frame deletes decide.
+  @Test(arguments: [1, -1] as [Int64])
+  func sharedFrameTensorsDeleteFrameByFrame(index: Int64) async throws {
+    let built = try await Self.build()
+    defer { try? FileManager.default.removeItem(at: built.folder) }
+    let frames = try #require(built.clips["C2"])
+    let image = try #require(built.images["F"])
+    try await Self.edit(built) { try await $0.addLayerForTests(tensorId: frames[1], index: index, toStepOf: image) }
+    try await Self.expectFallback(frames, in: built)
+  }
+
+  /// A frame's image is also another step's through that step's own field, with no layer
+  /// shared: two steps answer for the image.
+  @Test func aFrameImageOnTwoStepsDeletesFrameByFrame() async throws {
+    let built = try await Self.build()
+    defer { try? FileManager.default.removeItem(at: built.folder) }
+    let frames = try #require(built.clips["C2"])
+    let image = try #require(built.images["F"])
+    try await Self.edit(built) { await $0.setNodeImageForTests(tensorId: frames[1], ofStepOf: image) }
+    let tree = Project(url: built.url).tree(items: false)
+    #expect(tree.steps(tensorId: frames[1]).count == 2)
+    try await Self.expectFallback(frames, in: built)
+  }
+
+  /// A frame drawn over an image that isn't its parent's: whether a step recording that image
+  /// finds the frame depends on where things sit, so the frame-by-frame deletes decide.
+  @Test func aFrameOverAnotherStepsImageDeletesFrameByFrame() async throws {
+    let built = try await Self.build()
+    defer { try? FileManager.default.removeItem(at: built.folder) }
+    let frames = try #require(built.clips["C3"])
+    let image = try #require(built.images["A"])
+    try await Self.edit(built) { try await $0.addLayerForTests(tensorId: image, index: -1, toStepOf: frames[0]) }
+    try await Self.expectFallback(frames, in: built)
+  }
+
+  /// A step after C2 on its lineage records a parent that's no step's image: its parent is the
+  /// rule's step alone, which a renumbering can make one of C2's frames, so the frame-by-frame
+  /// deletes decide.
+  @Test func aLostParentAfterTheClipDeletesFrameByFrame() async throws {
+    let built = try await Self.build()
+    defer { try? FileManager.default.removeItem(at: built.folder) }
+    let frames = try #require(built.clips["C2"])
+    let image = try #require(built.images["D"])
+    try await Self.edit(built) { await $0.setRecordedParentForTests(123_456_789, ofStepOf: image) }
+    try await Self.expectFallback(frames, in: built)
+  }
+
+  /// One before the clip, or on a lower lineage past it, never has a frame for the rule's step:
+  /// the clip goes at once.
+  @Test(arguments: [("C2", "A"), ("C3", "F")])
+  func aLostParentElsewhereDeletesAtOnce(clip: String, step: String) async throws {
+    let built = try await Self.build()
+    defer { try? FileManager.default.removeItem(at: built.folder) }
+    let frames = try #require(built.clips[clip])
+    let image = try #require(built.images[step])
+    let tree = Project(url: built.url).tree(items: false)
+    let (first, other) = try (#require(tree.step(tensorId: frames[0])), #require(tree.step(tensorId: image)))
+    // Before the clip's start, or below its lineage past it.
+    #expect(other.logicalTime <= first.logicalTime || (other.lineage < first.lineage && other.logicalTime > first.logicalTime))
+    try await Self.edit(built) { await $0.setRecordedParentForTests(123_456_789, ofStepOf: image) }
+    try await Self.expectSameDeletes([clip], in: built)
+  }
+
+  /// Appends a zoomed refine (its frame at 2× density, as Create's merge writes it) of the step
+  /// whose image is `source`, reusing that image as the bottom layer and carrying its detail.
+  @discardableResult
+  private static func refine(
+    _ project: Project, _ name: String, of source: Int64, at offset: Int32 = 2, into built: inout Built
+  ) async throws
+    -> Int64
+  {
+    let image = try CanvasRefineTests.pattern(width: 8, height: 8)
+    let frame = try CanvasRefineTests.solid(width: 8, height: 8, red: 255, green: 0, blue: 0)
+    var step = RefinedStep(record: RefineRecord(rect: [Double(offset), Double(offset), 4, 4], scale: 2, offset: [0, 0]), composite: image)
+    step.layers = RefinedStep.Layers(
+      source: image, sourceTensorId: source, paint: nil, frame: frame, frameX: offset, frameY: offset, frameScaleFactorBy120: 240)
+    let item = try await project.append(
+      tensor: tensor(), model: "m", prompt: name, negativePrompt: "", seed: 1, settings: [:], createdAt: Date(),
+      duration: 0, inputTensorId: source, after: source, refined: step)
+    built.images[name] = item.tensorId
+    return item.tensorId
+  }
+
+  /// Zoomed refines after C3 on its lineage, the second carrying the first's dense frame (one
+  /// tensor on two steps), move down with their density and shared tensors as frame by frame.
+  @Test(arguments: [false, true])
+  func refinesAfterAClipMoveTheSame(unlinked: Bool) async throws {
+    var built = try await Self.build()
+    defer { try? FileManager.default.removeItem(at: built.folder) }
+    let template = Project(url: built.url)
+    let first = try await Self.refine(template, "R1", of: #require(built.images["H"]), into: &built)
+    try await Self.refine(template, "R2", of: first, at: 4, into: &built)
+    let rows = template.contents().layers
+    let r1Frame = try #require(rows.first { $0.tensorId == first })
+    #expect(r1Frame.scaleFactorBy120 == 240)
+    // R2 holds R1's dense frame as carried detail.
+    #expect(rows.filter { $0.tensorId == first }.count == 2)
+    await template.close()
+    try await Self.expectSameDeletes(["C3"], in: built, unlinked: unlinked)
+  }
+
+  /// A refine of a clip frame (Use Last Frame as Input, then Edit with an image model) keeps the
+  /// frame's image as its bottom layer: a frame image on another step, so its clip goes frame by
+  /// frame.
+  @Test func aRefinedClipFrameDeletesFrameByFrame() async throws {
+    var built = try await Self.build()
+    defer { try? FileManager.default.removeItem(at: built.folder) }
+    let frames = try #require(built.clips["C2"])
+    let template = Project(url: built.url)
+    try await Self.refine(template, "R", of: #require(frames.last), into: &built)
+    await template.close()
+    try await Self.expectFallback(frames, in: built)
+  }
+
+  /// A deleted step that recorded no parent isn't written back: the last step on its lineage, so
+  /// no step moves into its key to cover it.
+  @Test func deletingAStepWithoutAParentLinkLeavesItGone() async throws {
+    let folder = try Self.folder()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    var built = Built(folder: folder, url: folder.appending(path: "Steps.sqlite3"))
+    let project = Project(url: built.url)
+    let a = try await Self.image(project, "A", after: nil, into: &built)
+    let b = try await Self.image(project, "B", after: a, into: &built)
+    await project.forgetParentLinks()
+    _ = try await project.delete(tensorId: b)
+    let contents = project.contents()
+    #expect(contents.nodes.map(\.textPrompt) == ["A"])
+    #expect(!contents.nodes.contains { $0.lineage == 0 && $0.logicalTime == 1 })
+    #expect(contents.layers.map(\.tensorId) == [a])
+    #expect(!contents.tensorNames.contains("tensor_history_\(b)"))
+    await project.close()
+  }
+
+  /// And one in the middle: the step moving into its key keeps it.
   @Test func deletingAStepWithoutAParentLinkKeepsTheNextStep() async throws {
-    for _ in 0..<12 {
-      let folder = try Self.folder()
-      defer { try? FileManager.default.removeItem(at: folder) }
-      var built = Built(folder: folder, url: folder.appending(path: "Steps.sqlite3"))
-      let project = Project(url: built.url)
-      var last: Int64?
-      for name in ["A", "B", "C", "D"] {
-        last = try await Self.image(project, name, after: last, into: &built)
-      }
-      await project.forgetParentLinks()
-      let b = try #require(built.images["B"])
-      _ = try await project.delete(tensorId: b)
-      let contents = project.contents()
-      #expect(contents.nodes.map(\.textPrompt) == ["A", "C", "D"])
-      #expect(contents.nodes.map(\.logicalTime) == [0, 1, 2])
-      #expect(contents.layers.map(\.tensorId) == ["A", "C", "D"].map { built.images[$0] })
-      #expect(!contents.tensorNames.contains("tensor_history_\(b)"))
-      await project.close()
+    let folder = try Self.folder()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    var built = Built(folder: folder, url: folder.appending(path: "Steps.sqlite3"))
+    let project = Project(url: built.url)
+    var last: Int64?
+    for name in ["A", "B", "C", "D"] {
+      last = try await Self.image(project, name, after: last, into: &built)
     }
+    await project.forgetParentLinks()
+    let b = try #require(built.images["B"])
+    _ = try await project.delete(tensorId: b)
+    let contents = project.contents()
+    #expect(contents.nodes.map(\.textPrompt) == ["A", "C", "D"])
+    #expect(contents.nodes.map(\.logicalTime) == [0, 1, 2])
+    #expect(contents.layers.map(\.tensorId) == ["A", "C", "D"].map { built.images[$0] })
+    #expect(!contents.tensorNames.contains("tensor_history_\(b)"))
+    await project.close()
   }
 
   @Test func framesThatArentARunDeleteFrameByFrame() async throws {

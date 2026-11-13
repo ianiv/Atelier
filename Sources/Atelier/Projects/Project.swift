@@ -1044,10 +1044,8 @@ final nonisolated class Project: Sendable {
   /// lineage in that order, ending as `deleteHistory` on each of them, last first, would: one
   /// read, one renumbering (`Changes.shift(afterDeleting:on:)`) and one write. Their children
   /// outside the run record its first step's parent; thumbnails, clip rows and tensors go once
-  /// nothing left uses them. Nil, changing nothing, when they aren't such a run, or when a
-  /// frame's image is in another step's layers or a frame has another layer: where steps share a
-  /// tensor, which step an image names (and which parent a recorded tensor names) can change as
-  /// the frame-by-frame deletes renumber steps.
+  /// nothing left uses them. Nil, changing nothing, when they aren't such a run, or when the
+  /// frame-by-frame deletes could find other parents than the run does (`parentsHold`).
   func deleteRun(tensorIds: [Int64]) async throws -> DeletedRun? {
     let workspace = workspace
     var outcome: (tensorNames: [String], parentTensorId: Int64?)?
@@ -1069,14 +1067,7 @@ final nonisolated class Project: Sendable {
         }
         guard let first = run.first, let last = run.last else { return }
         let deleted = Set(run)
-        let frameTensors = Set(tensorIds)
-        guard tensorIds.allSatisfy({ tree.steps(tensorId: $0).count == 1 }),
-              !rows.layers.contains(where: { layer in
-                let own = deleted.contains(StepID(lineage: layer.lineage, logicalTime: layer.logicalTime))
-                return own ? (layer.tensorId > 0 && !frameTensors.contains(layer.tensorId))
-                  : frameTensors.contains(layer.tensorId)
-              })
-        else { return }
+        guard Self.parentsHold(deleting: run, images: tensorIds, tree, rows) else { return }
         let isDeleted = { (node: TensorHistoryNode) in
           deleted.contains(StepID(lineage: node.lineage, logicalTime: node.logicalTime))
         }
@@ -1173,6 +1164,55 @@ final nonisolated class Project: Sendable {
     guard let outcome else { return nil }
     removeTensors(outcome.tensorNames)
     return DeletedRun(parentTensorId: outcome.parentTensorId)
+  }
+
+  /// Whether deleting `run` frame by frame, each delete reading the tree afresh, finds the parents
+  /// the run reads once. A tree finds a parent by position (Draw Things' rule, the step one earlier
+  /// with the greatest lineage not above) or by the recorded tensor, preferring the rule's step
+  /// when its layers hold that tensor (`ProjectTree.init`); positions change as each delete
+  /// renumbers later steps, so a recorded tensor must name the same step wherever things sit:
+  /// - Each frame's image is that one step's image and in no other step's layers, so a tensor
+  ///   recorded for a frame names it, by layers or by image, wherever its child sits.
+  /// - A frame's other layers (a refined canvas's source) hold tensors that are no frame's, and
+  ///   that only that frame holds, or only it and its parent, whose image it is (a source reused
+  ///   from the step refined). A step recording such a tensor finds the parent or, when the frame
+  ///   is the rule's step, the frame, whose delete hands it the parent's image: what it recorded.
+  /// - No step that renumbering can put right after a frame records a tensor that's no other
+  ///   step's image: its parent is the rule's step alone. The rule's step is a frame only for a
+  ///   step on the run's lineage or above, numbered one past a frame; steps only move down, never
+  ///   off their lineage, so that takes a lineage at or above the run's and a number past its
+  ///   start. Others (older history, lower branches) never have a frame as the rule's step.
+  /// Anything else (a frame's image shared, a frame holding another frame's image or another
+  /// step's image beyond its parent's, a step recording a lost image) falls back frame by frame.
+  /// Steps recording nothing get their rule parent recorded first, as the first delete does.
+  private static func parentsHold(deleting run: [StepID], images: [Int64], _ tree: ProjectTree, _ rows: Rows) -> Bool {
+    let deleted = Set(run)
+    let frameTensors = Set(images)
+    var holders: [Int64: Set<StepID>] = [:]
+    var held: [StepID: Set<Int64>] = [:]
+    for layer in rows.layers where layer.tensorId > 0 {
+      let id = StepID(lineage: layer.lineage, logicalTime: layer.logicalTime)
+      holders[layer.tensorId, default: []].insert(id)
+      if deleted.contains(id) { held[id, default: []].insert(layer.tensorId) }
+    }
+    for (id, image) in zip(run, images) {
+      guard tree.steps(tensorId: image) == [id], (holders[image] ?? [id]) == [id] else { return false }
+      for tensorId in held[id] ?? [] where tensorId != image {
+        guard !frameTensors.contains(tensorId) else { return false }
+        let others = (holders[tensorId] ?? []).subtracting([id])
+        guard others.isEmpty
+          || (others.count == 1 && tree.steps(tensorId: tensorId) == Array(others)
+            && tree.steps[id]?.parent == others.first)
+        else { return false }
+      }
+    }
+    guard let start = run.first else { return false }
+    return !tree.steps.values.contains { step in
+      guard !deleted.contains(step.id), step.id.lineage >= start.lineage, step.id.logicalTime > start.logicalTime,
+            let recorded = step.recordedParent, recorded != 0
+      else { return false }
+      return tree.steps(tensorId: recorded).allSatisfy { $0 == step.id }
+    }
   }
 
   /// What `deleteRun` deleted.
@@ -1444,9 +1484,18 @@ final nonisolated class Project: Sendable {
     }
   }
 
+  #if DEBUG
   /// For tests: adds a layer of image `tensorId` at index `index` to the step whose image is
-  /// `imageOf`, sharing that tensor as Draw Things projects can.
-  @concurrent func addLayerForTests(tensorId: Int64, index: Int64, toStepOf imageOf: Int64) async {
+  /// `imageOf`, as a refined canvas's source or as Draw Things projects share tensors, with a new
+  /// mask `maskId`; `writing` writes a new tensor for it.
+  @concurrent func addLayerForTests(
+    tensorId: Int64, index: Int64, toStepOf imageOf: Int64, maskId: Int64 = 0, writing: Bool = false
+  ) async throws {
+    if writing { try writeTensor(Tensor<FloatType>(.CPU, .NHWC(1, 8, 8, 3)), name: "tensor_history_\(tensorId)") }
+    if maskId > 0 {
+      let codes = [UInt8](repeating: CanvasMask.Stored.painted, count: 64)
+      try writeTensor(Self.maskTensor(codes, width: 8, height: 8), name: "binary_mask_\(maskId)")
+    }
     let workspace = workspace
     _ = await withCheckedContinuation { continuation in
       workspace.performChanges([TensorHistoryNode.self, Layer.self]) { transaction in
@@ -1461,7 +1510,43 @@ final nonisolated class Project: Sendable {
         var builder = ProjectFormat.TensorDataBuilder(from: layer)
         builder.index = index
         builder.tensorId = tensorId
+        builder.maskId = maskId
         transaction.try(submit: ProjectFormat.TensorDataChangeRequest.upsertRequest(builder.build()))
+      } completionHandler: { continuation.resume(returning: $0) }
+    }
+  }
+
+  /// For tests: makes `tensorId` the image of the step whose image is `imageOf` through the node's
+  /// own field, as Draw Things steps without layers keep it, so two steps share one image.
+  @concurrent func setNodeImageForTests(tensorId: Int64, ofStepOf imageOf: Int64) async {
+    let workspace = workspace
+    _ = await withCheckedContinuation { continuation in
+      workspace.performChanges([TensorHistoryNode.self, Layer.self, TensorMoodboardData.self]) { transaction in
+        let rows = Rows(workspace)
+        let tree = ProjectTree(nodes: rows.nodes, layers: rows.layers, items: false)
+        guard let id = tree.step(tensorId: imageOf), let node = rows.byID[id] else { return }
+        var builder = TensorHistoryNodeBuilder(from: node)
+        builder.dataStored = 0
+        builder.tensorId = tensorId
+        transaction.try(submit: TensorHistoryNodeChangeRequest.upsertRequest(builder.build()))
+      } completionHandler: { continuation.resume(returning: $0) }
+    }
+  }
+
+  /// For tests: records `parentTensorId` as the parent of the step whose image is `imageOf`.
+  @concurrent func setRecordedParentForTests(_ parentTensorId: Int64, ofStepOf imageOf: Int64) async {
+    let workspace = workspace
+    _ = await withCheckedContinuation { continuation in
+      workspace.performChanges([TensorHistoryNode.self, Layer.self, TensorMoodboardData.self]) { transaction in
+        let rows = Rows(workspace)
+        let tree = ProjectTree(nodes: rows.nodes, layers: rows.layers, items: false)
+        guard let id = tree.step(tensorId: imageOf), let node = rows.byID[id],
+              var profile = ProjectMapping.Profile(node.profileData)
+        else { return }
+        profile.parentTensorId = parentTensorId
+        var builder = TensorHistoryNodeBuilder(from: node)
+        builder.profileData = profile.bytes
+        transaction.try(submit: TensorHistoryNodeChangeRequest.upsertRequest(builder.build()))
       } completionHandler: { continuation.resume(returning: $0) }
     }
   }
@@ -1506,6 +1591,8 @@ final nonisolated class Project: Sendable {
         tensorNames: tensorNames)
     }
   }
+
+  #endif
 
   private static func tensorNames(of layer: Layer) -> [String] {
     [
@@ -1561,6 +1648,8 @@ nonisolated struct ProjectTree: Sendable {
     var wallClock: Int64
     /// Whether `profile_data` records the parent (`parent_tensor_id`).
     var recordsParent: Bool
+    /// The parent tensor `profile_data` records (0: none).
+    var recordedParent: Int64?
   }
 
   private(set) var steps: [StepID: Step] = [:]
@@ -1616,7 +1705,8 @@ nonisolated struct ProjectTree: Sendable {
       profiles[id] = profile
       steps[id] = Step(
         id: id, tensorId: tensorId, parent: nil, generated: node.generated,
-        wallClock: node.wallClock, recordsParent: profile?.parentTensorId != nil)
+        wallClock: node.wallClock, recordsParent: profile?.parentTensorId != nil,
+        recordedParent: profile?.parentTensorId)
       if let tensorId { byTensor[tensorId, default: []].append(id) }
       byTime[id.logicalTime, default: []].append(id)
       greatestLineage[id.logicalTime] = max(greatestLineage[id.logicalTime] ?? .min, id.lineage)
