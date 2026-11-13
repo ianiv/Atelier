@@ -27,6 +27,7 @@
 		C1C8FF826A372CCCEC268435 /* RemoteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF232DA4CD210F5B739657F4 /* RemoteTests.swift */; };
 		B7A1F0C2B3D4A59687786204 /* QueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A1F0C2B3D4A59687786304 /* QueueTests.swift */; };
 		B7A1F0C2B3D4A59687786205 /* ValueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A1F0C2B3D4A59687786305 /* ValueTests.swift */; };
+		5A7E2C1B9D3F4E6A8B0C1D23 /* StrengthStepsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A7E2C1B9D3F4E6A8B0C1D24 /* StrengthStepsTests.swift */; };
 		A7E1F0C2B3D4A5968778696D /* AutomationEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1F0C2B3D4A5968778696C /* AutomationEngine.swift */; };
 		A7E1F0C2B3D4A5968778696B /* Log.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1F0C2B3D4A5968778696A /* Log.swift */; };
 		A9C3E5F70B1D2E3F40516278 /* AutomationModelMove.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9C3E5F70B1D2E3F40516277 /* AutomationModelMove.swift */; };
@@ -144,6 +145,7 @@
 		DE71CE4BC9D3833FBA7F38B6 /* VideoModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E18897D6E8A7C0EFA40806FC /* VideoModel.swift */; };
 		07ED1A855EFB26A6036EA256 /* EngineConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = F39D61C6D37D8CE30146AA63 /* EngineConfiguration.swift */; };
 		A7E1C0D2B3F4A5B6C7D8E9F0 /* GenerationTimings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8F2D1E3C4A5B6C7D8E9F0A1 /* GenerationTimings.swift */; };
+		5A7E2C1B9D3F4E6A8B0C1D21 /* StrengthSteps.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A7E2C1B9D3F4E6A8B0C1D22 /* StrengthSteps.swift */; };
 		D9478AB0A5F467A78FBF0F6F /* ClipVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFEFDFCC1580AA7B96B192D4 /* ClipVideo.swift */; };
 		ABC9C966086FCD6CDDFBF814 /* ClipPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BEBA3D6C6994515FE6F7A28 /* ClipPlayer.swift */; };
 		FA666B187E2913EFB28CCC13 /* AudioClip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EA2F5D417DF60CE076D9B6C /* AudioClip.swift */; };
@@ -235,6 +237,7 @@
 		AF232DA4CD210F5B739657F4 /* RemoteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTests.swift; sourceTree = "<group>"; };
 		B7A1F0C2B3D4A59687786304 /* QueueTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueueTests.swift; sourceTree = "<group>"; };
 		B7A1F0C2B3D4A59687786305 /* ValueTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ValueTests.swift; sourceTree = "<group>"; };
+		5A7E2C1B9D3F4E6A8B0C1D24 /* StrengthStepsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StrengthStepsTests.swift; sourceTree = "<group>"; };
 		B7A1F0C2B3D4A59687786101 /* AtelierTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AtelierTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A7E1F0C2B3D4A5968778696C /* AutomationEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationEngine.swift; sourceTree = "<group>"; };
 		A7E1F0C2B3D4A5968778696A /* Log.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Log.swift; sourceTree = "<group>"; };
@@ -349,6 +352,7 @@
 		E18897D6E8A7C0EFA40806FC /* VideoModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoModel.swift; sourceTree = "<group>"; };
 		F39D61C6D37D8CE30146AA63 /* EngineConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineConfiguration.swift; sourceTree = "<group>"; };
 		B8F2D1E3C4A5B6C7D8E9F0A1 /* GenerationTimings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationTimings.swift; sourceTree = "<group>"; };
+		5A7E2C1B9D3F4E6A8B0C1D22 /* StrengthSteps.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StrengthSteps.swift; sourceTree = "<group>"; };
 		FFEFDFCC1580AA7B96B192D4 /* ClipVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipVideo.swift; sourceTree = "<group>"; };
 		3BEBA3D6C6994515FE6F7A28 /* ClipPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipPlayer.swift; sourceTree = "<group>"; };
 		2EA2F5D417DF60CE076D9B6C /* AudioClip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioClip.swift; sourceTree = "<group>"; };
@@ -576,6 +580,7 @@
 			children = (
 				F39D61C6D37D8CE30146AA63 /* EngineConfiguration.swift */,
 				B8F2D1E3C4A5B6C7D8E9F0A1 /* GenerationTimings.swift */,
+				5A7E2C1B9D3F4E6A8B0C1D22 /* StrengthSteps.swift */,
 				E18897D6E8A7C0EFA40806FC /* VideoModel.swift */,
 				C4E2A1D07B3F4A5E9C8D1F02 /* GenerationBackend.swift */,
 				1CAC35AB075AAB4CDF7AD898 /* GenerationEngine.swift */,
@@ -744,6 +749,7 @@
 				B7A1F0C2B3D4A59687786304 /* QueueTests.swift */,
 				AF232DA4CD210F5B739657F4 /* RemoteTests.swift */,
 				B7A1F0C2B3D4A59687786305 /* ValueTests.swift */,
+				5A7E2C1B9D3F4E6A8B0C1D24 /* StrengthStepsTests.swift */,
 				B7A1F0C2B3D4A59687786306 /* WaitUntilTests.swift */,
 				C7A1F0C2B3D4A59687786306 /* CanvasDropTests.swift */,
 				267DD52FE466641E172AB19D /* CanvasRefineTests.swift */,
@@ -983,6 +989,7 @@
 				DE71CE4BC9D3833FBA7F38B6 /* VideoModel.swift in Sources */,
 				07ED1A855EFB26A6036EA256 /* EngineConfiguration.swift in Sources */,
 				A7E1C0D2B3F4A5B6C7D8E9F0 /* GenerationTimings.swift in Sources */,
+				5A7E2C1B9D3F4E6A8B0C1D21 /* StrengthSteps.swift in Sources */,
 				D9478AB0A5F467A78FBF0F6F /* ClipVideo.swift in Sources */,
 				ABC9C966086FCD6CDDFBF814 /* ClipPlayer.swift in Sources */,
 				6EDD8483CFFCDF6D6F8845B3 /* Timeline.swift in Sources */,
@@ -1117,6 +1124,7 @@
 				B7A1F0C2B3D4A59687786204 /* QueueTests.swift in Sources */,
 				C1C8FF826A372CCCEC268435 /* RemoteTests.swift in Sources */,
 				B7A1F0C2B3D4A59687786205 /* ValueTests.swift in Sources */,
+				5A7E2C1B9D3F4E6A8B0C1D23 /* StrengthStepsTests.swift in Sources */,
 				B7A1F0C2B3D4A59687786206 /* WaitUntilTests.swift in Sources */,
 				C7A1F0C2B3D4A59687786206 /* CanvasDropTests.swift in Sources */,
 				EB6EC16C5C8D9C4C67D558FA /* CanvasRefineTests.swift in Sources */,
