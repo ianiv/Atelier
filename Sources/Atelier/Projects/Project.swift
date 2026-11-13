@@ -875,15 +875,167 @@ final nonisolated class Project: Sendable {
     try await delete { _ in id }
   }
 
-  /// Deletes every frame of a clip, last first, as Draw Things deletes them one by one; the last
+  /// Deletes every frame of a clip, as Draw Things deletes them one by one, last first; the last
   /// one takes the clip row and its soundtrack. Returns the first frame's parent's image tensor.
+  ///
+  /// A clip's frames are a run of step numbers on one lineage, which `deleteRun` deletes in one
+  /// transaction, ending where the frame-by-frame deletes would; frame by frame, each delete
+  /// reads and renumbers the whole project again, minutes for a clip in a project of many.
+  /// Frames that aren't such a run are deleted frame by frame.
   @discardableResult
   @concurrent func deleteClip(frames: [Int64]) async throws -> Int64? {
+    if let deleted = try await deleteRun(tensorIds: frames) { return deleted.parentTensorId }
+    return try await deleteFrameByFrame(frames)
+  }
+
+  /// `deleteClip` as one `deleteHistory` per frame, last first: what `deleteRun` must match.
+  @discardableResult
+  @concurrent func deleteFrameByFrame(_ frames: [Int64]) async throws -> Int64? {
     var parent: Int64?
     for tensorId in frames.reversed() {
       parent = try await delete(tensorId: tensorId)
     }
     return parent
+  }
+
+  /// Deletes the steps whose images are `tensorIds`, when they're a run of step numbers on one
+  /// lineage in that order, ending as `deleteHistory` on each of them, last first, would: one
+  /// read, one renumbering (`Changes.shift(afterDeleting:on:)`) and one write. Their children
+  /// outside the run record its first step's parent; thumbnails, clip rows and tensors go once
+  /// nothing left uses them. Nil, changing nothing, when they aren't such a run, or when a
+  /// frame's image is in another step's layers or a frame has another layer: where steps share a
+  /// tensor, which step an image names (and which parent a recorded tensor names) can change as
+  /// the frame-by-frame deletes renumber steps.
+  func deleteRun(tensorIds: [Int64]) async throws -> DeletedRun? {
+    let workspace = workspace
+    var outcome: (tensorNames: [String], parentTensorId: Int64?)?
+    let succeeded = await withCheckedContinuation { continuation in
+      workspace.performChanges([
+        TensorHistoryNode.self, Layer.self, TensorMoodboardData.self, ThumbnailHistoryNode.self,
+        ThumbnailHistoryHalfNode.self, Clip.self,
+      ]) { transaction in
+        let rows = Rows(workspace)
+        let tree = ProjectTree(nodes: rows.nodes, layers: rows.layers, items: false)
+        // The steps the frame-by-frame deletes would find: deleting later steps never moves
+        // earlier ones, so each image still names the step it names now.
+        var run: [StepID] = []
+        for tensorId in tensorIds {
+          guard let id = tree.step(tensorId: tensorId), rows.byID[id] != nil,
+                run.last.map({ id.lineage == $0.lineage && id.logicalTime == $0.logicalTime + 1 }) ?? true
+          else { return }
+          run.append(id)
+        }
+        guard let first = run.first, let last = run.last else { return }
+        let deleted = Set(run)
+        let frameTensors = Set(tensorIds)
+        guard tensorIds.allSatisfy({ tree.steps(tensorId: $0).count == 1 }),
+              !rows.layers.contains(where: { layer in
+                let own = deleted.contains(StepID(lineage: layer.lineage, logicalTime: layer.logicalTime))
+                return own ? (layer.tensorId > 0 && !frameTensors.contains(layer.tensorId))
+                  : frameTensors.contains(layer.tensorId)
+              })
+        else { return }
+        let isDeleted = { (node: TensorHistoryNode) in
+          deleted.contains(StepID(lineage: node.lineage, logicalTime: node.logicalTime))
+        }
+
+        // Each delete hands its children to its parent, so a child ends with the nearest
+        // ancestor outside the run.
+        func survivor(of id: StepID) -> StepID? {
+          var seen: Set<StepID> = [id]
+          var next = tree.steps[id]?.parent
+          while let step = next, deleted.contains(step), seen.insert(step).inserted {
+            next = tree.steps[step]?.parent
+          }
+          return next.flatMap { deleted.contains($0) ? nil : $0 }
+        }
+        let parentTensorId = survivor(of: first).flatMap { tree.steps[$0]?.tensorId }
+        var changes = Changes()
+        changes.recordParents(tree, rows)
+        for id in run {
+          let tensorId = survivor(of: id).flatMap { tree.steps[$0]?.tensorId } ?? 0
+          for child in tree.children[id] ?? [] where !deleted.contains(child) {
+            changes.setParent(of: child, to: tensorId, rows)
+          }
+        }
+        // Deleted steps aren't written back (see `delete(_:)`).
+        for id in run { changes.profiles[id] = nil }
+        changes.shift(afterDeleting: first.logicalTime...last.logicalTime, on: first.lineage, rows)
+
+        let isDeletedKey = { (lineage: Int64, logicalTime: Int64) in
+          deleted.contains(StepID(lineage: lineage, logicalTime: logicalTime))
+        }
+        let nodes = rows.nodes.filter(isDeleted)
+        let others = rows.nodes.filter { !isDeleted($0) }
+        let layers = rows.layers.filter { isDeletedKey($0.lineage, $0.logicalTime) }
+        let otherLayers = rows.layers.filter { !isDeletedKey($0.lineage, $0.logicalTime) }
+        let moods = rows.moods.filter { isDeletedKey($0.lineage, $0.logicalTime) }
+        let otherMoods = rows.moods.filter { !isDeletedKey($0.lineage, $0.logicalTime) }
+        for node in nodes {
+          if let request = TensorHistoryNodeChangeRequest.deletionRequest(node) {
+            transaction.try(submit: request)
+          }
+        }
+        for layer in layers {
+          if let request = ProjectFormat.TensorDataChangeRequest.deletionRequest(layer) {
+            transaction.try(submit: request)
+          }
+        }
+        for mood in moods {
+          if let request = TensorMoodboardDataChangeRequest.deletionRequest(mood) {
+            transaction.try(submit: request)
+          }
+        }
+        changes.submit(rows, to: transaction)
+
+        // Thumbnails and tensors go once no step left uses them: a frame-by-frame delete keeps
+        // what a frame still to go uses, and the last of them to go lets it go.
+        let otherPreviews = Set(others.map(\.previewId))
+        for previewId in Set(nodes.map(\.previewId)) where previewId != 0 && !otherPreviews.contains(previewId) {
+          if let thumbnail = workspace.fetch(for: ThumbnailHistoryNode.self).where(
+            ThumbnailHistoryNode.id == previewId
+          ).first, let request = ThumbnailHistoryNodeChangeRequest.deletionRequest(thumbnail) {
+            transaction.try(submit: request)
+          }
+          if let thumbnail = workspace.fetch(for: ThumbnailHistoryHalfNode.self).where(
+            ThumbnailHistoryHalfNode.id == previewId
+          ).first, let request = ThumbnailHistoryHalfNodeChangeRequest.deletionRequest(thumbnail) {
+            transaction.try(submit: request)
+          }
+        }
+        let used = Set(otherLayers.flatMap(Self.tensorNames(of:)))
+          .union(others.compactMap { $0.tensorId > 0 ? "tensor_history_\($0.tensorId)" : nil })
+          .union(otherMoods.map { "shuffle_\($0.shuffleId)" })
+        var names = layers.flatMap(Self.tensorNames(of:)) + moods.map { "shuffle_\($0.shuffleId)" }
+        names += nodes.compactMap { $0.tensorId > 0 ? "tensor_history_\($0.tensorId)" : nil }
+        // As deleteHistory: a clip row and its soundtrack go with the clip's last frame.
+        let goneClips = Set(nodes.map(\.clipId).filter { $0 >= 0 }).subtracting(others.map(\.clipId))
+        if !goneClips.isEmpty {
+          let clips = Array(workspace.fetch(for: Clip.self).all())
+          let otherAudio = Set(clips.filter { !goneClips.contains($0.clipId) }.map(\.audioId))
+          for clip in clips where goneClips.contains(clip.clipId) {
+            if let request = ClipChangeRequest.deletionRequest(clip) { transaction.try(submit: request) }
+            if clip.audioId > 0, !otherAudio.contains(clip.audioId) { names.append("audio_\(clip.audioId)") }
+          }
+        }
+        // Reading every other step's settings for its audio input only when there's one to keep.
+        let inputAudio = Set(nodes.compactMap { ProjectMapping.Profile($0.profileData)?.inputAudioId })
+        if !inputAudio.isEmpty {
+          let otherInputAudio = Set(others.compactMap { ProjectMapping.Profile($0.profileData)?.inputAudioId })
+          names += inputAudio.subtracting(otherInputAudio).map { "audio_\($0)" }
+        }
+        outcome = (Array(Set(names).subtracting(used)), parentTensorId)
+      } completionHandler: { continuation.resume(returning: $0) }
+    }
+    guard succeeded else { throw ProjectError.writeFailed }
+    guard let outcome else { return nil }
+    removeTensors(outcome.tensorNames)
+    return DeletedRun(parentTensorId: outcome.parentTensorId)
+  }
+
+  /// What `deleteRun` deleted.
+  nonisolated struct DeletedRun {
+    var parentTensorId: Int64?
   }
 
   /// Deletes the step whose image is `tensorId`. Returns its parent's image tensor.
@@ -913,6 +1065,9 @@ final nonisolated class Project: Sendable {
         for child in tree.children[id] ?? [] {
           changes.setParent(of: child, to: parentTensorId ?? 0, rows)
         }
+        // The deleted step isn't written back. Recording its parent (a step Draw Things wrote,
+        // with none recorded) would put it back, over whichever step moves into its key.
+        changes.profiles[id] = nil
         changes.shift(afterDeleting: id, rows)
 
         let layers = rows.layers.filter { $0.lineage == id.lineage && $0.logicalTime == id.logicalTime }
@@ -1070,6 +1225,36 @@ final nonisolated class Project: Sendable {
       }
     }
 
+    /// `shift(afterDeleting:)` for each step numbered `run` on `lineage`, last first, at once.
+    /// The delete at `t` judges lineages by the steps numbered `t`, which the deletes before it
+    /// (all later numbers) never move: a lineage moves there when it's `lineage`, or below the
+    /// greatest lineage at `t` (when that's above `lineage`) with no step of its own at `t`. A step
+    /// numbered `s` past the run's start moves once for each such `t` before `s`: the earlier
+    /// deletes leave it above `t` (and a step at `t` on another lineage keeps its own there).
+    mutating func shift(afterDeleting run: ClosedRange<Int64>, on lineage: Int64, _ rows: Rows) {
+      var greatest: [Int64: Int64] = [:]
+      var lineagesAt: [Int64: Set<Int64>] = [:]
+      for node in rows.nodes where run.contains(node.logicalTime) {
+        greatest[node.logicalTime] = max(greatest[node.logicalTime] ?? node.lineage, node.lineage)
+        lineagesAt[node.logicalTime, default: []].insert(node.lineage)
+      }
+      for node in rows.nodes where node.lineage >= lineage && node.logicalTime > run.lowerBound {
+        // The run's own steps go.
+        if node.lineage == lineage, run.contains(node.logicalTime) { continue }
+        var count: Int64 = 0
+        for time in run.lowerBound...min(node.logicalTime - 1, run.upperBound) {
+          let maxAtTime = greatest[time] ?? lineage
+          let upper = maxAtTime > lineage ? maxAtTime : .max
+          guard node.lineage < upper else { continue }
+          if node.lineage == lineage || lineagesAt[time]?.contains(node.lineage) != true { count += 1 }
+        }
+        if count > 0 {
+          moved[StepID(lineage: node.lineage, logicalTime: node.logicalTime)] = StepID(
+            lineage: node.lineage, logicalTime: node.logicalTime - count)
+        }
+      }
+    }
+
     /// Old keys are deleted before anything is written, so a key freed by one move can take the
     /// next.
     func submit(_ rows: Rows, to transaction: TransactionContext) {
@@ -1114,6 +1299,69 @@ final nonisolated class Project: Sendable {
         builder.logicalTime = new.logicalTime
         transaction.try(submit: TensorMoodboardDataChangeRequest.upsertRequest(builder.build()))
       }
+    }
+  }
+
+  /// For tests: adds a layer of image `tensorId` at index `index` to the step whose image is
+  /// `imageOf`, sharing that tensor as Draw Things projects can.
+  @concurrent func addLayerForTests(tensorId: Int64, index: Int64, toStepOf imageOf: Int64) async {
+    let workspace = workspace
+    _ = await withCheckedContinuation { continuation in
+      workspace.performChanges([TensorHistoryNode.self, Layer.self]) { transaction in
+        let tree = ProjectTree(
+          nodes: Array(workspace.fetch(for: TensorHistoryNode.self).all()),
+          layers: Array(workspace.fetch(for: Layer.self).all()), items: false)
+        guard let id = tree.step(tensorId: imageOf),
+              let layer = workspace.fetch(for: Layer.self).where(
+                Layer.lineage == id.lineage && Layer.logicalTime == id.logicalTime
+              ).first
+        else { return }
+        var builder = ProjectFormat.TensorDataBuilder(from: layer)
+        builder.index = index
+        builder.tensorId = tensorId
+        transaction.try(submit: ProjectFormat.TensorDataChangeRequest.upsertRequest(builder.build()))
+      } completionHandler: { continuation.resume(returning: $0) }
+    }
+  }
+
+  /// For tests: every row a delete changes, in key order, and the tensor store's names.
+  nonisolated struct Contents: Equatable {
+    var nodes: [TensorHistoryNode]
+    var layers: [ProjectFormat.TensorData]
+    var moods: [TensorMoodboardData]
+    var clips: [Clip]
+    var thumbnails: [Int64]
+    var halfThumbnails: [Int64]
+    var tensorNames: [String]
+  }
+
+  func contents() -> Contents {
+    let key = { (lineage: Int64, logicalTime: Int64) in [lineage, logicalTime] }
+    let tensorNames = storeAccess.withLock { _ in
+      var names: [String] = []
+      _ = graph.openStore(url.path, flags: [.readOnly]) { names = $0.keys }
+      return names.sorted()
+    }
+    return workspace.fetchWithinASnapshot {
+      Contents(
+        // JSONEncoder orders keys as it likes, so profiles are compared with their keys sorted.
+        nodes: workspace.fetch(for: TensorHistoryNode.self).all().map { node in
+          guard let object = try? JSONSerialization.jsonObject(with: Data(node.profileData)),
+                let sorted = try? JSONSerialization.data(withJSONObject: object, options: .sortedKeys)
+          else { return node }
+          var builder = TensorHistoryNodeBuilder(from: node)
+          builder.profileData = [UInt8](sorted)
+          return builder.build()
+        }
+        .sorted { key($0.lineage, $0.logicalTime).lexicographicallyPrecedes(key($1.lineage, $1.logicalTime)) },
+        layers: workspace.fetch(for: Layer.self).all()
+          .sorted { (key($0.lineage, $0.logicalTime) + [$0.index]).lexicographicallyPrecedes(key($1.lineage, $1.logicalTime) + [$1.index]) },
+        moods: workspace.fetch(for: TensorMoodboardData.self).all()
+          .sorted { (key($0.lineage, $0.logicalTime) + [$0.index]).lexicographicallyPrecedes(key($1.lineage, $1.logicalTime) + [$1.index]) },
+        clips: workspace.fetch(for: Clip.self).all().sorted { $0.clipId < $1.clipId },
+        thumbnails: workspace.fetch(for: ThumbnailHistoryNode.self).all().map(\.id).sorted(),
+        halfThumbnails: workspace.fetch(for: ThumbnailHistoryHalfNode.self).all().map(\.id).sorted(),
+        tensorNames: tensorNames)
     }
   }
 
@@ -1303,6 +1551,11 @@ nonisolated struct ProjectTree: Sendable {
   /// The step holding the image `tensorId`.
   func step(tensorId: Int64) -> StepID? {
     byTensor[tensorId]?.first
+  }
+
+  /// Every step whose image is `tensorId` (Draw Things can share one).
+  func steps(tensorId: Int64) -> [StepID] {
+    byTensor[tensorId] ?? []
   }
 
   /// The item listing the clip whose frame is the image `tensorId` (the clip's first frame), when
