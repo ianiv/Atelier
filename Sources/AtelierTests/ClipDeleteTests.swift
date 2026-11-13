@@ -355,6 +355,92 @@ struct ClipDeleteTests {
     try await Self.expectFallback(frames, in: built)
   }
 
+  /// Clip X (frames at 1...4 on lineage 0) and branches whose renumbering differs: P on lineage 1
+  /// (3...5) and C on lineage 4 (3...7) have steps at 3, where X's third frame goes, and B on
+  /// lineage 2 (4...7) doesn't, so deleting that frame moves B down and not P or C; D on lineage
+  /// 3 (6...7), below C, has none at 4, where X's last frame goes, so deleting that one moves D
+  /// down and not C.
+  private static func buildStaged() async throws -> Built {
+    let folder = try folder()
+    var built = Built(folder: folder, url: folder.appending(path: "Template.sqlite3"))
+    let project = Project(url: built.url)
+    let a = try await image(project, "A", after: nil, into: &built)
+    let frames = try await clip(project, "X", frames: 4, after: a, into: &built)
+    var last = try await image(project, "P1", after: frames[1], into: &built)
+    for index in 2...3 { last = try await image(project, "P\(index)", after: last, into: &built) }
+    last = try await image(project, "B1", after: built.images["P1"], into: &built)
+    for index in 2...4 { last = try await image(project, "B\(index)", after: last, into: &built) }
+    last = try await image(project, "D1", after: built.images["B2"], into: &built)
+    try await image(project, "D2", after: last, into: &built)
+    last = try await image(project, "C1", after: frames[1], into: &built)
+    for index in 2...5 { last = try await image(project, "C\(index)", after: last, into: &built) }
+    await project.close()
+    return built
+  }
+
+  /// Where `names`' images sit before X's frames go, then after each frame-by-frame delete down
+  /// to (not including) the first frame: the trees the deletes read up to the first frame's.
+  private static func stages(of names: [String], in built: Built) async throws -> [[StepID]] {
+    let project = try copy(built, "stages-\(UUID().uuidString)")
+    let frames = try #require(built.clips["X"])
+    var stages: [[StepID]] = []
+    for frame in [nil] + frames.dropFirst().reversed().map(Optional.some) {
+      if let frame { _ = try await project.delete(tensorId: frame) }
+      let tree = await project.read { $0.tree(items: false) }
+      var stage: [StepID] = []
+      for name in names {
+        let image = try #require(built.images[name])
+        stage.append(try #require(tree.step(tensorId: image)))
+      }
+      stages.append(stage)
+    }
+    await project.close()
+    return stages
+  }
+
+  /// Whether `recorder` sits one number past `holder` on a lineage at or above it: where the
+  /// holder could be its rule's step.
+  private static func adjacent(_ recorder: StepID, after holder: StepID) -> Bool {
+    recorder.lineage >= holder.lineage && recorder.logicalTime == holder.logicalTime + 1
+  }
+
+  /// P3 holds X's first frame's image (a refine of it), and B4 records that image: they're
+  /// apart at first, but once X's third frame goes B4 sits right after P3, so B4 could find P3.
+  /// The frame-by-frame deletes decide. Without B4's record the clip goes at once.
+  @Test func adjacencyOnlyPartwayFallsBack() async throws {
+    let built = try await Self.buildStaged()
+    defer { try? FileManager.default.removeItem(at: built.folder) }
+    let frames = try #require(built.clips["X"])
+    let stages = try await Self.stages(of: ["B4", "P3"], in: built)
+    #expect(stages.first.map { !Self.adjacent($0[0], after: $0[1]) } == true)
+    #expect(stages.contains { Self.adjacent($0[0], after: $0[1]) })
+    let holder = try #require(built.images["P3"]), recorder = try #require(built.images["B4"])
+    try await Self.edit(built) { try await $0.addLayerForTests(tensorId: frames[0], index: -1, toStepOf: holder) }
+    let control = try Self.copy(built, "control")
+    #expect(try await control.deleteRun(tensorIds: frames) != nil)
+    await control.close()
+    try await Self.edit(built) { await $0.setRecordedParentForTests(frames[0], ofStepOf: recorder) }
+    try await Self.expectFallback(frames, in: built)
+  }
+
+  /// The mirror: D1 holds the image and C5 records it, right after D1 at first; once X's last
+  /// frame goes, D1 moves down and C5 doesn't, and they never meet again. Still frame by frame.
+  @Test func adjacencyOnlyAtFirstFallsBack() async throws {
+    let built = try await Self.buildStaged()
+    defer { try? FileManager.default.removeItem(at: built.folder) }
+    let frames = try #require(built.clips["X"])
+    let stages = try await Self.stages(of: ["C5", "D1"], in: built)
+    #expect(stages.first.map { Self.adjacent($0[0], after: $0[1]) } == true)
+    #expect(!stages.dropFirst().contains { Self.adjacent($0[0], after: $0[1]) })
+    let holder = try #require(built.images["D1"]), recorder = try #require(built.images["C5"])
+    try await Self.edit(built) { try await $0.addLayerForTests(tensorId: frames[0], index: -1, toStepOf: holder) }
+    let control = try Self.copy(built, "control")
+    #expect(try await control.deleteRun(tensorIds: frames) != nil)
+    await control.close()
+    try await Self.edit(built) { await $0.setRecordedParentForTests(frames[0], ofStepOf: recorder) }
+    try await Self.expectFallback(frames, in: built)
+  }
+
   /// A deleted step that recorded no parent isn't written back: the last step on its lineage, so
   /// no step moves into its key to cover it.
   @Test func deletingAStepWithoutAParentLinkLeavesItGone() async throws {
