@@ -877,8 +877,9 @@ final nonisolated class Project: Sendable {
   /// The layers of a merged refine (`RefinedStep.Layers`) and the tensors they need written: the
   /// source at the origin, reusing its step's tensor when that step is one plain layer of the same
   /// image there, carrying the paint mask (0xF9 painted, else its alpha's code, as Draw Things'
-  /// brush and `ImageConverter.imageAndMask(from:)` write them); then the frame, `frameTensorId`,
-  /// with a mask only where it isn't opaque.
+  /// brush and `ImageConverter.imageAndMask(from:)` write them); then the source step's own
+  /// detail layers (`carriedDetail`); then the frame, `frameTensorId`, at its density, with a
+  /// mask only where it isn't opaque.
   private func layeredRefine(_ layers: RefinedStep.Layers, frameTensorId: Int64) -> (
     rows: [LayerRow], images: [(String, Tensor<FloatType>)], masks: [(String, Tensor<UInt8>)]
   )? {
@@ -918,16 +919,61 @@ final nonisolated class Project: Sendable {
         "binary_mask_\(frameMaskId)",
         Self.maskTensor(frameAlpha.map(CanvasMask.Stored.code(alpha:)), width: layers.frame.width, height: layers.frame.height)))
     }
+    let frame = LayerRow(
+      tensorId: frameTensorId, maskId: frameMaskId, x: layers.frameX, y: layers.frameY,
+      width: Int32(layers.frame.width), height: Int32(layers.frame.height),
+      scaleFactorBy120: layers.frameScaleFactorBy120)
+    let carried = layers.sourceTensorId.map {
+      carriedDetail(from: $0, under: frame, frameAlpha: frameAlpha, frameWidth: layers.frame.width)
+    } ?? []
     return (
-      [
-        LayerRow(tensorId: sourceTensorId, maskId: sourceMaskId, x: 0, y: 0, width: Int32(width), height: Int32(height)),
-        LayerRow(
-          tensorId: frameTensorId, maskId: frameMaskId, x: layers.frameX, y: layers.frameY,
-          width: Int32(layers.frame.width), height: Int32(layers.frame.height),
-          scaleFactorBy120: layers.frameScaleFactorBy120),
-      ],
+      [LayerRow(tensorId: sourceTensorId, maskId: sourceMaskId, x: 0, y: 0, width: Int32(width), height: Int32(height))]
+        + carried + [frame],
       images, masks
     )
+  }
+
+  /// Most layers a merged refine keeps: the source, its carried detail, the frame.
+  static let maxRefineLayers = 8
+
+  /// The detail layers of the source's step (`detailLayers`'s: from its lowest layer finer than
+  /// 120 up), carried into a refine of it so its detail outlives the next refine: the same
+  /// tensors and masks (deleting a step only removes names no other step uses), moved by where
+  /// the source's top left was on its canvas. One the new frame covers wholly and opaquely at the
+  /// same or a finer density is dropped. Past `maxRefineLayers` the oldest go: the source layer
+  /// below them already has them, at its own pixels (it's the step's image), so dropping one
+  /// flattens it into the source.
+  private func carriedDetail(from sourceTensorId: Int64, under frame: LayerRow, frameAlpha: [UInt8], frameWidth: Int) -> [LayerRow] {
+    guard let layers = canvasLayers(imageTensorId: sourceTensorId),
+          let start = layers.firstIndex(where: { $0.scaleFactorBy120 > 120 })
+    else { return [] }
+    func units(_ row: Layer) -> CGRect {
+      let scale = Double(max(row.scaleFactorBy120, 1)) / 120
+      return CGRect(x: Double(row.x), y: Double(row.y), width: Double(row.width) / scale, height: Double(row.height) / scale)
+    }
+    let union = layers.dropFirst().reduce(units(layers[0])) { $0.union(units($1)) }
+    let frameScale = Double(frame.scaleFactorBy120) / 120
+    let frameUnits = CGRect(
+      x: Double(frame.x), y: Double(frame.y), width: Double(frame.width) / frameScale,
+      height: Double(frame.height) / frameScale)
+    var carried: [LayerRow] = []
+    for row in layers[start...] {
+      let rect = units(row).offsetBy(dx: -union.minX, dy: -union.minY)
+      if frame.scaleFactorBy120 >= row.scaleFactorBy120, frameUnits.contains(rect) {
+        // Covered when every frame pixel over it is opaque.
+        let x0 = Int(((rect.minX - frameUnits.minX) * frameScale).rounded(.down))
+        let x1 = min(Int(((rect.maxX - frameUnits.minX) * frameScale).rounded(.up)), Int(frame.width))
+        let y0 = Int(((rect.minY - frameUnits.minY) * frameScale).rounded(.down))
+        let y1 = min(Int(((rect.maxY - frameUnits.minY) * frameScale).rounded(.up)), Int(frame.height))
+        let opaque = (y0..<max(y1, y0)).allSatisfy { y in (x0..<max(x1, x0)).allSatisfy { frameAlpha[y * frameWidth + $0] == 255 } }
+        if opaque { continue }
+      }
+      carried.append(
+        LayerRow(
+          tensorId: row.tensorId, maskId: row.maskId, x: row.x - Int32(union.minX), y: row.y - Int32(union.minY),
+          width: row.width, height: row.height, scaleFactorBy120: row.scaleFactorBy120))
+    }
+    return Array(carried.suffix(Self.maxRefineLayers - 2))
   }
 
   /// Whether `tensorId` is some step's only layer, a plain image at the origin of this size.

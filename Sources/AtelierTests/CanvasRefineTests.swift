@@ -514,6 +514,107 @@ struct CanvasRefineTests {
     #expect(try #require(Project.canvasSize(layers)).width == 3000)
   }
 
+  // MARK: - Zoomed refines keep their detail
+
+  @Test func frameDensityFollowsTheZoom() {
+    #expect(CanvasMerge.frameDensity(zoom: 4) == 480)
+    #expect(CanvasMerge.frameDensity(zoom: 2.7) == 324)
+    #expect(CanvasMerge.frameDensity(zoom: 3.97) == 480)
+    #expect(CanvasMerge.frameDensity(zoom: 4.1) == 492)
+    #expect(CanvasMerge.frameDensity(zoom: 1.01) == 120)
+    #expect(CanvasMerge.frameDensity(zoom: 0.5) == 120)
+    #expect(CanvasMerge.frameDensity(zoom: 12) == 960)
+  }
+
+  /// A refine at 4× on part of a source: the frame is kept at 480, its pixels the merged
+  /// result's one for one, over whole source pixels around the crop.
+  @Test func aFourTimesRefineKeepsTheFramesPixels() throws {
+    let source = try Self.pattern(width: 128, height: 128)
+    let result = try Self.pattern(width: 128, height: 128)
+    let region = CGRect(x: 32, y: 32, width: 32, height: 32)
+    let placement = CanvasPlacement(sourceSize: CGSize(width: 128, height: 128), frameSize: CGSize(width: 128, height: 128), showing: region)
+    #expect(placement.cropRect == region)
+    let merge = RefineMerge(
+      source: source, sourceTensorId: nil, scale: 4, offset: CGSize(width: 64, height: 64),
+      frameSize: CGSize(width: 128, height: 128), mask: nil)
+    let merged = try #require(CanvasMerge.merge(result, into: merge, maskBlur: 0, maskBlurOutset: 0))
+    #expect(merged.image.width == 128 && merged.image.height == 128)
+    let layers = try #require(merged.step.layers)
+    #expect(layers.frameScaleFactorBy120 == 480 && layers.frameX == 32 && layers.frameY == 32)
+    #expect(layers.frame.width == 128 && layers.frame.height == 128)
+    #expect(Self.rgba(layers.frame) == Self.rgba(result))
+    // Outside the crop the source is untouched.
+    let out = Self.rgba(merged.image), original = Self.rgba(source)
+    #expect(Self.pixel(out, width: 128, 10, 100) == Self.pixel(original, width: 128, 10, 100))
+
+    // Half a source pixel off: the layer grows to whole pixels, the frame still lands 1:1.
+    let shifted = RefineMerge(
+      source: source, sourceTensorId: nil, scale: 4, offset: CGSize(width: 66, height: 64),
+      frameSize: CGSize(width: 128, height: 128), mask: nil)
+    #expect(shifted.placement.cropRect.minX == 31.5)
+    let offset = try #require(CanvasMerge.merge(result, into: shifted, maskBlur: 0, maskBlurOutset: 0)?.step.layers)
+    #expect(offset.frameX == 31 && offset.frame.width == 33 * 4 && offset.frame.height == 128)
+    let frameBytes = Self.rgba(offset.frame), resultBytes = Self.rgba(result)
+    for (x, y) in [(0, 0), (50, 77), (127, 127)] {
+      #expect(Self.pixel(frameBytes, width: 132, x + 2, y) == Self.pixel(resultBytes, width: 128, x, y))
+    }
+  }
+
+  @Test func otherZoomsPickTheirDensity() throws {
+    let source = try Self.pattern(width: 256, height: 256)
+    let result = try Self.solid(width: 128, height: 128, red: 255, green: 0, blue: 0)
+    func layers(scale: Double) throws -> RefinedStep.Layers? {
+      let merge = RefineMerge(
+        source: source, sourceTensorId: nil, scale: scale, offset: .zero, frameSize: CGSize(width: 128, height: 128), mask: nil)
+      return try #require(CanvasMerge.merge(result, into: merge, maskBlur: 0, maskBlurOutset: 0)).step.layers
+    }
+    #expect(try layers(scale: 2.7)?.frameScaleFactorBy120 == 324)
+    #expect(try layers(scale: 3.97)?.frameScaleFactorBy120 == 480)
+    // Zoomed out, the frame shows the whole image: nothing to keep finer, nothing layered.
+    #expect(try layers(scale: 0.5) == nil)
+  }
+
+  /// A refine of a refined step keeps the earlier detail under its own frame; a refine covering
+  /// that detail wholly at the same density drops it.
+  @Test func earlierDetailIsCarriedForward() async throws {
+    let folder = FileManager.default.temporaryDirectory.appending(path: "CanvasRefineTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let project = Project(url: folder.appending(path: "Carry.sqlite3"))
+    let source = try Self.pattern(width: 128, height: 128)
+    let first = try await project.append(
+      tensor: try #require(ImageTensor.tensor(from: source)), model: "m", prompt: "", negativePrompt: "", seed: 1,
+      settings: [:], createdAt: Date(), duration: 0, reason: .imported, generated: false)
+    let red = try Self.solid(width: 128, height: 128, red: 255, green: 0, blue: 0)
+    func refine(_ parent: HistoryItem, scale: Double, offset: CGSize) async throws -> HistoryItem {
+      let image = try #require(await project.read { $0.image(for: parent) })
+      let merge = RefineMerge(
+        source: image, sourceTensorId: parent.tensorId, scale: scale, offset: offset, frameSize: CGSize(width: 128, height: 128), mask: nil)
+      let merged = try #require(CanvasMerge.merge(red, into: merge, maskBlur: 0, maskBlurOutset: 0))
+      let frame = try #require(merged.step.layers?.frame)
+      return try await project.append(
+        tensor: try #require(ImageTensor.tensor(from: frame)), model: "m", prompt: "", negativePrompt: "", seed: 1,
+        settings: [:], createdAt: Date(), duration: 0, inputTensorId: parent.tensorId, after: parent.tensorId, refined: merged.step)
+    }
+    // 4× on (32, 32, 32, 32), then 2× on the bottom-right quadrant.
+    let a = try await refine(first, scale: 4, offset: CGSize(width: 64, height: 64))
+    let b = try await refine(a, scale: 2, offset: CGSize(width: -64, height: -64))
+    let rows = await project.read { $0.layerSummary(tensorId: b.tensorId) }
+    #expect(rows.map(\.scale) == [120, 480, 240])
+    #expect(rows[1].tensorId == a.tensorId && rows[1].x == 32 && rows[1].y == 32)
+    #expect(rows[0].tensorId != first.tensorId)
+    #expect(await project.read { $0.detailLayers(tensorId: b.tensorId) }.count == 2)
+    // 2× over the top-left quadrant covers a's frame at less than its density: kept.
+    let c = try await refine(a, scale: 2, offset: CGSize(width: 64, height: 64))
+    #expect(await project.read { $0.layerSummary(tensorId: c.tensorId) }.map(\.scale) == [120, 480, 240])
+    // 4× over the same region at the same density: dropped.
+    let d = try await refine(a, scale: 4, offset: CGSize(width: 64, height: 64))
+    #expect(await project.read { $0.layerSummary(tensorId: d.tensorId) }.map(\.scale) == [120, 480])
+    let full = try #require(await project.read { $0.image(tensorId: b.tensorId, density: Project.finestDensity) })
+    #expect(full.width == 512 && full.height == 512)
+    await project.close()
+  }
+
   @Test func blurKeepsItsTotal() {
     var values = [Float](repeating: 0, count: 50 * 50)
     values[25 * 50 + 25] = 1

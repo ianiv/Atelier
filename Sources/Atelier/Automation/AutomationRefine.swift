@@ -7,7 +7,8 @@ extension Automation {
   ///   (a) a rectangle mask: the result is the image's size, and pixels the feathered mask
   ///       doesn't reach are the input's exactly; the step keeps its mask and region;
   ///   (b) zoomed 2× on the top-left quadrant, no mask: the image's size, only that quadrant
-  ///       (and its feathered edge) changes;
+  ///       (and its feathered edge) changes; the frame is kept as a layer at 240 (twice its units),
+  ///       so the full-detail image is twice the size;
   ///   (c) the frame past the image's right edge: the result grows to hold both;
   ///   (d) Use Settings on (b) and (a) brings back the input, the zoom and the mask;
   ///   (e) a queued masked, merging job survives saving and loading the queue;
@@ -167,6 +168,16 @@ extension Automation {
       check((quadrant?.meanDelta ?? 0) > 1, "(b) the quadrant changed")
       check(
         model.canvas.scale.map { abs($0 - 2) < 0.01 } == true, "(b) the canvas still shows the quadrant after the run")
+      // The detail the 2× run added is kept: the frame is its own layer at 240, twice its units.
+      let layersB = await model.history.project.read { $0.layerSummary(tensorId: b.tensorId) }
+      let topB = layersB.last
+      check(
+        layersB.count >= 2 && topB?.scale == 240 && topB.map { Int($0.width) == size && Int($0.height) == size } == true,
+        "(b) it's layered, the frame at 240 and twice its units (\(layersB.map { "\($0.width)×\($0.height)@\($0.scale)" }))")
+      let fullB = await model.history.project.read { $0.image(tensorId: b.tensorId, density: Project.finestDensity) }
+      check(
+        fullB.map { $0.width == 2 * size && $0.height == 2 * size } == true,
+        "(b) at full detail it's twice the image's size (\(fullB.map { "\($0.width)×\($0.height)" } ?? "none"))")
 
       // (c) The frame past the right edge and above the top, at 1×: the image grows right and up,
       // leaving two corners neither covers.

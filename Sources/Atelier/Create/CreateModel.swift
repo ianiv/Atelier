@@ -1992,7 +1992,7 @@ final class CreateModel {
         if let merge = request.merge, !output.isVideo, let frame = output.frames.first {
           setRunMessage("Merging into the image…", job)
           let merged = try await CanvasMerge.merged(
-            frame, into: merge, maskBlur: Double(request.configuration.maskBlur),
+            frame, into: merge, input: request.canvas, maskBlur: Double(request.configuration.maskBlur),
             maskBlurOutset: request.configuration.maskBlurOutset)
           output.frames = [merged.tensor]
           refined = merged.step
