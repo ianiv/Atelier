@@ -191,4 +191,6 @@ extension EnvironmentValues {
 
 extension FocusedValues {
   @Entry var windowUndoManager: UndoManager?
+  /// Opens History's selected image full size, for Show Image Full Size (⌘Y); nil with none.
+  @Entry var showHistoryImageFullSize: (() -> Void)?
 }
