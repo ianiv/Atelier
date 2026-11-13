@@ -139,3 +139,38 @@ nonisolated enum StrengthSteps {
     return ("≈\(count) of \(start.steps) steps\(shiftText)", help)
   }
 }
+
+/// A line under a setting's row in the inspector (`SettingDescriptor.hint`), with the longer
+/// explanation for its help and VoiceOver; `dimmed` for one that only says nothing special applies.
+struct SettingHint: Equatable {
+  var text: String
+  var help: String
+  var dimmed = false
+}
+
+extension CreateModel {
+  /// Strength's hint: with an input image on the canvas and Strength below 1, how many of the
+  /// steps the run goes through (`StrengthSteps`); otherwise that it runs all of them. Nothing
+  /// where the count can't be worked out.
+  var strengthHint: SettingHint? {
+    guard let settings, let file = selectedModel,
+          let sampler = DataModels.SamplerType(rawValue: settings.sampler.rawValue)
+    else { return nil }
+    let steps = Int(settings.steps)
+    let tile = settings.tiledDiffusion ? (width: settings.diffusionTileWidth, height: settings.diffusionTileHeight) : nil
+    guard let start = StrengthSteps.start(
+      model: file, sampler: sampler, steps: steps, strength: settings.strength, shift: Double(settings.shift),
+      resolutionDependentShift: settings.resolutionDependentShift, width: settings.width, height: settings.height,
+      tile: tile)
+    else { return nil }
+    let editsInput = settings.strength < 1 && effectiveCanvasMode == .edit && image != nil && canvasClip == nil
+    guard editsInput else {
+      return SettingHint(
+        text: "Runs all \(steps) steps",
+        help: "With an input image on the canvas, Strength below 1 starts partway into the steps.", dimmed: true)
+    }
+    let takesShift = SettingsRegistry.byID["shift"]?.applies(traits) == true
+    let hint = StrengthSteps.hint(start, strength: settings.strength, shift: takesShift ? Double(settings.shift) : nil)
+    return SettingHint(text: hint.text, help: hint.help)
+  }
+}

@@ -983,7 +983,8 @@ enum Automation {
   ///   Atelier --inspector-check --expect-layout NAME [--snapshot-dir DIR] [--quit]
   ///
   /// The first form hides Shift in a custom layout, changes it as search would, round-trips the
-  /// layout through export/import, applies a preset across models, checks undo and "Use settings".
+  /// layout through export/import, applies a preset across models, checks undo and "Use settings",
+  /// and reads Strength's hint (the steps a run at 0.5 goes through; all of them at 1).
   /// The second form, run after a relaunch, checks the custom layout was restored.
   private static func inspectorCheck(
     _ model: CreateModel, navigation: Navigation, layouts: LayoutStore, presets: PresetStore
@@ -1054,6 +1055,45 @@ enum Automation {
       model.resetToModelDefaults(undoManager: nil)
       layouts.select(.standard)
       await shot("create.png")
+
+      // Strength's hint: with an input image and Strength below 1, how many steps run; at 1, all.
+      if let strength = SettingsRegistry.byID["strength"], let hint = strength.hint, let settings = model.settings {
+        let steps = Int(settings.steps)
+        let imageBefore = model.image, modeBefore = model.canvasMode
+        var bytes = [UInt8](repeating: 128, count: 64 * 64 * 4)
+        for index in stride(from: 3, to: bytes.count, by: 4) { bytes[index] = 255 }
+        if imageBefore == nil, let provider = CGDataProvider(data: Data(bytes) as CFData),
+           let input = CGImage(
+             width: 64, height: 64, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: 256,
+             space: CGColorSpace(name: CGColorSpace.sRGB)!,
+             bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue), provider: provider,
+             decode: nil, shouldInterpolate: false, intent: .defaultIntent)
+        {
+          model.setCanvasImage(input)
+        }
+        model.set(strength, to: .number(0.5), undoManager: nil)
+        let half = hint(model)
+        model.set(strength, to: .number(1), undoManager: nil)
+        let whole = hint(model)
+        if half == nil {
+          check(whole == nil, "Strength shows no hint for \(modelA), whose steps it can't count")
+        } else {
+          check(
+            half?.text.hasPrefix("≈") == true && half?.text.contains("of \(steps) steps") == true && half?.dimmed == false
+              && half?.help.contains("model pass") == true,
+            "Strength 0.5's hint counts the steps (“\(half?.text ?? "")”; \(half?.help ?? ""))")
+          check(
+            whole == SettingHint(text: "Runs all \(steps) steps", help: whole?.help ?? "", dimmed: true),
+            "Strength 1's hint says all \(steps) steps run, dimmed (“\(whole?.text ?? "")”)")
+        }
+        if imageBefore == nil {
+          model.clearCanvas()
+          model.canvasMode = modeBefore
+        }
+        model.resetToModelDefaults(undoManager: nil)
+      } else {
+        check(false, "Strength has a hint")
+      }
 
       // Hide Shift, then change it the way a search result row does.
       layouts.setShown("shift", false)

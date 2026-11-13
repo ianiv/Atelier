@@ -338,9 +338,22 @@ struct SettingRow: View {
   @Environment(\.undoManager) private var undoManager
 
   var body: some View {
-    control
-      .help(help)
-      .contextMenu { SettingContextMenu(descriptor: descriptor) }
+    let hint = descriptor.hint?(model)
+    VStack(alignment: .leading, spacing: 0) {
+      control
+      if let hint {
+        // Under the row, as Frames shows its seconds beside it.
+        Text(hint.text)
+          .font(.caption)
+          .monospacedDigit()
+          .foregroundStyle(hint.dimmed ? .tertiary : .secondary)
+          .frame(maxWidth: .infinity, alignment: .trailing)
+          .accessibilityLabel("\(descriptor.title): \(hint.text)")
+          .accessibilityValue(hint.help)
+      }
+    }
+    .help(hint.map { help + " " + $0.help } ?? help)
+    .contextMenu { SettingContextMenu(descriptor: descriptor) }
   }
 
   private var bindings: SettingBindings {
