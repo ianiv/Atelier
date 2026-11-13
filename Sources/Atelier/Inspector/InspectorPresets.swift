@@ -8,7 +8,6 @@ struct PresetMenu: View {
   @Environment(ModelLibrary.self) private var library
   @Environment(\.undoManager) private var undoManager
   @Environment(FileDialogs.self) private var fileDialogs
-  @Environment(\.openURL) private var openURL
   @State private var saving = false
   @State private var offeredDownload: ModelLibrary.PresetDownload?
   @State private var pasteFailed = false
@@ -116,7 +115,7 @@ struct PresetMenu: View {
       Button("Show Presets Folder") {
         try? FileManager.default.createDirectory(
           at: presets.directory, withIntermediateDirectories: true)
-        openURL(presets.directory)
+        Finder.reveal([presets.directory])
       }
     } label: {
       Label("Presets", systemImage: "square.stack.3d.up")
