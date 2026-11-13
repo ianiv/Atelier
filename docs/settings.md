@@ -28,6 +28,8 @@ When the same file name is in more than one folder, Atelier uses the one in the 
 
 **Include Generation Settings in Saved Images** (on by default) embeds the prompt, negative prompt, model, seed and settings in images you export, save from the canvas or drag out of Atelier. They're written the way Draw Things writes them, so either app can load them back (in Atelier, with **Load Settings from Image**). Videos carry them too, in the MP4's description and comment. Turn it off to save plain images and videos.
 
+**Export Refined Images At** picks the size of images that hold more detail than their own pixels, such as a region refined zoomed in (see [Refining part of an image](creating-images.md#refining-part-of-an-image)) or an image upscaled in Draw Things. **Full Detail** (the default) exports, copies, drags, saves to Photos and writes to the output folder at that detail, larger than the image; **Image Size** at the size the canvas and History show. Other images are the same either way.
+
 **Video Format** is the codec videos are saved with, always as MP4: **H.264** (the default) plays everywhere; **HEVC** makes smaller files.
 
 ### Output folder

@@ -60,7 +60,7 @@ extension CreateModel {
     else { return false }
     let key = "\(mask.hashValue) \(ObjectIdentifier(image)) \(placement.imageRect) \(placement.frameSize)"
     if let cached = frameMaskCache, cached.key == key { return cached.hasPaint }
-    let rendered = CanvasState.render(image, placement: placement)
+    let rendered = CanvasState.render(image, placement: placement, detail: canvasDetail)
     let hasPaint = mask.frameMask(placement, canvas: rendered) != nil
     frameMaskCache = (key, hasPaint)
     return hasPaint

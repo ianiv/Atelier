@@ -245,8 +245,12 @@ extension CanvasState {
         sourceSize: CGSize(width: image.width, height: image.height), frameSize: size, scale: scale, offset: offset))
   }
 
-  /// `image` drawn where `placement` puts it, in a frame of its size.
-  nonisolated static func render(_ image: CGImage, placement: CanvasPlacement) -> CGImage? {
+  /// `image` drawn where `placement` puts it, in a frame of its size, with its `detail` layers
+  /// (`Project.detailLayers`, in its pixels) drawn over it at their own resolution, so a zoomed
+  /// frame takes the detail an earlier zoomed refine kept rather than the image's coarser pixels.
+  nonisolated static func render(
+    _ image: CGImage, placement: CanvasPlacement, detail: [Project.DetailLayer] = []
+  ) -> CGImage? {
     let width = Int(placement.frameSize.width), height = Int(placement.frameSize.height)
     guard width > 0, height > 0,
           let context = CGContext(
@@ -256,6 +260,13 @@ extension CanvasState {
     else { return nil }
     context.interpolationQuality = .high
     context.draw(image, in: placement.imageRectYUp)
+    let zoom = placement.zoom
+    for layer in detail {
+      let rect = CGRect(
+        x: placement.imageRect.minX + layer.rect.minX * zoom.x, y: placement.imageRect.minY + layer.rect.minY * zoom.y,
+        width: layer.rect.width * zoom.x, height: layer.rect.height * zoom.y)
+      context.draw(layer.image, in: CGRect(x: rect.minX, y: Double(height) - rect.maxY, width: rect.width, height: rect.height))
+    }
     return context.makeImage()
   }
 }

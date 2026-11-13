@@ -96,16 +96,23 @@ extension GenerationEngine.Request {
   /// image's center from the frame's, frame pixels, y down; see `CanvasPlacement.zoomAndOffset`
   /// to show a region instead), the mask's codes when anything painted is in the frame, and with
   /// `merge`, how to merge the result back into `source`. Returns false when `source` couldn't be
-  /// drawn. Merge only applies when it changes anything (`RefineMerge.applies`).
+  /// drawn. Merge only applies when it changes anything (`RefineMerge.applies`). `detail` is the
+  /// source step's finer layers (`Project.detailLayers`), drawn into the frame at their own
+  /// resolution.
   @discardableResult
   mutating func setRefineInputs(
     source: CGImage, sourceTensorId: Int64?, isImported: Bool, scale: Double?, offset: CGSize,
-    mask: CanvasMask?, merge: Bool
+    mask: CanvasMask?, merge: Bool, detail: [Project.DetailLayer] = []
   ) -> Bool {
     let frame = CGSize(width: configuration.width, height: configuration.height)
+    // A merging run at a near-whole zoom takes that zoom, so its kept layer is its pixels.
+    let snapped = merge
+      ? RefineMerge.snapped(scale: scale, offset: offset, sourceSize: CGSize(width: source.width, height: source.height), frameSize: frame)
+      : (scale: scale, offset: offset)
+    let scale = snapped.scale, offset = snapped.offset
     let placement = CanvasPlacement(
       sourceSize: CGSize(width: source.width, height: source.height), frameSize: frame, scale: scale, offset: offset)
-    guard let rendered = CanvasState.render(source, placement: placement) else { return false }
+    guard let rendered = CanvasState.render(source, placement: placement, detail: detail) else { return false }
     canvas = rendered
     canvasIsImported = isImported
     let maskPNG = mask.flatMap { $0.mayHavePaint ? $0.frameMask(placement, canvas: rendered) : nil }
@@ -133,6 +140,27 @@ extension GenerationEngine.Request {
 }
 
 nonisolated extension RefineMerge {
+  /// The canvas zoom and offset a merging run takes: a zoom within 2% of a whole number is that
+  /// number (`CanvasMerge.frameDensity`, the user's choice), about the same image point at the
+  /// frame's center, and the image's edge moved onto a whole frame pixel (`CanvasPlacement` rounds
+  /// its rectangle out to whole pixels, which would stretch it a pixel). The frame's pixels are then
+  /// its kept layer's one for one. A fitted zoom (nil) is left alone.
+  static func snapped(scale: Double?, offset: CGSize, sourceSize: CGSize, frameSize: CGSize) -> (scale: Double?, offset: CGSize) {
+    guard let scale, scale > 0 else { return (scale, offset) }
+    let whole = scale.rounded()
+    guard whole >= 1, abs(scale - whole) <= whole * 0.02 else { return (scale, offset) }
+    func axis(_ offset: Double, source: Double, frame: Double) -> Double {
+      // The image's leading edge in frame pixels is base + offset (`CanvasPlacement.imageRect`).
+      let base = frame / 2 - source * whole / 2
+      return (base + offset * whole / scale).rounded() - base
+    }
+    return (
+      whole,
+      CGSize(
+        width: axis(offset.width, source: sourceSize.width, frame: frameSize.width),
+        height: axis(offset.height, source: sourceSize.height, frame: frameSize.height)))
+  }
+
   /// Whether merging changes anything: with a mask, or with the frame moved or zoomed to show part
   /// of the image or reach past it. A fitted, centered image is left as Edit always took it (the
   /// result at the output size), even when its shape leaves bars in the frame.
@@ -141,9 +169,10 @@ nonisolated extension RefineMerge {
   }
 }
 
-/// A merged result as the project stores it, Draw Things' way. Without a mask, inside the source,
-/// it's one flattened image layer. With a mask, or when the frame reached past the source, it's
-/// two layers, as Draw Things keeps a canvas: the source at the origin (its own step's tensor when
+/// A merged result as the project stores it, Draw Things' way. Without a mask or zoom, inside the
+/// source, it's one flattened image layer. With a mask, zoomed in, or when the frame reached past
+/// the source, it's layers, as Draw Things keeps a canvas (a zoomed frame at its own density,
+/// `CanvasMerge.denseFrame`, over the source step's earlier detail layers): the source at the origin (its own step's tensor when
 /// that's a plain image, carrying the paint mask, `CanvasMask.Stored`), and over it the merged
 /// result cropped to the frame, at the frame's place in the source's pixels (possibly negative).
 /// What neither layer covers is empty (`Project.composite`).
@@ -164,6 +193,12 @@ nonisolated struct RefinedStep: @unchecked Sendable {
     var frame: CGImage
     var frameX: Int32
     var frameY: Int32
+    /// The frame's pixels per source pixel ×120 (`scale_factor_by_120`): above 120 for a zoomed
+    /// refine, which keeps the detail the run added (`CanvasMerge.denseFrame`).
+    var frameScaleFactorBy120: Int32 = 120
+    /// The frame's alpha at its size, when `frame` is its straight color, opaque (a dense frame,
+    /// see-through where the source below shows); nil takes `frame`'s own alpha.
+    var frameAlpha: [UInt8]?
   }
 }
 
@@ -190,31 +225,54 @@ nonisolated enum CanvasMerge {
     var step: RefinedStep
   }
 
+  /// `input` is the frame as the run took it (`GenerationEngine.Request.canvas`), which a zoomed
+  /// refine blends over at the frame's resolution (`denseFrame`).
   @concurrent static func merged(
-    _ result: Tensor<FloatType>, into merge: RefineMerge, maskBlur: Double, maskBlurOutset: Int
+    _ result: Tensor<FloatType>, into merge: RefineMerge, input: CGImage?, maskBlur: Double, maskBlurOutset: Int
   ) async throws -> Merged {
     guard let image = ImageTensor.cgImage(from: result),
-          var merged = Self.merge(image, into: merge, maskBlur: maskBlur, maskBlurOutset: maskBlurOutset),
+          var merged = Self.merge(image, into: merge, input: input, maskBlur: maskBlur, maskBlurOutset: maskBlurOutset),
           let tensor = ImageTensor.tensor(from: merged.image)
     else { throw ProjectError.badImage }
     merged.tensor = tensor
     return merged
   }
 
-  static func merge(_ result: CGImage, into merge: RefineMerge, maskBlur: Double, maskBlurOutset: Int) -> Merged? {
+  /// A refine frame's density (`scale_factor_by_120`) for a canvas zoom: zoom ×120, a zoom
+  /// within 2% of a whole number taken as that number (so a 4× frame lands pixel for pixel), at
+  /// most 8×, and never below the source's own 120.
+  static func frameDensity(zoom: Double) -> Int {
+    var zoom = zoom
+    let whole = zoom.rounded()
+    if whole >= 1, abs(zoom - whole) <= whole * 0.02 { zoom = whole }
+    return min(max(Int((zoom * 120).rounded()), 120), 960)
+  }
+
+  /// `input` is the frame as the run took it (`GenerationEngine.Request.canvas`; nil renders it
+  /// from the source). A zoomed refine inside the source keeps its frame at the frame's own
+  /// density (`denseFrame`); any other is merged at the source's pixels.
+  static func merge(
+    _ result: CGImage, into merge: RefineMerge, input: CGImage? = nil, maskBlur: Double, maskBlurOutset: Int
+  ) -> Merged? {
     let placement = merge.placement
     let source = merge.source
     let sourceWidth = source.width, sourceHeight = source.height
     let crop = placement.cropRect
     let sourceRect = CGRect(x: 0, y: 0, width: sourceWidth, height: sourceHeight)
     let bounds = sourceRect.union(crop).integral
+    let zoom = (placement.zoom.x + placement.zoom.y) / 2
+    let density = frameDensity(zoom: zoom)
+    // A canvas grown past the source stays at its pixels, as before.
+    if density > 120, bounds == sourceRect {
+      return denseFrame(
+        result, into: merge, input: input, density: density, maskBlur: maskBlur, maskBlurOutset: maskBlurOutset)
+    }
     let width = Int(bounds.width), height = Int(bounds.height)
     guard width > 0, height > 0, width <= 16384, height <= 16384 else { return nil }
     let originX = Int(-bounds.minX), originY = Int(-bounds.minY)
     // The frame in the merged image's pixels.
     let frameRect = crop.offsetBy(dx: Double(originX), dy: Double(originY))
     // Mask Blur and Outset are frame pixels (the engine applies them in the frame).
-    let zoom = (placement.zoom.x + placement.zoom.y) / 2
     let feather = maskBlur / zoom
     let outset = Int((Double(maskBlurOutset) / zoom).rounded())
 
@@ -290,21 +348,240 @@ nonisolated enum CanvasMerge {
       // painted pixel at alpha 0xF8, so paint outside the frame would leave the image faintly
       // see-through there. The whole mask stays in the record.
       let frameX = x0 - originX, frameY = y0 - originY
-      let paint = merge.mask.map { mask -> [UInt8] in
-        var coverage = mask.coverage(width: sourceWidth, height: sourceHeight)
-        for y in 0..<sourceHeight {
-          let insideY = y >= frameY && y < frameY + regionHeight
-          for x in 0..<sourceWidth where !insideY || x < frameX || x >= frameX + regionWidth {
-            coverage[y * sourceWidth + x] = 0
-          }
-        }
-        return coverage
+      let paint = merge.mask.map {
+        paintUnder($0, width: sourceWidth, height: sourceHeight, frame: CGRect(x: frameX, y: frameY, width: regionWidth, height: regionHeight))
       }
       step.layers = RefinedStep.Layers(
         source: source, sourceTensorId: merge.sourceTensorId, paint: paint,
         frame: frame, frameX: Int32(frameX), frameY: Int32(frameY))
     }
     return Merged(image: image, sourceOrigin: CGPoint(x: originX, y: originY), step: step)
+  }
+
+  /// The mask's coverage at the source's size, kept only inside `frame` (source pixels).
+  private static func paintUnder(_ mask: CanvasMask, width: Int, height: Int, frame: CGRect) -> [UInt8] {
+    var coverage = mask.coverage(width: width, height: height)
+    let frameX = Int(frame.minX), frameY = Int(frame.minY), frameWidth = Int(frame.width), frameHeight = Int(frame.height)
+    for y in 0..<height {
+      let insideY = y >= frameY && y < frameY + frameHeight
+      for x in 0..<width where !insideY || x < frameX || x >= frameX + frameWidth {
+        coverage[y * width + x] = 0
+      }
+    }
+    return coverage
+  }
+
+  /// A zoomed refine inside its source, kept at the detail the run added, as Draw Things keeps a
+  /// canvas layer at more pixels than the area it covers (`TensorData.scale_factor_by_120`). The
+  /// weight the result has in each frame pixel is worked out in the frame's own pixels: the mask
+  /// grown by Mask Blur Outset and feathered by Mask Blur exactly as the engine does
+  /// (`LocalImageGenerator.imageWithMask`), the frame's edges inside the source feathered over
+  /// Mask Blur, outpainted pixels (transparent in the input) taken whole. The top layer is the
+  /// result with that weight as its alpha, so where the weight is 0 the source below shows as it
+  /// is, its own pixels untouched; painted pixels are the result blended over the input as the run
+  /// took it, opaque, since the source below them is stored see-through (0xF9, alpha 0xF8). The
+  /// layer covers the crop rectangle grown to whole source pixels, at `density` (at a whole zoom,
+  /// frame pixels one for one), transparent around the frame. Its alpha goes into its mask's codes
+  /// (`CanvasMask.Stored`, so `& 0xF8`); the image the step shows (`Merged.image`) is the source with
+  /// the layer drawn over it at those alphas, at the source's size, as `Project.composite` reads it.
+  private static func denseFrame(
+    _ result: CGImage, into merge: RefineMerge, input: CGImage?, density: Int, maskBlur: Double, maskBlurOutset: Int
+  ) -> Merged? {
+    let placement = merge.placement
+    let source = merge.source
+    let sourceWidth = source.width, sourceHeight = source.height
+    let crop = placement.cropRect
+    let frameWidth = Int(placement.frameSize.width), frameHeight = Int(placement.frameSize.height)
+    let frameBounds = CGRect(x: 0, y: 0, width: frameWidth, height: frameHeight)
+    guard frameWidth > 0, frameHeight > 0,
+          let input = input ?? CanvasState.render(source, placement: placement),
+          let inputBytes = draw(input, width: frameWidth, height: frameHeight, in: frameBounds),
+          let drawnResult = draw(result, width: frameWidth, height: frameHeight, in: frameBounds)
+    else { return nil }
+
+    var weight = [Float](repeating: 1, count: frameWidth * frameHeight)
+    var painted = [Bool](repeating: false, count: frameWidth * frameHeight)
+    if let mask = merge.mask {
+      let coverage = mask.coverage(
+        width: frameWidth, height: frameHeight, scale: placement.zoom, origin: placement.imageRect.origin)
+      painted = coverage.map { $0 != 0 }
+      weight = coverage.map { $0 != 0 ? 1 : 0 }
+      weight = MaskFilter.outset(weight, width: frameWidth, height: frameHeight, by: maskBlurOutset)
+      weight = MaskFilter.blur(weight, width: frameWidth, height: frameHeight, sigma: maskBlur)
+    }
+    if maskBlur > 0 {
+      // The frame's edges inside the source fade out, so a mask crossing one leaves no seam.
+      let fade = Float(maskBlur)
+      let left = crop.minX > 0, right = crop.maxX < Double(sourceWidth)
+      let top = crop.minY > 0, bottom = crop.maxY < Double(sourceHeight)
+      for j in 0..<frameHeight {
+        let py = Float(j) + 0.5
+        for i in 0..<frameWidth {
+          let px = Float(i) + 0.5
+          var w: Float = 1
+          if left { w = min(w, px / fade) }
+          if right { w = min(w, (Float(frameWidth) - px) / fade) }
+          if top { w = min(w, py / fade) }
+          if bottom { w = min(w, (Float(frameHeight) - py) / fade) }
+          weight[j * frameWidth + i] *= min(max(w, 0), 1)
+        }
+      }
+    }
+    // The layer's straight (not premultiplied) color and its alpha, in frame pixels.
+    var color = [UInt8](repeating: 0, count: frameWidth * frameHeight * 4)
+    var alpha = [UInt8](repeating: 0, count: frameWidth * frameHeight)
+    for index in weight.indices {
+      let inputAlpha = inputBytes[index * 4 + 3]
+      var w = weight[index]
+      if inputAlpha < 128 { w = 1 }
+      let resultAlpha = Float(drawnResult[index * 4 + 3]) / 255
+      if painted[index], inputAlpha >= 128 {
+        // Premultiplied blend over the input, as `merge` does, kept opaque.
+        let keep = 1 - w * resultAlpha
+        var out = [Float](repeating: 0, count: 4)
+        for c in 0..<4 {
+          out[c] = Float(inputBytes[index * 4 + c]) * keep + Float(drawnResult[index * 4 + c]) * w
+        }
+        let a = max(out[3], 1)
+        for c in 0..<3 { color[index * 4 + c] = UInt8(clamping: Int((out[c] * 255 / a).rounded())) }
+        alpha[index] = 255
+      } else {
+        let a = Float(drawnResult[index * 4 + 3])
+        for c in 0..<3 {
+          color[index * 4 + c] = a > 0 ? UInt8(clamping: Int((Float(drawnResult[index * 4 + c]) * 255 / a).rounded())) : 0
+        }
+        alpha[index] = UInt8(clamping: Int((w * resultAlpha * 255).rounded()))
+      }
+      color[index * 4 + 3] = 255
+    }
+    guard let straight = makeImage(color, width: frameWidth, height: frameHeight),
+          let alphaImage = grayImage(alpha, width: frameWidth, height: frameHeight)
+    else { return nil }
+
+    // The layer: whole source pixels around the crop, `density` pixels per 120 of them.
+    let units = crop.integral.intersection(CGRect(x: 0, y: 0, width: sourceWidth, height: sourceHeight))
+    let scale = Double(density) / 120
+    let layerWidth = Int((units.width * scale).rounded()), layerHeight = Int((units.height * scale).rounded())
+    guard !units.isNull, layerWidth > 0, layerHeight > 0, layerWidth <= 16384, layerHeight <= 16384 else { return nil }
+    // Within a hundredth of a pixel is that pixel, so a whole zoom isn't resampled.
+    func snapped(_ value: Double) -> Double { abs(value - value.rounded()) < 0.01 ? value.rounded() : value }
+    let frameInLayer = CGRect(
+      x: snapped((crop.minX - units.minX) * scale), y: snapped((crop.minY - units.minY) * scale),
+      width: snapped(crop.width * scale), height: snapped(crop.height * scale))
+    guard let covered = composed([(straight, frameInLayer)], width: layerWidth, height: layerHeight),
+          let layerAlpha = grayDrawn(alphaImage, width: layerWidth, height: layerHeight, in: frameInLayer),
+          var frameBytes = draw(covered, width: layerWidth, height: layerHeight, in: CGRect(x: 0, y: 0, width: layerWidth, height: layerHeight))
+    else { return nil }
+    // Pixels the frame only partly covers (its edges, at a fractional zoom) come premultiplied by
+    // that coverage, which the alpha already carries: back to the straight color, opaque, so the
+    // stored tensor isn't darkened there and then faded again.
+    for index in 0..<(layerWidth * layerHeight) {
+      let coverage = Int(frameBytes[index * 4 + 3])
+      guard coverage < 255 else { continue }
+      for c in 0..<3 {
+        frameBytes[index * 4 + c] = coverage > 0
+          ? UInt8(min((Int(frameBytes[index * 4 + c]) * 255 + coverage / 2) / coverage, 255)) : 0
+      }
+      frameBytes[index * 4 + 3] = 255
+    }
+    guard let frame = makeImage(frameBytes, width: layerWidth, height: layerHeight) else { return nil }
+    // What the layer shows once stored: its color at its mask codes' alpha (`Project.masked`).
+    var shown = [UInt8](repeating: 0, count: layerWidth * layerHeight * 4)
+    for index in 0..<(layerWidth * layerHeight) {
+      let a = Int(CanvasMask.Stored.alpha(CanvasMask.Stored.code(alpha: layerAlpha[index])))
+      for c in 0..<3 { shown[index * 4 + c] = UInt8((Int(frameBytes[index * 4 + c]) * a) / 255) }
+      shown[index * 4 + 3] = UInt8(a)
+    }
+    guard let shownImage = makeImage(shown, width: layerWidth, height: layerHeight),
+          let image = composed([
+            (source, CGRect(x: 0, y: 0, width: sourceWidth, height: sourceHeight)), (shownImage, units),
+          ], width: sourceWidth, height: sourceHeight)
+    else { return nil }
+
+    let record = RefineRecord(
+      rect: [crop.minX, crop.minY, crop.width, crop.height], scale: merge.scale,
+      offset: [merge.offset.width, merge.offset.height], mask: merge.mask)
+    var step = RefinedStep(record: record, composite: image)
+    step.layers = RefinedStep.Layers(
+      source: source, sourceTensorId: merge.sourceTensorId,
+      paint: merge.mask.map {
+        paintCovered(
+          paintUnder($0, width: sourceWidth, height: sourceHeight, frame: units), width: sourceWidth, units: units,
+          scale: scale, layerAlpha: layerAlpha, layerWidth: layerWidth, layerHeight: layerHeight)
+      },
+      frame: frame, frameX: Int32(units.minX), frameY: Int32(units.minY), frameScaleFactorBy120: Int32(density),
+      frameAlpha: layerAlpha)
+    return Merged(image: image, sourceOrigin: .zero, step: step)
+  }
+
+  /// `paint` (source pixels) kept only where the dense layer over it is wholly opaque: every
+  /// layer pixel over the source pixel and its neighbours stored at alpha 255. The source keeps a painted pixel as
+  /// 0xF9, which Draw Things and `Project.composite` show at alpha 0xF8, so anywhere the layer is
+  /// see-through (around the frame, a stroke's edge) paint would leave the image faintly
+  /// see-through; there the source keeps its opaque code instead. The trade-off: the outermost
+  /// ring of painted source pixels along the mask's edges, and one pixel inside the frame's edge,
+  /// lose 0xF9, so Draw Things' paint overlay and its next inpainting mask from this step are
+  /// about one source pixel smaller. Atelier's own kept mask (`storedMask`) is unaffected. It's
+  /// what keeps the resample at 120 from leaking alpha.
+  private static func paintCovered(
+    _ paint: [UInt8], width: Int, units: CGRect, scale: Double, layerAlpha: [UInt8], layerWidth: Int, layerHeight: Int
+  ) -> [UInt8] {
+    var paint = paint
+    for index in paint.indices where paint[index] != 0 {
+      let x = index % width, y = index / width
+      // With the source pixels on either side: drawn at the source's size the layer is resampled,
+      // and its neighbours' alpha reaches into this pixel.
+      let x0 = Int(((Double(x - 1) - units.minX) * scale).rounded(.down)), x1 = Int(((Double(x + 2) - units.minX) * scale).rounded(.up))
+      let y0 = Int(((Double(y - 1) - units.minY) * scale).rounded(.down)), y1 = Int(((Double(y + 2) - units.minY) * scale).rounded(.up))
+      var opaque = x0 >= 0 && y0 >= 0 && x1 <= layerWidth && y1 <= layerHeight && x0 < x1 && y0 < y1
+      if opaque {
+        check: for ly in y0..<y1 {
+          for lx in x0..<x1 where CanvasMask.Stored.alpha(CanvasMask.Stored.code(alpha: layerAlpha[ly * layerWidth + lx])) != 255 {
+            opaque = false
+            break check
+          }
+        }
+      }
+      if !opaque { paint[index] = 0 }
+    }
+    return paint
+  }
+
+  /// One byte per pixel as a gray image, top row first.
+  private static func grayImage(_ bytes: [UInt8], width: Int, height: Int) -> CGImage? {
+    guard let provider = CGDataProvider(data: Data(bytes) as CFData) else { return nil }
+    return CGImage(
+      width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 8, bytesPerRow: width,
+      space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
+      provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
+  }
+
+  /// A gray image drawn in `rect` (y down) on a black canvas, as bytes top row first.
+  private static func grayDrawn(_ image: CGImage, width: Int, height: Int, in rect: CGRect) -> [UInt8]? {
+    var bytes = [UInt8](repeating: 0, count: width * height)
+    let drawn = bytes.withUnsafeMutableBytes { raw -> Bool in
+      guard let context = CGContext(
+        data: raw.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width,
+        space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)
+      else { return false }
+      context.interpolationQuality = .high
+      context.draw(image, in: CGRect(x: rect.minX, y: Double(height) - rect.maxY, width: rect.width, height: rect.height))
+      return true
+    }
+    return drawn ? bytes : nil
+  }
+
+  /// Images drawn in order, each in its rectangle (y down), on a transparent canvas.
+  private static func composed(_ images: [(CGImage, CGRect)], width: Int, height: Int) -> CGImage? {
+    guard let context = CGContext(
+      data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+      space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    else { return nil }
+    context.interpolationQuality = .high
+    for (image, rect) in images {
+      context.draw(image, in: CGRect(x: rect.minX, y: Double(height) - rect.maxY, width: rect.width, height: rect.height))
+    }
+    return context.makeImage()
   }
 
   /// RGBA premultiplied sRGB bytes, `width` × `height` from the top-left row, with `image` drawn
