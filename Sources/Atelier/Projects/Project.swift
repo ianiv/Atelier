@@ -1171,8 +1171,17 @@ final nonisolated class Project: Sendable {
   /// with the greatest lineage not above) or by the recorded tensor, preferring the rule's step
   /// when its layers hold that tensor (`ProjectTree.init`); positions change as each delete
   /// renumbers later steps, so a recorded tensor must name the same step wherever things sit:
-  /// - Each frame's image is that one step's image and in no other step's layers, so a tensor
-  ///   recorded for a frame names it, by layers or by image, wherever its child sits.
+  /// - Each frame's image is that one step's image and no other frame's layer, so a tensor
+  ///   recorded for a frame names it by image. Other steps may hold it as a layer (a refine of
+  ///   the frame keeps it as its source): a step recording it then finds such a holder instead
+  ///   when the holder is the rule's step, which takes the step being numbered one past it, on its
+  ///   lineage or above. The steps that record it before the frame's delete hands them on are its
+  ///   children and those of the frames after it (each delete hands them down a frame) and any
+  ///   step recording it already; for each, at every renumbering up to the frame's delete
+  ///   (`shift(afterDeleting:on:)`'s counts, one delete at a time), none may sit one past a
+  ///   holder on a lineage at or below its own. Then each finds the frame, as the run does, and
+  ///   its delete hands it the frame's ancestor; after it, nothing records the image, which stays
+  ///   in the store while a holder's layer uses it.
   /// - A frame's other layers (a refined canvas's source) hold tensors that are no frame's, and
   ///   that only that frame holds, or only it and its parent, whose image it is (a source reused
   ///   from the step refined). A step recording such a tensor finds the parent or, when the frame
@@ -1182,8 +1191,10 @@ final nonisolated class Project: Sendable {
   ///   step on the run's lineage or above, numbered one past a frame; steps only move down, never
   ///   off their lineage, so that takes a lineage at or above the run's and a number past its
   ///   start. Others (older history, lower branches) never have a frame as the rule's step.
-  /// Anything else (a frame's image shared, a frame holding another frame's image or another
-  /// step's image beyond its parent's, a step recording a lost image) falls back frame by frame.
+  /// Anything else (a frame's image another step's image or another frame's layer, a step
+  /// recording it that could sit right after a holder, a frame holding another frame's image or
+  /// another step's image beyond its parent's, a step recording a lost image) falls back frame by
+  /// frame.
   /// Steps recording nothing get their rule parent recorded first, as the first delete does.
   private static func parentsHold(deleting run: [StepID], images: [Int64], _ tree: ProjectTree, _ rows: Rows) -> Bool {
     let deleted = Set(run)
@@ -1195,8 +1206,12 @@ final nonisolated class Project: Sendable {
       holders[layer.tensorId, default: []].insert(id)
       if deleted.contains(id) { held[id, default: []].insert(layer.tensorId) }
     }
-    for (id, image) in zip(run, images) {
-      guard tree.steps(tensorId: image) == [id], (holders[image] ?? [id]) == [id] else { return false }
+    var sharedImages: [(index: Int, image: Int64, holders: Set<StepID>)] = []
+    for (index, (id, image)) in zip(run, images).enumerated() {
+      guard tree.steps(tensorId: image) == [id] else { return false }
+      let outside = (holders[image] ?? []).subtracting([id])
+      guard outside.isDisjoint(with: deleted) else { return false }
+      if !outside.isEmpty { sharedImages.append((index, image, outside)) }
       for tensorId in held[id] ?? [] where tensorId != image {
         guard !frameTensors.contains(tensorId) else { return false }
         let others = (holders[tensorId] ?? []).subtracting([id])
@@ -1206,7 +1221,42 @@ final nonisolated class Project: Sendable {
         else { return false }
       }
     }
-    guard let start = run.first else { return false }
+    guard let start = run.first, let end = run.last else { return false }
+    if !sharedImages.isEmpty {
+      // Where each step sits once the frames from `index` on are gone, as the deletes renumber.
+      var greatest: [Int64: Int64] = [:]
+      var lineagesAt: [Int64: Set<Int64>] = [:]
+      for node in rows.nodes where (start.logicalTime...end.logicalTime).contains(node.logicalTime) {
+        greatest[node.logicalTime] = max(greatest[node.logicalTime] ?? node.lineage, node.lineage)
+        lineagesAt[node.logicalTime, default: []].insert(node.lineage)
+      }
+      func time(_ id: StepID, deletingFrom index: Int) -> Int64 {
+        let from = start.logicalTime + Int64(index)
+        guard id.lineage >= start.lineage, id.logicalTime > from, from <= end.logicalTime else { return id.logicalTime }
+        var count: Int64 = 0
+        for time in from...min(id.logicalTime - 1, end.logicalTime) {
+          let maxAtTime = greatest[time] ?? start.lineage
+          guard id.lineage < (maxAtTime > start.lineage ? maxAtTime : .max) else { continue }
+          if id.lineage == start.lineage || lineagesAt[time]?.contains(id.lineage) != true { count += 1 }
+        }
+        return id.logicalTime - count
+      }
+      for shared in sharedImages {
+        let handedDown = Set(run[shared.index...])
+        let recorders = tree.steps.values.filter { step in
+          !deleted.contains(step.id)
+            && (step.recordedParent == shared.image || step.parent.map(handedDown.contains) == true)
+        }
+        for recorder in recorders {
+          for holder in shared.holders where holder != recorder.id && recorder.id.lineage >= holder.lineage {
+            let adjacent = ((shared.index + 1)...run.count).contains {
+              time(recorder.id, deletingFrom: $0) == time(holder, deletingFrom: $0) + 1
+            }
+            if adjacent { return false }
+          }
+        }
+      }
+    }
     return !tree.steps.values.contains { step in
       guard !deleted.contains(step.id), step.id.lineage >= start.lineage, step.id.logicalTime > start.logicalTime,
             let recorded = step.recordedParent, recorded != 0
