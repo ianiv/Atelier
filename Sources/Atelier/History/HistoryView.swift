@@ -34,6 +34,8 @@ struct HistoryView: View {
   @State private var frames: [Int64: CGRect] = [:]
   @State private var marquee: CGRect?
   @State private var quickLookURL: URL?
+  /// The image open full size (Space or ⌘Y), by tensor id.
+  @State private var viewingImage: Int64?
   @State private var upscaling: HistoryItem?
   /// Export Video… is choosing how.
   @State private var exportingVideo: HistoryItem?
@@ -163,6 +165,16 @@ struct HistoryView: View {
         .inspectorColumnWidth(min: 300, ideal: 340, max: 900)
       }
       .sheet(item: $upscaling) { UpscaleSheet(item: $0) }
+      // Presented while there's an image to show, not per image, so the arrow keys in it change
+      // the image without closing and reopening it.
+      .sheet(isPresented: Binding(get: { viewingImage != nil }, set: { if !$0 { viewingImage = nil } })) {
+        HistoryImageViewer(tensorId: viewingImage) { key in
+          moveSelection(by: offset(for: key), extending: false)
+          if let item = fullSizeItem { viewingImage = item.tensorId }
+          return .handled
+        }
+      }
+      .focusedSceneValue(\.showHistoryImageFullSize, fullSizeItem.map { item in { viewingImage = item.tensorId } })
       .sheet(item: $exportingVideo) { item in
         VideoExportSheet(
           width: item.sidecar.width, height: item.sidecar.height,
@@ -252,16 +264,13 @@ struct HistoryView: View {
         .focusEffectDisabled()
         .focused($gridFocused)
         .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow]) { press in
-          let rows = layout == .graph ? 1 : columns
-          let offset = switch press.key {
-          case .leftArrow: -1
-          case .rightArrow: 1
-          case .upArrow: -rows
-          default: rows
-          }
-          moveSelection(by: offset, extending: press.modifiers.contains(.shift))
+          moveSelection(by: offset(for: press.key), extending: press.modifiers.contains(.shift))
           if let anchor { withAnimation { scroller.scrollTo(anchor) } }
           return .handled
+        }
+        // The arrow keys in the full-size viewer move the selection; the grid follows.
+        .onChange(of: viewingImage) { _, shown in
+          if let shown { withAnimation { scroller.scrollTo(shown) } }
         }
         .onKeyPress(keys: ["a"]) { press in
           guard press.modifiers == .command else { return .ignored }
@@ -269,7 +278,7 @@ struct HistoryView: View {
           return .handled
         }
         .onKeyPress(.space) {
-          toggleQuickLook()
+          showFullSize()
           return .handled
         }
         // 1 to 5 rate the selection, 0 clears its rating, as in Photos and Lightroom.
@@ -666,18 +675,42 @@ struct HistoryView: View {
     } else {
       pick(next)
     }
-    // Quick Look follows the selection while it's open.
-    if quickLookURL != nil { quickLookURL = nil; toggleQuickLook() }
+    // Quick Look follows the selection while it's open, for videos.
+    if quickLookURL != nil {
+      quickLookURL = nil
+      if let item = fullSizeItem, item.isVideo { quickLook(item) }
+    }
   }
 
-  /// Space: the anchor image full size in Quick Look, or closes it.
-  private func toggleQuickLook() {
+  /// How far an arrow key moves the selection: a row in the grid, one step in the graph.
+  private func offset(for key: KeyEquivalent) -> Int {
+    let rows = layout == .graph ? 1 : columns
+    return switch key {
+    case .leftArrow: -1
+    case .rightArrow: 1
+    case .upArrow: -rows
+    default: rows
+    }
+  }
+
+  /// The selected item Space and ⌘Y open: the anchor.
+  private var fullSizeItem: HistoryItem? {
+    history.items.first { $0.tensorId == anchor && selection.contains($0.tensorId) }
+  }
+
+  /// Space: an image opens in the full-size viewer Create uses for ⌘Y, which Space closes again; a
+  /// video, which that viewer can't play, in Quick Look.
+  private func showFullSize() {
     if quickLookURL != nil {
       quickLookURL = nil
       return
     }
-    guard let item = history.items.first(where: { $0.tensorId == anchor && selection.contains($0.tensorId) })
-    else { return }
+    guard let item = fullSizeItem else { return }
+    if item.isVideo { quickLook(item) } else { viewingImage = item.tensorId }
+  }
+
+  /// A video in Quick Look.
+  private func quickLook(_ item: HistoryItem) {
     Task {
       // A folder of its own: the file keeps its name, and removing it can't hit a later preview.
       let file = TemporaryFiles.newFolder(in: .quickLook).appendingPathComponent(history.fileName(for: item))
@@ -1083,6 +1116,41 @@ struct ClipThumbnail: View {
   }
 
   @State private var width: Double = 1
+}
+
+/// A History image full size in `ImageViewer`, the viewer Create's Show Image Full Size (⌘Y) uses:
+/// at full detail when its step has layers finer than the image (`HistoryStore.fullDetailImage`),
+/// else the image. A video shows its first frame. The arrow keys go to `arrow`.
+private struct HistoryImageViewer: View {
+  let tensorId: Int64?
+  let arrow: (KeyEquivalent) -> KeyPress.Result
+  @Environment(HistoryStore.self) private var history
+  @State private var image: CGImage?
+  @State private var shown: Int64?
+
+  var body: some View {
+    // A full-resolution image can take seconds to decode: a spinner shows until it's the one asked for.
+    ImageViewer(
+      image: image, imageID: shown, loaded: tensorId == nil || shown == tensorId, accessibilityLabel: "Image, full size",
+      emptyTitle: "No Image", arrow: arrow
+    )
+    // Kept from the last image while the next loads or the sheet closes, so it doesn't empty.
+    .task(id: tensorId) {
+      guard let tensorId else { return }
+      guard let item = history.item(tensorId: tensorId) else {
+        (image, shown) = (nil, tensorId)
+        return
+      }
+      let full: CGImage? = if let detailed = await history.fullDetailImage(tensorId: tensorId) {
+        detailed
+      } else {
+        await history.image(for: item)
+      }
+      guard !Task.isCancelled else { return }
+      image = full
+      shown = tensorId
+    }
+  }
 }
 
 /// A step's JPEG preview from the project, loaded off the main thread.

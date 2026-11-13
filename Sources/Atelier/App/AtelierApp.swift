@@ -6,6 +6,7 @@ struct AtelierApp: App {
     @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var appDelegate
   #endif
   @FocusedValue(\.windowUndoManager) private var undoManager
+  @FocusedValue(\.showHistoryImageFullSize) private var showHistoryImageFullSize
   @State private var history: HistoryStore
   @State private var create: CreateModel
   @State private var navigation: Navigation
@@ -152,9 +153,14 @@ struct AtelierApp: App {
           create.loadCanvasImageSettings(undoManager: undoManager)
         }
         .disabled(create.canvasImageSettings == nil)
-        Button("Show Image Full Size") { create.viewingCanvasImage = true }
-          .keyboardShortcut("y", modifiers: .command)
-          .disabled(navigation.section != .create || create.image == nil || create.canvasClip != nil)
+        Button("Show Image Full Size") {
+          if navigation.section == .history { showHistoryImageFullSize?() } else { create.viewingCanvasImage = true }
+        }
+        .keyboardShortcut("y", modifiers: .command)
+        .disabled(
+          navigation.section == .history
+            ? showHistoryImageFullSize == nil
+            : navigation.section != .create || create.image == nil || create.canvasClip != nil)
         Button("Clear Canvas") { create.clearCanvas() }
           .disabled(navigation.section != .create)
         Divider()

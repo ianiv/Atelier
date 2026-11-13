@@ -1303,11 +1303,12 @@ struct ThumbnailViewer: View {
 /// the buttons or ⌘+ / ⌘- (⌘0 actual size, ⌘9 fit), and panned by dragging. A double click switches
 /// between fit and actual size there. Space, Escape or Done closes it. A new `imageID` fits the
 /// image again; a new `image` with the same id keeps the zoom. For a style's thumbnail
-/// (`ThumbnailViewer`) and the canvas image (`CanvasView`).
+/// (`ThumbnailViewer`), the canvas image (`CanvasImageViewer`) and History's images (`HistoryImageViewer`).
 struct ImageViewer: View {
   let image: CGImage?
   let imageID: AnyHashable
   /// Whether loading is over: with no `image`, says `emptyTitle` rather than showing a spinner.
+  /// While it isn't, a spinner shows over the image already there (the one before).
   var loaded = true
   let accessibilityLabel: String
   let emptyTitle: String
@@ -1403,6 +1404,13 @@ struct ImageViewer: View {
         }
       }
       .frame(width: geometry.size.width, height: geometry.size.height)
+      .overlay {
+        if image != nil, !loaded {
+          ProgressView()
+            .padding(12)
+            .background(.regularMaterial, in: .rect(cornerRadius: 10))
+        }
+      }
       .clipped()
       .contentShape(.rect)
       .gesture(panGesture)
