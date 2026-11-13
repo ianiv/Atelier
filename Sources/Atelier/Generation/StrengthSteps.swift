@@ -2,6 +2,7 @@
 @preconcurrency import Diffusion
 import Foundation
 import ModelZoo
+import Synchronization
 
 /// Where an Edit run at Strength below 1 starts in its schedule, so the inspector can say how much
 /// of it actually runs. Strength is a noise level, not a share of the steps: the sampler starts at
@@ -37,12 +38,8 @@ nonisolated enum StrengthSteps {
     switch version {
     case .wurstchenStageB, .wurstchenStageC: return nil
     case .minimaxH3, .minimaxH3Image:
-      // HyperFlow's two-time checkpoints and H3 Image's output heads run Euler on their own sigma
-      // grids whatever the sampler (`LocalImageGenerator.sampler(from:)`); other H3 files don't.
-      let path = ModelZoo.filePathForModelDownloaded(model)
-      guard FileManager.default.fileExists(atPath: path) else { return nil }
-      let layout = MiniMaxH3Layout.load(filePath: path)
-      if version == .minimaxH3 ? layout.isTwoTime : !layout.sigmaGrids.isEmpty { return nil }
+      // Only once `checkFixedGrid` has read the file: the inspector asks on the main actor.
+      guard knownFixedGrid(model) == false else { return nil }
     default: break
     }
     let parameterization: Denoiser.Parameterization
@@ -63,6 +60,30 @@ nonisolated enum StrengthSteps {
     return start(
       parameterization: parameterization, objective: ModelZoo.objectiveForModel(model), version: version,
       sampler: sampler, sampling: Sampling(steps: steps, shift: runShift), strength: strength)
+  }
+
+  /// Whether each MiniMax H3 file checked so far runs its own fixed sigma grid.
+  private static let fixedGrids = Mutex<[String: Bool]>([:])
+
+  /// What `checkFixedGrid` found for `model`; nil until it has run.
+  static func knownFixedGrid(_ model: String) -> Bool? {
+    fixedGrids.withLock { $0[model] }
+  }
+
+  /// Whether a MiniMax H3 file runs Euler on its own sigma grid whatever the sampler, as
+  /// `LocalImageGenerator.sampler(from:)` decides: HyperFlow's two-time checkpoints and H3 Image
+  /// files with output-head grids (`MiniMaxH3Layout.load`). Reads the file once, off the main
+  /// actor, and remembers it; a file that isn't there counts as fixed (nothing to count).
+  @concurrent static func checkFixedGrid(_ model: String) async -> Bool {
+    if let known = knownFixedGrid(model) { return known }
+    let path = ModelZoo.filePathForModelDownloaded(model)
+    var fixed = true
+    if FileManager.default.fileExists(atPath: path) {
+      let layout = MiniMaxH3Layout.load(filePath: path)
+      fixed = ModelZoo.versionForModel(model) == .minimaxH3 ? layout.isTwoTime : !layout.sigmaGrids.isEmpty
+    }
+    fixedGrids.withLock { $0[model] = fixed }
+    return fixed
   }
 
   /// The start for a parameterization and sampler: the discretization each sampler type is built
@@ -163,6 +184,19 @@ extension CreateModel {
     guard let settings, let file = selectedModel,
           let sampler = DataModels.SamplerType(rawValue: settings.sampler.rawValue)
     else { return nil }
+    // An H3 file's schedule is read from it once, in the background; the hint shows once it's in.
+    let version = ModelZoo.versionForModel(file)
+    if version == .minimaxH3 || version == .minimaxH3Image, StrengthSteps.knownFixedGrid(file) == nil {
+      _ = fixedGridChecks
+      if !fixedGridsChecking.contains(file) {
+        fixedGridsChecking.insert(file)
+        Task {
+          _ = await StrengthSteps.checkFixedGrid(file)
+          fixedGridChecks += 1
+        }
+      }
+      return nil
+    }
     let steps = Int(settings.steps)
     let tile = settings.tiledDiffusion ? (width: settings.diffusionTileWidth, height: settings.diffusionTileHeight) : nil
     guard let start = StrengthSteps.start(

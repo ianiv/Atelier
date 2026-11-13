@@ -420,6 +420,10 @@ final class CreateModel {
   /// zoomed in, and the next Edit run's frame takes them (`setRefineInputs`). Only with the
   /// image they were loaded for (`loadCanvasDetail`); any other image clears them.
   private(set) var canvasDetail: [Project.DetailLayer] = []
+  /// Bumped when an H3 file's schedule has been read (`StrengthSteps.checkFixedGrid`), so
+  /// Strength's hint shows; the files being read meanwhile.
+  var fixedGridChecks = 0
+  @ObservationIgnored var fixedGridsChecking: Set<String> = []
   @ObservationIgnored private var canvasDetailImage: CGImage?
   /// The detail to draw over what the canvas shows: none over a placeholder or preview.
   var canvasDisplayDetail: [Project.DetailLayer] {
