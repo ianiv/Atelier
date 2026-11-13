@@ -462,6 +462,47 @@ struct CanvasRefineTests {
     #expect(Self.rgba(full) == Self.rgba(upscaled))
   }
 
+  /// A zoomed refine's frame is stored at its own density, as Draw Things keeps an upscaled layer:
+  /// width and height its pixels, scale_factor_by_120 above 120, the step's own scale the same.
+  /// Read at 120 it's the source's size; at full detail it's twice that, the frame pixel for pixel.
+  @Test func aDenseLayerRoundTrips() async throws {
+    let folder = FileManager.default.temporaryDirectory.appending(path: "CanvasRefineTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let project = Project(url: folder.appending(path: "Dense.sqlite3"))
+    let source = try Self.pattern(width: 128, height: 128)
+    let first = try await project.append(
+      tensor: try #require(ImageTensor.tensor(from: source)), model: "m", prompt: "", negativePrompt: "", seed: 1,
+      settings: [:], createdAt: Date(), duration: 0, reason: .imported, generated: false)
+    let frame = try Self.solid(width: 128, height: 128, red: 255, green: 0, blue: 0)
+    var step = RefinedStep(record: RefineRecord(rect: [32, 32, 64, 64], scale: 2, offset: [0, 0]), composite: source)
+    step.layers = RefinedStep.Layers(
+      source: source, sourceTensorId: first.tensorId, paint: nil, frame: frame, frameX: 32, frameY: 32,
+      frameScaleFactorBy120: 240)
+    let item = try await project.append(
+      tensor: try #require(ImageTensor.tensor(from: frame)), model: "m", prompt: "", negativePrompt: "", seed: 1,
+      settings: [:], createdAt: Date(), duration: 0, inputTensorId: first.tensorId, after: first.tensorId, refined: step)
+    let rows = await project.read { $0.layerSummary(tensorId: item.tensorId) }
+    #expect(rows.count == 2)
+    #expect(rows.first?.tensorId == first.tensorId && rows.first?.scale == 120)
+    #expect(rows.last?.x == 32 && rows.last?.y == 32 && rows.last?.width == 128 && rows.last?.height == 128 && rows.last?.scale == 240)
+    #expect(await project.read { $0.stepScale(tensorId: item.tensorId) } == 240)
+    let base = try #require(await project.read { $0.image(for: item) })
+    #expect(base.width == 128 && base.height == 128)
+    let baseBytes = Self.rgba(base)
+    #expect(Self.pixel(baseBytes, width: 128, 64, 64) == [255, 0, 0, 255])
+    #expect(Self.pixel(baseBytes, width: 128, 10, 10) == Self.pixel(Self.rgba(source), width: 128, 10, 10))
+    let full = try #require(await project.read { $0.image(tensorId: item.tensorId, density: Project.finestDensity) })
+    #expect(full.width == 256 && full.height == 256)
+    #expect(Self.pixel(Self.rgba(full), width: 256, 64, 64) == [255, 0, 0, 255])
+    #expect(Self.pixel(Self.rgba(full), width: 256, 191, 191) == [255, 0, 0, 255])
+    let detail = await project.read { $0.detailLayers(tensorId: item.tensorId) }
+    #expect(detail.map(\.rect) == [CGRect(x: 32, y: 32, width: 64, height: 64)])
+    #expect(await project.read { $0.hasDetail(tensorId: item.tensorId) })
+    #expect(await project.read { !$0.hasDetail(tensorId: first.tensorId) })
+    await project.close()
+  }
+
   /// A full-detail canvas past 16384 pixels a side goes coarser, never below the image's own.
   @Test func aHugeFullDetailCanvasGoesCoarser() throws {
     // 25 pixels at s = 1 cover 3000 units; the 960 layer asks for 8 pixels per unit.

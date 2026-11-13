@@ -417,14 +417,31 @@ final nonisolated class Project: Sendable {
     return nil
   }
 
-  /// The layers of the step whose image is `tensorId`, bottom to top, for checks.
-  func layerSummary(tensorId: Int64) -> [(tensorId: Int64, maskId: Int64, x: Int32, y: Int32)] {
+  /// The layers of the step whose image is `tensorId`, bottom to top, for checks: ids, place in
+  /// units, size in the tensor's pixels and density (`scale_factor_by_120`).
+  func layerSummary(tensorId: Int64) -> [(
+    tensorId: Int64, maskId: Int64, x: Int32, y: Int32, width: Int32, height: Int32, scale: Int32
+  )] {
     for row in workspace.fetch(for: Layer.self).where(Layer.tensorId == tensorId) {
       let layers = workspace.fetch(for: Layer.self).where(
         Layer.lineage == row.lineage && Layer.logicalTime == row.logicalTime, orderBy: [Layer.index.ascending])
-      if layers.last?.tensorId == tensorId { return layers.map { ($0.tensorId, $0.maskId, $0.x, $0.y) } }
+      if layers.last?.tensorId == tensorId {
+        return layers.map { ($0.tensorId, $0.maskId, $0.x, $0.y, $0.width, $0.height, $0.scaleFactorBy120) }
+      }
     }
     return []
+  }
+
+  /// The step's own `scale_factor_by_120` (the top layer's density), for checks.
+  func stepScale(tensorId: Int64) -> Int32? {
+    for row in workspace.fetch(for: Layer.self).where(Layer.tensorId == tensorId) {
+      if let node = workspace.fetch(for: TensorHistoryNode.self).where(
+        TensorHistoryNode.lineage == row.lineage && TensorHistoryNode.logicalTime == row.logicalTime
+      ).first {
+        return node.scaleFactorBy120
+      }
+    }
+    return nil
   }
 
   /// A layer's mask (`binary_mask_<id>`, `[height, width]` codes).
@@ -781,7 +798,8 @@ final nonisolated class Project: Sendable {
             refine: index == 0 ? refined?.record : nil,
             colorMatch: index == 0 ? colorMatch : nil,
             layerCount: index == 0 ? layered.map { Int32($0.rows.count) } : nil,
-            contentOffset: index == 0 ? layered.map { ($0.rows.last!.x, $0.rows.last!.y) } : nil)
+            contentOffset: index == 0 ? layered.map { ($0.rows.last!.x, $0.rows.last!.y) } : nil,
+            canvasScale: index == 0 ? layered.map { $0.rows.last!.scaleFactorBy120 } : nil)
           let node = ProjectMapping.node(for: step, settings: settings)
           if index == 0 { appended = node }
           transaction.try(submit: TensorHistoryNodeChangeRequest.upsertRequest(node))
@@ -791,7 +809,7 @@ final nonisolated class Project: Sendable {
                 submit: ProjectFormat.TensorDataChangeRequest.upsertRequest(
                   Layer(
                     lineage: id.lineage, logicalTime: id.logicalTime, index: Int64(layerIndex), x: row.x, y: row.y,
-                    width: row.width, height: row.height, scaleFactorBy120: 120, tensorId: row.tensorId,
+                    width: row.width, height: row.height, scaleFactorBy120: row.scaleFactorBy120, tensorId: row.tensorId,
                     maskId: row.maskId)))
             }
           } else {
@@ -844,7 +862,8 @@ final nonisolated class Project: Sendable {
           audioId: audioId, inputAudioId: inputAudioId, previewOffset: moodboardPreview) : nil)
   }
 
-  /// One layer row of a layered step, in source pixels at 120 (1 pixel per canvas unit).
+  /// One layer row of a layered step (`TensorData`): x and y in canvas units (the source's
+  /// pixels), width and height in the tensor's pixels, `scaleFactorBy120` its pixels per unit ×120.
   struct LayerRow {
     var tensorId: Int64
     var maskId: Int64
@@ -852,6 +871,7 @@ final nonisolated class Project: Sendable {
     var y: Int32
     var width: Int32
     var height: Int32
+    var scaleFactorBy120: Int32 = 120
   }
 
   /// The layers of a merged refine (`RefinedStep.Layers`) and the tensors they need written: the
@@ -903,7 +923,8 @@ final nonisolated class Project: Sendable {
         LayerRow(tensorId: sourceTensorId, maskId: sourceMaskId, x: 0, y: 0, width: Int32(width), height: Int32(height)),
         LayerRow(
           tensorId: frameTensorId, maskId: frameMaskId, x: layers.frameX, y: layers.frameY,
-          width: Int32(layers.frame.width), height: Int32(layers.frame.height)),
+          width: Int32(layers.frame.width), height: Int32(layers.frame.height),
+          scaleFactorBy120: layers.frameScaleFactorBy120),
       ],
       images, masks
     )

@@ -164,6 +164,9 @@ nonisolated struct RefinedStep: @unchecked Sendable {
     var frame: CGImage
     var frameX: Int32
     var frameY: Int32
+    /// The frame's pixels per source pixel ×120 (`scale_factor_by_120`): above 120 for a zoomed
+    /// refine, which keeps the detail the run added (`CanvasMerge.denseFrame`).
+    var frameScaleFactorBy120: Int32 = 120
   }
 }
 
