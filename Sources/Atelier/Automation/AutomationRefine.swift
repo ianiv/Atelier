@@ -8,7 +8,8 @@ extension Automation {
   ///       doesn't reach are the input's exactly; the step keeps its mask and region;
   ///   (b) zoomed 2× on the top-left quadrant, no mask: the image's size, only that quadrant
   ///       (and its feathered edge) changes; the frame is kept as a layer at 240 (twice its units),
-  ///       so the full-detail image is twice the size;
+  ///       so the full-detail image is twice the size; (b2) the same with a mask inside the quadrant:
+  ///       pixels away from the mask are the input's exactly;
   ///   (c) the frame past the image's right edge: the result grows to hold both;
   ///   (d) Use Settings on (b) and (a) brings back the input, the zoom and the mask;
   ///   (e) a queued masked, merging job survives saving and loading the queue;
@@ -178,6 +179,28 @@ extension Automation {
       check(
         fullB.map { $0.width == 2 * size && $0.height == 2 * size } == true,
         "(b) at full detail it's twice the image's size (\(fullB.map { "\($0.width)×\($0.height)" } ?? "none"))")
+
+      // (b2) Zoomed 2× on the quadrant with a mask inside it: the kept layer is see-through
+      // where the mask doesn't reach, so the image there is exactly the input, at its own size.
+      model.placeOnCanvas(source)
+      _ = model.showRegion(CGRect(x: 0, y: 0, width: half, height: half))
+      let maskB2 = CGRect(x: half / 4, y: half / 4, width: half / 4, height: half / 4)
+      _ = model.addMaskStrokes([.rect(maskB2)], actionName: Self.agentMaskName, undoManager: nil)
+      if let b2 = await run(), let imageB2 = await model.history.image(for: b2) {
+        // Mask Blur 4 frame pixels is about 12 at 3 sigma, 6 image pixels at 2×; with a margin.
+        let reach = maskB2.insetBy(dx: -12, dy: -12)
+        let outsideB2 = difference(imageB2, source) { !reach.contains($0) }
+        let insideB2 = difference(imageB2, source) { maskB2.insetBy(dx: 4, dy: 4).contains($0) }
+        let layersB2 = await model.history.project.read { $0.layerSummary(tensorId: b2.tensorId) }
+        check(
+          imageB2.width == size && layersB2.last?.scale == 240 && (layersB2.last?.maskId ?? 0) > 0,
+          "(b2) the masked zoomed run is kept at 240 with a mask on its layer (\(layersB2.map { "\($0.scale)/\($0.maskId)" }))")
+        check(outsideB2?.maxDelta == 0, "(b2) pixels away from the mask are the input's exactly (max delta \(outsideB2?.maxDelta ?? -1))")
+        check((insideB2?.meanDelta ?? 0) > 1, "(b2) the masked area changed")
+      } else {
+        check(false, "(b2) the masked zoomed run saved nothing")
+      }
+      model.clearMask(undoManager: nil)
 
       // (c) The frame past the right edge and above the top, at 1×: the image grows right and up,
       // leaving two corners neither covers.
