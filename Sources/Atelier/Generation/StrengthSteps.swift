@@ -26,8 +26,8 @@ nonisolated enum StrengthSteps {
   /// (`ModelZoo.shiftFor` at the run's size, tiled diffusion's tile when smaller, when
   /// Resolution-Dependent Shift is on and the model takes it; else the Shift setting), and the
   /// sampler's discretization (`LocalImageGenerator.sampler(from:)`). Nil where the steps run
-  /// aren't the user's to count: a model `ModelZoo` doesn't know (a server's), MiniMax H3's fixed
-  /// sigma grids, Würstchen, and samplers on manual timesteps or sigmas.
+  /// aren't the user's to count: a model `ModelZoo` doesn't know (a server's), the fixed sigma
+  /// grids of HyperFlow H3 Flash and MiniMax H3 Image, Würstchen, and samplers on manual timesteps or sigmas.
   static func start(
     model: String, sampler: DataModels.SamplerType, steps: Int, strength: Float, shift: Double,
     resolutionDependentShift: Bool, width: Int, height: Int, tile: (width: Int, height: Int)? = nil
@@ -35,7 +35,14 @@ nonisolated enum StrengthSteps {
     guard steps > 0, ModelZoo.specificationForModel(model) != nil else { return nil }
     let version = ModelZoo.versionForModel(model)
     switch version {
-    case .minimaxH3, .minimaxH3Image, .wurstchenStageB, .wurstchenStageC: return nil
+    case .wurstchenStageB, .wurstchenStageC: return nil
+    case .minimaxH3, .minimaxH3Image:
+      // HyperFlow's two-time checkpoints and H3 Image's output heads run Euler on their own sigma
+      // grids whatever the sampler (`LocalImageGenerator.sampler(from:)`); other H3 files don't.
+      let path = ModelZoo.filePathForModelDownloaded(model)
+      guard FileManager.default.fileExists(atPath: path) else { return nil }
+      let layout = MiniMaxH3Layout.load(filePath: path)
+      if version == .minimaxH3 ? layout.isTwoTime : !layout.sigmaGrids.isEmpty { return nil }
     default: break
     }
     let parameterization: Denoiser.Parameterization
