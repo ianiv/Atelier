@@ -341,6 +341,7 @@ final class AgentTools {
           "latest": ["type": "boolean", "description": "The project's newest image instead of the canvas."],
           "max_size": ["type": "integer", "description": "Long side of the returned image in pixels, 256–2048. Default 1024."],
           "save_to": ["type": "string", "description": "Also write the full-size PNG (settings embedded) to this file or folder."],
+          "full_detail": ["type": "boolean", "description": "For a saved image refined zoomed in (or a Draw Things upscale): the image at the detail its finer layers keep, larger than the image's own size, which is the default (and what masks, regions and canvas_size are in)."],
         ],
       ],
       "annotations": ["readOnlyHint": true],
@@ -1698,8 +1699,9 @@ final class AgentTools {
   }
 
   private func getImage(_ arguments: [String: Any]) async throws -> [String: Any] {
+    if let fullDetail = arguments["full_detail"], !Self.isBoolean(fullDetail) { throw ToolError("`full_detail` must be true or false.") }
     let item: HistoryItem?
-    let image: CGImage
+    var image: CGImage
     if let step = Self.int(arguments["history_step"]) {
       guard let found = create.history.items.first(where: { $0.id.logicalTime == step }) else {
         throw ToolError("No history step \(step) in “\(create.history.project.name)”. See list_history.")
@@ -1711,9 +1713,16 @@ final class AgentTools {
     } else {
       item = create.imageItem ?? create.canvasClip
     }
+    var detailSize: CGSize?
     if let item {
       guard let loaded = await create.history.image(for: item) else { throw ToolError("Couldn't read that image.") }
       image = loaded
+      if arguments["full_detail"] as? Bool == true, !item.isVideo,
+         let full = await create.history.fullDetailImage(tensorId: item.tensorId)
+      {
+        detailSize = CGSize(width: loaded.width, height: loaded.height)
+        image = full
+      }
     } else {
       guard let canvas = create.image else { throw ToolError("The canvas is empty.") }
       image = canvas
@@ -1728,6 +1737,11 @@ final class AgentTools {
         + "guidance \(sidecar.guidanceScale), seed \(sidecar.seed).\nPrompt: \(sidecar.prompt)"
       if !sidecar.negativePrompt.isEmpty { text += "\nNegative prompt: \(sidecar.negativePrompt)" }
       if let timings = sidecar.timings { text += "\nTimings: " + timings.lines.joined(separator: "; ") + "." }
+      if let detailSize {
+        text += "\nAt full detail: \(image.width)×\(image.height) (the image is \(Int(detailSize.width))×\(Int(detailSize.height)))."
+      } else if arguments["full_detail"] as? Bool == true {
+        text += "\nIt has no finer detail than its own \(image.width)×\(image.height)."
+      }
     } else {
       text = "The canvas image (\(image.width)×\(image.height)), not a saved history image: an imported image or a run in progress."
     }

@@ -69,6 +69,14 @@ nonisolated enum AppSettings {
     UserDefaults.standard.object(forKey: embedsSettingsKey) as? Bool ?? true
   }
 
+  /// Whether exported, copied, dragged and output-folder images keep the detail of a step's finer
+  /// layers (a zoomed refine, a Draw Things upscale), larger than the image (on by default), or
+  /// come at the image's own size, as the canvas and History show it.
+  static let exportsFullDetailKey = "exportRefinedImagesAtFullDetail"
+  static var exportsFullDetail: Bool {
+    UserDefaults.standard.object(forKey: exportsFullDetailKey) as? Bool ?? true
+  }
+
   /// Whether each generated image is also written to the output folder (off by default, as in
   /// Draw Things). A project can override it (`ProjectOutput`).
   static let savesToOutputFolderKey = "saveToOutputFolder"

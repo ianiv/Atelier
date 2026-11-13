@@ -665,6 +665,10 @@ final class HistoryStore {
       if item.isVideo {
         file = (nil, try await videoFile(for: item), "mp4")
       } else {
+        var image = image
+        if AppSettings.exportsFullDetail, let full = await fullDetailImage(tensorId: item.tensorId, in: project) {
+          image = full
+        }
         guard let image else { throw ProjectError.badImage }
         file = (try Self.pngData(image, sidecar: item.sidecar), nil, "png")
       }
@@ -846,9 +850,10 @@ final class HistoryStore {
   }
 
   /// The image as PNG carrying its settings, unless Settings turns that off: Draw Things'
-  /// metadata (`ImageMetadata`) and Atelier's sidecar in an `Atelier` iTXt chunk.
+  /// metadata (`ImageMetadata`) and Atelier's sidecar in an `Atelier` iTXt chunk. At full detail
+  /// unless Settings says otherwise (`exportImage`).
   func pngData(_ item: HistoryItem) async throws -> Data {
-    guard let image = await image(for: item) else { throw ProjectError.badImage }
+    guard let image = await exportImage(for: item) else { throw ProjectError.badImage }
     return try Self.pngData(image, sidecar: item.sidecar)
   }
 
@@ -881,9 +886,26 @@ final class HistoryStore {
     return export
   }
 
+  /// The image as exports, copies and drags take it: at full detail (`Project.finestDensity`),
+  /// unless Settings ▸ Images says the image's own size (`AppSettings.exportsFullDetail`).
+  func exportImage(for item: HistoryItem) async -> CGImage? {
+    let project = project
+    let density = AppSettings.exportsFullDetail ? Project.finestDensity : 120
+    return await project.read { $0.image(tensorId: item.tensorId, density: density) }
+  }
+
+  /// The step's image at full detail when it has layers finer than its image; nil when it has
+  /// none (its image is all there is) or isn't in `project` (the current one by default).
+  func fullDetailImage(tensorId: Int64, in project: Project? = nil) async -> CGImage? {
+    let project = project ?? self.project
+    return await project.read {
+      $0.hasDetail(tensorId: tensorId) ? $0.image(tensorId: tensorId, density: Project.finestDensity) : nil
+    }
+  }
+
   /// Puts the full-resolution image on the clipboard.
   func copyImage(_ item: HistoryItem) async {
-    if let image = await image(for: item) { Self.copy(image) }
+    if let image = await exportImage(for: item) { Self.copy(image) }
   }
 
   /// Puts several full-resolution images on the clipboard, one pasteboard item each.
@@ -894,7 +916,7 @@ final class HistoryStore {
     }
     var images: [(png: Data?, tiff: Data?)] = []
     for item in items {
-      guard let image = await image(for: item) else { continue }
+      guard let image = await exportImage(for: item) else { continue }
       images.append((ImageTensor.png(image), ImageTensor.tiff(image)))
     }
     Clipboard.copyImages(images)
