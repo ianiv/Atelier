@@ -181,6 +181,7 @@
 		39581119081A4BFFD6967A0B /* AutoMaskTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC3541FFA68BA7C5424778CE /* AutoMaskTests.swift */; };
 		C0104A7C11A0000000000005 /* ColorMatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0104A7C11A0000000000006 /* ColorMatchTests.swift */; };
 		A1B2C3D4E5F60718293A4B5C /* MaskMemoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E4F5A60718293A4B5D /* MaskMemoryTests.swift */; };
+		C11DDE1E7E57000000000001 /* ClipDeleteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11DDE1E7E57000000000002 /* ClipDeleteTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -386,6 +387,7 @@
 		CC3541FFA68BA7C5424778CE /* AutoMaskTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoMaskTests.swift; sourceTree = "<group>"; };
 		C0104A7C11A0000000000006 /* ColorMatchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorMatchTests.swift; sourceTree = "<group>"; };
 		B1C2D3E4F5A60718293A4B5D /* MaskMemoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaskMemoryTests.swift; sourceTree = "<group>"; };
+		C11DDE1E7E57000000000002 /* ClipDeleteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipDeleteTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -735,6 +737,7 @@
 				CC3541FFA68BA7C5424778CE /* AutoMaskTests.swift */,
 				C0104A7C11A0000000000006 /* ColorMatchTests.swift */,
 				B1C2D3E4F5A60718293A4B5D /* MaskMemoryTests.swift */,
+				C11DDE1E7E57000000000002 /* ClipDeleteTests.swift */,
 				B7A1F0C2B3D4A59687786300 /* ProjectMappingTests.swift */,
 				B7A1F0C2B3D4A59687786301 /* StyleTests.swift */,
 				B7A1F0C2B3D4A59687786302 /* HistoryGraphTests.swift */,
@@ -1123,6 +1126,7 @@
 				39581119081A4BFFD6967A0B /* AutoMaskTests.swift in Sources */,
 				C0104A7C11A0000000000005 /* ColorMatchTests.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* MaskMemoryTests.swift in Sources */,
+				C11DDE1E7E57000000000001 /* ClipDeleteTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
