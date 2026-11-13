@@ -39,24 +39,23 @@ struct HistoryView: View {
   @State private var exportingVideo: HistoryItem?
   @FocusState private var gridFocused: Bool
   @AppStorage("historyLayout") private var layout = Layout.grid
-  /// The grid's smallest thumbnail width, in points; cells grow up to `maximumCellRatio` of it
-  /// to fill each row.
+  /// The grid's thumbnail width, in points. Cells stay this size and the column count follows,
+  /// so every move of the slider shows; a stretching adaptive grid only changed at new columns.
   @AppStorage("historyThumbnailSize") private var thumbnailSize = Self.defaultThumbnailSize
   /// The size when a pinch began.
   @State private var pinchStart: Double?
 
   static let defaultThumbnailSize = 150.0
   static let thumbnailSizes = 90.0...400.0
-  private static let maximumCellRatio = 220.0 / 150.0
-  /// The grid's cell width limits for the current thumbnail size.
-  private var cellRange: ClosedRange<Double> {
-    let minimum = min(max(thumbnailSize, Self.thumbnailSizes.lowerBound), Self.thumbnailSizes.upperBound)
-    return minimum...(minimum * Self.maximumCellRatio)
+  /// The width of each cell: the thumbnail size, narrowed only when one doesn't fit the window.
+  private var cellWidth: Double {
+    let size = min(max(thumbnailSize, Self.thumbnailSizes.lowerBound), Self.thumbnailSizes.upperBound)
+    return gridWidth > 24 ? min(size, gridWidth - 24) : size
   }
 
   /// Whether the grid shows the small JPEG previews: they're at least 384 px on the short side
   /// (`ImageTensor.downsampled`), enough for cells up to about 200 points on a Retina display.
-  private var usesHalfPreviews: Bool { cellRange.upperBound <= 200 * 1.1 }
+  private var usesHalfPreviews: Bool { cellWidth <= 200 * 1.1 }
 
   enum Layout: String {
     case grid, graph
@@ -296,9 +295,9 @@ struct HistoryView: View {
 
   private nonisolated static let gridSpace = "HistoryGrid"
 
-  /// The adaptive grid's column count, for the arrow keys: 10 pt spacing, 12 pt padding.
+  /// How many cells fit across: 10 pt spacing, 12 pt padding. The arrow keys use it too.
   private var columnCount: Int {
-    max(1, Int((gridWidth - 24 + 10) / (cellRange.lowerBound + 10)))
+    max(1, Int((gridWidth - 24 + 10) / (cellWidth + 10)))
   }
 
   /// A slider on the Mac, as in Photos; a menu of sizes on iPad, where a toolbar has less room.
@@ -356,7 +355,7 @@ struct HistoryView: View {
   }
 
   private var gridCells: some View {
-    LazyVGrid(columns: [GridItem(.adaptive(minimum: cellRange.lowerBound, maximum: cellRange.upperBound), spacing: 10)], spacing: 10) {
+    LazyVGrid(columns: Array(repeating: GridItem(.fixed(cellWidth), spacing: 10), count: columnCount), alignment: .leading, spacing: 10) {
       ForEach(filtered, id: \.tensorId) { item in
         cell(
           Color.clear
@@ -394,7 +393,7 @@ struct HistoryView: View {
       }
     }
     .padding(12)
-    .frame(minHeight: viewportHeight, alignment: .top)
+    .frame(maxWidth: .infinity, minHeight: viewportHeight, alignment: .topLeading)
     .coordinateSpace(.named(Self.gridSpace))
     .background {
       // Clicking between images clears the selection; dragging there draws a marquee.
