@@ -902,8 +902,11 @@ final nonisolated class Project: Sendable {
   /// lineage in that order, ending as `deleteHistory` on each of them, last first, would: one
   /// read, one renumbering (`Changes.shift(afterDeleting:on:)`) and one write. Their children
   /// outside the run record its first step's parent; thumbnails, clip rows and tensors go once
-  /// nothing left uses them. Nil, changing nothing, when they aren't such a run.
-  private func deleteRun(tensorIds: [Int64]) async throws -> DeletedRun? {
+  /// nothing left uses them. Nil, changing nothing, when they aren't such a run, or when a
+  /// frame's image is in another step's layers or a frame has another layer: where steps share a
+  /// tensor, which step an image names (and which parent a recorded tensor names) can change as
+  /// the frame-by-frame deletes renumber steps.
+  func deleteRun(tensorIds: [Int64]) async throws -> DeletedRun? {
     let workspace = workspace
     var outcome: (tensorNames: [String], parentTensorId: Int64?)?
     let succeeded = await withCheckedContinuation { continuation in
@@ -924,6 +927,14 @@ final nonisolated class Project: Sendable {
         }
         guard let first = run.first, let last = run.last else { return }
         let deleted = Set(run)
+        let frameTensors = Set(tensorIds)
+        guard tensorIds.allSatisfy({ tree.steps(tensorId: $0).count == 1 }),
+              !rows.layers.contains(where: { layer in
+                let own = deleted.contains(StepID(lineage: layer.lineage, logicalTime: layer.logicalTime))
+                return own ? (layer.tensorId > 0 && !frameTensors.contains(layer.tensorId))
+                  : frameTensors.contains(layer.tensorId)
+              })
+        else { return }
         let isDeleted = { (node: TensorHistoryNode) in
           deleted.contains(StepID(lineage: node.lineage, logicalTime: node.logicalTime))
         }
@@ -1023,7 +1034,7 @@ final nonisolated class Project: Sendable {
   }
 
   /// What `deleteRun` deleted.
-  private nonisolated struct DeletedRun {
+  nonisolated struct DeletedRun {
     var parentTensorId: Int64?
   }
 
@@ -1291,6 +1302,28 @@ final nonisolated class Project: Sendable {
     }
   }
 
+  /// For tests: adds a layer of image `tensorId` at index `index` to the step whose image is
+  /// `imageOf`, sharing that tensor as Draw Things projects can.
+  @concurrent func addLayerForTests(tensorId: Int64, index: Int64, toStepOf imageOf: Int64) async {
+    let workspace = workspace
+    _ = await withCheckedContinuation { continuation in
+      workspace.performChanges([TensorHistoryNode.self, Layer.self]) { transaction in
+        let tree = ProjectTree(
+          nodes: Array(workspace.fetch(for: TensorHistoryNode.self).all()),
+          layers: Array(workspace.fetch(for: Layer.self).all()), items: false)
+        guard let id = tree.step(tensorId: imageOf),
+              let layer = workspace.fetch(for: Layer.self).where(
+                Layer.lineage == id.lineage && Layer.logicalTime == id.logicalTime
+              ).first
+        else { return }
+        var builder = ProjectFormat.TensorDataBuilder(from: layer)
+        builder.index = index
+        builder.tensorId = tensorId
+        transaction.try(submit: ProjectFormat.TensorDataChangeRequest.upsertRequest(builder.build()))
+      } completionHandler: { continuation.resume(returning: $0) }
+    }
+  }
+
   /// For tests: every row a delete changes, in key order, and the tensor store's names.
   nonisolated struct Contents: Equatable {
     var nodes: [TensorHistoryNode]
@@ -1306,7 +1339,7 @@ final nonisolated class Project: Sendable {
     let key = { (lineage: Int64, logicalTime: Int64) in [lineage, logicalTime] }
     let tensorNames = storeAccess.withLock { _ in
       var names: [String] = []
-      _ = graph.openStore(url.path, flags: []) { names = $0.keys }
+      _ = graph.openStore(url.path, flags: [.readOnly]) { names = $0.keys }
       return names.sorted()
     }
     return workspace.fetchWithinASnapshot {
@@ -1518,6 +1551,11 @@ nonisolated struct ProjectTree: Sendable {
   /// The step holding the image `tensorId`.
   func step(tensorId: Int64) -> StepID? {
     byTensor[tensorId]?.first
+  }
+
+  /// Every step whose image is `tensorId` (Draw Things can share one).
+  func steps(tensorId: Int64) -> [StepID] {
+    byTensor[tensorId] ?? []
   }
 
   /// The item listing the clip whose frame is the image `tensorId` (the clip's first frame), when
