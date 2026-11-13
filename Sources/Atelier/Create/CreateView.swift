@@ -1659,7 +1659,8 @@ private struct CanvasImageViewer: View {
       accessibilityLabel: "Canvas image, full size", emptyTitle: "No Image")
       // A run that finishes while it's open shows its result here.
       .task(id: tensorId) {
-        guard let tensorId, !model.canvasDetail.isEmpty,
+        // Read even before the canvas's detail has loaded: it may not have yet.
+        guard let tensorId,
               let image = await model.history.fullDetailImage(tensorId: tensorId)
         else { return }
         full = (tensorId, image)

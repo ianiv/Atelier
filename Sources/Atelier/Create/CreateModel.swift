@@ -2068,7 +2068,8 @@ final class CreateModel {
           // Saved with it just now (or none, for a result that isn't merged).
           landedMask = (item.tensorId, canvasMask)
           maskPendingTensorId = nil
-          if refined?.layers?.frameScaleFactorBy120 ?? 120 > 120 {
+          // Its own frame, or the detail carried from its source, whatever the zoom.
+          if refined?.layers != nil {
             await loadCanvasDetail(tensorId: item.tensorId, project: history.project.name)
           }
         }
