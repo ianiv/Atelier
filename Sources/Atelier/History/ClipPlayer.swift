@@ -70,6 +70,8 @@ struct ClipPlayer: View {
           url, tensorId: item.tensorId, framesPerSecond: item.clip?.framesPerSecond ?? 24,
           duration: item.clip?.duration ?? 0, play: autoplay)
       } catch {
+        // Same as above: a clip the user has moved off mustn't show its error over the new one.
+        guard !Task.isCancelled else { return }
         failure = error.localizedDescription
       }
     }
