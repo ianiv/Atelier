@@ -758,6 +758,8 @@ struct CanvasContentItems: View {
   let canLoadSettings: Bool
   let loadSettings: () -> Void
   let addToMoodboard: () -> Void
+  /// False while a clip's frame on screen isn't known yet (its video hasn't loaded).
+  var canAddToMoodboard = true
   @Environment(CreateModel.self) private var model
   @Environment(\.undoManager) private var undoManager
 
@@ -768,7 +770,7 @@ struct CanvasContentItems: View {
     Button("Load Settings from \(noun)", action: loadSettings)
       .disabled(!canLoadSettings)
     Button(addToMoodboardTitle, action: addToMoodboard)
-      .disabled(model.image == nil)
+      .disabled(model.image == nil || !canAddToMoodboard)
     Button("Match Size to \(noun)") { model.matchSizeToImage(undoManager: undoManager) }
       .disabled(model.image == nil)
     Button("Clear Canvas") { model.clearCanvas() }
