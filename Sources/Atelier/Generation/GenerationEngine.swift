@@ -119,11 +119,13 @@ actor GenerationEngine {
 
   /// Points MGK's default environment at the models folders (a file is looked up in each, in
   /// order, and downloads go to the first), loads their custom.json and custom_lora.json, and
-  /// drops any cached pipeline.
+  /// drops any cached pipeline, along with the engine's kept prompt encoding
+  /// (`WeightsCache.textEncoderOutput`, MiniMax H3), which names its text encoder by path.
   func setModelsDirectories(_ directories: [String]) async {
     let urls = directories.map { URL(fileURLWithPath: $0, isDirectory: true) }
     MediaGenerationEnvironment.default.externalUrls = urls
     pipeline = nil
+    await Self.withWeightsCache { $0.removeTextEncoderOutput() }
     await ModelLibrary.loadCustomSpecifications(in: urls)
   }
 
@@ -740,12 +742,14 @@ actor GenerationEngine {
 
   /// Logs how much the weights cache holds, around each run. A count that grows means something
   /// was loaded and kept; an unchanged one doesn't prove a cache hit (a model bigger than the
-  /// cache is never stored, and a run that merges LoRAs removes its model's entry).
+  /// cache is never stored, and a run that merges LoRAs removes its model's entry). Also logs how
+  /// many times the engine reused its kept prompt encoding (`WeightsCache.textEncoderOutputHits`,
+  /// MiniMax H3 and H3 Image): a count that grows across a run means Qwen didn't run.
   private nonisolated static func logWeightsCache(_ moment: String, _ model: String) async {
     await withWeightsCache { cache in
       let gigabytes = Double(cache.totalSize) / 1_073_741_824
       Log.engine.info(
-        "Weights cache \(moment, privacy: .public) \(model, privacy: .public): \(cache.count, privacy: .public) entries, \(gigabytes, format: .fixed(precision: 1), privacy: .public) GiB")
+        "Weights cache \(moment, privacy: .public) \(model, privacy: .public): \(cache.count, privacy: .public) entries, \(gigabytes, format: .fixed(precision: 1), privacy: .public) GiB, \(cache.textEncoderOutputHits, privacy: .public) text encoder output hits")
     }
   }
 
