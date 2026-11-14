@@ -1544,7 +1544,7 @@ private struct AdditionalModelFoldersSection: View {
       Text("Additional Model Folders")
     } footer: {
       Text(
-        "Models and LoRAs in these folders can be picked in Create too. When a file is in more than one folder, the models folder comes first, then these in order. A folder on a disconnected drive is skipped until it's back."
+        "Models and LoRAs in these folders can be picked in Create too. When a file is in more than one folder, the copy on an internal drive is used. New downloads go to the models folder. A folder on a disconnected drive is skipped until it's back."
       )
     }
   }

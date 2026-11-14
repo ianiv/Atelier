@@ -28,4 +28,19 @@ struct ModelsLookupOrderTests {
     let missing = URL(fileURLWithPath: "/nonexistent-\(UUID().uuidString)", isDirectory: true)
     #expect(!GenerationEngine.isOnInternalVolume(missing))
   }
+
+  @Test func macCloudFoldersAreCloud() {
+    #expect(GenerationEngine.isCloudPath("/Users/me/Library/Mobile Documents/com~apple~CloudDocs/Models", onMac: true))
+    #expect(GenerationEngine.isCloudPath("/Users/me/Library/CloudStorage/Dropbox/Models", onMac: true))
+    #expect(GenerationEngine.isCloudPath("/Users/me/Library/CloudStorage", onMac: true))
+    #expect(!GenerationEngine.isCloudPath("/Users/me/Documents/Models", onMac: true))
+    #expect(!GenerationEngine.isCloudPath("/Users/me/Library/CloudStorageOld/Models", onMac: true))
+  }
+
+  @Test func iPadFoldersOutsideTheContainerAreCloud() {
+    let home = "/private/var/mobile/Containers/Data/Application/APP"
+    #expect(!GenerationEngine.isCloudPath(home + "/Documents/Models", onMac: false, appHome: home))
+    #expect(GenerationEngine.isCloudPath("/private/var/mobile/Library/Mobile Documents/Models", onMac: false, appHome: home))
+    #expect(GenerationEngine.isCloudPath(home + "-other/Documents", onMac: false, appHome: home))
+  }
 }

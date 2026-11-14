@@ -150,11 +150,35 @@ actor GenerationEngine {
     return onInternal + folders.filter { !onInternal.contains($0) }
   }
 
-  /// Whether `folder` is on an internal volume (`volumeIsInternal`). Unknown counts as external, so
-  /// a folder only moves ahead when the system says it's internal.
+  /// Whether `folder` is on an internal volume (`volumeIsInternal`) and holds real local files.
+  /// Unknown counts as external, so a folder only moves ahead when the system says it's internal.
+  /// iCloud Drive and other File Provider folders sit on the internal volume too, but a file there
+  /// can be an evicted placeholder that still passes `fileExists`, so loading it would start a
+  /// download of several GB: those count as external (`isUbiquitousItem`, `isCloudPath`).
   nonisolated static func isOnInternalVolume(_ folder: URL) -> Bool {
-    (try? folder.resourceValues(forKeys: [.volumeIsInternalKey]))?.volumeIsInternal == true
+    guard let values = try? folder.resourceValues(forKeys: [.volumeIsInternalKey, .isUbiquitousItemKey]),
+          values.volumeIsInternal == true, values.isUbiquitousItem != true
+    else { return false }
+    return !isCloudPath(folder.path)
   }
+
+  /// Whether `path` may be a cloud folder. On a Mac that's under `~/Library/Mobile Documents`
+  /// (iCloud Drive) or `~/Library/CloudStorage` (File Provider apps such as Dropbox). On iPad any
+  /// folder outside the app's own container (`appHome`) is reached through a File Provider.
+  nonisolated static func isCloudPath(_ path: String, onMac: Bool = isMac, appHome: String = NSHomeDirectory()) -> Bool {
+    let folder = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path + "/"
+    if onMac {
+      return ["/Library/Mobile Documents/", "/Library/CloudStorage/"].contains { folder.contains($0) }
+    }
+    let home = URL(fileURLWithPath: appHome).resolvingSymlinksInPath().standardizedFileURL.path + "/"
+    return !folder.hasPrefix(home)
+  }
+
+  #if os(macOS)
+    nonisolated static let isMac = true
+  #else
+    nonisolated static let isMac = false
+  #endif
 
   /// Points MGK at the models folders unless it already is, keeping the cached pipeline.
   func useModelsDirectories(_ directories: [String]) async {

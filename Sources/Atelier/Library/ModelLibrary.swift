@@ -192,7 +192,7 @@ final class ModelLibrary {
     directories.first ?? URL(fileURLWithPath: create.modelsDirectory, isDirectory: true)
   }
 
-  /// The models folders that can be reached, in lookup order.
+  /// The models folders that can be reached, in the person's order.
   var directories: [URL] {
     create.availableModelsDirectories.map { URL(fileURLWithPath: $0, isDirectory: true) }
   }
