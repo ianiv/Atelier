@@ -23,7 +23,8 @@ struct ClipPlayer: View {
 
   var body: some View {
     ZStack {
-      if playback.isReady {
+      // The canvas's playback is shared, so it may still hold the clip shown before this one.
+      if playback.isReady(for: item.tensorId) {
         VideoPlayer(player: playback.player)
           .allowsHitTesting(false)
           .contentShape(.rect)
@@ -58,10 +59,15 @@ struct ClipPlayer: View {
     }
     .task(id: item.tensorId) {
       failure = nil
+      // Drop the previous clip now rather than when this one loads: encoding an uncached clip
+      // can take seconds, and meanwhile the old video would stand in for this one.
+      if playback.loadedTensorId != item.tensorId { playback.reset() }
       do {
         let url = try await history.videoFile(for: item)
+        // A newer clip took the view while this one encoded; loading now would replace it.
+        guard !Task.isCancelled else { return }
         playback.load(
-          url, framesPerSecond: item.clip?.framesPerSecond ?? 24,
+          url, tensorId: item.tensorId, framesPerSecond: item.clip?.framesPerSecond ?? 24,
           duration: item.clip?.duration ?? 0, play: autoplay)
       } catch {
         failure = error.localizedDescription
@@ -121,6 +127,9 @@ final class ClipPlayback {
   @ObservationIgnored private var looper: AVPlayerLooper?
   @ObservationIgnored private var timeObserver: Any?
   private(set) var isReady = false
+  /// The clip loaded, by first-frame tensor id, so a view can tell its own clip from the one a
+  /// shared playback held before.
+  private(set) var loadedTensorId: Int64?
   private(set) var isPlaying = false
   /// Seconds into the clip, kept current while it plays.
   private(set) var time: Double = 0
@@ -130,9 +139,24 @@ final class ClipPlayback {
     didSet { player.isMuted = isMuted }
   }
 
-  func load(_ url: URL, framesPerSecond: Double, duration: Double, play: Bool) {
+  func isReady(for tensorId: Int64) -> Bool { isReady && loadedTensorId == tensorId }
+
+  /// Unloads the clip, so nothing plays until the next `load`.
+  func reset() {
+    pause()
+    looper?.disableLooping()
+    looper = nil
+    player.removeAllItems()
+    isReady = false
+    time = 0
+    loadedTensorId = nil
+  }
+
+  func load(_ url: URL, tensorId: Int64, framesPerSecond: Double, duration: Double, play: Bool) {
     self.framesPerSecond = framesPerSecond
     self.duration = duration
+    // A looper left looping keeps re-inserting its items into the player.
+    looper?.disableLooping()
     player.removeAllItems()
     looper = AVPlayerLooper(player: player, templateItem: AVPlayerItem(url: url))
     if timeObserver == nil {
@@ -147,6 +171,7 @@ final class ClipPlayback {
       }
     }
     isReady = true
+    loadedTensorId = tensorId
     if play { self.play() }
   }
 
@@ -173,6 +198,8 @@ final class ClipPlayback {
   /// The frame on screen (pausing playback, so it stays there).
   func pauseOnFrame(count: Int) -> Int {
     pause()
+    // Nothing loaded yet: the clip's first frame is what's on screen.
+    guard isReady else { return 0 }
     let seconds = player.currentTime().seconds
     guard seconds.isFinite else { return 0 }
     return min(max(Int((seconds * framesPerSecond).rounded(.down)), 0), max(count - 1, 0))
