@@ -7,3 +7,4 @@ DerivedData/
 Config/Local.xcconfig
 CLAUDE.local.md
 .orchestrate/
+.orchestrate-fix/
