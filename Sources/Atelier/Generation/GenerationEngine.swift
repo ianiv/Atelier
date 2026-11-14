@@ -92,6 +92,10 @@ actor GenerationEngine {
   /// The model and image inputs (canvas, then moodboard sizes) of the last run, see
   /// `dropCachedModelsIfInputsChanged`.
   private var lastImageInputs: (model: String, canvas: Bool, sizes: [[Int]])?
+  /// Whether the weights cached for a model file (by its path) were built from a run with
+  /// references, for the models in `versionsWithInputDependentWeights`; see
+  /// `dropCachedModelsIfInputsChanged`. Missing means unknown.
+  private var cachedWithReferences: [String: Bool] = [:]
 
   private var isRunning = false
   private var waiting: [CheckedContinuation<Void, Never>] = []
@@ -161,9 +165,12 @@ actor GenerationEngine {
     await Self.logWeightsCache("before", request.model)
     do {
       let output = try await generateInTurn(request, pipeline: pipeline, progress: progress)
+      rememberCachedWeights(of: request.model, withReferences: Self.sendsReferences(request))
       await Self.logWeightsCache("after", request.model)
       return output
     } catch {
+      // The run may have stopped before or after its weights were cached.
+      rememberCachedWeights(of: request.model, withReferences: nil)
       await Self.logWeightsCache("after", request.model)
       throw error
     }
@@ -502,6 +509,7 @@ actor GenerationEngine {
       }
     }
     lastImageInputs = nil
+    cachedWithReferences = [:]
     // The engine's queue, so this never runs alongside another model.
     let queue = Self.engineResources()?.queue ?? DispatchQueue(label: "Atelier.upscale")
     let cancellation = EngineCancellation()
@@ -614,22 +622,24 @@ actor GenerationEngine {
 
   /// Engine workaround: a model whose denoiser has a different parameter set depending on the
   /// images sent. Flux.3 builds its reference refiner blocks (`content_mode_blocks.image_cond`)
-  /// only when a run has references (`Flux3` in Flux3.swift), and with the kontext modifier the
-  /// canvas is the first reference (`LocalImageGenerator`'s reference encoding), so the canvas
-  /// counts too. The weights cache keeps the denoiser under the model file either way
-  /// (`UNetProtocol`'s `weightsCacheKey`: file path plus the TeaCache suffix), so after a run
-  /// without references the next run with them finds the cache, skips reading the file and leaves
-  /// those blocks unloaded: the canvas is ignored or the result is a patchwork of tiles. Flux.1,
-  /// Flux.2, Qwen Image, Fibo 2 and MOSS Image don't need this: their denoisers have the same
-  /// parameters either way, and their fixed encoders, which differ, are cached under a separate
-  /// `:ref` key (`UNetFixedEncoder`).
+  /// only when a run has references (`Flux3` in Flux3.swift). With the kontext modifier the
+  /// canvas is the first reference and the moodboard images follow (`LocalImageGenerator`'s
+  /// reference encoding); without it there are none. The weights cache keeps the denoiser under
+  /// the model file either way (`UNetProtocol`'s `weightsCacheKey`: file path plus the TeaCache
+  /// suffix), so after a run without references a run with them finds the cache, skips reading
+  /// the file and leaves those blocks unloaded: the canvas is ignored or the result is a patchwork
+  /// of tiles. Other models running in between don't change that, so whether a model's cached
+  /// weights had references is remembered per file (`cachedWithReferences`), and its entries
+  /// (every key starting with its file path) are removed, on the generation queue before this run
+  /// loads anything, whenever this run's differs or isn't known. Other models and the text
+  /// encoders stay cached. Flux.1, Flux.2, Qwen Image, Fibo 2 and MOSS Image don't need this:
+  /// their denoisers have the same parameters either way, and their fixed encoders, which differ,
+  /// are cached under a separate `path:[fixed]:ref` key (`UNetFixedEncoder`).
   ///
-  /// So when the images sent change between two runs of such a model, its own cache entries (every
-  /// key starting with its file path) are removed, on the generation queue, before this run loads
-  /// anything; other models and the text encoders stay cached. Separately, the model preloader
-  /// reuses a model compiled for other inputs (`ModelPreloader.retrieveUNet` doesn't compare
-  /// them), so for the models it holds (`ModelPreloader.isEnabled`) "keep model in memory" is set
-  /// to 0 and back.
+  /// Separately, the model preloader reuses a model compiled for other inputs
+  /// (`ModelPreloader.retrieveUNet` doesn't compare them), so for the models it holds
+  /// (`ModelPreloader.isEnabled`) "keep model in memory" is set to 0 and back when the canvas
+  /// presence or image sizes change between two runs of the same model.
   private func dropCachedModelsIfInputsChanged(_ request: Request) async {
     let images = [request.canvas].compactMap(\.self) + request.moodboard.map(\.image)
     let inputs = (
@@ -637,28 +647,54 @@ actor GenerationEngine {
       sizes: images.map { [$0.width, $0.height] }
     )
     defer { lastImageInputs = inputs }
-    guard let last = lastImageInputs, last.model == inputs.model,
-          last.canvas != inputs.canvas || last.sizes != inputs.sizes
-    else { return }
     let model = request.model
-    if Self.isPreloaded(model), var dictionary = Self.engineWorkspace()?.dictionary {
+    if let last = lastImageInputs, last.model == inputs.model,
+       last.canvas != inputs.canvas || last.sizes != inputs.sizes,
+       Self.isPreloaded(model), var dictionary = Self.engineWorkspace()?.dictionary
+    {
       // The preloader applies each change in order on the generation queue, ahead of this run.
       let value = dictionary["keep_model_in_memory", Int.self]
       dictionary["keep_model_in_memory", Int.self] = 0
       dictionary["keep_model_in_memory", Int.self] = value
     }
+    await dropCachedWeights(of: model, unlessBuiltWithReferences: Self.sendsReferences(request))
+  }
+
+  /// Removes `model`'s weights cache entries unless they're known to come from a run whose
+  /// references match `references`, see `dropCachedModelsIfInputsChanged`.
+  private func dropCachedWeights(of model: String, unlessBuiltWithReferences references: Bool) async {
     guard Self.versionsWithInputDependentWeights.contains(ModelZoo.versionForModel(model)) else { return }
     // The path the engine reads the model from (`LocalImageGenerator`'s sampler `filePath`).
     let path = ModelZoo.filePathForModelDownloaded(model)
+    guard cachedWithReferences[path] != references else { return }
     await Self.withWeightsCache { cache in
       guard let keys = Self.weightsCacheKeys(cache) else { return }
       let removed = keys.filter { $0 == path || $0.hasPrefix(path + ":") }
+      guard !removed.isEmpty else { return }
       for key in removed {
         _ = cache.remove(at: key)
       }
       Log.engine.info(
-        "Images sent changed: dropped \(removed.count, privacy: .public) cached weights of \(model, privacy: .public)")
+        "References switched \(references ? "on" : "off", privacy: .public): dropped \(removed.count, privacy: .public) cached weights of \(model, privacy: .public)")
     }
+  }
+
+  /// Records, after a run of `model`, whether the weights it left cached were built with
+  /// references (nil when unknown), for the models `dropCachedModelsIfInputsChanged` checks.
+  private func rememberCachedWeights(of model: String, withReferences references: Bool?) {
+    guard Self.versionsWithInputDependentWeights.contains(ModelZoo.versionForModel(model)) else { return }
+    cachedWithReferences[ModelZoo.filePathForModelDownloaded(model)] = references
+  }
+
+  /// Whether the engine sends `request`'s images to the model as references: only with the
+  /// kontext modifier, from the model or a LoRA (`ImageGeneratorUtils.modifierForModel`), and
+  /// then the canvas and every moodboard image, whose weights MGK fixes at 1
+  /// (`LocalImageGenerator`'s reference encoding skips only weight 0).
+  private nonisolated static func sendsReferences(_ request: Request) -> Bool {
+    let modifier = ImageGeneratorUtils.modifierForModel(
+      request.model, LoRAs: request.configuration.loras.compactMap(\.file))
+    guard modifier == .kontext || modifier == .kontextKv else { return false }
+    return request.canvas != nil || !request.moodboard.isEmpty
   }
 
   /// Model versions whose denoiser builds a different parameter set depending on whether a run
@@ -702,8 +738,9 @@ actor GenerationEngine {
     return Array(dictionary.keys)
   }
 
-  /// Logs how much the weights cache holds, around each run: an entry count unchanged by a run
-  /// means its model came from the cache, not the disk.
+  /// Logs how much the weights cache holds, around each run. A count that grows means something
+  /// was loaded and kept; an unchanged one doesn't prove a cache hit (a model bigger than the
+  /// cache is never stored, and a run that merges LoRAs removes its model's entry).
   private nonisolated static func logWeightsCache(_ moment: String, _ model: String) async {
     await withWeightsCache { cache in
       let gigabytes = Double(cache.totalSize) / 1_073_741_824
@@ -755,6 +792,9 @@ actor GenerationEngine {
     pipeline.configuration.batchSize = 1
     pipeline.configuration.width = 512
     pipeline.configuration.height = 512
+    // A run without images, so without references.
+    await dropCachedWeights(of: model, unlessBuiltWithReferences: false)
+    rememberCachedWeights(of: model, withReferences: nil)
     let previewFields = Mutex<[ReflectedField]?>(nil)
     _ = try await pipeline.generate(
       prompt: "a dot", negativePrompt: "", inputs: [],
@@ -768,6 +808,7 @@ actor GenerationEngine {
         ]
         previewFields.withLock { if $0 == nil { $0 = fields } }
       })
+    rememberCachedWeights(of: model, withReferences: false)
     let storage = Self.reflectedChild(MediaGenerationEnvironment.default, "storage")
     let resources = storage.flatMap { Self.reflectedChild($0, "cachedLocalResources") }
     let generator = resources.flatMap { Self.reflected($0, "generator", as: LocalImageGenerator.self) }
