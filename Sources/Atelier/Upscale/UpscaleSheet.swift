@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Upscale… on a clip in History: pick FlashVSR+ (Quality) or Apple Super Resolution (Fast) and
-/// a scale, then queue it. The result is a new clip after the source.
+/// Upscale… on a clip in History: pick FlashVSR+ (Quality), ReCaVSR or Apple Super Resolution
+/// (Fast) and a scale, then queue it. The result is a new clip after the source.
 struct UpscaleSheet: View {
   @Environment(CreateModel.self) private var create
   @Environment(\.dismiss) private var dismiss
@@ -9,13 +9,14 @@ struct UpscaleSheet: View {
   @AppStorage("upscaleMethod") private var method = ClipUpscale.Method.flashVSR
   @AppStorage("upscaleScale") private var scale = 2
   @AppStorage("upscaleFlashVSRVariant") private var variant = FlashVSRFiles.Variant.turbo
+  @AppStorage("upscaleReCaVSRWeights") private var weights = ReCaVSRFiles.Weights.full
 
   var body: some View {
     let sidecar = item.sidecar
     let controls = UpscaleControls(
       width: sidecar.width, height: sidecar.height,
       method: Binding(get: { method }, set: { if let new = $0 { method = new } }), scale: $scale,
-      variant: $variant, server: create.runTargetUpscalers)
+      variant: $variant, weights: $weights, server: create.runTargetUpscalers)
     VStack(alignment: .leading, spacing: 12) {
       Text("Upscale Video").font(.headline)
       controls
@@ -24,8 +25,8 @@ struct UpscaleSheet: View {
         Button("Cancel", role: .cancel) { dismiss() }
           .keyboardShortcut(.cancelAction)
         Button("Upscale") {
-          let item = item, method = method, scale = scale, variant = variant
-          Task { await create.upscale(item, method: method, scale: scale, variant: variant) }
+          let item = item, method = method, scale = scale, variant = variant, weights = weights
+          Task { await create.upscale(item, method: method, scale: scale, variant: variant, weights: weights) }
           dismiss()
         }
         .keyboardShortcut(.defaultAction)
@@ -33,7 +34,7 @@ struct UpscaleSheet: View {
       }
     }
     .sheetPadding()
-    .sheetFrame(width: 440, height: 360)
+    .sheetFrame(width: 500, height: 440)
   }
 }
 
@@ -89,6 +90,7 @@ struct ImageUpscaleSheet: View {
     case .model: "Sharpens the image, without a diffusion model."
     case .video(.flashVSR, _): "Restores detail with a video model. It uses a lot of memory at large sizes."
     case .video(.system, _): "Runs on the Neural Engine in seconds. macOS downloads its model the first time."
+    case .video(.recaVSR, _): "ReCaVSR upscales videos, not images."
     case .seedVR2: "Restores detail with a diffusion model in one step, and can invent texture."
     }
   }
@@ -200,6 +202,7 @@ struct VideoExportSheet: View {
   @AppStorage("exportUpscale") private var upscaleChoice = "none"
   @AppStorage("exportUpscaleScale") private var scale = 2
   @AppStorage("upscaleFlashVSRVariant") private var variant = FlashVSRFiles.Variant.turbo
+  @AppStorage("upscaleReCaVSRWeights") private var weights = ReCaVSRFiles.Weights.full
 
   private var method: ClipUpscale.Method? {
     // Without None, a saved None falls to the method that needs no download.
@@ -210,8 +213,8 @@ struct VideoExportSheet: View {
     let controls = UpscaleControls(
       width: width, height: height,
       method: Binding(get: { method }, set: { upscaleChoice = $0?.rawValue ?? "none" }),
-      scale: $scale, variant: $variant, offersNone: name == nil, server: create.runTargetUpscalers)
-    let upscale = method.map { TimelineUpscale(method: $0, scale: scale, variant: variant) }
+      scale: $scale, variant: $variant, weights: $weights, offersNone: name == nil, server: create.runTargetUpscalers)
+    let upscale = method.map { TimelineUpscale(method: $0, scale: scale, variant: variant, weights: weights) }
     let problem = controls.problem
     VStack(alignment: .leading, spacing: 12) {
       Text(name.map { "Upscale “\($0)”" } ?? "Export Video").font(.headline)
@@ -241,7 +244,7 @@ struct VideoExportSheet: View {
       }
     }
     .sheetPadding()
-    .sheetFrame(width: 440, height: 430)
+    .sheetFrame(width: 500, height: 520)
   }
 
   private static func duration(_ seconds: Double) -> String {
@@ -258,9 +261,10 @@ struct DroppedVideo: Identifiable {
   let composition: TimelineComposition
 }
 
-/// Method, FlashVSR+ variant and scale for upscaling a `width`×`height` video, with the size it
-/// makes, a Download button when FlashVSR+ isn't there yet, and why it can't, if it can't.
-/// Every control stays; ones that don't apply are disabled.
+/// Method, FlashVSR+ variant, ReCaVSR weights and scale for upscaling a `width`×`height` video,
+/// with the size it makes, a Download button for the chosen model when it isn't there yet,
+/// ReCaVSR's Make 8-bit Copy, and why it can't, if it can't. Every control stays; ones that
+/// don't apply are disabled.
 struct UpscaleControls: View {
   let width: Int
   let height: Int
@@ -268,15 +272,17 @@ struct UpscaleControls: View {
   @Binding var method: ClipUpscale.Method?
   @Binding var scale: Int
   @Binding var variant: FlashVSRFiles.Variant
+  @Binding var weights: ReCaVSRFiles.Weights
   /// A None choice before Quality and Fast, for exporting as it is.
   let offersNone: Bool
   /// Where it would run, when that's a server: what it has decides, not what's on this device.
   let server: (name: String, upscalers: RemoteUpscalers)?
   private var download = FlashVSRDownload.shared
+  private var recaVSR = ReCaVSRDownload.shared
 
   init(
     width: Int, height: Int, method: Binding<ClipUpscale.Method?>, scale: Binding<Int>,
-    variant: Binding<FlashVSRFiles.Variant>, offersNone: Bool = false,
+    variant: Binding<FlashVSRFiles.Variant>, weights: Binding<ReCaVSRFiles.Weights>, offersNone: Bool = false,
     server: (name: String, upscalers: RemoteUpscalers)? = nil
   ) {
     self.server = server
@@ -285,6 +291,7 @@ struct UpscaleControls: View {
     _method = method
     _scale = scale
     _variant = variant
+    _weights = weights
     self.offersNone = offersNone
   }
 
@@ -311,43 +318,75 @@ struct UpscaleControls: View {
         return scales.contains(scale) ? nil : "That's too large for FlashVSR+."
       case .system:
         return server.upscalers.superResolution ? nil : "\(server.name) doesn't support Apple Super Resolution."
+      case .recaVSR:
+        guard (server.upscalers.recaVSR ?? []).contains(weights) else {
+          return "\(server.name) doesn't have ReCaVSR \(weights.title). Set it up there."
+        }
+        return scales.contains(scale) ? nil : "That's too large for ReCaVSR."
       }
     }
     return ClipUpscale.problem(
-      width: width, height: height, scale: scale, method: method, variant: variant)
+      width: width, height: height, scale: scale, method: method, variant: variant, weights: weights)
   }
 
   var body: some View {
     let size =
       method.map { ClipUpscale.outputSize(width: width, height: height, scale: scale, method: $0) }
         ?? (width: width, height: height)
-    // Read while it changes, so the controls follow the download.
+    // Read while they change, so the controls follow the downloads and the copy.
     let downloading = download.variant
     let missing = FlashVSRFiles.installed(variant) == nil
+    let recaVSRDownloaded = !recaVSR.downloading && recaVSR.isDownloaded
+    let hasEightBit = recaVSR.hasEightBitCopy
+    // An iPad doesn't run ReCaVSR; it can send it to a paired Mac that has it.
+    let recaVSROffered =
+      ReCaVSRFiles.runsHere ? true : !(server?.upscalers.recaVSR ?? []).isEmpty
     Group {
       Picker(offersNone ? "Upscale" : "Method", selection: $method) {
         if offersNone { Text("None").tag(ClipUpscale.Method?.none) }
         Text("Quality").tag(ClipUpscale.Method?.some(.flashVSR))
+        Text("ReCaVSR").tag(ClipUpscale.Method?.some(.recaVSR)).selectionDisabled(!recaVSROffered)
         Text("Fast").tag(ClipUpscale.Method?.some(.system))
       }
       .pickerStyle(.segmented)
       Text(
         method == .flashVSR
           ? "FlashVSR+ restores detail as one stream, steady from frame to frame. It takes a few seconds a frame."
+          : method == .recaVSR
+          ? "ReCaVSR restores detail with a large video model, reusing what it made for the frames before. About a second a frame at 1080p."
           : method == .system
           ? "Apple Super Resolution runs on the Neural Engine in seconds. macOS downloads its model the first time."
           : "At its own size."
       )
       .font(.caption).foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)
+      if !recaVSROffered {
+        Text("ReCaVSR runs on a paired Mac that has it: choose one in Run on.")
+          .font(.caption).foregroundStyle(.secondary)
+      }
       Picker("Version", selection: $variant) {
         ForEach(FlashVSRFiles.Variant.allCases, id: \.self) { Text($0.title).tag($0) }
       }
       .pickerStyle(.segmented)
       .disabled(method != .flashVSR)
       .help("Turbo is fast; Base searches wider for a little more detail")
+      Picker("Weights", selection: $weights) {
+        ForEach(ReCaVSRFiles.Weights.allCases, id: \.self) { Text($0.title).tag($0) }
+      }
+      .pickerStyle(.segmented)
+      .disabled(method != .recaVSR || !recaVSROffered)
+      .help("8-bit uses about 3–4 GB less memory and looks nearly the same; it needs the 8-bit copy")
       HStack {
-        if let downloading, downloading == variant {
+        if method == .recaVSR {
+          if recaVSR.downloading {
+            ProgressView(value: recaVSR.fraction) { Text("Downloading ReCaVSR…").font(.caption) }
+            Button("Cancel") { recaVSR.cancel() }
+          } else {
+            Button("Download ReCaVSR (\(Self.bytes(ReCaVSRDownload.remainingBytes)))") { recaVSR.start() }
+              .disabled(recaVSRDownloaded || server != nil || !ReCaVSRFiles.runsHere)
+              .help("Downloads it into \(ReCaVSRFiles.folderName) in the models folder, from Hugging Face")
+          }
+        } else if let downloading, downloading == variant {
           ProgressView(value: download.fraction) {
             Text("Downloading FlashVSR+ \(variant.title)…").font(.caption)
           }
@@ -361,6 +400,20 @@ struct UpscaleControls: View {
           .disabled(method != .flashVSR || !missing || downloading != nil || server != nil)
           .help("Downloads it into \(FlashVSRFiles.folderName) in the models folder, from Hugging Face")
         }
+      }
+      HStack {
+        if let copying = recaVSR.copying {
+          ProgressView(value: copying) { Text("Making ReCaVSR's 8-bit copy…").font(.caption) }
+          Button("Stop") { recaVSR.cancelEightBitCopy() }
+        } else {
+          Button("Make 8-bit Copy (\(Self.bytes(ReCaVSRDownload.eightBitBytes)))") { recaVSR.makeEightBitCopy() }
+            .disabled(
+              method != .recaVSR || !recaVSRDownloaded || hasEightBit || server != nil || !ReCaVSRFiles.runsHere)
+            .help("Writes an 8-bit copy of ReCaVSR beside it in the models folder, for the 8-bit weights")
+        }
+      }
+      if let failure = recaVSR.failure ?? recaVSR.copyFailure, method == .recaVSR {
+        Text(failure).font(.caption).foregroundStyle(.red)
       }
       if let failure = download.failure {
         Text(failure).font(.caption).foregroundStyle(.red)
@@ -378,7 +431,10 @@ struct UpscaleControls: View {
       }
     }
     // On each control, which is harmless: the first sets things right.
-    .onAppear { offerScale() }
+    .onAppear {
+      offerScale()
+      recaVSR.refresh()
+    }
     .onChange(of: method) { offerScale() }
   }
 

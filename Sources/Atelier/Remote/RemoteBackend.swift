@@ -181,7 +181,8 @@ nonisolated struct RemoteBackend: GenerationBackend {
         settings: ["width": .number(Double(width)), "height": .number(Double(height))])
       remote.upscale = ClipUpscale(
         method: upscale.method, scale: upscale.scale, sourceTensorId: 0,
-        variant: upscale.method == .flashVSR ? upscale.variant : nil)
+        variant: upscale.method == .flashVSR ? upscale.variant : nil,
+        weights: upscale.method == .recaVSR ? upscale.weights : nil)
       remote.frames = frames
       _ = try await Self.retrying { try await client.request(.submitJob(jobID: job, request: remote)) }
       let ready = try await waitForResult(job: job, updates: updates) { update in

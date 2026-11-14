@@ -14,6 +14,8 @@ nonisolated struct TimelineUpscale: Sendable, Hashable {
   var scale: Int
   /// FlashVSR+'s variant, for Quality.
   var variant: FlashVSRFiles.Variant
+  /// ReCaVSR's weights.
+  var weights: ReCaVSRFiles.Weights = .full
 
   /// The export's size for a `width`×`height` timeline.
   func outputSize(width: Int, height: Int) -> (width: Int, height: Int) {
@@ -23,7 +25,8 @@ nonisolated struct TimelineUpscale: Sendable, Hashable {
   /// A rough time for `frames` frames of `width`×`height`, in seconds, from an M5 Max: FlashVSR+
   /// Turbo grows faster than the size (1.7 s a frame at 1664×1024, 4.2 s at 1920×1152, after
   /// half a minute loading; Base about twice that), Apple Super Resolution with encoding about
-  /// 0.04 s a megapixel.
+  /// 0.04 s a megapixel, ReCaVSR about 0.65 s a frame per megapixel (0.6 s at 1280×720, 1.3 s at
+  /// 1920×1080, either weights) after about 15 s loading and its slower first block.
   func estimatedSeconds(frames: Int, width: Int, height: Int) -> Double {
     let size = outputSize(width: width, height: height)
     let megapixels = Double(size.width * size.height) / 1_000_000
@@ -31,7 +34,32 @@ nonisolated struct TimelineUpscale: Sendable, Hashable {
     case .flashVSR:
       return Double(frames) * 0.5 * pow(megapixels, 2.6) * (variant == .turbo ? 1 : 2) + 30
     case .system: return Double(frames) * (0.02 + megapixels * 0.04)
+    case .recaVSR: return Double(frames) * 0.65 * megapixels + 15
     }
+  }
+}
+
+/// An upscaler that restores a clip as one stream, frames read in order and handed out as they're
+/// restored: FlashVSR+ and ReCaVSR, for upscaled exports.
+nonisolated protocol StreamingVideoUpscaler {
+  func stream(
+    count: Int, frame: (Int) -> CGImage?, shouldContinue: () -> Bool, output: (Tensor<FloatType>) throws -> Void
+  ) throws
+}
+
+extension FlashVSRUpscaler: StreamingVideoUpscaler {
+  func stream(
+    count: Int, frame: (Int) -> CGImage?, shouldContinue: () -> Bool, output: (Tensor<FloatType>) throws -> Void
+  ) throws {
+    try run(count: count, frame: frame, progress: { _, _, _ in }, shouldContinue: shouldContinue, output: output)
+  }
+}
+
+extension ReCaVSRUpscaler: StreamingVideoUpscaler {
+  func stream(
+    count: Int, frame: (Int) -> CGImage?, shouldContinue: () -> Bool, output: (Tensor<FloatType>) throws -> Void
+  ) throws {
+    try run(count: count, frame: frame, progress: { _, _, _ in }, shouldContinue: shouldContinue, output: output)
   }
 }
 
@@ -138,16 +166,24 @@ nonisolated extension TimelineComposition {
     }
   }
 
-  /// FlashVSR+, the whole timeline as one stream, as vpipe runs it, each restored frame written
-  /// as it's decoded. Runs on the engine's queue.
-  func writeWithFlashVSR(
+  /// A streaming upscaler (FlashVSR+ or ReCaVSR), the whole timeline as one stream, each restored
+  /// frame written as it's decoded. Runs on the engine's queue.
+  func writeStreamed(
     to url: URL, codec: VideoCodec, upscale: TimelineUpscale, shouldContinue: @escaping () -> Bool,
     written: (Int) -> Void
   ) throws {
-    guard let files = FlashVSRFiles.installed(upscale.variant) else {
-      throw FlashVSRFiles.Failure.missing
-    }
     let size = upscale.outputSize(width: width, height: height)
+    let upscaler: any StreamingVideoUpscaler
+    switch upscale.method {
+    case .flashVSR:
+      guard let files = FlashVSRFiles.installed(upscale.variant) else { throw FlashVSRFiles.Failure.missing }
+      upscaler = FlashVSRUpscaler(files: files, width: size.width, height: size.height)
+    case .recaVSR:
+      let files = try ReCaVSRFiles.forJob(upscale.weights)
+      upscaler = ReCaVSRUpscaler(files: files, width: size.width, height: size.height)
+    case .system:
+      preconditionFailure("Apple Super Resolution isn't a streaming upscaler")
+    }
     let reader = try ComposedFrames(self)
     let writer = try UpscaledVideoWriter(url: url, codec: codec, width: size.width, height: size.height)
     // The frame last read; past the end, the last frame repeats.
@@ -161,10 +197,7 @@ nonisolated extension TimelineComposition {
     }
     var count = 0
     do {
-      let upscaler = FlashVSRUpscaler(files: files, width: size.width, height: size.height)
-      try upscaler.run(
-        count: frameCount, frame: frame, progress: { _, _, _ in }, shouldContinue: shouldContinue
-      ) { tensor in
+      try upscaler.stream(count: frameCount, frame: frame, shouldContinue: shouldContinue) { tensor in
         let buffer = try writer.makeBuffer()
         buffer.withUnsafeBuffer { Self.fill($0, with: tensor) }
         let ready = CVReadOnlyPixelBuffer(buffer)

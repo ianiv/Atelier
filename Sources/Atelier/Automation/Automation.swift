@@ -43,7 +43,7 @@ enum Automation {
       "--show", "--resize-bench", "--inspector-check", "--library-check", "--project-check",
       "--reuse", "--generate", "--ux-check", "--edit-input-check", "--refine-check", "--agent-canvas-check",
       "--automask-check", "--queue-check",
-      "--timeline-check", "--upscale-check", "--timeline-export-check", "--flashvsr-check",
+      "--timeline-check", "--upscale-check", "--timeline-export-check", "--flashvsr-check", "--recavsr-check",
       "--model-folders-check", "--styles-check", "--cleanup-check", "--engine-check", "--playback-check",
       "--remote-check", "--remote-net-check", "--remote-shots", "--remote-url-check", "--remote-tailnet-check",
       "--catalog-retry-check", "--model-move-check", "--add-folder-check", "--color-match-check",
@@ -116,6 +116,10 @@ enum Automation {
     }
     if args.contains("--flashvsr-check") {
       flashVSRCheck()
+      return
+    }
+    if args.contains("--recavsr-check") {
+      recaVSRCheck()
       return
     }
     if args.contains("--playback-check") {

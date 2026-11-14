@@ -40,6 +40,19 @@ https://huggingface.co/ruchangyao/FlashVSR_plus (the prompt embedding, posi_prom
 https://huggingface.co/deAPI-ai/flashvsr-v1-1).
 
 -------------------------------------------------------------------------------
+ReCaVSR
+https://github.com/kopperx/ReCaVSR
+https://huggingface.co/kopper/ReCaVSR
+Copyright Xijun Wang, Xin Li, Suhang Yao, Zirui Lang, Bingchen Li, Zhibo Chen (University of
+Science and Technology of China). Licensed under the Apache License, Version 2.0.
+
+The video super-resolution method behind Upscale ▸ ReCaVSR, built on Wan2.2, with its
+FlashDecoder. Atelier's version (Sources/Atelier/Upscale/ReCaVSR) is written in Swift on the Draw
+Things engine, following the reference inference code. Atelier doesn't ship the weights; it
+downloads them, or you place them, in a "ReCaVSR" folder of your models folder, from
+https://huggingface.co/kopper/ReCaVSR, and can write an 8-bit copy of the transformer beside them.
+
+-------------------------------------------------------------------------------
 SAM 2.1 Core ML models
 https://huggingface.co/apple/coreml-sam2.1-tiny
 https://huggingface.co/apple/coreml-sam2.1-small

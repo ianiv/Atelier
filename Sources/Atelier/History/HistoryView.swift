@@ -962,7 +962,7 @@ struct HistoryDetail: View {
             Button("Add to Timeline") { timelines.append([item], undoManager: undoManager) }
               .help("Add the video to the end of the timeline open in the Video Editor")
             Button("Upscale…", action: upscale)
-              .help("Make a sharper, larger copy of the video with FlashVSR+ or Apple Super Resolution")
+              .help("Make a sharper, larger copy of the video with FlashVSR+, ReCaVSR or Apple Super Resolution")
           }
         }
       }

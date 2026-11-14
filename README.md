@@ -11,7 +11,7 @@ What it does today:
 - Image to image: edit an image on the canvas, outpaint by moving it in the frame, and give edit models reference images on a moodboard.
 - Video with LTX-2, MiniMax H3, Wan and the other video models the engine runs: text or an image to video, first and last frames, references, and sound (LTX and H3 make a soundtrack; H3 and LongCat take an audio file). Clips play inline and save as MP4.
 - A video editor to put clips together on a timeline: trim, split, crossfade, continue a new video from any frame, and export one MP4.
-- Video upscaling: **Fast** (Apple Super Resolution) or **Quality** (FlashVSR+, Turbo or Base), as a new video in History or straight to a file with Export Video….
+- Video upscaling: **Fast** (Apple Super Resolution), **Quality** (FlashVSR+, Turbo or Base) or **ReCaVSR** (full or 8-bit), as a new video in History or straight to a file with Export Video….
 - Styles: prompt templates you pick on the Create screen, with thumbnails, and libraries you can import, export and browse as a web page.
 - Jobs on another device: pair your Macs and iPads, then send images, videos, upscales and exports to whichever one should do the work, over your local network or from anywhere with Atelier's built-in Tailscale. Every connection is encrypted, and results come back to the project you sent them from.
 - Presets and inspector layouts.
@@ -42,7 +42,7 @@ Start with the [user guide](docs/README.md).
 - [Getting started](docs/getting-started.md): requirements, building and installing, choosing your models folder, your first image.
 - [Creating images](docs/creating-images.md): the prompt, size and seed, the inspector, presets, image to image and the moodboard.
 - [Styles](docs/styles.md): prompt templates, thumbnails, and importing and exporting style libraries.
-- [Making videos](docs/video.md): video models, length, first and last frames, audio, upscaling (and getting FlashVSR+), and exporting videos.
+- [Making videos](docs/video.md): video models, length, first and last frames, audio, upscaling (and getting FlashVSR+ and ReCaVSR), and exporting videos.
 - [Putting videos together](docs/video-editor.md): assembling clips on a timeline, trimming, splitting and crossfades, continuing from any frame, and exporting.
 - [The queue](docs/queue.md): queuing, pausing and reordering images, and upscaled exports.
 - [Running jobs on another device](docs/remote.md): pairing, Tailscale or any network, video and upscaling on a server.
@@ -55,4 +55,4 @@ Start with the [user guide](docs/README.md).
 
 Atelier is free software, licensed under the [GNU General Public License v3.0](LICENSE). It is built on [draw-things-community](https://github.com/drawthingsai/draw-things-community), which is also GPL-3.0, and any app built on that engine must be GPL-3.0 as a whole. Models you use with Atelier keep their own licenses.
 
-Video upscaling builds on [vpipe](https://github.com/tgo-app-dev/vpipe) (T-Go LLC) and [FlashVSR/FlashVSR+](https://github.com/OpenImagingLab/FlashVSR) (OpenImagingLab), both Apache-2.0. See [NOTICE](NOTICE) for these and the other third-party notices; the app lists them in **Settings ▸ About**.
+Video upscaling builds on [vpipe](https://github.com/tgo-app-dev/vpipe) (T-Go LLC), [FlashVSR/FlashVSR+](https://github.com/OpenImagingLab/FlashVSR) (OpenImagingLab) and [ReCaVSR](https://github.com/kopperx/ReCaVSR) (USTC), all Apache-2.0. See [NOTICE](NOTICE) for these and the other third-party notices; the app lists them in **Settings ▸ About**.

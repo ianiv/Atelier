@@ -338,7 +338,11 @@ struct ExportQueueRow: View {
     let size = export.outputSize
     let upscale = export.upscale
     let method =
-      upscale.method == .flashVSR ? "FlashVSR+ \(upscale.variant.title)" : "Apple Super Resolution"
+      switch upscale.method {
+      case .flashVSR: "FlashVSR+ \(upscale.variant.title)"
+      case .recaVSR: "ReCaVSR \(upscale.weights.title)"
+      case .system: "Apple Super Resolution"
+      }
     HStack(spacing: 10) {
       ZStack {
         Color.quaternaryLabel

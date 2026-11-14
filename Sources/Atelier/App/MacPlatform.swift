@@ -282,6 +282,22 @@ enum AutomationWindows {
     return true
   }
 
+  /// Renders `content` in a window of its own, off screen, into a PNG (for views shown as sheets
+  /// that Automation can't present, such as Upscale Video). False when it can't.
+  static func snapshot(_ content: some View, size: CGSize, to url: URL) -> Bool {
+    let window = NSWindow(
+      contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled], backing: .buffered, defer: false)
+    // Swift owns it; AppKit releasing it on close as well would free it twice.
+    window.isReleasedWhenClosed = false
+    window.contentView = NSHostingView(rootView: content)
+    window.contentView?.layoutSubtreeIfNeeded()
+    window.displayIfNeeded()
+    defer { window.close() }
+    guard let view = window.contentView?.superview ?? window.contentView, let png = png(of: view) else { return false }
+    try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    return (try? png.write(to: url)) != nil
+  }
+
   /// Renders the sheet on screen into a PNG; false when there's none.
   static func snapshotSheet(to url: URL) -> Bool {
     guard let sheet = NSApp.windows.first(where: { $0.isSheet && $0.isVisible }),

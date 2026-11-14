@@ -37,7 +37,7 @@ If the connection drops or you quit, the job carries on at the server. Atelier p
 
 Inpainting with a mask needs a server whose Atelier lists the "mask" feature, which means an Atelier at least as new as this one. With an older server the Brush and Eraser are disabled, and Generate stays off while a mask is painted inside the frame; Clear Mask and Invert Mask still work.
 
-Upscale and Export use what's on the server: FlashVSR+ has to be downloaded there, and this device doesn't need it. The server holds all of an upscale's frames in memory at once, so very long timelines need a server with memory to spare.
+Upscale and Export use what's on the server: FlashVSR+ or ReCaVSR has to be downloaded there (and ReCaVSR's 8-bit copy made there, for 8-bit), and this device doesn't need it. An iPad server never offers ReCaVSR, since it doesn't run on iPad, and a server running an Atelier from before ReCaVSR doesn't offer it either; an iPad uses ReCaVSR only through a Mac that has it. The server holds all of an upscale's frames in memory at once, so very long timelines need a server with memory to spare.
 
 Video results are large, up to hundreds of megabytes, and over a slow connection a download can take minutes. It resumes where it stopped if the connection drops.
 

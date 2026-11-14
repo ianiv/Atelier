@@ -452,9 +452,12 @@ extension Automation {
 
       // Upscaling that clip on the server, without sending its frames, then with.
       let upscalers = model.runTargetUpscalers?.upscalers ?? RemoteUpscalers()
-      @MainActor func upscaleOnServer(_ item: HistoryItem, method: ClipUpscale.Method, scale: Int = 2, variant: FlashVSRFiles.Variant, label: String) async {
+      @MainActor func upscaleOnServer(
+        _ item: HistoryItem, method: ClipUpscale.Method, scale: Int = 2, variant: FlashVSRFiles.Variant,
+        weights: ReCaVSRFiles.Weights = .full, label: String
+      ) async {
         let framesBefore = item.clip?.frames.count ?? 0
-        await model.upscale(item, method: method, scale: scale, variant: variant)
+        await model.upscale(item, method: method, scale: scale, variant: variant, weights: weights)
         check(model.queue.runningRemote.first?.target == target, "\(label) runs on the server")
         _ = await wait(until: { model.queue.isEmpty }, seconds: 1800)
         if case .finished(let tensorId) = model.queue.recent.first?.status, let result = model.history.item(tensorId: tensorId) {
@@ -470,6 +473,11 @@ extension Automation {
           check(uploads() == before, "the server's own copy of the clip saves sending its frames")
         } else {
           print("SKIP the server has no FlashVSR+")
+        }
+        if let weights = upscalers.recaVSR?.last {
+          await upscaleOnServer(clipItem, method: .recaVSR, variant: .turbo, weights: weights, label: "ReCaVSR \(weights.title)")
+        } else {
+          print("SKIP the server has no ReCaVSR")
         }
         // The scales Apple's model offers depend on the size.
         let fastScale = SystemSuperResolution.scaleFactors(width: clipItem.sidecar.width, height: clipItem.sidecar.height).first
