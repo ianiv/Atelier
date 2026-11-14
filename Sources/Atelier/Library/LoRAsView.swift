@@ -5,12 +5,19 @@ import UniformTypeIdentifiers
 struct LoRAsView: View {
   @Environment(ModelLibrary.self) private var library
   @Environment(FileDialogs.self) private var fileDialogs
-  @State private var search = ""
-  @State private var family: String?
-  @State private var selection: String?
   @State private var pendingDelete: ModelLibrary.LoRA?
   @State private var pendingMove: ModelLibrary.Move?
   @State private var dropTargeted = false
+  /// Search, family, selection and sort live on the library, so they're still there after
+  /// visiting another screen.
+  private var search: String { library.loraScreen.search }
+  private var family: String? { library.loraScreen.family }
+  private var selection: String? {
+    get { library.loraScreen.selection }
+    nonmutating set { library.loraScreen.selection = newValue }
+  }
+
+  private var screen: Bindable<ModelLibrary> { Bindable(library) }
 
   private var filtered: [ModelLibrary.LoRA] {
     let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -20,6 +27,21 @@ struct LoRAsView: View {
           || lora.file.localizedCaseInsensitiveContains(query)
           || lora.prefix.localizedCaseInsensitiveContains(query))
     }
+  }
+
+  /// `filtered` with the values each column sorts by, in the order the column headers ask for.
+  private var tableRows: [LoRATableRow] {
+    let rows = filtered.map { lora in
+      LoRATableRow(
+        lora: lora,
+        name: lora.name,
+        family: lora.family,
+        trigger: lora.prefix.trimmingCharacters(in: .whitespaces),
+        size: lora.size ?? 0,
+        folder: lora.folder.map(library.folderName) ?? "")
+    }
+    let sortOrder = library.loraScreen.sortOrder
+    return sortOrder.isEmpty ? rows : rows.sorted(using: sortOrder)
   }
 
   private var families: [String] {
@@ -34,7 +56,7 @@ struct LoRAsView: View {
   }
 
   private var familyPicker: some View {
-    Picker("Family", selection: $family) {
+    Picker("Family", selection: screen.loraScreen.family) {
       Text("All families").tag(String?.none)
       ForEach(families, id: \.self) { Text(ModelLibrary.familyName($0)).tag(Optional($0)) }
     }
@@ -75,7 +97,7 @@ struct LoRAsView: View {
             .help("Import .safetensors LoRA files (or drop them here)")
         }
       }
-      .searchable(text: $search, placement: .toolbar, prompt: "Filter LoRAs")
+      .searchable(text: screen.loraScreen.search, placement: .toolbar, prompt: "Filter LoRAs")
       .detailInspector(selection: selection, isEmpty: selected == nil, clearSelection: { selection = nil }) {
         Group {
           if let selected {
@@ -135,8 +157,9 @@ struct LoRAsView: View {
     } else if filtered.isEmpty {
       ContentUnavailableView.search(text: search)
     } else {
-      Table(filtered, selection: $selection) {
-        TableColumn("Name") { lora in
+      Table(tableRows, selection: screen.loraScreen.selection, sortOrder: screen.loraScreen.sortOrder) {
+        TableColumn("Name", value: \.name) { row in
+          let lora = row.lora
           HStack(spacing: 6) {
             Text(lora.name).lineLimit(1)
             if !lora.isDownloaded {
@@ -147,21 +170,21 @@ struct LoRAsView: View {
           }
           .help(lora.file)
         }
-        TableColumn("For") { lora in
-          Text(lora.family).foregroundStyle(.secondary)
+        TableColumn("For", value: \.family) { row in
+          Text(row.family).foregroundStyle(.secondary)
         }
         .width(min: 90, ideal: 130)
-        TableColumn("Trigger") { lora in
-          Text(lora.prefix.trimmingCharacters(in: .whitespaces)).foregroundStyle(.secondary)
+        TableColumn("Trigger", value: \.trigger) { row in
+          Text(row.trigger).foregroundStyle(.secondary)
         }
         .width(min: 60, ideal: 120)
-        TableColumn("Size") { lora in
-          Text(lora.size.map(ModelsView.bytes) ?? "").monospacedDigit()
+        TableColumn("Size", value: \.size) { row in
+          Text(row.lora.size.map(ModelsView.bytes) ?? "").monospacedDigit()
             .foregroundStyle(.secondary)
         }
         .width(min: 60, ideal: 80)
-        TableColumn("Folder") { lora in
-          Text(lora.folder.map(library.folderName) ?? "").foregroundStyle(.secondary)
+        TableColumn("Folder", value: \.folder) { row in
+          Text(row.folder).foregroundStyle(.secondary)
         }
         .width(min: 70, ideal: 110)
       }
@@ -347,4 +370,24 @@ struct LoRAImportSheet: View {
       .disabled(library.isImporting)
     }
   }
+}
+
+/// A LoRAs table row with the values its columns sort by.
+struct LoRATableRow: Identifiable {
+  let lora: ModelLibrary.LoRA
+  let name: String
+  let family: String
+  let trigger: String
+  let size: Int64
+  let folder: String
+  var id: String { lora.id }
+}
+
+/// What the LoRAs screen shows, kept on `ModelLibrary` while other screens are open.
+struct LoRAScreenState {
+  var search = ""
+  var family: String?
+  var selection: String?
+  /// The column the table is sorted by; empty keeps the list's order.
+  var sortOrder: [KeyPathComparator<LoRATableRow>] = []
 }

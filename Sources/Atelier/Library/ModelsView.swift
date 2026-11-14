@@ -70,6 +70,28 @@ struct ModelsView: View {
     return rows
   }
 
+  /// `rows` with the values each column sorts by, in the order the column headers ask for.
+  private var tableRows: [ModelTableRow] {
+    let rows = rows.map { row in
+      ModelTableRow(
+        row: row,
+        name: row.name,
+        family: row.model.map { $0.version ?? "" } ?? ModelLibrary.h3ImageFamily,
+        size: row.model.flatMap { library.sizes[$0.file] } ?? 0,
+        folder: row.model.flatMap { library.folders[$0.file] }.map(library.folderName) ?? "",
+        status: status(rank: row))
+    }
+    let sortOrder = library.modelSortOrder
+    return sortOrder.isEmpty ? rows : rows.sorted(using: sortOrder)
+  }
+
+  /// Orders the status column: downloading, downloaded, then the rest.
+  private func status(rank row: ModelRow) -> Int {
+    guard let model = row.model else { return 2 }
+    if library.downloads[model.file] != nil { return 0 }
+    return model.isDownloaded ? 1 : 2
+  }
+
   var body: some View {
     table
       .overlay {
@@ -211,8 +233,9 @@ struct ModelsView: View {
     } else if rows.isEmpty, !search.isEmpty {
       ContentUnavailableView.search(text: search)
     } else {
-      Table(rows, selection: $selection) {
-        TableColumn("Name") { row in
+      Table(tableRows, selection: $selection, sortOrder: Bindable(library).modelSortOrder) {
+        TableColumn("Name", value: \.name) { item in
+          let row = item.row
           HStack(spacing: 6) {
             Text(row.name).lineLimit(1)
             if case .model(let model) = row, library.isCustom(model) {
@@ -228,23 +251,23 @@ struct ModelsView: View {
           }
           .help(row.model?.file ?? "")
         }
-        TableColumn("Family") { row in
-          Text(row.model.map { $0.version ?? "" } ?? ModelLibrary.h3ImageFamily)
+        TableColumn("Family", value: \.family) { item in
+          Text(item.family)
             .foregroundStyle(.secondary)
         }
         .width(min: 90, ideal: 140)
-        TableColumn("Size") { row in
-          Text(row.model.flatMap { library.sizes[$0.file] }.map(Self.bytes) ?? "")
+        TableColumn("Size", value: \.size) { item in
+          Text(item.size > 0 ? Self.bytes(item.size) : "")
             .monospacedDigit().foregroundStyle(.secondary)
         }
         .width(min: 60, ideal: 80)
-        TableColumn("Folder") { row in
-          Text(row.model.flatMap { library.folders[$0.file] }.map(library.folderName) ?? "")
+        TableColumn("Folder", value: \.folder) { item in
+          Text(item.folder)
             .foregroundStyle(.secondary)
         }
         .width(min: 70, ideal: 110)
-        TableColumn("") { row in
-          status(row)
+        TableColumn("", value: \.status) { item in
+          status(item.row)
         }
         .width(min: 130, ideal: 150)
       }
@@ -315,6 +338,17 @@ struct ModelsView: View {
 
 /// A row of the Models list: a catalog model, or MiniMax H3 Image before it's installed, which
 /// isn't in the catalog until its install (`H3ImageInstallSheet`) has imported it.
+/// A Models table row with the values its columns sort by.
+struct ModelTableRow: Identifiable {
+  let row: ModelRow
+  let name: String
+  let family: String
+  let size: Int64
+  let folder: String
+  let status: Int
+  var id: String { row.id }
+}
+
 enum ModelRow: Identifiable {
   case model(MediaGenerationResolvedModel)
   case h3Image

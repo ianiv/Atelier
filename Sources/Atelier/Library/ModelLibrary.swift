@@ -157,6 +157,10 @@ final class ModelLibrary {
   /// The move to another models folder running now (see `ModelMove.swift`); one at a time.
   var moving: MoveProgress?
   var errorMessage: String?
+  /// The LoRAs screen's search, family filter, selection and sort, kept while it isn't shown.
+  var loraScreen = LoRAScreenState()
+  /// The Models table's sort (empty keeps the catalog's order, by name), kept the same way.
+  var modelSortOrder: [KeyPathComparator<ModelTableRow>] = []
 
   private var downloadTasks: [String: Task<Void, Never>] = [:]
   var importTask: Task<Void, Never>?
@@ -167,8 +171,20 @@ final class ModelLibrary {
 
   init(create: CreateModel) {
     self.create = create
-    create.onModelsReloaded = { [weak self] in self?.reloadLoRAs() }
+    create.onModelsReloaded = { [weak self] in
+      guard let self else { return }
+      reloadLoRAs()
+      // A catalog read before the folders (and their custom.json) were loaded leaves out every
+      // imported model, and the Models screen only rereads an empty catalog. Once one has been
+      // asked for, reread it whenever the folders are.
+      if catalogRequested { Task { await self.refresh() } }
+    }
   }
+
+  /// `refresh()` has been called: the catalog is wanted, so folder reloads keep it current.
+  private var catalogRequested = false
+  /// Counts `refresh()` calls, so one that finishes after a newer one doesn't overwrite it.
+  private var refreshGeneration = 0
 
   /// The first models folder that can be reached, else the models directory setting: where the
   /// engine writes a file no folder has yet (`ModelZoo.filePathForModelDownloaded`).
@@ -187,12 +203,16 @@ final class ModelLibrary {
   /// and cached by MGK, or if that failed, tried again here (`CommunityCatalog`); an offline
   /// listing would leave out every community model.
   func refresh() async {
+    catalogRequested = true
+    refreshGeneration += 1
+    let refresh = refreshGeneration
     isLoadingCatalog = true
-    defer { isLoadingCatalog = false }
+    defer { if refresh == refreshGeneration { isLoadingCatalog = false } }
     // The engine points MGK at the models folders; wait until it has.
     await create.engine.useModelsDirectories(create.availableModelsDirectories)
     let generation = CommunityCatalog.generation
     let models = await CommunityCatalog.models()
+    guard refresh == refreshGeneration else { return }
     catalog = models.sorted {
       $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
     }
