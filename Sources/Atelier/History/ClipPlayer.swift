@@ -220,6 +220,8 @@ struct ClipFrameMenu: View {
 
   var body: some View {
     let count = item.clip?.frames.count ?? 0
+    // Until this clip loads, the playback's time belongs to no frame of it (or to another clip).
+    let frameKnown = playback.isReady(for: item.tensorId)
     Button("Save Video…") { ClipActions.save(item, history: history, dialogs: fileDialogs) }
     Button("Save to Photos") { ClipActions.saveToPhotos(item, history: history, model: model) }
     Divider()
@@ -228,6 +230,7 @@ struct ClipFrameMenu: View {
       model.useFrame(index, of: item)
       navigation.section = .create
     }
+    .disabled(!frameKnown)
     Button("Use Last Frame as Input") {
       playback.pause()
       model.useFrame(count - 1, of: item)
@@ -238,10 +241,12 @@ struct ClipFrameMenu: View {
       let index = playback.pauseOnFrame(count: count)
       Task { if let frame = await history.frame(index, of: item) { HistoryStore.copy(frame) } }
     }
+    .disabled(!frameKnown)
     Button("Add Frame to Moodboard") {
       let index = playback.pauseOnFrame(count: count)
       Task { if let frame = await history.frame(index, of: item) { model.moodboard.add(frame) } }
     }
+    .disabled(!frameKnown)
   }
 }
 
@@ -256,10 +261,13 @@ struct CanvasClipMenu: View {
 
   var body: some View {
     let count = item.clip?.frames.count ?? 0
+    // The canvas's playback is shared: until this clip loads it may hold another one's time.
+    let frameKnown = playback.isReady(for: item.tensorId)
     Button("Copy Frame") {
       let index = playback.pauseOnFrame(count: count)
       Task { if let frame = await history.frame(index, of: item) { HistoryStore.copy(frame) } }
     }
+    .disabled(!frameKnown)
     Button("Save Video…") { ClipActions.save(item, history: history, dialogs: fileDialogs) }
     Button("Save to Photos") { ClipActions.saveToPhotos(item, history: history, model: model) }
     Divider()
@@ -267,6 +275,7 @@ struct CanvasClipMenu: View {
       let index = playback.pauseOnFrame(count: count)
       model.useFrame(index, of: item)
     }
+    .disabled(!frameKnown)
     Button("Use Last Frame as Input") {
       playback.pause()
       model.useFrame(count - 1, of: item)
@@ -279,7 +288,8 @@ struct CanvasClipMenu: View {
       addToMoodboard: {
         let index = playback.pauseOnFrame(count: count)
         Task { if let frame = await history.frame(index, of: item) { model.moodboard.add(frame) } }
-      })
+      },
+      canAddToMoodboard: frameKnown)
     Divider()
     // A clip always fills the frame: canvas zoom doesn't reach it.
     ZoomMenuItems(canvas: model.canvas)
