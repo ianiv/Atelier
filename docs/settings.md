@@ -59,6 +59,14 @@ These match Draw Things' Machine Settings. **Automatic** uses what the engine pi
 | Merge LoRA | Merging LoRA weights into the model is 10–30% faster. Running them separately keeps quantized weights and uses less memory. |
 | Use High Resolution Preview When Possible | Sharper step previews, decoded on the Neural Engine when it can, so it rarely slows generation. Off shows a quicker low-resolution preview. |
 
+**Weights Cache Size** is what makes the second run with a model faster than the first: the model and its text encoder stay in memory between runs, so changing the prompt, settings or canvas doesn't reload them from disk. A few things still reload:
+
+- A model bigger than the cache always reloads, every run. Raise the size if you want a big model to stay in memory, at the cost of that memory.
+- LoRAs merged into the model (**Merge LoRA**) aren't cached, so a run with a merged LoRA reads the model again.
+- When the cache is full, the smallest models go first to make room.
+
+Editing the canvas or moodboard doesn't reload anything, except for FLUX.3, which reloads its own weights (and only its own) when the images a run sends it change (added, removed or resized).
+
 ## Compute
 
 Lets paired devices run jobs on this one, and lists the servers this one can use. Sign in to Tailscale, set which networks to accept connections from, pair and remove devices, and add servers here. See [Running jobs on another device](remote.md).

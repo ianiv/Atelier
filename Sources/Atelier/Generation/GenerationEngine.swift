@@ -11,6 +11,7 @@ import Foundation
 @preconcurrency import NNC
 import Synchronization
 @preconcurrency import Upscaler
+@preconcurrency import WeightsCache
 
 /// Owns a cached pipeline for the current model and runs one generation at a time.
 actor GenerationEngine {
@@ -154,9 +155,26 @@ actor GenerationEngine {
     await waitForTurn()
     defer { endTurn() }
     try Task.checkCancellation()
-    var pipeline = try await pipeline(for: request.model)
+    let pipeline = try await pipeline(for: request.model)
     await applyPerformanceSettings(using: pipeline)
-    dropCachedModelsIfInputsChanged(request)
+    await dropCachedModelsIfInputsChanged(request)
+    await Self.logWeightsCache("before", request.model)
+    do {
+      let output = try await generateInTurn(request, pipeline: pipeline, progress: progress)
+      await Self.logWeightsCache("after", request.model)
+      return output
+    } catch {
+      await Self.logWeightsCache("after", request.model)
+      throw error
+    }
+  }
+
+  /// `generate`'s run, in the engine's turn with the Performance settings applied.
+  private func generateInTurn(
+    _ request: Request, pipeline: MediaGenerationPipeline,
+    progress: @escaping @Sendable (Progress) -> Void
+  ) async throws -> Output {
+    var pipeline = pipeline
     if let video = request.configuration.videoModel,
        let output = try await generateVideo(request, video: video, pipeline: pipeline, progress: progress)
     {
@@ -594,15 +612,25 @@ actor GenerationEngine {
     }
   }
 
-  /// Engine workaround: some models build different layers depending on the images sent.
-  /// Flux.3 adds its reference layers (embedder, refiner block, modulations) only when a run has
-  /// references, but the weights cache keeps the model's weights under the model file either way.
-  /// After a run without references, the next run with them finds the cache, skips reading the
-  /// file and leaves the reference layers unloaded: the canvas is ignored or the result is a
-  /// patchwork of tiles. The model preloader likewise reuses a model compiled for other inputs
-  /// (`ModelPreloader.retrieveUNet` doesn't compare them). So when the images sent change, empty
-  /// both: set the weights cache and "keep model in memory" to 0 and back.
-  private func dropCachedModelsIfInputsChanged(_ request: Request) {
+  /// Engine workaround: a model whose denoiser has a different parameter set depending on the
+  /// images sent. Flux.3 builds its reference refiner blocks (`content_mode_blocks.image_cond`)
+  /// only when a run has references (`Flux3` in Flux3.swift), and with the kontext modifier the
+  /// canvas is the first reference (`LocalImageGenerator`'s reference encoding), so the canvas
+  /// counts too. The weights cache keeps the denoiser under the model file either way
+  /// (`UNetProtocol`'s `weightsCacheKey`: file path plus the TeaCache suffix), so after a run
+  /// without references the next run with them finds the cache, skips reading the file and leaves
+  /// those blocks unloaded: the canvas is ignored or the result is a patchwork of tiles. Flux.1,
+  /// Flux.2, Qwen Image, Fibo 2 and MOSS Image don't need this: their denoisers have the same
+  /// parameters either way, and their fixed encoders, which differ, are cached under a separate
+  /// `:ref` key (`UNetFixedEncoder`).
+  ///
+  /// So when the images sent change between two runs of such a model, its own cache entries (every
+  /// key starting with its file path) are removed, on the generation queue, before this run loads
+  /// anything; other models and the text encoders stay cached. Separately, the model preloader
+  /// reuses a model compiled for other inputs (`ModelPreloader.retrieveUNet` doesn't compare
+  /// them), so for the models it holds (`ModelPreloader.isEnabled`) "keep model in memory" is set
+  /// to 0 and back.
+  private func dropCachedModelsIfInputsChanged(_ request: Request) async {
     let images = [request.canvas].compactMap(\.self) + request.moodboard.map(\.image)
     let inputs = (
       model: request.model, canvas: request.canvas != nil,
@@ -610,14 +638,77 @@ actor GenerationEngine {
     )
     defer { lastImageInputs = inputs }
     guard let last = lastImageInputs, last.model == inputs.model,
-          last.canvas != inputs.canvas || last.sizes != inputs.sizes,
-          var dictionary = Self.engineWorkspace()?.dictionary
+          last.canvas != inputs.canvas || last.sizes != inputs.sizes
     else { return }
-    // The preloader applies each change in order on the generation queue, ahead of this run.
-    for key in ["total_weights_cache", "keep_model_in_memory"] {
-      let value = dictionary[key, Int.self]
-      dictionary[key, Int.self] = 0
-      dictionary[key, Int.self] = value
+    let model = request.model
+    if Self.isPreloaded(model), var dictionary = Self.engineWorkspace()?.dictionary {
+      // The preloader applies each change in order on the generation queue, ahead of this run.
+      let value = dictionary["keep_model_in_memory", Int.self]
+      dictionary["keep_model_in_memory", Int.self] = 0
+      dictionary["keep_model_in_memory", Int.self] = value
+    }
+    guard Self.versionsWithInputDependentWeights.contains(ModelZoo.versionForModel(model)) else { return }
+    // The path the engine reads the model from (`LocalImageGenerator`'s sampler `filePath`).
+    let path = ModelZoo.filePathForModelDownloaded(model)
+    await Self.withWeightsCache { cache in
+      guard let keys = Self.weightsCacheKeys(cache) else { return }
+      let removed = keys.filter { $0 == path || $0.hasPrefix(path + ":") }
+      for key in removed {
+        _ = cache.remove(at: key)
+      }
+      Log.engine.info(
+        "Images sent changed: dropped \(removed.count, privacy: .public) cached weights of \(model, privacy: .public)")
+    }
+  }
+
+  /// Model versions whose denoiser builds a different parameter set depending on whether a run
+  /// has references, see `dropCachedModelsIfInputsChanged`.
+  private nonisolated static let versionsWithInputDependentWeights: Set<ModelVersion> = [.flux3_5b]
+
+  /// Whether the model preloader holds `model` (`ModelPreloader.isEnabled`): SD 1.x, SD 2, SDXL
+  /// base or refiner and SSD-1B, without a separate text encoder.
+  private nonisolated static func isPreloaded(_ model: String) -> Bool {
+    let version = ModelZoo.versionForModel(model)
+    guard [.v1, .v2, .sdxlBase, .sdxlRefiner, .ssd1b].contains(version) else { return false }
+    return ModelZoo.textEncoderVersionForModel(model) == nil
+  }
+
+  /// The engine's weights cache (`ModelPreloader.weightsCache`, the instance `LocalImageGenerator`
+  /// hands every model it loads). It isn't thread-safe and the engine uses it on its generation
+  /// queue, so `body` runs there; nil until the engine exists.
+  @discardableResult
+  private nonisolated static func withWeightsCache<T: Sendable>(
+    _ body: @escaping @Sendable (WeightsCache) -> T
+  ) async -> T? {
+    guard let queue = engineResources()?.queue else { return nil }
+    return await withCheckedContinuation { continuation in
+      queue.async {
+        let cache = engineResources().flatMap {
+          reflected($0.generator.modelPreloader, "weightsCache", as: WeightsCache.self)
+        }
+        continuation.resume(returning: cache.map(body))
+      }
+    }
+  }
+
+  /// The keys of the weights cache's entries (`WeightsCache.map`, private): a model's are its file
+  /// path plus a suffix. Call on the generation queue.
+  private nonisolated static func weightsCacheKeys(_ cache: WeightsCache) -> [String]? {
+    guard let map = reflectedChild(cache, "map") else { return nil }
+    guard let dictionary = map as? [String: Any] else {
+      reportMissing("WeightsCache.map as [String: Item]")
+      return nil
+    }
+    return Array(dictionary.keys)
+  }
+
+  /// Logs how much the weights cache holds, around each run: an entry count unchanged by a run
+  /// means its model came from the cache, not the disk.
+  private nonisolated static func logWeightsCache(_ moment: String, _ model: String) async {
+    await withWeightsCache { cache in
+      let gigabytes = Double(cache.totalSize) / 1_073_741_824
+      Log.engine.info(
+        "Weights cache \(moment, privacy: .public) \(model, privacy: .public): \(cache.count, privacy: .public) entries, \(gigabytes, format: .fixed(precision: 1), privacy: .public) GiB")
     }
   }
 
@@ -691,6 +782,9 @@ actor GenerationEngine {
         name: "resources.tempDir",
         found: resources.flatMap { Self.reflected($0, "tempDir", as: String.self) } != nil),
       ReflectedField(name: "modelPreloader.workspace", found: Self.engineWorkspace() != nil),
+      ReflectedField(
+        name: "modelPreloader.weightsCache.map",
+        found: await Self.withWeightsCache { Self.weightsCacheKeys($0) != nil } ?? false),
       ReflectedField(
         name: "pipeline.storage.recommendedTemplate",
         found: Self.reflectedChild(pipeline, "storage").flatMap {
