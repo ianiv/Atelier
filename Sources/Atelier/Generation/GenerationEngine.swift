@@ -748,9 +748,8 @@ actor GenerationEngine {
   private nonisolated static func logWeightsCache(_ moment: String, _ model: String) async {
     await withWeightsCache { cache in
       let gigabytes = Double(cache.totalSize) / 1_073_741_824
-      let hits = reflected(cache, "textEncoderOutputHits", as: Int.self).map(String.init) ?? "unknown"
       Log.engine.info(
-        "Weights cache \(moment, privacy: .public) \(model, privacy: .public): \(cache.count, privacy: .public) entries, \(gigabytes, format: .fixed(precision: 1), privacy: .public) GiB, \(hits, privacy: .public) text encoder output hits")
+        "Weights cache \(moment, privacy: .public) \(model, privacy: .public): \(cache.count, privacy: .public) entries, \(gigabytes, format: .fixed(precision: 1), privacy: .public) GiB, \(cache.textEncoderOutputHits, privacy: .public) text encoder output hits")
     }
   }
 
@@ -831,10 +830,6 @@ actor GenerationEngine {
       ReflectedField(
         name: "modelPreloader.weightsCache.map",
         found: await Self.withWeightsCache { Self.weightsCacheKeys($0) != nil } ?? false),
-      ReflectedField(
-        name: "modelPreloader.weightsCache.textEncoderOutputHits",
-        found: await Self.withWeightsCache { Self.reflected($0, "textEncoderOutputHits", as: Int.self) != nil }
-          ?? false),
       ReflectedField(
         name: "pipeline.storage.recommendedTemplate",
         found: Self.reflectedChild(pipeline, "storage").flatMap {
