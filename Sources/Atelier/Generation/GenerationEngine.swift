@@ -117,17 +117,68 @@ actor GenerationEngine {
     }
   }
 
-  /// Points MGK's default environment at the models folders (a file is looked up in each, in
-  /// order, and downloads go to the first), loads their custom.json and custom_lora.json, and
-  /// drops any cached pipeline, along with the engine's kept prompt encoding
+  /// Points MGK's default environment at the models folders (downloads go to the first; a file
+  /// already there is looked up internal drives first, `lookupOrder`), loads their custom.json and
+  /// custom_lora.json, and drops any cached pipeline, along with the engine's kept prompt encoding
   /// (`WeightsCache.textEncoderOutput`, MiniMax H3), which names its text encoder by path.
   func setModelsDirectories(_ directories: [String]) async {
     let urls = directories.map { URL(fileURLWithPath: $0, isDirectory: true) }
+    let order = Self.lookupOrder(urls, isInternal: Self.isOnInternalVolume)
+    // Set before the folders: the engine ignores entries not in `externalUrls`, so neither order
+    // of the two assignments can look in a folder that isn't in use.
+    ModelZoo.lookupUrlsOrder = order
     MediaGenerationEnvironment.default.externalUrls = urls
+    if order != loggedLookupOrder {
+      loggedLookupOrder = order
+      Log.engine.info("Models folder lookup order: \(order.map(\.path).joined(separator: ", "), privacy: .public)")
+    }
     pipeline = nil
     await Self.withWeightsCache { $0.removeTextEncoderOutput() }
     await ModelLibrary.loadCustomSpecifications(in: urls)
   }
+
+  /// The last lookup order logged, so it's logged once per change.
+  private var loggedLookupOrder: [URL]?
+
+  /// The order the engine looks for a file that's already in a models folder
+  /// (`ModelZoo.lookupUrlsOrder`, read by `ModelZoo.filePathForModelDownloaded`): folders on an
+  /// internal drive first, which load faster, each group kept in the person's order. Only the
+  /// lookup moves: new downloads, imports and conversions still go to the first folder
+  /// (`externalUrls.first`), and custom.json is still found in the person's order.
+  nonisolated static func lookupOrder(_ folders: [URL], isInternal: (URL) -> Bool) -> [URL] {
+    let onInternal = folders.filter(isInternal)
+    return onInternal + folders.filter { !onInternal.contains($0) }
+  }
+
+  /// Whether `folder` is on an internal volume (`volumeIsInternal`) and holds real local files.
+  /// Unknown counts as external, so a folder only moves ahead when the system says it's internal.
+  /// iCloud Drive and other File Provider folders sit on the internal volume too, but a file there
+  /// can be an evicted placeholder that still passes `fileExists`, so loading it would start a
+  /// download of several GB: those count as external (`isUbiquitousItem`, `isCloudPath`).
+  nonisolated static func isOnInternalVolume(_ folder: URL) -> Bool {
+    guard let values = try? folder.resourceValues(forKeys: [.volumeIsInternalKey, .isUbiquitousItemKey]),
+          values.volumeIsInternal == true, values.isUbiquitousItem != true
+    else { return false }
+    return !isCloudPath(folder.path)
+  }
+
+  /// Whether `path` may be a cloud folder. On a Mac that's under `~/Library/Mobile Documents`
+  /// (iCloud Drive) or `~/Library/CloudStorage` (File Provider apps such as Dropbox). On iPad any
+  /// folder outside the app's own container (`appHome`) is reached through a File Provider.
+  nonisolated static func isCloudPath(_ path: String, onMac: Bool = isMac, appHome: String = NSHomeDirectory()) -> Bool {
+    let folder = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path + "/"
+    if onMac {
+      return ["/Library/Mobile Documents/", "/Library/CloudStorage/"].contains { folder.contains($0) }
+    }
+    let home = URL(fileURLWithPath: appHome).resolvingSymlinksInPath().standardizedFileURL.path + "/"
+    return !folder.hasPrefix(home)
+  }
+
+  #if os(macOS)
+    nonisolated static let isMac = true
+  #else
+    nonisolated static let isMac = false
+  #endif
 
   /// Points MGK at the models folders unless it already is, keeping the cached pipeline.
   func useModelsDirectories(_ directories: [String]) async {

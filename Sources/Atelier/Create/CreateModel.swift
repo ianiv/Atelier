@@ -265,12 +265,13 @@ final class CreateModel {
       }
     }
   }
-  /// Where downloads and imports go, and the first folder a model file is looked up in.
+  /// Where downloads and imports go, and the first of the person's folders.
   var modelsDirectory = AppSettings.modelsDirectory
-  /// More folders models and LoRAs are read from, in lookup order after `modelsDirectory`.
+  /// More folders models and LoRAs are read from, in the person's order after `modelsDirectory`.
   var additionalModelsDirectories = AppSettings.additionalModelsDirectories
-  /// The models folders the engine reads now: the ones above that can be reached, in lookup
-  /// order. A folder on a disconnected drive is left out until it's back.
+  /// The models folders the engine reads now: the ones above that can be reached, in the person's
+  /// order (the engine looks on internal drives first, `GenerationEngine.lookupOrder`). A folder
+  /// on a disconnected drive is left out until it's back.
   private(set) var availableModelsDirectories: [String] = []
   /// Called after the models folders are reread (ModelLibrary rereads its LoRAs).
   @ObservationIgnored var onModelsReloaded: (() -> Void)?

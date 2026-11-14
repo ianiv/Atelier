@@ -192,7 +192,7 @@ final class ModelLibrary {
     directories.first ?? URL(fileURLWithPath: create.modelsDirectory, isDirectory: true)
   }
 
-  /// The models folders that can be reached, in lookup order.
+  /// The models folders that can be reached, in the person's order.
   var directories: [URL] {
     create.availableModelsDirectories.map { URL(fileURLWithPath: $0, isDirectory: true) }
   }
@@ -1424,15 +1424,17 @@ final class ModelLibrary {
 
   // MARK: - Files
 
-  /// `file` and its `-tensordata`, from the first models folder that has the file (the one the
-  /// engine reads).
+  /// `file` and its `-tensordata`, from the first models folder that has the file, in the
+  /// person's order (`folder(of:in:)`).
   nonisolated static func files(of file: String, in directories: [URL]) -> [URL] {
     guard let directory = folder(of: file, in: directories) else { return [] }
     return [file, file + "-tensordata"].map { directory.appendingPathComponent($0) }
       .filter { FileManager.default.fileExists(atPath: $0.path) }
   }
 
-  /// The first models folder that has `file`: the one the engine reads it from.
+  /// The first models folder, in the person's order, that has `file`. With copies in several the
+  /// engine may read another, since it looks on internal drives first
+  /// (`GenerationEngine.lookupOrder`).
   nonisolated static func folder(of file: String, in directories: [URL]) -> URL? {
     directories.first { FileManager.default.fileExists(atPath: $0.appendingPathComponent(file).path) }
   }
