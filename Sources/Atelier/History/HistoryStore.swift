@@ -238,7 +238,7 @@ final class HistoryStore {
     }
     for (id, children) in visibleChildren { visibleChildren[id] = children.sorted(by: tree.isNewer) }
     if currentTensorId.flatMap(tree.step(tensorId:)) == nil {
-      currentTensorId = (stored ?? tree.newest).flatMap { tree.steps[$0]?.tensorId }
+      currentTensorId = Self.openingCurrent(in: tree, stored: stored)
     }
     projectNames = Self.scanProjectNames()
     if !projectNames.contains(project.name) { projectNames = (projectNames + [project.name]).sorted() }
@@ -478,14 +478,28 @@ final class HistoryStore {
   /// another size was drawn into (`save`), when that's an entry. It holds the canvas and the whole
   /// moodboard as they were when the run was queued.
   func inputEntry(of item: HistoryItem) -> HistoryItem? {
+    Self.inputEntry(of: item, in: tree)
+  }
+
+  /// `inputEntry` in `tree`: only Atelier's hidden frame steps (Other) are passed over; any other
+  /// step that isn't listed (a Draw Things Moodboard or Mask step, an Imported one from before
+  /// entries) ends the search, so an older entry beyond it isn't taken for the run's input.
+  nonisolated static func inputEntry(of item: HistoryItem, in tree: ProjectTree) -> HistoryItem? {
     guard !item.isEntry else { return nil }
     var next = tree.steps[item.id]?.parent
     var seen: Set<StepID> = []
-    while let id = next, seen.insert(id).inserted {
+    while let id = next, seen.insert(id).inserted, let step = tree.steps[id] {
       if let listed = tree.items[id] { return listed.isEntry ? listed : nil }
-      next = tree.steps[id]?.parent
+      guard !step.generated, step.reasonValue == ProjectFormat.Reason.other.rawValue else { return nil }
+      next = step.parent
     }
     return nil
+  }
+
+  /// What's current when a project opens: the step it recorded, else the newest, by what finds it
+  /// (an input entry's key, which its image would find the image's own step by instead).
+  nonisolated static func openingCurrent(in tree: ProjectTree, stored: StepID?) -> Int64? {
+    (stored ?? tree.newest).flatMap { tree.steps[$0]?.key }
   }
 
   /// A step's moodboard images, weights and `shuffle_<id>` tensors (empty when it had none).
@@ -618,6 +632,9 @@ final class HistoryStore {
     return item(tensorId: appended.key)
   }
 
+  /// How long quitting waits for an entry to be written.
+  static let quitWriteTimeout: TimeInterval = 5
+
   /// `saveEntry` for quitting, which can't wait: written off the main actor while this waits for it,
   /// up to a few seconds. Made the current step when `makeCurrent`, as the project's newest.
   func saveEntryBeforeQuit(_ input: EntryInput, after parent: Int64?, makeCurrent: Bool) {
@@ -654,7 +671,7 @@ final class HistoryStore {
         project.setCurrentStep(step == tree.newest ? nil : step)
       }
     }
-    _ = done.wait(timeout: .now() + 5)
+    _ = done.wait(timeout: .now() + Self.quitWriteTimeout)
   }
 
   /// An entry's tensors and thumbnail, made off the main actor: the canvas image's tensor when it's

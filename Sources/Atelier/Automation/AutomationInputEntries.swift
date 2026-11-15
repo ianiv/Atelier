@@ -195,10 +195,89 @@ extension Automation {
       model.use(run1)
       await idle()
       let used = await settled {
-        same(model.image, original) && model.moodboard.items.map(\.weight) == [1, 0] && model.canvasMode == .edit
+        !model.isLoadingCanvasImage && history.currentItem == moodboardEntry
+          && same(model.image, original) && model.moodboard.items.map(\.weight) == [1, 0] && model.canvasMode == .edit
+          && same(model.moodboard.items.first?.image, first) && same(model.moodboard.items.last?.image, second)
       }
       check(used, "Use on the first run brings back the original image and the whole moodboard, weight 0 too")
-      check(history.currentItem == moodboardEntry, "with its input entry current")
+      check(
+        history.currentItem == moodboardEntry,
+        "with its input entry current (current: \(history.currentItem.map { "\($0.entryReason?.rawValue ?? "run") \($0.tensorId)" } ?? "none"), entry \(moodboardEntry.tensorId), run \(run1.tensorId))")
+
+      // A moodboard change still settling when an entry is restored: it's recorded, but what was
+      // restored stays current and on the screen.
+      model.moodboard.add(second)
+      model.restore(entry: moodboardEntry)
+      await model.flushEntries()
+      _ = await settled { model.moodboard.items.count == 2 }
+      let settledEntry = history.items.first
+      check(
+        history.currentItem == moodboardEntry && model.moodboard.items.map(\.weight) == [1, 0]
+          && settledEntry?.entryReason == .moodboard && settledEntry != moodboardEntry
+          && settledEntry?.entryMoodboard.count == 3,
+        "a moodboard change made just before a restore is recorded, but the restored entry stays current")
+
+      // Reopening the project: the entry is current, not the image it shows.
+      let projectName = history.project.name
+      await history.open(projectName + " other")
+      await history.open(projectName)
+      check(
+        history.currentTensorId == moodboardEntry.tensorId && history.currentItem == moodboardEntry,
+        "reopened, the project's current step is the entry, by its key")
+      model.restore(entry: moodboardEntry)
+      _ = await settled { same(model.image, original) }
+
+      // Deleting the entry a run was made from: the run's input is the Imported entry, which shows
+      // the same image, and Use and Match Colors still find it.
+      do {
+        try await history.delete([moodboardEntry])
+      } catch {
+        check(false, "delete: \(error.localizedDescription)")
+      }
+      let orphan = history.item(tensorId: run1.tensorId)
+      check(
+        orphan?.inputTensorId == imported.tensorId && orphan.map { history.parent(of: $0) } == imported,
+        "deleting its input entry hands a run the Imported entry before it, as input and parent")
+      if let orphan {
+        let found = await model.originalImage(for: orphan)
+        check(found?.tensorId == originalTensor && found.map { same($0.image, original) } == true, "Match Colors still finds its original")
+        model.use(orphan)
+        await idle()
+        check(
+          await settled {
+            !model.isLoadingCanvasImage && history.currentTensorId == imported.tensorId && same(model.image, original)
+              && model.statusNote == nil
+          },
+          "and Use still brings back its input, current")
+      }
+
+      // An Imported step written before entries (no marker): it isn't listed, and Use on a run made
+      // from it brings back the run's own moodboard and the mask its input image remembers.
+      if let oldTensor = ImageTensor.tensor(from: original), let moodTensor = ImageTensor.tensor(from: first) {
+        let project = history.project
+        let settingsDump = model.settings.map(JSONValue.fields(of:)) ?? [:]
+        let old = try? await project.append(
+          tensor: oldTensor, model: file, prompt: "", negativePrompt: "", seed: 0, settings: settingsDump,
+          createdAt: Date(), duration: 0, reason: .imported, generated: false, after: history.currentTensorId)
+        let oldRun = try? await project.append(
+          tensor: oldTensor, model: file, prompt: "old run", negativePrompt: "", seed: 5, settings: settingsDump,
+          createdAt: Date(), duration: 1, moodboard: [Project.MoodboardTensor(tensor: moodTensor, weight: 0.5)],
+          inputTensorId: old?.tensorId, after: old?.tensorId)
+        await history.reload()
+        let oldMask = CanvasMask(strokes: [.rect(CGRect(x: 10, y: 10, width: 40, height: 40))])
+        if let old { history.setMask(oldMask, forImage: old.tensorId, size: CGSize(width: size, height: size)) }
+        check(old.map { history.item(tensorId: $0.tensorId) == nil } == true, "an unmarked Imported step isn't listed")
+        if let oldRun = oldRun.flatMap({ history.item(tensorId: $0.tensorId) }) {
+          check(history.inputEntry(of: oldRun) == nil, "a run from it has no input entry")
+          model.use(oldRun)
+          await idle()
+          check(
+            await settled { !model.isLoadingCanvasImage && model.moodboard.items.map(\.weight) == [0.5] && model.canvasMask == oldMask },
+            "Use on that run brings back its own moodboard and its input's mask")
+        } else {
+          check(false, "the old-style run wasn't listed")
+        }
+      }
 
       // Clear: a Cleared entry; clearing again repeats it.
       model.clearCanvas()
@@ -234,10 +313,25 @@ extension Automation {
       // Without Show Inputs only runs are listed.
       model.setCanvasImage(original)
       await model.flushEntries()
-      let listed = history.items.filter { !$0.isEntry }
+      // History's filter and the Create strip's list, both modes, with Show Inputs on and off.
+      let shown = history.items.filter { EntryBadge.isListed($0, showsEntries: true) }
+      let hidden = history.items.filter { EntryBadge.isListed($0, showsEntries: false) }
       check(
-        history.items.contains(where: \.isEntry) && !listed.isEmpty && listed.allSatisfy { !$0.isEntry && $0.sidecar.steps > 0 },
-        "with Show Inputs off, only the runs are listed (\(listed.count) of \(history.items.count))")
+        shown.count == history.items.count && shown.contains(where: \.isEntry),
+        "with Show Inputs on, History lists the entries too (\(shown.count(where: \.isEntry)) entries)")
+      check(
+        !hidden.isEmpty && hidden.allSatisfy { !$0.isEntry },
+        "with Show Inputs off, History lists only the runs (\(hidden.count) of \(history.items.count))")
+      for lineage in [false, true] {
+        let on = RecentStrip.items(history, lineage: lineage, showsEntries: true)
+        let off = RecentStrip.items(history, lineage: lineage, showsEntries: false)
+        check(
+          on.contains(where: \.isEntry) && !off.contains(where: \.isEntry)
+            && (lineage
+              ? off == on.filter { !$0.isEntry }
+              : on == Array(history.items.prefix(24)) && off == Array(history.items.filter { !$0.isEntry }.prefix(24))),
+          "the strip (\(lineage ? "Current Lineage" : "Chronological")) lists entries with Show Inputs on and only runs with it off")
+      }
       finish()
     }
   }

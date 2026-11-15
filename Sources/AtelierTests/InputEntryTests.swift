@@ -184,4 +184,85 @@ struct InputEntryTests {
     #expect(!contents.tensorNames.contains(image) && !contents.tensorNames.contains(shuffle))
     #expect(contents.nodes.isEmpty && contents.layers.isEmpty && contents.moods.isEmpty && contents.thumbnails.isEmpty)
   }
+
+  /// Imported steps written before entries (Atelier's hidden inputs, Draw Things' own) aren't
+  /// entries: not listed, and no run takes one, or anything past a Draw Things Moodboard step, as
+  /// its input entry.
+  @Test func unmarkedInputsAreNoEntries() async throws {
+    let project = try Self.project()
+    let old = try await project.append(
+      tensor: Self.tensor(1), model: "m", prompt: "", negativePrompt: "", seed: 0, settings: [:], createdAt: Date(),
+      duration: 0, reason: .imported, generated: false)
+    let run = try await project.append(
+      tensor: Self.tensor(), model: "m", prompt: "run", negativePrompt: "", seed: 1, settings: [:], createdAt: Date(),
+      duration: 1, inputTensorId: old.tensorId, after: old.tensorId)
+    var tree = await project.read { $0.tree() }
+    #expect(tree.itemsNewestFirst.map(\.tensorId) == [run.tensorId])
+    let listedRun = try #require(tree.items[run.id])
+    #expect(HistoryStore.inputEntry(of: listedRun, in: tree) == nil)
+
+    // A marked entry, then a Draw Things Moodboard step, then a run: the run has no input entry.
+    let entry = try await Self.entry(project, .moodboard, canvas: .step(tensorId: run.tensorId), after: run.tensorId)
+    let dt = try await project.append(
+      tensor: Self.tensor(2), model: "m", prompt: "", negativePrompt: "", seed: 0, settings: [:], createdAt: Date(),
+      duration: 0, reason: .moodboard, generated: false, after: entry.key)
+    let after = try await Self.generated(project, after: dt.tensorId)
+    // A run straight after the entry, past only a frame step (Other), has it.
+    let frame = try await project.append(
+      tensor: Self.tensor(3), model: "m", prompt: "", negativePrompt: "", seed: 0, settings: [:], createdAt: Date(),
+      duration: 0, reason: .other, generated: false, after: entry.key)
+    let framed = try await Self.generated(project, after: frame.tensorId)
+    tree = await project.read { $0.tree() }
+    #expect(HistoryStore.inputEntry(of: try #require(tree.items[after.id]), in: tree) == nil)
+    #expect(HistoryStore.inputEntry(of: try #require(tree.items[framed.id]), in: tree)?.tensorId == entry.key)
+  }
+
+  /// A project opens on the step it recorded by what finds it: an entry by its key, not by the
+  /// image it shows (which finds the image's own step).
+  @Test func opensOnTheEntry() async throws {
+    let project = try Self.project()
+    let run = try await Self.generated(project, after: nil)
+    let entry = try await Self.entry(project, .moodboard, canvas: .step(tensorId: run.tensorId), after: run.tensorId)
+    let tree = await project.read { $0.tree(items: false) }
+    #expect(HistoryStore.openingCurrent(in: tree, stored: nil) == entry.key)
+    #expect(HistoryStore.openingCurrent(in: tree, stored: tree.step(tensorId: run.tensorId)) == run.tensorId)
+  }
+
+  /// Deleting the entry a run was made from records what's left of its input: the step before
+  /// when it shows the same image, else the image.
+  @Test func deletingAnEntryKeepsItsRunsInput() async throws {
+    let project = try Self.project()
+    let imported = try await Self.entry(project, .imported, canvas: .image(Self.tensor(1)), after: nil)
+    let image = try #require(imported.imageTensorId)
+    let moodboard = try await Self.entry(project, .moodboard, canvas: .step(tensorId: image), after: imported.key)
+    let run = try await project.append(
+      tensor: Self.tensor(), model: "m", prompt: "run", negativePrompt: "", seed: 1, settings: [:], createdAt: Date(),
+      duration: 1, inputTensorId: moodboard.key, after: moodboard.key)
+    try await project.delete(tensorId: moodboard.key)
+    var tree = await project.read { $0.tree() }
+    let moved = try #require(tree.itemsNewestFirst.first { $0.tensorId == run.tensorId })
+    #expect(moved.inputTensorId == image)
+    #expect(await project.read { $0.input(of: moved.id, tensorId: image) }?.imageTensorId == image)
+
+    // A Mask entry on the run, after which the next run; the step before it (the run) shows
+    // another image, so the next run keeps the entry's image as its input.
+    let mask = try await Self.entry(project, .mask, canvas: .step(tensorId: run.tensorId), after: run.tensorId)
+    let next = try await project.append(
+      tensor: Self.tensor(), model: "m", prompt: "next", negativePrompt: "", seed: 2, settings: [:], createdAt: Date(),
+      duration: 1, inputTensorId: mask.key, after: mask.key)
+    try await project.delete(tensorId: mask.key)
+    tree = await project.read { $0.tree() }
+    #expect(tree.itemsNewestFirst.first { $0.tensorId == next.tensorId }?.inputTensorId == run.tensorId)
+  }
+
+  /// A moodboard tensor no row uses any more isn't shared: it's written again.
+  @Test func aLostMoodboardTensorIsWrittenAgain() async throws {
+    let project = try Self.project()
+    let run = try await Self.generated(project, after: nil)
+    let moods = try [Project.EntryMood(shuffleId: 1_700_000_001, tensor: Self.tensor(2), weight: 1)]
+    let entry = try await Self.entry(project, .moodboard, canvas: .step(tensorId: run.tensorId), moodboard: moods, after: run.tensorId)
+    #expect(entry.shuffleIds != [1_700_000_001])
+    let names = await project.read { $0.contents().tensorNames }
+    #expect(names.contains("shuffle_\(entry.shuffleIds[0])"))
+  }
 }

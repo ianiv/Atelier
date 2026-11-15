@@ -89,7 +89,7 @@ struct HistoryView: View {
       (modelFilter == nil || item.sidecar.model == modelFilter)
         && (kindFilter == .all || item.isVideo == (kindFilter == .videos))
         && ratingFilter.matches(history.rating(of: item))
-        && (showsEntries || !item.isEntry)
+        && EntryBadge.isListed(item, showsEntries: showsEntries)
         && (query.isEmpty || item.sidecar.prompt.localizedCaseInsensitiveContains(query))
     }
   }
@@ -1565,6 +1565,11 @@ struct EntryBadge: View {
 
   /// The setting History's and the Create strip's Show Inputs share.
   static let showsEntriesKey = "showsInputEntries"
+
+  /// Whether History and the strip list `item` with Show Inputs `showsEntries`.
+  static func isListed(_ item: HistoryItem, showsEntries: Bool) -> Bool {
+    showsEntries || !item.isEntry
+  }
 
   var body: some View {
     Text(reason.title)

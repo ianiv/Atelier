@@ -565,6 +565,9 @@ final class CreateModel {
   @ObservationIgnored private var adoptedImport: (image: CGImage, tensorId: Int64)?
   /// The entry `recordEntry` wrote last: one gathered before it follows it while it's current.
   @ObservationIgnored private var lastEntryKey: Int64?
+  /// Counts restores (an entry, or a History image put back), so an entry gathered before one isn't
+  /// made current over it (`recordEntry`).
+  @ObservationIgnored private var restoreCount = 0
   /// Generate is writing the entries a run follows (a moodboard change, a mask) before queueing
   /// it: Generate is held meanwhile, as for a selection.
   private(set) var waitsForEntries = false
@@ -1191,6 +1194,7 @@ final class CreateModel {
     if item.isEntry, loadImage, !newSeed { return restore(entry: item) }
     guard canUse(item) else { return }
     recordMoodboardChange()
+    if loadImage { restoreCount += 1 }
     if newSeed { rerunUndoManager = undoManager }
     let sidecar = item.sidecar
     restorePrompts(sidecar.prompt, sidecar.negativePrompt)
@@ -1727,11 +1731,7 @@ final class CreateModel {
     waitsForEntries = true
     let waitedImage = image, waitedMode = canvasMode
     Task {
-      await entryChain?.value
-      if let input = maskEntryInput() {
-        recordEntry(input)
-        await entryChain?.value
-      }
+      await recordEntriesBeforeRun()
       waitsForEntries = false
       guard image === waitedImage, canvasMode == waitedMode else {
         statusNote = "The run was cancelled because the canvas changed while it was being recorded."
@@ -1797,6 +1797,9 @@ final class CreateModel {
     forAgent request: GenerationEngine.Request, target: JobTarget? = nil,
     progress: @escaping (GenerationEngine.Progress) -> Void
   ) async throws -> HistoryItem {
+    // It follows what History has, as Generate's runs do (`recordEntriesBeforeRun`, which an
+    // agent's run from the screen has done before taking it).
+    await flushEntries()
     // A model only the selected server has runs there; any other runs on this device, as agents
     // choose among this device's models.
     let target = target ?? (models.contains(where: { $0.file == request.model }) ? JobTarget.local : runTarget)
@@ -1828,7 +1831,9 @@ final class CreateModel {
 
   /// Queues `request` for `target`, for scripted checks that need inputs Generate takes from the
   /// screen.
-  func queueForCheck(_ request: GenerationEngine.Request, target: JobTarget) {
+  func queueForCheck(_ request: GenerationEngine.Request, target: JobTarget) async {
+    // It follows what History has, as Generate's runs do.
+    await flushEntries()
     queue.append([request], currentTensorId: history.currentTensorId, target: target)
     runNext()
   }
@@ -2422,7 +2427,15 @@ final class CreateModel {
     if let tensorId = item.inputTensorId {
       // The input's image: an input entry's is its canvas's.
       if let input = await project.read({ $0.input(of: item.id, tensorId: tensorId) }) { return (input.image, input.imageTensorId, nil) }
-      if let image = await project.read({ $0.image(tensorId: tensorId) }) { return (image, tensorId, nil) }
+      // Else the image the recorded input names (an entry's key names its canvas's), if it's still
+      // in the project.
+      let found = await project.read { project -> (image: CGImage, tensorId: Int64)? in
+        let tree = project.tree(items: false)
+        let imageTensorId = tree.step(tensorId: tensorId).flatMap { tree.steps[$0]?.tensorId }
+          ?? (ProjectMapping.Profile.entryKeys.contains(tensorId) ? nil : tensorId)
+        return imageTensorId.flatMap { id in project.image(tensorId: id).map { ($0, id) } }
+      }
+      if let found { return (found.image, found.tensorId, nil) }
     }
     return await firstMoodboardImage()
   }
@@ -2827,6 +2840,7 @@ final class CreateModel {
   func show(_ item: HistoryItem) {
     if item.isEntry { return restore(entry: item) }
     recordMoodboardChange()
+    restoreCount += 1
     statusNote = nil
     stopFollowingRun()
     let projectName = history.project.name
@@ -2862,6 +2876,7 @@ final class CreateModel {
       return false
     }
     recordMoodboardChange()
+    restoreCount += 1
     statusNote = nil
     stopFollowingRun()
     imageStep = (projectName, tensorId)
@@ -3233,18 +3248,31 @@ extension CreateModel {
 
   /// Whether `item` has a mask that can go on the canvas now (`applyMask(from:how:undoManager:)`).
   func canApplyMask(from item: HistoryItem) -> Bool {
-    !item.isVideo && canPaintMask && history.hasStoredMask(tensorId: item.tensorId)
+    !item.isVideo && canPaintMask && hasMask(item)
   }
 
-  /// `item`'s remembered mask and the size of its image, which it's in the pixels of.
+  /// Whether `item` has a mask: an input entry the one it holds, any other image the one it
+  /// remembers (`HistoryStore.hasStoredMask`).
+  func hasMask(_ item: HistoryItem) -> Bool {
+    if item.isEntry { return item.entryMask?.mayHavePaint == true }
+    return !item.isVideo && history.hasStoredMask(tensorId: item.tensorId)
+  }
+
+  /// `item`'s mask (`hasMask`), nil for none.
+  func mask(of item: HistoryItem) async -> CanvasMask? {
+    if item.isEntry { return item.entryMask?.mayHavePaint == true ? item.entryMask : nil }
+    guard hasMask(item) else { return nil }
+    return await history.storedMask(tensorId: item.tensorId)
+  }
+
+  /// `item`'s mask (`mask(of:)`) and the size of its image, which it's in the pixels of.
   func storedMask(of item: HistoryItem) async -> (mask: CanvasMask, size: CGSize)? {
-    guard !item.isVideo, history.hasStoredMask(tensorId: item.tensorId) else { return nil }
+    guard !item.isVideo, let tensorId = item.imageTensorId, let mask = await mask(of: item) else { return nil }
     let projectName = history.project.name
-    guard let mask = await history.storedMask(tensorId: item.tensorId) else { return nil }
-    if canvasShowsImage, imageStep?.tensorId == item.tensorId, imageStep?.project == projectName, let image {
+    if canvasShowsImage, imageStep?.tensorId == tensorId, imageStep?.project == projectName, let image {
       return (mask, CGSize(width: image.width, height: image.height))
     }
-    guard let source = await history.image(tensorId: item.tensorId, in: projectName) else { return nil }
+    guard let source = await history.image(tensorId: tensorId, in: projectName) else { return nil }
     return (mask, CGSize(width: source.width, height: source.height))
   }
 
@@ -3348,11 +3376,28 @@ extension CreateModel {
     await entryChain?.value
   }
 
+  /// What a run from the screen follows, written first: `flushEntries`, then a Mask entry when the
+  /// mask isn't the current entry's (`maskEntryInput`). Generate does it, and an agent's run from
+  /// the screen before taking the screen's request.
+  func recordEntriesBeforeRun() async {
+    await flushEntries()
+    if let input = maskEntryInput() {
+      recordEntry(input)
+      await entryChain?.value
+    }
+  }
+
   /// At quit there's no waiting for the next turn: a moodboard change still settling is written now.
+  /// Entries still on their way are let finish first (the main run loop runs their turns), for as
+  /// long as the quit-time write itself may take.
   private func recordMoodboardChangeBeforeQuit() {
     guard moodboardChanged else { return }
     moodboardChanged = false
     moodboardSettling?.cancel()
+    let deadline = Date().addingTimeInterval(HistoryStore.quitWriteTimeout)
+    while entriesPending > 0, Date() < deadline {
+      RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.05))
+    }
     guard entriesPending == 0, let input = entryInput(.moodboard) else { return }
     history.saveEntryBeforeQuit(input, after: input.parent, makeCurrent: true)
   }
@@ -3393,6 +3438,7 @@ extension CreateModel {
     let previous = entryChain
     let project = history.project.name
     let before = history.currentTensorId
+    let restores = restoreCount
     entriesPending += 1
     entryChain = Task { [weak self] in
       await previous?.value
@@ -3412,7 +3458,10 @@ extension CreateModel {
       }
       // Still where the entries left it: the entry follows what's current.
       let current = history.currentTensorId
-      let followsCurrent = current == input.parent || current == before || current == lastEntryKey
+      // Not after a restore since it was gathered: it's written, but what was restored stays
+      // current, as the screen shows it.
+      let followsCurrent = restoreCount == restores
+        && (current == input.parent || current == before || current == lastEntryKey)
       let parent = followsCurrent ? current : input.parent
       input.parent = parent
       do {
@@ -3461,6 +3510,7 @@ extension CreateModel {
   func restore(entry: HistoryItem) {
     guard entry.isEntry else { return }
     recordMoodboardChange()
+    restoreCount += 1
     statusNote = nil
     stopFollowingRun()
     let projectName = history.project.name

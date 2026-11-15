@@ -1021,9 +1021,7 @@ struct RecentStrip: View {
 
   var body: some View {
     if !history.items.isEmpty {
-      let listed = { (item: HistoryItem) in showsEntries || !item.isEntry }
-      let items = mode == .lineage
-        ? history.currentLineage.filter(listed) : Array(history.items.lazy.filter(listed).prefix(24))
+      let items = Self.items(history, lineage: mode == .lineage, showsEntries: showsEntries)
       let current = history.currentItem?.tensorId
       HStack(spacing: 8) {
         Picker("Recent Images", selection: $mode) {
@@ -1062,6 +1060,13 @@ struct RecentStrip: View {
       }
       .frame(height: 48)
     }
+  }
+
+  /// What the strip lists: the current lineage, or the newest 24, without input entries unless
+  /// Show Inputs is on (`EntryBadge.isListed`).
+  static func items(_ history: HistoryStore, lineage: Bool, showsEntries: Bool) -> [HistoryItem] {
+    let listed = { (item: HistoryItem) in EntryBadge.isListed(item, showsEntries: showsEntries) }
+    return lineage ? history.currentLineage.filter(listed) : Array(history.items.lazy.filter(listed).prefix(24))
   }
 
   private func pickUp(_ item: HistoryItem) {

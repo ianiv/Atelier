@@ -777,6 +777,8 @@ final class AgentTools {
     if let problem = create.runTargetProblem {
       throw ToolError(problem + (create.runTargetMaskProblem != nil ? " (set_canvas_mask with clear: true clears it)" : ""))
     }
+    // What History doesn't have yet goes in first, as Generate does, so the run follows it.
+    await create.recordEntriesBeforeRun()
     guard var request = create.screenRequest(), let model = create.selectedModel else {
       throw ToolError(create.errorMessage ?? "The Create screen has no model or settings loaded yet.")
     }
@@ -1255,7 +1257,7 @@ final class AgentTools {
   /// A History step's remembered mask and its image's size, or why there's none.
   private func historyMask(_ step: Int) async throws -> (mask: CanvasMask, size: CGSize) {
     let item = try historyImage(step)
-    guard create.history.hasStoredMask(tensorId: item.tensorId), let stored = await create.storedMask(of: item) else {
+    guard create.hasMask(item), let stored = await create.storedMask(of: item) else {
       throw ToolError("History step \(step) has no mask (see list_history's has_mask).")
     }
     return stored
@@ -1532,7 +1534,7 @@ final class AgentTools {
       let item = try historyImage(historyStep)
       guard let loaded = await create.history.image(for: item) else { throw ToolError("Couldn't read history step \(historyStep)'s image.") }
       image = loaded
-      mask = create.history.hasStoredMask(tensorId: item.tensorId) ? await create.history.storedMask(tensorId: item.tensorId) : nil
+      mask = await create.mask(of: item)
       let stats = (mask ?? CanvasMask()).stats(sourceSize: CGSize(width: image.width, height: image.height), placement: nil)
       summary = [
         "history_step": historyStep,
@@ -1700,7 +1702,7 @@ final class AgentTools {
         "history_step": item.id.logicalTime, "prompt": Self.shortened(sidecar.prompt),
         "model": sidecar.model, "seed": Int(sidecar.seed), "width": sidecar.width, "height": sidecar.height,
         "rating": create.history.rating(of: item), "video": item.isVideo,
-        "has_mask": !item.isVideo && create.history.hasStoredMask(tensorId: item.tensorId),
+        "has_mask": create.hasMask(item),
         "on_canvas": create.imageItem == item || create.canvasClip == item,
       ]
     }

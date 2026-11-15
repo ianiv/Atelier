@@ -748,11 +748,34 @@ final nonisolated class Project: Sendable {
   /// way), the canvas as its layers, the whole moodboard (weight 0 too) as its moodboard rows, and
   /// `thumbnail` as its previews. `keyed` gives it an `entry_key` to be found by (every kind but
   /// Imported, which is found by its own image); `mask` is kept as `entry_mask`.
+  ///
+  /// A moodboard image is shared only if a row still uses its tensor when the step is written, in
+  /// the same transaction: a delete that let it go first makes this write it again instead.
   @concurrent func appendEntry(
     reason: ProjectFormat.Reason, keyed: Bool, canvas: EntryCanvas, mask: CanvasMask?, moodboard: [EntryMood],
     thumbnail: CGImage?, model: String, prompt: String, negativePrompt: String, seed: UInt32,
     settings: [String: JSONValue], createdAt: Date, after parentKey: Int64?
   ) async throws -> AppendedEntry {
+    for sharing in [true, false] {
+      let moods = sharing ? moodboard : moodboard.map { EntryMood(shuffleId: nil, tensor: $0.tensor, weight: $0.weight) }
+      if let appended = try await appendEntryOnce(
+        reason: reason, keyed: keyed, canvas: canvas, mask: mask, moodboard: moods, thumbnail: thumbnail, model: model,
+        prompt: prompt, negativePrompt: negativePrompt, seed: seed, settings: settings, createdAt: createdAt,
+        after: parentKey)
+      {
+        return appended
+      }
+    }
+    throw ProjectError.writeFailed
+  }
+
+  /// `appendEntry`, or nil, writing nothing, when a moodboard tensor it would share was let go
+  /// meanwhile.
+  private func appendEntryOnce(
+    reason: ProjectFormat.Reason, keyed: Bool, canvas: EntryCanvas, mask: CanvasMask?, moodboard: [EntryMood],
+    thumbnail: CGImage?, model: String, prompt: String, negativePrompt: String, seed: UInt32,
+    settings: [String: JSONValue], createdAt: Date, after parentKey: Int64?
+  ) async throws -> AppendedEntry? {
     let full = thumbnail.flatMap { ImageTensor.jpeg($0, quality: 0.75) }
     let half = thumbnail.flatMap { ImageTensor.downsampled($0) ?? $0 }.flatMap { ImageTensor.jpeg($0, quality: 0.5) }
     // Moodboard images still used by a row are shared; the rest are written (`addImage`'s band).
@@ -800,12 +823,19 @@ final nonisolated class Project: Sendable {
     let wallClock = Int64(createdAt.timeIntervalSince1970 * 1_000_000)
     let workspace = workspace
     var appended: AppendedEntry?
+    var lostShared = false
     let succeeded = await withCheckedContinuation { continuation in
       workspace.performChanges([
         TensorHistoryNode.self, Layer.self, TensorMoodboardData.self, ThumbnailHistoryNode.self,
         ThumbnailHistoryHalfNode.self,
       ]) { transaction in
         let rows = Rows(workspace)
+        // The tensors shared are still some row's, now that nothing else can change the rows.
+        let used = Set(rows.moods.map(\.shuffleId))
+        guard kept.isSubset(of: used) else {
+          lostShared = true
+          return
+        }
         let tree = ProjectTree(nodes: rows.nodes, layers: rows.layers, items: false)
         // The canvas step's own layers, and the node fields that go with several (`pushHistory`).
         var layers: [Layer] = []
@@ -860,7 +890,7 @@ final nonisolated class Project: Sendable {
           moodboardCount: moodboard.count, parentTensorId: parent.flatMap { tree.steps[$0]?.key },
           layerCount: Int32(layers.count),
           contentOffset: layered ? source.map { ($0.contentOffsetX, $0.contentOffsetY) } : nil,
-          canvasScale: layered ? source?.scaleFactorBy120 : nil, entryKey: key, entryMask: mask)
+          canvasScale: layered ? source?.scaleFactorBy120 : nil, entryKey: key, entryMask: mask, isEntry: true)
         transaction.try(
           submit: TensorHistoryNodeChangeRequest.upsertRequest(ProjectMapping.node(for: step, settings: settings)))
         for layer in layers {
@@ -887,6 +917,10 @@ final nonisolated class Project: Sendable {
         }
         appended = AppendedEntry(id: id, key: key ?? imageTensorId ?? 0, imageTensorId: imageTensorId, shuffleIds: shuffleIds)
       } completionHandler: { continuation.resume(returning: $0) }
+    }
+    if succeeded, lostShared {
+      removeTensors(written)
+      return nil
     }
     guard succeeded, let appended, appended.key != 0 else {
       removeTensors(written)
@@ -1504,6 +1538,15 @@ final nonisolated class Project: Sendable {
         for child in tree.children[id] ?? [] {
           changes.setParent(of: child, to: parentTensorId ?? 0, rows)
         }
+        // Runs made from a deleted input entry record what's left of their input: the parent, when
+        // it shows the same image, else the image itself (none for an empty canvas).
+        if let step = tree.steps[id], step.isEntry, let key = step.key {
+          let parentImage = step.parent.flatMap { tree.steps[$0]?.tensorId }
+          let input = parentImage != nil && parentImage == step.tensorId ? parentTensorId : step.tensorId
+          for child in tree.children[id] ?? [] {
+            changes.setInput(of: child, from: key, to: input, rows)
+          }
+        }
         // The deleted step isn't written back. Recording its parent (a step Draw Things wrote,
         // with none recorded) would put it back, over whichever step moves into its key.
         changes.profiles[id] = nil
@@ -1622,11 +1665,23 @@ final nonisolated class Project: Sendable {
     }
 
     mutating func setParent(of id: StepID, to tensorId: Int64, _ rows: Rows) {
-      guard let node = rows.byID[id] else { return }
-      var profile = ProjectMapping.Profile(node.profileData)
-        ?? ProjectMapping.Profile(duration: node.generationTime, inputTensorId: nil, parentTensorId: nil)
+      guard var profile = profile(of: id, rows) else { return }
       profile.parentTensorId = tensorId
       profiles[id] = profile.bytes
+    }
+
+    /// Records `tensorId` as the step's input where it recorded `old`.
+    mutating func setInput(of id: StepID, from old: Int64, to tensorId: Int64?, _ rows: Rows) {
+      guard var profile = profile(of: id, rows), profile.inputTensorId == old else { return }
+      profile.inputTensorId = tensorId
+      profiles[id] = profile.bytes
+    }
+
+    /// The step's profile with the changes made so far.
+    private func profile(of id: StepID, _ rows: Rows) -> ProjectMapping.Profile? {
+      guard let node = rows.byID[id] else { return nil }
+      return ProjectMapping.Profile(profiles[id] ?? node.profileData)
+        ?? ProjectMapping.Profile(duration: node.generationTime, inputTensorId: nil, parentTensorId: nil)
     }
 
     /// pushHistory's fork from `parent` (not the newest step); returns the new step's key.
@@ -1910,6 +1965,10 @@ nonisolated struct ProjectTree: Sendable {
     /// An input entry's own key (`ProjectMapping.Profile.entryKey`): it's found and recorded as a
     /// parent by it, since its image, if any, is the canvas's, listed by the canvas's own step.
     var entryKey: Int64?
+    /// Draw Things' reason for the step (`tensor_history.fbs` `Reason`), by its raw value.
+    var reasonValue: Int32 = ProjectFormat.Reason.generate.rawValue
+    /// Written as an input entry (`ProjectMapping.Profile.inputEntry`).
+    var isEntry = false
 
     /// What finds this step and what its children record as their parent: the entry key, else the
     /// image.
@@ -1985,7 +2044,8 @@ nonisolated struct ProjectTree: Sendable {
       steps[id] = Step(
         id: id, tensorId: tensorId, parent: nil, generated: node.generated,
         wallClock: node.wallClock, recordsParent: profile?.parentTensorId != nil,
-        recordedParent: profile?.parentTensorId, entryKey: entryKey)
+        recordedParent: profile?.parentTensorId, entryKey: entryKey, reasonValue: node.reason.rawValue,
+        isEntry: profile?.inputEntry == true || entryKey != nil)
       if let entryKey {
         byEntryKey[entryKey] = id
         if let tensorId { sharedByTensor[tensorId, default: []].append(id) }
@@ -2010,10 +2070,12 @@ nonisolated struct ProjectTree: Sendable {
         if node.clipId >= 0 {
           clipListings[node.clipId] = (id, profile?.inputAudioId)
         }
-      } else if withItems, !node.generated, let reason = HistoryItem.EntryReason(node.reason) {
-        // Input entries: Atelier's own, by their key, and images brought in (Draw Things' Imported
-        // steps, and Atelier's before entries had keys), by their image. Draw Things' own
-        // Moodboard, Clear and Mask steps have no key, and stay hidden as its other inputs do.
+      } else if withItems, !node.generated, profile?.inputEntry == true || entryKey != nil,
+                let reason = HistoryItem.EntryReason(node.reason)
+      {
+        // Input entries: only the steps `appendEntry` wrote, by their key, or Imported ones by
+        // their image. Imported steps from before (Atelier's hidden inputs, Draw Things' own) and
+        // Draw Things' Moodboard, Clear and Mask steps stay hidden, as its other inputs do.
         var item = HistoryItem(
           id: id, tensorId: entryKey ?? tensorId ?? 0, previewId: node.previewId, sidecar: Project.sidecar(for: node),
           moodboardCount: Int(node.shuffleDataStored), weightedMoodboardCount: weightedMoods[id] ?? 0)

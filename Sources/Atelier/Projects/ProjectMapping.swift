@@ -57,6 +57,8 @@ nonisolated enum ProjectMapping {
     /// `profile_data`.
     var entryKey: Int64?
     var entryMask: CanvasMask?
+    /// Written by `Project.appendEntry` (`Profile.inputEntry`).
+    var isEntry = false
   }
 
   /// `profile_data`: Draw Things' `GenerationProfile` as snake-case JSON (timings and duration),
@@ -95,6 +97,10 @@ nonisolated enum ProjectMapping {
     var colorMatch: ColorMatch.Record?
     var entryKey: Int64?
     var entryMask: CanvasMask?
+    /// Marks a step `Project.appendEntry` wrote (`input_entry`), an Imported one too, which has no
+    /// key: only marked steps are input entries, holding the whole moodboard and the canvas mask.
+    /// Imported steps written before entries existed, and Draw Things' own, stay plain inputs.
+    var inputEntry: Bool?
 
     /// The band entry keys come from: above the audio tensors' (`Project.append`), so a key is
     /// never a tensor's id.
@@ -127,7 +133,7 @@ nonisolated enum ProjectMapping {
     init(
       duration: Double, inputTensorId: Int64?, parentTensorId: Int64?, inputAudioId: Int64? = nil,
       timings: [Timing] = [], refine: RefineRecord? = nil, colorMatch: ColorMatch.Record? = nil,
-      entryKey: Int64? = nil, entryMask: CanvasMask? = nil
+      entryKey: Int64? = nil, entryMask: CanvasMask? = nil, inputEntry: Bool? = nil
     ) {
       self.timings = timings
       self.duration = duration
@@ -138,6 +144,7 @@ nonisolated enum ProjectMapping {
       self.colorMatch = colorMatch
       self.entryKey = entryKey
       self.entryMask = entryMask
+      self.inputEntry = inputEntry
     }
 
     init?(_ bytes: [UInt8]) {
@@ -223,7 +230,8 @@ nonisolated enum ProjectMapping {
         duration: step.generationTime, inputTensorId: step.inputTensorId,
         parentTensorId: step.parentTensorId ?? 0, inputAudioId: step.inputAudioId,
         timings: step.timings?.profileTimings ?? [], refine: step.refine,
-        colorMatch: step.colorMatch, entryKey: step.entryKey, entryMask: step.entryMask
+        colorMatch: step.colorMatch, entryKey: step.entryKey, entryMask: step.entryMask,
+        inputEntry: step.isEntry ? true : nil
       ).bytes,
       teaCacheStart: i32("teaCacheStart", 5), teaCacheEnd: i32("teaCacheEnd", -1),
       teaCacheThreshold: d.float("teaCacheThreshold", 0.06), teaCache: d.bool("teaCache", false),
