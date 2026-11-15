@@ -573,6 +573,17 @@ final class CreateModel {
   /// written twice.
   @ObservationIgnored private var pendingEntries: [PendingEntry] = []
 
+  /// The entry being written now, which quitting waits for (`recordEntriesBeforeQuit`).
+  @ObservationIgnored private var entryInWrite: EntryInWrite?
+
+  private struct EntryInWrite {
+    var write: EntryWrite
+    /// It's made current, so the next one follows it.
+    var follows: Bool
+    /// An Imported entry's image, the canvas's step once written.
+    var importedImage: CGImage?
+  }
+
   private struct PendingEntry {
     var id = UUID()
     var input: HistoryStore.EntryInput
@@ -3420,10 +3431,16 @@ extension CreateModel {
     pendingEntries = []
     let deadline = Date().addingTimeInterval(HistoryStore.quitWriteTimeout)
     var last: Int64?
+    var adopted = adoptedImport
+    // One being written: those after it follow it, and show its image when it was brought in.
+    if let inWrite = entryInWrite, let appended = inWrite.write.wait(until: deadline) {
+      if inWrite.follows { last = appended.key }
+      if let image = inWrite.importedImage, let tensorId = appended.imageTensorId { adopted = (image, tensorId) }
+    }
     for entry in pending {
       var input = entry.input
-      if input.reason != .imported, case .image(let image) = input.canvas, let adoptedImport, adoptedImport.image === image {
-        input.canvas = .step(tensorId: adoptedImport.tensorId)
+      if input.reason != .imported, case .image(let image) = input.canvas, let adopted, adopted.image === image {
+        input.canvas = .step(tensorId: adopted.tensorId)
       }
       // As the chain would: after the entry before it, unless something was restored since.
       let follows = entry.restores == restoreCount
@@ -3478,12 +3495,13 @@ extension CreateModel {
       await previous?.value
       guard let self else { return }
       defer { entriesPending -= 1 }
-      // Taken up here, unless quitting wrote it already.
-      guard let index = pendingEntries.firstIndex(where: { $0.id == pending.id }) else {
+      // Still pending until it's written just below, unless quitting wrote it already; whatever
+      // happens here, it's no longer quitting's to write once this is done.
+      guard pendingEntries.contains(where: { $0.id == pending.id }) else {
         landed?(nil)
         return
       }
-      pendingEntries.remove(at: index)
+      defer { pendingEntries.removeAll { $0.id == pending.id } }
       guard history.project.name == project else {
         landed?(nil)
         return
@@ -3504,8 +3522,20 @@ extension CreateModel {
         && (current == input.parent || current == before || current == lastEntryKey)
       let parent = followsCurrent ? current : input.parent
       input.parent = parent
+      // Taken from the pending ones just before it's written, once its tensors are made (off the
+      // main actor, which quitting may hold meanwhile): from then on quitting waits for this write.
+      let write = EntryWrite()
+      let imported = input.reason == .imported ? input.canvasImage : nil
+      let claim = { [weak self] () -> Bool in
+        guard let self, pendingEntries.contains(where: { $0.id == pending.id }) else { return false }
+        pendingEntries.removeAll { $0.id == pending.id }
+        entryInWrite = EntryInWrite(write: write, follows: followsCurrent, importedImage: imported)
+        return true
+      }
+      defer { if entryInWrite?.write === write { entryInWrite = nil } }
       do {
-        let item = try await history.saveEntry(input, after: parent, makeCurrent: followsCurrent)
+        let item = try await history.saveEntry(
+          input, after: parent, makeCurrent: followsCurrent, write: write, claim: claim)
         if let item { lastEntryKey = item.tensorId }
         landed?(item)
       } catch {

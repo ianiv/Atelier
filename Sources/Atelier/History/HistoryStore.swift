@@ -602,8 +602,15 @@ final class HistoryStore {
   /// Writes an input entry after the step `parent` names (its image or key; the newest when nil)
   /// and with `makeCurrent` makes it the current step, unless it would repeat that step
   /// (`isDuplicate`; an Imported image never does). Returns the entry, nil when none was written.
+  ///
+  /// `claim`, when given, is asked once the entry's tensors are made, just before it's written:
+  /// false writes nothing (quitting took the entry meanwhile). `write` hears what was written as
+  /// soon as the project has it, off the main actor (`EntryWrite`).
   @discardableResult
-  func saveEntry(_ input: EntryInput, after parent: Int64?, makeCurrent: Bool) async throws -> HistoryItem? {
+  func saveEntry(
+    _ input: EntryInput, after parent: Int64?, makeCurrent: Bool, write: EntryWrite? = nil,
+    claim: (() -> Bool)? = nil
+  ) async throws -> HistoryItem? {
     guard isLoaded else { return nil }
     if input.reason != .imported, Self.isDuplicate(signature(of: input), of: parent.flatMap(entry(key:))) {
       return nil
@@ -620,17 +627,35 @@ final class HistoryStore {
       guard let tensor = made.image else { throw ProjectError.badImage }
       canvas = .image(tensor)
     }
-    let appended = try await project.appendEntry(
-      reason: input.reason.reason, keyed: input.reason != .imported, canvas: canvas, mask: input.mask,
-      moodboard: made.moodboard, thumbnail: made.thumbnail, model: input.model, prompt: input.prompt,
-      negativePrompt: input.negativePrompt, seed: input.seed, settings: input.settings, createdAt: Date(),
-      after: parent)
+    if let claim, !claim() { return nil }
+    let appended = try await Self.appendEntry(
+      to: project, reason: input.reason, canvas: canvas, mask: input.mask, moodboard: made.moodboard,
+      thumbnail: made.thumbnail, input: input, after: parent, write: write)
     guard project === self.project else { return nil }
     noteMoodboardShuffles(input.moodboard.map(\.id), appended.shuffleIds)
     if makeCurrent { currentTensorId = appended.key }
     await reload()
     recordCurrent()
     return item(tensorId: appended.key)
+  }
+
+  /// `Project.appendEntry`, telling `write` what was written (or that nothing was) from where the
+  /// write finished, off the main actor, so a main thread waiting on it doesn't wait on itself.
+  @concurrent private nonisolated static func appendEntry(
+    to project: Project, reason: HistoryItem.EntryReason, canvas: Project.EntryCanvas, mask: CanvasMask?,
+    moodboard: [Project.EntryMood], thumbnail: CGImage?, input: EntryInput, after parent: Int64?, write: EntryWrite?
+  ) async throws -> Project.AppendedEntry {
+    do {
+      let appended = try await project.appendEntry(
+        reason: reason.reason, keyed: reason != .imported, canvas: canvas, mask: mask, moodboard: moodboard,
+        thumbnail: thumbnail, model: input.model, prompt: input.prompt, negativePrompt: input.negativePrompt,
+        seed: input.seed, settings: input.settings, createdAt: Date(), after: parent)
+      write?.finish(appended)
+      return appended
+    } catch {
+      write?.finish(nil)
+      throw error
+    }
   }
 
   /// How long quitting waits for an entry to be written.
@@ -1525,5 +1550,24 @@ nonisolated enum EntryThumbnail {
     CGContext(
       data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
       space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+  }
+}
+
+/// An entry being written (`HistoryStore.saveEntry`), which quitting can wait for: what the
+/// project got, published from where the write finished, never needing the main actor.
+final nonisolated class EntryWrite: Sendable {
+  private let result = Mutex<Project.AppendedEntry?>(nil)
+  private let done = DispatchSemaphore(value: 0)
+
+  func finish(_ appended: Project.AppendedEntry?) {
+    result.withLock { $0 = appended }
+    done.signal()
+  }
+
+  /// What was written, waiting until `deadline` at most; nil when nothing was, or not by then.
+  func wait(until deadline: Date) -> Project.AppendedEntry? {
+    guard done.wait(timeout: .now() + max(deadline.timeIntervalSinceNow, 0)) == .success else { return nil }
+    done.signal()
+    return result.withLock { $0 }
   }
 }
