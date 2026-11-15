@@ -53,6 +53,7 @@ extension Automation {
         model.generate()
         await idle()
         if let error = model.errorMessage { print("error: \(error)") }
+        if let note = model.statusNote { print("note: \(note)") }
         guard let step = model.lastSavedStep, step != previous else { return nil }
         return model.history.item(step)
       }
@@ -282,13 +283,14 @@ extension Automation {
       // Use Settings brings back another run's moodboard: a run after it follows that board, and
       // Use on that run brings it back, not the board of the entry current before.
       model.restore(entry: imported)
-      _ = await settled { !model.isLoadingCanvasImage && same(model.image, original) }
+      // The image it loads, not the same pixels the canvas showed before.
+      _ = await settled { model.canvasImageIsCurrent && same(model.image, original) }
       model.moodboard.replace(with: [(second, 1)])
       model.moodboard.setWeight(0.75, for: model.moodboard.items[0].id)
       await model.flushEntries()
       if let run3 = await run() {
         model.restore(entry: imported)
-        _ = await settled { !model.isLoadingCanvasImage && model.moodboard.items.isEmpty }
+        _ = await settled { model.canvasImageIsCurrent && model.moodboard.items.isEmpty }
         let boardOf = { (items: [MoodboardItem]) in items.map(\.weight) }
         model.use(run3, loadImage: false)
         _ = await settled { boardOf(model.moodboard.items) == [0.75] }
@@ -296,7 +298,7 @@ extension Automation {
         let afterUseSettings = history.currentItem
         check(
           afterUseSettings?.entryReason == .moodboard && afterUseSettings?.entryMoodboard.map(\.weight) == [0.75],
-          "Use Settings records the board it brings back as a Moodboard entry, current")
+          "Use Settings records the board it brings back as a Moodboard entry, current (current: \(afterUseSettings?.entryReason?.rawValue ?? "run"), \(afterUseSettings?.entryMoodboard.map(\.weight) ?? []))")
         if let run4 = await run() {
           model.moodboard.removeAll()
           await model.flushEntries()
