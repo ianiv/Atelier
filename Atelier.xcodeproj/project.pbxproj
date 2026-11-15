@@ -1620,7 +1620,7 @@
 			repositoryURL = "https://github.com/ianiv/draw-things-community";
 			requirement = {
 				kind = revision;
-				revision = 544a00208eeef3a7ef07b2b849cadb981a2d3162;
+				revision = 9599c5ffe1b3d3c86dcc0c84121d9f3908dfcbee;
 			};
 		};
 		FA3B96D181CC9804C2FF9474 /* XCRemoteSwiftPackageReference "flatbuffers" */ = {
