@@ -20,6 +20,10 @@ final class Moodboard {
   private(set) var items: [MoodboardItem] = []
   /// Tells the user a change wasn't saved. Set by `CreateModel`, whose status bar shows it.
   @ObservationIgnored var reportFailure: ((String) -> Void)?
+  /// Told of each change made on the board (add, insert, remove, clear, weight), so `CreateModel`
+  /// can record it in History as a Moodboard entry. Not for `replace`, which brings a recorded
+  /// board back.
+  @ObservationIgnored var onChange: (() -> Void)?
 
   /// Reference images are scaled down to this long side: the engine resizes references to about
   /// the output's pixel count anyway, and full-size photos would bloat project files.
@@ -62,6 +66,7 @@ final class Moodboard {
   func add(_ image: CGImage) {
     items.append(MoodboardItem(image: ImageLoader.fitted(image, maxSide: Self.maxSide)))
     save(writing: items.last)
+    onChange?()
   }
 
   /// Puts an image at `index` (the front, for MiniMax H3 FL2VA's last frame).
@@ -69,15 +74,24 @@ final class Moodboard {
     let item = MoodboardItem(image: ImageLoader.fitted(image, maxSide: Self.maxSide))
     items.insert(item, at: min(max(index, 0), items.count))
     save(writing: item)
+    onChange?()
   }
 
   func remove(_ id: MoodboardItem.ID) {
+    guard items.contains(where: { $0.id == id }) else { return }
     items.removeAll { $0.id == id }
     try? FileManager.default.removeItem(at: Self.folder.appending(path: "\(id).png"))
     save()
+    onChange?()
   }
 
   func removeAll() {
+    guard !items.isEmpty else { return }
+    clear()
+    onChange?()
+  }
+
+  private func clear() {
     for item in items {
       try? FileManager.default.removeItem(at: Self.folder.appending(path: "\(item.id).png"))
     }
@@ -87,17 +101,23 @@ final class Moodboard {
 
   func setWeight(_ weight: Float, for id: MoodboardItem.ID) {
     guard let index = items.firstIndex(where: { $0.id == id }) else { return }
-    items[index].weight = min(max(weight, 0), 1)
+    let weight = min(max(weight, 0), 1)
+    guard items[index].weight != weight else { return }
+    items[index].weight = weight
     save()
+    onChange?()
   }
 
-  /// Replaces the board, e.g. with a history step's moodboard.
-  func replace(with references: [(image: CGImage, weight: Float)]) {
-    removeAll()
+  /// Replaces the board with a recorded one (a History step's or entry's), without recording it
+  /// again. Returns the new items' ids, in order.
+  @discardableResult
+  func replace(with references: [(image: CGImage, weight: Float)]) -> [MoodboardItem.ID] {
+    clear()
     for reference in references {
       items.append(MoodboardItem(image: reference.image, weight: reference.weight))
       save(writing: items.last)
     }
+    return items.map(\.id)
   }
 
   /// The images the next run sends: weight above zero, in order.

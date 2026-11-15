@@ -25,6 +25,9 @@ struct HistoryView: View {
   @State private var modelFilter: String?
   @State private var kindFilter = Kind.all
   @State private var ratingFilter = RatingFilter.any
+  /// Whether input entries (the canvas and moodboard before runs) are listed; shared with the
+  /// Create strip.
+  @AppStorage(EntryBadge.showsEntriesKey) private var showsEntries = true
   @State private var pendingDelete: [HistoryItem]?
   @State private var deleteError: String?
   @State private var columns = 1
@@ -86,6 +89,7 @@ struct HistoryView: View {
       (modelFilter == nil || item.sidecar.model == modelFilter)
         && (kindFilter == .all || item.isVideo == (kindFilter == .videos))
         && ratingFilter.matches(history.rating(of: item))
+        && (showsEntries || !item.isEntry)
         && (query.isEmpty || item.sidecar.prompt.localizedCaseInsensitiveContains(query))
     }
   }
@@ -123,6 +127,7 @@ struct HistoryView: View {
               kindPicker.pickerStyle(.menu).disabled(!history.items.contains(where: \.isVideo))
               ratingPicker.pickerStyle(.menu)
               modelPicker.pickerStyle(.menu)
+              inputsToggle
             } label: {
               Label("Filter", systemImage: isFiltering ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
             }
@@ -138,6 +143,7 @@ struct HistoryView: View {
           }
           ToolbarItem { ToolbarPickerMenu(title: ratingTitle, width: 90) { ratingPicker } }
           ToolbarItem { ToolbarPickerMenu(title: modelFilter ?? "All models", width: 150) { modelPicker } }
+          ToolbarItem { inputsToggle }
         #endif
       }
       .searchable(text: $search, placement: .toolbar, prompt: "Filter by prompt")
@@ -380,18 +386,24 @@ struct HistoryView: View {
               if let clip = item.clip { ClipBadge(clip: clip).padding(5) }
             }
             .overlay(alignment: .topLeading) {
-              let stars = history.rating(of: item)
-              if stars > 0 { RatingBadge(stars: stars).padding(5) }
+              if let reason = item.entryReason {
+                EntryBadge(reason: reason).padding(5)
+              } else {
+                let stars = history.rating(of: item)
+                if stars > 0 { RatingBadge(stars: stars).padding(5) }
+              }
             }
             .overlay(alignment: .bottomTrailing) {
-              Text(GenerationTime.text(item.sidecar.durationSeconds))
-                .font(.caption2.monospacedDigit())
-                .padding(.horizontal, 5)
-                .padding(.vertical, 2)
-                .background(.black.opacity(0.55), in: .capsule)
-                .foregroundStyle(.white)
-                .padding(5)
-                .help("Generation time")
+              if !item.isEntry {
+                Text(GenerationTime.text(item.sidecar.durationSeconds))
+                  .font(.caption2.monospacedDigit())
+                  .padding(.horizontal, 5)
+                  .padding(.vertical, 2)
+                  .background(.black.opacity(0.55), in: .capsule)
+                  .foregroundStyle(.white)
+                  .padding(5)
+                  .help("Generation time")
+              }
             }
             .clipShape(.rect(cornerRadius: 6))
             .overlay {
@@ -532,9 +544,16 @@ struct HistoryView: View {
     }
   }
 
+  private var inputsToggle: some View {
+    Toggle(isOn: $showsEntries) {
+      Label("Show Inputs", systemImage: "square.and.arrow.down.on.square")
+    }
+    .help("Show the inputs runs went in with: images brought in, moodboard changes, cleared canvases and masks")
+  }
+
   #if os(iOS)
     private var isFiltering: Bool {
-      kindFilter != .all || ratingFilter != .any || modelFilter != nil
+      kindFilter != .all || ratingFilter != .any || modelFilter != nil || !showsEntries
     }
   #endif
 
@@ -582,10 +601,15 @@ struct HistoryView: View {
       Button("Rerun with New Seed") { use(item, newSeed: true) }
         .disabled(!create.canUse(item))
       Button(item.isVideo ? "Copy First Frame" : "Copy Image") { Task { await history.copyImage(item) } }
+        .disabled(!item.hasImage)
       Button("Copy Prompt") { copy(item.sidecar.prompt) }
+        .disabled(item.isEntry)
       Button("Copy Seed") { copy(String(item.sidecar.seed)) }
+        .disabled(item.isEntry)
       Button(item.isVideo ? "Export Video…" : "Export PNG…") { export([item]) }
+        .disabled(!item.hasImage)
       Button("Save to Photos") { saveToPhotos([item]) }
+        .disabled(!item.hasImage)
       Divider()
       MaskMenu(item: item, undoManager: undoManager)
       if item.isVideo {
@@ -595,6 +619,7 @@ struct HistoryView: View {
       }
       Divider()
       ratingMenu(items)
+        .disabled(item.isEntry)
       Divider()
       Button("Delete", role: .destructive) { pendingDelete = [item] }
     }
@@ -739,6 +764,12 @@ struct HistoryView: View {
   }
 
   private func use(_ item: HistoryItem, newSeed: Bool, loadImage: Bool = true) {
+    // An input entry has no settings: opening it puts its canvas and moodboard back.
+    if item.isEntry, loadImage, !newSeed {
+      create.restore(entry: item)
+      navigation.section = .create
+      return
+    }
     guard create.canUse(item) else { return }
     // Opening a clip shows the clip, as the strip does, not the still it was made from; a rerun
     // still needs that input to generate from.
@@ -949,6 +980,7 @@ struct HistoryDetail: View {
         LabeledContent("Rating") {
           StarRating(stars: history.rating(of: item)) { history.setRating($0, for: [item]) }
         }
+        .disabled(item.isEntry)
         if !create.models.contains(where: { $0.file == sidecar.model }) {
           Label("\(sidecar.model) isn't downloaded.", systemImage: "exclamationmark.triangle")
             .font(.caption).foregroundStyle(.secondary)
@@ -957,8 +989,10 @@ struct HistoryDetail: View {
           Button(item.isVideo ? "Copy Frame" : "Copy Image") { Task { await history.copyImage(item) } }
           Button(item.isVideo ? "Export Video…" : "Export PNG…", action: export)
         }
+        .disabled(!item.hasImage)
         ButtonRow {
           Button("Save to Photos", action: saveToPhotos)
+            .disabled(!item.hasImage)
           Button("Delete", role: .destructive, action: delete)
         }
         if item.isVideo {
@@ -970,35 +1004,49 @@ struct HistoryDetail: View {
           }
         }
       }
-      Section("Prompt") {
-        Text(sidecar.prompt).textSelection(.enabled)
-        if !sidecar.negativePrompt.isEmpty {
-          LabeledContent("Negative") { Text(sidecar.negativePrompt).textSelection(.enabled) }
+      if let reason = item.entryReason {
+        Section("Input") {
+          LabeledContent("Kind", value: reason.title)
+          LabeledContent("Canvas", value: item.hasImage ? "\(sidecar.width) × \(sidecar.height) frame" : "Empty")
+          LabeledContent("Mask", value: item.entryMask?.mayHavePaint == true ? "Painted" : "None")
+          LabeledContent(
+            "Moodboard",
+            value: item.entryMoodboard.isEmpty
+              ? "Empty"
+              : item.entryMoodboard.map { "\(Int(($0.weight * 100).rounded()))%" }.joined(separator: ", "))
+          LabeledContent("Created", value: sidecar.createdAt.formatted(date: .abbreviated, time: .shortened))
         }
-      }
-      Section("Settings") {
-        LabeledContent("Model", value: modelName(sidecar.model))
-        LabeledContent("Size", value: "\(sidecar.width) × \(sidecar.height)")
-        if let clip = item.clip {
-          LabeledContent("Length", value: ClipBadge.length(clip))
+      } else {
+        Section("Prompt") {
+          Text(sidecar.prompt).textSelection(.enabled)
+          if !sidecar.negativePrompt.isEmpty {
+            LabeledContent("Negative") { Text(sidecar.negativePrompt).textSelection(.enabled) }
+          }
         }
-        LabeledContent("Seed") { Text(String(sidecar.seed)).textSelection(.enabled) }
-        LabeledContent("Steps", value: "\(sidecar.steps)")
-        LabeledContent("Guidance", value: sidecar.guidanceScale.formatted())
-        LabeledContent("Shift", value: sidecar.shift.formatted())
-        LabeledContent("Sampler", value: sidecar.sampler)
-        LabeledContent(
-          "Resolution-dependent shift", value: sidecar.resolutionDependentShift ? "On" : "Off")
-        LabeledContent("Hires fix", value: sidecar.hiresFix ? "On" : "Off")
-        LabeledContent(
-          "Created",
-          value: sidecar.createdAt.formatted(date: .abbreviated, time: .shortened))
-        LabeledContent(
-          "Duration", value: Duration.seconds(sidecar.durationSeconds).formatted(.units(width: .abbreviated, fractionalPart: .show(length: 1))))
-        LabeledContent("Timings") {
-          Text(sidecar.timings.map { $0.lines.joined(separator: "\n") } ?? "Not recorded")
-            .multilineTextAlignment(.trailing)
-            .textSelection(.enabled)
+        Section("Settings") {
+          LabeledContent("Model", value: modelName(sidecar.model))
+          LabeledContent("Size", value: "\(sidecar.width) × \(sidecar.height)")
+          if let clip = item.clip {
+            LabeledContent("Length", value: ClipBadge.length(clip))
+          }
+          LabeledContent("Seed") { Text(String(sidecar.seed)).textSelection(.enabled) }
+          LabeledContent("Steps", value: "\(sidecar.steps)")
+          LabeledContent("Guidance", value: sidecar.guidanceScale.formatted())
+          LabeledContent("Shift", value: sidecar.shift.formatted())
+          LabeledContent("Sampler", value: sidecar.sampler)
+          LabeledContent(
+            "Resolution-dependent shift", value: sidecar.resolutionDependentShift ? "On" : "Off")
+          LabeledContent("Hires fix", value: sidecar.hiresFix ? "On" : "Off")
+          LabeledContent(
+            "Created",
+            value: sidecar.createdAt.formatted(date: .abbreviated, time: .shortened))
+          LabeledContent(
+            "Duration", value: Duration.seconds(sidecar.durationSeconds).formatted(.units(width: .abbreviated, fractionalPart: .show(length: 1))))
+          LabeledContent("Timings") {
+            Text(sidecar.timings.map { $0.lines.joined(separator: "\n") } ?? "Not recorded")
+              .multilineTextAlignment(.trailing)
+              .textSelection(.enabled)
+          }
         }
       }
     }
@@ -1457,6 +1505,7 @@ struct HistoryGraphRow: View {
           .lineLimit(1)
       }
       Spacer(minLength: 0)
+      if let reason = item.entryReason { EntryBadge(reason: reason) }
       if stars > 0 { RatingBadge(stars: stars, plain: true) }
       if isCurrent {
         Text("Current")
@@ -1507,5 +1556,32 @@ struct HistoryGraphRow: View {
 
   private func modelName(_ file: String) -> String {
     create.models.first { $0.file == file }?.name ?? file
+  }
+}
+
+/// The badge on an input entry's tile: what it records.
+struct EntryBadge: View {
+  var reason: HistoryItem.EntryReason
+
+  /// The setting History's and the Create strip's Show Inputs share.
+  static let showsEntriesKey = "showsInputEntries"
+
+  var body: some View {
+    Text(reason.title)
+      .font(.system(size: 9, weight: .semibold))
+      .padding(.horizontal, 4)
+      .padding(.vertical, 1)
+      .background(.black.opacity(0.6), in: .capsule)
+      .foregroundStyle(.white)
+      .help(help)
+  }
+
+  private var help: String {
+    switch reason {
+    case .imported: "Input: an image brought onto the canvas"
+    case .moodboard: "Input: the moodboard changed"
+    case .cleared: "Input: the canvas was cleared"
+    case .mask: "Input: the mask a run went in with"
+    }
   }
 }

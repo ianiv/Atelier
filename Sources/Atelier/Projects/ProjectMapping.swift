@@ -53,6 +53,10 @@ nonisolated enum ProjectMapping {
     var layerCount: Int32?
     var contentOffset: (x: Int32, y: Int32)?
     var canvasScale: Int32?
+    /// An input entry's own key (see `Profile.entryKey`), and the canvas mask it holds. Kept in
+    /// `profile_data`.
+    var entryKey: Int64?
+    var entryMask: CanvasMask?
   }
 
   /// `profile_data`: Draw Things' `GenerationProfile` as snake-case JSON (timings and duration),
@@ -69,7 +73,14 @@ nonisolated enum ProjectMapping {
   /// input back as it was; the mask itself is also the step's `binary_mask` layer, as Draw Things
   /// keeps a canvas mask. A step made by Match Colors to Original adds `color_match` (strength,
   /// luminance and the original's tensor), so matching it again uses that original rather than its
-  /// input, the image it was matched from. Draw Things decodes the profile with Codable, which skips the extra keys.
+  /// input, the image it was matched from. An input entry (a Moodboard, Clear or Mask step, written
+  /// as `ImageHistoryManager.pushHistory` writes Draw Things' own with those reasons) adds
+  /// `entry_key`, the id History lists it by: it has no image of its own, or shows the canvas's,
+  /// which the image's own step is listed by (see `ProjectTree`). Ids are in a band no tensor uses.
+  /// It also adds `entry_mask`, the canvas mask as it was, kept as strokes rather than as the
+  /// layer's `binary_mask`: the layer rows are the canvas step's own, shared, and a mask on them
+  /// would change how that image composites wherever it's read by tensor. Draw Things decodes the
+  /// profile with Codable, which skips the extra keys.
   struct Profile: Codable {
     var timings: [Timing] = []
     var duration: Double
@@ -82,6 +93,12 @@ nonisolated enum ProjectMapping {
     var refineOffset: [Double]?
     var refineMask: CanvasMask?
     var colorMatch: ColorMatch.Record?
+    var entryKey: Int64?
+    var entryMask: CanvasMask?
+
+    /// The band entry keys come from: above the audio tensors' (`Project.append`), so a key is
+    /// never a tensor's id.
+    static let entryKeys: ClosedRange<Int64> = 2_200_000_000...2_999_999_999
 
     var refine: RefineRecord? {
       get {
@@ -109,7 +126,8 @@ nonisolated enum ProjectMapping {
 
     init(
       duration: Double, inputTensorId: Int64?, parentTensorId: Int64?, inputAudioId: Int64? = nil,
-      timings: [Timing] = [], refine: RefineRecord? = nil, colorMatch: ColorMatch.Record? = nil
+      timings: [Timing] = [], refine: RefineRecord? = nil, colorMatch: ColorMatch.Record? = nil,
+      entryKey: Int64? = nil, entryMask: CanvasMask? = nil
     ) {
       self.timings = timings
       self.duration = duration
@@ -118,6 +136,8 @@ nonisolated enum ProjectMapping {
       self.inputAudioId = inputAudioId
       self.refine = refine
       self.colorMatch = colorMatch
+      self.entryKey = entryKey
+      self.entryMask = entryMask
     }
 
     init?(_ bytes: [UInt8]) {
@@ -203,7 +223,7 @@ nonisolated enum ProjectMapping {
         duration: step.generationTime, inputTensorId: step.inputTensorId,
         parentTensorId: step.parentTensorId ?? 0, inputAudioId: step.inputAudioId,
         timings: step.timings?.profileTimings ?? [], refine: step.refine,
-        colorMatch: step.colorMatch
+        colorMatch: step.colorMatch, entryKey: step.entryKey, entryMask: step.entryMask
       ).bytes,
       teaCacheStart: i32("teaCacheStart", 5), teaCacheEnd: i32("teaCacheEnd", -1),
       teaCacheThreshold: d.float("teaCacheThreshold", 0.06), teaCache: d.bool("teaCache", false),

@@ -134,8 +134,10 @@ extension Automation {
       check((inside?.meanDelta ?? 0) > 1, "(a) the masked area changed (mean delta \(String(format: "%.1f", inside?.meanDelta ?? 0)))")
       check(a.sidecar.refine?.mask == maskA && a.inputTensorId != nil, "(a) the step keeps its mask and region, after its input")
       let layersA = await model.history.project.read { $0.layerSummary(tensorId: a.tensorId) }
+      // The input may be an entry (the Mask entry the run wrote first), which shows the image.
+      let inputImageA = a.inputTensorId.flatMap { model.history.item(tensorId: $0)?.imageTensorId } ?? a.inputTensorId
       check(
-        layersA.count == 2 && layersA[0].maskId > 0 && layersA[0].tensorId == a.inputTensorId,
+        layersA.count == 2 && layersA[0].maskId > 0 && layersA[0].tensorId == inputImageA,
         "(a) it's stored as two layers, the input's own tensor with the mask under the frame (\(layersA.map { "\($0.tensorId)/\($0.maskId)@\($0.x),\($0.y)" }))")
       check(model.canvasMask != nil, "(a) the mask stays on the canvas after the run")
       do {

@@ -553,6 +553,24 @@ final class CreateModel {
   /// While a slider drags, its changes share the undo step registered when the drag began.
   private var coalescingEdit = false
   private var generateWhenLoaded = false
+  /// Input entries being written, one after another (`recordEntry`), and how many.
+  @ObservationIgnored private var entryChain: Task<Void, Never>?
+  @ObservationIgnored private var entriesPending = 0
+  /// The moodboard changed and that isn't in History yet: it's recorded once it settles
+  /// (`moodboardSettle`), or before anything that needs it there first (`recordMoodboardChange`).
+  @ObservationIgnored private var moodboardChanged = false
+  @ObservationIgnored private var moodboardSettling: Task<Void, Never>?
+  /// The last image brought in, once its Imported entry is written: an entry recorded meanwhile
+  /// shows that step rather than storing the image again.
+  @ObservationIgnored private var adoptedImport: (image: CGImage, tensorId: Int64)?
+  /// The entry `recordEntry` wrote last: one gathered before it follows it while it's current.
+  @ObservationIgnored private var lastEntryKey: Int64?
+  /// Generate is writing the entries a run follows (a moodboard change, a mask) before queueing
+  /// it: Generate is held meanwhile, as for a selection.
+  private(set) var waitsForEntries = false
+  /// How long the moodboard is left alone before a change is recorded: a burst of changes, or a
+  /// weight slider being dragged, is one entry.
+  static let moodboardSettle: Duration = .milliseconds(1500)
 
   /// The saved history item behind the canvas image, when it's a finished image in the current
   /// project (not a step preview).
@@ -560,7 +578,8 @@ final class CreateModel {
     guard !imageIsPreview, let imageStep, imageStep.project == history.project.name else {
       return nil
     }
-    return history.item(tensorId: imageStep.tensorId)
+    // An Imported entry is listed by its image, but it's no run: it has no settings of its own.
+    return history.item(tensorId: imageStep.tensorId).flatMap { $0.isEntry ? nil : $0 }
   }
 
   /// The video the canvas image is a frame of, when it shows one (`useFrame`): only its first
@@ -636,7 +655,7 @@ final class CreateModel {
   }
 
   /// A job is running or the model's defaults are loading.
-  var isBusy: Bool { isRunning || isLoadingModel }
+  var isBusy: Bool { isRunning || isLoadingModel || waitsForEntries }
 
   var isRunning: Bool { phase != .idle }
 
@@ -849,7 +868,13 @@ final class CreateModel {
 
   /// Puts an image from outside the project on the canvas, fitted to the frame, and switches to
   /// Edit so the next run starts from it. Settings it carries (`metadata`) can then be loaded.
+  ///
+  /// The image goes into History at once as an Imported entry, with the moodboard, and becomes the
+  /// canvas's step once it's written (`adoptImport`): masks are kept with it, and a run from it
+  /// follows it.
   func setCanvasImage(_ newImage: CGImage, metadata: ImageMetadata.Embedded? = nil) {
+    // A moodboard change made with the canvas before goes in first.
+    recordMoodboardChange()
     stopFollowingRun()
     imageStep = nil
     lastSavedTensorId = nil
@@ -861,16 +886,27 @@ final class CreateModel {
     }
     canvas.zoomToFit()
     canvasMode = .edit
+    // A new step of its own, even for an image brought in before.
+    adoptedImport = nil
+    if var input = entryInput(.imported) {
+      input.canvas = .image(newImage)
+      input.canvasImage = newImage
+      input.mask = nil
+      recordEntry(input) { [weak self] item in self?.adoptImport(newImage, item) }
+    }
   }
 
-  /// Empties the canvas (Generate mode then has nothing to show it with).
+  /// Empties the canvas (Generate mode then has nothing to show it with), recorded in History as a
+  /// Cleared entry.
   func clearCanvas() {
+    recordMoodboardChange()
     stopFollowingRun()
     imageStep = nil
     lastSavedTensorId = nil
     image = nil
     canvasIsImported = false
     canvas.zoomToFit()
+    if let input = entryInput(.cleared) { recordEntry(input) }
   }
 
   /// Sets the output size to the canvas image's, in whole 64-pixel units.
@@ -996,7 +1032,11 @@ final class CreateModel {
   init(history: HistoryStore) {
     self.history = history
     timelines = TimelineStore(history: history)
-    defer { moodboard.reportFailure = { [weak self] in self?.errorMessage = $0 } }
+    defer {
+      moodboard.reportFailure = { [weak self] in self?.errorMessage = $0 }
+      moodboard.onChange = { [weak self] in self?.moodboardDidChange() }
+      history.willSwitchProject = { [weak self] in await self?.flushEntries() }
+    }
     if let session = SessionState.load() {
       restored = session
       prompt = session.prompt
@@ -1019,6 +1059,7 @@ final class CreateModel {
         }
       }
     }
+    AppLifecycle.onWillTerminate { [weak self] in self?.recordMoodboardChangeBeforeQuit() }
     AppLifecycle.onWillTerminate { [weak self] in self?.saveSession() }
     AppLifecycle.onResignActive { [weak self] in self?.saveSession() }
     AppLifecycle.onWillTerminate { [weak self] in self?.saveQueue() }
@@ -1133,9 +1174,10 @@ final class CreateModel {
     ).save()
   }
 
-  /// Whether `item`'s model is downloaded, so its settings can be loaded here.
+  /// Whether `item`'s model is downloaded, so its settings can be loaded here. An input entry has no
+  /// settings to use: it's restored instead (`restore(entry:)`).
   func canUse(_ item: HistoryItem) -> Bool {
-    !isBusy && !item.sidecar.configuration.isEmpty
+    !item.isEntry && !isBusy && !item.sidecar.configuration.isEmpty
       && availableModels.contains { $0.file == item.sidecar.model }
   }
 
@@ -1146,7 +1188,9 @@ final class CreateModel {
     _ item: HistoryItem, newSeed: Bool = false, loadImage: Bool = true, restoreInput: Bool = true,
     undoManager: UndoManager? = nil
   ) {
+    if item.isEntry, loadImage, !newSeed { return restore(entry: item) }
     guard canUse(item) else { return }
+    recordMoodboardChange()
     if newSeed { rerunUndoManager = undoManager }
     let sidecar = item.sidecar
     restorePrompts(sidecar.prompt, sidecar.negativePrompt)
@@ -1175,11 +1219,13 @@ final class CreateModel {
            let inputTensorId = item.inputTensorId
         {
           guard imageStep?.tensorId == item.tensorId else { return }
-          // The input becomes the current step, so a rerun branches beside this one.
-          imageStep = (projectName, inputTensorId)
+          // The input becomes the current step, so a rerun branches beside this one. An input entry
+          // is current by its key; the canvas shows its image, which masks are kept with.
+          imageStep = (projectName, input.imageTensorId)
           history.setCurrent(tensorId: inputTensorId)
           image = input.image
-          Task { await loadCanvasDetail(tensorId: inputTensorId, project: projectName) }
+          Task { await loadCanvasDetail(tensorId: input.imageTensorId, project: projectName) }
+          let entry = history.item(tensorId: inputTensorId).flatMap { $0.isEntry ? $0 : nil }
           if let refine = item.sidecar.refine, refine.offset.count == 2 {
             // A refined region merged back: the frame on that region again, with its mask.
             let offset = CGSize(width: refine.offset[0], height: refine.offset[1])
@@ -1188,6 +1234,10 @@ final class CreateModel {
             // The run's own mask, to reproduce it, rather than what the input had last.
             canvasMask = refine.mask
             maskPendingTensorId = nil
+          } else if let entry {
+            // The mask the run went in with, not whatever the image had last.
+            canvas.zoomToFit()
+            putBackMask(entry.entryMask, on: input.imageTensorId)
           } else {
             canvas.zoomToFit()
             await restoreCanvasMask()
@@ -1207,9 +1257,11 @@ final class CreateModel {
         canvasImageDidNotLoad("This image couldn't be read from the project.")
       }
     }
+    // The input entry's whole moodboard (weight-0 images too) when the run has one, else the
+    // images the run took.
+    let moodboardStep = (restoreInput ? history.inputEntry(of: item) : nil)?.id ?? item.id
     let restoreMoodboard = Task {
-      let references = await history.moodboard(at: item.id, in: projectName)
-      moodboard.replace(with: references)
+      await restoreMoodboard(from: moodboardStep, in: projectName)
       // A video run's audio file comes back too.
       if let samples = await history.audioInput(of: item),
          let rate = VideoModel(model: item.sidecar.model)?.audioSampleRate
@@ -1574,7 +1626,7 @@ final class CreateModel {
   /// the selection goes in. It's dropped, with a note, if the canvas image or Edit mode changes
   /// during the wait.
   func generate(undoManager: UndoManager? = nil) {
-    guard canGenerate, !waitsForSelection else { return }
+    guard canGenerate, !waitsForSelection, !waitsForEntries else { return }
     let undoManager = undoManager ?? rerunUndoManager ?? Self.windowUndoManager
     guard hasPendingSelection, autoMask.isBusy else {
       let note = addPendingSelection(undoManager: undoManager)
@@ -1614,7 +1666,7 @@ final class CreateModel {
   static let selectionTimedOutNote = "The selection took too long to work out, so the run went without it."
 
   /// Generate can be pressed now (the button and ⌘↩).
-  var canPressGenerate: Bool { canGenerate && !waitsForSelection }
+  var canPressGenerate: Bool { canGenerate && !waitsForSelection && !waitsForEntries }
 
   /// The window's undo manager, for runs started without one at hand (Use Settings' rerun).
   static var windowUndoManager: UndoManager? {
@@ -1665,8 +1717,31 @@ final class CreateModel {
     return nil
   }
 
-  /// Queues the run from the screen as it is now.
+  /// Queues the run from the screen as it is now. What History doesn't have yet goes in first, so
+  /// the run follows it: a moodboard change still settling, entries on their way, and the mask
+  /// when it isn't the one the current entry holds (a Mask entry, `maskEntryInput`).
   private func queueGeneration() {
+    guard canGenerate else { return }
+    guard moodboardChanged || entriesPending > 0 || maskEntryInput() != nil else { return queueGenerationNow() }
+    recordMoodboardChange()
+    waitsForEntries = true
+    let waitedImage = image, waitedMode = canvasMode
+    Task {
+      await entryChain?.value
+      if let input = maskEntryInput() {
+        recordEntry(input)
+        await entryChain?.value
+      }
+      waitsForEntries = false
+      guard image === waitedImage, canvasMode == waitedMode else {
+        statusNote = "The run was cancelled because the canvas changed while it was being recorded."
+        return
+      }
+      queueGenerationNow()
+    }
+  }
+
+  private func queueGenerationNow() {
     guard canGenerate, let base = screenRequest() else { return }
     // The canvas image remembers the mask it's queued with now, not when the run is saved (the
     // mask may have changed, or been cleared, by then).
@@ -2318,7 +2393,7 @@ final class CreateModel {
   /// Whether a step has an image its colors can be matched to (see `originalImage(for:)`). A
   /// moodboard counts only with an image of weight above 0, the one `originalImage` would take.
   func hasOriginal(_ item: HistoryItem) -> Bool {
-    !item.isVideo && (item.sidecar.colorMatch != nil || item.inputTensorId != nil || item.weightedMoodboardCount > 0)
+    !item.isVideo && !item.isEntry && (item.sidecar.colorMatch != nil || item.inputTensorId != nil || item.weightedMoodboardCount > 0)
   }
 
   /// The image an edit was made from: a Match Colors result's own original, else the step's input
@@ -2345,7 +2420,8 @@ final class CreateModel {
       return await firstMoodboardImage()
     }
     if let tensorId = item.inputTensorId {
-      if let input = await project.read({ $0.input(of: item.id, tensorId: tensorId) }) { return (input.image, tensorId, nil) }
+      // The input's image: an input entry's is its canvas's.
+      if let input = await project.read({ $0.input(of: item.id, tensorId: tensorId) }) { return (input.image, input.imageTensorId, nil) }
       if let image = await project.read({ $0.image(tensorId: tensorId) }) { return (image, tensorId, nil) }
     }
     return await firstMoodboardImage()
@@ -2749,6 +2825,8 @@ final class CreateModel {
   /// Shows a history image on the canvas without touching the prompt or settings, and makes it
   /// the current step.
   func show(_ item: HistoryItem) {
+    if item.isEntry { return restore(entry: item) }
+    recordMoodboardChange()
     statusNote = nil
     stopFollowingRun()
     let projectName = history.project.name
@@ -2777,26 +2855,30 @@ final class CreateModel {
   /// current step), for callers without the view, with the mask it last had unless `restoresMask`
   /// is false. Returns once it's there; false for a video or an image that can't be read.
   func placeOnCanvas(_ item: HistoryItem, restoresMask: Bool = true) async -> Bool {
-    guard !item.isVideo else { return false }
+    // An input entry's image is its canvas's (none for an empty one).
+    guard !item.isVideo, let tensorId = item.imageTensorId else { return false }
     let projectName = history.project.name
     guard let full = await whileLoadingCanvasImage({ await history.image(at: item.id, in: projectName) }) else {
       return false
     }
+    recordMoodboardChange()
     statusNote = nil
     stopFollowingRun()
-    imageStep = (projectName, item.tensorId)
+    imageStep = (projectName, tensorId)
     history.setCurrent(tensorId: item.tensorId)
     canvasIsImported = false
     image = full
     canvas.zoomToFit()
     canvasMode = .edit
-    await loadCanvasDetail(tensorId: item.tensorId, project: projectName)
-    if restoresMask {
+    await loadCanvasDetail(tensorId: tensorId, project: projectName)
+    if restoresMask, item.isEntry {
+      putBackMask(item.entryMask, on: tensorId)
+    } else if restoresMask {
       await restoreCanvasMask()
     } else {
       // Left without its mask on purpose: leaving it unchanged keeps the one it had.
       maskPendingTensorId = nil
-      landedMask = (item.tensorId, nil)
+      landedMask = (tensorId, nil)
     }
     return true
   }
@@ -3232,5 +3314,196 @@ extension CreateModel {
   func pasteMask(undoManager: UndoManager?) {
     guard canPasteMask, let copiedMask else { return }
     applyMask(copiedMask.mask, from: copiedMask.size, how: .replace, actionName: "Paste Mask", undoManager: undoManager)
+  }
+}
+
+// MARK: - Input entries
+
+extension CreateModel {
+  /// A moodboard change: recorded once the board has been left alone a moment.
+  private func moodboardDidChange() {
+    moodboardChanged = true
+    moodboardSettling?.cancel()
+    moodboardSettling = Task { [weak self] in
+      guard (try? await Task.sleep(for: CreateModel.moodboardSettle)) != nil else { return }
+      self?.recordMoodboardChange()
+    }
+  }
+
+  /// Records a moodboard change still settling, as things are now: before the canvas changes, a
+  /// run is queued, or something else is restored. The entry is written in turn (`flushEntries`
+  /// waits for it).
+  func recordMoodboardChange() {
+    guard moodboardChanged else { return }
+    moodboardChanged = false
+    moodboardSettling?.cancel()
+    moodboardSettling = nil
+    if let input = entryInput(.moodboard) { recordEntry(input) }
+  }
+
+  /// Writes what History doesn't have yet: a moodboard change still settling, and the entries on
+  /// their way. Before another project opens, and for checks.
+  func flushEntries() async {
+    recordMoodboardChange()
+    await entryChain?.value
+  }
+
+  /// At quit there's no waiting for the next turn: a moodboard change still settling is written now.
+  private func recordMoodboardChangeBeforeQuit() {
+    guard moodboardChanged else { return }
+    moodboardChanged = false
+    moodboardSettling?.cancel()
+    guard entriesPending == 0, let input = entryInput(.moodboard) else { return }
+    history.saveEntryBeforeQuit(input, after: input.parent, makeCurrent: true)
+  }
+
+  /// What an entry made now would hold: the canvas (the image under a run's preview; none for a
+  /// preview alone), its mask, and the whole moodboard. Nil until the project has loaded.
+  func entryInput(_ reason: HistoryItem.EntryReason) -> HistoryStore.EntryInput? {
+    guard history.isLoaded else { return nil }
+    let canvas = entryCanvas()
+    let styled = styledPrompts
+    return HistoryStore.EntryInput(
+      reason: reason, parent: history.currentTensorId, canvas: canvas.canvas, canvasImage: canvas.image,
+      mask: canvas.image != nil ? canvasMask : nil, moodboard: moodboard.items, model: selectedModel ?? "",
+      prompt: styled.prompt, negativePrompt: styled.negativePrompt, seed: seed,
+      settings: settings.map(JSONValue.fields(of:)) ?? [:])
+  }
+
+  /// The canvas as an entry holds it: the current project's step behind it, or the image itself
+  /// when it isn't one yet.
+  private func entryCanvas() -> (canvas: HistoryStore.EntryInput.Canvas, image: CGImage?) {
+    guard let source = canvasSource, !source.isPreview else { return (.empty, nil) }
+    if !source.isImported, let step = source.step, step.project == history.project.name,
+       history.tree.step(tensorId: step.tensorId) != nil
+    {
+      return (.step(tensorId: step.tensorId), source.image)
+    }
+    if let adoptedImport, adoptedImport.image === source.image, history.tree.step(tensorId: adoptedImport.tensorId) != nil {
+      return (.step(tensorId: adoptedImport.tensorId), source.image)
+    }
+    return (.image(source.image), source.image)
+  }
+
+  /// Writes an entry after those on their way. It follows the step that was current when it was
+  /// gathered, or the entry written just before it when that's current now, and becomes current
+  /// itself, unless another step was picked meanwhile. `landed` gets it (nil when none was written:
+  /// it repeated the step before, or failed).
+  private func recordEntry(_ input: HistoryStore.EntryInput, landed: ((HistoryItem?) -> Void)? = nil) {
+    let previous = entryChain
+    let project = history.project.name
+    let before = history.currentTensorId
+    entriesPending += 1
+    entryChain = Task { [weak self] in
+      await previous?.value
+      guard let self else { return }
+      defer { entriesPending -= 1 }
+      guard history.project.name == project else {
+        landed?(nil)
+        return
+      }
+      var input = input
+      // An image brought in just before is the canvas's step by now (an Imported entry always
+      // stores its own: it's listed by it).
+      if input.reason != .imported, case .image(let image) = input.canvas, let adoptedImport, adoptedImport.image === image,
+         history.tree.step(tensorId: adoptedImport.tensorId) != nil
+      {
+        input.canvas = .step(tensorId: adoptedImport.tensorId)
+      }
+      // Still where the entries left it: the entry follows what's current.
+      let current = history.currentTensorId
+      let followsCurrent = current == input.parent || current == before || current == lastEntryKey
+      let parent = followsCurrent ? current : input.parent
+      input.parent = parent
+      do {
+        let item = try await history.saveEntry(input, after: parent, makeCurrent: followsCurrent)
+        if let item { lastEntryKey = item.tensorId }
+        landed?(item)
+      } catch {
+        errorMessage = "Couldn't record the change in History: \(error.localizedDescription)"
+        landed?(nil)
+      }
+    }
+  }
+
+  /// The image just brought in is its Imported entry's step now: the canvas, still showing it,
+  /// takes that step, so its mask is kept with it and a run from it follows it.
+  private func adoptImport(_ newImage: CGImage, _ item: HistoryItem?) {
+    guard let item, let tensorId = item.canvasTensorId else { return }
+    adoptedImport = (newImage, tensorId)
+    guard image === newImage, imageStep == nil, canvasIsImported else { return }
+    let mask = canvasMask
+    imageStep = (history.project.name, tensorId)
+    canvasIsImported = false
+    awaitsStepImage = false
+    maskPendingTensorId = nil
+    landedMask = (tensorId, nil)
+    canvasMask = mask
+  }
+
+  /// The Mask entry Generate writes first, when the mask on the canvas isn't the one the current
+  /// entry holds (or, after a step that isn't an entry, when there's any): the run then follows it,
+  /// and Use brings that mask back. Nil when there's none to write, or in Generate mode, where the
+  /// canvas isn't an input.
+  private func maskEntryInput() -> HistoryStore.EntryInput? {
+    guard effectiveCanvasMode == .edit, canvasClip == nil, history.isLoaded, let input = entryInput(.mask),
+          case .step = input.canvas
+    else { return nil }
+    if let current = history.currentEntry {
+      return HistoryStore.isDuplicate(history.signature(of: input), of: current) ? nil : input
+    }
+    return canvasMask?.mayHavePaint == true ? input : nil
+  }
+
+  /// Puts an input entry back: its canvas image (or an empty canvas), fitted, with its mask, and its
+  /// whole moodboard, weights and all, without recording any of it again. It becomes the current
+  /// step. The prompt, settings and seed stay as they are: an entry isn't a run.
+  func restore(entry: HistoryItem) {
+    guard entry.isEntry else { return }
+    recordMoodboardChange()
+    statusNote = nil
+    stopFollowingRun()
+    let projectName = history.project.name
+    history.setCurrent(tensorId: entry.tensorId, exact: true)
+    Task { await restoreMoodboard(from: entry.id, in: projectName) }
+    lastSavedTensorId = nil
+    canvasIsImported = false
+    guard let tensorId = entry.canvasTensorId else {
+      imageStep = nil
+      image = nil
+      canvas.zoomToFit()
+      return
+    }
+    imageStep = (projectName, tensorId)
+    canvas.zoomToFit()
+    showTask = Task {
+      let full = await whileLoadingCanvasImage {
+        await Project.$isCanvasRead.withValue(true) { await history.image(tensorId: tensorId, in: projectName) }
+      }
+      guard !Task.isCancelled, imageStep?.tensorId == tensorId, !imageIsPreview else { return }
+      guard let full else { return canvasImageDidNotLoad("This image couldn't be read from the project.") }
+      image = full
+      putBackMask(entry.entryMask, on: tensorId)
+      await loadCanvasDetail(tensorId: tensorId, project: projectName)
+    }
+  }
+
+  /// Puts a recorded moodboard back on the board (`replace`, which isn't recorded), remembering
+  /// which of the project's tensors each image is, so the next entry shares them.
+  private func restoreMoodboard(from id: StepID, in projectName: String) async {
+    let images = await history.moodboardImages(at: id, in: projectName)
+    let ids = moodboard.replace(with: images.map { ($0.image, $0.weight) })
+    if projectName == history.project.name { history.noteMoodboardShuffles(ids, images.map(\.shuffleId)) }
+  }
+
+  /// Puts `mask` (an entry's) on the canvas image `tensorId`, as its own: no undo step, and kept as
+  /// the image's mask (`HistoryStore.setMask`), so the canvas shows it there from now on.
+  private func putBackMask(_ mask: CanvasMask?, on tensorId: Int64) {
+    guard imageStep?.tensorId == tensorId else { return }
+    maskPendingTensorId = nil
+    canvasMask = mask
+    // Written whatever the image had, none included.
+    landedMask = nil
+    rememberCanvasMask()
   }
 }

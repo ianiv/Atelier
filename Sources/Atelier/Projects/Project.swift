@@ -106,14 +106,15 @@ final nonisolated class Project: Sendable {
     }
   }
 
-  /// The input of an Edit step: its parent, when the parent's image is still the recorded input
-  /// (`tensorId`). Nil once that step was deleted (the step now before it holds another image).
-  func input(of id: StepID, tensorId: Int64) -> (id: StepID, image: CGImage)? {
+  /// The input of an Edit step: its parent, when the parent is still the recorded input
+  /// (`tensorId`: its image, or an input entry's key). Nil once that step was deleted (the step now
+  /// before it is another). With the image's tensor, which for an entry is the canvas's.
+  func input(of id: StepID, tensorId: Int64) -> (id: StepID, image: CGImage, imageTensorId: Int64)? {
     let tree = tree(items: false)
-    guard let parent = tree.steps[id]?.parent, tree.steps[parent]?.tensorId == tensorId,
-          let image = image(tensorId: tensorId)
+    guard let parent = tree.steps[id]?.parent, tree.steps[parent]?.key == tensorId,
+          let imageTensorId = tree.steps[parent]?.tensorId, let image = image(tensorId: imageTensorId)
     else { return nil }
-    return (parent, image)
+    return (parent, image, imageTensorId)
   }
 
   /// The current step as Draw Things records it (`image_seek_to`, plus `image_seek_to_lineage`
@@ -209,6 +210,23 @@ final nonisolated class Project: Sendable {
     let gone = storedMaskImages().keys.filter { tree.step(tensorId: $0) == nil }
     for tensorId in gone { setStoredMask(nil, forImage: tensorId) }
     return Array(gone)
+  }
+
+  /// The `shuffle_<id>` tensor of each moodboard image (`MoodboardItem.ID`) an input entry stored,
+  /// as `atelier_moodboard_shuffles` JSON, so the next entry shares it (`HistoryStore.saveEntry`).
+  var moodboardShuffles: [UUID: Int64] {
+    get {
+      guard let json = workspace.dictionary["atelier_moodboard_shuffles", String.self],
+            let stored = try? JSONDecoder().decode([String: Int64].self, from: Data(json.utf8))
+      else { return [:] }
+      return Dictionary(
+        stored.compactMap { key, value in UUID(uuidString: key).map { ($0, value) } }, uniquingKeysWith: { a, _ in a })
+    }
+    set {
+      let stored = Dictionary(newValue.map { ($0.key.uuidString, $0.value) }, uniquingKeysWith: { a, _ in a })
+      workspace.dictionary["atelier_moodboard_shuffles", String.self] = stored.isEmpty
+        ? nil : (try? JSONEncoder().encode(stored)).map { String(decoding: $0, as: UTF8.self) }
+    }
   }
 
   private static let maskKeyPrefix = "atelier_mask_"
@@ -341,18 +359,24 @@ final nonisolated class Project: Sendable {
 
   /// A step's moodboard images and weights, in order.
   func moodboard(at id: StepID) -> [(image: CGImage, weight: Float)] {
+    moodboardImages(at: id).map { ($0.image, $0.weight) }
+  }
+
+  /// A step's moodboard images, weights and `shuffle_<id>` tensors, in order.
+  func moodboardImages(at id: StepID) -> [(image: CGImage, weight: Float, shuffleId: Int64)] {
     let rows = workspace.fetch(for: TensorMoodboardData.self).where(
       TensorMoodboardData.lineage == id.lineage && TensorMoodboardData.logicalTime == id.logicalTime,
       orderBy: [TensorMoodboardData.index.ascending])
     return rows.compactMap { row in
       tensor(named: "shuffle_\(row.shuffleId)").flatMap(ImageTensor.cgImage(from:)).map {
-        ($0, row.weight)
+        ($0, row.weight, row.shuffleId)
       }
     }
   }
 
+  /// The item's image: an entry's is its canvas's, none for an empty one.
   func image(for item: HistoryItem) -> CGImage? {
-    image(tensorId: item.tensorId)
+    item.imageTensorId.flatMap { image(tensorId: $0) }
   }
 
   /// The full-resolution image of a step, if it has one.
@@ -690,6 +714,189 @@ final nonisolated class Project: Sendable {
       colorMatch: nil)
   }
 
+  /// What an input entry's canvas holds.
+  enum EntryCanvas: @unchecked Sendable {
+    case empty
+    /// The image of the step whose own image is `tensorId`: that step's layer rows are copied, as
+    /// `pushHistory` repeats the canvas's layers on every step, so the tensors are shared, not
+    /// written again (a delete keeps a tensor while any layer uses it).
+    case step(tensorId: Int64)
+    /// An image from outside the project, written as a tensor of its own.
+    case image(Tensor<FloatType>)
+  }
+
+  /// A moodboard image going into an entry: `shuffleId` reuses a `shuffle_<id>` tensor the project
+  /// has, as long as a moodboard row still uses it; otherwise `tensor` is written as a new one.
+  struct EntryMood: @unchecked Sendable {
+    var shuffleId: Int64?
+    var tensor: Tensor<FloatType>
+    var weight: Float
+  }
+
+  /// What `appendEntry` wrote: the step, what finds it (its key, else its image), its image and
+  /// each moodboard image's `shuffle_<id>`.
+  struct AppendedEntry: Sendable {
+    var id: StepID
+    var key: Int64
+    var imageTensorId: Int64?
+    var shuffleIds: [Int64]
+  }
+
+  /// Appends an input entry after the step `parentKey` names (the newest when nil or gone),
+  /// forking as `append` does: a step that isn't generated, with Draw Things' reason for it
+  /// (`ImageHistoryManager.pushHistory` records Imported, Moodboard, Clear and Mask steps the same
+  /// way), the canvas as its layers, the whole moodboard (weight 0 too) as its moodboard rows, and
+  /// `thumbnail` as its previews. `keyed` gives it an `entry_key` to be found by (every kind but
+  /// Imported, which is found by its own image); `mask` is kept as `entry_mask`.
+  @concurrent func appendEntry(
+    reason: ProjectFormat.Reason, keyed: Bool, canvas: EntryCanvas, mask: CanvasMask?, moodboard: [EntryMood],
+    thumbnail: CGImage?, model: String, prompt: String, negativePrompt: String, seed: UInt32,
+    settings: [String: JSONValue], createdAt: Date, after parentKey: Int64?
+  ) async throws -> AppendedEntry {
+    let full = thumbnail.flatMap { ImageTensor.jpeg($0, quality: 0.75) }
+    let half = thumbnail.flatMap { ImageTensor.downsampled($0) ?? $0 }.flatMap { ImageTensor.jpeg($0, quality: 0.5) }
+    // Moodboard images still used by a row are shared; the rest are written (`addImage`'s band).
+    let kept = Set(
+      moodboard.compactMap(\.shuffleId).filter {
+        workspace.fetch(for: TensorMoodboardData.self).where(TensorMoodboardData.shuffleId == $0).first != nil
+      })
+    var shuffleIds: [Int64] = []
+    var newShuffles: [(name: String, tensor: Tensor<FloatType>)] = []
+    for entry in moodboard {
+      if let id = entry.shuffleId, kept.contains(id) {
+        shuffleIds.append(id)
+      } else {
+        var id: Int64
+        repeat { id = Int64.random(in: 1_600_000_000...1_799_999_999) } while shuffleIds.contains(id)
+        shuffleIds.append(id)
+        newShuffles.append(("shuffle_\(id)", entry.tensor))
+      }
+    }
+    var newImageTensorId: Int64?
+    var written: [String] = []
+    do {
+      if case .image(let tensor) = canvas {
+        let id = Int64.random(in: 100_000_000...299_999_999)
+        try writeTensor(tensor, name: "tensor_history_\(id)")
+        written.append("tensor_history_\(id)")
+        newImageTensorId = id
+      }
+      if !newShuffles.isEmpty {
+        try writeTensors(newShuffles)
+        written += newShuffles.map(\.name)
+      }
+    } catch {
+      removeTensors(written)
+      throw error
+    }
+    var moodboardPreview: Int64 = 0
+    for (entry, shuffleId) in zip(moodboard, shuffleIds) {
+      moodboardPreview &+= shuffleId &* Int64((entry.weight * 1000).rounded())
+    }
+    var imageSize: (width: Int32, height: Int32)?
+    if case .image(let tensor) = canvas, tensor.shape.count == 4 {
+      imageSize = (Int32(tensor.shape[2]), Int32(tensor.shape[1]))
+    }
+    let wallClock = Int64(createdAt.timeIntervalSince1970 * 1_000_000)
+    let workspace = workspace
+    var appended: AppendedEntry?
+    let succeeded = await withCheckedContinuation { continuation in
+      workspace.performChanges([
+        TensorHistoryNode.self, Layer.self, TensorMoodboardData.self, ThumbnailHistoryNode.self,
+        ThumbnailHistoryHalfNode.self,
+      ]) { transaction in
+        let rows = Rows(workspace)
+        let tree = ProjectTree(nodes: rows.nodes, layers: rows.layers, items: false)
+        // The canvas step's own layers, and the node fields that go with several (`pushHistory`).
+        var layers: [Layer] = []
+        var source: TensorHistoryNode?
+        var imageTensorId = newImageTensorId
+        if case .step(let tensorId) = canvas {
+          guard let id = tree.step(tensorId: tensorId), let node = rows.byID[id] else { return }
+          source = node
+          layers = rows.layers.filter { $0.lineage == id.lineage && $0.logicalTime == id.logicalTime }
+            .sorted { $0.index < $1.index }
+          imageTensorId = tensorId
+          // A Draw Things step keeping its image in the node's own field: one layer of it.
+          if layers.isEmpty {
+            layers = [
+              Layer(
+                lineage: 0, logicalTime: 0, index: 0, x: 0, y: 0, width: Int32(node.startWidth) * 64,
+                height: Int32(node.startHeight) * 64, scaleFactorBy120: 120, tensorId: tensorId),
+            ]
+          }
+        } else if let imageTensorId, let imageSize {
+          layers = [
+            Layer(
+              lineage: 0, logicalTime: 0, index: 0, x: 0, y: 0, width: imageSize.width, height: imageSize.height,
+              scaleFactorBy120: 120, tensorId: imageTensorId),
+          ]
+        }
+        var key: Int64?
+        if keyed {
+          var candidate: Int64
+          repeat {
+            candidate = Int64.random(in: ProjectMapping.Profile.entryKeys)
+          } while tree.step(tensorId: candidate) != nil
+          key = candidate
+        }
+        let previewId = (key ?? imageTensorId ?? 0) &+ moodboardPreview
+        let parent = parentKey.flatMap(tree.step(tensorId:)) ?? tree.newest
+        var changes = Changes()
+        let id: StepID
+        if let parent, let newest = tree.newest, parent != newest {
+          changes.recordParents(tree, rows)
+          id = changes.fork(from: parent, newest: newest, rows)
+        } else {
+          id = parent.map { StepID(lineage: $0.lineage, logicalTime: $0.logicalTime + 1) }
+            ?? StepID(lineage: 0, logicalTime: 0)
+        }
+        changes.submit(rows, to: transaction)
+        let layered = layers.count > 1 || (source?.dataStored ?? 0) > 1
+        let step = ProjectMapping.Step(
+          lineage: id.lineage, logicalTime: id.logicalTime, model: model, prompt: prompt,
+          negativePrompt: negativePrompt, seed: seed, tensorId: imageTensorId ?? 0, previewId: previewId,
+          wallClock: wallClock, generationTime: 0, reason: reason, generated: false,
+          moodboardCount: moodboard.count, parentTensorId: parent.flatMap { tree.steps[$0]?.key },
+          layerCount: Int32(layers.count),
+          contentOffset: layered ? source.map { ($0.contentOffsetX, $0.contentOffsetY) } : nil,
+          canvasScale: layered ? source?.scaleFactorBy120 : nil, entryKey: key, entryMask: mask)
+        transaction.try(
+          submit: TensorHistoryNodeChangeRequest.upsertRequest(ProjectMapping.node(for: step, settings: settings)))
+        for layer in layers {
+          var builder = ProjectFormat.TensorDataBuilder(from: layer)
+          builder.lineage = id.lineage
+          builder.logicalTime = id.logicalTime
+          transaction.try(submit: ProjectFormat.TensorDataChangeRequest.upsertRequest(builder.build()))
+        }
+        for (index, (entry, shuffleId)) in zip(moodboard, shuffleIds).enumerated() {
+          transaction.try(
+            submit: TensorMoodboardDataChangeRequest.upsertRequest(
+              TensorMoodboardData(
+                lineage: id.lineage, logicalTime: id.logicalTime, index: Int64(index), shuffleId: shuffleId,
+                weight: entry.weight)))
+        }
+        if let full {
+          transaction.try(
+            submit: ThumbnailHistoryNodeChangeRequest.upsertRequest(ThumbnailHistoryNode(id: previewId, data: full)))
+        }
+        if let half {
+          transaction.try(
+            submit: ThumbnailHistoryHalfNodeChangeRequest.upsertRequest(
+              ThumbnailHistoryHalfNode(id: previewId, data: half)))
+        }
+        appended = AppendedEntry(id: id, key: key ?? imageTensorId ?? 0, imageTensorId: imageTensorId, shuffleIds: shuffleIds)
+      } completionHandler: { continuation.resume(returning: $0) }
+    }
+    guard succeeded, let appended, appended.key != 0 else {
+      removeTensors(written)
+      throw ProjectError.writeFailed
+    }
+    // As `append`: the new step is the newest.
+    setCurrentStep(nil)
+    return appended
+  }
+
   private func append(
     frames tensors: [Tensor<FloatType>], clip: ClipContent?, model: String, prompt: String,
     negativePrompt: String, seed: UInt32, settings: [String: JSONValue], createdAt: Date,
@@ -812,7 +1019,7 @@ final nonisolated class Project: Sendable {
             moodboardCount: moodboard.count,
             inputTensorId: index == 0 ? inputTensorId : nil,
             parentTensorId: index == 0
-              ? parent.flatMap { tree.steps[$0]?.tensorId } : tensorIds[index - 1],
+              ? parent.flatMap { tree.steps[$0]?.key } : tensorIds[index - 1],
             clipId: clipId, indexInAClip: index, hasAudio: audioId != nil,
             inputAudioId: inputAudioId, timings: index == 0 ? timings : nil,
             refine: index == 0 ? refined?.record : nil,
@@ -1082,11 +1289,11 @@ final nonisolated class Project: Sendable {
           }
           return next.flatMap { deleted.contains($0) ? nil : $0 }
         }
-        let parentTensorId = survivor(of: first).flatMap { tree.steps[$0]?.tensorId }
+        let parentTensorId = survivor(of: first).flatMap { tree.steps[$0]?.key }
         var changes = Changes()
         changes.recordParents(tree, rows)
         for id in run {
-          let tensorId = survivor(of: id).flatMap { tree.steps[$0]?.tensorId } ?? 0
+          let tensorId = survivor(of: id).flatMap { tree.steps[$0]?.key } ?? 0
           for child in tree.children[id] ?? [] where !deleted.contains(child) {
             changes.setParent(of: child, to: tensorId, rows)
           }
@@ -1291,7 +1498,7 @@ final nonisolated class Project: Sendable {
         let rows = Rows(workspace)
         let tree = ProjectTree(nodes: rows.nodes, layers: rows.layers, items: false)
         guard let id = target(tree), let node = rows.byID[id] else { return }
-        let parentTensorId = tree.steps[id]?.parent.flatMap { tree.steps[$0]?.tensorId }
+        let parentTensorId = tree.steps[id]?.parent.flatMap { tree.steps[$0]?.key }
         var changes = Changes()
         changes.recordParents(tree, rows)
         for child in tree.children[id] ?? [] {
@@ -1407,7 +1614,7 @@ final nonisolated class Project: Sendable {
     mutating func recordParents(_ tree: ProjectTree, _ rows: Rows) {
       for step in tree.steps.values where !step.recordsParent {
         if let parent = step.parent {
-          if let tensorId = tree.steps[parent]?.tensorId { setParent(of: step.id, to: tensorId, rows) }
+          if let tensorId = tree.steps[parent]?.key { setParent(of: step.id, to: tensorId, rows) }
         } else if step.id.logicalTime > 0 {
           setParent(of: step.id, to: 0, rows)
         }
@@ -1700,6 +1907,13 @@ nonisolated struct ProjectTree: Sendable {
     var recordsParent: Bool
     /// The parent tensor `profile_data` records (0: none).
     var recordedParent: Int64?
+    /// An input entry's own key (`ProjectMapping.Profile.entryKey`): it's found and recorded as a
+    /// parent by it, since its image, if any, is the canvas's, listed by the canvas's own step.
+    var entryKey: Int64?
+
+    /// What finds this step and what its children record as their parent: the entry key, else the
+    /// image.
+    var key: Int64? { entryKey ?? tensorId }
   }
 
   private(set) var steps: [StepID: Step] = [:]
@@ -1710,7 +1924,12 @@ nonisolated struct ProjectTree: Sendable {
   /// The step with the greatest lineage and, on it, the greatest step number: the one Draw Things
   /// opens on and appends after.
   private(set) var newest: StepID?
+  /// The steps whose image is each tensor, input entries showing another step's image aside
+  /// (`sharedByTensor`), so a lookup by image finds the image's own step.
   private var byTensor: [Int64: [StepID]] = [:]
+  /// Input entries by their key, and by the canvas image they show.
+  private var byEntryKey: [Int64: StepID] = [:]
+  private var sharedByTensor: [Int64: [StepID]] = [:]
   /// Each clip frame's step: the item listing the clip (its first frame).
   private var clipItems: [StepID: StepID] = [:]
   private var greatestLineage: [Int64: Int64] = [:]
@@ -1747,17 +1966,32 @@ nonisolated struct ProjectTree: Sendable {
     var clipFrames: [Int64: [(index: Int32, tensorId: Int64)]] = [:]
     var clipFrameSteps: [Int64: [StepID]] = [:]
     var clipListings: [Int64: (id: StepID, inputAudioId: Int64?)] = [:]
+    // An entry's whole moodboard, in order, for its item.
+    var stepMoods: [StepID: [(index: Int64, mood: HistoryItem.EntryMood)]] = [:]
+    if withItems {
+      for mood in moods {
+        stepMoods[StepID(lineage: mood.lineage, logicalTime: mood.logicalTime), default: []].append(
+          (mood.index, HistoryItem.EntryMood(shuffleId: mood.shuffleId, weight: mood.weight)))
+      }
+    }
+    var importedEntries: [StepID] = []
     for node in nodes {
       let id = StepID(lineage: node.lineage, logicalTime: node.logicalTime)
       let tensorId =
         node.dataStored > 0 ? layerTensors[id]?.tensorId : (node.tensorId > 0 ? node.tensorId : nil)
       let profile = ProjectMapping.Profile(node.profileData)
       profiles[id] = profile
+      let entryKey = profile?.entryKey
       steps[id] = Step(
         id: id, tensorId: tensorId, parent: nil, generated: node.generated,
         wallClock: node.wallClock, recordsParent: profile?.parentTensorId != nil,
-        recordedParent: profile?.parentTensorId)
-      if let tensorId { byTensor[tensorId, default: []].append(id) }
+        recordedParent: profile?.parentTensorId, entryKey: entryKey)
+      if let entryKey {
+        byEntryKey[entryKey] = id
+        if let tensorId { sharedByTensor[tensorId, default: []].append(id) }
+      } else if let tensorId {
+        byTensor[tensorId, default: []].append(id)
+      }
       byTime[id.logicalTime, default: []].append(id)
       greatestLineage[id.logicalTime] = max(greatestLineage[id.logicalTime] ?? .min, id.lineage)
       if newest.map({ (id.lineage, id.logicalTime) > ($0.lineage, $0.logicalTime) }) ?? true {
@@ -1776,7 +2010,28 @@ nonisolated struct ProjectTree: Sendable {
         if node.clipId >= 0 {
           clipListings[node.clipId] = (id, profile?.inputAudioId)
         }
+      } else if withItems, !node.generated, let reason = HistoryItem.EntryReason(node.reason) {
+        // Input entries: Atelier's own, by their key, and images brought in (Draw Things' Imported
+        // steps, and Atelier's before entries had keys), by their image. Draw Things' own
+        // Moodboard, Clear and Mask steps have no key, and stay hidden as its other inputs do.
+        var item = HistoryItem(
+          id: id, tensorId: entryKey ?? tensorId ?? 0, previewId: node.previewId, sidecar: Project.sidecar(for: node),
+          moodboardCount: Int(node.shuffleDataStored), weightedMoodboardCount: weightedMoods[id] ?? 0)
+        item.entryReason = reason
+        item.canvasTensorId = tensorId
+        item.entryMask = profile?.entryMask
+        item.entryMoodboard = (stepMoods[id] ?? []).sorted { $0.index < $1.index }.map(\.mood)
+        if entryKey != nil {
+          items[id] = item
+        } else if reason == .imported, tensorId != nil {
+          items[id] = item
+          importedEntries.append(id)
+        }
       }
+    }
+    // An unkeyed Imported step is listed only when it's its image's own step.
+    for id in importedEntries {
+      if let tensorId = steps[id]?.tensorId, byTensor[tensorId]?.first != id { items[id] = nil }
     }
     let clipRows = Dictionary(clips.map { ($0.clipId, $0) }, uniquingKeysWith: { a, _ in a })
     for (clipId, item) in clipListings {
@@ -1796,13 +2051,14 @@ nonisolated struct ProjectTree: Sendable {
       if let recorded = profiles[id]?.parentTensorId, recorded == 0 {
         parent = nil
       } else if let recorded = profiles[id]?.parentTensorId, let ruleParent,
-                allLayerTensors[ruleParent]?.contains(recorded) == true
+                steps[ruleParent]?.entryKey.map({ $0 == recorded })
+                ?? (allLayerTensors[ruleParent]?.contains(recorded) == true)
       {
         // Earlier builds recorded a canvas's bottom layer, which every step drawn over that
         // canvas shares; Draw Things' rule picks the right one of them.
         parent = ruleParent
       } else if let recorded = profiles[id]?.parentTensorId,
-                byTensor[recorded]?.contains(where: { $0 != id }) == true
+                holders(of: recorded).contains(where: { $0 != id })
       {
         parent = candidate(for: recorded, child: id)
       } else {
@@ -1818,7 +2074,7 @@ nonisolated struct ProjectTree: Sendable {
   /// Where a recorded tensor appears on more than one step (Draw Things can share one), the
   /// latest one before the child.
   private func candidate(for tensorId: Int64, child: StepID) -> StepID? {
-    let candidates = (byTensor[tensorId] ?? []).filter { $0 != child }
+    let candidates = holders(of: tensorId).filter { $0 != child }
     return candidates.filter { $0.logicalTime < child.logicalTime }.max { $0.logicalTime < $1.logicalTime }
       ?? candidates.first
   }
@@ -1830,14 +2086,22 @@ nonisolated struct ProjectTree: Sendable {
     return (a.lineage, a.logicalTime) > (b.lineage, b.logicalTime)
   }
 
-  /// The step holding the image `tensorId`.
-  func step(tensorId: Int64) -> StepID? {
-    byTensor[tensorId]?.first
+  /// The steps a recorded parent names: the entry with that key, else the steps whose own image
+  /// it is, else (that step gone) the entries showing it.
+  private func holders(of key: Int64) -> [StepID] {
+    if let entry = byEntryKey[key] { return [entry] }
+    return byTensor[key] ?? sharedByTensor[key] ?? []
   }
 
-  /// Every step whose image is `tensorId` (Draw Things can share one).
+  /// The step holding the image `tensorId`, or the input entry keyed by it. The image's own step
+  /// comes before an entry that shows it; that entry only when the image's step is gone.
+  func step(tensorId: Int64) -> StepID? {
+    byTensor[tensorId]?.first ?? byEntryKey[tensorId] ?? sharedByTensor[tensorId]?.first
+  }
+
+  /// Every step whose own image is `tensorId` (Draw Things can share one), or the entry keyed by it.
   func steps(tensorId: Int64) -> [StepID] {
-    byTensor[tensorId] ?? []
+    byTensor[tensorId] ?? byEntryKey[tensorId].map { [$0] } ?? []
   }
 
   /// The item listing the clip whose frame is the image `tensorId` (the clip's first frame), when

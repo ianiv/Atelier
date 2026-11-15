@@ -7,6 +7,7 @@ import ImageIO
 @preconcurrency import ModelZoo
 @preconcurrency import NNC
 import Observation
+import ProjectFormat
 import UniformTypeIdentifiers
 
 /// One generated image: a step in the current project.
@@ -25,12 +26,69 @@ nonisolated struct HistoryItem: Identifiable, Hashable, Sendable {
   var weightedMoodboardCount = 0
   /// Set for a video: the item is its first frame and stands for the whole clip.
   var clip: ClipInfo?
+  /// Set for an input entry: the canvas and moodboard as they were before a run (an image brought
+  /// in, a moodboard change, Clear, or a mask at Generate), not a run of its own. A Moodboard,
+  /// Clear or Mask entry is keyed by its own `entry_key` (`tensorId`), since it shows the canvas's
+  /// image or none; an Imported one by its image.
+  var entryReason: EntryReason?
+  /// An entry's canvas image, nil for an empty canvas.
+  var canvasTensorId: Int64?
+  /// An entry's canvas mask, nil for none.
+  var entryMask: CanvasMask?
+  /// An entry's whole moodboard, weight-0 images too, in order.
+  var entryMoodboard: [EntryMood] = []
 
   var isVideo: Bool { clip != nil }
+  var isEntry: Bool { entryReason != nil }
+  /// The tensor holding the item's image: its own, or an entry's canvas (nil when it's empty).
+  var imageTensorId: Int64? { isEntry ? canvasTensorId : tensorId }
+  /// Whether there's an image to show, copy or export.
+  var hasImage: Bool { imageTensorId != nil }
+
+  /// What an input entry records, as Draw Things' history reasons (`tensor_history.fbs` `Reason`).
+  nonisolated enum EntryReason: String, Sendable, Hashable, CaseIterable {
+    case imported, moodboard, cleared, mask
+
+    var reason: ProjectFormat.Reason {
+      switch self {
+      case .imported: .imported
+      case .moodboard: .moodboard
+      case .cleared: .clear
+      case .mask: .mask
+      }
+    }
+
+    init?(_ reason: ProjectFormat.Reason) {
+      switch reason {
+      case .imported: self = .imported
+      case .moodboard: self = .moodboard
+      case .clear: self = .cleared
+      case .mask: self = .mask
+      default: return nil
+      }
+    }
+
+    /// The badge on its tile.
+    var title: String {
+      switch self {
+      case .imported: "Imported"
+      case .moodboard: "Moodboard"
+      case .cleared: "Cleared"
+      case .mask: "Mask"
+      }
+    }
+  }
+
+  /// One moodboard image of an entry: its `shuffle_<id>` tensor and weight.
+  nonisolated struct EntryMood: Hashable, Sendable {
+    var shuffleId: Int64
+    var weight: Float
+  }
 
   /// What VoiceOver says for the image or video: the start of its prompt.
   var accessibilityDescription: String {
     let prompt = sidecar.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    if let entryReason { return "Input entry: \(entryReason.title)" }
     let kind = isVideo ? "Video" : "Image"
     if prompt.isEmpty { return kind }
     return "\(kind): \(prompt.count > 80 ? prompt.prefix(80) + "…" : prompt)"
@@ -113,6 +171,8 @@ final class HistoryStore {
   /// Original saving into its own project), by name, so `project(named:)` and `open` hand out the
   /// same one rather than open a second connection to the same file.
   @ObservationIgnored private var heldProjects: [String: WeakProject] = [:]
+  /// Run before another project opens (`CreateModel` records a pending moodboard change).
+  @ObservationIgnored var willSwitchProject: (() async -> Void)?
 
   private final class WeakProject {
     weak var project: Project?
@@ -163,6 +223,7 @@ final class HistoryStore {
     if let masks {
       storedMasks = masks
       storedMasksProject = ObjectIdentifier(project)
+      moodboardShuffles = project.moodboardShuffles
     }
     self.tree = tree
     items = tree.itemsNewestFirst
@@ -189,6 +250,9 @@ final class HistoryStore {
   /// Makes `name` the current project, creating it if needed.
   func open(_ name: String) async {
     guard name != project.name else { return }
+    // A moodboard change still to be recorded goes into the project it was made in.
+    await willSwitchProject?()
+    guard name != project.name else { return }
     // One still held (a job saving into it) is the one opened; the one left stays findable while
     // it's held.
     let previous = project
@@ -204,6 +268,7 @@ final class HistoryStore {
     ratings = [:]
     storedMasks = [:]
     childMasks = [:]
+    moodboardShuffles = [:]
     await reload()
   }
 
@@ -302,11 +367,21 @@ final class HistoryStore {
     // a step of its own after the current one: Imported for an image from outside, as Draw Things
     // does. A refined region merged back (`request.merge`) follows the whole image it was
     // refined from, so that's the input saved, not the frame.
+    //
+    // When the step the run follows is an input entry showing that very image (Imported, or a
+    // Moodboard or Mask entry made since), the entry is the input: it holds the canvas and the
+    // whole moodboard as they were, which Use brings back.
     var parentTensorId = request.parentTensorId
     var inputTensorId: Int64?
+    // The input's image, which an entry shares with the canvas's own step.
+    var inputImageTensorId: Int64?
     if let canvas = request.merge?.source ?? request.canvas {
-      if let tensorId = request.canvasTensorId, await step(tensorId: tensorId, in: project) != nil {
-        inputTensorId = tensorId
+      if let key = request.canvasTensorId, let image = await imageTensor(ofKey: key, in: project) {
+        inputImageTensorId = image
+        inputTensorId = key
+        if let parent = parentTensorId, parent != key, await imageTensor(ofKey: parent, in: project) == image {
+          inputTensorId = parent
+        }
       } else if let tensor = ImageTensor.tensor(from: canvas) {
         let input = try await project.append(
           tensor: tensor, model: request.model, prompt: request.prompt,
@@ -315,6 +390,7 @@ final class HistoryStore {
           reason: request.canvasIsImported ? .imported : .other, generated: false,
           after: parentTensorId)
         inputTensorId = input.tensorId
+        inputImageTensorId = input.tensorId
       }
       parentTensorId = inputTensorId ?? parentTensorId
     }
@@ -336,7 +412,7 @@ final class HistoryStore {
     } else {
       // A layered refine's bottom layer is its input's image, the step just found or saved.
       var refined = refined
-      if request.merge != nil, let inputTensorId { refined?.layers?.sourceTensorId = inputTensorId }
+      if request.merge != nil, let inputImageTensorId { refined?.layers?.sourceTensorId = inputImageTensorId }
       // A layered refine's own image is its top layer: the frame.
       let image = refined?.layers.flatMap { ImageTensor.tensor(from: $0.frame) } ?? ImageTensor.rgb(output.frames[0])
       item = try await project.append(
@@ -350,8 +426,8 @@ final class HistoryStore {
     // remembers the mask it was queued with. One already in the project remembered it when the job
     // was queued (`CreateModel.rememberCanvasMask`): writing it again here could undo a change
     // made since. The merged result keeps it too, moved as the image grew.
-    if let source = request.canvasSourceMask, source.tensorId == nil, request.merge != nil, let inputTensorId {
-      keepMask(source.mask, forImage: inputTensorId, size: CGSize(width: source.width, height: source.height), in: project)
+    if let source = request.canvasSourceMask, source.tensorId == nil, request.merge != nil, let inputImageTensorId {
+      keepMask(source.mask, forImage: inputImageTensorId, size: CGSize(width: source.width, height: source.height), in: project)
     }
     if let resultMask {
       keepMask(resultMask, forImage: item.tensorId, size: refined.map { CGSize(width: $0.composite.width, height: $0.composite.height) }, in: project)
@@ -381,10 +457,14 @@ final class HistoryStore {
     item.clip?.frames.last ?? item.tensorId
   }
 
-  /// The step holding the image, in `project` (read fresh when it isn't the one loaded).
-  private func step(tensorId: Int64, in project: Project) async -> StepID? {
-    if project === self.project { return tree.step(tensorId: tensorId) }
-    return await project.read { $0.tree(items: false).step(tensorId: tensorId) }
+  /// The image of the step `key` names (its image, or an input entry's key), in `project` (read
+  /// fresh when it isn't the one loaded); nil for no such step or one without an image.
+  private func imageTensor(ofKey key: Int64, in project: Project) async -> Int64? {
+    if project === self.project { return tree.step(tensorId: key).flatMap { tree.steps[$0]?.tensorId } }
+    return await project.read { project in
+      let tree = project.tree(items: false)
+      return tree.step(tensorId: key).flatMap { tree.steps[$0]?.tensorId }
+    }
   }
 
   /// A step's moodboard images and weights (empty when it had none).
@@ -392,6 +472,205 @@ final class HistoryStore {
     guard projectName == project.name else { return [] }
     let project = project
     return await project.read { $0.moodboard(at: id) }
+  }
+
+  /// The input entry a run went in after: the step it follows, past the hidden frame a canvas of
+  /// another size was drawn into (`save`), when that's an entry. It holds the canvas and the whole
+  /// moodboard as they were when the run was queued.
+  func inputEntry(of item: HistoryItem) -> HistoryItem? {
+    guard !item.isEntry else { return nil }
+    var next = tree.steps[item.id]?.parent
+    var seen: Set<StepID> = []
+    while let id = next, seen.insert(id).inserted {
+      if let listed = tree.items[id] { return listed.isEntry ? listed : nil }
+      next = tree.steps[id]?.parent
+    }
+    return nil
+  }
+
+  /// A step's moodboard images, weights and `shuffle_<id>` tensors (empty when it had none).
+  func moodboardImages(at id: StepID, in projectName: String) async -> [(image: CGImage, weight: Float, shuffleId: Int64)] {
+    guard projectName == project.name else { return [] }
+    let project = project
+    return await project.read { $0.moodboardImages(at: id) }
+  }
+
+  // MARK: - Input entries
+
+  /// What an input entry records, gathered on the Create screen.
+  struct EntryInput {
+    enum Canvas {
+      case empty
+      /// The current project's step whose image is on the canvas.
+      case step(tensorId: Int64)
+      /// An image that isn't a step of the project yet.
+      case image(CGImage)
+    }
+
+    var reason: HistoryItem.EntryReason
+    /// The current step when it was gathered, which the entry follows.
+    var parent: Int64?
+    var canvas: Canvas
+    /// What the canvas shows, for the thumbnail.
+    var canvasImage: CGImage?
+    var mask: CanvasMask?
+    var moodboard: [MoodboardItem]
+    var model: String
+    var prompt: String
+    var negativePrompt: String
+    var seed: UInt32
+    var settings: [String: JSONValue]
+  }
+
+  /// What an entry would hold, for telling whether it repeats one (`isDuplicate`).
+  nonisolated struct EntrySignature: Equatable {
+    var canvasTensorId: Int64?
+    var mask: CanvasMask?
+    var moodboard: [HistoryItem.EntryMood]
+
+    init(canvasTensorId: Int64?, mask: CanvasMask?, moodboard: [HistoryItem.EntryMood]) {
+      self.canvasTensorId = canvasTensorId
+      // A mask that paints nothing is no mask.
+      self.mask = mask?.mayHavePaint == true ? mask : nil
+      self.moodboard = moodboard
+    }
+
+    init(_ entry: HistoryItem) {
+      self.init(canvasTensorId: entry.canvasTensorId, mask: entry.entryMask, moodboard: entry.entryMoodboard)
+    }
+  }
+
+  /// Whether an entry holding `state` would repeat `entry` (nil: there's none to repeat): the same
+  /// canvas image, mask and moodboard, weights and all. An image new to the project never does.
+  nonisolated static func isDuplicate(_ state: EntrySignature?, of entry: HistoryItem?) -> Bool {
+    guard let state, let entry, entry.isEntry else { return false }
+    return EntrySignature(entry) == state
+  }
+
+  /// What an entry made from `input` now would hold; nil for an image new to the project.
+  func signature(of input: EntryInput) -> EntrySignature? {
+    let canvas: Int64?
+    switch input.canvas {
+    case .empty: canvas = nil
+    case .step(let tensorId): canvas = tensorId
+    case .image: return nil
+    }
+    // A moodboard image the project has no tensor for yet can't match any entry's.
+    return EntrySignature(
+      canvasTensorId: canvas, mask: input.mask,
+      moodboard: input.moodboard.map { HistoryItem.EntryMood(shuffleId: moodboardShuffles[$0.id] ?? -1, weight: $0.weight) })
+  }
+
+  /// The entry the next one would follow and could repeat: the current step, when it's one.
+  var currentEntry: HistoryItem? {
+    currentTensorId.flatMap(entry(key:))
+  }
+
+  /// The input entry `key` finds, if it's one.
+  func entry(key: Int64) -> HistoryItem? {
+    tree.step(tensorId: key).flatMap { tree.items[$0] }.flatMap { $0.isEntry ? $0 : nil }
+  }
+
+  /// The `shuffle_<id>` tensor each moodboard image already has in the current project, so an
+  /// entry shares it rather than storing the image again. Kept in the project file (Draw Things
+  /// ignores the key); `Project.appendEntry` checks a row still uses one before sharing it.
+  private(set) var moodboardShuffles: [UUID: Int64] = [:]
+
+  /// Remembers that the moodboard images `ids` are the project's `shuffleIds` (restored from an
+  /// entry, or just written).
+  func noteMoodboardShuffles(_ ids: [UUID], _ shuffleIds: [Int64]) {
+    guard !ids.isEmpty else { return }
+    for (id, shuffleId) in zip(ids, shuffleIds) { moodboardShuffles[id] = shuffleId }
+    project.moodboardShuffles = moodboardShuffles
+  }
+
+  /// Writes an input entry after the step `parent` names (its image or key; the newest when nil)
+  /// and with `makeCurrent` makes it the current step, unless it would repeat that step
+  /// (`isDuplicate`; an Imported image never does). Returns the entry, nil when none was written.
+  @discardableResult
+  func saveEntry(_ input: EntryInput, after parent: Int64?, makeCurrent: Bool) async throws -> HistoryItem? {
+    guard isLoaded else { return nil }
+    if input.reason != .imported, Self.isDuplicate(signature(of: input), of: parent.flatMap(entry(key:))) {
+      return nil
+    }
+    let project = project
+    let shuffles = moodboardShuffles
+    let moods = input.moodboard.map { (id: $0.id, image: $0.image, weight: $0.weight, shuffleId: shuffles[$0.id]) }
+    let made = await Self.entryContents(canvas: input.canvas, moodboard: moods, canvasImage: input.canvasImage)
+    let canvas: Project.EntryCanvas
+    switch input.canvas {
+    case .empty: canvas = .empty
+    case .step(let tensorId): canvas = .step(tensorId: tensorId)
+    case .image:
+      guard let tensor = made.image else { throw ProjectError.badImage }
+      canvas = .image(tensor)
+    }
+    let appended = try await project.appendEntry(
+      reason: input.reason.reason, keyed: input.reason != .imported, canvas: canvas, mask: input.mask,
+      moodboard: made.moodboard, thumbnail: made.thumbnail, model: input.model, prompt: input.prompt,
+      negativePrompt: input.negativePrompt, seed: input.seed, settings: input.settings, createdAt: Date(),
+      after: parent)
+    guard project === self.project else { return nil }
+    noteMoodboardShuffles(input.moodboard.map(\.id), appended.shuffleIds)
+    if makeCurrent { currentTensorId = appended.key }
+    await reload()
+    recordCurrent()
+    return item(tensorId: appended.key)
+  }
+
+  /// `saveEntry` for quitting, which can't wait: written off the main actor while this waits for it,
+  /// up to a few seconds. Made the current step when `makeCurrent`, as the project's newest.
+  func saveEntryBeforeQuit(_ input: EntryInput, after parent: Int64?, makeCurrent: Bool) {
+    guard isLoaded, !Self.isDuplicate(signature(of: input), of: parent.flatMap(entry(key:))) else { return }
+    let project = project
+    let shuffles = moodboardShuffles
+    let current = currentTensorId
+    let moods = input.moodboard.map { (id: $0.id, image: $0.image, weight: $0.weight, shuffleId: shuffles[$0.id]) }
+    let done = DispatchSemaphore(value: 0)
+    Task.detached {
+      defer { done.signal() }
+      let made = await Self.entryContents(canvas: input.canvas, moodboard: moods, canvasImage: input.canvasImage)
+      let canvas: Project.EntryCanvas
+      switch input.canvas {
+      case .empty: canvas = .empty
+      case .step(let tensorId): canvas = .step(tensorId: tensorId)
+      case .image:
+        guard let tensor = made.image else { return }
+        canvas = .image(tensor)
+      }
+      guard let appended = try? await project.appendEntry(
+        reason: input.reason.reason, keyed: input.reason != .imported, canvas: canvas, mask: input.mask,
+        moodboard: made.moodboard, thumbnail: made.thumbnail, model: input.model, prompt: input.prompt,
+        negativePrompt: input.negativePrompt, seed: input.seed, settings: input.settings, createdAt: Date(),
+        after: parent)
+      else { return }
+      var map = project.moodboardShuffles
+      for (mood, shuffleId) in zip(moods, appended.shuffleIds) { map[mood.id] = shuffleId }
+      project.moodboardShuffles = map
+      // `appendEntry` leaves the newest step current; otherwise the current one stays.
+      if !makeCurrent, let current {
+        let tree = project.tree(items: false)
+        let step = tree.step(tensorId: current)
+        project.setCurrentStep(step == tree.newest ? nil : step)
+      }
+    }
+    _ = done.wait(timeout: .now() + 5)
+  }
+
+  /// An entry's tensors and thumbnail, made off the main actor: the canvas image's tensor when it's
+  /// new, each moodboard image's, and the thumbnail (the canvas, else the moodboard's collage, else
+  /// a blank tile).
+  @concurrent private nonisolated static func entryContents(
+    canvas: EntryInput.Canvas, moodboard: [(id: UUID, image: CGImage, weight: Float, shuffleId: Int64?)],
+    canvasImage: CGImage?
+  ) async -> (image: Tensor<FloatType>?, moodboard: [Project.EntryMood], thumbnail: CGImage?) {
+    var image: Tensor<FloatType>?
+    if case .image(let new) = canvas { image = ImageTensor.tensor(from: new) }
+    let moods = moodboard.compactMap { mood in
+      ImageTensor.tensor(from: mood.image).map { Project.EntryMood(shuffleId: mood.shuffleId, tensor: $0, weight: mood.weight) }
+    }
+    let thumbnail = canvasImage ?? EntryThumbnail.collage(moodboard.map(\.image)) ?? EntryThumbnail.blank()
+    return (image, moods, thumbnail)
   }
 
   /// Removes the steps from the project. Later steps may be renumbered, so each is found by its
@@ -615,7 +894,7 @@ final class HistoryStore {
   }
 
   /// An Edit step's input step and image, while that step still exists in `projectName`.
-  func input(of item: HistoryItem, in projectName: String) async -> (id: StepID, image: CGImage)? {
+  func input(of item: HistoryItem, in projectName: String) async -> (id: StepID, image: CGImage, imageTensorId: Int64)? {
     guard projectName == project.name, let tensorId = item.inputTensorId else { return nil }
     let project = project
     return await project.read { $0.input(of: item.id, tensorId: tensorId) }
@@ -891,7 +1170,8 @@ final class HistoryStore {
   func exportImage(for item: HistoryItem) async -> CGImage? {
     let project = project
     let density = AppSettings.exportsFullDetail ? Project.finestDensity : 120
-    return await project.read { $0.image(tensorId: item.tensorId, density: density) }
+    guard let tensorId = item.imageTensorId else { return nil }
+    return await project.read { $0.image(tensorId: tensorId, density: density) }
   }
 
   /// The step's image at full detail when it has layers finer than its image; nil when it has
@@ -1180,5 +1460,42 @@ nonisolated struct PNGExport: Transferable, Identifiable {
     DataRepresentation(exportedContentType: .png) { try await $0.data() }
       .exportingCondition { $0.video == nil }
       .suggestedFileName { $0.name }
+  }
+}
+
+/// The thumbnail of an input entry with no canvas image: its moodboard side by side, else a blank
+/// tile.
+nonisolated enum EntryThumbnail {
+  static let side = 384
+
+  /// The images in a row of square tiles, each filled and cropped to its tile, at most four.
+  static func collage(_ images: [CGImage]) -> CGImage? {
+    let images = Array(images.prefix(4))
+    guard !images.isEmpty, let context = context(width: side * images.count, height: side) else { return nil }
+    context.interpolationQuality = .high
+    for (index, image) in images.enumerated() {
+      let scale = max(Double(side) / Double(image.width), Double(side) / Double(image.height))
+      let width = Double(image.width) * scale, height = Double(image.height) * scale
+      let tile = CGRect(x: index * side, y: 0, width: side, height: side)
+      context.saveGState()
+      context.clip(to: tile)
+      context.draw(image, in: CGRect(x: tile.midX - width / 2, y: tile.midY - height / 2, width: width, height: height))
+      context.restoreGState()
+    }
+    return context.makeImage()
+  }
+
+  /// A plain grey square, for an empty canvas with an empty moodboard.
+  static func blank() -> CGImage? {
+    guard let context = context(width: side, height: side) else { return nil }
+    context.setFillColor(CGColor(gray: 0.5, alpha: 1))
+    context.fill(CGRect(x: 0, y: 0, width: side, height: side))
+    return context.makeImage()
+  }
+
+  private static func context(width: Int, height: Int) -> CGContext? {
+    CGContext(
+      data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+      space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
   }
 }
