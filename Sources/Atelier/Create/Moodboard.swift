@@ -59,13 +59,28 @@ final class Moodboard {
       // Only after reading the index: without it there's no telling which images are in use.
       Self.removeOrphans(in: Self.folder, keeping: Set(entries.map(\.id)))
     }
-    writer = MoodboardWriter(folder: Self.folder, onDisk: loaded.map(\.id))
-    items = loaded
-    writer?.onFailure = { [weak self] message in
-      Task { @MainActor in self?.reportFailure?(message) }
+    // The writer is made before the board is, so it reaches the board through this.
+    let relay = FailureRelay()
+    writer = MoodboardWriter(folder: Self.folder, onDisk: loaded.map(\.id)) { message in
+      Task { @MainActor in relay.board?.reportFailure?(message) }
     }
-    // Quitting doesn't wait for a task: the writes still queued finish first, briefly.
-    AppLifecycle.onWillTerminate { [weak self] in self?.writer?.flush(timeout: MoodboardWriter.quitTimeout) }
+    items = loaded
+    relay.board = self
+    // Quitting doesn't wait for a task: the writes still queued finish first, within the deadline
+    // the quit handlers share.
+    AppLifecycle.onWillTerminate { [weak self] in
+      self?.writer?.flush(timeout: max(QuitDeadline.date.timeIntervalSinceNow, 0))
+    }
+    #if os(iOS)
+      // iPadOS may end a suspended app with no will-terminate: the last change goes to disk as the
+      // app goes to the background, while it still runs.
+      AppLifecycle.onEnterBackground { [weak self] in self?.writer?.flush(timeout: MoodboardWriter.backgroundTimeout) }
+    #endif
+  }
+
+  /// The board a failed write is reported to.
+  private final class FailureRelay {
+    weak var board: Moodboard?
   }
 
   /// Removes the images in `folder` that aren't on the board, such as ones a crash left behind.
@@ -492,8 +507,8 @@ private struct MoodboardWeightEditor: View {
 /// the board no longer has, so the index only ever names images that are there. A save made while
 /// a later one waits is skipped: the later one writes the whole board.
 final nonisolated class MoodboardWriter: @unchecked Sendable {
-  /// How long quitting waits for the writes still queued.
-  static let quitTimeout: TimeInterval = 3
+  /// How long going to the background waits for the writes still queued.
+  static let backgroundTimeout: TimeInterval = 1
 
   private let folder: URL
   private let queue = DispatchQueue(label: "Atelier.MoodboardWriter", qos: .utility)
@@ -503,7 +518,7 @@ final nonisolated class MoodboardWriter: @unchecked Sendable {
   /// The PNGs on disk, by item: only touched on `queue`.
   private var onDisk: Set<UUID>
   /// Told of a write that failed, from `queue`.
-  var onFailure: (@Sendable (String) -> Void)?
+  private let onFailure: (@Sendable (String) -> Void)?
 
   private struct Board: @unchecked Sendable {
     var items: [(id: UUID, image: CGImage, weight: Float)]
@@ -514,9 +529,10 @@ final nonisolated class MoodboardWriter: @unchecked Sendable {
     var weight: Float
   }
 
-  init(folder: URL, onDisk: [UUID] = []) {
+  init(folder: URL, onDisk: [UUID] = [], onFailure: (@Sendable (String) -> Void)? = nil) {
     self.folder = folder
     self.onDisk = Set(onDisk)
+    self.onFailure = onFailure
   }
 
   /// Queues writing `items` as the board.

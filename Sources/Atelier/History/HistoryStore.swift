@@ -662,9 +662,6 @@ final class HistoryStore {
     }
   }
 
-  /// How long quitting waits for an entry to be written.
-  static let quitWriteTimeout: TimeInterval = 5
-
   /// `saveEntry` for quitting, which can't wait: written off the main actor while this waits for it,
   /// up to a few seconds. Made the current step when `makeCurrent`, as the project's newest.
   ///
