@@ -359,11 +359,14 @@ extension Automation {
         !history.items.contains(where: \.isEntry) && left1 != nil && left2 != nil
           && run1Image.map { same(image1, $0) } == true && run2Image.map { same(image2, $0) } == true,
         "deleting every entry leaves both runs with their images")
-      let names = await history.project.read { $0.contents().tensorNames }
-      check(
-        names.contains("tensor_history_\(run1.tensorId)") && names.contains("tensor_history_\(run2.tensorId)")
-          && !names.contains("tensor_history_\(originalTensor)"),
-        "the runs' tensors stay, the imported image's goes with its entries")
+      // `Project.contents()` is Debug-only, so Release builds skip this one.
+      #if DEBUG
+        let names = await history.project.read { $0.contents().tensorNames }
+        check(
+          names.contains("tensor_history_\(run1.tensorId)") && names.contains("tensor_history_\(run2.tensorId)")
+            && !names.contains("tensor_history_\(originalTensor)"),
+          "the runs' tensors stay, the imported image's goes with its entries")
+      #endif
 
       // Without Show Inputs only runs are listed.
       model.setCanvasImage(original)
