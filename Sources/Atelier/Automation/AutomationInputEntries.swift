@@ -317,6 +317,23 @@ extension Automation {
         check(false, "the run with a new board saved nothing")
       }
 
+      // Generate mode: a new mask on the canvas image is a Mask entry too, which the run follows.
+      _ = await settled { model.canvasImageIsCurrent && model.canvasShowsImage }
+      let mask3 = CanvasMask(strokes: [.rect(CGRect(x: size / 2, y: size / 2, width: size / 4, height: size / 4))])
+      model.canvasMask = mask3
+      model.canvasMode = .generate
+      let shownTensor = history.currentItem?.imageTensorId
+      if let run5 = await run() {
+        let entry = history.parent(of: run5)
+        check(
+          entry?.entryReason == .mask && entry?.entryMask == mask3 && entry?.canvasTensorId != nil
+            && entry?.canvasTensorId == shownTensor && run5.inputTensorId == nil,
+          "a Generate-mode run with a new mask follows a Mask entry holding it (\(entry?.entryReason?.rawValue ?? "run"))")
+      } else {
+        check(false, "the Generate-mode run saved nothing")
+      }
+      model.canvasMode = .edit
+
       // Clear: a Cleared entry; clearing again repeats it.
       model.clearCanvas()
       await model.flushEntries()

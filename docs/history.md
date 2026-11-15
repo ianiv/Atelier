@@ -42,7 +42,7 @@ History also records what went into your runs, as Draw Things does:
 - **Imported**: an image you put on the canvas (pasted, dropped, opened, picked from Photos, **Show on Canvas** from the moodboard, or placed by an agent), as you brought it in, with the moodboard at that moment.
 - **Moodboard**: a change to the moodboard (adding, removing, clearing, or a new weight), with the canvas as it was. A burst of changes, or dragging a weight slider, is one entry, written about a second and a half after the last change (or straight away when you generate, put another image on the canvas, clear it, switch projects or quit).
 - **Cleared**: the canvas was cleared, with the moodboard at that moment.
-- **Mask**: when you generate with a mask that isn't the one the latest entry holds, the canvas, mask and moodboard go in first, and the run follows them.
+- **Mask**: when you generate (in Generate or Edit mode) with an image on the canvas and a mask that isn't the one the latest entry holds, the canvas, mask and moodboard go in first, and the run follows them.
 
 Each entry holds the canvas image (none for an empty canvas), its mask and the whole moodboard, weight-0 images included. Entries show in the grid, the graph and the strip under the canvas with a badge saying which kind they are. They have no stars, settings or generation time; **Use Settings**, **Rerun with New Seed**, the rating and **Copy Prompt** / **Copy Seed** are unavailable for them, and so are **Copy Image**, **Export PNG…** and **Save to Photos** when the canvas was empty.
 

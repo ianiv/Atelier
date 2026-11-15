@@ -3560,12 +3560,12 @@ extension CreateModel {
     canvasMask = mask
   }
 
-  /// The Mask entry Generate writes first, when the mask on the canvas isn't the one the current
-  /// entry holds (or, after a step that isn't an entry, when there's any): the run then follows it,
-  /// and Use brings that mask back. Nil when there's none to write, or in Generate mode, where the
-  /// canvas isn't an input.
+  /// The Mask entry Generate writes first, in Generate or Edit mode, when the canvas has an image
+  /// and its mask isn't the one the current entry holds (or, after a step that isn't an entry, when
+  /// there's any): the run then follows it, and Use brings that mask back. Nil when there's none to
+  /// write, or while a clip plays on the canvas.
   private func maskEntryInput() -> HistoryStore.EntryInput? {
-    guard effectiveCanvasMode == .edit, canvasClip == nil, history.isLoaded, let input = entryInput(.mask),
+    guard canvasClip == nil, history.isLoaded, let input = entryInput(.mask),
           case .step = input.canvas
     else { return nil }
     if let current = history.currentEntry {
