@@ -2177,7 +2177,12 @@ nonisolated struct ProjectTree: Sendable {
     var line: [StepID] = []
     var seen: Set<StepID> = []
     var next: StepID? = steps[id] != nil ? id : nil
-    while let step = next, seen.insert(step).inserted {
+    while let step = next {
+      // A loop in the links, which should never be, ends the line where it comes back round.
+      guard seen.insert(step).inserted else {
+        Log.once(Log.history, site: "ancestry", "the parents above \(id.lineage)/\(id.logicalTime) loop at \(step.lineage)/\(step.logicalTime)")
+        break
+      }
       line.append(step)
       next = steps[step]?.parent
     }
@@ -2217,7 +2222,10 @@ nonisolated struct ProjectTree: Sendable {
     var seen: Set<StepID> = [id]
     while !queue.isEmpty {
       let step = queue.removeFirst()
-      guard seen.insert(step).inserted else { continue }
+      guard seen.insert(step).inserted else {
+        Log.once(Log.history, site: "representative", "the children below \(id.lineage)/\(id.logicalTime) reach \(step.lineage)/\(step.logicalTime) twice")
+        continue
+      }
       if items[step] != nil { return step }
       queue += children[step] ?? []
     }

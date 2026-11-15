@@ -2,6 +2,7 @@ import CoreGraphics
 import Foundation
 import ImageIO
 import SwiftUI
+import Synchronization
 import UniformTypeIdentifiers
 
 /// One reference image on the moodboard. Weight 0 keeps it on the board but leaves it out of the
@@ -38,17 +39,33 @@ final class Moodboard {
     URL.applicationSupportDirectory.appending(path: "Atelier/Moodboard", directoryHint: .isDirectory)
   }
 
+  /// Writes the board to disk off the main actor (nil when sessions aren't kept: scripted runs
+  /// and tests leave the user's board alone).
+  @ObservationIgnored private let writer: MoodboardWriter?
+
   init() {
-    guard SessionState.isEnabled,
-          let data = try? Data(contentsOf: Self.folder.appending(path: "index.json")),
-          let entries = try? JSONDecoder().decode([Entry].self, from: data)
-    else { return }
-    items = entries.compactMap { entry in
-      ImageLoader.image(at: Self.folder.appending(path: "\(entry.id).png"), maxSide: Self.maxSide)
-        .map { MoodboardItem(id: entry.id, image: $0, weight: entry.weight) }
+    guard SessionState.isEnabled else {
+      writer = nil
+      return
     }
-    // Only after reading the index: without it there's no telling which images are in use.
-    Self.removeOrphans(in: Self.folder, keeping: Set(entries.map(\.id)))
+    var loaded: [MoodboardItem] = []
+    if let data = try? Data(contentsOf: Self.folder.appending(path: "index.json")),
+       let entries = try? JSONDecoder().decode([Entry].self, from: data)
+    {
+      loaded = entries.compactMap { entry in
+        ImageLoader.image(at: Self.folder.appending(path: "\(entry.id).png"), maxSide: Self.maxSide)
+          .map { MoodboardItem(id: entry.id, image: $0, weight: entry.weight) }
+      }
+      // Only after reading the index: without it there's no telling which images are in use.
+      Self.removeOrphans(in: Self.folder, keeping: Set(entries.map(\.id)))
+    }
+    writer = MoodboardWriter(folder: Self.folder, onDisk: loaded.map(\.id))
+    items = loaded
+    writer?.onFailure = { [weak self] message in
+      Task { @MainActor in self?.reportFailure?(message) }
+    }
+    // Quitting doesn't wait for a task: the writes still queued finish first, briefly.
+    AppLifecycle.onWillTerminate { [weak self] in self?.writer?.flush(timeout: MoodboardWriter.quitTimeout) }
   }
 
   /// Removes the images in `folder` that aren't on the board, such as ones a crash left behind.
@@ -65,7 +82,7 @@ final class Moodboard {
 
   func add(_ image: CGImage) {
     items.append(MoodboardItem(image: ImageLoader.fitted(image, maxSide: Self.maxSide)))
-    save(writing: items.last)
+    save()
     onChange?()
   }
 
@@ -73,14 +90,13 @@ final class Moodboard {
   func insert(_ image: CGImage, at index: Int) {
     let item = MoodboardItem(image: ImageLoader.fitted(image, maxSide: Self.maxSide))
     items.insert(item, at: min(max(index, 0), items.count))
-    save(writing: item)
+    save()
     onChange?()
   }
 
   func remove(_ id: MoodboardItem.ID) {
     guard items.contains(where: { $0.id == id }) else { return }
     items.removeAll { $0.id == id }
-    try? FileManager.default.removeItem(at: Self.folder.appending(path: "\(id).png"))
     save()
     onChange?()
   }
@@ -92,9 +108,6 @@ final class Moodboard {
   }
 
   private func clear() {
-    for item in items {
-      try? FileManager.default.removeItem(at: Self.folder.appending(path: "\(item.id).png"))
-    }
     items = []
     save()
   }
@@ -112,11 +125,8 @@ final class Moodboard {
   /// again. Returns the new items' ids, in order.
   @discardableResult
   func replace(with references: [(image: CGImage, weight: Float)]) -> [MoodboardItem.ID] {
-    clear()
-    for reference in references {
-      items.append(MoodboardItem(image: reference.image, weight: reference.weight))
-      save(writing: items.last)
-    }
+    items = references.map { MoodboardItem(image: $0.image, weight: $0.weight) }
+    save()
     return items.map(\.id)
   }
 
@@ -125,25 +135,10 @@ final class Moodboard {
     items.filter { $0.weight > 0 }.map { .init(image: $0.image, weight: $0.weight) }
   }
 
-  private func save(writing item: MoodboardItem? = nil) {
-    guard SessionState.isEnabled else { return }
-    let folder = Self.folder
-    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-    var failure: Error?
-    if let item, let png = ImageTensor.png(item.image) {
-      failure = Log.attempt(Log.create, "Saving a moodboard image") {
-        try png.write(to: folder.appending(path: "\(item.id).png"))
-      }
-    }
-    let entries = items.map { Entry(id: $0.id, weight: $0.weight) }
-    if let data = try? JSONEncoder().encode(entries) {
-      failure = Log.attempt(Log.create, "Saving the moodboard") {
-        try data.write(to: folder.appending(path: "index.json"))
-      } ?? failure
-    }
-    if let failure {
-      reportFailure?("Couldn't save the moodboard, so it may not be here next time: \(failure.localizedDescription)")
-    }
+  /// Saves the board as it is now: the files are written in turn off the main actor
+  /// (`MoodboardWriter`), so a click that brings a board back doesn't wait on PNG encoding.
+  private func save() {
+    writer?.save(items)
   }
 }
 
@@ -489,5 +484,96 @@ private struct MoodboardWeightEditor: View {
         .fixedSize(horizontal: false, vertical: true)
     }
     .padding()
+  }
+}
+
+/// Writes the moodboard's files in order on a queue of its own: each image's PNG once (an item's
+/// image never changes, so one already on disk is kept), then `index.json`, then removes the PNGs
+/// the board no longer has, so the index only ever names images that are there. A save made while
+/// a later one waits is skipped: the later one writes the whole board.
+final nonisolated class MoodboardWriter: @unchecked Sendable {
+  /// How long quitting waits for the writes still queued.
+  static let quitTimeout: TimeInterval = 3
+
+  private let folder: URL
+  private let queue = DispatchQueue(label: "Atelier.MoodboardWriter", qos: .utility)
+  private let pending = DispatchGroup()
+  /// The newest save handed over; an older one still waiting is skipped.
+  private let latest = Mutex(0)
+  /// The PNGs on disk, by item: only touched on `queue`.
+  private var onDisk: Set<UUID>
+  /// Told of a write that failed, from `queue`.
+  var onFailure: (@Sendable (String) -> Void)?
+
+  private struct Board: @unchecked Sendable {
+    var items: [(id: UUID, image: CGImage, weight: Float)]
+  }
+
+  private struct Entry: Codable {
+    var id: UUID
+    var weight: Float
+  }
+
+  init(folder: URL, onDisk: [UUID] = []) {
+    self.folder = folder
+    self.onDisk = Set(onDisk)
+  }
+
+  /// Queues writing `items` as the board.
+  func save(_ items: [MoodboardItem]) {
+    let board = Board(items: items.map { ($0.id, $0.image, $0.weight) })
+    let generation = latest.withLock { value -> Int in
+      value += 1
+      return value
+    }
+    pending.enter()
+    queue.async { [self] in
+      defer { pending.leave() }
+      guard latest.withLock({ $0 }) == generation else { return }
+      write(board)
+    }
+  }
+
+  /// Waits up to `timeout` for the saves queued so far; whether they all finished.
+  @discardableResult
+  func flush(timeout: TimeInterval) -> Bool {
+    pending.wait(timeout: .now() + timeout) == .success
+  }
+
+  private func write(_ board: Board) {
+    let fileManager = FileManager.default
+    try? fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+    var failure: Error?
+    for item in board.items where !onDisk.contains(item.id) {
+      let file = folder.appending(path: "\(item.id).png")
+      if fileManager.fileExists(atPath: file.path) {
+        onDisk.insert(item.id)
+        continue
+      }
+      guard let png = ImageTensor.png(item.image) else { continue }
+      if let error = Log.attempt(Log.create, "Saving a moodboard image", { try png.write(to: file, options: .atomic) }) {
+        failure = error
+      } else {
+        onDisk.insert(item.id)
+      }
+    }
+    // The index names only images on disk, so it never points at a file that isn't there.
+    let entries = board.items.filter { onDisk.contains($0.id) }.map { Entry(id: $0.id, weight: $0.weight) }
+    if let data = try? JSONEncoder().encode(entries) {
+      failure = Log.attempt(Log.create, "Saving the moodboard") {
+        try data.write(to: folder.appending(path: "index.json"), options: .atomic)
+      } ?? failure
+    }
+    // Then the images the board let go, once the index no longer names them.
+    if failure == nil {
+      let kept = Set(board.items.map(\.id))
+      for id in onDisk.subtracting(kept) {
+        try? fileManager.removeItem(at: folder.appending(path: "\(id).png"))
+        onDisk.remove(id)
+      }
+    }
+    if let failure {
+      onFailure?("Couldn't save the moodboard, so it may not be here next time: \(failure.localizedDescription)")
+    }
   }
 }

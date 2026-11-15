@@ -489,7 +489,11 @@ final class HistoryStore {
     guard !item.isEntry else { return nil }
     var next = tree.steps[item.id]?.parent
     var seen: Set<StepID> = []
-    while let id = next, seen.insert(id).inserted, let step = tree.steps[id] {
+    while let id = next, let step = tree.steps[id] {
+      guard seen.insert(id).inserted else {
+        Log.once(Log.history, site: "inputEntry", "the parents above \(item.tensorId) loop at \(id.lineage)/\(id.logicalTime)")
+        return nil
+      }
       if let listed = tree.items[id] { return listed.isEntry ? listed : nil }
       guard !step.generated, step.reasonValue == ProjectFormat.Reason.other.rawValue else { return nil }
       next = step.parent
@@ -915,17 +919,38 @@ final class HistoryStore {
   /// wherever it branches), it, and its ancestors.
   var currentLineage: [HistoryItem] {
     guard let current = currentItem else { return [] }
+    return Self.lineage(of: current, parent: parent(of:), firstChild: { self.children(of: $0).first })
+  }
+
+  /// `currentLineage` from `current`: the newest line below it (each step's first child), newest
+  /// first, then it and its ancestors. A loop in the links, which should never be, ends the walk
+  /// where it comes back round (logged once), rather than walking it forever: the strip asks for
+  /// this on every change of the current step.
+  nonisolated static func lineage(
+    of current: HistoryItem, parent: (HistoryItem) -> HistoryItem?, firstChild: (HistoryItem) -> HistoryItem?
+  ) -> [HistoryItem] {
+    var seen: Set<Int64> = [current.tensorId]
     var below: [HistoryItem] = []
-    var next = children(of: current).first
+    var next = firstChild(current)
     while let item = next {
+      guard seen.insert(item.tensorId).inserted else {
+        Log.once(Log.history, site: "currentLineage", "the children below \(current.tensorId) loop back to \(item.tensorId)")
+        break
+      }
       below.append(item)
-      next = children(of: item).first
+      next = firstChild(item)
     }
     var line = Array(below.reversed())
-    var up: HistoryItem? = current
+    line.append(current)
+    // Each step once: an ancestor that's also below ends the line too.
+    var up = parent(current)
     while let item = up {
+      guard seen.insert(item.tensorId).inserted else {
+        Log.once(Log.history, site: "currentLineage", "the parents above \(current.tensorId) loop back to \(item.tensorId)")
+        break
+      }
       line.append(item)
-      up = parent(of: item)
+      up = parent(item)
     }
     return line
   }

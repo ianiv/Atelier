@@ -469,7 +469,11 @@ struct HistoryView: View {
   private func visibleParent(of item: HistoryItem, in items: [HistoryItem]) -> HistoryItem? {
     var next = history.parent(of: item)
     var seen: Set<Int64> = []
-    while let parent = next, seen.insert(parent.tensorId).inserted {
+    while let parent = next {
+      guard seen.insert(parent.tensorId).inserted else {
+        Log.once(Log.history, site: "visibleParent", "the parents above \(item.tensorId) loop at \(parent.tensorId)")
+        return nil
+      }
       if items.contains(parent) { return parent }
       next = history.parent(of: parent)
     }

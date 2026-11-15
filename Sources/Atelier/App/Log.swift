@@ -1,5 +1,6 @@
 import Foundation
 import os
+import Synchronization
 
 /// The app's logs, one category per area; read them in Console or with `log stream --predicate
 /// 'subsystem == "<bundle id>"'`. For failures nothing else reports, such as a file that couldn't
@@ -18,6 +19,18 @@ nonisolated enum Log {
   static let create = Logger(subsystem: subsystem, category: "create")
   static let inspector = Logger(subsystem: subsystem, category: "inspector")
   static let remote = Logger(subsystem: subsystem, category: "remote")
+
+  /// The sites `once` has logged from in this run.
+  private static let reported = Mutex<Set<String>>([])
+
+  /// Logs `message` as a fault the first time `site` reports one in this run, so something that
+  /// should never happen (a loop in History's parent links, which a walk then stops at) leaves
+  /// evidence without flooding the log each time the views ask again.
+  static func once(_ logger: Logger, site: String, _ message: @autoclosure () -> String) {
+    guard reported.withLock({ $0.insert(site).inserted }) else { return }
+    let message = message()
+    logger.fault("\(site, privacy: .public): \(message, privacy: .public)")
+  }
 
   /// Runs `body`, logging its error as what failed. Returns the error for callers that also tell
   /// the user; `@discardableResult` for the rest.
