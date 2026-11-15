@@ -55,8 +55,15 @@ struct HistoryView: View {
   /// The width of each cell: the thumbnail size, narrowed only when one doesn't fit the window.
   private var cellWidth: Double {
     let size = min(max(thumbnailSize, Self.thumbnailSizes.lowerBound), Self.thumbnailSizes.upperBound)
-    return gridWidth > 24 ? min(size, gridWidth - 24) : size
+    let room = gridWidth - Self.gridInsets
+    return room > 0 ? min(size, room) : size
   }
+
+  /// The grid's 12 pt padding on each side, plus room for a scroll bar. `gridWidth` is the scroll
+  /// view's whole width, but with always-shown scroll bars (a mouse attached) the content is about
+  /// 15 pt narrower. Cells sized to the whole width then overflowed it, the layout widened, and
+  /// on macOS 26 the window looped through layout passes until AppKit aborted.
+  private static let gridInsets = 24.0 + 16
 
   /// Whether the grid shows the small JPEG previews: they're at least 384 px on the short side
   /// (`ImageTensor.downsampled`), enough for cells up to about 200 points on a Retina display.
@@ -260,7 +267,10 @@ struct HistoryView: View {
           }
           .dragContainerSelection(selectedItems.map(\.tensorId))
         }
-        .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+        // Whole points, so a fraction of a point of rounding can't start another layout pass.
+        .onGeometryChange(for: CGSize.self) {
+          CGSize(width: $0.size.width.rounded(.down), height: $0.size.height.rounded(.down))
+        } action: { size in
           gridWidth = size.width
           viewportHeight = size.height
         }
@@ -310,9 +320,10 @@ struct HistoryView: View {
 
   private nonisolated static let gridSpace = "HistoryGrid"
 
-  /// How many cells fit across: 10 pt spacing, 12 pt padding. The arrow keys use it too.
+  /// How many cells fit across: 10 pt spacing, padding and scroll bar room (`gridInsets`). The
+  /// arrow keys use it too.
   private var columnCount: Int {
-    max(1, Int((gridWidth - 24 + 10) / (cellWidth + 10)))
+    max(1, Int((gridWidth - Self.gridInsets + 10) / (cellWidth + 10)))
   }
 
   /// A slider on the Mac, as in Photos; a menu of sizes on iPad, where a toolbar has less room.
@@ -414,7 +425,8 @@ struct HistoryView: View {
       }
     }
     .padding(12)
-    .frame(maxWidth: .infinity, minHeight: viewportHeight, alignment: .topLeading)
+    // Its minimum width is 0, so the fixed columns can never ask the window for more room.
+    .frame(minWidth: 0, maxWidth: .infinity, minHeight: viewportHeight, alignment: .topLeading)
     .coordinateSpace(.named(Self.gridSpace))
     .background {
       // Clicking between images clears the selection; dragging there draws a marquee.
