@@ -279,6 +279,42 @@ extension Automation {
         }
       }
 
+      // Use Settings brings back another run's moodboard: a run after it follows that board, and
+      // Use on that run brings it back, not the board of the entry current before.
+      model.restore(entry: imported)
+      _ = await settled { !model.isLoadingCanvasImage && same(model.image, original) }
+      model.moodboard.replace(with: [(second, 1)])
+      model.moodboard.setWeight(0.75, for: model.moodboard.items[0].id)
+      await model.flushEntries()
+      if let run3 = await run() {
+        model.restore(entry: imported)
+        _ = await settled { !model.isLoadingCanvasImage && model.moodboard.items.isEmpty }
+        let boardOf = { (items: [MoodboardItem]) in items.map(\.weight) }
+        model.use(run3, loadImage: false)
+        _ = await settled { boardOf(model.moodboard.items) == [0.75] }
+        await model.flushEntries()
+        let afterUseSettings = history.currentItem
+        check(
+          afterUseSettings?.entryReason == .moodboard && afterUseSettings?.entryMoodboard.map(\.weight) == [0.75],
+          "Use Settings records the board it brings back as a Moodboard entry, current")
+        if let run4 = await run() {
+          model.moodboard.removeAll()
+          await model.flushEntries()
+          model.use(run4)
+          await idle()
+          check(
+            await settled {
+              !model.isLoadingCanvasImage && boardOf(model.moodboard.items) == [0.75]
+                && same(model.moodboard.items.first?.image, second)
+            },
+            "after Use Settings and Generate, Use brings back the board the run used")
+        } else {
+          check(false, "the run after Use Settings saved nothing")
+        }
+      } else {
+        check(false, "the run with a new board saved nothing")
+      }
+
       // Clear: a Cleared entry; clearing again repeats it.
       model.clearCanvas()
       await model.flushEntries()

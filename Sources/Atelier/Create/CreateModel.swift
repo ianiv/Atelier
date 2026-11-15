@@ -568,6 +568,18 @@ final class CreateModel {
   /// Counts restores (an entry, or a History image put back), so an entry gathered before one isn't
   /// made current over it (`recordEntry`).
   @ObservationIgnored private var restoreCount = 0
+  /// Entries gathered and not yet taken up by the chain (`recordEntry`), in order: what quitting
+  /// writes itself (`recordEntriesBeforeQuit`). Whichever takes one first removes it, so none is
+  /// written twice.
+  @ObservationIgnored private var pendingEntries: [PendingEntry] = []
+
+  private struct PendingEntry {
+    var id = UUID()
+    var input: HistoryStore.EntryInput
+    /// The current step and the restore count when it was gathered.
+    var before: Int64?
+    var restores: Int
+  }
   /// Generate is writing the entries a run follows (a moodboard change, a mask) before queueing
   /// it: Generate is held meanwhile, as for a selection.
   private(set) var waitsForEntries = false
@@ -1062,7 +1074,7 @@ final class CreateModel {
         }
       }
     }
-    AppLifecycle.onWillTerminate { [weak self] in self?.recordMoodboardChangeBeforeQuit() }
+    AppLifecycle.onWillTerminate { [weak self] in self?.recordEntriesBeforeQuit() }
     AppLifecycle.onWillTerminate { [weak self] in self?.saveSession() }
     AppLifecycle.onResignActive { [weak self] in self?.saveSession() }
     AppLifecycle.onWillTerminate { [weak self] in self?.saveQueue() }
@@ -1194,7 +1206,8 @@ final class CreateModel {
     if item.isEntry, loadImage, !newSeed { return restore(entry: item) }
     guard canUse(item) else { return }
     recordMoodboardChange()
-    if loadImage { restoreCount += 1 }
+    // Use Settings brings back a moodboard too: a change gathered before it isn't made current.
+    restoreCount += 1
     if newSeed { rerunUndoManager = undoManager }
     let sidecar = item.sidecar
     restorePrompts(sidecar.prompt, sidecar.negativePrompt)
@@ -1266,6 +1279,10 @@ final class CreateModel {
     let moodboardStep = (restoreInput ? history.inputEntry(of: item) : nil)?.id ?? item.id
     let restoreMoodboard = Task {
       await restoreMoodboard(from: moodboardStep, in: projectName)
+      // Without the image, the board brought back goes with whatever the canvas shows: recorded
+      // as a Moodboard entry (none when it's what the current entry holds), so a run from here
+      // follows it and Use on that run brings this board back.
+      if !loadImage, let input = entryInput(.moodboard) { recordEntry(input) }
       // A video run's audio file comes back too.
       if let samples = await history.audioInput(of: item),
          let rate = VideoModel(model: item.sidecar.model)?.audioSampleRate
@@ -3387,19 +3404,35 @@ extension CreateModel {
     }
   }
 
-  /// At quit there's no waiting for the next turn: a moodboard change still settling is written now.
-  /// Entries still on their way are let finish first (the main run loop runs their turns), for as
-  /// long as the quit-time write itself may take.
-  private func recordMoodboardChangeBeforeQuit() {
-    guard moodboardChanged else { return }
-    moodboardChanged = false
-    moodboardSettling?.cancel()
-    let deadline = Date().addingTimeInterval(HistoryStore.quitWriteTimeout)
-    while entriesPending > 0, Date() < deadline {
-      RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.05))
+  /// At quit there's no waiting for the chain's next turn (quit can come from inside one): the
+  /// entries it hasn't taken up yet, and a moodboard change still settling, are written now, in
+  /// order, off the main actor while this waits, within one deadline (`quitWriteTimeout`). One the
+  /// chain is already writing finishes on its own, or not at all; it's not written again.
+  private func recordEntriesBeforeQuit() {
+    if moodboardChanged {
+      moodboardChanged = false
+      moodboardSettling?.cancel()
+      if let input = entryInput(.moodboard) {
+        pendingEntries.append(PendingEntry(input: input, before: history.currentTensorId, restores: restoreCount))
+      }
     }
-    guard entriesPending == 0, let input = entryInput(.moodboard) else { return }
-    history.saveEntryBeforeQuit(input, after: input.parent, makeCurrent: true)
+    let pending = pendingEntries
+    pendingEntries = []
+    let deadline = Date().addingTimeInterval(HistoryStore.quitWriteTimeout)
+    var last: Int64?
+    for entry in pending {
+      var input = entry.input
+      if input.reason != .imported, case .image(let image) = input.canvas, let adoptedImport, adoptedImport.image === image {
+        input.canvas = .step(tensorId: adoptedImport.tensorId)
+      }
+      // As the chain would: after the entry before it, unless something was restored since.
+      let follows = entry.restores == restoreCount
+      let parent = follows ? last ?? history.currentTensorId : input.parent
+      input.parent = parent
+      if let key = history.saveEntryBeforeQuit(input, after: parent, makeCurrent: follows, deadline: deadline), follows {
+        last = key
+      }
+    }
   }
 
   /// What an entry made now would hold: the canvas (the image under a run's preview; none for a
@@ -3437,13 +3470,20 @@ extension CreateModel {
   private func recordEntry(_ input: HistoryStore.EntryInput, landed: ((HistoryItem?) -> Void)? = nil) {
     let previous = entryChain
     let project = history.project.name
-    let before = history.currentTensorId
-    let restores = restoreCount
+    let pending = PendingEntry(input: input, before: history.currentTensorId, restores: restoreCount)
+    let before = pending.before, restores = pending.restores
+    pendingEntries.append(pending)
     entriesPending += 1
     entryChain = Task { [weak self] in
       await previous?.value
       guard let self else { return }
       defer { entriesPending -= 1 }
+      // Taken up here, unless quitting wrote it already.
+      guard let index = pendingEntries.firstIndex(where: { $0.id == pending.id }) else {
+        landed?(nil)
+        return
+      }
+      pendingEntries.remove(at: index)
       guard history.project.name == project else {
         landed?(nil)
         return

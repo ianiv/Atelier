@@ -8,6 +8,7 @@ import ImageIO
 @preconcurrency import NNC
 import Observation
 import ProjectFormat
+import Synchronization
 import UniformTypeIdentifiers
 
 /// One generated image: a step in the current project.
@@ -637,15 +638,23 @@ final class HistoryStore {
 
   /// `saveEntry` for quitting, which can't wait: written off the main actor while this waits for it,
   /// up to a few seconds. Made the current step when `makeCurrent`, as the project's newest.
-  func saveEntryBeforeQuit(_ input: EntryInput, after parent: Int64?, makeCurrent: Bool) {
-    guard isLoaded, !Self.isDuplicate(signature(of: input), of: parent.flatMap(entry(key:))) else { return }
+  ///
+  /// Waits until `deadline` at most, which several such writes share. Returns what finds the entry,
+  /// nil when none was written (it repeated the step before, failed, or ran out of time).
+  @discardableResult
+  func saveEntryBeforeQuit(_ input: EntryInput, after parent: Int64?, makeCurrent: Bool, deadline: Date) -> Int64? {
+    guard isLoaded, Date() < deadline, !Self.isDuplicate(signature(of: input), of: parent.flatMap(entry(key:))) else {
+      return nil
+    }
     let project = project
-    let shuffles = moodboardShuffles
     let current = currentTensorId
-    let moods = input.moodboard.map { (id: $0.id, image: $0.image, weight: $0.weight, shuffleId: shuffles[$0.id]) }
+    let written = Mutex<Int64?>(nil)
     let done = DispatchSemaphore(value: 0)
     Task.detached {
       defer { done.signal() }
+      // The project's own map: an earlier write at quit may have added to it.
+      let shuffles = project.moodboardShuffles
+      let moods = input.moodboard.map { (id: $0.id, image: $0.image, weight: $0.weight, shuffleId: shuffles[$0.id]) }
       let made = await Self.entryContents(canvas: input.canvas, moodboard: moods, canvasImage: input.canvasImage)
       let canvas: Project.EntryCanvas
       switch input.canvas {
@@ -670,8 +679,10 @@ final class HistoryStore {
         let step = tree.step(tensorId: current)
         project.setCurrentStep(step == tree.newest ? nil : step)
       }
+      written.withLock { $0 = appended.key }
     }
-    _ = done.wait(timeout: .now() + Self.quitWriteTimeout)
+    _ = done.wait(timeout: .now() + max(deadline.timeIntervalSinceNow, 0))
+    return written.withLock { $0 }
   }
 
   /// An entry's tensors and thumbnail, made off the main actor: the canvas image's tensor when it's
