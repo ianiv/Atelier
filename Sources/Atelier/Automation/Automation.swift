@@ -29,7 +29,8 @@ import SwiftUI
 /// canvas tools (AutomationAgentCanvas.swift). `--automask-check` selects with Vision and SAM
 /// into the canvas mask (AutomationAutoMask.swift). `--queue-check` runs the queue
 /// (AutomationQueue.swift). `--color-match-check` matches an edit's colors to its original
-/// (AutomationColorMatch.swift).
+/// (AutomationColorMatch.swift). `--input-entries-check` records and restores input entries
+/// (AutomationInputEntries.swift).
 @MainActor
 enum Automation {
   /// The app's Compute server, for the checks that look at its Settings.
@@ -47,6 +48,7 @@ enum Automation {
       "--model-folders-check", "--styles-check", "--cleanup-check", "--engine-check", "--playback-check",
       "--remote-check", "--remote-net-check", "--remote-shots", "--remote-url-check", "--remote-tailnet-check",
       "--catalog-retry-check", "--model-move-check", "--add-folder-check", "--color-match-check", "--canvas-clip-check",
+      "--input-entries-check",
     ]
     // The unit tests run inside the app. Like a scripted run, that leaves the user's data alone: no
     // cleanup at launch, no saving the session or queue.
@@ -188,6 +190,10 @@ enum Automation {
     }
     if args.contains("--color-match-check") {
       colorMatchCheck(model)
+      return
+    }
+    if args.contains("--input-entries-check") {
+      inputEntriesCheck(model)
       return
     }
     if args.contains("--reuse") {

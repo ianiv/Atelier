@@ -351,7 +351,7 @@ extension Automation {
         check(remoteRunning, "a job waits at the server")
         var quick = current
         quick.steps = settings.steps
-        model.queueForCheck(
+        await model.queueForCheck(
           GenerationEngine.Request(model: file, prompt: "a quick local job", negativePrompt: "", seed: 3, configuration: quick),
           target: .local)
         check(model.queue.running != nil && !model.queue.runningRemote.isEmpty, "a job on this device runs alongside it")
@@ -431,7 +431,7 @@ extension Automation {
             request.audio = audio
           }
           let before = uploads()
-          model.queueForCheck(request, target: target)
+          await model.queueForCheck(request, target: target)
           _ = await wait(until: { model.queue.isEmpty }, seconds: 1800)
           if case .finished(let tensorId) = model.queue.recent.first?.status, let item = model.history.item(tensorId: tensorId) {
             clipItem = item

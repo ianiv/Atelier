@@ -162,6 +162,7 @@
 		E8B7558C1BC967172061F95A /* TimelineUpscaleExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 705B33C92E12A854209C6682 /* TimelineUpscaleExport.swift */; };
 		58D2F5882DA905D40744609C /* AutomationUpscale.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2FF5ECF7B3949AB28ABC1A2 /* AutomationUpscale.swift */; };
 		C0104A7C11A0000000000003 /* AutomationColorMatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0104A7C11A0000000000004 /* AutomationColorMatch.swift */; };
+		E17E00000000000000000001 /* AutomationInputEntries.swift in Sources */ = {isa = PBXBuildFile; fileRef = E17E00000000000000000002 /* AutomationInputEntries.swift */; };
 		4E97E7417B4FBD4C0A2D4F5F /* FlashVSRWeights.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E49E0979AF32A5D8D048181 /* FlashVSRWeights.swift */; };
 		81757968C9588EE3EE6A6ECA /* FlashVSRSourceProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = A08CCF40C7CF25F4BF8BAFCF /* FlashVSRSourceProjection.swift */; };
 		399404404C42798FDF78F390 /* FlashVSRTinyDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09EC439DFB06AF76584E0D97 /* FlashVSRTinyDecoder.swift */; };
@@ -184,6 +185,7 @@
 		CA9420258E514629F01CC732 /* AutomationAutoMask.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60B649AE442AE955874615B1 /* AutomationAutoMask.swift */; };
 		39581119081A4BFFD6967A0B /* AutoMaskTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC3541FFA68BA7C5424778CE /* AutoMaskTests.swift */; };
 		C0104A7C11A0000000000005 /* ColorMatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0104A7C11A0000000000006 /* ColorMatchTests.swift */; };
+		E17E00000000000000000003 /* InputEntryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E17E00000000000000000004 /* InputEntryTests.swift */; };
 		A1B2C3D4E5F60718293A4B5C /* MaskMemoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E4F5A60718293A4B5D /* MaskMemoryTests.swift */; };
 		C11DDE1E7E57000000000001 /* ClipDeleteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11DDE1E7E57000000000002 /* ClipDeleteTests.swift */; };
 		2A05F48827FD4DE65A99F665 /* ReCaVSRWeights.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8F1CB5990A8A39715A331D1 /* ReCaVSRWeights.swift */; };
@@ -383,6 +385,7 @@
 		705B33C92E12A854209C6682 /* TimelineUpscaleExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineUpscaleExport.swift; sourceTree = "<group>"; };
 		D2FF5ECF7B3949AB28ABC1A2 /* AutomationUpscale.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationUpscale.swift; sourceTree = "<group>"; };
 		C0104A7C11A0000000000004 /* AutomationColorMatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationColorMatch.swift; sourceTree = "<group>"; };
+		E17E00000000000000000002 /* AutomationInputEntries.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationInputEntries.swift; sourceTree = "<group>"; };
 		9E49E0979AF32A5D8D048181 /* FlashVSRWeights.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlashVSRWeights.swift; sourceTree = "<group>"; };
 		A08CCF40C7CF25F4BF8BAFCF /* FlashVSRSourceProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlashVSRSourceProjection.swift; sourceTree = "<group>"; };
 		09EC439DFB06AF76584E0D97 /* FlashVSRTinyDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlashVSRTinyDecoder.swift; sourceTree = "<group>"; };
@@ -405,6 +408,7 @@
 		60B649AE442AE955874615B1 /* AutomationAutoMask.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationAutoMask.swift; sourceTree = "<group>"; };
 		CC3541FFA68BA7C5424778CE /* AutoMaskTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoMaskTests.swift; sourceTree = "<group>"; };
 		C0104A7C11A0000000000006 /* ColorMatchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorMatchTests.swift; sourceTree = "<group>"; };
+		E17E00000000000000000004 /* InputEntryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputEntryTests.swift; sourceTree = "<group>"; };
 		B1C2D3E4F5A60718293A4B5D /* MaskMemoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaskMemoryTests.swift; sourceTree = "<group>"; };
 		C11DDE1E7E57000000000002 /* ClipDeleteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipDeleteTests.swift; sourceTree = "<group>"; };
 		A8F1CB5990A8A39715A331D1 /* ReCaVSRWeights.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReCaVSRWeights.swift; sourceTree = "<group>"; };
@@ -535,6 +539,7 @@
 				D2FF5ECF7B3949AB28ABC1A2 /* AutomationUpscale.swift */,
 				B7BD68E493CDB95E8BB1788B /* AutomationReCaVSR.swift */,
 				C0104A7C11A0000000000004 /* AutomationColorMatch.swift */,
+				E17E00000000000000000002 /* AutomationInputEntries.swift */,
 				E5D760BDEB2FA5F04BDAF779 /* AutomationTimeline.swift */,
 			);
 			path = Automation;
@@ -770,6 +775,7 @@
 			children = (
 				CC3541FFA68BA7C5424778CE /* AutoMaskTests.swift */,
 				C0104A7C11A0000000000006 /* ColorMatchTests.swift */,
+				E17E00000000000000000004 /* InputEntryTests.swift */,
 				9716C5CC927EB4F63FBFC0A9 /* ReCaVSRTests.swift */,
 				B1C2D3E4F5A60718293A4B5D /* MaskMemoryTests.swift */,
 				C11DDE1E7E57000000000002 /* ClipDeleteTests.swift */,
@@ -1043,6 +1049,7 @@
 				58D2F5882DA905D40744609C /* AutomationUpscale.swift in Sources */,
 				2F5E204A6500D7675B33E763 /* AutomationReCaVSR.swift in Sources */,
 				C0104A7C11A0000000000003 /* AutomationColorMatch.swift in Sources */,
+				E17E00000000000000000001 /* AutomationInputEntries.swift in Sources */,
 				70E8E18439D847EA73F0D5DD /* AutomationTimeline.swift in Sources */,
 				02980CB68834C5E6EA77013B /* ContentView.swift in Sources */,
 				90D46F51CBD101C88E0BD1B0 /* CreateModel.swift in Sources */,
@@ -1192,6 +1199,7 @@
 				EB6EC16C5C8D9C4C67D558FA /* CanvasRefineTests.swift in Sources */,
 				39581119081A4BFFD6967A0B /* AutoMaskTests.swift in Sources */,
 				C0104A7C11A0000000000005 /* ColorMatchTests.swift in Sources */,
+				E17E00000000000000000003 /* InputEntryTests.swift in Sources */,
 				21E31F9C3FD8B3C49DB10302 /* ReCaVSRTests.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* MaskMemoryTests.swift in Sources */,
 				C11DDE1E7E57000000000001 /* ClipDeleteTests.swift in Sources */,

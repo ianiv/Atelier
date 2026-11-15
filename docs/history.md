@@ -13,6 +13,7 @@ Every image you generate is saved to the **current project**. Click **History** 
 - **Model**: show only images made with one model.
 - **Rating**: show only images with at least that many stars, or only unrated ones.
 - Videos show as one tile each, with a film badge. **Images / Videos** in the toolbar shows only one kind. See [Making videos](video.md#in-history).
+- **Show Inputs** in the toolbar (on iPad, in the **Filter** menu) shows or hides [input entries](#input-entries). It's on by default, and the strip under the canvas in Create follows the same setting.
 - Click an image to make it the **current image** (see Branches below) and see its prompt, negative prompt and settings (model, size, seed, steps, guidance, shift, sampler, hires fix and more) in the panel on the right. Prompts and seeds can be selected and copied.
 - Select several images with ⌘-click or ⇧-click to copy, export or delete them together. On iPad, tap **Select** in the toolbar, then tap images to add or remove them; tap **Done** when you're finished.
 - On iPad, a tap shows an image's details and a double tap uses its settings. In a narrow window the details open over the grid and close when you're done.
@@ -25,13 +26,29 @@ Ratings are saved in the project, so they stay with the image when you branch fr
 
 ## Reusing an image
 
-- **Use Settings** (or double-click the image) loads the image's model, prompt, seed and every setting into Create. The seed is kept, so generating again reproduces the image. If the image was made with Edit, its input image is put back on the canvas in Edit mode as well, and its moodboard is restored. For an image made by refining part of its input and merging the result back ([Refining part of an image](creating-images.md#refining-part-of-an-image)), the input comes back zoomed on the same region, with its mask. Otherwise an image comes back with the last mask it had on the canvas, as it does when you click it.
+- **Double-click** an image to load its model, prompt, seed and every setting into Create. The seed is kept, so generating again reproduces the image. If the image was made with Edit, its input image is put back on the canvas in Edit mode as well, with the mask the run went in with. The moodboard comes back as it was when you generated: from the run's [input entry](#input-entries) when it has one, weight-0 images included, otherwise the images the run used. For an image made by refining part of its input and merging the result back ([Refining part of an image](creating-images.md#refining-part-of-an-image)), the input comes back zoomed on the same region, with its mask. Otherwise an image comes back with the last mask it had on the canvas, as it does when you click it.
+- **Use Settings** loads the same model, prompt, seed, settings and moodboard, but leaves the canvas as it is: it doesn't put the input back.
 - **Rerun with New Seed** does the same with a fresh seed, for a variation.
 - If the model that made an image isn't downloaded anymore, History says so and Use Settings is unavailable.
 
 - **Mask ▸ Replace Canvas Mask** and **Mask ▸ Add to Canvas Mask** put the mask an image remembers on the image on the canvas, stretched to fill it ([Refining part of an image](creating-images.md#refining-part-of-an-image)). They're available when the image has a mask and the canvas can be painted.
 
 You can also drag images from History onto the canvas or the moodboard in Create. A dragged image comes in as a new image, without its mask.
+
+## Input entries
+
+History also records what went into your runs, as Draw Things does:
+
+- **Imported**: an image you put on the canvas (pasted, dropped, opened, picked from Photos, **Show on Canvas** from the moodboard, or placed by an agent), as you brought it in, with the moodboard at that moment.
+- **Moodboard**: a change to the moodboard (adding, removing, clearing, or a new weight), with the canvas as it was. A burst of changes, or dragging a weight slider, is one entry, written about a second and a half after the last change (or straight away when you generate, put another image on the canvas, clear it, switch projects or quit).
+- **Cleared**: the canvas was cleared, with the moodboard at that moment.
+- **Mask**: when you generate (in Generate or Edit mode) with an image on the canvas and a mask that isn't the one the latest entry holds, the canvas, mask and moodboard go in first, and the run follows them.
+
+Each entry holds the canvas image (none for an empty canvas), its mask and the whole moodboard, weight-0 images included. Entries show in the grid, the graph and the strip under the canvas with a badge saying which kind they are. They have no stars, settings or generation time; **Use Settings**, **Rerun with New Seed**, the rating and **Copy Prompt** / **Copy Seed** are unavailable for them, and so are **Copy Image**, **Export PNG…** and **Save to Photos** when the canvas was empty.
+
+Click an entry (in History or the strip) to put it back: the canvas image, fitted, with its mask, and the moodboard with its weights. The prompt, settings and seed stay as they are. The entry becomes the current image, so the next image you make follows it. An entry isn't written when it would hold just what the one before it holds, so clicking an entry and changing nothing records nothing.
+
+An entry and the images around it share their pictures in the project file: the canvas image and the moodboard images are stored once, however many entries show them. Deleting entries never removes an image another step still uses. Undo (⌘Z) isn't affected: entries are a record, not undo steps.
 
 ## Copying, exporting and deleting
 
@@ -53,7 +70,7 @@ Like Draw Things, a project keeps a branching history. The **current image** is 
 - If the current image is the newest one, the new image simply comes after it.
 - Otherwise the new image starts a new branch from it. Nothing is lost: the images that already followed it stay where they are, on their own branch.
 
-Clicking an image changes nothing in the project except which image is current, and the project remembers that for the next time it's opened. Use Settings on an image made with Edit makes its input the current image, so generating again makes a sibling of the original.
+Clicking an image changes nothing in the project except which image is current, and the project remembers that for the next time it's opened. Double-clicking an image made with Edit makes its input the current image, so generating again makes a sibling of the original. Changing the canvas or the moodboard adds an [input entry](#input-entries) after the current image, which becomes current in its place.
 
 Deleting an image keeps its branch together: the images that followed it now follow the image before it. If you delete the current image, the one before it becomes current.
 
@@ -69,4 +86,4 @@ A project is one file holding the images, their branches and their settings. Use
 
 Projects are stored in `~/Pictures/Atelier/Projects/` (on iPad, **On My iPad ▸ Atelier ▸ Atelier ▸ Projects**), one `.sqlite3` file each, in the same format Draw Things uses for its projects. The first project is called "Atelier".
 
-When you bring an image in from outside to edit it, Atelier also saves that image in the project (History doesn't list it) so the edited result can always find its input again.
+When you bring an image in from outside, Atelier saves it in the project as an Imported [input entry](#input-entries), so the edited result can always find its input again. When the canvas isn't the frame's size, the frame a run was drawn from is saved too; History doesn't list it.

@@ -320,7 +320,7 @@ final class AgentTools {
       "name": "list_history",
       "title": "List history",
       "description":
-        "Lists the newest images and videos in the current Atelier project, newest first: history step, prompt (shortened), model, seed, size, star rating, whether it's a video, and has_mask (it remembers a mask: set_canvas_image brings it back, set_canvas_mask from_history_step applies it, get_canvas_mask history_step shows it). Includes what the user generated themselves. Use get_image to look at one.",
+        "Lists the newest images and videos in the current Atelier project, newest first: history step, prompt (shortened), model, seed, size, star rating, whether it's a video, and has_mask (it remembers a mask: set_canvas_image brings it back, set_canvas_mask from_history_step applies it, get_canvas_mask history_step shows it). Includes what the user generated themselves, and input entries (kind \"input\", with a reason: imported, moodboard, cleared or mask): the canvas and moodboard as they were before runs, which aren't runs themselves and have no settings of their own. Use get_image to look at one.",
       "inputSchema": [
         "type": "object",
         "properties": [
@@ -777,6 +777,8 @@ final class AgentTools {
     if let problem = create.runTargetProblem {
       throw ToolError(problem + (create.runTargetMaskProblem != nil ? " (set_canvas_mask with clear: true clears it)" : ""))
     }
+    // What History doesn't have yet goes in first, as Generate does, so the run follows it.
+    await create.recordEntriesBeforeRun()
     guard var request = create.screenRequest(), let model = create.selectedModel else {
       throw ToolError(create.errorMessage ?? "The Create screen has no model or settings loaded yet.")
     }
@@ -1255,7 +1257,7 @@ final class AgentTools {
   /// A History step's remembered mask and its image's size, or why there's none.
   private func historyMask(_ step: Int) async throws -> (mask: CanvasMask, size: CGSize) {
     let item = try historyImage(step)
-    guard create.history.hasStoredMask(tensorId: item.tensorId), let stored = await create.storedMask(of: item) else {
+    guard create.hasMask(item), let stored = await create.storedMask(of: item) else {
       throw ToolError("History step \(step) has no mask (see list_history's has_mask).")
     }
     return stored
@@ -1532,7 +1534,7 @@ final class AgentTools {
       let item = try historyImage(historyStep)
       guard let loaded = await create.history.image(for: item) else { throw ToolError("Couldn't read history step \(historyStep)'s image.") }
       image = loaded
-      mask = create.history.hasStoredMask(tensorId: item.tensorId) ? await create.history.storedMask(tensorId: item.tensorId) : nil
+      mask = await create.mask(of: item)
       let stats = (mask ?? CanvasMask()).stats(sourceSize: CGSize(width: image.width, height: image.height), placement: nil)
       summary = [
         "history_step": historyStep,
@@ -1688,11 +1690,19 @@ final class AgentTools {
     let limit = max(Self.int(arguments["limit"]) ?? 20, 1)
     return create.history.items.prefix(limit).map { item in
       let sidecar = item.sidecar
+      if let reason = item.entryReason {
+        return [
+          "history_step": item.id.logicalTime, "kind": "input", "reason": reason.rawValue,
+          "has_image": item.hasImage, "width": sidecar.width, "height": sidecar.height,
+          "has_mask": item.entryMask?.mayHavePaint == true, "moodboard": item.entryMoodboard.count,
+        ]
+      }
       return [
+        "kind": item.isVideo ? "video" : "image",
         "history_step": item.id.logicalTime, "prompt": Self.shortened(sidecar.prompt),
         "model": sidecar.model, "seed": Int(sidecar.seed), "width": sidecar.width, "height": sidecar.height,
         "rating": create.history.rating(of: item), "video": item.isVideo,
-        "has_mask": !item.isVideo && create.history.hasStoredMask(tensorId: item.tensorId),
+        "has_mask": create.hasMask(item),
         "on_canvas": create.imageItem == item || create.canvasClip == item,
       ]
     }
@@ -1708,17 +1718,20 @@ final class AgentTools {
       }
       item = found
     } else if arguments["latest"] as? Bool == true {
-      guard let newest = create.history.items.first else { throw ToolError("The project has no images yet.") }
+      guard let newest = create.history.items.first(where: { !$0.isEntry }) else { throw ToolError("The project has no images yet.") }
       item = newest
     } else {
       item = create.imageItem ?? create.canvasClip
     }
     var detailSize: CGSize?
     if let item {
+      guard item.hasImage else {
+        throw ToolError("History step \(item.id.logicalTime) is an input entry with an empty canvas: it has no image.")
+      }
       guard let loaded = await create.history.image(for: item) else { throw ToolError("Couldn't read that image.") }
       image = loaded
-      if arguments["full_detail"] as? Bool == true, !item.isVideo,
-         let full = await create.history.fullDetailImage(tensorId: item.tensorId)
+      if arguments["full_detail"] as? Bool == true, !item.isVideo, let tensorId = item.imageTensorId,
+         let full = await create.history.fullDetailImage(tensorId: tensorId)
       {
         detailSize = CGSize(width: loaded.width, height: loaded.height)
         image = full
@@ -1729,7 +1742,10 @@ final class AgentTools {
     }
 
     var text: String
-    if let item {
+    if let item, let reason = item.entryReason {
+      text =
+        "History step \(item.id.logicalTime) in “\(create.history.project.name)” is an input entry (\(reason.rawValue)): the canvas as it was before a run, \(image.width)×\(image.height), with \(item.entryMoodboard.count) moodboard image\(item.entryMoodboard.count == 1 ? "" : "s"). It isn't a run, so it has no prompt or settings."
+    } else if let item {
       let sidecar = item.sidecar
       text =
         "History step \(item.id.logicalTime) in “\(create.history.project.name)”\(item.isVideo ? " (a video; this is its first frame)" : "").\n"

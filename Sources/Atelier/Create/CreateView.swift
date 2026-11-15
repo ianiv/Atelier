@@ -1012,6 +1012,8 @@ struct RecentStrip: View {
   @Environment(HistoryStore.self) private var history
   @Environment(\.undoManager) private var undoManager
   @AppStorage("recentStripMode") private var mode = Mode.chronological
+  /// Shared with History's Show Inputs.
+  @AppStorage(EntryBadge.showsEntriesKey) private var showsEntries = true
 
   enum Mode: String {
     case chronological, lineage
@@ -1019,7 +1021,7 @@ struct RecentStrip: View {
 
   var body: some View {
     if !history.items.isEmpty {
-      let items = mode == .lineage ? history.currentLineage : Array(history.items.prefix(24))
+      let items = Self.items(history, lineage: mode == .lineage, showsEntries: showsEntries)
       let current = history.currentItem?.tensorId
       HStack(spacing: 8) {
         Picker("Recent Images", selection: $mode) {
@@ -1035,6 +1037,13 @@ struct RecentStrip: View {
           ? "Current lineage: the current image's ancestors and the newest images after it"
           : "Chronological: the newest images on every branch")
         .padding(.leading, 12)
+        Toggle(isOn: $showsEntries) {
+          Label("Show Inputs", systemImage: "square.and.arrow.down.on.square")
+        }
+        .toggleStyle(.button)
+        .labelStyle(.iconOnly)
+        .compactPickerSize()
+        .help("Show the inputs runs went in with: images brought in, moodboard changes, cleared canvases and masks")
         ScrollViewReader { scroller in
           ScrollView(.horizontal) {
             LazyHStack(spacing: 6) {
@@ -1053,8 +1062,18 @@ struct RecentStrip: View {
     }
   }
 
+  /// What the strip lists: the current lineage, or the newest 24, without input entries unless
+  /// Show Inputs is on (`EntryBadge.isListed`).
+  static func items(_ history: HistoryStore, lineage: Bool, showsEntries: Bool) -> [HistoryItem] {
+    let listed = { (item: HistoryItem) in EntryBadge.isListed(item, showsEntries: showsEntries) }
+    return lineage ? history.currentLineage.filter(listed) : Array(history.items.lazy.filter(listed).prefix(24))
+  }
+
   private func pickUp(_ item: HistoryItem) {
-    if model.canUse(item) {
+    if item.isEntry {
+      // Its canvas and moodboard come back; it has no settings of its own.
+      model.restore(entry: item)
+    } else if model.canUse(item) {
       model.use(item, restoreInput: false)
     } else {
       model.showWithPrompt(item, undoManager: undoManager)
@@ -1066,7 +1085,11 @@ struct RecentStrip: View {
       .frame(width: 44, height: 44)
       .clipShape(.rect(cornerRadius: 4))
       .overlay(alignment: .topLeading) {
-        if item.isVideo {
+        if let reason = item.entryReason {
+          EntryBadge(reason: reason)
+            .scaleEffect(0.8, anchor: .topLeading)
+            .padding(1)
+        } else if item.isVideo {
           Image(systemName: "film")
             .font(.system(size: 8, weight: .semibold))
             .padding(2)
@@ -1102,7 +1125,9 @@ struct RecentStrip: View {
       .onTapGesture { pickUp(item) }
       .accessibleButton(item.accessibilityDescription, isSelected: isCurrent) { pickUp(item) }
       .draggable(history.dragExport(item))
-      .help("\(item.sidecar.prompt)\n\(GenerationTime.text(item.sidecar.durationSeconds)). Click to use its settings; the next image follows it.")
+      .help(
+        item.entryReason.map { "\($0.title) input. Click to put its canvas and moodboard back; the next image follows it." }
+          ?? "\(item.sidecar.prompt)\n\(GenerationTime.text(item.sidecar.durationSeconds)). Click to use its settings; the next image follows it.")
       .contextMenu {
         Button("Use Settings") { model.use(item, loadImage: false) }
           .disabled(!model.canUse(item))
@@ -1110,10 +1135,13 @@ struct RecentStrip: View {
           model.show(item)
           model.canvasMode = .edit
         }
+        .disabled(!item.hasImage)
         Button("Add to Moodboard") {
           Task { if let image = await history.image(for: item) { model.moodboard.add(image) } }
         }
+        .disabled(!item.hasImage)
         Button("Copy Image") { Task { await history.copyImage(item) } }
+          .disabled(!item.hasImage)
         MaskMenu(item: item, undoManager: undoManager)
       }
   }
