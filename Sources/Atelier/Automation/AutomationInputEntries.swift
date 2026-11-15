@@ -395,6 +395,238 @@ extension Automation {
   }
 }
 
+extension Automation {
+  /// Regression check for a freeze reported after moodboard changes, Clear and Generate-mode runs,
+  /// then clicking tiles in the Create strip (use a scratch `--project` and a fast image model with
+  /// few steps). Each round adds moodboard images, clears the canvas and generates in Generate
+  /// mode: even rounds one run at a time, odd ones three queued back to back while strip tiles are
+  /// picked and the moodboard changes meanwhile. Then it picks up every strip tile, in both
+  /// Chronological and Current Lineage, as the strip does (an entry restored, a run used without its
+  /// input), sometimes with a moodboard change still settling; makes 30 quick picks; and reopens
+  /// the project. After each step it checks History's parent and child links have no loop, which
+  /// the strip's Current Lineage would walk. A main-actor stall over a second prints a `STALL`
+  /// line, and each action prints a timestamped `STEP` line, for a watchdog to sample the process
+  /// by when the output stops. Prints PASS/FAIL lines.
+  ///
+  ///   Atelier --entries-freeze-check --project NAME --model M [--steps N] [--rounds R] [--quit]
+  ///
+  /// `--steps` is each run's (default 4), `--rounds` how many rounds (default 3). Always pass a
+  /// scratch `--project`: it adds steps to it.
+  static func entriesFreezeCheck(_ model: CreateModel) {
+    let args = CommandLine.arguments
+    func value(_ name: String) -> String? {
+      guard let index = args.firstIndex(of: name), index + 1 < args.count else { return nil }
+      return args[index + 1]
+    }
+    Task { @MainActor in
+      var failures = 0
+      func check(_ ok: Bool, _ message: String) {
+        if !ok { failures += 1 }
+        print("\(ok ? "PASS" : "FAIL") \(message)")
+        fflush(stdout)
+      }
+      func step(_ message: String) {
+        print("STEP \(Date().timeIntervalSince1970) \(message)")
+        fflush(stdout)
+      }
+      @MainActor func finish() {
+        print(failures == 0 ? "entries freeze check: all passed" : "entries freeze check: \(failures) failed")
+        fflush(stdout)
+        if args.contains("--quit") { AppLifecycle.quit() }
+      }
+      @MainActor func idle() async {
+        try? await Task.sleep(for: .milliseconds(200))
+        while model.isBusy || model.isLoadingCanvasImage { try? await Task.sleep(for: .milliseconds(100)) }
+      }
+      func pattern(_ side: Int, seed: Int) -> CGImage? {
+        let context = CGContext(
+          data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4,
+          space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+        guard let context else { return nil }
+        context.setFillColor(CGColor(srgbRed: Double(seed * 37 % 256) / 255, green: Double(seed * 91 % 256) / 255, blue: 0.5, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: side, height: side))
+        return context.makeImage()
+      }
+      /// A cycle in the visible parent links, which `currentLineage` would loop on forever.
+      @MainActor func cycle() -> [Int64]? {
+        let history = model.history
+        for item in history.items {
+          var seen: [Int64] = [item.tensorId]
+          var next = history.parent(of: item)
+          while let parent = next {
+            if seen.contains(parent.tensorId) { return seen + [parent.tensorId] }
+            seen.append(parent.tensorId)
+            next = history.parent(of: parent)
+          }
+          var below: [Int64] = [item.tensorId]
+          var child = history.children(of: item).first
+          while let c = child {
+            if below.contains(c.tensorId) { return below + [c.tensorId] }
+            below.append(c.tensorId)
+            child = history.children(of: c).first
+          }
+        }
+        return nil
+      }
+      @MainActor func describe() -> String {
+        let history = model.history
+        return history.items.map { item in
+          let step = history.tree.steps[item.id]
+          return "\(item.entryReason?.rawValue ?? "run") key \(item.tensorId) id \(item.id.lineage)/\(item.id.logicalTime) parent \(step?.parent.map { "\($0.lineage)/\($0.logicalTime)" } ?? "-") visible \(history.parent(of: item)?.tensorId ?? 0) input \(item.inputTensorId ?? 0)"
+        }.joined(separator: "\n  ")
+      }
+      var cycleReported = false
+      @MainActor func checkTree(_ after: String) -> Bool {
+        if let cycle = cycle() {
+          if !cycleReported {
+            check(false, "no cycle in the parent links after \(after): \(cycle)\n  \(describe())")
+            cycleReported = true
+          }
+          return false
+        }
+        return true
+      }
+
+      Task { @MainActor in
+        var last = Date()
+        while true {
+          try? await Task.sleep(for: .milliseconds(50))
+          let gap = Date().timeIntervalSince(last)
+          if gap > 1 { print("STALL main actor \(String(format: "%.1f", gap)) s"); fflush(stdout) }
+          last = Date()
+        }
+      }
+      while !model.history.isLoaded || model.models.isEmpty || model.settings == nil || model.isBusy {
+        try? await Task.sleep(for: .milliseconds(100))
+      }
+      guard let file = value("--model"), model.models.contains(where: { $0.file == file }) else {
+        check(false, "--model M is required and must be downloaded")
+        return finish()
+      }
+      if model.selectedModel != file {
+        model.selectedModel = file
+        await idle()
+      }
+      model.resetToModelDefaults(undoManager: nil)
+      guard var settings = model.settings else { return finish() }
+      settings.steps = value("--steps").flatMap(Int.init) ?? 4
+      settings.width = 512
+      settings.height = 512
+      model.settings = settings
+      model.count = 1
+      model.prompt = "a lighthouse at dusk"
+      let rounds = value("--rounds").flatMap(Int.init) ?? 3
+      let history = model.history
+      var seed = 10
+      for round in 0..<rounds {
+        // Moodboard images, then Clear, then runs in Generate mode.
+        for _ in 0..<(2 + round % 2) {
+          seed += 1
+          if let image = pattern(256, seed: seed) {
+            step("round \(round): add moodboard image")
+            model.moodboard.add(image)
+          }
+        }
+        if round % 2 == 1 { try? await Task.sleep(for: .seconds(2)) }
+        step("round \(round): clear canvas")
+        model.clearCanvas()
+        model.canvasMode = .generate
+        if round % 2 == 0 {
+          for run in 0..<3 {
+            step("round \(round): generate \(run)")
+            model.generate()
+            await idle()
+            if let error = model.errorMessage { print("error: \(error)"); model.errorMessage = nil }
+            guard checkTree("generate \(run) in round \(round)") else { return finish() }
+          }
+        } else {
+          // Queued back to back, with tiles picked and the moodboard changed while they run.
+          for run in 0..<3 {
+            step("round \(round): queue \(run)")
+            while model.waitsForEntries { try? await Task.sleep(for: .milliseconds(50)) }
+            model.generate()
+            try? await Task.sleep(for: .milliseconds(300))
+          }
+          while model.isRunning {
+            let tiles = RecentStrip.items(history, lineage: false, showsEntries: true)
+            if let tile = tiles.randomElement() {
+              step("round \(round): pick up while running \(tile.entryReason?.rawValue ?? "run") \(tile.tensorId)")
+              if tile.isEntry { model.restore(entry: tile) } else { model.use(tile, restoreInput: false) }
+            }
+            seed += 1
+            if let image = pattern(256, seed: seed), Bool.random() {
+              step("round \(round): add moodboard image while running")
+              model.moodboard.add(image)
+            }
+            try? await Task.sleep(for: .milliseconds(Int.random(in: 200...2500)))
+            guard checkTree("picks while running in round \(round)") else { return finish() }
+            if !model.isRunning, !model.queue.waiting.isEmpty { try? await Task.sleep(for: .milliseconds(500)) }
+          }
+          await idle()
+          await model.flushEntries()
+          if let error = model.errorMessage { print("error: \(error)"); model.errorMessage = nil }
+          guard checkTree("queued runs in round \(round)") else { return finish() }
+          model.clearCanvas()
+          model.canvasMode = .generate
+          step("round \(round): generate after clear")
+          model.generate()
+          await idle()
+        }
+        // Every strip tile, both modes, picked up as the strip does.
+        for lineage in [false, true] {
+          let tiles = RecentStrip.items(history, lineage: lineage, showsEntries: true)
+          for tile in tiles {
+            guard let item = history.item(tensorId: tile.tensorId) else { continue }
+            step("round \(round): pick up \(lineage ? "lineage" : "recent") \(item.entryReason?.rawValue ?? "run") \(item.tensorId)")
+            if Int.random(in: 0..<3) == 0 {
+              seed += 1
+              if let image = pattern(256, seed: seed) { model.moodboard.add(image) }
+            }
+            if item.isEntry {
+              model.restore(entry: item)
+            } else if model.canUse(item) {
+              model.use(item, restoreInput: false)
+            } else {
+              model.show(item)
+            }
+            await idle()
+            await model.flushEntries()
+            guard checkTree("picking up \(item.entryReason?.rawValue ?? "run") \(item.tensorId) in round \(round)") else {
+              return finish()
+            }
+            // What the strip's body works out after a click.
+            step("round \(round): strip lists")
+            _ = history.currentItem
+            _ = RecentStrip.items(history, lineage: true, showsEntries: true)
+            _ = RecentStrip.items(history, lineage: false, showsEntries: true)
+          }
+        }
+        // Rapid clicks, as someone going through the strip quickly.
+        for click in 0..<30 {
+          let lineage = click % 3 == 0
+          let tiles = RecentStrip.items(history, lineage: lineage, showsEntries: true)
+          guard let tile = tiles.randomElement() else { break }
+          step("round \(round): rapid pick \(click) \(tile.entryReason?.rawValue ?? "run") \(tile.tensorId)")
+          if tile.isEntry { model.restore(entry: tile) } else if model.canUse(tile) { model.use(tile, restoreInput: false) } else { model.show(tile) }
+          _ = history.currentItem
+          _ = RecentStrip.items(history, lineage: true, showsEntries: true)
+          try? await Task.sleep(for: .milliseconds(Int.random(in: 0...150)))
+        }
+        await idle()
+        await model.flushEntries()
+        guard checkTree("rapid picks in round \(round)") else { return finish() }
+        step("round \(round): reopen project")
+        let name = history.project.name
+        await history.open(name + " other")
+        await history.open(name)
+        guard checkTree("reopening in round \(round)") else { return finish() }
+      }
+      check(true, "\(rounds) rounds of moodboard, Clear, Generate and strip picks with no cycle (\(history.items.count) items)")
+      finish()
+    }
+  }
+}
+
 fileprivate extension Optional {
   func asyncMap<T>(_ transform: (Wrapped) async -> T) async -> T? {
     guard let self else { return nil }

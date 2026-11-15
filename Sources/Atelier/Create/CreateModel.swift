@@ -3417,7 +3417,7 @@ extension CreateModel {
 
   /// At quit there's no waiting for the chain's next turn (quit can come from inside one): the
   /// entries it hasn't taken up yet, and a moodboard change still settling, are written now, in
-  /// order, off the main actor while this waits, within one deadline (`quitWriteTimeout`). One the
+  /// order, off the main actor while this waits, within the deadline every quit handler shares (`QuitDeadline`). One the
   /// chain is already writing finishes on its own, or not at all; it's not written again.
   private func recordEntriesBeforeQuit() {
     if moodboardChanged {
@@ -3429,7 +3429,7 @@ extension CreateModel {
     }
     let pending = pendingEntries
     pendingEntries = []
-    let deadline = Date().addingTimeInterval(HistoryStore.quitWriteTimeout)
+    let deadline = QuitDeadline.date
     var last: Int64?
     var adopted = adoptedImport
     // One being written: those after it follow it, and show its image when it was brought in.

@@ -30,3 +30,20 @@ nonisolated struct SessionState: Codable {
     UserDefaults.standard.set(data, forKey: Self.key)
   }
 }
+
+/// The one deadline every will-terminate handler that waits for writes shares (the moodboard's
+/// files, input entries still to be recorded), so together they stay within the few seconds iOS
+/// gives an app that's ending. The first handler to ask starts it; the later ones get what's left.
+@MainActor
+enum QuitDeadline {
+  /// How long all the waits at quit take at most, together.
+  static let total: TimeInterval = 4.5
+  private static var started: Date?
+
+  static var date: Date {
+    if let started { return started }
+    let date = Date().addingTimeInterval(total)
+    started = date
+    return date
+  }
+}
