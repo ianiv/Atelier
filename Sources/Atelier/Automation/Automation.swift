@@ -10,9 +10,14 @@ import SwiftUI
 /// progress to stdout and snapshots the window. Does nothing unless `--generate` is passed.
 ///
 ///   Atelier --generate --model moss_image_sft_i8x.ckpt --prompt "…" --width 1152 --height 896
-///           [--seed N] [--steps N] [--num-frames N] [--hires-fix true|false] [--audio FILE]
+///           [--seed N] [--steps N] [--sampler NAME] [--shift X] [--num-frames N]
+///           [--hires-fix true|false] [--audio FILE]
 ///           [--cancel-at-step N] [--download]
 ///           [--snapshot-dir DIR] [--quit]
+///
+/// `--sampler` takes the engine's sampler name (`SamplerType` case, e.g. dDIMTrailing,
+/// eulerATrailing, LCM, dPMPP2MKarras, uniPCTrailing), in any case; an unknown name fails the run
+/// with the valid ones. `--shift` sets Shift as the inspector does.
 ///
 /// `--show history` opens that sidebar section at launch. `--project NAME` saves to (and reads
 /// history from) that project instead of the user's current one.
@@ -34,6 +39,12 @@ import SwiftUI
 /// (AutomationInputEntries.swift).
 @MainActor
 enum Automation {
+  /// The inspector's samplers (`SettingsRegistry.samplerTitles`) by lowercased case name, for
+  /// `--sampler`.
+  static var samplerNames: [String: SamplerType] {
+    Dictionary(uniqueKeysWithValues: SettingsRegistry.samplerTitles.keys.map { ("\($0)".lowercased(), $0) })
+  }
+
   /// The app's Compute server, for the checks that look at its Settings.
   static var remoteServer: RemoteServer?
   /// Opens the Settings window, set once a window is up (`openSettings` comes from a view).
@@ -263,6 +274,16 @@ enum Automation {
       let guidanceAtStart = settings.guidanceScale
       if let height = value("--height").flatMap(Int.init) { settings.height = height }
       if let steps = value("--steps").flatMap(Int.init) { settings.steps = steps }
+      if let name = value("--sampler") {
+        let names = Self.samplerNames
+        guard let sampler = names[name.lowercased()] else {
+          log("FAIL: unknown sampler \(name); valid: \(names.values.map { "\($0)" }.sorted().joined(separator: ", "))")
+          if args.contains("--quit") { AppLifecycle.quit() }
+          return
+        }
+        settings.sampler = sampler
+      }
+      if let shift = value("--shift").flatMap(Float.init) { settings.shift = shift }
       if let frames = value("--num-frames").flatMap(Int.init) { settings.numFrames = frames }
       if let sol = value("--sol-attention") { settings.usesSolAttention = sol == "true" }
       if let teaCache = value("--tea-cache") { settings.teaCache = teaCache == "true" }
