@@ -151,6 +151,70 @@ struct SizePresetTests {
     let wide = SizePreset.size(aspect: .init(width: 21, height: 9), megapixels: 24, maxSide: SizePreset.largeMaxSide)
     #expect(wide.width == 6400)
   }
+
+  @Test func lockedSixteenByNineRoundTrips() {
+    let size = SizePreset.size(aspect: .init(width: 16, height: 9), megapixels: 1)
+    let ratio = SizePreset.lockRatio(width: size.width, height: size.height)
+    #expect(ratio == 16.0 / 9)
+    #expect(SizePreset.fits(width: size.width, height: size.height, ratio: ratio))
+    let wider = SizePreset.locked(width: 1920, ratio: ratio, maxSide: SizePreset.maxSide)
+    #expect(wider == (1920, 1088))
+    let back = SizePreset.locked(height: size.height, ratio: ratio, maxSide: SizePreset.maxSide)
+    #expect(back == size)
+  }
+
+  @Test(arguments: [SizePreset.maxSide, SizePreset.largeMaxSide])
+  func lockedSizesStopAtTheLongestSide(maxSide: Int) {
+    let ratio = 16.0 / 9
+    let typedWidth = SizePreset.locked(width: maxSide * 2, ratio: ratio, maxSide: maxSide)
+    #expect(typedWidth.width == maxSide)
+    #expect(typedWidth.height == SizePreset.snap(Double(maxSide) / ratio))
+    // A tall height asks for a width past the limit; the width stops there and the height follows.
+    let typedHeight = SizePreset.locked(height: maxSide, ratio: ratio, maxSide: maxSide)
+    #expect(typedHeight == typedWidth)
+    let portrait = SizePreset.locked(width: maxSide, ratio: 9.0 / 16, maxSide: maxSide)
+    #expect(portrait.height == maxSide)
+    #expect(portrait.width == SizePreset.snap(Double(maxSide) * 9 / 16))
+  }
+
+  @Test func lockedSizesKeepTheFloorOf64() {
+    let ratio = 21.0 / 9
+    // A width of 64 would need a height under 64, so the height stays at 64 and the width follows.
+    #expect(SizePreset.locked(width: 64, ratio: ratio, maxSide: 4096) == (SizePreset.snap(64 * ratio), 64))
+    #expect(SizePreset.locked(height: 1, ratio: ratio, maxSide: 4096) == (SizePreset.snap(64 * ratio), 64))
+    #expect(SizePreset.locked(width: 0, ratio: 1, maxSide: 4096) == (64, 64))
+  }
+
+  @Test func repeatedLockedCommitsDontDrift() {
+    for ratio in [16.0 / 9, 4.0 / 3, 21.0 / 9, 1.37] {
+      var size = SizePreset.locked(width: 1024, ratio: ratio, maxSide: 4096)
+      for _ in 0..<20 {
+        size = SizePreset.locked(height: size.height, ratio: ratio, maxSide: 4096)
+        size = SizePreset.locked(width: size.width, ratio: ratio, maxSide: 4096)
+      }
+      // Sides on the 64 grid can't always meet the ratio exactly; they stay within a step of it.
+      #expect(abs(Double(size.width) / ratio - Double(size.height)) <= 32)
+      #expect(size.width >= 960 && size.width <= 1088)
+      #expect(SizePreset.fits(width: size.width, height: size.height, ratio: ratio))
+    }
+  }
+
+  @Test func aLockedRatioKeepsItsMegapixels() {
+    let size = SizePreset.size(ratio: 16.0 / 9, megapixels: 1)
+    #expect(size == SizePreset.size(aspect: .init(width: 16, height: 9), megapixels: 1))
+  }
+
+  /// A wide preset capped at the side limit still locks to its preset's exact ratio.
+  @Test func cappedLargePresetsLockToTheirRatio() {
+    let wide = SizePreset.AspectRatio(width: 21, height: 9)
+    for megapixels in [20.0, 24] {
+      let size = SizePreset.size(aspect: wide, megapixels: megapixels, maxSide: SizePreset.largeMaxSide)
+      let ratio = SizePreset.lockRatio(
+        width: size.width, height: size.height, megapixels: SizePreset.largeMegapixels,
+        maxSide: SizePreset.largeMaxSide)
+      #expect(ratio == wide.ratio)
+    }
+  }
 }
 
 struct ClipTests {

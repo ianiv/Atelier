@@ -6,6 +6,11 @@ struct SizeButton: View {
   @Environment(CreateModel.self) private var model
   @Environment(\.undoManager) private var undoManager
   @State private var showing = false
+  /// The aspect lock is a preference of this device, not a setting: presets, projects and other
+  /// devices never carry it.
+  @AppStorage("sizeAspectLocked") private var aspectLocked = false
+  /// The locked ratio, kept here so it outlives the popover; see `SizePopover.lockedRatio`.
+  @State private var lockedRatio: Double?
 
   var body: some View {
     let size = model.settings.map { ($0.width, $0.height) } ?? (0, 0)
@@ -22,7 +27,8 @@ struct SizeButton: View {
       SizePopover(
         width: size.0, height: size.1, megapixels: SizePreset.megapixels(for: model.traits),
         maxSide: SizePreset.maxSide(for: model.traits),
-        current: { model.settings.map { ($0.width, $0.height) } ?? size }
+        current: { model.settings.map { ($0.width, $0.height) } ?? size },
+        locked: $aspectLocked, lockedRatio: $lockedRatio
       ) { width, height in
         model.set(
           descriptor,
@@ -43,6 +49,12 @@ struct SizePopover: View {
   /// popover closes runs a closure from the last render, and pairing its side with a captured other
   /// side could undo the other field's commit made a moment before.
   let current: () -> (width: Int, height: Int)
+  /// Whether changing one side changes the other to keep `lockedRatio`.
+  @Binding var locked: Bool
+  /// Width / height while locked. Stored rather than worked out from the size each time, since
+  /// each side is snapped to 64 and a ratio taken from snapped sides would drift commit by commit.
+  @Binding var lockedRatio: Double?
+  /// Sets both sides at once, so a locked change is one undo step.
   let set: (Int, Int) -> Void
 
   var body: some View {
@@ -66,7 +78,10 @@ struct SizePopover: View {
         get: { match?.1 },
         set: { mp in
           guard let mp else { return }
-          let size = SizePreset.size(aspect: match?.0 ?? closestAspect, megapixels: mp, maxSide: maxSide)
+          // The locked ratio, not the nearest preset's, within the model's longest side.
+          let size = locked
+            ? SizePreset.size(ratio: ratio, megapixels: mp, maxSide: maxSide)
+            : SizePreset.size(aspect: match?.0 ?? closestAspect, megapixels: mp, maxSide: maxSide)
           set(size.width, size.height)
         })
       ) {
@@ -80,17 +95,22 @@ struct SizePopover: View {
       // than by ViewThatFits, whose measuring could size the popover for the other layout.
       #if os(macOS)
         HStack {
-          dimension("W", value: width) { set($0, current().height) }
+          dimension("W", value: width, set: setWidth)
           swapButton
-          dimension("H", value: height) { set(current().width, $0) }
+          dimension("H", value: height, set: setHeight)
+          lockButton
         }
       #else
         HStack {
           VStack(alignment: .trailing) {
-            dimension("W", value: width) { set($0, current().height) }
-            dimension("H", value: height) { set(current().width, $0) }
+            dimension("W", value: width, set: setWidth)
+            dimension("H", value: height, set: setHeight)
           }
-          swapButton
+          // Lock beneath swap, level with the H row.
+          VStack {
+            swapButton
+            lockButton
+          }
         }
       #endif
       Text("\((Double(width * height) / 1_048_576).formatted(.number.precision(.fractionLength(2)))) megapixels; sizes snap to 64 px.")
@@ -100,6 +120,41 @@ struct SizePopover: View {
     .frame(width: 320)
     // The popover's size is the content's ideal size, never a squeezed one.
     .fixedSize()
+    .onAppear {
+      // Keep the stored ratio only if it still describes the size; a size changed while the
+      // popover was closed is locked at its own ratio.
+      guard locked else { return }
+      if let lockedRatio, SizePreset.fits(width: width, height: height, ratio: lockedRatio) { return }
+      lockedRatio = SizePreset.lockRatio(width: width, height: height, megapixels: self.megapixels, maxSide: maxSide)
+    }
+  }
+
+  /// The ratio a locked change keeps.
+  private var ratio: Double {
+    lockedRatio ?? SizePreset.lockRatio(width: width, height: height, megapixels: megapixels, maxSide: maxSide)
+  }
+
+  /// Sets a typed width, and the height too while locked; returns the width actually set, which
+  /// the lock can hold below the typed one so the height stays within the model's limits.
+  private func setWidth(_ width: Int) -> Int {
+    let size: (width: Int, height: Int) = locked
+      ? SizePreset.locked(width: width, ratio: ratio, maxSide: maxSide)
+      : (width, current().height)
+    apply(size)
+    return size.width
+  }
+
+  private func setHeight(_ height: Int) -> Int {
+    let size: (width: Int, height: Int) = locked
+      ? SizePreset.locked(height: height, ratio: ratio, maxSide: maxSide)
+      : (current().width, height)
+    apply(size)
+    return size.height
+  }
+
+  /// Sets the size unless it's already that, keeping a no-op out of undo.
+  private func apply(_ size: (width: Int, height: Int)) {
+    if size != current() { set(size.width, size.height) }
   }
 
   private func aspectButton(_ aspect: SizePreset.AspectRatio, selected: Bool, megapixels: Double)
@@ -108,6 +163,7 @@ struct SizePopover: View {
     Button {
       let size = SizePreset.size(aspect: aspect, megapixels: megapixels, maxSide: maxSide)
       set(size.width, size.height)
+      if locked { lockedRatio = aspect.ratio }
     } label: {
       VStack(spacing: 4) {
         let scale = 28 / Double(max(aspect.width, aspect.height))
@@ -126,7 +182,9 @@ struct SizePopover: View {
 
   private var swapButton: some View {
     Button {
+      let ratio = ratio
       set(height, width)
+      if locked { lockedRatio = 1 / ratio }
     } label: {
       Image(systemName: "arrow.left.arrow.right")
     }
@@ -135,7 +193,29 @@ struct SizePopover: View {
     .accessibilityLabel("Swap width and height")
   }
 
-  private func dimension(_ title: String, value: Int, set: @escaping (Int) -> Void) -> some View {
+  private var lockButton: some View {
+    Button {
+      locked.toggle()
+      lockedRatio = locked
+        ? SizePreset.lockRatio(width: width, height: height, megapixels: megapixels, maxSide: maxSide) : nil
+    } label: {
+      // The open lock is wider; reserving its width keeps the row from shifting on toggle.
+      ZStack {
+        Image(systemName: "lock.open").hidden()
+        if locked {
+          Image(systemName: "lock")
+        } else {
+          Image(systemName: "lock.open").foregroundStyle(.secondary)
+        }
+      }
+    }
+    .buttonStyle(.borderless)
+    .help(locked ? "Unlock Aspect Ratio" : "Lock Aspect Ratio")
+    .accessibilityLabel(locked ? "Unlock Aspect Ratio" : "Lock Aspect Ratio")
+    .accessibilityAddTraits(locked ? .isSelected : [])
+  }
+
+  private func dimension(_ title: String, value: Int, set: @escaping (Int) -> Int) -> some View {
     SizeDimensionField(title: title, value: value, maxSide: maxSide, set: set)
   }
 
@@ -167,7 +247,9 @@ private struct SizeDimensionField: View {
   let title: String
   let value: Int
   let maxSide: Int
-  let set: (Int) -> Void
+  /// Sets this side and returns what it became, which the aspect lock can make differ from the
+  /// value given. The draft shows that: Return keeps focus, so the value-change sync wouldn't.
+  let set: (Int) -> Int
   @State private var draft = ""
   /// The text the draft was last set to from `value`; a draft that differs was typed.
   @State private var synced = ""
@@ -196,8 +278,7 @@ private struct SizeDimensionField: View {
           get: { value },
           set: {
             let snapped = SizePreset.snap(min(max($0, 64), maxSide))
-            if snapped != value { set(snapped) }
-            show(snapped)
+            show(snapped != value ? set(snapped) : snapped)
           }
         ), in: 64...maxSide, step: 64
       ).labelsHidden()
@@ -210,8 +291,7 @@ private struct SizeDimensionField: View {
     guard edited else { return }
     if let typed = Int(draft.trimmingCharacters(in: .whitespaces)) {
       let snapped = SizePreset.snap(min(max(typed, 64), maxSide))
-      if snapped != value { set(snapped) }
-      show(snapped)
+      show(snapped != value ? set(snapped) : snapped)
     } else {
       show(value)
     }

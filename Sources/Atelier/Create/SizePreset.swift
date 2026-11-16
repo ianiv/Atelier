@@ -7,6 +7,7 @@ nonisolated enum SizePreset {
     var height: Int
     var id: String { "\(width):\(height)" }
     var label: String { id }
+    var ratio: Double { Double(width) / Double(height) }
   }
 
   static let aspectRatios: [AspectRatio] = [
@@ -44,12 +45,60 @@ nonisolated enum SizePreset {
 
   /// The preset's size, scaled down to keep its aspect when its longer side would pass `maxSide`.
   static func size(aspect: AspectRatio, megapixels: Double, maxSide: Int = .max) -> (width: Int, height: Int) {
+    size(ratio: aspect.ratio, megapixels: megapixels, maxSide: maxSide)
+  }
+
+  /// The size closest to `megapixels` at width / height `ratio`, scaled down to keep the ratio
+  /// when its longer side would pass `maxSide`.
+  static func size(ratio: Double, megapixels: Double, maxSide: Int = .max) -> (width: Int, height: Int) {
     let pixels = megapixels * 1_048_576
-    let ratio = Double(aspect.width) / Double(aspect.height)
     var height = (pixels / ratio).squareRoot()
     let longest = max(height * ratio, height)
     if longest > Double(maxSide) { height *= Double(maxSide) / longest }
     return (min(snap(height * ratio), maxSide), min(snap(height), maxSide))
+  }
+
+  /// The ratio to lock a size to: a preset's exact ratio when the size is one (16:9 is 1.7778,
+  /// not 1344 / 768), so later commits aim at the true ratio rather than a snapped one and don't
+  /// drift; otherwise the size's own ratio.
+  static func lockRatio(
+    width: Int, height: Int, megapixels: [Double] = megapixels, maxSide: Int = .max
+  ) -> Double {
+    if let (aspect, _) = match(width: width, height: height, megapixels: megapixels, maxSide: maxSide) {
+      return aspect.ratio
+    }
+    return Double(width) / Double(max(height, 1))
+  }
+
+  /// Whether a size is what a locked commit at `ratio` could have made, so a stored ratio still
+  /// describes it. A size changed elsewhere (an agent, Match Size to Image) fails this and is
+  /// locked afresh.
+  static func fits(width: Int, height: Int, ratio: Double) -> Bool {
+    snap(Double(width) / ratio) == height || snap(Double(height) * ratio) == width
+  }
+
+  /// The size for a width typed while the aspect ratio is locked: the width snapped within
+  /// 64...`maxSide`, and the height that keeps `ratio`. When that height would leave the range it
+  /// stops at the limit and the width follows it instead, so the ratio holds at the extremes.
+  static func locked(width: Int, ratio: Double, maxSide: Int) -> (width: Int, height: Int) {
+    func clamped(_ side: Double) -> Int {
+      snap(min(max(side, 64), Double(maxSide)))
+    }
+    let width = clamped(Double(width))
+    let height = Double(width) / ratio
+    if snap(height) > maxSide {
+      return (clamped(Double(maxSide) * ratio), maxSide)
+    }
+    if height < 64 {
+      return (clamped(64 * ratio), 64)
+    }
+    return (width, snap(height))
+  }
+
+  /// `locked(width:ratio:maxSide:)` for a typed height.
+  static func locked(height: Int, ratio: Double, maxSide: Int) -> (width: Int, height: Int) {
+    let size = locked(width: height, ratio: 1 / ratio, maxSide: maxSide)
+    return (size.height, size.width)
   }
 
   /// The preset closest to an arbitrary size, for showing which preset (if any) is active.
