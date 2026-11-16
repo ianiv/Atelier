@@ -34,6 +34,10 @@ Usage:
   LORA OUT  a LoRA file (loraA/lora.safetensors, loraB/lora.safetensors) and the merged file to write
 
 Needs torch and safetensors; runs on the CPU (336 rank-128 products per LoRA).
+
+Atelier's `ModelDefaults.downloadSources` carries the SHA-256 of the published i8x files
+(longcat_video_avatar_1.6_{dmd,opsd}_i8x.ckpt), and downloads are checked against it: any
+re-conversion or re-upload needs those hashes updated, or downloads fail.
 """
 
 import json

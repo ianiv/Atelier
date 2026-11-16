@@ -279,6 +279,10 @@ struct ModelsView: View {
             .disabled(library.h3ImageInstall.isRunning)
         } else if let file = files.first, let model = library.catalog.first(where: { $0.file == file }) {
           if model.isDownloaded {
+            if library.missingHiddenRefiner(of: model) != nil {
+              Button("Download Missing File") { library.download(model) }
+                .disabled(library.downloads[model.file] != nil)
+            }
             Button(Finder.revealTitle) { library.reveal(model.file) }
             MoveToFolderMenu(library: library, file: model.file, folder: library.folders[model.file], enabled: library.canMove(model)) {
               pendingMove = library.planMove(model, to: $0)
@@ -437,6 +441,11 @@ struct ModelStatus: View {
         .accessibilityLabel("Cancel download")
       }
       .help(Self.describe(download))
+    } else if model.isDownloaded, library.missingHiddenRefiner(of: model) != nil {
+      Button("Download Missing File") { library.download(model) }
+        .controlSize(.small)
+        .help("Part of this model isn't downloaded: the refiner it finishes with.")
+        .formRowButtons()
     } else if model.isDownloaded {
       Label("Downloaded", systemImage: "checkmark.circle.fill")
         .labelStyle(.titleAndIcon)
@@ -495,6 +504,11 @@ struct ModelDetail: View {
               .disabled(!library.canDelete(model))
           }
           MoveProgressRow(file: model.file)
+          if let missing = library.missingHiddenRefiner(of: model) {
+            Button("Download Missing File") { library.download(model) }
+            Text("\(missing), the refiner this model finishes with, isn't downloaded.")
+              .font(.caption).foregroundStyle(.secondary)
+          }
           // 4-bit S is only made by the MiniMax H3 Image install.
           ForEach([MOSSImporter.EightBit.palettized, .rowwise], id: \.self) { format in
             let output = ModelLibrary.eightBitFile(for: model.file, format)

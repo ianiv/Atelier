@@ -78,6 +78,24 @@ struct RefinerModelSwitchTests {
     #expect(kept.model == nil && kept.start == 0.7)
   }
 
+  /// A refiner MGK's catalog recommends (Wan 2.2's high-noise expert hands over to its low-noise
+  /// one) isn't one of this table's pairs: switching keeps what the person had, as before.
+  @Test func anUnpairedRecommendedRefinerKeepsTheCurrentOne() {
+    let lne = "wan_v2.2_a14b_lne_t2v_q8p.ckpt"
+    #expect(!Self.paired.contains(lne))
+    let chosen = ModelDefaults.refinerAfterModelSwitch(current: ("my_refiner.ckpt", 0.6), recommended: (lne, 0.125))
+    #expect(chosen.model == "my_refiner.ckpt" && chosen.start == 0.6)
+    let none = ModelDefaults.refinerAfterModelSwitch(current: (nil, 0.5), recommended: (lne, 0.125))
+    #expect(none.model == nil && none.start == 0.5)
+  }
+
+  @Test func theOPSDFileGoesWithItsModel() {
+    #expect(ModelDefaults.hiddenCompanions(of: ModelDefaults.longCat16DMD, defaultRefiner: Self.opsd) == [Self.opsd])
+    #expect(ModelDefaults.hiddenCompanions(of: "wan.ckpt", defaultRefiner: "wan_lne.ckpt").isEmpty)
+    #expect(ModelDefaults.hiddenCompanions(of: "x.ckpt", defaultRefiner: nil).isEmpty)
+    #expect(ModelDefaults.hiddenModelParents[Self.opsd] == ModelDefaults.longCat16DMD)
+  }
+
   @Test func anUnrelatedModelKeepsThePersonsRefiner() {
     let chosen = ("sd_xl_refiner_1.0_f16.ckpt", Float(0.8))
     let kept = ModelDefaults.refinerAfterModelSwitch(current: chosen, recommended: (nil, 0.7))

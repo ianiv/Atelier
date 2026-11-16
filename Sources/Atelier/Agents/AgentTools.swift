@@ -492,7 +492,8 @@ final class AgentTools {
 
   private func listModels() async -> [[String: Any]] {
     if create.models.isEmpty { await create.refreshModelList() }
-    return create.models.map { model in
+    // As the model picker: a refiner-only file isn't a model to pick (`ModelDefaults.hiddenFromModelPicker`).
+    return create.models.filter { !ModelDefaults.hiddenFromModelPicker.contains($0.file) }.map { model in
       var entry: [String: Any] = [
         "file": model.file, "name": model.name, "version": model.version ?? NSNull(),
         "selected_in_app": model.file == create.selectedModel,
@@ -1979,7 +1980,8 @@ final class AgentTools {
     if let model = create.models.first(where: { $0.file == name })
       ?? create.models.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame })
     {
-      return model.file
+      // A refiner-only file runs as part of its model, as Create selects it.
+      return ModelDefaults.hiddenModelParents[model.file] ?? model.file
     }
     throw ToolError("“\(name)” isn't a downloaded model. See list_models.")
   }

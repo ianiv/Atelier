@@ -106,7 +106,9 @@ extension ModelLibrary {
   func planMove(_ model: MediaGenerationResolvedModel, to destination: URL) -> Move? {
     errorMessage = nil
     guard let source = Self.folder(of: model.file, in: directories) else { return nil }
+    // A hidden refiner (LongCat-Video Avatar 1.6's OPSD half) has no row to move it from.
     let own = [model.file] + (isCustom(model) ? Self.importedCompanions(of: model.file) : [])
+      + Self.hiddenCompanions(of: model.file)
     let needs = ModelZoo.specificationForModel(model.file).map(Self.files(of:)) ?? []
     // What the other downloaded models need, unless they're in the destination already.
     var neededElsewhere = Set<String>()

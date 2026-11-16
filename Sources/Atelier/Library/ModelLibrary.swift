@@ -217,7 +217,7 @@ final class ModelLibrary {
     let generation = CommunityCatalog.generation
     let models = await CommunityCatalog.models()
     guard refresh == refreshGeneration else { return }
-    catalog = models.map(Self.withHiddenRefiner).sorted {
+    catalog = models.sorted {
       $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
     }
     // The retry just brought community models in: Create's picker hasn't seen them yet.
@@ -227,16 +227,18 @@ final class ModelLibrary {
     await measure()
   }
 
-  /// A model whose refiner-only partner (`ModelDefaults.hiddenFromModelPicker`) is missing shows
-  /// as not downloaded: that file has no row of its own, so the model's Download is how it comes
-  /// back (`downloadModel(_:into:)` fetches only the missing files).
-  private nonisolated static func withHiddenRefiner(_ model: MediaGenerationResolvedModel) -> MediaGenerationResolvedModel {
-    guard model.isDownloaded, let refiner = ModelZoo.defaultRefinerForModel(model.file),
-          ModelDefaults.hiddenFromModelPicker.contains(refiner), !ModelZoo.isModelDownloaded(refiner)
-    else { return model }
-    var model = model
-    model.isDownloaded = false
-    return model
+  /// The hidden refiner (`ModelDefaults.hiddenFromModelPicker`) a downloaded model is missing, if
+  /// any. That file has no row of its own, so the model's row shows it as partly downloaded and
+  /// offers Download, which fetches only the missing file (`downloadModel(_:into:)`); Move and
+  /// Delete stay available.
+  func missingHiddenRefiner(of model: MediaGenerationResolvedModel) -> String? {
+    guard model.isDownloaded else { return nil }
+    return Self.hiddenCompanions(of: model.file).first { !ModelZoo.isModelDownloaded($0) }
+  }
+
+  /// `file`'s hidden refiner, deleted and moved with it (`ModelDefaults.hiddenCompanions`).
+  nonisolated static func hiddenCompanions(of file: String) -> [String] {
+    ModelDefaults.hiddenCompanions(of: file, defaultRefiner: ModelZoo.defaultRefinerForModel(file))
   }
 
   /// Disk sizes of downloaded models and LoRAs, and free space on the volume.
@@ -425,11 +427,12 @@ final class ModelLibrary {
   }
 
   /// Moves the model's own files to the Trash. Shared files (text encoders, VAEs) stay. An
-  /// imported model also loses its custom.json entry and the companion files its import wrote.
+  /// imported model also loses its custom.json entry and the companion files its import wrote, and
+  /// a model with a hidden refiner (LongCat-Video Avatar 1.6's OPSD half) loses that file too.
   func delete(_ model: MediaGenerationResolvedModel) async {
     guard canDelete(model) else { return }
     let isCustom = isCustom(model)
-    let companions = isCustom ? Self.importedCompanions(of: model.file) : []
+    let companions = (isCustom ? Self.importedCompanions(of: model.file) : []) + Self.hiddenCompanions(of: model.file)
     do {
       for file in [model.file] + companions {
         for url in Self.files(of: file, in: directories) {

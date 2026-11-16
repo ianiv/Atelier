@@ -81,6 +81,17 @@ nonisolated enum ModelDefaults {
   /// in the Refiner setting's choices. ModelZoo's specification has no field for this.
   static let hiddenFromModelPicker: Set<String> = [longCat16OPSD]
 
+  /// The model each `hiddenFromModelPicker` file belongs to: picking a hidden file (an agent, a
+  /// preset or a restored session can) selects this one instead.
+  static let hiddenModelParents: [String: String] = [longCat16OPSD: longCat16DMD]
+
+  /// `file`'s hidden refiner, which is deleted and moved with it: a file with no row of its own
+  /// would otherwise be left behind.
+  static func hiddenCompanions(of _: String, defaultRefiner: String?) -> [String] {
+    guard let defaultRefiner, hiddenFromModelPicker.contains(defaultRefiner) else { return [] }
+    return [defaultRefiner]
+  }
+
   /// The refiners this table pairs with a model (`Fallback.refiner`), which belong to that model
   /// alone.
   static var pairedRefiners: Set<String> {
@@ -103,12 +114,14 @@ nonisolated enum ModelDefaults {
   /// but a paired refiner is part of its model's recipe: a model that has one gets it (and its
   /// start), and one model's paired refiner doesn't carry over to another, which would otherwise
   /// keep running it (same family, so the engine's `isCompatibleRefiner` lets it through), so it
-  /// goes back to the new model's recommendation. A refiner the person chose stays, as before.
+  /// goes back to the new model's recommendation. Only this table's pairs count: refiners MGK's
+  /// catalog recommends (Wan 2.2's low-noise expert) or a default preset sets behave as they did,
+  /// and a refiner the person chose stays.
   static func refinerAfterModelSwitch(
     current: (model: String?, start: Float), recommended: (model: String?, start: Float),
     pairedRefiners: Set<String> = pairedRefiners
   ) -> (model: String?, start: Float) {
-    if recommended.model != nil { return recommended }
+    if let model = recommended.model, pairedRefiners.contains(model) { return recommended }
     if let model = current.model, pairedRefiners.contains(model) { return recommended }
     return current
   }

@@ -261,6 +261,12 @@ final class CreateModel {
   var models: [MediaGenerationResolvedModel] = []
   var selectedModel: String? {
     didSet {
+      // A refiner-only file (`ModelDefaults.hiddenFromModelPicker`) isn't in the model picker, which
+      // would go blank on it; an agent, a preset or a restored session can still name it. Its
+      // model is selected instead. (Assigning here doesn't run the observers again.)
+      if let selected = selectedModel, let parent = ModelDefaults.hiddenModelParents[selected] {
+        selectedModel = parent
+      }
       if selectedModel != oldValue, let selectedModel {
         loadDefaults(for: selectedModel)
         // Before the inspector asks, so Strength's hint rarely waits on it.

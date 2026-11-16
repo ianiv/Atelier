@@ -67,7 +67,7 @@ Then ask for an image, for example: "Use Atelier to make a 1024×1024 watercolor
 
 | Tool | What it does |
 | --- | --- |
-| `list_models` | Downloaded models: file, name, family, which one is selected in the app, and whether it takes reference images. Video models say so, with their frame rate, the inputs they take and whether they make sound. |
+| `list_models` | Downloaded models: file, name, family, which one is selected in the app, and whether it takes reference images. A file that's only another model's refiner (LongCat-Video Avatar 1.6's OPSD half) isn't listed; naming it selects or runs its model. Video models say so, with their frame rate, the inputs they take and whether they make sound. |
 | `list_presets` | Saved presets, the model each belongs to, which are model defaults, and their settings. |
 | `get_settings` | The full settings `generate` would start from for a model (and preset), as Draw Things configuration JSON. |
 | `get_create_screen` | What's on the Create screen now: model, prompt, negative prompt, the selected [style](docs/styles.md), its tag boxes and the prompt it writes (`style`, `style_tags`, `styled_prompt`; `SUBJECT` is the prompt), seed and whether it's random, image count, every inspector setting (Draw Things configuration JSON), the settings that differ from the model's defaults, the number of reference images, whether the Layout editor is open, and `canvas` (see [Masks and regions on the canvas](#masks-and-regions-on-the-canvas)). |
