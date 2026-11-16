@@ -131,15 +131,7 @@ struct SizePopover: View {
   }
 
   private func dimension(_ title: String, value: Int, set: @escaping (Int) -> Void) -> some View {
-    let binding = Binding(get: { value }, set: { set(SizePreset.snap(min(max($0, 64), maxSide))) })
-    return HStack(spacing: 4) {
-      Text(title).foregroundStyle(.secondary)
-      TextField(title, value: binding, format: .number.grouping(.never))
-        .labelsHidden()
-        .multilineTextAlignment(.trailing)
-        .frame(width: 60)
-      Stepper(title, value: binding, in: 64...maxSide, step: 64).labelsHidden()
-    }
+    SizeDimensionField(title: title, value: value, maxSide: maxSide, set: set)
   }
 
   private var closestMegapixels: Double {
@@ -153,5 +145,61 @@ struct SizePopover: View {
       abs(Double($0.width) / Double($0.height) - ratio)
         < abs(Double($1.width) / Double($1.height) - ratio)
     } ?? SizePreset.aspectRatios[0]
+  }
+}
+
+/// One side of the size, typed or stepped, snapped to a multiple of 64.
+///
+/// Typing edits a text draft that snaps only on Return, when the field loses focus, or when the
+/// popover closes (so a value typed on iPad isn't lost): a value-formatted field commits on every
+/// keystroke, so snapping there turned the "1" of "1024" into 64 before the rest could be typed,
+/// and made an undo entry per keystroke. Same approach as `FramesControl`.
+private struct SizeDimensionField: View {
+  let title: String
+  let value: Int
+  let maxSide: Int
+  let set: (Int) -> Void
+  @State private var draft = ""
+  @FocusState private var focused: Bool
+
+  var body: some View {
+    HStack(spacing: 4) {
+      Text(title).foregroundStyle(.secondary)
+      TextField(title, text: $draft)
+        .labelsHidden()
+        .multilineTextAlignment(.trailing)
+        .frame(width: 60)
+        .focused($focused)
+        .onSubmit(commit)
+        .onChange(of: focused) { _, isFocused in
+          if !isFocused { commit() }
+        }
+        .onChange(of: value, initial: true) { _, newValue in
+          if !focused { draft = String(newValue) }
+        }
+        .onDisappear(perform: commit)
+      Stepper(
+        title,
+        value: Binding(
+          get: { value },
+          set: {
+            set($0)
+            draft = String($0)
+          }
+        ), in: 64...maxSide, step: 64
+      ).labelsHidden()
+    }
+  }
+
+  /// Snaps the typed size to a multiple of 64 within range and shows it; text that isn't a
+  /// number reverts. Setting only when the size changes keeps a no-op commit out of undo.
+  private func commit() {
+    if let typed = Int(draft.trimmingCharacters(in: .whitespaces)) {
+      let snapped = SizePreset.snap(min(max(typed, 64), maxSide))
+      if snapped != value { set(snapped) }
+      draft = String(snapped)
+    } else {
+      draft = String(value)
+    }
   }
 }
