@@ -251,7 +251,10 @@ enum Automation {
       }
       let snapshotDir = value("--snapshot-dir").map { URL(fileURLWithPath: $0) }
 
-      while model.models.isEmpty || model.settings == nil || model.isBusy {
+      // With --download the models folder may start empty: no model, so no settings, until the
+      // download finishes and selects it.
+      let downloads = args.contains("--download")
+      while (!downloads && (model.models.isEmpty || model.settings == nil)) || model.isBusy {
         try? await Task.sleep(for: .milliseconds(100))
       }
       log("models: \(model.models.count) downloaded")
