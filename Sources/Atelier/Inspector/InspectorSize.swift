@@ -122,7 +122,9 @@ struct SizePopover: View {
         .font(.caption).foregroundStyle(.secondary)
     }
     .padding(16)
-    .frame(width: 320)
+    // At least 320, but wider when the content is: H3 Image's eight Megapixels segments are about
+    // 320 on the Mac on their own, and a fixed width left them overflowing both edges.
+    .frame(minWidth: 320)
     // The popover's size is the content's ideal size, never a squeezed one.
     .fixedSize()
     .onAppear {
