@@ -16,7 +16,7 @@ import SwiftUI
 ///           [--snapshot-dir DIR] [--quit]
 ///
 /// `--sampler` takes the engine's sampler name (`SamplerType` case, e.g. dDIMTrailing,
-/// eulerATrailing, LCM, dPMPP2MKarras, uniPCTrailing), in any case; an unknown name fails the run
+/// eulerATrailing, LCM, dPMPP2MKarras, uniPCTrailing) or its inspector title, in any case; an unknown name fails the run
 /// with the valid ones. `--shift` sets Shift as the inspector does.
 ///
 /// `--show history` opens that sidebar section at launch. `--project NAME` saves to (and reads
@@ -39,10 +39,25 @@ import SwiftUI
 /// (AutomationInputEntries.swift).
 @MainActor
 enum Automation {
-  /// The inspector's samplers (`SettingsRegistry.samplerTitles`) by lowercased case name, for
-  /// `--sampler`.
+  /// `--sampler`'s names: `SamplerType`'s case names, spelled out because the type describes
+  /// itself by display title. Covers the inspector's samplers (`SettingsRegistry.samplerTitles`).
+  static let samplerCaseNames: [(String, SamplerType)] = [
+    ("dPMPP2MKarras", .dPMPP2MKarras), ("eulerA", .eulerA), ("DDIM", .DDIM), ("PLMS", .PLMS),
+    ("dPMPPSDEKarras", .dPMPPSDEKarras), ("uniPC", .uniPC), ("LCM", .LCM),
+    ("eulerASubstep", .eulerASubstep), ("dPMPPSDESubstep", .dPMPPSDESubstep), ("TCD", .TCD),
+    ("eulerATrailing", .eulerATrailing), ("dPMPPSDETrailing", .dPMPPSDETrailing),
+    ("DPMPP2MAYS", .DPMPP2MAYS), ("eulerAAYS", .eulerAAYS), ("DPMPPSDEAYS", .DPMPPSDEAYS),
+    ("dPMPP2MTrailing", .dPMPP2MTrailing), ("dDIMTrailing", .dDIMTrailing),
+    ("uniPCTrailing", .uniPCTrailing), ("uniPCAYS", .uniPCAYS), ("tCDTrailing", .tCDTrailing),
+  ]
+
+  /// Lowercased case names and inspector titles to samplers, for `--sampler`.
   static var samplerNames: [String: SamplerType] {
-    Dictionary(uniqueKeysWithValues: SettingsRegistry.samplerTitles.keys.map { ("\($0)".lowercased(), $0) })
+    var names = [String: SamplerType]()
+    for (title, sampler) in SettingsRegistry.samplerTitles.map({ ($0.value, $0.key) }) + samplerCaseNames {
+      names[title.lowercased()] = sampler
+    }
+    return names
   }
 
   /// The app's Compute server, for the checks that look at its Settings.
@@ -275,9 +290,8 @@ enum Automation {
       if let height = value("--height").flatMap(Int.init) { settings.height = height }
       if let steps = value("--steps").flatMap(Int.init) { settings.steps = steps }
       if let name = value("--sampler") {
-        let names = Self.samplerNames
-        guard let sampler = names[name.lowercased()] else {
-          log("FAIL: unknown sampler \(name); valid: \(names.values.map { "\($0)" }.sorted().joined(separator: ", "))")
+        guard let sampler = Self.samplerNames[name.lowercased()] else {
+          log("FAIL: unknown sampler \(name); valid: \(Self.samplerCaseNames.map(\.0).joined(separator: ", "))")
           if args.contains("--quit") { AppLifecycle.quit() }
           return
         }
