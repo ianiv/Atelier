@@ -59,19 +59,25 @@ struct StrengthStepsTests {
     #expect(Self.start(0.5, shift: 1, sampler: .eulerASubstep) == nil)
   }
 
-  /// MiniMax H3 Image samples its own grid (trained, or the finest one stretched) only with DDIM
-  /// Trailing, as `LocalImageGenerator.sampler(from:)` decides; other samplers are counted like
-  /// other models.
-  @Test func h3ImageGridOnlyForDDIMTrailing() {
-    let h3Image = StrengthSteps.FixedGrid.ddimTrailing
-    for steps in [1, 2, 3, 4, 5, 6, 7, 8, 12] {
-      #expect(h3Image.applies(sampler: .dDIMTrailing, steps: steps))
+  /// MiniMax H3 Image counts DDIM Trailing on its own grid, as `RFSigmaGridDiscretization`
+  /// samples it: at Strength 0.5 and shift 1 the 6-step grid (1, .97, .89, .75, .53, .23, 0)
+  /// reaches sigma 0.5 between steps 4 (.53) and 5 (.23). Other step counts stretch the grid.
+  @Test func h3ImageCountsOnItsGrid() throws {
+    let grid = [1.0, 0.9675, 0.8875, 0.75, 0.5328, 0.2320, 0.0]
+    let grids: [Int: [Double]] = [1: [1, 0], 2: [1, 0.75, 0], 3: [1, 0.8875, 0.5328, 0], 6: grid]
+    func start(_ steps: Int, _ sampler: DataModels.SamplerType = .dDIMTrailing) -> StrengthSteps.Start? {
+      StrengthSteps.start(
+        parameterization: Self.flow, objective: Self.flowObjective, version: .minimaxH3Image, sampler: sampler,
+        sampling: Sampling(steps: steps, shift: 1), strength: 0.5, h3ImageGrids: grids)
     }
-    for sampler in [DataModels.SamplerType.eulerATrailing, .DDIM, .dPMPP2MTrailing, .uniPCTrailing, .eulerA, .TCD] {
-      #expect(!h3Image.applies(sampler: sampler, steps: 6))
-    }
-    #expect(StrengthSteps.FixedGrid.always.applies(sampler: .eulerA, steps: 5))
-    #expect(!StrengthSteps.FixedGrid.never.applies(sampler: .dDIMTrailing, steps: 6))
+    let six = try #require(start(6))
+    #expect(six.startStep > 4 && six.startStep < 5, "\(six.startStep)")
+    let eight = try #require(start(8))
+    #expect(eight.startStep > 5 && eight.startStep < 7, "\(eight.startStep)")
+    // Karras ends at the grid's lowest nonzero sigma, so no step sits below it but the last.
+    let karras = try #require(start(8, .dPMPP2MKarras))
+    let plain = try #require(Self.start(0.5, steps: 8, shift: 1, sampler: .dPMPP2MKarras))
+    #expect(karras.startStep > plain.startStep)
   }
 
   /// Flow models on Karras sigmas count from the sigma each step is told

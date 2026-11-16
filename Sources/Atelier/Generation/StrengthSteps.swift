@@ -28,19 +28,24 @@ nonisolated enum StrengthSteps {
   /// Resolution-Dependent Shift is on and the model takes it; else the Shift setting), and the
   /// sampler's discretization (`LocalImageGenerator.sampler(from:)`). Nil where the steps run
   /// aren't the user's to count: a model `ModelZoo` doesn't know (a server's), the fixed sigma
-  /// grids of HyperFlow H3 Flash and of MiniMax H3 Image's native schedule (`runsFixedGrid`),
-  /// Würstchen, and samplers on manual timesteps or sigmas.
+  /// grids of HyperFlow H3 Flash, Würstchen, and samplers on manual timesteps or sigmas. MiniMax
+  /// H3 Image's grids are counted (`FixedGrid.ddimTrailing`).
   static func start(
     model: String, sampler: DataModels.SamplerType, steps: Int, strength: Float, shift: Double,
     resolutionDependentShift: Bool, width: Int, height: Int, tile: (width: Int, height: Int)? = nil
   ) -> Start? {
     guard steps > 0, ModelZoo.specificationForModel(model) != nil else { return nil }
     let version = ModelZoo.versionForModel(model)
+    var h3ImageGrids: [Int: [Double]]?
     switch version {
     case .wurstchenStageB, .wurstchenStageC: return nil
     case .minimaxH3, .minimaxH3Image:
       // Only once `checkFixedGrid` has read the file: the inspector asks on the main actor.
-      guard runsFixedGrid(model, sampler: sampler, steps: steps) == false else { return nil }
+      switch knownFixedGrid(model) {
+      case nil, .always?: return nil
+      case .never?: break
+      case .ddimTrailing(let grids)?: h3ImageGrids = grids
+      }
     default: break
     }
     let parameterization: Denoiser.Parameterization
@@ -60,7 +65,8 @@ nonisolated enum StrengthSteps {
     }
     return start(
       parameterization: parameterization, objective: ModelZoo.objectiveForModel(model), version: version,
-      sampler: sampler, sampling: Sampling(steps: steps, shift: runShift), strength: strength)
+      sampler: sampler, sampling: Sampling(steps: steps, shift: runShift), strength: strength,
+      h3ImageGrids: h3ImageGrids)
   }
 
   /// When a MiniMax H3 file runs Euler on its own sigma grid, as `LocalImageGenerator.sampler(from:)`
@@ -71,18 +77,10 @@ nonisolated enum StrengthSteps {
     /// Whatever the sampler: HyperFlow's two-time checkpoints (and a file that isn't there, so
     /// there's nothing to count).
     case always
-    /// MiniMax H3 Image's output-head grids, which only DDIM Trailing samples: a trained grid at
-    /// step counts that have one (`MiniMaxH3Layout.sigmaGrids`), the finest one stretched to the
-    /// others (`RFSigmaGridDiscretization`). Every other sampler runs the usual flow-model ones.
-    case ddimTrailing
-
-    func applies(sampler: DataModels.SamplerType, steps: Int) -> Bool {
-      switch self {
-      case .never: false
-      case .always: true
-      case .ddimTrailing: sampler == .dDIMTrailing
-      }
-    }
+    /// MiniMax H3 Image's output-head grids (`MiniMaxH3Layout.sigmaGrids`), which DDIM Trailing
+    /// samples (`RFSigmaGridDiscretization`) and which end its Karras schedules; its steps are
+    /// counted on them.
+    case ddimTrailing(grids: [Int: [Double]])
   }
 
   /// What `checkFixedGrid` found for each MiniMax H3 file checked so far.
@@ -91,12 +89,6 @@ nonisolated enum StrengthSteps {
   /// What `checkFixedGrid` found for `model`; nil until it has run.
   static func knownFixedGrid(_ model: String) -> FixedGrid? {
     fixedGrids.withLock { $0[model] }
-  }
-
-  /// Whether a run of `model` with this sampler and step count samples the file's fixed grid;
-  /// nil until `checkFixedGrid` has read it.
-  static func runsFixedGrid(_ model: String, sampler: DataModels.SamplerType, steps: Int) -> Bool? {
-    knownFixedGrid(model)?.applies(sampler: sampler, steps: steps)
   }
 
   /// Which fixed grid a MiniMax H3 file runs (`FixedGrid`). Reads the file once, off the main
@@ -110,7 +102,8 @@ nonisolated enum StrengthSteps {
       if ModelZoo.versionForModel(model) == .minimaxH3 {
         fixed = layout.isTwoTime ? .always : .never
       } else {
-        fixed = layout.sigmaGrids.isEmpty ? .never : .ddimTrailing
+        let grids = layout.sigmaGrids
+        fixed = grids.isEmpty ? .never : .ddimTrailing(grids: grids)
       }
     }
     fixedGrids.withLock { $0[model] = fixed }
@@ -120,13 +113,26 @@ nonisolated enum StrengthSteps {
   /// The start for a parameterization and sampler: the discretization each sampler type is built
   /// with (`LocalImageGenerator.sampler(from:)`), then its `timestep(for:sampling:)`. Every
   /// sampler but PLMS shares DDIM's; PLMS starts at a whole step (`PLMSSampler.timestep`).
+  /// `h3ImageGrids` are a MiniMax H3 Image file's grids: DDIM Trailing samples them (trained, or
+  /// the finest stretched) and Karras ends at their lowest nonzero sigma, as the engine does.
   static func start(
     parameterization: Denoiser.Parameterization, objective: Denoiser.Objective, version: ModelVersion,
-    sampler: DataModels.SamplerType, sampling: Sampling, strength: Float
+    sampler: DataModels.SamplerType, sampling: Sampling, strength: Float, h3ImageGrids: [Int: [Double]]? = nil
   ) -> Start? {
     let strength = min(max(strength, 0), 1)
     func at(_ discretization: some Denoiser.Discretization) -> Start {
       Start(startStep: startStep(for: strength, sampling: sampling, discretization: discretization), steps: sampling.steps)
+    }
+    if let grids = h3ImageGrids, !grids.isEmpty {
+      if sampler == .dDIMTrailing {
+        return at(Denoiser.RFSigmaGridDiscretization(parameterization, objective: objective, grids: grids, stretchesFinestGrid: true))
+      }
+      if sampler == .dPMPP2MKarras || sampler == .dPMPPSDEKarras, case .rf(var rf) = parameterization,
+         let floor = grids.keys.max().flatMap({ grids[$0]?.dropLast().last }), floor > rf.sigmaMin
+      {
+        rf.sigmaMin = floor
+        return at(Denoiser.KarrasDiscretization(.rf(rf), objective: objective))
+      }
     }
     switch sampler {
     case .dPMPP2MKarras, .dPMPPSDEKarras:
@@ -228,11 +234,6 @@ extension CreateModel {
         return SettingHint(
           text: "Runs the model's fixed schedule",
           help: "This model runs its own fixed schedule of steps whatever the sampler, so they aren't counted here.",
-          dimmed: true)
-      case let fixed? where fixed.applies(sampler: sampler, steps: steps):
-        return SettingHint(
-          text: "Runs the model's fixed schedule",
-          help: "With DDIM Trailing, this model runs its own fixed schedule of steps, so they aren't counted here.",
           dimmed: true)
       case _?:
         break
