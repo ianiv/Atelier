@@ -29,8 +29,9 @@ nonisolated enum ModelDefaults {
     var version: ModelVersion?
   }
 
-  /// Models the engine runs and static.libnnc.org hosts, but that no catalog lists: neither
-  /// ModelZoo's built-in list nor models.drawthings.ai has them, and draw-things-cli can't resolve
+  /// Models the engine runs that no catalog lists, hosted on static.libnnc.org or, for files in
+  /// `downloadSources`, on Hugging Face: neither ModelZoo's built-in list nor models.drawthings.ai
+  /// has them, and draw-things-cli can't resolve
   /// them without an entry of its own either. Added to `ModelZoo.availableSpecifications` by
   /// `ModelLibrary.loadCustomSpecifications(in:)`, unless a catalog or custom.json has the file.
   static var uncatalogedSpecifications: [ModelZoo.Specification] {
@@ -56,12 +57,61 @@ nonisolated enum ModelDefaults {
   static let longCat16DMD = "longcat_video_avatar_1.6_dmd_i8x.ckpt"
   static let longCat16OPSD = "longcat_video_avatar_1.6_opsd_i8x.ckpt"
 
+  /// A file that downloads from somewhere other than static.libnnc.org, and the SHA-256 of the
+  /// file published there, which the download is checked against.
+  struct DownloadSource {
+    var url: URL
+    var sha256: String
+  }
+
   /// Where files that static.libnnc.org doesn't host download from, by file name. Atelier's own
-  /// conversions of LongCat-Video Avatar 1.6 (MIT) are published on Hugging Face.
-  static let downloadSources: [String: URL] = [
-    longCat16DMD: huggingFaceFile("ianivs/LongCat-Video-Avatar-1.6-DrawThings", longCat16DMD),
-    longCat16OPSD: huggingFaceFile("ianivs/LongCat-Video-Avatar-1.6-DrawThings", longCat16OPSD),
+  /// conversions of LongCat-Video Avatar 1.6 (MIT) are published on Hugging Face; the hashes are
+  /// of the files as converted (`Scripts/longcat-avatar-merge.py`, import, Make 8-bit S Copy).
+  static let downloadSources: [String: DownloadSource] = [
+    longCat16DMD: DownloadSource(
+      url: huggingFaceFile("ianivs/LongCat-Video-Avatar-1.6-DrawThings", longCat16DMD),
+      sha256: "e42689bff60bb752289364707d546b7f71f951c85690dfcc8933de1e5b7fe42d"),
+    longCat16OPSD: DownloadSource(
+      url: huggingFaceFile("ianivs/LongCat-Video-Avatar-1.6-DrawThings", longCat16OPSD),
+      sha256: "ca4e3750f8480bfe6b7c1847c03001e59a6422924a1100cbdbbbc1671da43d95"),
   ]
+
+  /// Files that only make sense as another model's refiner, kept out of the model picker and the
+  /// Models list. They still download with that model (`Specification.defaultRefiner`) and stay
+  /// in the Refiner setting's choices. ModelZoo's specification has no field for this.
+  static let hiddenFromModelPicker: Set<String> = [longCat16OPSD]
+
+  /// The refiners this table pairs with a model (`Fallback.refiner`), which belong to that model
+  /// alone.
+  static var pairedRefiners: Set<String> {
+    Set(fallbacks.compactMap { $0.refiner?.model })
+  }
+
+  /// Why a run of `model` can't start, when its refiner is the one its specification pairs it
+  /// with (`defaultRefiner`) and that file isn't in any models folder; nil otherwise. A refiner the
+  /// person picked that's missing is left to the engine, which skips it, as before.
+  static func missingRefinerMessage(
+    model: String, refiner: String?, defaultRefiner: String?, isDownloaded: (String) -> Bool
+  ) -> String? {
+    guard let refiner, refiner == defaultRefiner, !isDownloaded(refiner) else { return nil }
+    let name = uncatalogedSpecifications.first { $0.file == refiner }?.name ?? refiner
+    let modelName = uncatalogedSpecifications.first { $0.file == model }?.name ?? model
+    return "\(name), the refiner \(modelName) runs its last steps with, isn't downloaded. Download \(modelName) in Models to fetch it, or turn the refiner off."
+  }
+
+  /// The refiner to keep when the model changes. Switching models keeps the current settings,
+  /// but a paired refiner is part of its model's recipe: a model that has one gets it (and its
+  /// start), and one model's paired refiner doesn't carry over to another, which would otherwise
+  /// keep running it (same family, so the engine's `isCompatibleRefiner` lets it through), so it
+  /// goes back to the new model's recommendation. A refiner the person chose stays, as before.
+  static func refinerAfterModelSwitch(
+    current: (model: String?, start: Float), recommended: (model: String?, start: Float),
+    pairedRefiners: Set<String> = pairedRefiners
+  ) -> (model: String?, start: Float) {
+    if recommended.model != nil { return recommended }
+    if let model = current.model, pairedRefiners.contains(model) { return recommended }
+    return current
+  }
 
   private static func huggingFaceFile(_ repository: String, _ path: String) -> URL {
     URL(string: "https://huggingface.co/\(repository)/resolve/main/\(path)")!

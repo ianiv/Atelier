@@ -50,7 +50,7 @@ The converted model is saved in the folder chosen in **Add To** as `<name>_f16.c
 
 **MOSS Image fine-tunes** in OpenMOSS' layout (for example Kromoss) are converted by a dedicated importer and work like the official MOSS Image model. To edit images with MOSS Image, add a [MOSS Image Edit LoRA](#moss-image-edit-loras).
 
-Some families can't be imported yet: HiDream O1, Qwen Image 2.1, LTX-2, SeedVR2, Kandinsky and Würstchen. Atelier tells you after inspecting the file. LongCat-Video Avatar imports from a single `.safetensors` file of its DiT with any distillation LoRA already merged in (the engine can't apply LongCat LoRAs); Meituan's sharded `base_model` folder has to be joined into one file first, as `Scripts/longcat-avatar-merge.py` does.
+Some families can't be imported yet: HiDream O1, Qwen Image 2.1, LTX-2, SeedVR2, Kandinsky and Würstchen. Atelier tells you after inspecting the file. LongCat-Video Avatar imports from a single `.safetensors` file of its DiT with any distillation LoRA already merged in (the engine can't apply LongCat LoRAs); Meituan's sharded `base_model` folder and its distillation LoRAs have to be merged into one file first: `Scripts/longcat-avatar-merge.py` writes one merged file per LoRA.
 
 ### Fibo 2.0 Edit Turbo
 

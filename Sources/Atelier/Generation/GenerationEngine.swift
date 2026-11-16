@@ -232,6 +232,17 @@ actor GenerationEngine {
     await waitForTurn()
     defer { endTurn() }
     try Task.checkCancellation()
+    // The engine drops a refiner it can't find (`LocalImageGenerator`'s `refinerModel.flatMap`
+    // checks `isModelDownloaded`) and runs the whole schedule on the first model, which a model
+    // distilled in two halves can't do well. Runs here on whichever device does the job, so a
+    // server missing the file says so too.
+    if let message = ModelDefaults.missingRefinerMessage(
+      model: request.model, refiner: request.configuration.refinerModel,
+      defaultRefiner: ModelZoo.defaultRefinerForModel(request.model),
+      isDownloaded: { ModelZoo.isModelDownloaded($0) })
+    {
+      throw MediaGenerationKitError.generationFailed(message)
+    }
     let pipeline = try await pipeline(for: request.model)
     await applyPerformanceSettings(using: pipeline)
     await dropCachedModelsIfInputsChanged(request)

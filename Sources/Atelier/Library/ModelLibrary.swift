@@ -217,7 +217,7 @@ final class ModelLibrary {
     let generation = CommunityCatalog.generation
     let models = await CommunityCatalog.models()
     guard refresh == refreshGeneration else { return }
-    catalog = models.sorted {
+    catalog = models.map(Self.withHiddenRefiner).sorted {
       $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
     }
     // The retry just brought community models in: Create's picker hasn't seen them yet.
@@ -225,6 +225,18 @@ final class ModelLibrary {
     customModels = Set(directories.flatMap { Self.readCustomModels(in: $0) })
     await reloadLoRAs()
     await measure()
+  }
+
+  /// A model whose refiner-only partner (`ModelDefaults.hiddenFromModelPicker`) is missing shows
+  /// as not downloaded: that file has no row of its own, so the model's Download is how it comes
+  /// back (`downloadModel(_:into:)` fetches only the missing files).
+  private nonisolated static func withHiddenRefiner(_ model: MediaGenerationResolvedModel) -> MediaGenerationResolvedModel {
+    guard model.isDownloaded, let refiner = ModelZoo.defaultRefinerForModel(model.file),
+          ModelDefaults.hiddenFromModelPicker.contains(refiner), !ModelZoo.isModelDownloaded(refiner)
+    else { return model }
+    var model = model
+    model.isDownloaded = false
+    return model
   }
 
   /// Disk sizes of downloaded models and LoRAs, and free space on the volume.

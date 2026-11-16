@@ -25,7 +25,9 @@ struct ModelsView: View {
 
   private var filtered: [MediaGenerationResolvedModel] {
     let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+    // A refiner-only file downloads, and goes, with its model (`ModelDefaults.hiddenFromModelPicker`).
     return library.catalog.filter { model in
+      guard !ModelDefaults.hiddenFromModelPicker.contains(model.file) else { return false }
       let downloading = library.downloads[model.file] != nil
       let shown =
         switch filter {

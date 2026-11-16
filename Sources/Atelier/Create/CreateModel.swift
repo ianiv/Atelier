@@ -65,6 +65,13 @@ final class CreateModel {
     runTarget == .local ? models : serverCatalog?.models ?? []
   }
 
+  /// `availableModels` without the files that are only another model's refiner
+  /// (`ModelDefaults.hiddenFromModelPicker`): what the model picker lists. The Refiner setting
+  /// still offers them from `availableModels`.
+  var pickableModels: [MediaGenerationResolvedModel] {
+    availableModels.filter { !ModelDefaults.hiddenFromModelPicker.contains($0.file) }
+  }
+
   /// The file names the settings offer refiners and upscalers from.
   private var availableFiles: [String] {
     runTarget == .local ? modelFiles : serverCatalog?.files ?? []
@@ -3107,6 +3114,12 @@ final class CreateModel {
         } else if let current = self.settings {
           // Switching models keeps the current values; Reset brings back this model's defaults.
           for descriptor in SettingsRegistry.all { descriptor.set(&settings, descriptor.get(current)) }
+          // Except a paired refiner (LongCat-Video Avatar 1.6's OPSD half), which goes with its model.
+          let refiner = ModelDefaults.refinerAfterModelSwitch(
+            current: (current.refinerModel, current.refinerStart),
+            recommended: (recommended.refinerModel, recommended.refinerStart))
+          settings.refinerModel = refiner.model
+          settings.refinerStart = refiner.start
         }
         self.settings = settings
       } catch {

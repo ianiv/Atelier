@@ -75,9 +75,10 @@ extension ModelLibrary {
     _ name: String, to destination: URL,
     progress: @escaping @Sendable (_ written: Int64, _ expected: Int64) -> Void
   ) async throws {
-    guard let url = ModelDefaults.downloadSources[name] ?? URL(string: "https://static.libnnc.org/\(name)") else { return }
+    let source = ModelDefaults.downloadSources[name]
+    guard let url = source?.url ?? URL(string: "https://static.libnnc.org/\(name)") else { return }
     let downloader = ResumableDownloader(
-      remoteUrl: url, localUrl: destination, sha256: ModelZoo.fileSHA256ForModelDownloaded(name))
+      remoteUrl: url, localUrl: destination, sha256: source?.sha256 ?? ModelZoo.fileSHA256ForModelDownloaded(name))
     let resumed = Mutex(false)
     try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in

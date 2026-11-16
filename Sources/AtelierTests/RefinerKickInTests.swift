@@ -58,3 +58,53 @@ struct RefinerKickInTests {
     }
   }
 }
+
+/// A paired refiner (LongCat-Video Avatar 1.6's OPSD half) goes with its model when the model
+/// changes; a refiner the person picked stays (`ModelDefaults.refinerAfterModelSwitch`).
+struct RefinerModelSwitchTests {
+  private static let opsd = ModelDefaults.longCat16OPSD
+  private static let paired = ModelDefaults.pairedRefiners
+
+  @Test func switchingTo16BringsItsRefiner() {
+    for current in [(String?.none, Float(0.7)), ("sdxl_refiner_v1.0_f16.ckpt", 0.8)] {
+      let kept = ModelDefaults.refinerAfterModelSwitch(current: current, recommended: (Self.opsd, 0.10))
+      #expect(kept.model == Self.opsd && kept.start == 0.10)
+    }
+  }
+
+  @Test func switchingFrom16To15DropsTheOPSDRefiner() {
+    #expect(Self.paired.contains(Self.opsd))
+    let kept = ModelDefaults.refinerAfterModelSwitch(current: (Self.opsd, 0.10), recommended: (nil, 0.7))
+    #expect(kept.model == nil && kept.start == 0.7)
+  }
+
+  @Test func anUnrelatedModelKeepsThePersonsRefiner() {
+    let chosen = ("sd_xl_refiner_1.0_f16.ckpt", Float(0.8))
+    let kept = ModelDefaults.refinerAfterModelSwitch(current: chosen, recommended: (nil, 0.7))
+    #expect(kept.model == chosen.0 && kept.start == chosen.1)
+    let none = ModelDefaults.refinerAfterModelSwitch(current: (nil, 0.5), recommended: (nil, 0.7))
+    #expect(none.model == nil && none.start == 0.5)
+  }
+
+  @Test func aMissingPairedRefinerStopsTheRun() {
+    let dmd = ModelDefaults.longCat16DMD
+    let missing = ModelDefaults.missingRefinerMessage(
+      model: dmd, refiner: Self.opsd, defaultRefiner: Self.opsd, isDownloaded: { _ in false })
+    #expect(missing?.contains("isn't downloaded") == true)
+    #expect(ModelDefaults.missingRefinerMessage(
+      model: dmd, refiner: Self.opsd, defaultRefiner: Self.opsd, isDownloaded: { _ in true }) == nil)
+    #expect(ModelDefaults.missingRefinerMessage(
+      model: dmd, refiner: nil, defaultRefiner: Self.opsd, isDownloaded: { _ in false }) == nil)
+    // A refiner the person picked is left to the engine, as before.
+    #expect(ModelDefaults.missingRefinerMessage(
+      model: dmd, refiner: "other.ckpt", defaultRefiner: Self.opsd, isDownloaded: { _ in false }) == nil)
+  }
+
+  @Test func theOPSDFileIsHiddenAndHashed() {
+    #expect(ModelDefaults.hiddenFromModelPicker.contains(Self.opsd))
+    #expect(!ModelDefaults.hiddenFromModelPicker.contains(ModelDefaults.longCat16DMD))
+    for file in [ModelDefaults.longCat16DMD, Self.opsd] {
+      #expect(ModelDefaults.downloadSources[file]?.sha256.count == 64)
+    }
+  }
+}
