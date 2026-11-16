@@ -87,7 +87,7 @@ extension Automation {
           let away = await measure(section)
           let back = await measure(.create)
           results.append(back)
-          log(String(format: "switch %d %@ → Create: %.1f ms (to %@: %.1f ms)", index, section.rawValue, back, section.rawValue, away))
+          log(String(format: "switch %d %@ → Create: %.1f ms (to %@: %.1f ms), %d LoRAs downloaded", index, section.rawValue, back, section.rawValue, away, library.loras.filter(\.isDownloaded).count))
         }
       }
       let sorted = results.sorted()

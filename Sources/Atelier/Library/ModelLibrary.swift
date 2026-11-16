@@ -1156,14 +1156,24 @@ final class ModelLibrary {
 
   /// Counts `reloadLoRAs()` calls, so one that finishes after a newer one doesn't overwrite it.
   private var loraGeneration = 0
-  /// Each folder's custom_lora.json as it was when `loras` was last read (nil before the first
-  /// read), so a screen showing LoRAs can tell whether anything changed outside the app.
+  /// Each folder and its custom_lora.json as they were when `loras` was last read (nil before the
+  /// first read), so a screen showing LoRAs can tell whether anything changed outside the app.
   private var loadedLoRARegistries: [LoRARegistryStamp]?
 
-  /// A folder's custom_lora.json modification date, nil when it has none.
+  /// What says a folder's LoRAs may have changed: the folder's modification date (a LoRA file
+  /// added, removed or renamed in it), and its custom_lora.json's date and size, nil when it has
+  /// none. The size catches a backup put back with its old date.
   nonisolated struct LoRARegistryStamp: Equatable, Sendable {
     var directory: URL
+    var folderModified: Date?
     var modified: Date?
+    var size: Int?
+  }
+
+  /// Drops any reread still running, for a change made to `loras` in place: one that started
+  /// before the change would land after it and undo it until the next reread.
+  private func invalidateLoRAReads() {
+    loraGeneration += 1
   }
 
   /// Rereads every models folder's custom_lora.json (they can also change outside the app). A
@@ -1181,8 +1191,9 @@ final class ModelLibrary {
   }
 
   /// For screens that show LoRAs, on appear: rereads them only if a folder's custom_lora.json
-  /// changed (or appeared, or went) since the last read, as when Draw Things writes it. Every
-  /// change the app makes, and a change of models folders, already rereads them.
+  /// changed (or appeared, or went) since the last read, as when Draw Things writes it, or a file
+  /// was added to or removed from the folder itself, as when a LoRA is deleted or copied in from
+  /// the Finder. Every change the app makes, and a change of models folders, already rereads them.
   func reloadLoRAsIfRegistriesChanged() async {
     let stamps = await Self.loraRegistryStamps(in: directories)
     guard stamps != loadedLoRARegistries else { return }
@@ -1191,9 +1202,12 @@ final class ModelLibrary {
 
   @concurrent private nonisolated static func loraRegistryStamps(in directories: [URL]) async -> [LoRARegistryStamp] {
     directories.map { directory in
-      let url = directory.appendingPathComponent("custom_lora.json")
-      let modified = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
-      return LoRARegistryStamp(directory: directory, modified: modified)
+      let fileManager = FileManager.default
+      let folder = try? fileManager.attributesOfItem(atPath: directory.path)
+      let registry = try? fileManager.attributesOfItem(atPath: directory.appendingPathComponent("custom_lora.json").path)
+      return LoRARegistryStamp(
+        directory: directory, folderModified: folder?[.modificationDate] as? Date,
+        modified: registry?[.modificationDate] as? Date, size: (registry?[.size] as? NSNumber)?.intValue)
     }
   }
 
@@ -1383,6 +1397,7 @@ final class ModelLibrary {
     specification.prefix = prefix
     do {
       try register(specification, in: lora.registry)
+      invalidateLoRAReads()
       // Shown at once; the reread (which also re-sorts) lands a moment later.
       if let index = loras.firstIndex(where: { $0.file == lora.file }) {
         loras[index].name = name
@@ -1423,6 +1438,7 @@ final class ModelLibrary {
       // The engine's in-memory table keeps the entry, but with the file gone it's skipped.
       // Gone from the list at once, so a screen picking the next selection doesn't pick it; the
       // reread lands a moment later.
+      invalidateLoRAReads()
       loras.removeAll { $0.file == lora.file }
     } catch {
       errorMessage = "Couldn't delete \(lora.name): \(error.localizedDescription)"
