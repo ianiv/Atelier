@@ -41,7 +41,7 @@ struct SizePopover: View {
   let set: (Int, Int) -> Void
 
   var body: some View {
-    let match = SizePreset.match(width: width, height: height, megapixels: self.megapixels)
+    let match = SizePreset.match(width: width, height: height, megapixels: self.megapixels, maxSide: maxSide)
     let megapixels = match?.1 ?? closestMegapixels
     VStack(alignment: .leading, spacing: 12) {
       Text("Aspect Ratio").font(.headline)
@@ -61,7 +61,7 @@ struct SizePopover: View {
         get: { match?.1 },
         set: { mp in
           guard let mp else { return }
-          let size = SizePreset.size(aspect: match?.0 ?? closestAspect, megapixels: mp)
+          let size = SizePreset.size(aspect: match?.0 ?? closestAspect, megapixels: mp, maxSide: maxSide)
           set(size.width, size.height)
         })
       ) {
@@ -101,7 +101,7 @@ struct SizePopover: View {
     -> some View
   {
     Button {
-      let size = SizePreset.size(aspect: aspect, megapixels: megapixels)
+      let size = SizePreset.size(aspect: aspect, megapixels: megapixels, maxSide: maxSide)
       set(size.width, size.height)
     } label: {
       VStack(spacing: 4) {

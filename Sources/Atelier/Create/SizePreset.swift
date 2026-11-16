@@ -20,8 +20,9 @@ nonisolated enum SizePreset {
   static let megapixels: [Double] = [0.5, 1, 1.5, 2, 3, 4]
 
   /// MiniMax H3 Image works from about 4 to 20 megapixels and is at its best around 16, so it gets
-  /// larger choices and a longer side (21:9 at 16 megapixels is 6272 wide).
-  static let largeMegapixels: [Double] = [1, 2, 4, 8, 12, 16]
+  /// larger choices, up to 24, and a longer side (21:9 at 16 megapixels is 6272 wide). Wide presets
+  /// above 16 would pass the side limit, so they stop at it (`size(aspect:megapixels:maxSide:)`).
+  static let largeMegapixels: [Double] = [1, 2, 4, 8, 12, 16, 20, 24]
   static let maxSide = 4096
   static let largeMaxSide = 6400
 
@@ -41,17 +42,22 @@ nonisolated enum SizePreset {
     snap(Double(value))
   }
 
-  static func size(aspect: AspectRatio, megapixels: Double) -> (width: Int, height: Int) {
+  /// The preset's size, scaled down to keep its aspect when its longer side would pass `maxSide`.
+  static func size(aspect: AspectRatio, megapixels: Double, maxSide: Int = .max) -> (width: Int, height: Int) {
     let pixels = megapixels * 1_048_576
     let ratio = Double(aspect.width) / Double(aspect.height)
-    let height = (pixels / ratio).squareRoot()
-    return (snap(height * ratio), snap(height))
+    var height = (pixels / ratio).squareRoot()
+    let longest = max(height * ratio, height)
+    if longest > Double(maxSide) { height *= Double(maxSide) / longest }
+    return (min(snap(height * ratio), maxSide), min(snap(height), maxSide))
   }
 
   /// The preset closest to an arbitrary size, for showing which preset (if any) is active.
-  static func match(width: Int, height: Int, megapixels: [Double] = megapixels) -> (AspectRatio, Double)? {
+  static func match(
+    width: Int, height: Int, megapixels: [Double] = megapixels, maxSide: Int = .max
+  ) -> (AspectRatio, Double)? {
     for aspect in aspectRatios {
-      for mp in megapixels where size(aspect: aspect, megapixels: mp) == (width, height) {
+      for mp in megapixels where size(aspect: aspect, megapixels: mp, maxSide: maxSide) == (width, height) {
         return (aspect, mp)
       }
     }

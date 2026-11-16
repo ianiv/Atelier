@@ -135,6 +135,22 @@ struct SizePresetTests {
   @Test func aSizeNoPresetMakesHasNoMatch() {
     #expect(SizePreset.match(width: 100, height: 3000) == nil)
   }
+
+  /// MiniMax H3 Image's presets go to 24 megapixels, in multiples of 64, and never pass its
+  /// 6400 px side: wide shapes there stop at the limit, keeping their aspect.
+  @Test func largePresetsStayWithinTheSideLimit() {
+    for aspect in SizePreset.aspectRatios {
+      for megapixels in SizePreset.largeMegapixels {
+        let size = SizePreset.size(aspect: aspect, megapixels: megapixels, maxSide: SizePreset.largeMaxSide)
+        #expect(size.width <= 6400 && size.height <= 6400)
+        #expect(size.width % 64 == 0 && size.height % 64 == 0)
+      }
+    }
+    let square = SizePreset.size(aspect: .init(width: 1, height: 1), megapixels: 20, maxSide: SizePreset.largeMaxSide)
+    #expect(Double(square.width * square.height) / 1_048_576 > 19)
+    let wide = SizePreset.size(aspect: .init(width: 21, height: 9), megapixels: 24, maxSide: SizePreset.largeMaxSide)
+    #expect(wide.width == 6400)
+  }
 }
 
 struct ClipTests {
