@@ -152,9 +152,9 @@ struct SizePresetTests {
     #expect(wide.width == 6400)
   }
 
-  @Test func lockedSixteenByNineRoundTrips() {
+  @Test func lockedSixteenByNineRoundTrips() throws {
     let size = SizePreset.size(aspect: .init(width: 16, height: 9), megapixels: 1)
-    let ratio = SizePreset.lockRatio(width: size.width, height: size.height)
+    let ratio = try #require(SizePreset.lockRatio(width: size.width, height: size.height))
     #expect(ratio == 16.0 / 9)
     #expect(SizePreset.fits(width: size.width, height: size.height, ratio: ratio))
     let wider = SizePreset.locked(width: 1920, ratio: ratio, maxSide: SizePreset.maxSide)
@@ -202,6 +202,40 @@ struct SizePresetTests {
   @Test func aLockedRatioKeepsItsMegapixels() {
     let size = SizePreset.size(ratio: 16.0 / 9, megapixels: 1)
     #expect(size == SizePreset.size(aspect: .init(width: 16, height: 9), megapixels: 1))
+  }
+
+  /// A Megapixels choice while locked makes a size that still fits the ratio, so reopening the
+  /// popover keeps it rather than locking afresh (1408 × 1024 at 0.5 MP once made 832 × 640, which
+  /// relocked at 4:3).
+  @Test func lockedMegapixelsFitTheRatio() {
+    let cases: [(ratios: [Double], megapixels: [Double], maxSide: Int)] = [
+      ([1.375, 16.0 / 9, 4.0 / 3, 21.0 / 9, 1.37, 1, 0.73, 9.0 / 16, 2.0 / 3, 9.0 / 21],
+       SizePreset.megapixels, SizePreset.maxSide),
+      ([1.375, 16.0 / 9, 21.0 / 9, 0.73, 9.0 / 21], SizePreset.largeMegapixels, SizePreset.largeMaxSide),
+    ]
+    for (ratios, megapixels, maxSide) in cases {
+      for ratio in ratios {
+        for mp in megapixels {
+          let size = SizePreset.locked(ratio: ratio, megapixels: mp, maxSide: maxSide)
+          #expect(SizePreset.fits(width: size.width, height: size.height, ratio: ratio), "\(ratio) at \(mp) MP: \(size)")
+          #expect(size.width <= maxSide && size.height <= maxSide)
+          #expect(size.width % 64 == 0 && size.height % 64 == 0)
+        }
+      }
+    }
+  }
+
+  /// A size with a zero side has no ratio to lock, and a stored bad ratio never fits.
+  @Test func unusableRatiosAreNil() {
+    #expect(SizePreset.lockRatio(width: 0, height: 0) == nil)
+    #expect(SizePreset.lockRatio(width: 1024, height: 0) == nil)
+    #expect(SizePreset.lockRatio(width: 0, height: 1024) == nil)
+    #expect(SizePreset.validRatio(.nan) == nil)
+    #expect(SizePreset.validRatio(.infinity) == nil)
+    #expect(SizePreset.validRatio(-1) == nil)
+    #expect(SizePreset.validRatio(1.5) == 1.5)
+    #expect(!SizePreset.fits(width: 1024, height: 1024, ratio: 0))
+    #expect(!SizePreset.fits(width: 1024, height: 1024, ratio: .nan))
   }
 
   /// A wide preset capped at the side limit still locks to its preset's exact ratio.

@@ -53,6 +53,9 @@ struct SizePopover: View {
   @Binding var locked: Bool
   /// Width / height while locked. Stored rather than worked out from the size each time, since
   /// each side is snapped to 64 and a ratio taken from snapped sides would drift commit by commit.
+  ///
+  /// It's checked against the size only when the popover appears: a size changed from outside
+  /// while the popover is open (an agent, a model switch) keeps the old ratio until it's reopened.
   @Binding var lockedRatio: Double?
   /// Sets both sides at once, so a locked change is one undo step.
   let set: (Int, Int) -> Void
@@ -79,9 +82,11 @@ struct SizePopover: View {
         set: { mp in
           guard let mp else { return }
           // The locked ratio, not the nearest preset's, within the model's longest side.
-          let size = locked
-            ? SizePreset.size(ratio: ratio, megapixels: mp, maxSide: maxSide)
-            : SizePreset.size(aspect: match?.0 ?? closestAspect, megapixels: mp, maxSide: maxSide)
+          let size = if locked, let ratio {
+            SizePreset.locked(ratio: ratio, megapixels: mp, maxSide: maxSide)
+          } else {
+            SizePreset.size(aspect: match?.0 ?? closestAspect, megapixels: mp, maxSide: maxSide)
+          }
           set(size.width, size.height)
         })
       ) {
@@ -125,29 +130,36 @@ struct SizePopover: View {
       // popover was closed is locked at its own ratio.
       guard locked else { return }
       if let lockedRatio, SizePreset.fits(width: width, height: height, ratio: lockedRatio) { return }
+      // Nil when the size has no usable ratio; the lock then acts unlocked until one is set.
       lockedRatio = SizePreset.lockRatio(width: width, height: height, megapixels: self.megapixels, maxSide: maxSide)
     }
   }
 
-  /// The ratio a locked change keeps.
-  private var ratio: Double {
-    lockedRatio ?? SizePreset.lockRatio(width: width, height: height, megapixels: megapixels, maxSide: maxSide)
+  /// The ratio a locked change keeps, or nil when there's none to keep (a zero side), in which
+  /// case a locked change acts as an unlocked one.
+  private var ratio: Double? {
+    SizePreset.validRatio(lockedRatio)
+      ?? SizePreset.lockRatio(width: width, height: height, megapixels: megapixels, maxSide: maxSide)
   }
 
   /// Sets a typed width, and the height too while locked; returns the width actually set, which
   /// the lock can hold below the typed one so the height stays within the model's limits.
   private func setWidth(_ width: Int) -> Int {
-    let size: (width: Int, height: Int) = locked
-      ? SizePreset.locked(width: width, ratio: ratio, maxSide: maxSide)
-      : (width, current().height)
+    let size: (width: Int, height: Int) = if locked, let ratio {
+      SizePreset.locked(width: width, ratio: ratio, maxSide: maxSide)
+    } else {
+      (width, current().height)
+    }
     apply(size)
     return size.width
   }
 
   private func setHeight(_ height: Int) -> Int {
-    let size: (width: Int, height: Int) = locked
-      ? SizePreset.locked(height: height, ratio: ratio, maxSide: maxSide)
-      : (current().width, height)
+    let size: (width: Int, height: Int) = if locked, let ratio {
+      SizePreset.locked(height: height, ratio: ratio, maxSide: maxSide)
+    } else {
+      (current().width, height)
+    }
     apply(size)
     return size.height
   }
@@ -184,7 +196,7 @@ struct SizePopover: View {
     Button {
       let ratio = ratio
       set(height, width)
-      if locked { lockedRatio = 1 / ratio }
+      if locked { lockedRatio = ratio.map { 1 / $0 } }
     } label: {
       Image(systemName: "arrow.left.arrow.right")
     }
@@ -240,9 +252,11 @@ struct SizePopover: View {
 /// keystroke, so snapping there turned the "1" of "1024" into 64 before the rest could be typed,
 /// and made an undo entry per keystroke. Same approach as `FramesControl`.
 ///
-/// Only an edited draft commits. The aspect buttons, Megapixels and Swap change the size without
-/// taking focus, so a focused but untouched draft would otherwise write the old size back over the
-/// preset on Return or blur, and closing the popover would rewrite sizes nobody typed.
+/// Only a draft that differs from the size commits. The aspect buttons, Megapixels and Swap change
+/// the size without taking focus, and an untouched focused draft follows them, so it never writes
+/// the old size back over the preset on Return or blur, and closing the popover rewrites nothing
+/// nobody typed. A typed draft is compared with the live size, not the text it last showed: typed
+/// back to that text after a preset changed the size, it's still a size to set.
 private struct SizeDimensionField: View {
   let title: String
   let value: Int
@@ -288,8 +302,12 @@ private struct SizeDimensionField: View {
   /// Snaps the typed size to a multiple of 64 within range and shows it; text that isn't a
   /// number reverts. Setting only when the size changes keeps a no-op commit out of undo.
   private func commit() {
-    guard edited else { return }
-    if let typed = Int(draft.trimmingCharacters(in: .whitespaces)) {
+    let text = draft.trimmingCharacters(in: .whitespaces)
+    guard text != String(value) else {
+      show(value)
+      return
+    }
+    if let typed = Int(text) {
       let snapped = SizePreset.snap(min(max(typed, 64), maxSide))
       show(snapped != value ? set(snapped) : snapped)
     } else {
@@ -297,6 +315,8 @@ private struct SizeDimensionField: View {
     }
   }
 
+  /// Whether the draft was typed in since it last showed the size; only the value-change sync uses
+  /// this, to keep what's being typed. A commit compares with the live size instead.
   private var edited: Bool { draft != synced }
 
   private func show(_ size: Int) {
