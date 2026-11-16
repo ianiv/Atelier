@@ -137,6 +137,26 @@ actor GenerationEngine {
     await ModelLibrary.loadCustomSpecifications(in: urls)
   }
 
+  /// Rereads the models folders' custom.json and custom_lora.json, for Refresh after they were
+  /// edited outside the app. Unlike `setModelsDirectories(_:)`, the cached pipeline stays unless
+  /// the loaded model's own entry changed, since it was built from that entry.
+  func reloadCustomSpecifications() async {
+    let urls = MediaGenerationEnvironment.default.externalUrls
+    let model = pipeline?.model
+    let before = model.flatMap { ModelZoo.specificationForModel($0) }.flatMap(Self.encoded)
+    await ModelLibrary.loadCustomSpecifications(in: urls)
+    if let model, before != ModelZoo.specificationForModel(model).flatMap(Self.encoded) {
+      pipeline = nil
+    }
+  }
+
+  /// `Specification` isn't Equatable; its encoding stands in for comparing two.
+  private nonisolated static func encoded(_ specification: ModelZoo.Specification) -> Data? {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = .sortedKeys
+    return try? encoder.encode(specification)
+  }
+
   /// The last lookup order logged, so it's logged once per change.
   private var loggedLookupOrder: [URL]?
 

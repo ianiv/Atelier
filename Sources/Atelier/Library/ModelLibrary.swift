@@ -202,7 +202,10 @@ final class ModelLibrary {
   /// Reloads the catalog, LoRAs and disk usage. The community list is fetched once per process
   /// and cached by MGK, or if that failed, tried again here (`CommunityCatalog`); an offline
   /// listing would leave out every community model.
-  func refresh() async {
+  /// `rereadingModelLists` also rereads custom.json and custom_lora.json (the Refresh button):
+  /// people edit them outside the app, and the engine otherwise reads them only when the models
+  /// folders change.
+  func refresh(rereadingModelLists: Bool = false) async {
     catalogRequested = true
     refreshGeneration += 1
     let refresh = refreshGeneration
@@ -210,6 +213,7 @@ final class ModelLibrary {
     defer { if refresh == refreshGeneration { isLoadingCatalog = false } }
     // The engine points MGK at the models folders; wait until it has.
     await create.engine.useModelsDirectories(create.availableModelsDirectories)
+    if rereadingModelLists { await create.engine.reloadCustomSpecifications() }
     let generation = CommunityCatalog.generation
     let models = await CommunityCatalog.models()
     guard refresh == refreshGeneration else { return }
@@ -217,7 +221,7 @@ final class ModelLibrary {
       $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
     }
     // The retry just brought community models in: Create's picker hasn't seen them yet.
-    if CommunityCatalog.generation != generation { await create.refreshModelList() }
+    if rereadingModelLists || CommunityCatalog.generation != generation { await create.refreshModelList() }
     customModels = Set(directories.flatMap { Self.readCustomModels(in: $0) })
     reloadLoRAs()
     await measure()
@@ -1097,6 +1101,7 @@ final class ModelLibrary {
     }
     ModelZoo.availableSpecifications.removeAll { $0.file == file }
     ModelZoo.fallbackMapping[file] = nil
+    if Self.overriddenFiles.remove(file) != nil { ModelZoo.overrideMapping[file] = nil }
   }
 
   /// Lists a model file already in `directory` that nothing explains, from what its owner says it
@@ -1527,8 +1532,18 @@ final class ModelLibrary {
     ModelZoo.availableSpecifications = builtin + community + uncataloged + custom
     // ModelZoo looks a model up in a table it fills once; one it doesn't have is looked up here.
     ModelZoo.fallbackMapping = Dictionary((custom + uncataloged + community).map { ($0.file, $0) }) { first, _ in first }
+    // That table (`ModelZoo.specificationMapping`, private) also keeps a custom.json entry as it
+    // was when it was filled, so an entry edited since would still load with its old values.
+    // `overrideMapping` is looked up before it.
+    for file in overriddenFiles.subtracting(files) { ModelZoo.overrideMapping[file] = nil }
+    for specification in custom { ModelZoo.overrideMapping[specification.file] = specification }
+    overriddenFiles = files
     loadCustomLoRAs(in: directories)
   }
+
+  /// The custom.json entries `loadCustomSpecifications(in:)` put in `ModelZoo.overrideMapping`,
+  /// so one that leaves custom.json leaves it too.
+  static var overriddenFiles: Set<String> = []
 
   /// The LoRA half of `loadCustomSpecifications(in:)`.
   static func loadCustomLoRAs(in directories: [URL]) {

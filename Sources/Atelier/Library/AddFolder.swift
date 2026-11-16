@@ -106,6 +106,10 @@ extension ModelLibrary {
       ModelZoo.isExternalUrlsPreferred = true
       ModelZoo.appendCustomSpecification(specification)
       ModelZoo.isExternalUrlsPreferred = preferred
+      // A re-import of the same file would otherwise still find the entry read before it.
+      if Self.overriddenFiles.contains(specification.file) {
+        ModelZoo.overrideMapping[specification.file] = specification
+      }
     } else {
       backUpModelRegistryOnce(in: folder)
       try Self.addToCustomJSON(specification, in: folder)

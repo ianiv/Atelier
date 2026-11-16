@@ -119,10 +119,10 @@ struct ModelsView: View {
         #endif
         ToolbarItem {
           Button("Refresh", systemImage: "arrow.clockwise") {
-            Task { await library.refresh() }
+            Task { await library.refresh(rereadingModelLists: true) }
           }
           .disabled(library.isLoadingCatalog)
-          .help("Reload the model catalog and the models folder")
+          .help("Reload the model catalog, the models folder, custom.json and custom_lora.json")
         }
         ToolbarItem {
           Button("Import…", systemImage: "plus") { chooseFiles() }

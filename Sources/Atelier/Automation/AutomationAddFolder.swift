@@ -84,6 +84,24 @@
         check(library.catalog.contains { $0.file == file && $0.isDownloaded }, "the library lists it as downloaded")
         check(library.folders[file]?.standardizedFileURL == b.standardizedFileURL, "the library finds it in B")
 
+        // custom.json edited outside the app, then Refresh.
+        let registry = b.appendingPathComponent("custom.json")
+        if let data = fm.contents(atPath: registry.path),
+           var entries = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]], !entries.isEmpty
+        {
+          entries[0]["name"] = "Renamed Outside"
+          entries[0]["default_scale"] = 12
+          try? JSONSerialization.data(withJSONObject: entries).write(to: registry)
+          await library.refresh(rereadingModelLists: true)
+          check(model.models.contains { $0.file == file && $0.name == "Renamed Outside" }, "Refresh shows a name edited in custom.json")
+          check(ModelZoo.specificationForModel(file)?.defaultScale == 12, "Refresh gives the engine a field edited in custom.json")
+          try? Data("[]".utf8).write(to: registry)
+          await library.refresh(rereadingModelLists: true)
+          check(!model.models.contains { $0.file == file }, "Refresh drops a model removed from custom.json")
+          try? data.write(to: registry)
+          await library.refresh(rereadingModelLists: true)
+        }
+
         // The first folder keeps the engine's own way of listing.
         let first = "add_check_first_f16.ckpt"
         fm.createFile(atPath: a.appendingPathComponent(first).path, contents: Data(count: 1024))
