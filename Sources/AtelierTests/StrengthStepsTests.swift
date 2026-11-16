@@ -59,21 +59,29 @@ struct StrengthStepsTests {
     #expect(Self.start(0.5, shift: 1, sampler: .eulerASubstep) == nil)
   }
 
-  /// MiniMax H3 Image samples its own grid only with DDIM Trailing at a step count that has one,
-  /// as `LocalImageGenerator.sampler(from:)` decides; anything else is counted like other models.
+  /// MiniMax H3 Image samples its own grid (trained, or the finest one stretched) only with DDIM
+  /// Trailing, as `LocalImageGenerator.sampler(from:)` decides; other samplers are counted like
+  /// other models.
   @Test func h3ImageGridOnlyForDDIMTrailing() {
-    let h3Image = StrengthSteps.FixedGrid.ddimTrailing(steps: [1, 2, 3, 6])
-    for steps in [1, 2, 3, 6] {
+    let h3Image = StrengthSteps.FixedGrid.ddimTrailing
+    for steps in [1, 2, 3, 4, 5, 6, 7, 8, 12] {
       #expect(h3Image.applies(sampler: .dDIMTrailing, steps: steps))
-    }
-    for steps in [4, 5, 7, 8, 12] {
-      #expect(!h3Image.applies(sampler: .dDIMTrailing, steps: steps))
     }
     for sampler in [DataModels.SamplerType.eulerATrailing, .DDIM, .dPMPP2MTrailing, .uniPCTrailing, .eulerA, .TCD] {
       #expect(!h3Image.applies(sampler: sampler, steps: 6))
     }
     #expect(StrengthSteps.FixedGrid.always.applies(sampler: .eulerA, steps: 5))
     #expect(!StrengthSteps.FixedGrid.never.applies(sampler: .dDIMTrailing, steps: 6))
+  }
+
+  /// Flow models on Karras sigmas count from the sigma each step is told
+  /// (`KarrasDiscretization.timestep(for:)` = sigma × 1000): Strength 1 starts at the top, and
+  /// lower Strength starts later.
+  @Test func flowKarras() throws {
+    #expect(try #require(Self.start(1, steps: 8, shift: 3, sampler: .dPMPP2MKarras)).startStep == 0)
+    let half = try #require(Self.start(0.5, steps: 8, shift: 3, sampler: .dPMPP2MKarras))
+    let less = try #require(Self.start(0.3, steps: 8, shift: 3, sampler: .dPMPP2MKarras))
+    #expect(half.startStep > 0 && half.startStep < 8 && less.startStep > half.startStep)
   }
 
   @Test func unknownModelsAreNotCounted() {

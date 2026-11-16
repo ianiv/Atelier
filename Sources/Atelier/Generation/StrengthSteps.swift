@@ -71,16 +71,16 @@ nonisolated enum StrengthSteps {
     /// Whatever the sampler: HyperFlow's two-time checkpoints (and a file that isn't there, so
     /// there's nothing to count).
     case always
-    /// MiniMax H3 Image's output-head grids, which only DDIM Trailing samples, and only at a step
-    /// count that has a grid (`MiniMaxH3Layout.sigmaGrids`); everything else runs the usual
-    /// flow-model samplers.
-    case ddimTrailing(steps: Set<Int>)
+    /// MiniMax H3 Image's output-head grids, which only DDIM Trailing samples: a trained grid at
+    /// step counts that have one (`MiniMaxH3Layout.sigmaGrids`), the finest one stretched to the
+    /// others (`RFSigmaGridDiscretization`). Every other sampler runs the usual flow-model ones.
+    case ddimTrailing
 
     func applies(sampler: DataModels.SamplerType, steps: Int) -> Bool {
       switch self {
       case .never: false
       case .always: true
-      case .ddimTrailing(let gridSteps): sampler == .dDIMTrailing && gridSteps.contains(steps)
+      case .ddimTrailing: sampler == .dDIMTrailing
       }
     }
   }
@@ -110,8 +110,7 @@ nonisolated enum StrengthSteps {
       if ModelZoo.versionForModel(model) == .minimaxH3 {
         fixed = layout.isTwoTime ? .always : .never
       } else {
-        let grids = layout.sigmaGrids
-        fixed = grids.isEmpty ? .never : .ddimTrailing(steps: Set(grids.keys))
+        fixed = layout.sigmaGrids.isEmpty ? .never : .ddimTrailing
       }
     }
     fixedGrids.withLock { $0[model] = fixed }
@@ -233,7 +232,7 @@ extension CreateModel {
       case let fixed? where fixed.applies(sampler: sampler, steps: steps):
         return SettingHint(
           text: "Runs the model's fixed schedule",
-          help: "With DDIM Trailing at this step count, this model runs its own fixed schedule of steps, so they aren't counted here.",
+          help: "With DDIM Trailing, this model runs its own fixed schedule of steps, so they aren't counted here.",
           dimmed: true)
       case _?:
         break
