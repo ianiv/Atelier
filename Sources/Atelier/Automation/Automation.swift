@@ -36,7 +36,8 @@ import SwiftUI
 /// (AutomationQueue.swift). `--color-match-check` matches an edit's colors to its original
 /// (AutomationColorMatch.swift). `--input-entries-check` records and restores input entries, and
 /// `--entries-freeze-check` clicks through the strip after moodboard, Clear and Generate-mode runs
-/// (AutomationInputEntries.swift).
+/// (AutomationInputEntries.swift). `--tab-switch-bench` times switching back to Create
+/// (AutomationTabSwitch.swift).
 @MainActor
 enum Automation {
   /// `--sampler`'s names: `SamplerType`'s case names, spelled out because the type describes
@@ -75,7 +76,7 @@ enum Automation {
       "--model-folders-check", "--styles-check", "--cleanup-check", "--engine-check", "--playback-check",
       "--remote-check", "--remote-net-check", "--remote-shots", "--remote-url-check", "--remote-tailnet-check",
       "--catalog-retry-check", "--model-move-check", "--add-folder-check", "--color-match-check", "--canvas-clip-check",
-      "--input-entries-check", "--entries-freeze-check",
+      "--input-entries-check", "--entries-freeze-check", "--tab-switch-bench",
     ]
     // The unit tests run inside the app. Like a scripted run, that leaves the user's data alone: no
     // cleanup at launch, no saving the session or queue.
@@ -98,6 +99,10 @@ enum Automation {
       })
     {
       navigation.section = section
+    }
+    if args.contains("--tab-switch-bench") {
+      tabSwitchBench(model, navigation: navigation, library: library)
+      return
     }
     if args.contains("--resize-bench") {
       resizeBench(model)
