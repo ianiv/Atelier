@@ -11,13 +11,15 @@ import SwiftUI
 ///
 ///   Atelier --generate --model moss_image_sft_i8x.ckpt --prompt "…" --width 1152 --height 896
 ///           [--seed N] [--steps N] [--sampler NAME] [--shift X] [--num-frames N]
-///           [--hires-fix true|false] [--audio FILE]
+///           [--hires-fix true|false] [--audio FILE] [--refiner FILE|none] [--refiner-start X]
 ///           [--cancel-at-step N] [--download]
 ///           [--snapshot-dir DIR] [--quit]
 ///
 /// `--sampler` takes the engine's sampler name (`SamplerType` case, e.g. dDIMTrailing,
 /// eulerATrailing, LCM, dPMPP2MKarras, uniPCTrailing) or its inspector title, in any case; an unknown name fails the run
-/// with the valid ones. `--shift` sets Shift as the inspector does.
+/// with the valid ones. `--shift` sets Shift as the inspector does. `--refiner` replaces the
+/// model's refiner (`none` turns it off), to compare a run with and without it, and
+/// `--refiner-start` sets Refiner Start; the log says at which step the refiner takes over.
 ///
 /// `--show history` opens that sidebar section at launch. `--project NAME` saves to (and reads
 /// history from) that project instead of the user's current one.
@@ -303,6 +305,8 @@ enum Automation {
         settings.sampler = sampler
       }
       if let shift = value("--shift").flatMap(Float.init) { settings.shift = shift }
+      if let refiner = value("--refiner") { settings.refinerModel = refiner == "none" ? nil : refiner }
+      if let start = value("--refiner-start").flatMap(Float.init) { settings.refinerStart = start }
       if let frames = value("--num-frames").flatMap(Int.init) { settings.numFrames = frames }
       if let sol = value("--sol-attention") { settings.usesSolAttention = sol == "true" }
       if let teaCache = value("--tea-cache") { settings.teaCache = teaCache == "true" }
@@ -318,6 +322,8 @@ enum Automation {
         let kickIn = ModelDefaults.refinerKickInStep(
           refinerStart: Double(settings.refinerStart), steps: settings.steps, shift: Double(settings.shift))
         log("refiner \(refiner) from \(settings.refinerStart): kick-in at step \(kickIn) of \(settings.steps) (DDIM Trailing schedule)")
+      } else {
+        log("refiner off")
       }
       // Image to image: --input FILE puts it on the canvas (Edit mode), --input-zoom and
       // --input-offset X,Y (frame pixels) place it, --moodboard FILE[,FILE…] adds references
