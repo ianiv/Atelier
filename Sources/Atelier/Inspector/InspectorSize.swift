@@ -100,16 +100,16 @@ struct SizePopover: View {
       // than by ViewThatFits, whose measuring could size the popover for the other layout.
       #if os(macOS)
         HStack {
-          dimension("W", value: width, set: setWidth)
+          dimension("W", value: width, current: { current().width }, set: setWidth)
           swapButton
-          dimension("H", value: height, set: setHeight)
+          dimension("H", value: height, current: { current().height }, set: setHeight)
           lockButton
         }
       #else
         HStack {
           VStack(alignment: .trailing) {
-            dimension("W", value: width, set: setWidth)
-            dimension("H", value: height, set: setHeight)
+            dimension("W", value: width, current: { current().width }, set: setWidth)
+            dimension("H", value: height, current: { current().height }, set: setHeight)
           }
           // Lock beneath swap, level with the H row.
           VStack {
@@ -129,7 +129,9 @@ struct SizePopover: View {
       // Keep the stored ratio only if it still describes the size; a size changed while the
       // popover was closed is locked at its own ratio.
       guard locked else { return }
-      if let lockedRatio, SizePreset.fits(width: width, height: height, ratio: lockedRatio) { return }
+      if let lockedRatio,
+         SizePreset.fits(width: width, height: height, ratio: lockedRatio, megapixels: self.megapixels, maxSide: maxSide)
+      { return }
       // Nil when the size has no usable ratio; the lock then acts unlocked until one is set.
       lockedRatio = SizePreset.lockRatio(width: width, height: height, megapixels: self.megapixels, maxSide: maxSide)
     }
@@ -227,8 +229,10 @@ struct SizePopover: View {
     .accessibilityAddTraits(locked ? .isSelected : [])
   }
 
-  private func dimension(_ title: String, value: Int, set: @escaping (Int) -> Int) -> some View {
-    SizeDimensionField(title: title, value: value, maxSide: maxSide, set: set)
+  private func dimension(
+    _ title: String, value: Int, current: @escaping () -> Int, set: @escaping (Int) -> Int
+  ) -> some View {
+    SizeDimensionField(title: title, value: value, maxSide: maxSide, current: current, set: set)
   }
 
   private var closestMegapixels: Double {
@@ -261,6 +265,10 @@ private struct SizeDimensionField: View {
   let title: String
   let value: Int
   let maxSide: Int
+  /// This side as it is now. Closing the popover with a typed draft commits twice (focus loss,
+  /// then disappearing), both from the last render, so the second compares with `value` from
+  /// before the first commit; compared with the live side instead, it finds nothing to set.
+  let current: () -> Int
   /// Sets this side and returns what it became, which the aspect lock can make differ from the
   /// value given. The draft shows that: Return keeps focus, so the value-change sync wouldn't.
   let set: (Int) -> Int
@@ -302,6 +310,7 @@ private struct SizeDimensionField: View {
   /// Snaps the typed size to a multiple of 64 within range and shows it; text that isn't a
   /// number reverts. Setting only when the size changes keeps a no-op commit out of undo.
   private func commit() {
+    let value = current()
     let text = draft.trimmingCharacters(in: .whitespaces)
     guard text != String(value) else {
       show(value)

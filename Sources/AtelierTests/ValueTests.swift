@@ -217,10 +217,53 @@ struct SizePresetTests {
       for ratio in ratios {
         for mp in megapixels {
           let size = SizePreset.locked(ratio: ratio, megapixels: mp, maxSide: maxSide)
-          #expect(SizePreset.fits(width: size.width, height: size.height, ratio: ratio), "\(ratio) at \(mp) MP: \(size)")
+          #expect(
+            SizePreset.fits(width: size.width, height: size.height, ratio: ratio, megapixels: megapixels, maxSide: maxSide),
+            "\(ratio) at \(mp) MP: \(size)")
           #expect(size.width <= maxSide && size.height <= maxSide)
           #expect(size.width % 64 == 0 && size.height % 64 == 0)
         }
+      }
+    }
+  }
+
+  /// A Megapixels choice while locked to a preset's ratio gives that preset's size, not one with
+  /// the shorter side rederived (3:2 at 2 MP is 1792 × 1152, not 1792 × 1216), and it fits, so the
+  /// picker still shows it and reopening the popover keeps the lock. The swapped lock's `1 / ratio`
+  /// counts as the portrait preset's ratio too.
+  @Test func lockedMegapixelsAtAPresetRatioIsThePreset() {
+    let cases: [(megapixels: [Double], maxSide: Int)] = [
+      (SizePreset.megapixels, SizePreset.maxSide), (SizePreset.largeMegapixels, SizePreset.largeMaxSide),
+    ]
+    for (megapixels, maxSide) in cases {
+      for aspect in SizePreset.aspectRatios {
+        for ratio in [aspect.ratio, 1 / (Double(aspect.height) / Double(aspect.width))] {
+          for mp in megapixels {
+            let preset = SizePreset.size(aspect: aspect, megapixels: mp, maxSide: maxSide)
+            let size = SizePreset.locked(ratio: ratio, megapixels: mp, maxSide: maxSide)
+            #expect(size == preset, "\(aspect.label) at \(mp) MP: \(size)")
+            #expect(
+              SizePreset.fits(width: size.width, height: size.height, ratio: ratio, megapixels: megapixels, maxSide: maxSide),
+              "\(aspect.label) at \(mp) MP: \(size)")
+          }
+        }
+      }
+    }
+  }
+
+  /// Committing a locked side's own result again changes nothing, for every side on the grid, so
+  /// a second commit as the popover closes makes no second undo step (21:9 at 4096: H 1760 made
+  /// 4096 × 1728, and H 1728 then made 4032 × 1728).
+  @Test(arguments: [1024, 2048, SizePreset.maxSide, SizePreset.largeMaxSide])
+  func lockedSidesAreIdempotent(maxSide: Int) {
+    let ratios = SizePreset.aspectRatios.map(\.ratio) + [1.37, 0.73, 1.375, 2.5, 0.4, 7.3, 0.13]
+    for ratio in ratios {
+      for side in stride(from: 64, through: maxSide, by: 64) {
+        let byWidth = SizePreset.locked(width: side, ratio: ratio, maxSide: maxSide)
+        #expect(SizePreset.locked(width: byWidth.width, ratio: ratio, maxSide: maxSide) == byWidth, "W \(side) at \(ratio): \(byWidth)")
+        let byHeight = SizePreset.locked(height: side, ratio: ratio, maxSide: maxSide)
+        #expect(SizePreset.locked(height: byHeight.height, ratio: ratio, maxSide: maxSide) == byHeight, "H \(side) at \(ratio): \(byHeight)")
+        #expect(byWidth.width <= maxSide && byWidth.height <= maxSide && byHeight.width <= maxSide && byHeight.height <= maxSide)
       }
     }
   }

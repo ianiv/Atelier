@@ -80,10 +80,29 @@ nonisolated enum SizePreset {
 
   /// Whether a size is what a locked commit at `ratio` could have made, so a stored ratio still
   /// describes it. A size changed elsewhere (an agent, Match Size to Image) fails this and is
-  /// locked afresh.
-  static func fits(width: Int, height: Int, ratio: Double) -> Bool {
+  /// locked afresh. A preset size at its own ratio always fits, though snapping both its sides on
+  /// their own can leave it off the side-follows-side rule (3:2 at 2 megapixels is 1792 × 1152,
+  /// where 1792 / 1.5 snaps to 1216), so pass the model's `megapixels` and `maxSide` to know it.
+  static func fits(
+    width: Int, height: Int, ratio: Double, megapixels: [Double] = megapixels, maxSide: Int = .max
+  ) -> Bool {
     guard validRatio(ratio) != nil else { return false }
+    if let (aspect, _) = match(width: width, height: height, megapixels: megapixels, maxSide: maxSide),
+       isRatio(aspect.ratio, ratio)
+    {
+      return true
+    }
     return snap(Double(width) / ratio) == height || snap(Double(height) * ratio) == width
+  }
+
+  /// The preset aspect whose ratio `ratio` is, if any. Close rather than equal, since a swapped
+  /// lock stores `1 / ratio`, which can be an ulp off the portrait preset's own ratio.
+  static func presetAspect(ratio: Double) -> AspectRatio? {
+    aspectRatios.first { isRatio($0.ratio, ratio) }
+  }
+
+  private static func isRatio(_ a: Double, _ b: Double) -> Bool {
+    abs(a - b) <= 1e-9 * max(a, b)
   }
 
   /// The size for a width typed while the aspect ratio is locked: the width snapped within
@@ -96,7 +115,15 @@ nonisolated enum SizePreset {
     let width = clamped(Double(width))
     let height = Double(width) / ratio
     if snap(height) > maxSide {
-      return (clamped(Double(maxSide) * ratio), maxSide)
+      // The width follows the height's limit instead, and the height is then rederived from that
+      // width as a typed width's would be, so typing the result back gives the result again (21:9
+      // at 4096: a height of 1728 is 4032 wide, so H 1760 makes 4032 × 1728, not 4096 × 1728). Without that, closing the popover just after
+      // a commit, which commits again, moved the other side and made a second undo step.
+      var width = clamped(Double(maxSide) * ratio)
+      while width > 64, snap(Double(width) / ratio) > maxSide {
+        width -= 64
+      }
+      return (width, min(snap(Double(width) / ratio), maxSide))
     }
     if height < 64 {
       return (clamped(64 * ratio), 64)
@@ -113,8 +140,13 @@ nonisolated enum SizePreset {
   /// The size for a Megapixels choice while the aspect ratio is locked. Worked out from the longer
   /// side alone, snapped, with the other side following it as a typed side's would, so the result
   /// always `fits` the ratio; snapping both sides of `size(ratio:megapixels:maxSide:)` on their own
-  /// could miss it, and the popover would then lock the size afresh at a different ratio.
+  /// could miss it, and the popover would then lock the size afresh at a different ratio. A
+  /// preset's own ratio gives that preset's size as it is, which `fits` accepts and the picker
+  /// shows as selected.
   static func locked(ratio: Double, megapixels: Double, maxSide: Int) -> (width: Int, height: Int) {
+    if let aspect = presetAspect(ratio: ratio) {
+      return size(aspect: aspect, megapixels: megapixels, maxSide: maxSide)
+    }
     let size = size(ratio: ratio, megapixels: megapixels, maxSide: maxSide)
     return ratio >= 1
       ? locked(width: size.width, ratio: ratio, maxSide: maxSide)

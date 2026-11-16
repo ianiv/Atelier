@@ -47,7 +47,7 @@ Click the size row in the inspector to open the size popover:
 
 - **Aspect Ratio**: 1:1, 4:3, 3:4, 3:2, 2:3, 16:9, 9:16 and 21:9.
 - **Megapixels**: 0.5 to 4. Larger images take longer and use more memory.
-- **Width** and **Height**: type exact values. Sizes snap to multiples of 64 pixels. The swap button flips width and height. The lock button keeps the aspect ratio: with it on, changing one side changes the other to match, within the sizes the model takes. Choosing an aspect ratio or swapping keeps the lock on at the new ratio, and the lock stays on until you turn it off.
+- **Width** and **Height**: type exact values. Sizes snap to multiples of 64 pixels. The swap button flips width and height. The lock button keeps the aspect ratio: with it on, changing one side changes the other to match, within the sizes the model takes, and Megapixels keeps the ratio too. Choosing an aspect ratio or swapping keeps the lock on at the new ratio, and the lock stays on until you turn it off.
 
 ## The settings inspector
 
