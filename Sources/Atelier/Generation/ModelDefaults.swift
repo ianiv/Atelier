@@ -81,9 +81,11 @@ nonisolated enum ModelDefaults {
       prefix: "fibo_2_", steps: 4, guidanceScale: 1, shift: 3,
       resolutionDependentShift: true, sampler: .eulerATrailing, size: (1024, 1024)),
     // MiniMax H3 Image, imported: distilled to 6 steps without CFG (the engine forces it off) on
-    // its own sigma grid, which the engine samples with Euler whatever the sampler or shift
-    // (`MiniMaxH3Layout.sigmaGrids`), so those two only matter for display. Tuned for about
-    // 2,048 x 2,048 pixels of area; its working range goes up to 16 megapixels.
+    // its own sigma grid. The engine samples that grid with Euler only for DDIM Trailing at a step
+    // count that has one (`LocalImageGenerator.sampler(from:)`, `MiniMaxH3Layout.sigmaGrids`), and
+    // shift 1 keeps it as trained, so these defaults are the native schedule; any other sampler,
+    // step count or shift runs as on other flow models. Tuned for about 2,048 x 2,048 pixels of
+    // area; its working range goes up to 16 megapixels.
     Fallback(
       prefix: "", steps: 6, guidanceScale: 1, shift: 1,
       resolutionDependentShift: false, sampler: .dDIMTrailing, size: (2048, 2048),

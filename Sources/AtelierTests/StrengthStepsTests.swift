@@ -59,6 +59,23 @@ struct StrengthStepsTests {
     #expect(Self.start(0.5, shift: 1, sampler: .eulerASubstep) == nil)
   }
 
+  /// MiniMax H3 Image samples its own grid only with DDIM Trailing at a step count that has one,
+  /// as `LocalImageGenerator.sampler(from:)` decides; anything else is counted like other models.
+  @Test func h3ImageGridOnlyForDDIMTrailing() {
+    let h3Image = StrengthSteps.FixedGrid.ddimTrailing(steps: [1, 2, 3, 6])
+    for steps in [1, 2, 3, 6] {
+      #expect(h3Image.applies(sampler: .dDIMTrailing, steps: steps))
+    }
+    for steps in [4, 5, 7, 8, 12] {
+      #expect(!h3Image.applies(sampler: .dDIMTrailing, steps: steps))
+    }
+    for sampler in [DataModels.SamplerType.eulerATrailing, .DDIM, .dPMPP2MTrailing, .uniPCTrailing, .eulerA, .TCD] {
+      #expect(!h3Image.applies(sampler: sampler, steps: 6))
+    }
+    #expect(StrengthSteps.FixedGrid.always.applies(sampler: .eulerA, steps: 5))
+    #expect(!StrengthSteps.FixedGrid.never.applies(sampler: .dDIMTrailing, steps: 6))
+  }
+
   @Test func unknownModelsAreNotCounted() {
     #expect(
       StrengthSteps.start(

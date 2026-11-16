@@ -28,7 +28,8 @@ nonisolated enum StrengthSteps {
   /// Resolution-Dependent Shift is on and the model takes it; else the Shift setting), and the
   /// sampler's discretization (`LocalImageGenerator.sampler(from:)`). Nil where the steps run
   /// aren't the user's to count: a model `ModelZoo` doesn't know (a server's), the fixed sigma
-  /// grids of HyperFlow H3 Flash and MiniMax H3 Image, Würstchen, and samplers on manual timesteps or sigmas.
+  /// grids of HyperFlow H3 Flash and of MiniMax H3 Image's native schedule (`runsFixedGrid`),
+  /// Würstchen, and samplers on manual timesteps or sigmas.
   static func start(
     model: String, sampler: DataModels.SamplerType, steps: Int, strength: Float, shift: Double,
     resolutionDependentShift: Bool, width: Int, height: Int, tile: (width: Int, height: Int)? = nil
@@ -39,7 +40,7 @@ nonisolated enum StrengthSteps {
     case .wurstchenStageB, .wurstchenStageC: return nil
     case .minimaxH3, .minimaxH3Image:
       // Only once `checkFixedGrid` has read the file: the inspector asks on the main actor.
-      guard knownFixedGrid(model) == false else { return nil }
+      guard runsFixedGrid(model, sampler: sampler, steps: steps) == false else { return nil }
     default: break
     }
     let parameterization: Denoiser.Parameterization
@@ -62,25 +63,56 @@ nonisolated enum StrengthSteps {
       sampler: sampler, sampling: Sampling(steps: steps, shift: runShift), strength: strength)
   }
 
-  /// Whether each MiniMax H3 file checked so far runs its own fixed sigma grid.
-  private static let fixedGrids = Mutex<[String: Bool]>([:])
+  /// When a MiniMax H3 file runs Euler on its own sigma grid, as `LocalImageGenerator.sampler(from:)`
+  /// decides (`MiniMaxH3Layout.load`).
+  enum FixedGrid: Equatable {
+    /// The usual schedules: the file has no grid of its own.
+    case never
+    /// Whatever the sampler: HyperFlow's two-time checkpoints (and a file that isn't there, so
+    /// there's nothing to count).
+    case always
+    /// MiniMax H3 Image's output-head grids, which only DDIM Trailing samples, and only at a step
+    /// count that has a grid (`MiniMaxH3Layout.sigmaGrids`); everything else runs the usual
+    /// flow-model samplers.
+    case ddimTrailing(steps: Set<Int>)
+
+    func applies(sampler: DataModels.SamplerType, steps: Int) -> Bool {
+      switch self {
+      case .never: false
+      case .always: true
+      case .ddimTrailing(let gridSteps): sampler == .dDIMTrailing && gridSteps.contains(steps)
+      }
+    }
+  }
+
+  /// What `checkFixedGrid` found for each MiniMax H3 file checked so far.
+  private static let fixedGrids = Mutex<[String: FixedGrid]>([:])
 
   /// What `checkFixedGrid` found for `model`; nil until it has run.
-  static func knownFixedGrid(_ model: String) -> Bool? {
+  static func knownFixedGrid(_ model: String) -> FixedGrid? {
     fixedGrids.withLock { $0[model] }
   }
 
-  /// Whether a MiniMax H3 file runs Euler on its own sigma grid whatever the sampler, as
-  /// `LocalImageGenerator.sampler(from:)` decides: HyperFlow's two-time checkpoints and H3 Image
-  /// files with output-head grids (`MiniMaxH3Layout.load`). Reads the file once, off the main
-  /// actor, and remembers it; a file that isn't there counts as fixed (nothing to count).
-  @concurrent static func checkFixedGrid(_ model: String) async -> Bool {
+  /// Whether a run of `model` with this sampler and step count samples the file's fixed grid;
+  /// nil until `checkFixedGrid` has read it.
+  static func runsFixedGrid(_ model: String, sampler: DataModels.SamplerType, steps: Int) -> Bool? {
+    knownFixedGrid(model)?.applies(sampler: sampler, steps: steps)
+  }
+
+  /// Which fixed grid a MiniMax H3 file runs (`FixedGrid`). Reads the file once, off the main
+  /// actor, and remembers it.
+  @concurrent @discardableResult static func checkFixedGrid(_ model: String) async -> FixedGrid {
     if let known = knownFixedGrid(model) { return known }
     let path = ModelZoo.filePathForModelDownloaded(model)
-    var fixed = true
+    var fixed = FixedGrid.always
     if FileManager.default.fileExists(atPath: path) {
       let layout = MiniMaxH3Layout.load(filePath: path)
-      fixed = ModelZoo.versionForModel(model) == .minimaxH3 ? layout.isTwoTime : !layout.sigmaGrids.isEmpty
+      if ModelZoo.versionForModel(model) == .minimaxH3 {
+        fixed = layout.isTwoTime ? .always : .never
+      } else {
+        let grids = layout.sigmaGrids
+        fixed = grids.isEmpty ? .never : .ddimTrailing(steps: Set(grids.keys))
+      }
     }
     fixedGrids.withLock { $0[model] = fixed }
     return fixed
@@ -186,22 +218,27 @@ extension CreateModel {
     else { return nil }
     // An H3 file's schedule is read from it once, in the background (`startFixedGridCheck`, as
     // it's selected). The line stays put meanwhile, and for a fixed schedule says so.
+    let steps = Int(settings.steps)
     if Self.mayRunFixedGrid(file) {
       _ = fixedGridChecks
       switch StrengthSteps.knownFixedGrid(file) {
       case nil:
         startFixedGridCheck(file)
         return SettingHint(text: "Counting steps…", help: "Reading the model's schedule.", dimmed: true)
-      case true?:
+      case .always?:
         return SettingHint(
           text: "Runs the model's fixed schedule",
           help: "This model runs its own fixed schedule of steps whatever the sampler, so they aren't counted here.",
           dimmed: true)
-      case false?:
+      case let fixed? where fixed.applies(sampler: sampler, steps: steps):
+        return SettingHint(
+          text: "Runs the model's fixed schedule",
+          help: "With DDIM Trailing at this step count, this model runs its own fixed schedule of steps, so they aren't counted here.",
+          dimmed: true)
+      case _?:
         break
       }
     }
-    let steps = Int(settings.steps)
     let tile = settings.tiledDiffusion ? (width: settings.diffusionTileWidth, height: settings.diffusionTileHeight) : nil
     guard let start = StrengthSteps.start(
       model: file, sampler: sampler, steps: steps, strength: settings.strength, shift: Double(settings.shift),
@@ -232,7 +269,7 @@ extension CreateModel {
     else { return }
     fixedGridsChecking.insert(file)
     Task {
-      _ = await StrengthSteps.checkFixedGrid(file)
+      await StrengthSteps.checkFixedGrid(file)
       fixedGridChecks += 1
     }
   }
