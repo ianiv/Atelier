@@ -17,7 +17,8 @@ import Synchronization
 /// - Model and LoRA imports pass it to the importers as `outputDirectory`, which the fork adds to
 ///   `ModelImporter` and `LoRAImporter.import`.
 /// - An 8-bit copy is written by `MOSSImporter`, which takes a path.
-/// Downloads to the first folder still go through MGK, unchanged.
+/// Downloads to the first folder still go through MGK, unchanged, unless a file comes from
+/// somewhere MGK doesn't fetch from (`needsOwnDownloader`).
 extension ModelLibrary {
   nonisolated static let addFolderKey = "addModelsFolder"
 
@@ -61,12 +62,20 @@ extension ModelLibrary {
     }
   }
 
+  /// Whether `file` or anything it needs downloads from somewhere other than static.libnnc.org
+  /// (`ModelDefaults.downloadSources`), which MGK's `ensure` can't fetch, so `download(_:)` goes
+  /// through `downloadModel(_:into:)` even for the first folder.
+  nonisolated static func needsOwnDownloader(_ file: String) -> Bool {
+    let files = ModelZoo.specificationForModel(file).map { ModelZoo.filesToDownload($0).map(\.file) } ?? [file]
+    return files.contains { ModelDefaults.downloadSources[$0] != nil }
+  }
+
   /// One file, resumable, checked against the catalog's SHA-256 when it has one.
   private nonisolated static func downloadFile(
     _ name: String, to destination: URL,
     progress: @escaping @Sendable (_ written: Int64, _ expected: Int64) -> Void
   ) async throws {
-    guard let url = URL(string: "https://static.libnnc.org/\(name)") else { return }
+    guard let url = ModelDefaults.downloadSources[name] ?? URL(string: "https://static.libnnc.org/\(name)") else { return }
     let downloader = ResumableDownloader(
       remoteUrl: url, localUrl: destination, sha256: ModelZoo.fileSHA256ForModelDownloaded(name))
     let resumed = Mutex(false)

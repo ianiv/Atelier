@@ -23,13 +23,19 @@ FastH3 Omni is a fast MiniMax H3 Ref2VA: it starts at 1280×768, 8 steps and gui
 2. Convert it with `Scripts/hyperflow/hyperflow_gguf_to_safetensors.py` from the engine fork (needs Python with `gguf` and `numpy`):
    `python hyperflow_gguf_to_safetensors.py <file>.gguf hyperflow_h3_flash_fl2va.safetensors --config config.json`. Keep `hyperflow` in the output name, and put `ref2va` in it for the Ref2VA file. The result is about 28 GB.
 3. Import the `.safetensors` file in **Models** (see [Importing a checkpoint](models-and-loras.md#importing-a-checkpoint)). It uses the MiniMax H3 text encoder and VAE.
-4. Select it in **Models** and click **Make 8-bit S Copy** (see [Make 8-bit Copy](models-and-loras.md#make-8-bit-copy-moss-and-minimax-h3-models)). The copy is about half the size and needs half the memory; use it in Create and move the full-precision one to the Trash if you like.
+4. Select it in **Models** and click **Make 8-bit S Copy** (see [Make 8-bit Copy](models-and-loras.md#make-8-bit-copy-moss-minimax-h3-and-longcat-models)). The copy is about half the size and needs half the memory; use it in Create and move the full-precision one to the Trash if you like.
 
 It starts at 1344×768, 124 frames, 6 steps, guidance 1 and shift 12. It's trained for exactly 4, 6 or 8 steps (4 is fastest, 8 best) and always runs its own sampler on those steps; any other step count falls back to a plain linear schedule and looks worse. Leave guidance at 1 and the negative prompt empty.
 
 The weights are under the MiniMax H3 Community License: it doesn't cover the EU, the UK, South Korea or the US without MiniMax's permission, and asks that what you share be marked as AI-generated.
 
 LongCat starts at 832×512, 8 steps, guidance 1 and 93 frames (3.7 seconds at 25 fps). It always runs at guidance 1, and the audio is cut or padded to the clip's length. It also needs the 1.3 GB Whisper voice encoder, which downloads with it.
+
+### LongCat-Video Avatar 1.6
+
+[LongCat-Video Avatar 1.6](https://huggingface.co/meituan-longcat/LongCat-Video-Avatar-1.6) (MIT) is listed beside 1.5 as **LongCat-Video Avatar 1.6 (8-bit S)**. It comes as two files that download together: Meituan distilled 1.6 in two halves, one for the first four of its eight steps and one for the last four, and the second half (**LongCat-Video Avatar 1.6 OPSD (8-bit S)**) is set as its **Refiner**, with **Refiner Start** at 0.10, the value that hands over after step 4 at Shift 7. If you change the steps or Shift, the hand-over moves with them. Leave the refiner on: without it the first half runs all eight steps. Picking the OPSD file on its own gives poor results.
+
+1.6 starts with 1.5's settings. Unlike 1.5, it hears the voice at the level you give it: 1.5 evens out the loudness of the audio first, 1.6 doesn't, so a very quiet or very loud recording may lip-sync less well. The files are Atelier's own conversion (`Scripts/longcat-avatar-merge.py` merges each half into the base model) and download from Hugging Face rather than Draw Things' server.
 
 Download them from **Models** like any other model. They're large, and a video takes minutes, not seconds.
 

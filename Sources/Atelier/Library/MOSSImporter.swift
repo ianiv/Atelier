@@ -128,9 +128,16 @@ nonisolated enum MOSSImporter {
   /// projection and output projections in FP16, and vectors (norms, biases) ezm7. The AdaLN
   /// matrices of a curve-form checkpoint (MiniMax H3 Image from ComfyUI) are a few columns wide,
   /// where a palette would cost precision and save nothing, so they stay FP16.
+  ///
+  /// `longCat` writes LongCat-Video Avatar checkpoints as Draw Things'
+  /// `longcat_video_avatar_1.5_dmd_i8x.ckpt` stores them: every matrix row-wise 8-bit, the AdaLN
+  /// and audio projections included, the patch, text and timestep embedders and final linear
+  /// layer as they are, and vectors ezm7. The importer writes some of LongCat's tensors in BF16
+  /// (the attention projections and FFN, and their biases), and Draw Things' file keeps them BF16:
+  /// those keep their type, quantized as BF16, and BF16 vectors stay uncompressed.
   static func quantize(
     _ path: String, to output: String, format: EightBit, miniMaxH3: Bool = false,
-    progress: (Float) -> Void
+    longCat: Bool = false, progress: (Float) -> Void
   ) {
     let graph = DynamicGraph()
     graph.openStore(
@@ -146,6 +153,19 @@ nonisolated enum MOSSImporter {
           }
           if tensor.dataType == .Float32 {
             out.write(key, tensor: tensor)
+            continue
+          }
+          if longCat {
+            let isMatrix = tensor.shape.filter { $0 > 1 }.count > 1
+            if key.contains("embedder") || key.contains("-linear-") {
+              out.write(key, tensor: tensor)
+            } else if isMatrix {
+              out.write(key, tensor: tensor, codec: format.matrixCodec)
+            } else if tensor.dataType == .Float16 {
+              out.write(key, tensor: tensor, codec: .ezm7)
+            } else {
+              out.write(key, tensor: tensor)
+            }
             continue
           }
           let fp16 = Tensor<Float16>(from: tensor)

@@ -286,7 +286,7 @@ final class ModelLibrary {
       file: file, fileIndex: 0, totalFiles: 0, bytesWritten: 0, totalBytes: 0)
     let folder = addFolder
     // MGK's `ensure` would try to fetch the H3 Image VAE, which the server doesn't have.
-    let viaEngine = isEngineFolder(folder) && !awaitsH3ImageVAE(file)
+    let viaEngine = isEngineFolder(folder) && !awaitsH3ImageVAE(file) && !Self.needsOwnDownloader(file)
     downloadTasks[file] = Task {
       var finished = false
       let show: @Sendable (Download) -> Void = { progress in
@@ -449,7 +449,7 @@ final class ModelLibrary {
   /// of throwing, so they're turned away after inspection. MOSS goes through MOSSImporter.
   private nonisolated static let unconvertibleVersions: Set<ModelVersion> = [
     .mossImage, .hiDreamO1, .qwenImage2_1, .ltx2, .ltx2_3, .seedvr2_3b, .seedvr2_7b,
-    .kandinsky21, .wurstchenStageB, .longcatVideoAvatar1_5,
+    .kandinsky21, .wurstchenStageB,
   ]
 
   var isImportingModels: Bool { modelImportTask != nil }
@@ -716,9 +716,9 @@ final class ModelLibrary {
       && Self.folder(of: H3ImageVAEImporter.file, in: directories) == nil
   }
 
-  /// Whether `model` can get an 8-bit copy in `format`: an imported full-precision MOSS or
-  /// MiniMax H3 (video or Image) model without that copy yet. MiniMax H3 only gets 8-bit S, the
-  /// format Draw Things' own H3 files use, and MiniMax H3 Image 4-bit S too, for its install. A copy whose file exists but isn't registered was interrupted, and making it
+  /// Whether `model` can get an 8-bit copy in `format`: an imported full-precision MOSS,
+  /// MiniMax H3 (video or Image) or LongCat-Video Avatar model without that copy yet. MiniMax H3
+  /// and LongCat only get 8-bit S, the format Draw Things' own files of them use, and MiniMax H3 Image 4-bit S too, for its install. A copy whose file exists but isn't registered was interrupted, and making it
   /// again resumes it.
   func canMake8BitCopy(_ model: MediaGenerationResolvedModel, _ format: MOSSImporter.EightBit)
     -> Bool
@@ -727,7 +727,7 @@ final class ModelLibrary {
     let version = ModelZoo.specificationForModel(model.file)?.version
     let supported =
       version == .mossImage
-        || ((version == .minimaxH3 || version == .minimaxH3Image) && format == .rowwise)
+        || ((version == .minimaxH3 || version == .minimaxH3Image || version == .longcatVideoAvatar1_5) && format == .rowwise)
         || (version == .minimaxH3Image && format == .rowwise4Bit)
     return isCustom(model) && model.isDownloaded && model.file.hasSuffix("_f16.ckpt") && supported
       && quantizing[output] == nil && moving == nil && ModelZoo.specificationForModel(output) == nil
@@ -739,10 +739,11 @@ final class ModelLibrary {
 
   @concurrent private nonisolated static func quantize(
     _ source: String, to destination: String, format: MOSSImporter.EightBit, miniMaxH3: Bool,
-    progress: @escaping @Sendable (Float) -> Void
+    longCat: Bool = false, progress: @escaping @Sendable (Float) -> Void
   ) async {
     MOSSImporter.quantize(
-      source, to: destination, format: format, miniMaxH3: miniMaxH3, progress: progress)
+      source, to: destination, format: format, miniMaxH3: miniMaxH3, longCat: longCat,
+      progress: progress)
   }
 
   /// Writes `<name>_q8p.ckpt` or `<name>_i8x.ckpt` to `addFolder`, about half the model's size,
@@ -769,7 +770,7 @@ final class ModelLibrary {
       await Self.quantize(
         source, to: destination, format: format,
         miniMaxH3: specification.version == .minimaxH3 || specification.version == .minimaxH3Image,
-        progress: progress)
+        longCat: specification.version == .longcatVideoAvatar1_5, progress: progress)
       if FileManager.default.fileExists(atPath: destination) {
         specification.file = output
         specification.name = "\(model.name) (\(format.title))"

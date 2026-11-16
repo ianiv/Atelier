@@ -313,6 +313,12 @@ enum Automation {
       if let preserve = value("--preserve-original") { settings.preserveOriginalAfterInpaint = preserve == "true" }
       model.settings = settings
       log("mask blur \(settings.maskBlur), outset \(settings.maskBlurOutset), preserve original \(settings.preserveOriginalAfterInpaint)")
+      if let refiner = settings.refinerModel {
+        // The step the engine swaps to the refiner at, for DDIM Trailing (`ModelDefaults.refinerKickInStep`).
+        let kickIn = ModelDefaults.refinerKickInStep(
+          refinerStart: Double(settings.refinerStart), steps: settings.steps, shift: Double(settings.shift))
+        log("refiner \(refiner) from \(settings.refinerStart): kick-in at step \(kickIn) of \(settings.steps) (DDIM Trailing schedule)")
+      }
       // Image to image: --input FILE puts it on the canvas (Edit mode), --input-zoom and
       // --input-offset X,Y (frame pixels) place it, --moodboard FILE[,FILE…] adds references
       // (FILE@WEIGHT for a weight), --mode generate|edit overrides the mode.

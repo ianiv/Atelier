@@ -50,7 +50,7 @@ The converted model is saved in the folder chosen in **Add To** as `<name>_f16.c
 
 **MOSS Image fine-tunes** in OpenMOSS' layout (for example Kromoss) are converted by a dedicated importer and work like the official MOSS Image model. To edit images with MOSS Image, add a [MOSS Image Edit LoRA](#moss-image-edit-loras).
 
-Some families can't be imported yet: HiDream O1, Qwen Image 2.1, LTX-2, SeedVR2, Kandinsky, Würstchen and LongCat. Atelier tells you after inspecting the file.
+Some families can't be imported yet: HiDream O1, Qwen Image 2.1, LTX-2, SeedVR2, Kandinsky and Würstchen. Atelier tells you after inspecting the file. LongCat-Video Avatar imports from a single `.safetensors` file of its DiT with any distillation LoRA already merged in (the engine can't apply LongCat LoRAs); Meituan's sharded `base_model` folder has to be joined into one file first, as `Scripts/longcat-avatar-merge.py` does.
 
 ### Fibo 2.0 Edit Turbo
 
@@ -68,7 +68,7 @@ Some families can't be imported yet: HiDream O1, Qwen Image 2.1, LTX-2, SeedVR2,
 - Its license is the **MiniMax-H3-Image Community License**, which doesn't cover use in the European Union, the United Kingdom, South Korea or the United States. Read it on Hugging Face before you download the files.
 - In **Models**, show **Available** or **All**, find the **MiniMax H3 Image** row and click **Install…** (also in the row's detail and right-click menu). Once the model and its VAE are installed, the row is replaced by the installed model.
 - Under **1. Download**, the two links open Hugging Face in your browser: `minimax_h3_image_pruned_bf16.safetensors` (40 GB) and `minimax_h3_image_vae_fp16.safetensors` (1.2 GB).
-- Under **2. Import**, click **Choose Downloaded Files…** and pick both files. If you pick only the model, the VAE is taken from the same folder or from a `vae` folder beside it. Atelier imports the model, converts the VAE to `minimax_h3_image_vae_f16.ckpt`, and makes the copy you chose under **Install**: the [8-bit S copy](#make-8-bit-copy-moss-and-minimax-h3-models), 21 GB, which on a 48 GB Mac makes a 2048×2048 image in well under a minute where the full-precision file takes many minutes, or a 4-bit S copy, about 12 GB, for Macs with less memory, at some cost in detail. The 4-bit S copy takes a few hours to write. The text encoder is MiniMax H3's and downloads afterwards in the Models list.
+- Under **2. Import**, click **Choose Downloaded Files…** and pick both files. If you pick only the model, the VAE is taken from the same folder or from a `vae` folder beside it. Atelier imports the model, converts the VAE to `minimax_h3_image_vae_f16.ckpt`, and makes the copy you chose under **Install**: the [8-bit S copy](#make-8-bit-copy-moss-minimax-h3-and-longcat-models), 21 GB, which on a 48 GB Mac makes a 2048×2048 image in well under a minute where the full-precision file takes many minutes, or a 4-bit S copy, about 12 GB, for Macs with less memory, at some cost in detail. The 4-bit S copy takes a few hours to write. The text encoder is MiniMax H3's and downloads afterwards in the Models list.
 - **Move the full-precision copy to the Trash afterwards** is on by default. It moves only the converted `.ckpt` Atelier wrote, never the `.safetensors` files you downloaded, which you can delete yourself once it's installed.
 - The install needs about 90 GB of free space while it runs and about 50 GB afterwards (about 40 GB with 4-bit S). If it stops part way, run it again: finished steps are skipped.
 - To do it by hand, import the model file with **Import…** (or drop it on the Models list), then import the VAE file the same way, then use **Make 8-bit Copy**.
@@ -88,14 +88,14 @@ The file itself doesn't say what it is, so Atelier can't check your choice. If i
 
 If the community catalog couldn't be reached, the list says so, because it may then include models newer than the copy Atelier shipped with.
 
-### Make 8-bit Copy (MOSS and MiniMax H3 models)
+### Make 8-bit Copy (MOSS, MiniMax H3 and LongCat models)
 
-An imported MOSS or MiniMax H3 model (such as HyperFlow H3 Flash) is full precision and large. Atelier can write a smaller copy at about half the size. Select the model and click:
+An imported MOSS, MiniMax H3 (such as HyperFlow H3 Flash) or LongCat-Video Avatar model is full precision and large. Atelier can write a smaller copy at about half the size. Select the model and click:
 
 - **Make 8-bit Copy**: like Draw Things' "8-bit" models. Slow to write.
 - **Make 8-bit S Copy**: like Draw Things' "8-bit S" models. These can run on the Apple Neural Engine (see Performance in [Settings](settings.md)).
 
-MiniMax H3 models only offer **Make 8-bit S Copy**, the format Draw Things' own H3 files use. The copy is faster too: each step reads half as much from memory, and it leaves more room for the text encoder.
+MiniMax H3 and LongCat models only offer **Make 8-bit S Copy**, the format Draw Things' own files of them use. The copy is faster too: each step reads half as much from memory, and it leaves more room for the text encoder.
 
 The copy is saved in the folder chosen in **Add To** and listed as "<name> (8-bit)" or "<name> (8-bit S)" with the same settings. Pick it in Create like any other model. Once a copy exists, its button goes away. You can keep the full-precision model or move it to the Trash.
 

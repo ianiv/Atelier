@@ -21,6 +21,8 @@ nonisolated enum ModelDefaults {
     var fps: Int?
     var numFrames: Int?
     var shiftForAudio: Float?
+    /// A second model that takes over at `refinerStart`, for models distilled as two halves.
+    var refiner: (model: String, start: Float)?
     var replacesCatalog = false
     /// Matches every file of this model family instead of a file name prefix, for imports whose
     /// name is the user's.
@@ -35,13 +37,80 @@ nonisolated enum ModelDefaults {
     [
       longCatSpecification(name: "LongCat-Video Avatar 1.5 DMD (8-bit S)", file: "longcat_video_avatar_1.5_dmd_i8x.ckpt"),
       longCatSpecification(name: "LongCat-Video Avatar 1.5 DMD", file: "longcat_video_avatar_1.5_dmd_q8p.ckpt"),
+      longCat16Specification(
+        name: "LongCat-Video Avatar 1.6 (8-bit S)", file: longCat16DMD, refiner: longCat16OPSD,
+        note:
+        "[LongCat-Video Avatar 1.6](https://huggingface.co/meituan-longcat/LongCat-Video-Avatar-1.6) animates a portrait to lip-sync to an audio file. Put the image on the canvas and add a voice; the clip keeps that voice. It runs 8 steps at guidance 1 and takes 4k + 1 frames at 25 fps: its DMD half for the first four steps, then its OPSD half as the refiner, which downloads with it."),
+      longCat16Specification(
+        name: "LongCat-Video Avatar 1.6 OPSD (8-bit S)", file: longCat16OPSD, refiner: nil,
+        note:
+        "The second half of [LongCat-Video Avatar 1.6](https://huggingface.co/meituan-longcat/LongCat-Video-Avatar-1.6): the refiner LongCat-Video Avatar 1.6 (8-bit S) switches to for its last four steps. On its own it finishes poorly; pick LongCat-Video Avatar 1.6 instead."),
     ]
+  }
+
+  /// LongCat-Video Avatar 1.6's two files. Meituan ships 1.6 as a base model and two
+  /// step-distillation LoRAs, DMD for steps 0-3 and OPSD for steps 4-7 (the official
+  /// `--mix_steps 4 --mix_alpha 1.0` recipe), and the engine can't load LoRAs for LongCat, so
+  /// each is merged into its own copy of the base model (Scripts/longcat-avatar-merge.py) and the
+  /// OPSD copy runs as the DMD copy's refiner.
+  static let longCat16DMD = "longcat_video_avatar_1.6_dmd_i8x.ckpt"
+  static let longCat16OPSD = "longcat_video_avatar_1.6_opsd_i8x.ckpt"
+
+  /// Where files that static.libnnc.org doesn't host download from, by file name. Atelier's own
+  /// conversions of LongCat-Video Avatar 1.6 (MIT) are published on Hugging Face.
+  static let downloadSources: [String: URL] = [
+    longCat16DMD: huggingFaceFile("ianivs/LongCat-Video-Avatar-1.6-DrawThings", longCat16DMD),
+    longCat16OPSD: huggingFaceFile("ianivs/LongCat-Video-Avatar-1.6-DrawThings", longCat16OPSD),
+  ]
+
+  private static func huggingFaceFile(_ repository: String, _ path: String) -> URL {
+    URL(string: "https://huggingface.co/\(repository)/resolve/main/\(path)")!
+  }
+
+  /// The refiner start that hands `steps` sampling steps over to the refiner after `kickInStep`
+  /// of them, for a flow model sampled with DDIM Trailing at `shift`. The engine swaps models at
+  /// the first step whose timestep is below `(1 - refinerStart) * 1000`
+  /// (`DDIMSampler.sample`'s `refinerKickIn`), and step i of the trailing schedule has timestep
+  /// `1000 * shift * t / (1 + (shift - 1) * t)` with `t = (steps - i) / steps`
+  /// (`Denoiser.LinearDiscretization.alphasCumprod` with `.trailing` spacing), so any start whose
+  /// threshold falls between steps `kickInStep - 1` and `kickInStep` works; this is the midpoint.
+  static func refinerStart(kickInStep: Int, steps: Int, shift: Double) -> Double {
+    func timestep(_ i: Int) -> Double {
+      let t = Double(steps - i) / Double(steps)
+      return 1000 * shift * t / (1 + (shift - 1) * t)
+    }
+    let threshold = (timestep(kickInStep - 1) + timestep(kickInStep)) / 2
+    return 1 - threshold / 1000
+  }
+
+  /// The step at which the engine hands over to the refiner, as `DDIMSampler.sample` decides it
+  /// for the trailing schedule above (`steps` when it never does).
+  static func refinerKickInStep(refinerStart: Double, steps: Int, shift: Double) -> Int {
+    let kickIn = (1 - refinerStart) * 1000
+    for i in 0..<steps {
+      let t = Double(steps - i) / Double(steps)
+      if 1000 * shift * t / (1 + (shift - 1) * t) < kickIn { return i }
+    }
+    return steps
   }
 
   /// The dependencies the engine's run-longcat-avatar-video skill lists. Its third, Whisper, has no
   /// field here: see `ModelLibrary.downloadAudioEncoder(for:progress:)`. `.kontext` is what makes
   /// the portrait count: `LocalImageGenerator.encodeImageCond` only reaches LongCat's reference
   /// frame under that modifier, and without it the avatar is a stranger who lip-syncs the voice.
+  /// 1.6 has 1.5's network and dependencies but not its audio preprocessing: its pipeline feeds
+  /// Whisper the voice as it is, without 1.5's -23 LUFS normalization.
+  private static func longCat16Specification(name: String, file: String, refiner: String?, note: String)
+    -> ModelZoo.Specification
+  {
+    var specification = longCatSpecification(name: name, file: file)
+    specification.defaultRefiner = refiner
+    specification.audioLoudnessNormalization = false
+    specification.note = note
+    specification.huggingFaceLink = "meituan-longcat/LongCat-Video-Avatar-1.6"
+    return specification
+  }
+
   private static func longCatSpecification(name: String, file: String) -> ModelZoo.Specification {
     ModelZoo.Specification(
       name: name, file: file, prefix: "", version: .longcatVideoAvatar1_5, defaultScale: 12,
@@ -90,6 +159,13 @@ nonisolated enum ModelDefaults {
       prefix: "", steps: 6, guidanceScale: 1, shift: 1,
       resolutionDependentShift: false, sampler: .dDIMTrailing, size: (2048, 2048),
       replacesCatalog: true, version: .minimaxH3Image),
+    // LongCat-Video Avatar 1.6: 1.5's values, with the OPSD half taking the last four of the
+    // eight steps as the official recipe does (`refinerStart(kickInStep: 4, steps: 8, shift: 7)`
+    // is about 0.10).
+    Fallback(
+      prefix: "longcat_video_avatar_1.6_dmd", steps: 8, guidanceScale: 1, shift: 7,
+      resolutionDependentShift: false, sampler: .dDIMTrailing, size: (832, 512), fps: 25,
+      numFrames: 93, refiner: (longCat16OPSD, 0.10)),
     // The values the engine's run-longcat-avatar-video skill uses for the step-distilled DMD files.
     Fallback(
       prefix: "longcat_video_avatar_", steps: 8, guidanceScale: 1, shift: 7,
@@ -110,7 +186,7 @@ nonisolated enum ModelDefaults {
       let fallback = fallbacks.first(where: {
         $0.version.map { $0 == version } ?? model.hasPrefix($0.prefix)
       }),
-          fallback.replacesCatalog || isGenericTemplate(configuration)
+      fallback.replacesCatalog || isGenericTemplate(configuration)
     else {
       return settings
     }
@@ -126,6 +202,10 @@ nonisolated enum ModelDefaults {
     if let fps = fallback.fps { settings.fps = fps }
     if let numFrames = fallback.numFrames { settings.numFrames = numFrames }
     if let shiftForAudio = fallback.shiftForAudio { settings.shiftForAudio = shiftForAudio }
+    if let refiner = fallback.refiner {
+      settings.refinerModel = refiner.model
+      settings.refinerStart = refiner.start
+    }
     return settings
   }
 
