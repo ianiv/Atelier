@@ -173,7 +173,7 @@ final class ModelLibrary {
     self.create = create
     create.onModelsReloaded = { [weak self] in
       guard let self else { return }
-      reloadLoRAs()
+      Task { await self.reloadLoRAs() }
       // A catalog read before the folders (and their custom.json) were loaded leaves out every
       // imported model, and the Models screen only rereads an empty catalog. Once one has been
       // asked for, reread it whenever the folders are.
@@ -223,7 +223,7 @@ final class ModelLibrary {
     // The retry just brought community models in: Create's picker hasn't seen them yet.
     if rereadingModelLists || CommunityCatalog.generation != generation { await create.refreshModelList() }
     customModels = Set(directories.flatMap { Self.readCustomModels(in: $0) })
-    reloadLoRAs()
+    await reloadLoRAs()
     await measure()
   }
 
@@ -1154,58 +1154,70 @@ final class ModelLibrary {
 
   // MARK: - LoRAs
 
+  /// Counts `reloadLoRAs()` calls, so one that finishes after a newer one doesn't overwrite it.
+  private var loraGeneration = 0
+  /// Each folder's custom_lora.json as it was when `loras` was last read (nil before the first
+  /// read), so a screen showing LoRAs can tell whether anything changed outside the app.
+  private var loadedLoRARegistries: [LoRARegistryStamp]?
+
+  /// A folder's custom_lora.json modification date, nil when it has none.
+  nonisolated struct LoRARegistryStamp: Equatable, Sendable {
+    var directory: URL
+    var modified: Date?
+  }
+
   /// Rereads every models folder's custom_lora.json (they can also change outside the app). A
-  /// LoRA listed in more than one folder comes from the first.
-  func reloadLoRAs() {
-    let directories = directories
+  /// LoRA listed in more than one folder comes from the first. The reading, the file checks for
+  /// every LoRA in every folder and the linking of copies run off the main actor: with hundreds of
+  /// entries on a slow drive they took seconds, and the screens that show LoRAs used to call this
+  /// each time they appeared.
+  func reloadLoRAs() async {
+    loraGeneration += 1
+    let generation = loraGeneration
+    let (loras, stamps) = await Self.readLoRAs(in: directories)
+    guard generation == loraGeneration else { return }
+    self.loras = loras
+    loadedLoRARegistries = stamps
+  }
+
+  /// For screens that show LoRAs, on appear: rereads them only if a folder's custom_lora.json
+  /// changed (or appeared, or went) since the last read, as when Draw Things writes it. Every
+  /// change the app makes, and a change of models folders, already rereads them.
+  func reloadLoRAsIfRegistriesChanged() async {
+    let stamps = await Self.loraRegistryStamps(in: directories)
+    guard stamps != loadedLoRARegistries else { return }
+    await reloadLoRAs()
+  }
+
+  @concurrent private nonisolated static func loraRegistryStamps(in directories: [URL]) async -> [LoRARegistryStamp] {
+    directories.map { directory in
+      let url = directory.appendingPathComponent("custom_lora.json")
+      let modified = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+      return LoRARegistryStamp(directory: directory, modified: modified)
+    }
+  }
+
+  /// The LoRAs every folder lists, linked (`linkingLoRACopies`) and sorted by name, and the
+  /// custom_lora.json stamps read before them (so a write during the read shows as a change).
+  @concurrent private nonisolated static func readLoRAs(in directories: [URL]) async -> ([LoRA], [LoRARegistryStamp]) {
+    let stamps = await loraRegistryStamps(in: directories)
     var seen = Set<String>()
     var loras: [LoRA] = []
     for directory in directories {
-      for specification in Self.readLoRASpecifications(in: directory)
+      for specification in readLoRASpecifications(in: directory)
         where seen.insert(specification.file).inserted
       {
+        let folder = folder(of: specification.file, in: directories)
         loras.append(
           LoRA(
             name: specification.name, file: specification.file, prefix: specification.prefix,
             version: specification.version.rawValue,
-            size: Self.size(of: specification.file, in: directories), registry: directory,
-            folder: Self.folder(of: specification.file, in: directories), weight: Weight(specification.weight)))
+            size: folder.flatMap { size(of: specification.file, inFolder: $0) }, registry: directory,
+            folder: folder, weight: Weight(specification.weight)))
       }
     }
-    self.loras = Self.linkingLoRACopies(loras).sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-  }
-
-  /// Draw Things' 8-bit conversion deletes the original LoRA's file but leaves its custom_lora.json
-  /// entry, and the copy's new entry has no trigger words. So a file that's gone and a file that's
-  /// here, in the same family with the same name apart from the precision, are one LoRA: it's shown
-  /// once, as the copy, with the original's trigger words if it has none. Only in memory: this
-  /// file is Draw Things' too, and saving an edit in the LoRAs screen is what writes them down.
-  nonisolated static func linkingLoRACopies(_ loras: [LoRA]) -> [LoRA] {
-    // Names and file names, without what differs between the two. The copy's name is usually just
-    // its file name ("Age Slider v1 Krea" becomes age_slider_v1_krea_lora_q8p.ckpt).
-    func normalized(_ text: String) -> String {
-      text.lowercased()
-        .replacingOccurrences(of: "[^a-z0-9.]+", with: "_", options: .regularExpression)
-        .replacingOccurrences(of: "\\.ckpt$", with: "", options: .regularExpression)
-        .replacingOccurrences(of: "(_lora)?(_(f16|q8p|q6p|q5p|i8x|8_?bit))?_*$", with: "", options: .regularExpression)
-        .replacingOccurrences(of: "^_+", with: "", options: .regularExpression)
-    }
-    func keys(_ lora: LoRA) -> Set<String> { [normalized(lora.file), normalized(lora.name)] }
-    let present = loras.filter(\.isDownloaded)
-    var missing = loras.filter { !$0.isDownloaded }
-    var result = present
-    for index in result.indices {
-      let copy = result[index]
-      guard let match = missing.firstIndex(where: { $0.version == copy.version && !keys($0).isDisjoint(with: keys(copy)) }) else { continue }
-      if copy.prefix.trimmingCharacters(in: .whitespaces).isEmpty { result[index].prefix = missing[match].prefix }
-      if copy.weight == nil { result[index].weight = missing[match].weight }
-      // A name that's only the file name says less than the one its owner chose.
-      if normalized(copy.name) == normalized(copy.file), normalized(copy.name) != copy.name.lowercased() || copy.name.contains("_") {
-        result[index].name = missing[match].name
-      }
-      missing.remove(at: match)
-    }
-    return result + missing
+    let sorted = linkingLoRACopies(loras).sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    return (sorted, stamps)
   }
 
   /// Model families (readable names, as MGK reports a model's `version`) whose LoRAs the engine
@@ -1286,8 +1298,9 @@ final class ModelLibrary {
         }
         importing.removeFirst()
       }
+      // Before `isImporting` turns false, so whoever waits for it finds the new LoRAs listed.
+      await reloadLoRAs()
       importTask = nil
-      reloadLoRAs()
       if !failures.isEmpty {
         errorMessage = "Couldn't import " + failures.joined(separator: "\n")
       }
@@ -1370,10 +1383,15 @@ final class ModelLibrary {
     specification.prefix = prefix
     do {
       try register(specification, in: lora.registry)
+      // Shown at once; the reread (which also re-sorts) lands a moment later.
+      if let index = loras.firstIndex(where: { $0.file == lora.file }) {
+        loras[index].name = name
+        loras[index].prefix = prefix
+      }
     } catch {
       errorMessage = "Couldn't rename \(lora.name): \(error.localizedDescription)"
     }
-    reloadLoRAs()
+    Task { await reloadLoRAs() }
   }
 
   /// Writes `specification` to `directory`'s custom_lora.json (sorted by name, as LoRAZoo keeps
@@ -1403,10 +1421,13 @@ final class ModelLibrary {
       }
       try Self.writeLoRASpecifications(remaining, in: lora.registry)
       // The engine's in-memory table keeps the entry, but with the file gone it's skipped.
+      // Gone from the list at once, so a screen picking the next selection doesn't pick it; the
+      // reread lands a moment later.
+      loras.removeAll { $0.file == lora.file }
     } catch {
       errorMessage = "Couldn't delete \(lora.name): \(error.localizedDescription)"
     }
-    reloadLoRAs()
+    Task { await reloadLoRAs() }
   }
 
   /// Copies a folder's custom_lora.json aside before the app first changes it in a session.
@@ -1445,7 +1466,13 @@ final class ModelLibrary {
   }
 
   private nonisolated static func size(of file: String, in directories: [URL]) -> Int64? {
-    let urls = files(of: file, in: directories)
+    folder(of: file, in: directories).flatMap { size(of: file, inFolder: $0) }
+  }
+
+  /// `file` and its `-tensordata` in `directory`, which has the file.
+  private nonisolated static func size(of file: String, inFolder directory: URL) -> Int64? {
+    let urls = [file, file + "-tensordata"].map { directory.appendingPathComponent($0) }
+      .filter { FileManager.default.fileExists(atPath: $0.path) }
     guard !urls.isEmpty else { return nil }
     return urls.reduce(Int64(0)) { total, url in
       let size = (try? url.resourceValues(forKeys: [.totalFileAllocatedSizeKey]))?
@@ -1574,7 +1601,7 @@ final class ModelLibrary {
     return entries.compactMap(\.value)
   }
 
-  private static func readLoRASpecifications(in directory: URL) -> [LoRAZoo.Specification] {
+  private nonisolated static func readLoRASpecifications(in directory: URL) -> [LoRAZoo.Specification] {
     decodeRegistry(LoRAZoo.Specification.self, "custom_lora.json", in: directory)
   }
 

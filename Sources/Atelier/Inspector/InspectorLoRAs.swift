@@ -117,7 +117,7 @@ struct LoRAEditor: View {
           }
         }
     }
-    .onAppear { library.reloadLoRAs() }
+    .task { await library.reloadLoRAsIfRegistriesChanged() }
   }
 
   /// The slider range custom_lora.json gives the LoRA, widened to take a weight typed or loaded

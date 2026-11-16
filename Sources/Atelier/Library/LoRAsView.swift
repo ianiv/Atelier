@@ -141,7 +141,7 @@ struct LoRAsView: View {
       .moveConfirmation($pendingMove)
       .libraryErrorAlert()
       .deleteCommand { pendingDelete = selected }
-      .onAppear { library.reloadLoRAs() }
+      .task { await library.reloadLoRAsIfRegistriesChanged() }
   }
 
   @ViewBuilder
