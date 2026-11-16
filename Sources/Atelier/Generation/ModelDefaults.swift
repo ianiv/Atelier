@@ -105,9 +105,8 @@ nonisolated enum ModelDefaults {
     model: String, refiner: String?, defaultRefiner: String?, isDownloaded: (String) -> Bool
   ) -> String? {
     guard let refiner, refiner == defaultRefiner, !isDownloaded(refiner) else { return nil }
-    let name = uncatalogedSpecifications.first { $0.file == refiner }?.name ?? refiner
     let modelName = uncatalogedSpecifications.first { $0.file == model }?.name ?? model
-    return "\(name), the refiner \(modelName) runs its last steps with, isn't downloaded. Download \(modelName) in Models to fetch it, or turn the refiner off."
+    return "\(modelName) needs its refiner file (\(refiner)), which isn't downloaded. Download the model in Models, or turn the refiner off."
   }
 
   /// The refiner to keep when the model changes. Switching models keeps the current settings,

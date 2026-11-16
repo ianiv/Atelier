@@ -279,9 +279,10 @@ struct ModelsView: View {
             .disabled(library.h3ImageInstall.isRunning)
         } else if let file = files.first, let model = library.catalog.first(where: { $0.file == file }) {
           if model.isDownloaded {
-            if library.missingHiddenRefiner(of: model) != nil {
+            // Always there for a model with a hidden refiner, enabled while that file is missing.
+            if !ModelLibrary.hiddenCompanions(of: model.file).isEmpty {
               Button("Download Missing File") { library.download(model) }
-                .disabled(library.downloads[model.file] != nil)
+                .disabled(library.missingHiddenRefiner(of: model) == nil || library.downloads[model.file] != nil)
             }
             Button(Finder.revealTitle) { library.reveal(model.file) }
             MoveToFolderMenu(library: library, file: model.file, folder: library.folders[model.file], enabled: library.canMove(model)) {
@@ -504,9 +505,12 @@ struct ModelDetail: View {
               .disabled(!library.canDelete(model))
           }
           MoveProgressRow(file: model.file)
-          if let missing = library.missingHiddenRefiner(of: model) {
+          // Always there for a model with a hidden refiner, enabled while that file is missing.
+          if let companion = ModelLibrary.hiddenCompanions(of: model.file).first {
+            let missing = library.missingHiddenRefiner(of: model) != nil
             Button("Download Missing File") { library.download(model) }
-            Text("\(missing), the refiner this model finishes with, isn't downloaded.")
+              .disabled(!missing)
+            Text(missing ? "Its refiner file, \(companion), isn't downloaded." : "Its refiner file, \(companion), is downloaded.")
               .font(.caption).foregroundStyle(.secondary)
           }
           // 4-bit S is only made by the MiniMax H3 Image install.
