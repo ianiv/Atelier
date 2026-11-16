@@ -21,7 +21,8 @@ struct SizeButton: View {
     .popover(isPresented: $showing, arrowEdge: inspectorPopoverEdge) {
       SizePopover(
         width: size.0, height: size.1, megapixels: SizePreset.megapixels(for: model.traits),
-        maxSide: SizePreset.maxSide(for: model.traits)
+        maxSide: SizePreset.maxSide(for: model.traits),
+        current: { model.settings.map { ($0.width, $0.height) } ?? size }
       ) { width, height in
         model.set(
           descriptor,
@@ -38,6 +39,10 @@ struct SizePopover: View {
   /// The megapixel choices and the longest side the model takes.
   var megapixels: [Double] = SizePreset.megapixels
   var maxSide = SizePreset.maxSide
+  /// The size as it is now, not as it was when this view last rendered: a field committing as the
+  /// popover closes runs a closure from the last render, and pairing its side with a captured other
+  /// side could undo the other field's commit made a moment before.
+  let current: () -> (width: Int, height: Int)
   let set: (Int, Int) -> Void
 
   var body: some View {
@@ -75,15 +80,15 @@ struct SizePopover: View {
       // than by ViewThatFits, whose measuring could size the popover for the other layout.
       #if os(macOS)
         HStack {
-          dimension("W", value: width) { set($0, height) }
+          dimension("W", value: width) { set($0, current().height) }
           swapButton
-          dimension("H", value: height) { set(width, $0) }
+          dimension("H", value: height) { set(current().width, $0) }
         }
       #else
         HStack {
           VStack(alignment: .trailing) {
-            dimension("W", value: width) { set($0, height) }
-            dimension("H", value: height) { set(width, $0) }
+            dimension("W", value: width) { set($0, current().height) }
+            dimension("H", value: height) { set(current().width, $0) }
           }
           swapButton
         }
@@ -154,12 +159,18 @@ struct SizePopover: View {
 /// popover closes (so a value typed on iPad isn't lost): a value-formatted field commits on every
 /// keystroke, so snapping there turned the "1" of "1024" into 64 before the rest could be typed,
 /// and made an undo entry per keystroke. Same approach as `FramesControl`.
+///
+/// Only an edited draft commits. The aspect buttons, Megapixels and Swap change the size without
+/// taking focus, so a focused but untouched draft would otherwise write the old size back over the
+/// preset on Return or blur, and closing the popover would rewrite sizes nobody typed.
 private struct SizeDimensionField: View {
   let title: String
   let value: Int
   let maxSide: Int
   let set: (Int) -> Void
   @State private var draft = ""
+  /// The text the draft was last set to from `value`; a draft that differs was typed.
+  @State private var synced = ""
   @FocusState private var focused: Bool
 
   var body: some View {
@@ -175,7 +186,8 @@ private struct SizeDimensionField: View {
           if !isFocused { commit() }
         }
         .onChange(of: value, initial: true) { _, newValue in
-          if !focused { draft = String(newValue) }
+          // While focused, keep only what the user is typing; an untouched draft follows the size.
+          if !focused || !edited { show(newValue) }
         }
         .onDisappear(perform: commit)
       Stepper(
@@ -183,8 +195,9 @@ private struct SizeDimensionField: View {
         value: Binding(
           get: { value },
           set: {
-            set($0)
-            draft = String($0)
+            let snapped = SizePreset.snap(min(max($0, 64), maxSide))
+            if snapped != value { set(snapped) }
+            show(snapped)
           }
         ), in: 64...maxSide, step: 64
       ).labelsHidden()
@@ -194,12 +207,20 @@ private struct SizeDimensionField: View {
   /// Snaps the typed size to a multiple of 64 within range and shows it; text that isn't a
   /// number reverts. Setting only when the size changes keeps a no-op commit out of undo.
   private func commit() {
+    guard edited else { return }
     if let typed = Int(draft.trimmingCharacters(in: .whitespaces)) {
       let snapped = SizePreset.snap(min(max(typed, 64), maxSide))
       if snapped != value { set(snapped) }
-      draft = String(snapped)
+      show(snapped)
     } else {
-      draft = String(value)
+      show(value)
     }
+  }
+
+  private var edited: Bool { draft != synced }
+
+  private func show(_ size: Int) {
+    draft = String(size)
+    synced = draft
   }
 }
