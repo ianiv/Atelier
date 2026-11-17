@@ -1589,8 +1589,8 @@ nonisolated enum JSONValue: Codable, Hashable, Sendable {
   }
 }
 
-/// A PNG to drag into Finder (as a file) or another app (as image data), encoded on drop; a
-/// clip drags as its MP4.
+/// A PNG to drag into Finder (as a file) or another app (as image data), or to share, encoded on
+/// drop (or when the share target asks for it); a clip goes as its MP4.
 nonisolated struct PNGExport: Transferable, Identifiable {
   /// The image tensor.
   var id: Int64
@@ -1598,10 +1598,18 @@ nonisolated struct PNGExport: Transferable, Identifiable {
   var data: @Sendable () async throws -> Data
   /// Set for a clip: its video file.
   var video: (@Sendable () async throws -> URL)?
+  /// Set when it's shared rather than dragged: its file then goes in the Shares area, kept
+  /// longer (`TemporaryFiles.shareLifetime`).
+  var isShared = false
+
+  /// A new folder for its file, in the area its use calls for.
+  private var folder: URL {
+    isShared ? TemporaryFiles.newShareFolder() : TemporaryFiles.newDragFolder()
+  }
 
   static var transferRepresentation: some TransferRepresentation {
     FileRepresentation(exportedContentType: .mpeg4Movie) { export in
-      let folder = TemporaryFiles.newDragFolder()
+      let folder = export.folder
       let file = folder.appendingPathComponent(export.name).appendingPathExtension("mp4")
       guard let video = export.video else { throw ClipVideoError.noFrames }
       try FileManager.default.copyItem(at: try await video(), to: file)
@@ -1610,7 +1618,7 @@ nonisolated struct PNGExport: Transferable, Identifiable {
     .exportingCondition { $0.video != nil }
     .suggestedFileName { $0.name + ".mp4" }
     FileRepresentation(exportedContentType: .png) { export in
-      let folder = TemporaryFiles.newDragFolder()
+      let folder = export.folder
       let file = folder.appendingPathComponent(export.name).appendingPathExtension("png")
       try await export.data().write(to: file)
       return SentTransferredFile(file)

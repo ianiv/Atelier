@@ -9,6 +9,8 @@ nonisolated enum TemporaryFiles {
     case exports = "Exports"
     /// Files dragged out of History.
     case drags = "Drags"
+    /// Files handed to a share target (AirDrop, Mail, Messages…).
+    case shares = "Shares"
     case quickLook = "QuickLook"
     /// What agents generate when they don't say where to save it.
     case agent = "Agent"
@@ -16,6 +18,9 @@ nonisolated enum TemporaryFiles {
 
   /// A drag's receiver reads the file when the drag ends; well after that, nothing needs it.
   private static let dragLifetime: TimeInterval = 60 * 60
+  /// A share target may read its file long after it was picked: an AirDrop waiting on the other
+  /// device to accept, a Mail message left unsent for a while.
+  static let shareLifetime: TimeInterval = 24 * 60 * 60
 
   static var root: URL {
     FileManager.default.temporaryDirectory.appending(path: "Atelier", directoryHint: .isDirectory)
@@ -46,6 +51,13 @@ nonisolated enum TemporaryFiles {
     return newFolder(in: .drags)
   }
 
+  /// A new folder for a shared file. Clears out shares older than `shareLifetime`, so a long
+  /// session's don't pile up, while the share targets still reading theirs keep them.
+  static func newShareFolder() -> URL {
+    sweep([.shares], olderThan: shareLifetime)
+    return newFolder(in: .shares)
+  }
+
   /// Empties the areas' folders, or with `olderThan`, removes what hasn't changed for that long.
   static func sweep(_ areas: [Area], in root: URL = root, olderThan age: TimeInterval? = nil) {
     let fileManager = FileManager.default
@@ -63,17 +75,26 @@ nonisolated enum TemporaryFiles {
     }
   }
 
-  /// What the last run left behind: every area, and the engine folders of runs that ended.
+  /// What the last run left behind: every area (shares only once `shareLifetime` is up), and the
+  /// engine folders of runs that ended.
   @concurrent static func cleanAtLaunch() async {
-    sweep(Area.allCases)
+    sweepAreasAtLaunch()
     let temporary = FileManager.default.temporaryDirectory
     // Where Quick Look files went before they moved to their area.
     try? FileManager.default.removeItem(at: temporary.appending(path: "Atelier Quick Look"))
     removeEngineFolders(in: temporary, olderThan: 60 * 60)
   }
 
+  /// Every area but Shares emptied; shares outlive a relaunch until `shareLifetime` is up, as a
+  /// share target (an AirDrop waiting to be accepted, an unsent Mail message) may still read one.
+  static func sweepAreasAtLaunch(in root: URL = root) {
+    sweep(Area.allCases.filter { $0 != .shares }, in: root)
+    sweep([.shares], in: root, olderThan: shareLifetime)
+  }
+
   /// What nothing needs once the app is gone. Dragged files stay until the next launch, as the
-  /// app they went to may still be reading them, and agents' files too: they may read them later.
+  /// app they went to may still be reading them, shared files until `shareLifetime` is up, and
+  /// agents' files too: they may read them later.
   static func cleanAtQuit() {
     sweep([.exports, .quickLook])
     if let engineFolder = GenerationEngine.temporaryDirectory {

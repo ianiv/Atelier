@@ -3,6 +3,16 @@ import SwiftUI
 // SwiftUI modifiers that exist on the Mac only, with what an iPad does in their place.
 
 extension View {
+  /// Where a Share item with this anchor opens its picker, on the Mac (`ShareAnchorView`); nil
+  /// marks nothing. iPad's share sheet finds its own place.
+  func shareAnchor(_ id: AnyHashable?) -> some View {
+    #if os(macOS)
+      background { if let id { ShareAnchorView(id: id) } }
+    #else
+      self
+    #endif
+  }
+
   /// The Delete key on the Mac; on iPad, deleting goes through the context menu.
   func deleteCommand(perform action: @escaping () -> Void) -> some View {
     #if os(macOS)
@@ -265,14 +275,18 @@ extension ToolbarPickerMenu where Actions == EmptyView {
   }
 }
 
-/// A row of buttons in a detail pane's Form. On iPad, where buttons take more room, they go one
-/// per line when the row doesn't fit; the Mac keeps the row.
+/// A row of buttons in a detail pane's Form, going one per line when the row doesn't fit. On the
+/// Mac too: History's detail row with Share (Copy Image, Export PNG…, Share) is wider than the
+/// inspector at its narrowest, and a plain row would clip there.
 struct ButtonRow<Content: View>: View {
   @ViewBuilder var content: Content
 
   var body: some View {
     #if os(macOS)
-      HStack { content }
+      ViewThatFits(in: .horizontal) {
+        HStack { content }.fixedSize()
+        VStack(alignment: .leading) { content }
+      }
     #else
       ViewThatFits(in: .horizontal) {
         HStack(spacing: 16) { content }.fixedSize()

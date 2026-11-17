@@ -56,6 +56,8 @@ struct ClipPlayer: View {
         ClipFrameMenu(item: item, playback: playback)
       }
     }
+    // On the canvas, the canvas is the anchor (`CreateView`).
+    .shareAnchor(onCanvas ? nil : AnyHashable(ShareAnchor.player(item.tensorId)))
     .task(id: item.tensorId) {
       // Coming back to the clip the canvas already has keeps its place.
       guard !playback.isReady(for: item.tensorId), let clip = item.clip else { return }
@@ -445,6 +447,7 @@ struct ClipFrameMenu: View {
     let frameKnown = playback.isReady(for: item.tensorId)
     Button("Save Video…") { ClipActions.save(item, history: history, dialogs: fileDialogs) }
     Button("Save to Photos") { ClipActions.saveToPhotos(item, history: history, model: model) }
+    ShareItem(exports: [history.dragExport(item)], anchor: ShareAnchor.player(item.tensorId))
     Divider()
     Button("Use This Frame as Input") {
       let index = playback.pauseOnFrame(count: count)
@@ -491,6 +494,7 @@ struct CanvasClipMenu: View {
     .disabled(!frameKnown)
     Button("Save Video…") { ClipActions.save(item, history: history, dialogs: fileDialogs) }
     Button("Save to Photos") { ClipActions.saveToPhotos(item, history: history, model: model) }
+    ShareItem(exports: [history.dragExport(item)], anchor: ShareAnchor.canvas)
     Divider()
     Button("Use This Frame as Input") {
       let index = playback.pauseOnFrame(count: count)

@@ -332,6 +332,7 @@ struct CanvasView: View {
             contextMenu(canvas)
           }
         }
+        .shareAnchor(ShareAnchor.canvas)
         .onDrop(of: CanvasDrop.types, isTargeted: $isTargeted) { providers in
           guard let provider = providers.first else { return false }
           open(dropped: provider)
@@ -659,6 +660,9 @@ struct CanvasView: View {
       .disabled(model.image == nil)
     Button("Save to Photos") { saveToPhotos() }
       .disabled(model.image == nil)
+    ShareItem(
+      exports: model.image.map { [history.canvasShare(image: $0, item: model.imageItem)] } ?? [],
+      anchor: ShareAnchor.canvas)
     Divider()
     Button("Upscale…") { model.upscalingCanvasImage = true }
       .disabled(!model.canUpscaleCanvasImage)
