@@ -62,3 +62,86 @@ struct ShareTests {
     }
   }
 }
+
+#if os(macOS)
+  import AppKit
+  import UniformTypeIdentifiers
+
+  @MainActor
+  struct SharePickerTests {
+    @Test func anImageProviderOffersAPNGAndAClipsAnMP4() {
+      var clip = PNGExport(id: 2, name: "Clip") { Data() }
+      clip.video = { URL(filePath: "/nonexistent.mp4") }
+      let providers = SharePicker.providers([PNGExport.image(smallImage(), name: "Image"), clip])
+      #expect(providers[0].registeredContentTypes.contains(.png))
+      #expect(!providers[0].registeredContentTypes.contains(.mpeg4Movie))
+      #expect(providers[1].registeredContentTypes.contains(.mpeg4Movie))
+      #expect(providers[0].suggestedName == "Image")
+    }
+
+    /// What the provider hands a share target asking for a file of `type`: its name and contents.
+    private func load(_ provider: NSItemProvider, _ type: UTType) async throws -> (name: String, data: Data) {
+      try await withCheckedThrowingContinuation { continuation in
+        _ = provider.loadFileRepresentation(for: type, openInPlace: false) { url, _, error in
+          if let url, let data = try? Data(contentsOf: url) {
+            continuation.resume(returning: (url.lastPathComponent, data))
+          } else {
+            continuation.resume(throwing: error ?? CocoaError(.fileReadUnknown))
+          }
+        }
+      }
+    }
+
+    @Test func anImageLoadsAsAPNGUnderItsName() async throws {
+      let name = "share-test-\(UUID().uuidString)"
+      let provider = try #require(SharePicker.providers([PNGExport.image(smallImage(), name: name).shared]).first)
+      let loaded = try await load(provider, .png)
+      #expect(loaded.name.hasPrefix(name))
+      #expect(ImageLoader.image(from: loaded.data)?.width == 4)
+    }
+
+    @Test func aClipLoadsAsItsMP4WrittenIntoShares() async throws {
+      try await withTestFolderAsync { folder in
+        let video = folder.appending(path: "clip.mp4")
+        try Data("not really a movie".utf8).write(to: video)
+        let name = "share-test-\(UUID().uuidString)"
+        var clip = PNGExport(id: 3, name: name) { Data() }
+        clip.video = { video }
+        let shares = TemporaryFiles.folder(.shares)
+        let before = names(shares)
+        let provider = try #require(SharePicker.providers([clip.shared]).first)
+        let loaded = try await load(provider, .mpeg4Movie)
+        #expect(loaded.name == name + ".mp4")
+        #expect(loaded.data == Data("not really a movie".utf8))
+        let added = names(shares).subtracting(before)
+        #expect(added.count == 1)
+        for item in added { try? FileManager.default.removeItem(at: shares.appending(path: item)) }
+      }
+    }
+
+    private func withTestFolderAsync(_ body: (URL) async throws -> Void) async throws {
+      let folder = FileManager.default.temporaryDirectory.appending(path: "atelier-tests-\(UUID().uuidString)")
+      try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+      defer { try? FileManager.default.removeItem(at: folder) }
+      try await body(folder)
+    }
+
+    @Test func anAnchorDropsOutWhenItsViewGoes() throws {
+      let id = AnyHashable(ShareAnchor.historyCell(-42))
+      var view: NSView? = NSView()
+      ShareAnchors.register(try #require(view), for: id)
+      #expect(ShareAnchors.view(for: id) === view)
+      view = nil
+      #expect(ShareAnchors.view(for: id) == nil)
+    }
+
+    @Test func removingAnOldViewKeepsTheNewOne() {
+      let id = AnyHashable(ShareAnchor.queueJob(UUID()))
+      let old = NSView(), new = NSView()
+      ShareAnchors.register(old, for: id)
+      ShareAnchors.register(new, for: id)
+      ShareAnchors.remove(old, for: id)
+      #expect(ShareAnchors.view(for: id) === new)
+    }
+  }
+#endif

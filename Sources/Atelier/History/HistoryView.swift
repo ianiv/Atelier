@@ -581,6 +581,7 @@ struct HistoryView: View {
       }
       .id(item.tensorId)
       .contextMenu { contextMenu(for: item) }
+      .shareAnchor(ShareAnchor.historyCell(item.tensorId))
   }
 
   @ViewBuilder
@@ -594,7 +595,9 @@ struct HistoryView: View {
       Button("Copy \(items.count) Images") { Task { await history.copyImages(items) } }
       Button("Export \(items.count) Files…") { export(items) }
       Button("Save \(items.count) Images to Photos") { saveToPhotos(items) }
-      ShareItem(exports: shareExports(items), title: "Share \(items.count) Files")
+      ShareItem(
+        exports: shareExports(items), title: "Share \(items.count) Files",
+        anchor: ShareAnchor.historyCell(item.tensorId))
       Divider()
       ratingMenu(items)
       Divider()
@@ -614,7 +617,7 @@ struct HistoryView: View {
         .disabled(!item.hasImage)
       Button("Save to Photos") { saveToPhotos([item]) }
         .disabled(!item.hasImage)
-      ShareItem(exports: shareExports([item]))
+      ShareItem(exports: shareExports([item]), anchor: ShareAnchor.historyCell(item.tensorId))
       Divider()
       MaskMenu(item: item, undoManager: undoManager)
       if item.isVideo {

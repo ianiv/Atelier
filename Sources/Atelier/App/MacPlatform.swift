@@ -208,6 +208,121 @@ struct SheetResizeObserver: NSViewRepresentable {
   }
 }
 
+/// Marks where a Share menu item's picker opens (`View.shareAnchor`). SwiftUI's `ShareLink` in a
+/// context menu opens its picker only after the menu closes, with nothing left to anchor to, so
+/// it shows at the top of the window; a Share item with an anchor opens `SharePicker` at this
+/// view instead.
+struct ShareAnchorView: NSViewRepresentable {
+  let id: AnyHashable
+
+  func makeNSView(context _: Context) -> Anchor { Anchor(id: id) }
+  func updateNSView(_ view: Anchor, context _: Context) { view.id = id }
+
+  final class Anchor: NSView {
+    var id: AnyHashable {
+      didSet {
+        guard id != oldValue else { return }
+        ShareAnchors.remove(self, for: oldValue)
+        ShareAnchors.register(self, for: id)
+      }
+    }
+
+    init(id: AnyHashable) {
+      self.id = id
+      super.init(frame: .zero)
+      ShareAnchors.register(self, for: id)
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) { fatalError("not used") }
+
+    /// Only a place to point at: clicks go to the view it's behind.
+    override func hitTest(_: NSPoint) -> NSView? { nil }
+  }
+}
+
+/// The views Share pickers open at, by anchor id, held weakly: a view that goes away (a History
+/// cell scrolled off) drops out on its own. The newest view with an id wins.
+@MainActor
+enum ShareAnchors {
+  private final class Entry {
+    weak var view: NSView?
+    init(_ view: NSView) { self.view = view }
+  }
+
+  private static var entries: [AnyHashable: Entry] = [:]
+
+  static func register(_ view: NSView, for id: AnyHashable) {
+    entries = entries.filter { $0.value.view != nil }
+    entries[id] = Entry(view)
+  }
+
+  /// Takes `view` off `id`, unless another view has registered it since.
+  static func remove(_ view: NSView, for id: AnyHashable) {
+    if entries[id]?.view === view { entries[id] = nil }
+  }
+
+  static func view(for id: AnyHashable) -> NSView? {
+    guard let view = entries[id]?.view else {
+      entries[id] = nil
+      return nil
+    }
+    return view
+  }
+}
+
+/// The system's share picker, opened at an anchor (`ShareAnchors`), or at the pointer when the
+/// anchor isn't on screen.
+@MainActor
+enum SharePicker {
+  /// The open picker and its delegate, kept until it closes: AppKit holds neither.
+  private static var current: (picker: NSSharingServicePicker, delegate: Delegate)?
+
+  /// `items` are `NSItemProvider`s or file URLs.
+  static func show(_ items: [Any], anchor: AnyHashable?) {
+    guard !items.isEmpty else { return }
+    let picker = NSSharingServicePicker(items: items)
+    let delegate = Delegate()
+    picker.delegate = delegate
+    if let view = anchor.flatMap(ShareAnchors.view(for:)), view.window != nil {
+      picker.show(relativeTo: rect(in: view), of: view, preferredEdge: .minY)
+    } else if let window = NSApp.keyWindow ?? NSApp.mainWindow, let content = window.contentView {
+      let point = content.convert(window.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)
+      picker.show(relativeTo: NSRect(origin: point, size: CGSize(width: 1, height: 1)), of: content, preferredEdge: .minY)
+    } else {
+      return
+    }
+    current = (picker, delegate)
+  }
+
+  /// A small view's bounds; for a large one (the canvas) its middle, so the picker doesn't open
+  /// off its far edge.
+  private static func rect(in view: NSView) -> NSRect {
+    let bounds = view.bounds
+    guard bounds.width > 400 || bounds.height > 400 else { return bounds }
+    return NSRect(x: bounds.midX, y: bounds.midY, width: 1, height: 1)
+  }
+
+  /// The items as `NSItemProvider`s that make each file only when a share target asks for it. A
+  /// target asking for an image file gets the PNG through its data representation, written to a
+  /// file by the provider itself; a clip's MP4 goes through the Shares area.
+  static func providers(_ exports: [PNGExport]) -> [NSItemProvider] {
+    exports.map { export in
+      let provider = NSItemProvider()
+      provider.register(export)
+      provider.suggestedName = export.name
+      return provider
+    }
+  }
+
+  private final class Delegate: NSObject, NSSharingServicePickerDelegate {
+    /// Called with the service chosen, or nil when the picker closed without one.
+    func sharingServicePicker(_: NSSharingServicePicker, didChoose _: NSSharingService?) {
+      MainActor.assumeIsolated { SharePicker.current = nil }
+    }
+  }
+}
+
 /// Finder. SwiftUI's `openURL` opens a folder but can't select files in it.
 @MainActor
 enum Finder {

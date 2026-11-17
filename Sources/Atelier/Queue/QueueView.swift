@@ -70,6 +70,7 @@ struct QueueView: View {
     }
     .tag(job.id)
     .contextMenu { menu(for: job) }
+    .shareAnchor(ShareAnchor.queueJob(job.id))
   }
 
   @ViewBuilder
@@ -94,7 +95,7 @@ struct QueueView: View {
       Button("Remove from List") { queue.removeRecent(job.id) }
     case .exported(let url):
       Button(Finder.showTitle) { Finder.reveal([url]) }
-      ShareFileItem(url: url)
+      ShareFileItem(url: url, anchor: ShareAnchor.queueJob(job.id))
       Button("Export Again") { create.retry(job.id) }
       Button("Remove from List") { queue.removeRecent(job.id) }
     case .madeThumbnail, .ranForDevice:

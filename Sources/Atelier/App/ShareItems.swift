@@ -3,16 +3,33 @@ import CoreTransferable
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Share for images and clips: on the Mac a Share submenu of the system's services (or, outside a
-/// menu, a button opening the service picker); on iPad the share sheet. It takes the same lazy
-/// `PNGExport`s drags do, so nothing is encoded, and no clip's MP4 written, until a share target
-/// asks for the file; each is marked shared so its file goes in the Shares area, which keeps it
-/// long enough for a slow target (`TemporaryFiles.shareLifetime`).
+/// Share for images and clips: on iPad the share sheet; on the Mac, with an `anchor`, a button
+/// opening the system's service picker at that anchor (`View.shareAnchor`), else (a detail
+/// panel's button) a `ShareLink`. In a context menu a `ShareLink`'s picker opens only once the
+/// menu has closed, with nothing to point at, so it shows at the top of the window; the anchor
+/// gives it the place the menu was opened from. Either way it takes the same lazy `PNGExport`s
+/// drags do, so nothing is encoded, and no clip's MP4 written, until a share target asks for the
+/// file; each is marked shared so its file goes in the Shares area, which keeps it long enough for
+/// a slow target (`TemporaryFiles.shareLifetime`).
 struct ShareItem: View {
   var exports: [PNGExport]
   var title = "Share"
+  var anchor: AnyHashable?
 
   var body: some View {
+    #if os(macOS)
+      if let anchor {
+        Button(title) { SharePicker.show(SharePicker.providers(exports.map(\.shared)), anchor: anchor) }
+          .disabled(exports.isEmpty)
+      } else {
+        link
+      }
+    #else
+      link
+    #endif
+  }
+
+  private var link: some View {
     // A name only: a preview image would mean reading every image when the menu is built.
     ShareLink(items: exports.map(\.shared), preview: { SharePreview($0.name) }) {
       Text(title)
@@ -22,24 +39,39 @@ struct ShareItem: View {
 }
 
 /// Share for a file already written somewhere the user picked (a finished video export), offered
-/// while it's still there.
+/// while it's still there. On the Mac, with an `anchor`, the picker opens there (see `ShareItem`).
 struct ShareFileItem: View {
   var url: URL
+  var anchor: AnyHashable?
 
   var body: some View {
-    #if os(macOS)
-      // Not sandboxed: the target reads the file where it is.
-      ShareLink(item: url, preview: SharePreview(url.deletingPathExtension().lastPathComponent)) {
-        Text("Share")
-      }
-      .disabled(!SharedFile.exists(url))
-    #else
-      ShareLink(item: SharedFile(url: url), preview: SharePreview(url.deletingPathExtension().lastPathComponent)) {
-        Text("Share")
-      }
-      .disabled(!SharedFile.exists(url))
-    #endif
+    let preview = SharePreview(url.deletingPathExtension().lastPathComponent)
+    Group {
+      #if os(macOS)
+        // Not sandboxed: the target reads the file where it is.
+        if let anchor {
+          Button("Share") { SharePicker.show([url], anchor: anchor) }
+        } else {
+          ShareLink(item: url, preview: preview) { Text("Share") }
+        }
+      #else
+        ShareLink(item: SharedFile(url: url), preview: preview) { Text("Share") }
+      #endif
+    }
+    .disabled(!SharedFile.exists(url))
   }
+}
+
+/// Where Share items open their picker on the Mac (`View.shareAnchor`), one case per kind of
+/// place so a History cell and a player showing the same step don't share an anchor.
+enum ShareAnchor: Hashable {
+  /// The Create canvas, for its image and clip menus.
+  case canvas
+  /// A History player (not the canvas's), by its clip's first-frame tensor.
+  case player(Int64)
+  /// A History grid cell, by its image tensor.
+  case historyCell(Int64)
+  case queueJob(UUID)
 }
 
 /// A file the user saved to a place they picked, to share. On iPad that place is reachable only

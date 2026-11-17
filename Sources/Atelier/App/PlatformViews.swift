@@ -3,6 +3,16 @@ import SwiftUI
 // SwiftUI modifiers that exist on the Mac only, with what an iPad does in their place.
 
 extension View {
+  /// Where a Share item with this anchor opens its picker, on the Mac (`ShareAnchorView`); nil
+  /// marks nothing. iPad's share sheet finds its own place.
+  func shareAnchor(_ id: AnyHashable?) -> some View {
+    #if os(macOS)
+      background { if let id { ShareAnchorView(id: id) } }
+    #else
+      self
+    #endif
+  }
+
   /// The Delete key on the Mac; on iPad, deleting goes through the context menu.
   func deleteCommand(perform action: @escaping () -> Void) -> some View {
     #if os(macOS)
