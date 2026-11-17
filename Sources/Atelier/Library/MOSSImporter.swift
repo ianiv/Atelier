@@ -16,22 +16,38 @@ nonisolated enum MOSSImporter {
 
   /// Whether `url` is a MOSS Image checkpoint, from its safetensors header.
   static func isMOSS(_ url: URL) -> Bool {
-    guard let archive = SafeTensors(url: url) else { return false }
-    return isMOSS(Set(archive.states.keys))
+    guard let reader = try? SafeTensorsReader(url: url) else { return false }
+    return prefix(of: Set(reader.entries.keys)) != nil
   }
 
-  private static func isMOSS(_ keys: Set<String>) -> Bool {
-    ["shared_block_modulation.weight", "video_head_modulation.weight", "text_embedder.proj.weight"]
-      .allSatisfy(keys.contains)
+  /// The markers of a MOSS Image DiT, unprefixed.
+  private static let markers = [
+    "shared_block_modulation.weight", "video_head_modulation.weight", "text_embedder.proj.weight",
+  ]
+
+  /// What every tensor name starts with: nothing in OpenMOSS' layout, `model.diffusion_model.` in a
+  /// checkpoint saved by ComfyUI (which prefixes the whole diffusion model's state dict; its MOSS
+  /// detection in comfy/model_detection.py reads the same names under that `key_prefix`). Nil
+  /// when the markers aren't all there under one prefix.
+  static func prefix(of keys: Set<String>) -> String? {
+    let first = markers[0]
+    for key in keys where key.hasSuffix(first) {
+      let prefix = String(key.dropLast(first.count))
+      if prefix.isEmpty || prefix.hasSuffix("."), markers.allSatisfy({ keys.contains(prefix + $0) }) {
+        return prefix
+      }
+    }
+    return nil
   }
 
   enum Error: LocalizedError {
-    case notMOSS
+    case unknownLayout(missing: [String])
     case missingTensors([String])
 
     var errorDescription: String? {
       switch self {
-      case .notMOSS: "Not a MOSS Image checkpoint."
+      case .unknownLayout(let missing):
+        "This MOSS Image checkpoint's layout isn't one Atelier can convert: it has no \(missing.joined(separator: ", "))."
       case .missingTensors(let keys):
         "The checkpoint is missing \(keys.count) MOSS tensors, such as \(keys.prefix(3).joined(separator: ", "))."
       }
@@ -40,35 +56,45 @@ nonisolated enum MOSSImporter {
 
   /// Writes the converted weights to `path` (an s4nnc store, FP16 apart from the time
   /// embedding's output layer, which the engine keeps in FP32 as the official files do).
+  ///
+  /// Takes OpenMOSS' layout and ComfyUI's: the latter prefixes every name (see `prefix(of:)`),
+  /// fuses each block's q, k and v into `proj.qkv` (ComfyUI's `Block` in
+  /// comfy/ldm/moss_image/model.py splits it with `.chunk(3, dim=-1)`: q, k, v rows in that order,
+  /// which `mapping(fusedQKV:)` splits the same way), and may store linears quantized (INT8 with
+  /// ConvRot, FP8), which `SafeTensorsReader.weight(_:)` dequantizes.
   static func convert(_ url: URL, to path: String, progress: (Float) -> Void) throws {
-    guard let archive = SafeTensors(url: url) else { throw Error.notMOSS }
-    let states = archive.states
-    guard isMOSS(Set(states.keys)) else { throw Error.notMOSS }
+    let reader = try SafeTensorsReader(url: url)
+    let names = Set(reader.entries.keys)
+    guard let prefix = prefix(of: names) else {
+      // The likeliest prefix, for naming what's missing.
+      let guess = names.first { $0.contains("layers.") && $0.hasSuffix(".norm1.weight") }
+        .map { String($0[..<$0.range(of: "layers.")!.lowerBound]) } ?? ""
+      throw Error.unknownLayout(missing: markers.filter { !names.contains(guess + $0) })
+    }
+    let keys = Set(names.compactMap { $0.hasPrefix(prefix) ? String($0.dropFirst(prefix.count)) : nil })
     let layers =
-      (states.keys.compactMap { key -> Int? in
+      (keys.compactMap { key -> Int? in
         guard key.hasPrefix("layers."), key.hasSuffix(".norm1.weight") else { return nil }
         return Int(key.split(separator: ".")[1])
       }.max() ?? -1) + 1
-    let mapping = mapping(layers: layers, fusedQKV: states["layers.0.proj.qkv.weight"] != nil)
-    let missing = mapping.keys.filter { states[$0] == nil }.sorted()
+    let mapping = mapping(layers: layers, fusedQKV: keys.contains("layers.0.proj.qkv.weight"))
+    let missing = mapping.keys.filter { !keys.contains($0) }.sorted()
     guard missing.isEmpty else { throw Error.missingTensors(missing) }
     let graph = DynamicGraph()
     var done = 0
     try graph.openStore(path) { store in
       for (key, element) in mapping.sorted(by: { $0.key < $1.key }) {
-        guard let descriptor = states[key] else { continue }
-        try archive.with(descriptor) { tensor in
-          let renamer: (String) -> String = { "__dit__[\($0)]" }
-          if key.hasPrefix("time_embedding.2.") {
-            element.write(
-              graph: graph, to: store, tensor: Tensor<Float>(from: tensor), format: element.format,
-              isDiagonalUp: false, isDiagonalDown: false, renamer: renamer)
-          } else {
-            element.write(
-              graph: graph, to: store, tensor: Tensor<Float16>(from: tensor),
-              format: element.format, isDiagonalUp: false, isDiagonalDown: false,
-              renamer: renamer)
-          }
+        let tensor = try reader.weight(prefix + key)
+        let renamer: (String) -> String = { "__dit__[\($0)]" }
+        if key.hasPrefix("time_embedding.2.") {
+          element.write(
+            graph: graph, to: store, tensor: tensor, format: element.format,
+            isDiagonalUp: false, isDiagonalDown: false, renamer: renamer)
+        } else {
+          element.write(
+            graph: graph, to: store, tensor: Tensor<Float16>(from: tensor),
+            format: element.format, isDiagonalUp: false, isDiagonalDown: false,
+            renamer: renamer)
         }
         done += 1
         progress(Float(done) / Float(mapping.count))
