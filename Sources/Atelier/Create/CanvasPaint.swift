@@ -1,0 +1,321 @@
+import CoreGraphics
+import Foundation
+import ImageIO
+import UniformTypeIdentifiers
+
+/// Colour painted onto the canvas image (the Paint tool, Select's Fill, Fill Mask with Color,
+/// agents' `set_canvas_paint`): a layer of its own over the image, as vector strokes in the image's
+/// pixels (from its top left) like `CanvasMask`, so it stays sharp at any zoom and each stroke
+/// undoes on its own. Called the paint layer, and its strokes colours: elsewhere "painted" means
+/// masked (`CanvasMask.Code.painted`). It isn't the mask and adds nothing to it. A run bakes it
+/// into its input (`CanvasState.render`, `RefineMerge.source`), and Generate records the baked
+/// image as a Draw entry first, as Draw Things records a canvas drawn on (`Reason.draw`). The same
+/// rendering (`layer`) draws it on screen and for a run.
+nonisolated struct CanvasPaint: Codable, Sendable, Hashable {
+  /// An sRGB colour, each component 0–1, with straight (not premultiplied) alpha.
+  nonisolated struct Color: Codable, Sendable, Hashable {
+    var red: Double
+    var green: Double
+    var blue: Double
+    var alpha: Double = 1
+
+    init(red: Double, green: Double, blue: Double, alpha: Double = 1) {
+      self.red = red
+      self.green = green
+      self.blue = blue
+      self.alpha = alpha
+    }
+
+    /// `color` in sRGB; nil when it can't be converted (a pattern).
+    init?(_ color: CGColor) {
+      guard let srgb = CGColorSpace(name: CGColorSpace.sRGB),
+            let converted = color.converted(to: srgb, intent: .defaultIntent, options: nil),
+            let components = converted.components, components.count >= 4
+      else { return nil }
+      self.init(
+        red: min(max(Double(components[0]), 0), 1), green: min(max(Double(components[1]), 0), 1),
+        blue: min(max(Double(components[2]), 0), 1), alpha: min(max(Double(components[3]), 0), 1))
+    }
+
+    /// `#RRGGBB` or `#RRGGBBAA` (the `#` optional).
+    init?(hex: String) {
+      var text = hex.trimmingCharacters(in: .whitespaces)
+      if text.hasPrefix("#") { text.removeFirst() }
+      guard text.count == 6 || text.count == 8, let value = UInt64(text, radix: 16) else { return nil }
+      let bytes = text.count == 8 ? value : value << 8 | 0xFF
+      self.init(
+        red: Double(bytes >> 24 & 0xFF) / 255, green: Double(bytes >> 16 & 0xFF) / 255,
+        blue: Double(bytes >> 8 & 0xFF) / 255, alpha: Double(bytes & 0xFF) / 255)
+    }
+
+    static let black = Color(red: 0, green: 0, blue: 0)
+    static let white = Color(red: 1, green: 1, blue: 1)
+
+    var cgColor: CGColor {
+      CGColor(srgbRed: red, green: green, blue: blue, alpha: alpha)
+    }
+
+    /// `#RRGGBB`, with `AA` when it isn't opaque.
+    var hex: String {
+      func byte(_ value: Double) -> String { String(format: "%02X", Int((value * 255).rounded())) }
+      return "#" + byte(red) + byte(green) + byte(blue) + (alpha < 1 ? byte(alpha) : "")
+    }
+  }
+
+  /// One change to the paint layer, applied in order over what came before.
+  nonisolated struct Stroke: Codable, Sendable, Hashable {
+    enum Kind: String, Codable, Sendable {
+      /// A brush stroke through `points`, `radius` wide on each side, in `color`.
+      case brush
+      /// Takes paint away along `points` (`radius` wide on each side), showing the image again;
+      /// with a `bitmap`, wherever it's light, as `fill` paints.
+      case erase
+      /// The rectangle spanned by its two points.
+      case rect
+      /// The ellipse inside the rectangle spanned by its two points.
+      case ellipse
+      /// The polygon through its points.
+      case polygon
+      /// `color` wherever `bitmap` (a PNG, white filled, as `CanvasMask.grayPNG` writes it) is
+      /// light, its top left at the one point, drawn at `size` when set: a Select selection or the
+      /// mask, filled.
+      case fill
+      /// `bitmap` as a colour image (RGBA PNG) with its top left at the one point, drawn at `size`
+      /// when set: earlier strokes flattened (`compacted`).
+      case image
+    }
+
+    var kind: Kind
+    var points: [CGPoint] = []
+    /// Half the brush width, in image pixels.
+    var radius: Double = 0
+    var color: Color?
+    var bitmap: Data?
+    /// The rectangle size a bitmap is drawn at, image pixels; nil is its own size.
+    var size: CGSize?
+
+    init(kind: Kind, points: [CGPoint] = [], radius: Double = 0, color: Color? = nil, bitmap: Data? = nil, size: CGSize? = nil) {
+      self.kind = kind
+      self.points = points
+      self.radius = radius
+      self.color = color
+      self.bitmap = bitmap
+      self.size = size
+    }
+
+    func hash(into hasher: inout Hasher) {
+      hasher.combine(kind)
+      for point in points {
+        hasher.combine(point.x)
+        hasher.combine(point.y)
+      }
+      hasher.combine(radius)
+      hasher.combine(color)
+      hasher.combine(bitmap)
+      hasher.combine(size?.width)
+      hasher.combine(size?.height)
+    }
+
+    static func rect(_ rect: CGRect, color: Color) -> Stroke {
+      Stroke(kind: .rect, points: [rect.origin, CGPoint(x: rect.maxX, y: rect.maxY)], color: color)
+    }
+
+    static func ellipse(in rect: CGRect, color: Color) -> Stroke {
+      Stroke(kind: .ellipse, points: [rect.origin, CGPoint(x: rect.maxX, y: rect.maxY)], color: color)
+    }
+
+    static func polygon(_ points: [CGPoint], color: Color) -> Stroke {
+      Stroke(kind: .polygon, points: points, color: color)
+    }
+
+    /// `mask`'s bitmap stroke (`CanvasMask.Stroke.bitmap`, white where selected) filled with
+    /// `color`, where it lies: Select's Fill.
+    static func fill(_ mask: CanvasMask.Stroke, color: Color) -> Stroke? {
+      guard mask.kind == .bitmap, !mask.erases, let bitmap = mask.bitmap else { return nil }
+      return Stroke(kind: .fill, points: [mask.points.first ?? .zero], color: color, bitmap: bitmap, size: mask.size)
+    }
+
+    /// The size a bitmap stroke is drawn at: `size`, else its PNG's pixel size (read from the
+    /// header, without decoding it).
+    var bitmapSize: CGSize? {
+      if let size { return size }
+      guard let bitmap, let source = CGImageSourceCreateWithData(bitmap as CFData, nil),
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+            let width = properties[kCGImagePropertyPixelWidth] as? Int,
+            let height = properties[kCGImagePropertyPixelHeight] as? Int
+      else { return nil }
+      return CGSize(width: width, height: height)
+    }
+  }
+
+  var strokes: [Stroke] = []
+
+  init(strokes: [Stroke] = []) {
+    self.strokes = strokes
+  }
+
+  /// Whether anything can show: a layer of only erasing shows nothing.
+  var mayHaveColor: Bool {
+    strokes.contains { $0.kind != .erase }
+  }
+
+  /// The layer stretched by `sx` across and `sy` down, as `CanvasMask.scaled` stretches a mask.
+  func scaled(sx: Double, sy: Double) -> CanvasPaint {
+    guard sx != 1 || sy != 1 else { return self }
+    var scaled = self
+    for index in scaled.strokes.indices {
+      var stroke = scaled.strokes[index]
+      if stroke.bitmap != nil, let size = stroke.bitmapSize {
+        stroke.size = CGSize(width: size.width * sx, height: size.height * sy)
+      }
+      stroke.points = stroke.points.map { CGPoint(x: $0.x * sx, y: $0.y * sy) }
+      stroke.radius *= (sx * sy).squareRoot()
+      scaled.strokes[index] = stroke
+    }
+    return scaled
+  }
+
+  /// The layer scaled from an image of `from` to one of `to`.
+  func scaled(from: CGSize, to: CGSize) -> CanvasPaint {
+    guard from.width > 0, from.height > 0 else { return self }
+    return scaled(sx: to.width / from.width, sy: to.height / from.height)
+  }
+
+  func translated(by delta: CGPoint) -> CanvasPaint {
+    var moved = self
+    for index in moved.strokes.indices {
+      moved.strokes[index].points = moved.strokes[index].points.map { CGPoint(x: $0.x + delta.x, y: $0.y + delta.y) }
+    }
+    return moved
+  }
+
+  /// The layer to keep with an image of `size` (`HistoryStore.setPaint`): as it is, unless it
+  /// holds several bitmaps (each Fill adds one, often a whole-image PNG), which are flattened,
+  /// with everything else, into one colour image so the project doesn't keep a stack of them.
+  func compacted(for size: CGSize?) -> CanvasPaint {
+    guard let size, strokes.count(where: { $0.bitmap != nil }) > 1,
+          let layer = layer(width: Int(size.width), height: Int(size.height)),
+          let png = Self.png(layer)
+    else { return self }
+    return CanvasPaint(strokes: [Stroke(kind: .image, points: [.zero], bitmap: png)])
+  }
+
+  /// The layer over a `width` × `height` grid, as a transparent sRGB image (premultiplied alpha)
+  /// with the colours where they lie, antialiased. An image point p lands on (p.x × scale.x +
+  /// origin.x, p.y × scale.y + origin.y), as in `CanvasMask.coverage`. Nil when it shows nothing.
+  func layer(width: Int, height: Int, scale: (x: Double, y: Double) = (1, 1), origin: CGPoint = .zero) -> CGImage? {
+    guard width > 0, height > 0, mayHaveColor,
+          let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    else { return nil }
+    // Image pixels counting down, onto the grid's rows top to bottom.
+    context.translateBy(x: 0, y: CGFloat(height))
+    context.scaleBy(x: 1, y: -1)
+    context.translateBy(x: origin.x, y: origin.y)
+    context.scaleBy(x: scale.x, y: scale.y)
+    context.setLineCap(.round)
+    context.setLineJoin(.round)
+    context.interpolationQuality = .high
+    for stroke in strokes {
+      // Erasing takes the paint away where it covers, by its own coverage (antialiased edges too).
+      context.setBlendMode(stroke.kind == .erase ? .destinationOut : .normal)
+      let color = stroke.kind == .erase ? CGColor(srgbRed: 0, green: 0, blue: 0, alpha: 1) : (stroke.color ?? .black).cgColor
+      context.setStrokeColor(color)
+      context.setFillColor(color)
+      func spanned() -> CGRect? {
+        guard stroke.points.count == 2 else { return nil }
+        return CGRect(
+          x: stroke.points[0].x, y: stroke.points[0].y,
+          width: stroke.points[1].x - stroke.points[0].x, height: stroke.points[1].y - stroke.points[0].y
+        ).standardized
+      }
+      func drawBitmap() {
+        guard let point = stroke.points.first, let data = stroke.bitmap,
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        else { return }
+        let rect = CGRect(origin: .zero, size: stroke.size ?? CGSize(width: image.width, height: image.height))
+        context.saveGState()
+        // Upright: the flip above would turn it over.
+        context.translateBy(x: point.x, y: point.y + rect.height)
+        context.scaleBy(x: 1, y: -1)
+        if stroke.kind == .image {
+          context.draw(image, in: rect)
+        } else if let mask = CanvasMask.grayAlpha(of: image) {
+          context.clip(to: rect, mask: mask)
+          context.fill(rect)
+        }
+        context.restoreGState()
+      }
+      switch stroke.kind {
+      case .erase where stroke.bitmap != nil:
+        drawBitmap()
+      case .brush, .erase:
+        context.setLineWidth(stroke.radius * 2)
+        if stroke.points.count == 1, let point = stroke.points.first {
+          // A dot: Core Graphics draws nothing for a zero-length line.
+          context.fillEllipse(
+            in: CGRect(x: point.x - stroke.radius, y: point.y - stroke.radius, width: stroke.radius * 2, height: stroke.radius * 2))
+        } else if stroke.points.count > 1 {
+          context.addLines(between: stroke.points)
+          context.strokePath()
+        }
+      case .rect:
+        if let rect = spanned() { context.fill(rect) }
+      case .ellipse:
+        if let rect = spanned() { context.fillEllipse(in: rect) }
+      case .polygon:
+        guard stroke.points.count > 2 else { continue }
+        context.addLines(between: stroke.points)
+        context.closePath()
+        context.fillPath()
+      case .fill, .image:
+        drawBitmap()
+      }
+    }
+    return context.makeImage()
+  }
+
+  /// `image` with the layer drawn over it at its own pixels, opaque where `image` is: the canvas
+  /// image as a run takes it (`RefineMerge.source`) and as its Draw entry records it.
+  func baked(onto image: CGImage) -> CGImage? {
+    let width = image.width, height = image.height
+    guard let context = CGContext(
+      data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+      space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    else { return nil }
+    let rect = CGRect(x: 0, y: 0, width: width, height: height)
+    context.draw(image, in: rect)
+    if let layer = layer(width: width, height: height) { context.draw(layer, in: rect) }
+    return context.makeImage()
+  }
+
+  /// The bounding box of what the layer shows over a `width` × `height` image (its pixels, from the
+  /// top left); nil when it shows nothing there.
+  func bounds(width: Int, height: Int) -> CGRect? {
+    guard let layer = layer(width: width, height: height),
+          let alpha = CanvasMask.alpha(of: layer, width: width, height: height)
+    else { return nil }
+    var minX = width, minY = height, maxX = -1, maxY = -1
+    for y in 0..<height {
+      for x in 0..<width where alpha[y * width + x] != 0 {
+        minX = min(minX, x)
+        minY = min(minY, y)
+        maxX = max(maxX, x)
+        maxY = max(maxY, y)
+      }
+    }
+    guard maxX >= 0 else { return nil }
+    return CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)
+  }
+
+  static func png(_ image: CGImage) -> Data? {
+    let data = NSMutableData()
+    guard let destination = CGImageDestinationCreateWithData(data as CFMutableData, UTType.png.identifier as CFString, 1, nil)
+    else { return nil }
+    CGImageDestinationAddImage(destination, image, nil)
+    guard CGImageDestinationFinalize(destination) else { return nil }
+    return data as Data
+  }
+}

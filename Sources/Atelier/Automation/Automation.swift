@@ -35,7 +35,8 @@ import SwiftUI
 /// (AutomationProject.swift). `--refine-check` refines part of an image
 /// and merges it back (AutomationRefine.swift); `--agent-canvas-check` does it through the agent
 /// canvas tools (AutomationAgentCanvas.swift). `--automask-check` selects with Vision and SAM
-/// into the canvas mask (AutomationAutoMask.swift). `--queue-check` runs the queue
+/// into the canvas mask (AutomationAutoMask.swift). `--paint-check` paints colours on the canvas
+/// and runs from them (AutomationPaint.swift). `--queue-check` runs the queue
 /// (AutomationQueue.swift). `--color-match-check` matches an edit's colors to its original
 /// (AutomationColorMatch.swift). `--input-entries-check` records and restores input entries, and
 /// `--entries-freeze-check` clicks through the strip after moodboard, Clear and Generate-mode runs
@@ -82,6 +83,7 @@ enum Automation {
       "--create-delete-check",
       "--history-loras-check",
       "--input-entries-check", "--entries-freeze-check", "--tab-switch-bench", "--delete-project-check",
+      "--paint-check",
     ]
     // The unit tests run inside the app. Like a scripted run, that leaves the user's data alone: no
     // cleanup at launch, no saving the session or queue.
@@ -139,6 +141,10 @@ enum Automation {
     }
     if args.contains("--automask-check") {
       autoMaskCheck(model, navigation: navigation, layouts: layouts, presets: presets)
+      return
+    }
+    if args.contains("--paint-check") {
+      paintCheck(model)
       return
     }
     if args.contains("--queue-check") {

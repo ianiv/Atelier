@@ -278,8 +278,10 @@ extension CanvasState {
   /// `image` drawn where `placement` puts it, in a frame of its size, with its `detail` layers
   /// (`Project.detailLayers`, in its pixels) drawn over it at their own resolution, so a zoomed
   /// frame takes the detail an earlier zoomed refine kept rather than the image's coarser pixels.
+  /// `paint` (`CanvasPaint`, in the image's pixels) goes over all of them, at the frame's own
+  /// pixels and only on the image, as the canvas shows it.
   nonisolated static func render(
-    _ image: CGImage, placement: CanvasPlacement, detail: [Project.DetailLayer] = []
+    _ image: CGImage, placement: CanvasPlacement, detail: [Project.DetailLayer] = [], paint: CanvasPaint? = nil
   ) -> CGImage? {
     let width = Int(placement.frameSize.width), height = Int(placement.frameSize.height)
     guard width > 0, height > 0,
@@ -296,6 +298,12 @@ extension CanvasState {
         x: placement.imageRect.minX + layer.rect.minX * zoom.x, y: placement.imageRect.minY + layer.rect.minY * zoom.y,
         width: layer.rect.width * zoom.x, height: layer.rect.height * zoom.y)
       context.draw(layer.image, in: CGRect(x: rect.minX, y: Double(height) - rect.maxY, width: rect.width, height: rect.height))
+    }
+    if let paint, let layer = paint.layer(width: width, height: height, scale: zoom, origin: placement.imageRect.origin) {
+      context.saveGState()
+      context.clip(to: placement.imageRectYUp)
+      context.draw(layer, in: CGRect(x: 0, y: 0, width: width, height: height))
+      context.restoreGState()
     }
     return context.makeImage()
   }

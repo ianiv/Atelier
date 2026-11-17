@@ -6,7 +6,8 @@ import SwiftUI
 /// and Space-drag moves. Select picks what to mask by clicking and dragging a box
 /// (`AutoMaskSession`).
 enum CanvasTool: String, CaseIterable, Identifiable {
-  case move, brush, eraser, select
+  /// `paint` paints colours on the image (`CanvasPaint`), not the mask.
+  case move, brush, eraser, select, paint
 
   var id: Self { self }
 
@@ -16,6 +17,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
     case .brush: "Brush"
     case .eraser: "Eraser"
     case .select: "Select"
+    case .paint: "Paint"
     }
   }
 
@@ -25,6 +27,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
     case .brush: "paintbrush.pointed"
     case .eraser: "eraser"
     case .select: "wand.and.sparkles"
+    case .paint: "paintbrush"
     }
   }
 }
@@ -145,6 +148,113 @@ extension CreateModel {
     registerCanvasUndo(on: image, undoManager: undoManager, actionName: actionName) { [weak self] in
       self?.setMask(previous, actionName: actionName, undoManager: undoManager)
     }
+  }
+
+  // MARK: Paint
+
+  /// The undo action name for paint changes an agent makes.
+  static let agentPaintActionName = "Agent Paint"
+
+  /// Colours can be painted on the canvas image: wherever the mask can change. Unlike a mask,
+  /// paint needs nothing of the run target: it goes in as part of the image.
+  var canPaintColor: Bool {
+    canEditMask
+  }
+
+  /// Fill Mask with Color: there's a mask to fill.
+  var canFillMask: Bool {
+    canPaintColor && canvasMask?.mayHavePaint == true
+  }
+
+  /// Why paint on the canvas would come to nothing in the next run, for the status bar: at
+  /// Strength 100% with no mask the whole frame is generated afresh.
+  var paintProblem: String? {
+    guard canvasShowsImage, canvasPaint?.mayHaveColor == true, videoModel == nil, canvasMode == .edit,
+          (settings?.strength ?? 1) >= 1, canvasMask?.mayHavePaint != true
+    else { return nil }
+    return "At Strength 100% the painted colors will be replaced: lower Strength, or mask what to regenerate."
+  }
+
+  /// Adds paint strokes (in the canvas image's pixels, from its top left) as one undo step. The
+  /// colours used go to the front of the recent ones. False when there's nothing to paint on.
+  @discardableResult
+  func addPaintStrokes(_ strokes: [CanvasPaint.Stroke], actionName: String = "Paint", undoManager: UndoManager?) -> Bool {
+    guard canPaintColor, !strokes.isEmpty else { return false }
+    var paint = canvasPaint ?? CanvasPaint()
+    paint.strokes += strokes
+    setPaint(paint, actionName: actionName, undoManager: undoManager)
+    for color in strokes.compactMap(\.color).reversed() { noteRecentPaintColor(color) }
+    return true
+  }
+
+  /// Puts `color` first among the recent colours (at most eight).
+  func noteRecentPaintColor(_ color: CanvasPaint.Color) {
+    var recent = recentPaintColors.filter { $0 != color }
+    recent.insert(color, at: 0)
+    recentPaintColors = Array(recent.prefix(8))
+  }
+
+  func clearPaint(actionName: String = "Clear Paint", undoManager: UndoManager?) {
+    guard canvasPaint != nil, canPaintColor else { return }
+    setPaint(nil, actionName: actionName, undoManager: undoManager)
+  }
+
+  /// Fill Mask with Color: what the mask covers, filled with `color` (the paint colour by default),
+  /// as one undo step. The mask stays as it is.
+  @discardableResult
+  func fillMask(with color: CanvasPaint.Color? = nil, actionName: String = "Fill Mask", undoManager: UndoManager?) -> Bool {
+    guard canFillMask, let mask = canvasMask, let image,
+          let flat = mask.flattenedStroke(width: image.width, height: image.height),
+          let fill = CanvasPaint.Stroke.fill(flat, color: color ?? paintColor)
+    else { return false }
+    return addPaintStrokes([fill], actionName: actionName, undoManager: undoManager)
+  }
+
+  /// Select's Fill: the preview filled with the paint colour and the points cleared, as one undo
+  /// step, “Fill Selection”, which puts both back (as Add does for the mask,
+  /// `commitAutoMaskPreview`).
+  @discardableResult
+  func fillAutoMaskPreview(undoManager: UndoManager?) -> Bool {
+    guard canPaintColor, let preview = autoMask.preview, let image, image === preview.image, let stroke = preview.stroke,
+          let fill = CanvasPaint.Stroke.fill(stroke, color: paintColor)
+    else { return false }
+    undoManager?.beginUndoGrouping()
+    defer { undoManager?.endUndoGrouping() }
+    guard addPaintStrokes([fill], actionName: "Fill Selection", undoManager: undoManager) else { return false }
+    autoMask.change(to: AutoMaskPrompt(), actionName: "Fill Selection", model: self, undoManager: undoManager)
+    return true
+  }
+
+  /// Replaces the paint layer as one undo step, on the canvas image's own undo target as a mask
+  /// change is (`setMask`): it never reaches another image.
+  func setPaint(_ paint: CanvasPaint?, actionName: String, undoManager: UndoManager?) {
+    let previous = canvasPaint
+    canvasPaint = paint?.strokes.isEmpty == true ? nil : paint
+    guard let undoManager, let image = canvasUndoImage else { return }
+    registerCanvasUndo(on: image, undoManager: undoManager, actionName: actionName) { [weak self] in
+      self?.setPaint(previous, actionName: actionName, undoManager: undoManager)
+    }
+  }
+
+  /// New Sketch: an opaque white image the size of the frame on the canvas, brought in as any
+  /// image is (an Imported entry, Edit mode), with the Paint tool picked to draw on it.
+  func newSketch() {
+    let size = frameSize ?? CGSize(width: 1024, height: 1024)
+    guard let blank = Self.blankImage(width: Int(size.width), height: Int(size.height)) else { return }
+    setCanvasImage(blank)
+    canvasTool = .paint
+  }
+
+  /// An opaque white image.
+  nonisolated static func blankImage(width: Int, height: Int) -> CGImage? {
+    guard width > 0, height > 0,
+          let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    else { return nil }
+    context.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1))
+    context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+    return context.makeImage()
   }
 
   // MARK: Undo on the canvas image
@@ -419,13 +529,15 @@ extension CanvasMask {
 
 // MARK: - Controls
 
-/// Move / Brush / Eraser, the brush size, Clear Mask and Invert Mask, in the status bar beside the
-/// zoom controls. Always there; disabled when there's nothing to paint on.
+/// Move / Brush / Eraser / Select / Paint, the brush size, Mask Opacity, Clear Mask and Invert
+/// Mask, in the status bar beside the zoom controls. Always there; disabled when there's nothing
+/// to paint on.
 struct CanvasToolControls: View {
   @Environment(CreateModel.self) private var model
   @Environment(\.undoManager) private var undoManager
 
-  private static let sizes: [Double] = [8, 16, 32, 64, 128, 256]
+  static let sizes: [Double] = [8, 16, 32, 64, 128, 256]
+  private static let opacities: [Double] = [0, 0.25, 0.5, 0.75, 1]
 
   var body: some View {
     @Bindable var model = model
@@ -442,7 +554,8 @@ struct CanvasToolControls: View {
       .labelsHidden()
       .fixedSize()
       .help(Self.toolHelp)
-      .disabled(!paints)
+      // Paint needs only an image to paint on; the mask tools check the target themselves.
+      .disabled(!edits)
       Menu {
         ForEach(Self.sizes, id: \.self) { size in
           Button("\(Int(size)) px") { model.brushSize = size }
@@ -454,6 +567,20 @@ struct CanvasToolControls: View {
       .fixedSize()
       .help("Brush Size, in frame pixels")
       .disabled(!paints)
+      Menu {
+        Picker("Mask Opacity", selection: $model.maskOpacity) {
+          ForEach(Self.opacities, id: \.self) { opacity in
+            Text(opacity.formatted(.percent)).tag(opacity)
+          }
+        }
+        .pickerStyle(.inline)
+      } label: {
+        Label("Mask Opacity", systemImage: "circle.dotted.circle").touchTarget()
+      }
+      .menuIndicator(.hidden)
+      .fixedSize()
+      .help("Mask Opacity: how strongly the mask shows over the image. What a run regenerates stays the same.")
+      .disabled(model.image == nil)
       Button {
         model.invertMask(undoManager: undoManager)
       } label: {
@@ -477,9 +604,9 @@ struct CanvasToolControls: View {
 
   private static var toolHelp: String {
     #if os(iOS)
-      "Paint the area to regenerate with Apple Pencil: Brush paints, Eraser erases. Fingers move and zoom."
+      "Paint the area to regenerate with Apple Pencil: Brush paints, Eraser erases. Paint paints colors on the image. Fingers move and zoom."
     #else
-      "Move drags the image; Brush and Eraser paint the area to regenerate. Hold Space to drag the image while painting."
+      "Move drags the image; Brush and Eraser paint the area to regenerate; Paint paints colors on the image. Hold Space to drag the image while painting."
     #endif
   }
 }

@@ -1739,6 +1739,7 @@ struct EntryBadge: View {
     case .moodboard: "Input: the moodboard changed"
     case .cleared: "Input: the canvas was cleared"
     case .mask: "Input: the mask a run went in with"
+    case .draw: "Input: the canvas image with the colors painted on it, as a run went in with it"
     }
   }
 }

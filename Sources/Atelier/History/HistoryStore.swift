@@ -48,7 +48,8 @@ nonisolated struct HistoryItem: Identifiable, Hashable, Sendable {
 
   /// What an input entry records, as Draw Things' history reasons (`tensor_history.fbs` `Reason`).
   nonisolated enum EntryReason: String, Sendable, Hashable, CaseIterable {
-    case imported, moodboard, cleared, mask
+    /// `draw`: the canvas image with its paint layer baked in (`CanvasPaint`), before a run.
+    case imported, moodboard, cleared, mask, draw
 
     var reason: ProjectFormat.Reason {
       switch self {
@@ -56,6 +57,7 @@ nonisolated struct HistoryItem: Identifiable, Hashable, Sendable {
       case .moodboard: .moodboard
       case .cleared: .clear
       case .mask: .mask
+      case .draw: .draw
       }
     }
 
@@ -65,6 +67,7 @@ nonisolated struct HistoryItem: Identifiable, Hashable, Sendable {
       case .moodboard: self = .moodboard
       case .clear: self = .cleared
       case .mask: self = .mask
+      case .draw: self = .draw
       default: return nil
       }
     }
@@ -76,6 +79,7 @@ nonisolated struct HistoryItem: Identifiable, Hashable, Sendable {
       case .moodboard: "Moodboard"
       case .cleared: "Cleared"
       case .mask: "Mask"
+      case .draw: "Draw"
       }
     }
   }
@@ -826,6 +830,8 @@ final class HistoryStore {
     // A later image could be given a deleted one's tensor: don't let it inherit the mask either.
     let gone = await project.read { $0.pruneStoredMasks(keeping: $0.tree(items: false)) }
     if project === self.project { for tensorId in gone { storedMasks[tensorId] = nil } }
+    // Nor its paint.
+    await project.read { _ = $0.pruneStoredPaint(keeping: $0.tree(items: false)) }
     // A later image could be given a deleted one's tensor: don't let it inherit the rating.
     let kept = ratings.filter { byTensor[$0.key] != nil }
     if kept.count != ratings.count { ratings = kept; project.ratings = kept }
@@ -894,6 +900,22 @@ final class HistoryStore {
     } else {
       project.setStoredMask(nil, forImage: tensorId)
     }
+  }
+
+  // MARK: - Paint
+
+  /// The paint layer the image last had on the canvas (`CreateModel.canvasPaint`), in its pixels;
+  /// nil for none.
+  func storedPaint(tensorId: Int64) async -> CanvasPaint? {
+    let project = project
+    return await project.read { $0.storedPaint(forImage: tensorId) }
+  }
+
+  /// Keeps `paint` as the image's last paint layer, compacted for an image of `size`
+  /// (`CanvasPaint.compacted`); nil or one that shows nothing removes it.
+  func setPaint(_ paint: CanvasPaint?, forImage tensorId: Int64, size: CGSize?) {
+    guard tree.step(tensorId: tensorId) != nil else { return }
+    project.setStoredPaint(paint?.mayHaveColor == true ? paint?.compacted(for: size) : nil, forImage: tensorId)
   }
 
   /// Each image's newest Edit child's recorded mask (`refine_mask`, in the image's pixels), from

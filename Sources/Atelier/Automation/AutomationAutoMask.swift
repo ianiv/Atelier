@@ -5,7 +5,9 @@ extension Automation {
   /// Auto masking through `CreateModel`'s entry points, on an image placed on the canvas (use a
   /// scratch `--project`; nothing is generated or saved):
   ///   Vision (`--subject`, or without `--sam`): the subject under the first point (else the
-  ///     image's center) and every subject: the mask isn't empty and holds the click.
+  ///     image's center) and every subject: the mask isn't empty and holds the click; Fill paints
+  ///     exactly the selection in the paint colour, leaving the mask alone, and one undo takes it
+  ///     away and brings the selection back.
   ///   SAM 2.1 (`--sam`, downloading `--size` through the app's own download when it's missing):
   ///     the mask holds the positive point; the same prompt again skips the encoder; a negative
   ///     point inside the selection (a second `--point`, else pixels deep inside it, far from
@@ -112,6 +114,42 @@ extension Automation {
         } catch {
           check(false, "every subject: \(error.localizedDescription)")
         }
+        // Select's Fill: the selection painted with the paint colour, one step that puts the
+        // points back.
+        do {
+          model.clearMask(undoManager: nil)
+          model.clearPaint(undoManager: nil)
+          model.autoMask.clearPoints(model: model, undoManager: nil)
+          let history = UndoManager()
+          history.groupsByEvent = false
+          model.paintColor = CanvasPaint.Color(red: 0, green: 0.5, blue: 1)
+          history.beginUndoGrouping()
+          model.autoMask.selectSubject(at: click, model: model, undoManager: history)
+          history.endUndoGrouping()
+          while model.autoMask.isBusy { try? await Task.sleep(for: .milliseconds(50)) }
+          let prompt = model.autoMask.prompt
+          guard let preview = model.autoMask.preview else {
+            check(false, "fill: the subject is selected (\(model.autoMask.failure ?? "no preview"))")
+            throw CancellationError()
+          }
+          history.beginUndoGrouping()
+          let filled = model.fillAutoMaskPreview(undoManager: history)
+          history.endUndoGrouping()
+          let layer = model.canvasPaint?.layer(width: input.width, height: input.height)
+          let alpha = layer.flatMap { CanvasMask.alpha(of: $0, width: input.width, height: input.height) }
+          let covered = alpha.map { $0.map { $0 != 0 ? UInt8(255) : 0 } }
+          let selected = preview.coverage.map { $0 != 0 ? UInt8(255) : 0 }
+          check(
+            filled && covered == selected && model.canvasMask == nil && model.autoMask.points.isEmpty
+              && model.autoMask.preview == nil && history.undoActionName == "Fill Selection",
+            "fill: Fill paints exactly the selection (\(selected.count(where: { $0 != 0 })) px), leaves the mask alone and clears the selection, one “Fill Selection” step")
+          history.undo()
+          while model.autoMask.isBusy { try? await Task.sleep(for: .milliseconds(50)) }
+          check(
+            model.canvasPaint == nil && model.autoMask.prompt == prompt && model.autoMask.preview != nil && !history.canUndo,
+            "fill: one ⌘Z takes the paint away and brings back the selection")
+          model.autoMask.clearPoints(model: model, undoManager: nil)
+        } catch {}
       }
 
       if usesSAM {

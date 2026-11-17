@@ -148,6 +148,10 @@ struct AtelierApp: App {
           create.pasteImage()
         }
         .keyboardShortcut("v", modifiers: [.command, .shift])
+        Button("New Sketch") {
+          navigation.section = .create
+          create.newSketch()
+        }
         Button("Load Settings from Image") {
           navigation.section = .create
           create.loadCanvasImageSettings(undoManager: undoManager)
@@ -165,6 +169,8 @@ struct AtelierApp: App {
           .disabled(navigation.section != .create)
         Divider()
         MaskCopyItems(model: create, undoManager: undoManager, enabled: navigation.section == .create)
+        Button("Fill Mask with Color") { create.fillMask(undoManager: undoManager) }
+          .disabled(navigation.section != .create || !create.canFillMask)
         Divider()
         Picker("Mode", selection: Binding(get: { create.effectiveCanvasMode }, set: { create.canvasMode = $0 })) {
           Text("Generate").tag(CreateModel.CanvasMode.generate)

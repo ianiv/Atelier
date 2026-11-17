@@ -158,8 +158,12 @@ struct CanvasView: View {
   @Environment(\.undoManager) private var undoManager
   /// The brush stroke being drawn, in image pixels, until it's added to the mask.
   @State private var liveStroke: CanvasMask.Stroke?
+  /// The Paint tool's stroke being drawn, in image pixels, until it's added to the paint layer.
+  @State private var livePaint: CanvasPaint.Stroke?
   /// The red tint of the canvas mask, redrawn when the mask changes.
   @State private var maskTint: CGImage?
+  /// The paint layer drawn for the canvas (`CanvasPaint.layer`), redrawn when the paint changes.
+  @State private var paintLayer: CGImage?
   /// The Select tool's drag: where it began and is now, in image pixels.
   @State private var selectDrag: (start: CGPoint, end: CGPoint)?
   #if os(macOS)
@@ -223,6 +227,12 @@ struct CanvasView: View {
                     detailOverlay(model.canvasDisplayDetail, scale: zoom * points)
                   }
                 }
+                // The paint layer over the image (and its detail), as a run takes it.
+                .overlay {
+                  if model.canvasShowsImage, model.canvasDisplayImage === model.image {
+                    paintOverlay(scale: zoom * points)
+                  }
+                }
                 .accessibilityElement()
                 .accessibilityLabel("Canvas image")
                 .accessibilityAddTraits(.isImage)
@@ -275,9 +285,13 @@ struct CanvasView: View {
           LayoutCanvas(size: frameRect.size)
             .position(x: frameRect.midX, y: frameRect.midY)
         } else if model.image == nil, !model.isLoadingCanvasImage {
-          ContentUnavailableView(
-            "No image yet", systemImage: "photo",
-            description: Text("Write a prompt below and press Generate (⌘↩), or drop an image here to edit it."))
+          ContentUnavailableView {
+            Label("No image yet", systemImage: "photo")
+          } description: {
+            Text("Write a prompt below and press Generate (⌘↩), drop an image here to edit it, or start a sketch to paint on.")
+          } actions: {
+            Button("New Sketch") { model.newSketch() }
+          }
         }
         if model.isLoadingCanvasImage, model.canvasClip == nil {
           CanvasLoadingIndicator()
@@ -292,7 +306,7 @@ struct CanvasView: View {
         dragGesture(canvas, points: points, center: center, zoom: zoom, frame: frameRect)
           .simultaneously(with: zoomGesture(canvas, frame: frameRect, points: points, in: geometry.size)))
       #if os(macOS)
-        .focusable(model.canPaintMask)
+        .focusable(model.canPaintMask || model.canPaintColor)
         .focusEffectDisabled()
         .focused($canvasFocused)
         .onKeyPress(.space, phases: .all) { press in
@@ -345,13 +359,17 @@ struct CanvasView: View {
         .overlay(alignment: .bottom) {
           if model.canvasTool == .select {
             AutoMaskBar().padding(.bottom, 8).padding(.horizontal, 16)
+          } else if model.canvasTool == .paint {
+            PaintBar().padding(.bottom, 8).padding(.horizontal, 16)
           }
         }
     }
     .background(Color.underPageBackground.ignoresSafeArea())
     .onChange(of: model.canvasMask, initial: true) { updateMaskTint() }
+    .onChange(of: model.canvasPaint, initial: true) { updatePaintLayer() }
     .onChange(of: model.image.map(ObjectIdentifier.init)) {
       updateMaskTint()
+      updatePaintLayer()
       // A run's preview over the image doesn't end its selection: its steps still undo.
       model.autoMask.follow(model.canvasUndoImage ?? model.image)
       model.autoMask.resumeSelecting(model: model)
@@ -440,11 +458,28 @@ struct CanvasView: View {
     liveStroke?.points.append(point)
   }
 
+  /// Extends the Paint tool's stroke (or starts one) at `location`, in the paint colour.
+  private func paintColor(at location: CGPoint, erases: Bool, center: CGPoint, zoom: Double, points: Double) {
+    guard let point = imagePoint(location, center: center, zoom: zoom, points: points) else { return }
+    if livePaint == nil {
+      // Sized in frame pixels too, so it covers the same part of the frame at any zoom.
+      let radius = model.paintBrushSize / 2 / zoom
+      livePaint = erases
+        ? CanvasPaint.Stroke(kind: .erase, radius: radius)
+        : CanvasPaint.Stroke(kind: .brush, radius: radius, color: model.paintColor)
+    }
+    livePaint?.points.append(point)
+  }
+
   private func endStroke() {
     if let stroke = liveStroke {
       model.addMaskStrokes([stroke], actionName: stroke.erases ? "Erase" : "Brush Stroke", undoManager: undoManager)
     }
     liveStroke = nil
+    if let stroke = livePaint {
+      model.addPaintStrokes([stroke], actionName: stroke.kind == .erase ? "Erase Paint" : "Paint", undoManager: undoManager)
+    }
+    livePaint = nil
   }
 
   /// The image pixel under `location` (view points), through the frame's placement of the image
@@ -482,10 +517,12 @@ struct CanvasView: View {
   }
 
   #if os(macOS)
-    /// A drag paints with Brush or Eraser, selects with Select (a click marks a point, Option-click
-    /// one to leave out, a drag a box), and moves the image with Move or while Space is held.
+    /// A drag paints with Brush or Eraser, paints colours with Paint (erasing them with Option or
+    /// the bar's Erase), selects with Select (a click marks a point, Option-click one to leave out,
+    /// a drag a box), and moves the image with Move or while Space is held.
     private func dragGesture(_ canvas: CanvasState, points: Double, center: CGPoint, zoom: Double, frame: CGRect) -> some Gesture {
-      let paints = model.canPaintMask && model.canvasTool != .move
+      let colors = model.canvasTool == .paint
+      let paints = colors ? model.canPaintColor : model.canPaintMask && model.canvasTool != .move
       let selects = model.canvasTool == .select
       return DragGesture(minimumDistance: paints ? 0 : 2)
         .onChanged { value in
@@ -493,10 +530,12 @@ struct CanvasView: View {
             canvasFocused = true
             if selects {
               dragSelection(from: value.startLocation, to: value.location, frame: frame, points: points)
+            } else if colors {
+              paintColor(at: value.location, erases: model.paintErases || optionDown, center: center, zoom: zoom, points: points)
             } else {
               paint(at: value.location, erases: model.canvasTool == .eraser, center: center, zoom: zoom, points: points)
             }
-          } else if liveStroke == nil, selectDrag == nil {
+          } else if liveStroke == nil, livePaint == nil, selectDrag == nil {
             pan(canvas, by: value.translation, points: points)
           }
         }
@@ -509,8 +548,8 @@ struct CanvasView: View {
         }
     }
   #else
-    /// Apple Pencil paints (Eraser erases), whatever the tool; one finger moves the image, and two
-    /// zoom (`zoomGesture`).
+    /// Apple Pencil paints (Eraser erases), whatever the tool, colours with Paint (the bar's Erase
+    /// erasing them); one finger moves the image, and two zoom (`zoomGesture`).
     private func dragGesture(_ canvas: CanvasState, points: Double, center: CGPoint, zoom: Double, frame: CGRect) -> some Gesture {
       SpatialEventGesture()
         .onChanged { events in
@@ -527,9 +566,14 @@ struct CanvasView: View {
               pencilMarkedAt = Date()
             }
           } else if let pencil = active.first(where: { $0.kind == .pencil }) {
-            guard model.canPaintMask else { return }
-            paint(at: pencil.location, erases: model.canvasTool == .eraser, center: center, zoom: zoom, points: points)
-          } else if active.count == 1, let touch = active.first, liveStroke == nil {
+            if model.canvasTool == .paint {
+              guard model.canPaintColor else { return }
+              paintColor(at: pencil.location, erases: model.paintErases, center: center, zoom: zoom, points: points)
+            } else {
+              guard model.canPaintMask else { return }
+              paint(at: pencil.location, erases: model.canvasTool == .eraser, center: center, zoom: zoom, points: points)
+            }
+          } else if active.count == 1, let touch = active.first, liveStroke == nil, livePaint == nil {
             let start = touchStart ?? touch.location
             touchStart = start
             pan(canvas, by: CGSize(width: touch.location.x - start.x, height: touch.location.y - start.y), points: points)
@@ -570,31 +614,56 @@ struct CanvasView: View {
     .accessibilityHidden(true)
   }
 
-  /// The mask in red over the image, with the stroke being painted.
+  /// The mask in red over the image at Mask Opacity, with the stroke being painted.
   private func maskOverlay(imageSize _: CGSize, scale: Double) -> some View {
     ZStack {
       if let maskTint {
         Image(decorative: maskTint, scale: 1)
           .resizable()
           .interpolation(.none)
+          .opacity(model.maskOpacity)
       }
       if let liveStroke {
-        Canvas { context, _ in
-          var path = Path()
-          let points = liveStroke.points.map { CGPoint(x: $0.x * scale, y: $0.y * scale) }
-          if points.count == 1, let point = points.first {
-            let r = liveStroke.radius * scale
-            path.addEllipse(in: CGRect(x: point.x - r, y: point.y - r, width: 2 * r, height: 2 * r))
-            context.fill(path, with: .color(liveStroke.erases ? .white.opacity(0.5) : .red.opacity(0.45)))
-          } else {
-            path.addLines(points)
-            context.stroke(
-              path, with: .color(liveStroke.erases ? .white.opacity(0.5) : .red.opacity(0.45)),
-              style: StrokeStyle(lineWidth: liveStroke.radius * 2 * scale, lineCap: .round, lineJoin: .round))
-          }
-        }
+        Self.strokeCanvas(
+          liveStroke.points, radius: liveStroke.radius, scale: scale,
+          color: liveStroke.erases ? .white.opacity(0.5) : .red.opacity(model.maskOpacity))
       }
     }
+  }
+
+  /// A stroke through `points` (image pixels) `radius` wide on each side, `scale` points per pixel.
+  private static func strokeCanvas(_ points: [CGPoint], radius: Double, scale: Double, color: Color) -> some View {
+    Canvas { context, _ in
+      var path = Path()
+      let points = points.map { CGPoint(x: $0.x * scale, y: $0.y * scale) }
+      if points.count == 1, let point = points.first {
+        let r = radius * scale
+        path.addEllipse(in: CGRect(x: point.x - r, y: point.y - r, width: 2 * r, height: 2 * r))
+        context.fill(path, with: .color(color))
+      } else {
+        path.addLines(points)
+        context.stroke(
+          path, with: .color(color), style: StrokeStyle(lineWidth: radius * 2 * scale, lineCap: .round, lineJoin: .round))
+      }
+    }
+  }
+
+  /// The paint layer over the image, with the Paint tool's stroke being drawn in its colour.
+  private func paintOverlay(scale: Double) -> some View {
+    ZStack {
+      if let paintLayer {
+        Image(decorative: paintLayer, scale: 1)
+          .resizable()
+          .interpolation(.high)
+      }
+      if let livePaint {
+        Self.strokeCanvas(
+          livePaint.points, radius: livePaint.radius, scale: scale,
+          color: livePaint.kind == .erase ? .white.opacity(0.5) : Color(cgColor: (livePaint.color ?? .black).cgColor))
+      }
+    }
+    .allowsHitTesting(false)
+    .accessibilityHidden(true)
   }
 
   /// The Select tool's preview tinted blue (apart from the mask's red), its points (green to
@@ -627,9 +696,19 @@ struct CanvasView: View {
     }
   }
 
+  /// At full strength: Mask Opacity fades it as it's shown.
   private func updateMaskTint() {
     guard let image = model.image, let mask = model.canvasMask else { return maskTint = nil }
-    maskTint = mask.tint(sourceSize: CGSize(width: image.width, height: image.height))
+    maskTint = mask.tint(sourceSize: CGSize(width: image.width, height: image.height), alpha: 1)
+  }
+
+  /// The paint layer at the image's size, at most 2048 pixels on its long side.
+  private func updatePaintLayer() {
+    guard let image = model.image, let paint = model.canvasPaint else { return paintLayer = nil }
+    let scale = min(1, 2048 / Double(max(image.width, image.height)))
+    let width = max(Int((Double(image.width) * scale).rounded()), 1), height = max(Int((Double(image.height) * scale).rounded()), 1)
+    paintLayer = paint.layer(
+      width: width, height: height, scale: (Double(width) / Double(image.width), Double(height) / Double(image.height)))
   }
 
   /// Pinch zoom, keeping the image point under the fingers in place.
@@ -672,6 +751,8 @@ struct CanvasView: View {
       .disabled(!model.canOpenMatchColors)
     Divider()
     MaskCopyItems(model: model, undoManager: undoManager)
+    Button("Fill Mask with Color") { model.fillMask(undoManager: undoManager) }
+      .disabled(!model.canFillMask)
     Divider()
     CanvasContentItems(
       noun: "Image", addToMoodboardTitle: "Add to Moodboard",
@@ -793,6 +874,7 @@ struct CanvasContentItems: View {
     Button("Open Image…") { model.imageImport = .canvas }
     Button("Open from Photos…") { model.photosImport = .canvas }
     Button("Paste Image") { model.pasteImage() }
+    Button("New Sketch") { model.newSketch() }
     Button("Load Settings from \(noun)", action: loadSettings)
       .disabled(!canLoadSettings)
     Button(addToMoodboardTitle, action: addToMoodboard)
@@ -912,6 +994,10 @@ struct StatusBar: View {
             .foregroundStyle(.red)
             .lineLimit(2)
         } else if let problem = model.runTargetMaskProblem {
+          Label(problem, systemImage: "info.circle")
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+        } else if let problem = model.paintProblem {
           Label(problem, systemImage: "info.circle")
             .foregroundStyle(.secondary)
             .lineLimit(2)

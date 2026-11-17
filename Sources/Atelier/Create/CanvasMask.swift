@@ -365,7 +365,7 @@ nonisolated struct CanvasMask: Codable, Sendable, Hashable {
   }
 
   /// `image` as a device-gray image of 255 (painted) and 0, which `clip(to:mask:)` reads as alpha.
-  private static func grayAlpha(of image: CGImage) -> CGImage? {
+  static func grayAlpha(of image: CGImage) -> CGImage? {
     var gray = [UInt8](repeating: 0, count: image.width * image.height)
     gray.withUnsafeMutableBytes { raw in
       let context = CGContext(

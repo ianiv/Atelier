@@ -395,6 +395,40 @@ final class CreateModel {
   var brushSize = UserDefaults.standard.object(forKey: "brushSize") as? Double ?? 64 {
     didSet { UserDefaults.standard.set(brushSize, forKey: "brushSize") }
   }
+  /// The colours painted on the canvas image (`CanvasPaint`; `CanvasTools.swift` changes them):
+  /// a layer of their own, apart from the mask. Each image remembers the last layer it had
+  /// (`persistCanvasPaint`, `restoreCanvasPaint`), as it does its mask.
+  var canvasPaint: CanvasPaint?
+  /// The canvas image whose remembered paint hasn't been brought back yet (`maskPendingTensorId`'s
+  /// counterpart).
+  @ObservationIgnored var paintPendingTensorId: Int64?
+  /// The paint the canvas image arrived with, so leaving it unchanged writes nothing.
+  @ObservationIgnored var landedPaint: (tensorId: Int64, paint: CanvasPaint?)?
+  /// The canvas image with its paint baked in (`CanvasPaint.baked`), for the paint and image it was
+  /// made from: the same image object each time, so a Draw entry and the jobs from it share it.
+  @ObservationIgnored var bakedCanvasCache: (image: CGImage, paint: CanvasPaint, baked: CGImage)?
+  /// The Draw entry last written before a run (`drawEntryInput`): the canvas image, paint and mask
+  /// it held, and its key once written, so the next run from the same canvas doesn't write another.
+  @ObservationIgnored var drawnEntry: (image: CGImage, paint: CanvasPaint, mask: CanvasMask?, key: Int64?)?
+  /// The Paint tool's brush width in frame pixels, apart from the mask brush's.
+  var paintBrushSize = UserDefaults.standard.object(forKey: "paintBrushSize") as? Double ?? 32 {
+    didSet { UserDefaults.standard.set(paintBrushSize, forKey: "paintBrushSize") }
+  }
+  /// The colour the Paint tool and the fills paint with.
+  var paintColor = (UserDefaults.standard.string(forKey: "paintColor")).flatMap(CanvasPaint.Color.init(hex:)) ?? .black {
+    didSet { UserDefaults.standard.set(paintColor.hex, forKey: "paintColor") }
+  }
+  /// The colours painted with last, newest first (`PaintBar`'s swatches).
+  var recentPaintColors = (UserDefaults.standard.stringArray(forKey: "recentPaintColors") ?? []).compactMap(CanvasPaint.Color.init(hex:)) {
+    didSet { UserDefaults.standard.set(recentPaintColors.map(\.hex), forKey: "recentPaintColors") }
+  }
+  /// The Paint tool erases paint instead (the bar's Erase; Option-drag on the Mac too).
+  var paintErases = false
+  /// How strongly the mask's red shows over the image (Mask Opacity), for every image. Only what
+  /// the canvas shows: the mask a run takes is the same at any opacity.
+  var maskOpacity = UserDefaults.standard.object(forKey: "maskOpacity") as? Double ?? 0.5 {
+    didSet { UserDefaults.standard.set(maskOpacity, forKey: "maskOpacity") }
+  }
   /// Merge into Image: an Edit run on part of the image, past its edges or with a mask merges
   /// its result back into the whole image (`RefineMerge`) instead of saving the frame alone.
   var mergeIntoImage = UserDefaults.standard.object(forKey: "mergeIntoImage") as? Bool ?? true {
@@ -497,12 +531,14 @@ final class CreateModel {
       guard !relabelsImageStep else { return }
       // Before anything else changes: the size it's kept at comes from what the canvas shows.
       if let oldValue { persistCanvasMask(for: oldValue) }
-      // The old image's mask and Select steps leave the history with it, and its selection.
+      // The old image's mask, paint and Select steps leave the history with it, and its selection.
       retireCanvasUndo()
       autoMask.follow(nil)
       awaitsStepImage = imageStep != nil
       landedMask = nil
       maskPendingTensorId = imageStep?.tensorId
+      landedPaint = nil
+      paintPendingTensorId = imageStep?.tensorId
       imageIsPreview = false
       showsFrame = false
       canvasImageLoad = nil
@@ -510,8 +546,10 @@ final class CreateModel {
       showTask?.cancel()
       // The mask belongs to the image it was painted on, which remembers it; the new image's own
       // comes back once it's there (`restoreCanvasMask`). A run whose result merges back puts the
-      // source's back on the result, as Draw Things keeps it.
+      // source's back on the result, as Draw Things keeps it. Paint the same, but a result has
+      // it baked in, so none goes back.
       canvasMask = nil
+      canvasPaint = nil
     }
   }
   /// The load the canvas is waiting on. Decoding a large image (an upscale, say) can take seconds,
@@ -1310,6 +1348,7 @@ final class CreateModel {
             // The run's own mask, to reproduce it, rather than what the input had last.
             canvasMask = refine.mask
             maskPendingTensorId = nil
+            await restoreCanvasPaint()
           } else if let entry {
             // The mask the run went in with, not whatever the image had last.
             canvas.zoomToFit()
@@ -1682,7 +1721,7 @@ final class CreateModel {
       base.setRefineInputs(
         source: source.image, sourceTensorId: step, isImported: source.isImported, scale: source.scale,
         offset: source.offset, mask: refines && runTargetTakesMasks ? canvasMask : nil,
-        merge: refines && mergeIntoImage, detail: source.detail)
+        merge: refines && mergeIntoImage, detail: source.detail, paint: source.paint)
       // The image remembers its mask even when this run can't take it (a video model, an older
       // server).
       base.canvasSourceMask = canvasMask.map {
@@ -1824,7 +1863,9 @@ final class CreateModel {
   /// when it isn't the one the current entry holds (a Mask entry, `maskEntryInput`).
   private func queueGeneration() {
     guard canGenerate else { return }
-    guard moodboardChanged || entriesPending > 0 || maskEntryInput() != nil else { return queueGenerationNow() }
+    guard moodboardChanged || entriesPending > 0 || drawEntryInput() != nil || maskEntryInput() != nil else {
+      return queueGenerationNow()
+    }
     recordMoodboardChange()
     waitsForEntries = true
     let waitedImage = image, waitedMode = canvasMode
@@ -1874,6 +1915,8 @@ final class CreateModel {
     var isPreview: Bool
     var scale: Double?
     var offset: CGSize
+    /// `canvasPaint`, which belongs to `image`.
+    var paint: CanvasPaint?
   }
 
   /// The canvas Edit runs start from: while a preview covers it, what it held before.
@@ -1882,7 +1925,7 @@ final class CreateModel {
     return image.map {
       CanvasSnapshot(
         image: $0, detail: canvasDetail, step: imageStep, isImported: canvasIsImported, isPreview: imageIsPreview,
-        scale: canvas.scale, offset: canvas.offset)
+        scale: canvas.scale, offset: canvas.offset, paint: imageIsPreview ? nil : canvasPaint)
     }
   }
 
@@ -2256,6 +2299,9 @@ final class CreateModel {
           // Saved with it just now (or none, for a result that isn't merged).
           landedMask = (item.tensorId, canvasMask)
           maskPendingTensorId = nil
+          // Any paint went into the result.
+          landedPaint = (item.tensorId, nil)
+          paintPendingTensorId = nil
           // Its own frame, or the detail carried from its source, whatever the zoom.
           if refined?.layers != nil {
             await loadCanvasDetail(tensorId: item.tensorId, project: history.project.name)
@@ -2717,9 +2763,11 @@ final class CreateModel {
             canvasIsImported = false
             image = matched
             canvas.zoomToFit()
-            // A new step, with no mask of its own yet.
+            // A new step, with no mask or paint of its own yet.
             landedMask = (saved.tensorId, canvasMask)
             maskPendingTensorId = nil
+            landedPaint = (saved.tensorId, nil)
+            paintPendingTensorId = nil
           }
           statusNote = shift.summary
         }
@@ -2992,6 +3040,7 @@ final class CreateModel {
       // Left without its mask on purpose: leaving it unchanged keeps the one it had.
       maskPendingTensorId = nil
       landedMask = (tensorId, nil)
+      await restoreCanvasPaint()
     }
     return true
   }
@@ -3272,17 +3321,49 @@ extension CreateModel {
   /// is the one it arrived with, or when its own hasn't come back yet.
   private func persistCanvasMask(for step: (project: String, tensorId: Int64)) {
     guard step.project == history.project.name else { return }
+    // Its paint layer the same way.
+    persistCanvasPaint(for: step)
     if canvasMask == nil, maskPendingTensorId == step.tensorId { return }
     if let landedMask, landedMask.tensorId == step.tensorId, landedMask.mask == canvasMask { return }
-    // At the image's size, for compacting: the image under a run's preview, else the one showing.
-    var size: CGSize?
-    if previewCoversCanvas, let before = canvasBeforePreview, before.step?.tensorId == step.tensorId {
-      size = CGSize(width: before.image.width, height: before.image.height)
-    } else if !imageIsPreview, let image {
-      size = CGSize(width: image.width, height: image.height)
-    }
-    history.setMask(canvasMask, forImage: step.tensorId, size: size)
+    history.setMask(canvasMask, forImage: step.tensorId, size: canvasStepSize(for: step))
     landedMask = (step.tensorId, canvasMask)
+  }
+
+  /// The size of `step`'s image, for compacting what it keeps: the image under a run's preview,
+  /// else the one showing.
+  private func canvasStepSize(for step: (project: String, tensorId: Int64)) -> CGSize? {
+    if previewCoversCanvas, let before = canvasBeforePreview, before.step?.tensorId == step.tensorId {
+      return CGSize(width: before.image.width, height: before.image.height)
+    } else if !imageIsPreview, let image {
+      return CGSize(width: image.width, height: image.height)
+    }
+    return nil
+  }
+
+  /// The image the canvas is leaving remembers its paint layer (`HistoryStore.setPaint`), as
+  /// `persistCanvasMask` does its mask: nothing is written when it's the one it arrived with, or
+  /// when its own hasn't come back yet.
+  private func persistCanvasPaint(for step: (project: String, tensorId: Int64)) {
+    guard step.project == history.project.name else { return }
+    if canvasPaint == nil, paintPendingTensorId == step.tensorId { return }
+    if let landedPaint, landedPaint.tensorId == step.tensorId, landedPaint.paint == canvasPaint { return }
+    history.setPaint(canvasPaint, forImage: step.tensorId, size: canvasStepSize(for: step))
+    landedPaint = (step.tensorId, canvasPaint)
+  }
+
+  /// Brings back the paint layer the canvas image last had (`HistoryStore.storedPaint`), once,
+  /// when the image is on the canvas, as `restoreCanvasMask` does its mask: no undo step, and not
+  /// over paint added meanwhile.
+  func restoreCanvasPaint() async {
+    guard let step = imageStep, step.project == history.project.name, paintPendingTensorId == step.tensorId else { return }
+    let paint = await history.storedPaint(tensorId: step.tensorId)
+    guard let current = imageStep, current.project == step.project, current.tensorId == step.tensorId,
+          paintPendingTensorId == step.tensorId
+    else { return }
+    paintPendingTensorId = nil
+    guard canvasPaint == nil else { return }
+    landedPaint = (step.tensorId, paint)
+    canvasPaint = paint
   }
 
   /// The canvas image remembers its mask now (`persistCanvasMask`): before a job is queued from
@@ -3351,6 +3432,8 @@ extension CreateModel {
   /// back.
   @discardableResult
   func restoreCanvasMask() async -> Bool {
+    // Its paint layer comes back with it.
+    await restoreCanvasPaint()
     guard let step = imageStep, step.project == history.project.name else { return false }
     let mask = await history.storedMask(tensorId: step.tensorId)
     guard let current = imageStep, current.project == step.project, current.tensorId == step.tensorId else { return false }
@@ -3507,7 +3590,16 @@ extension CreateModel {
   /// the screen before taking the screen's request.
   func recordEntriesBeforeRun() async {
     await flushEntries()
-    if let input = maskEntryInput() {
+    if let input = drawEntryInput(), let source = canvasSource, let paint = source.paint {
+      // Remembered, so the next run from the same canvas follows this one rather than another.
+      drawnEntry = (source.image, paint, canvasMask, nil)
+      let image = source.image
+      recordEntry(input) { [weak self] item in
+        guard let self, let item, let drawn = drawnEntry, drawn.image === image, drawn.paint == paint else { return }
+        drawnEntry?.key = item.tensorId
+      }
+      await entryChain?.value
+    } else if let input = maskEntryInput() {
       recordEntry(input)
       await entryChain?.value
     }
@@ -3650,12 +3742,16 @@ extension CreateModel {
     adoptedImport = (newImage, tensorId)
     guard image === newImage, imageStep == nil, canvasIsImported else { return }
     let mask = canvasMask
+    let paint = canvasPaint
     imageStep = (history.project.name, tensorId)
     canvasIsImported = false
     awaitsStepImage = false
     maskPendingTensorId = nil
     landedMask = (tensorId, nil)
     canvasMask = mask
+    paintPendingTensorId = nil
+    landedPaint = (tensorId, nil)
+    canvasPaint = paint
   }
 
   /// The Mask entry Generate writes first, in Generate or Edit mode, when the canvas has an image
@@ -3663,13 +3759,43 @@ extension CreateModel {
   /// there's any): the run then follows it, and Use brings that mask back. Nil when there's none to
   /// write, or while a clip plays on the canvas.
   private func maskEntryInput() -> HistoryStore.EntryInput? {
-    guard canvasClip == nil, history.isLoaded, let input = entryInput(.mask),
+    // With paint, the Draw entry holds the mask too (`drawEntryInput`).
+    guard canvasClip == nil, history.isLoaded, canvasSource?.paint?.mayHaveColor != true, let input = entryInput(.mask),
           case .step = input.canvas
     else { return nil }
     if let current = history.currentEntry {
       return HistoryStore.isDuplicate(history.signature(of: input), of: current) ? nil : input
     }
     return canvasMask?.mayHavePaint == true ? input : nil
+  }
+
+  /// The Draw entry Generate writes first when the canvas image has paint (`CanvasPaint`): the
+  /// image with the paint baked in, and the mask, as Draw Things records a canvas drawn on
+  /// (`Reason.draw`). The run then follows it, and restoring it brings back the painted image.
+  /// Nil when there's no paint, or the Draw entry written last holds this very canvas, paint and
+  /// mask and is still the current step.
+  func drawEntryInput() -> HistoryStore.EntryInput? {
+    guard canvasClip == nil, history.isLoaded, let source = canvasSource, !source.isPreview,
+          let paint = source.paint, paint.mayHaveColor
+    else { return nil }
+    if let drawn = drawnEntry, drawn.image === source.image, drawn.paint == paint, drawn.mask == canvasMask,
+       let key = drawn.key, history.currentTensorId == key
+    {
+      return nil
+    }
+    guard let baked = bakedCanvas(source.image, paint: paint), var input = entryInput(.draw) else { return nil }
+    input.canvas = .image(baked)
+    input.canvasImage = baked
+    input.mask = canvasMask
+    return input
+  }
+
+  /// `image` with `paint` baked in (`CanvasPaint.baked`), made once per image and paint.
+  func bakedCanvas(_ image: CGImage, paint: CanvasPaint) -> CGImage? {
+    if let cached = bakedCanvasCache, cached.image === image, cached.paint == paint { return cached.baked }
+    guard let baked = paint.baked(onto: image) else { return nil }
+    bakedCanvasCache = (image, paint, baked)
+    return baked
   }
 
   /// Puts an input entry back: its canvas image (or an empty canvas), fitted, with its mask, and its
@@ -3723,5 +3849,7 @@ extension CreateModel {
     // Written whatever the image had, none included.
     landedMask = nil
     rememberCanvasMask()
+    // The image's own paint layer: an entry holds none (a Draw entry's is baked into its image).
+    Task { await restoreCanvasPaint() }
   }
 }

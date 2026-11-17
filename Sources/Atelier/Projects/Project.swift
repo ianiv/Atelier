@@ -232,6 +232,38 @@ final nonisolated class Project: Sendable {
   private static let maskKeyPrefix = "atelier_mask_"
   private static func maskKey(_ tensorId: Int64) -> String { maskKeyPrefix + String(tensorId) }
 
+  /// The paint layer an image last had on the canvas (`HistoryStore.setPaint`), under
+  /// `atelier_paint_<image tensor id>` as `CanvasPaint` JSON, kept as its mask is (`storedMask`):
+  /// by tensor, in the project file, which Draw Things ignores. Nil is no key; a cleared layer
+  /// removes it, as there's nothing older to fall back to.
+  func storedPaint(forImage tensorId: Int64) -> CanvasPaint? {
+    workspace.dictionary[Self.paintKey(tensorId), String.self]
+      .flatMap { try? JSONDecoder().decode(CanvasPaint.self, from: Data($0.utf8)) }
+  }
+
+  /// Keeps `paint` as the image's (`storedPaint`); nil removes the key.
+  func setStoredPaint(_ paint: CanvasPaint?, forImage tensorId: Int64) {
+    workspace.dictionary[Self.paintKey(tensorId), String.self] =
+      paint.flatMap { try? JSONEncoder().encode($0) }.map { String(decoding: $0, as: UTF8.self) }
+  }
+
+  /// The images with a kept paint layer. Reads every key (slow for a dictionary): for pruning.
+  func storedPaintImages() -> [Int64] {
+    workspace.dictionary.keys.filter { $0.hasPrefix(Self.paintKeyPrefix) }.compactMap { Int64($0.dropFirst(Self.paintKeyPrefix.count)) }
+  }
+
+  /// Removes the kept paint of images no step shows any more (deleted), as `pruneStoredMasks`
+  /// does for masks. Returns the images whose paint went.
+  @discardableResult
+  func pruneStoredPaint(keeping tree: ProjectTree) -> [Int64] {
+    let gone = storedPaintImages().filter { tree.step(tensorId: $0) == nil }
+    for tensorId in gone { setStoredPaint(nil, forImage: tensorId) }
+    return gone
+  }
+
+  private static let paintKeyPrefix = "atelier_paint_"
+  private static func paintKey(_ tensorId: Int64) -> String { paintKeyPrefix + String(tensorId) }
+
   /// A Draw Things canvas's painted mask, for the step whose image is `tensorId`, as one bitmap
   /// stroke in the composited image's pixels (`Self.paintedMask`); nil when no layer paints.
   /// Read-only: Atelier keeps its own masks as `storedMask`.
@@ -1191,8 +1223,10 @@ final nonisolated class Project: Sendable {
       tensorId: frameTensorId, maskId: frameMaskId, x: layers.frameX, y: layers.frameY,
       width: Int32(layers.frame.width), height: Int32(layers.frame.height),
       scaleFactorBy120: layers.frameScaleFactorBy120)
-    let carried = layers.sourceTensorId.map {
-      carriedDetail(from: $0, under: frame, frameAlpha: frameAlpha, frameWidth: layers.frame.width)
+    // Paint baked into the source carries the detail of the step it was painted on, less what
+    // would hide the paint.
+    let carried = (layers.detailTensorId ?? layers.sourceTensorId).map {
+      carriedDetail(from: $0, under: frame, frameAlpha: frameAlpha, frameWidth: layers.frame.width, clearOf: layers.paintBounds)
     } ?? []
     return (
       [LayerRow(tensorId: sourceTensorId, maskId: sourceMaskId, x: 0, y: 0, width: Int32(width), height: Int32(height))]
@@ -1210,8 +1244,12 @@ final nonisolated class Project: Sendable {
   /// the source's top left was on its canvas. One the new frame covers wholly and opaquely is
   /// dropped, whatever its density: it could never show again. Past `maxRefineLayers` the oldest go: the source layer
   /// below them already has them, at its own pixels (it's the step's image), so dropping one
-  /// flattens it into the source.
-  private func carriedDetail(from sourceTensorId: Int64, under frame: LayerRow, frameAlpha: [UInt8], frameWidth: Int) -> [LayerRow] {
+  /// flattens it into the source. One over `paintBounds` (paint baked into the source, source
+  /// pixels) is dropped too: drawn over the source it would hide the paint, which the source layer
+  /// alone has.
+  private func carriedDetail(
+    from sourceTensorId: Int64, under frame: LayerRow, frameAlpha: [UInt8], frameWidth: Int, clearOf paintBounds: CGRect? = nil
+  ) -> [LayerRow] {
     guard let layers = canvasLayers(imageTensorId: sourceTensorId),
           let start = layers.firstIndex(where: { $0.scaleFactorBy120 > 120 })
     else { return [] }
@@ -1223,6 +1261,7 @@ final nonisolated class Project: Sendable {
     var carried: [LayerRow] = []
     for row in layers[start...] {
       let rect = Self.units(row).offsetBy(dx: -union.minX, dy: -union.minY)
+      if let paintBounds, rect.intersects(paintBounds) { continue }
       if frameUnits.contains(rect) {
         // Covered when every frame pixel over it is opaque.
         let x0 = Int(((rect.minX - frameUnits.minX) * frameScale).rounded(.down))

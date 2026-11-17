@@ -21,6 +21,13 @@ nonisolated struct RefineMerge: Sendable {
   /// The canvas's mask when the run was queued, painted inside the frame or not: it goes back on
   /// the canvas with the result.
   var canvasMask: CanvasMask?
+  /// With paint baked into `source` (`CanvasPaint`), the step it was painted on, whose detail
+  /// layers the result still carries (`Project.carriedDetail`); `sourceTensorId` is nil then, as
+  /// `source` is no step's image.
+  var detailTensorId: Int64?
+  /// Where the paint lies (`CanvasPaint.bounds`, `source`'s pixels): carried detail layers over it
+  /// are dropped, as they'd hide it.
+  var paintBounds: CGRect?
 
   var placement: CanvasPlacement {
     CanvasPlacement(
@@ -38,17 +45,22 @@ nonisolated struct RefineMerge: Sendable {
     var frameHeight: Double
     var mask: CanvasMask?
     var canvasMask: CanvasMask?
+    /// Optional, so jobs saved before paint decode as they were.
+    var detailTensorId: Int64?
+    /// x, y, width, height.
+    var paintBounds: [Double]?
   }
 
   var record: Record {
     Record(
       sourceTensorId: sourceTensorId, scale: scale, offsetX: offset.width, offsetY: offset.height,
-      frameWidth: frameSize.width, frameHeight: frameSize.height, mask: mask, canvasMask: canvasMask)
+      frameWidth: frameSize.width, frameHeight: frameSize.height, mask: mask, canvasMask: canvasMask,
+      detailTensorId: detailTensorId, paintBounds: paintBounds.map { [$0.minX, $0.minY, $0.width, $0.height] })
   }
 
   init(
     source: CGImage, sourceTensorId: Int64?, scale: Double?, offset: CGSize, frameSize: CGSize, mask: CanvasMask?,
-    canvasMask: CanvasMask? = nil
+    canvasMask: CanvasMask? = nil, detailTensorId: Int64? = nil, paintBounds: CGRect? = nil
   ) {
     self.source = source
     self.sourceTensorId = sourceTensorId
@@ -57,6 +69,8 @@ nonisolated struct RefineMerge: Sendable {
     self.frameSize = frameSize
     self.mask = mask
     self.canvasMask = canvasMask ?? mask
+    self.detailTensorId = detailTensorId
+    self.paintBounds = paintBounds
   }
 
   init(record: Record, source: CGImage, sameProject: Bool) {
@@ -64,7 +78,8 @@ nonisolated struct RefineMerge: Sendable {
       source: source, sourceTensorId: sameProject ? record.sourceTensorId : nil, scale: record.scale,
       offset: CGSize(width: record.offsetX, height: record.offsetY),
       frameSize: CGSize(width: record.frameWidth, height: record.frameHeight), mask: record.mask,
-      canvasMask: record.canvasMask)
+      canvasMask: record.canvasMask, detailTensorId: sameProject ? record.detailTensorId : nil,
+      paintBounds: record.paintBounds.flatMap { $0.count == 4 ? CGRect(x: $0[0], y: $0[1], width: $0[2], height: $0[3]) : nil })
   }
 }
 
@@ -89,6 +104,65 @@ nonisolated struct RefineRecord: Codable, Hashable, Sendable {
   var mask: CanvasMask?
 }
 
+/// The Edit inputs `setRefineInputs` sets, worked out apart from the request so they can be
+/// checked on their own.
+nonisolated struct RefineInputs: @unchecked Sendable {
+  var canvas: CGImage
+  var mask: Data?
+  var sourceMask: CanvasSourceMask?
+  var merge: RefineMerge?
+  var canvasKey: String
+  /// The step the frame is exactly, saved once already; nil saves the frame as a new input.
+  var canvasTensorId: Int64?
+
+  /// See `GenerationEngine.Request.setRefineInputs`. With `paint` that shows anything, the frame
+  /// has it drawn in (`CanvasState.render`), and no step is reused as the input: the frame and the
+  /// merge's `source` (the image with the paint baked in at its own pixels) are no step's image,
+  /// so they're saved as new tensors, and the paint is part of the key that shares that saved input
+  /// between jobs.
+  static func make(
+    source: CGImage, sourceTensorId: Int64?, isImported: Bool, scale: Double?, offset: CGSize, frame: CGSize,
+    mask: CanvasMask?, merge: Bool, detail: [Project.DetailLayer] = [], paint: CanvasPaint? = nil
+  ) -> RefineInputs? {
+    let sourceSize = CGSize(width: source.width, height: source.height)
+    // A merging run at a near-whole zoom takes that zoom, so its kept layer is its pixels.
+    let snapped = merge
+      ? RefineMerge.snapped(scale: scale, offset: offset, sourceSize: sourceSize, frameSize: frame)
+      : (scale: scale, offset: offset)
+    let scale = snapped.scale, offset = snapped.offset
+    let placement = CanvasPlacement(sourceSize: sourceSize, frameSize: frame, scale: scale, offset: offset)
+    let paint = paint?.mayHaveColor == true ? paint : nil
+    guard let rendered = CanvasState.render(source, placement: placement, detail: detail, paint: paint) else { return nil }
+    let maskPNG = mask.flatMap { $0.mayHavePaint ? $0.frameMask(placement, canvas: rendered) : nil }
+    let stepId = isImported ? nil : sourceTensorId
+    var inputs = RefineInputs(
+      canvas: rendered, mask: maskPNG,
+      sourceMask: mask.map {
+        CanvasSourceMask(tensorId: stepId, width: Double(source.width), height: Double(source.height), mask: $0)
+      },
+      canvasKey: "")
+    let paintKey = paint.map { " paint \($0.hashValue)" } ?? ""
+    if merge, RefineMerge.applies(placement: placement, scale: scale, offset: offset, hasMask: maskPNG != nil) {
+      let baked = paint.flatMap { $0.baked(onto: source) }
+      if paint != nil, baked == nil { return nil }
+      inputs.merge = RefineMerge(
+        source: baked ?? source, sourceTensorId: paint == nil ? stepId : nil, scale: scale, offset: offset,
+        frameSize: frame, mask: maskPNG != nil ? mask : nil, canvasMask: mask,
+        detailTensorId: paint == nil ? nil : stepId,
+        paintBounds: paint.flatMap { $0.bounds(width: source.width, height: source.height) })
+      // The input step is the source itself, saved once for every job from it.
+      inputs.canvasTensorId = inputs.merge?.sourceTensorId
+      inputs.canvasKey = "merge \(ObjectIdentifier(source))" + paintKey
+    } else {
+      inputs.canvasKey = "\(ObjectIdentifier(source)) \(scale ?? 0) \(offset) \(frame.width)x\(frame.height)" + paintKey
+      if paint == nil, !isImported, placement.showsWholeImage, source.width == Int(frame.width), source.height == Int(frame.height) {
+        inputs.canvasTensorId = sourceTensorId
+      }
+    }
+    return inputs
+  }
+}
+
 extension GenerationEngine.Request {
   /// Sets the Edit inputs for refining part of `source`, the way Generate does from the canvas,
   /// for any caller (the Create screen, agents, scripted checks): the frame at the output size
@@ -98,42 +172,27 @@ extension GenerationEngine.Request {
   /// `merge`, how to merge the result back into `source`. Returns false when `source` couldn't be
   /// drawn. Merge only applies when it changes anything (`RefineMerge.applies`). `detail` is the
   /// source step's finer layers (`Project.detailLayers`), drawn into the frame at their own
-  /// resolution.
+  /// resolution; `paint` the canvas's paint layer, drawn over them (`RefineInputs.make`).
   @discardableResult
   mutating func setRefineInputs(
     source: CGImage, sourceTensorId: Int64?, isImported: Bool, scale: Double?, offset: CGSize,
-    mask: CanvasMask?, merge: Bool, detail: [Project.DetailLayer] = []
+    mask: CanvasMask?, merge: Bool, detail: [Project.DetailLayer] = [], paint: CanvasPaint? = nil
   ) -> Bool {
     let frame = CGSize(width: configuration.width, height: configuration.height)
-    // A merging run at a near-whole zoom takes that zoom, so its kept layer is its pixels.
-    let snapped = merge
-      ? RefineMerge.snapped(scale: scale, offset: offset, sourceSize: CGSize(width: source.width, height: source.height), frameSize: frame)
-      : (scale: scale, offset: offset)
-    let scale = snapped.scale, offset = snapped.offset
-    let placement = CanvasPlacement(
-      sourceSize: CGSize(width: source.width, height: source.height), frameSize: frame, scale: scale, offset: offset)
-    guard let rendered = CanvasState.render(source, placement: placement, detail: detail) else { return false }
-    canvas = rendered
+    guard let inputs = RefineInputs.make(
+      source: source, sourceTensorId: sourceTensorId, isImported: isImported, scale: scale, offset: offset, frame: frame,
+      mask: mask, merge: merge, detail: detail, paint: paint)
+    else { return false }
+    canvas = inputs.canvas
     canvasIsImported = isImported
-    let maskPNG = mask.flatMap { $0.mayHavePaint ? $0.frameMask(placement, canvas: rendered) : nil }
-    self.mask = maskPNG
-    canvasSourceMask = mask.map {
-      CanvasSourceMask(
-        tensorId: isImported ? nil : sourceTensorId, width: Double(source.width), height: Double(source.height), mask: $0)
-    }
-    if merge, RefineMerge.applies(placement: placement, scale: scale, offset: offset, hasMask: maskPNG != nil) {
-      self.merge = RefineMerge(
-        source: source, sourceTensorId: isImported ? nil : sourceTensorId, scale: scale, offset: offset,
-        frameSize: frame, mask: maskPNG != nil ? mask : nil, canvasMask: mask)
-      // The input step is the source itself, saved once for every job from it.
-      canvasTensorId = self.merge?.sourceTensorId
-      canvasKey = "merge \(ObjectIdentifier(source))"
-    } else {
-      self.merge = nil
-      canvasKey = "\(ObjectIdentifier(source)) \(scale ?? 0) \(offset) \(frame.width)x\(frame.height)"
-      if !isImported, placement.showsWholeImage, source.width == Int(frame.width), source.height == Int(frame.height) {
-        canvasTensorId = sourceTensorId
-      }
+    self.mask = inputs.mask
+    canvasSourceMask = inputs.sourceMask
+    self.merge = inputs.merge
+    canvasKey = inputs.canvasKey
+    if self.merge != nil {
+      canvasTensorId = inputs.canvasTensorId
+    } else if let id = inputs.canvasTensorId {
+      canvasTensorId = id
     }
     return true
   }
@@ -199,6 +258,11 @@ nonisolated struct RefinedStep: @unchecked Sendable {
     /// The frame's alpha at its size, when `frame` is its straight color, opaque (a dense frame,
     /// see-through where the source below shows); nil takes `frame`'s own alpha.
     var frameAlpha: [UInt8]?
+    /// The step whose detail layers to carry, when it isn't `sourceTensorId`'s (paint baked into
+    /// the source, `RefineMerge.detailTensorId`), and the paint's bounds, which carried layers
+    /// mustn't cover.
+    var detailTensorId: Int64?
+    var paintBounds: CGRect?
   }
 }
 
@@ -353,7 +417,8 @@ nonisolated enum CanvasMerge {
       }
       step.layers = RefinedStep.Layers(
         source: source, sourceTensorId: merge.sourceTensorId, paint: paint,
-        frame: frame, frameX: Int32(frameX), frameY: Int32(frameY))
+        frame: frame, frameX: Int32(frameX), frameY: Int32(frameY), detailTensorId: merge.detailTensorId,
+        paintBounds: merge.paintBounds)
     }
     return Merged(image: image, sourceOrigin: CGPoint(x: originX, y: originY), step: step)
   }
@@ -510,7 +575,7 @@ nonisolated enum CanvasMerge {
           scale: scale, layerAlpha: layerAlpha, layerWidth: layerWidth, layerHeight: layerHeight)
       },
       frame: frame, frameX: Int32(units.minX), frameY: Int32(units.minY), frameScaleFactorBy120: Int32(density),
-      frameAlpha: layerAlpha)
+      frameAlpha: layerAlpha, detailTensorId: merge.detailTensorId, paintBounds: merge.paintBounds)
     return Merged(image: image, sourceOrigin: .zero, step: step)
   }
 

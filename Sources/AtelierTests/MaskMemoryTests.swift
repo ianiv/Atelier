@@ -140,6 +140,33 @@ struct MaskMemoryTests {
     await project.close()
   }
 
+  @Test func paintIsKeptPerImageBesideItsMask() async throws {
+    let (project, folder) = try Self.project()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let first = try await Self.append(project)
+    let second = try await Self.append(project, after: first.tensorId)
+    let paint = CanvasPaint(strokes: [.ellipse(in: CGRect(x: 4, y: 4, width: 20, height: 10), color: CanvasPaint.Color(red: 1, green: 0.5, blue: 0))])
+    let mask = CanvasMask(rects: [CGRect(x: 0, y: 0, width: 8, height: 8)])
+    project.setStoredPaint(paint, forImage: second.tensorId)
+    project.setStoredMask(mask, forImage: second.tensorId)
+    #expect(project.storedPaint(forImage: second.tensorId) == paint && project.storedPaint(forImage: first.tensorId) == nil)
+    // Its own key: the mask's is untouched, and only paint keys are listed as paint.
+    #expect(project.storedMask(forImage: second.tensorId) == mask)
+    #expect(project.storedPaintImages() == [second.tensorId] && project.storedMaskImages() == [second.tensorId: true])
+    // Read fresh from the file, then deleting the step removes its paint with its mask.
+    await project.close()
+    let reopened = Project(url: project.url)
+    #expect(await reopened.read { $0.storedPaint(forImage: second.tensorId) } == paint)
+    reopened.setStoredPaint(paint, forImage: first.tensorId)
+    _ = try await reopened.delete(tensorId: second.tensorId)
+    let gone = await reopened.read { $0.pruneStoredPaint(keeping: $0.tree(items: false)) }
+    #expect(gone == [second.tensorId])
+    #expect(reopened.storedPaint(forImage: second.tensorId) == nil && reopened.storedPaint(forImage: first.tensorId) == paint)
+    reopened.setStoredPaint(nil, forImage: first.tensorId)
+    #expect(reopened.storedPaintImages().isEmpty)
+    await reopened.close()
+  }
+
   @Test func olderProjectsFallBackToTheNewestChildsMask() async throws {
     let (project, folder) = try Self.project()
     defer { try? FileManager.default.removeItem(at: folder) }
