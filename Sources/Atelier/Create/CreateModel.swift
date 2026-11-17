@@ -953,15 +953,15 @@ final class CreateModel {
   var pendingHistoryDelete: [HistoryItem]?
 
   /// Deletes History items: the steps (`HistoryStore.delete`, one transaction per clip), then their
-  /// clips come off the timelines. History's Delete and Create's both come here. From Create
-  /// (`movesCanvas`), when the canvas showed one of them it moves to the step History then
+  /// clips come off the timelines. History's Delete and Create's both come here. When the canvas
+  /// showed one of them it moves to the step History then
   /// selects: the one now current (a deleted current step hands over to its parent), else the
   /// newest. The canvas's clip player is unloaded first when it holds a deleted clip, so none of its
   /// frames stays up or is read from a step that's gone.
-  func deleteHistoryItems(_ items: [HistoryItem], movesCanvas: Bool = false) async throws {
+  func deleteHistoryItems(_ items: [HistoryItem]) async throws {
     let deleted = Set(items.flatMap { [$0.tensorId] + ($0.clip?.frames ?? []) })
-    let canvasShowedOne = movesCanvas && !imageIsPreview && imageStep.map { $0.project == history.project.name && deleted.contains($0.tensorId) } == true
-    if movesCanvas, let loaded = canvasPlayback.loadedTensorId, deleted.contains(loaded) { canvasPlayback.reset() }
+    let canvasShowedOne = !imageIsPreview && imageStep.map { $0.project == history.project.name && deleted.contains($0.tensorId) } == true
+    if let loaded = canvasPlayback.loadedTensorId, deleted.contains(loaded) { canvasPlayback.reset() }
     defer { if canvasShowedOne { showAfterDelete() } }
     try await history.delete(items)
     timelines.removeClips(Set(items.filter(\.isVideo).map(\.tensorId)))

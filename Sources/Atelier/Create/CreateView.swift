@@ -370,7 +370,7 @@ struct CanvasView: View {
       model.pendingHistoryDelete = nil
       Task {
         do {
-          try await model.deleteHistoryItems(items, movesCanvas: true)
+          try await model.deleteHistoryItems(items)
         } catch {
           deleteError = error.localizedDescription
         }

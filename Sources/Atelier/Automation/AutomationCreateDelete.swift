@@ -5,7 +5,7 @@ import SwiftUI
 /// `--create-delete-check --project NAME [--snapshot-dir DIR] [--quit]` checks Delete from the
 /// Create screen (the strip's and the canvas's menus), as PASS/FAIL lines. It puts the newest image
 /// on the canvas and deletes it the way the confirmation's Delete does
-/// (`CreateModel.deleteHistoryItems(_:movesCanvas:)`): the image leaves History and the canvas
+/// (`CreateModel.deleteHistoryItems(_:)`): the image leaves History and the canvas
 /// moves to the step now current. Deleting an image that isn't on the canvas leaves the canvas
 /// alone. Then it plays the shortest clip on the canvas and deletes it: the clip leaves History
 /// and every timeline, the canvas's shared player lets it go, and the canvas moves on. It DELETES
@@ -83,7 +83,7 @@ extension Automation {
       model.pendingHistoryDelete = nil
       try? await Task.sleep(for: .milliseconds(500))
       do {
-        try await model.deleteHistoryItems([image], movesCanvas: true)
+        try await model.deleteHistoryItems([image])
         check(true, "deleted image \(name(image))")
       } catch {
         check(false, "deleting image \(name(image)): \(error.localizedDescription)")
@@ -97,7 +97,7 @@ extension Automation {
       let onCanvas = model.imageItem?.tensorId
       if let other = history.items.first(where: { !$0.isVideo && !$0.isEntry && $0.tensorId != onCanvas }) {
         do {
-          try await model.deleteHistoryItems([other], movesCanvas: true)
+          try await model.deleteHistoryItems([other])
         } catch {
           check(false, "deleting image \(name(other)): \(error.localizedDescription)")
         }
@@ -122,7 +122,7 @@ extension Automation {
       try? await Task.sleep(for: .milliseconds(500))
       let frames = Set(video.clip?.frames ?? [])
       do {
-        try await model.deleteHistoryItems([video], movesCanvas: true)
+        try await model.deleteHistoryItems([video])
         check(true, "deleted clip \(name(video))")
       } catch {
         check(false, "deleting clip \(name(video)): \(error.localizedDescription)")
