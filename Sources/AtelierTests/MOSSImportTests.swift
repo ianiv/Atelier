@@ -227,4 +227,45 @@ struct MOSSImportTests {
     #expect(throws: SafeTensorsReader.Error.self) { try reader.weight("a.weight") }
     #expect(throws: SafeTensorsReader.Error.self) { try reader.weight("b.weight") }
   }
+
+  /// A raw file: an 8-byte header length (`length`, or the header's real size), the header, `body`.
+  private static func writeRaw(_ header: [String: Any], body: Data, length: UInt64? = nil) throws -> URL {
+    let json = try JSONSerialization.data(withJSONObject: header, options: [.sortedKeys])
+    var file = Data()
+    withUnsafeBytes(of: (length ?? UInt64(json.count)).littleEndian) { file.append(contentsOf: $0) }
+    file.append(json)
+    file.append(body)
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent("MOSSImportTests-" + UUID().uuidString)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    let url = folder.appendingPathComponent("model.safetensors")
+    try file.write(to: url)
+    return url
+  }
+
+  @Test func malformedHeaderEntriesAreSkipped() throws {
+    let header: [String: Any] = [
+      "good": ["dtype": "F32", "shape": [2], "data_offsets": [0, 8]],
+      "negativeOffset": ["dtype": "F32", "shape": [2], "data_offsets": [-8, 0]],
+      "pastEnd": ["dtype": "F32", "shape": [2], "data_offsets": [0, Int.max]],
+      "reversed": ["dtype": "F32", "shape": [2], "data_offsets": [8, 0]],
+      "hugeDims": ["dtype": "F32", "shape": [Int.max / 2, 4], "data_offsets": [0, 8]],
+      "hugeBytes": ["dtype": "F64", "shape": [Int.max / 4], "data_offsets": [0, 8]],
+      "negativeDim": ["dtype": "F32", "shape": [-2, -1], "data_offsets": [0, 8]],
+      "wrongSize": ["dtype": "F32", "shape": [3], "data_offsets": [0, 8]],
+      "empty": ["dtype": "F32", "shape": [0, 4], "data_offsets": [8, 8]],
+    ]
+    let url = try Self.writeRaw(header, body: Self.f32([1, 2]))
+    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    let reader = try SafeTensorsReader(url: url)
+    #expect(Set(reader.entries.keys) == ["good", "empty"])
+    #expect(try reader.floats(try #require(reader.entries["good"]), name: "good") == [1, 2])
+    #expect(throws: SafeTensorsReader.Error.self) { try reader.weight("empty") }
+    #expect(throws: SafeTensorsReader.Error.self) { try reader.weight("hugeDims") }
+
+    for length in [UInt64.max, UInt64(Int.max), 1 << 40] {
+      let bad = try Self.writeRaw(header, body: Data(), length: length)
+      defer { try? FileManager.default.removeItem(at: bad.deletingLastPathComponent()) }
+      #expect(throws: SafeTensorsReader.Error.self) { try SafeTensorsReader(url: bad) }
+    }
+  }
 }

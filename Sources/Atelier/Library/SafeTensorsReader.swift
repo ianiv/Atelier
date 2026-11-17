@@ -17,8 +17,21 @@ final nonisolated class SafeTensorsReader {
     var shape: [Int]
     /// Byte range in the file (the header's `data_offsets` moved past the header).
     var range: Range<Int>
+    /// The element count, checked against overflow when the header was read.
+    var count: Int
+    /// `count` times the element size, nil for a dtype `floats` can't decode.
+    var byteCount: Int?
+  }
 
-    var count: Int { shape.reduce(1, *) }
+  /// Bytes per element of the dtypes `floats` decodes.
+  static func elementSize(_ dtype: String) -> Int? {
+    switch dtype {
+    case "F32": 4
+    case "F64": 8
+    case "F16", "BF16": 2
+    case "I8", "U8", "F8_E4M3", "F8_E5M2": 1
+    default: nil
+    }
   }
 
   enum Error: LocalizedError {
@@ -48,18 +61,41 @@ final nonisolated class SafeTensorsReader {
     guard let data = try? Data(contentsOf: url, options: .alwaysMapped), data.count >= 8 else {
       throw Error.unreadable
     }
-    let headerSize = data.withUnsafeBytes { Int(UInt64(littleEndian: $0.loadUnaligned(as: UInt64.self))) }
-    guard headerSize > 0, headerSize <= data.count - 8, headerSize < 100_000_000,
-          let header = try? JSONSerialization.jsonObject(with: data[8..<(8 + headerSize)]) as? [String: Any]
+    // The header is untrusted: its length, offsets and shapes are checked before any arithmetic
+    // that could overflow or reach outside the file.
+    let rawHeaderSize = data.withUnsafeBytes { UInt64(littleEndian: $0.loadUnaligned(as: UInt64.self)) }
+    guard rawHeaderSize > 0, rawHeaderSize <= UInt64(data.count - 8), rawHeaderSize < 100_000_000 else {
+      throw Error.unreadable
+    }
+    let headerSize = Int(rawHeaderSize)
+    guard let header = try? JSONSerialization.jsonObject(with: data[8..<(8 + headerSize)]) as? [String: Any]
     else { throw Error.unreadable }
     let start = 8 + headerSize
+    let available = data.count - start
     var entries = [String: Entry]()
     for (key, value) in header {
-      guard let value = value as? [String: Any], let dtype = value["dtype"] as? String,
+      guard let value = value as? [String: Any], let dtype = (value["dtype"] as? String)?.uppercased(),
             let shape = value["shape"] as? [Int], let offsets = value["data_offsets"] as? [Int],
-            offsets.count == 2, offsets[0] <= offsets[1], start + offsets[1] <= data.count
+            offsets.count == 2, offsets[0] >= 0, offsets[0] <= offsets[1], offsets[1] <= available,
+            shape.allSatisfy({ $0 >= 0 })
       else { continue }
-      entries[key] = Entry(dtype: dtype.uppercased(), shape: shape, range: (start + offsets[0])..<(start + offsets[1]))
+      var count = 1
+      var overflow = false
+      for dimension in shape {
+        (count, overflow) = count.multipliedReportingOverflow(by: dimension)
+        if overflow { break }
+      }
+      guard !overflow else { continue }
+      var byteCount: Int?
+      if let size = Self.elementSize(dtype) {
+        let (bytes, overflow) = count.multipliedReportingOverflow(by: size)
+        // A decodable entry whose bytes don't match its shape is skipped.
+        guard !overflow, bytes == offsets[1] - offsets[0] else { continue }
+        byteCount = bytes
+      }
+      entries[key] = Entry(
+        dtype: dtype, shape: shape, range: (start + offsets[0])..<(start + offsets[1]), count: count,
+        byteCount: byteCount)
     }
     self.data = data
     self.entries = entries
@@ -71,15 +107,8 @@ final nonisolated class SafeTensorsReader {
   /// `entry` decoded to Float, row-major.
   func floats(_ entry: Entry, name: String) throws -> [Float] {
     let count = entry.count
-    let size: Int
-    switch entry.dtype {
-    case "F32": size = 4
-    case "F64": size = 8
-    case "F16", "BF16": size = 2
-    case "I8", "U8", "F8_E4M3", "F8_E5M2": size = 1
-    default: throw Error.unsupportedType(name, entry.dtype)
-    }
-    guard entry.range.count == count * size else { throw Error.unreadable }
+    guard Self.elementSize(entry.dtype) != nil else { throw Error.unsupportedType(name, entry.dtype) }
+    guard entry.byteCount == entry.range.count else { throw Error.unreadable }
     return [Float](unsafeUninitializedCapacity: count) { out, initialized in
       data.withUnsafeBytes { raw in
         let base = raw.baseAddress! + entry.range.lowerBound
@@ -117,7 +146,7 @@ final nonisolated class SafeTensorsReader {
   /// scalar or one per row; `dequantize_int8_convrot_weight`: that, then un-rotated, see
   /// `ConvRot`). FP8 weights with a `weight_scale` are scaled the same way.
   func weight(_ name: String) throws -> Tensor<Float> {
-    guard let entry = entries[name] else { throw Error.unreadable }
+    guard let entry = entries[name], entry.count > 0 else { throw Error.unreadable }
     var values = try floats(entry, name: name)
     let module = name.hasSuffix(".weight") ? String(name.dropLast(".weight".count)) : name
     var convRotGroupSize: Int?

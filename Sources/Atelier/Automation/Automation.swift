@@ -862,8 +862,18 @@ enum Automation {
           canImport ? added.count == 1 : added.isEmpty,
           String(format: "import of %@ in %.1fs: %@", source.lastPathComponent, Date().timeIntervalSince(importStart), added.map { "\($0.file) (\($0.name), \($0.version ?? "?"))" }.joined()))
         if let entry = added.first {
-          let registry = (try? String(contentsOfFile: model.modelsDirectory + "/custom.json", encoding: .utf8)) ?? ""
-          check(library.isCustom(entry) && registry.contains(entry.file), "registered in custom.json as Imported")
+          // Imports go to the add folder, which needn't be the main one: read the custom.json of the
+          // folder the file landed in, and on failure say which folders' lists have it.
+          func registry(_ folder: URL) -> String {
+            (try? String(contentsOf: folder.appendingPathComponent("custom.json"), encoding: .utf8)) ?? ""
+          }
+          let landed = library.folders[entry.file] ?? library.addFolder
+          let registered = library.isCustom(entry) && registry(landed).contains(entry.file)
+          let listing = library.directories.filter { registry($0).contains(entry.file) }.map(\.path)
+          check(
+            registered,
+            "registered in \(landed.path)/custom.json as Imported"
+              + (registered ? "" : " (isCustom \(library.isCustom(entry)); listed in: \(listing.isEmpty ? "no folder's custom.json" : listing.joined(separator: ", ")))"))
           while library.downloads[entry.file] != nil {
             if let progress = library.downloads[entry.file] { log("dependencies: \(ModelStatus.describe(progress))") }
             try? await Task.sleep(for: .seconds(2))
