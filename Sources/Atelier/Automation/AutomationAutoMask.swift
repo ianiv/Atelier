@@ -26,6 +26,8 @@ extension Automation {
   ///   Atelier --automask-check --project NAME --input FILE [--point x,y]… [--box x,y,w,h]
   ///           [--subject] [--sam] [--size tiny|small|large] [--model M] [--snapshot-dir DIR] [--quit]
   static func autoMaskCheck(_ model: CreateModel, navigation: Navigation, layouts: LayoutStore, presets: PresetStore) {
+    // Select's Fill changes the paint colour and recent colours; the user's come back at the end.
+    let restoreSettings = keepCanvasSettings(model)
     let args = CommandLine.arguments
     func value(_ name: String) -> String? {
       guard let index = args.firstIndex(of: name), index + 1 < args.count else { return nil }
@@ -51,6 +53,7 @@ extension Automation {
         fflush(stdout)
       }
       @MainActor func finish() {
+        restoreSettings()
         print(failures == 0 ? "automask check: all passed" : "automask check: \(failures) failed")
         fflush(stdout)
         if args.contains("--quit") { AppLifecycle.quit() }

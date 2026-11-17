@@ -2,6 +2,27 @@
 import SwiftUI
 
 extension Automation {
+  /// The canvas tools' remembered settings as they are now (the layer, the paint colour and recent
+  /// colours, both brush sizes, Mask Opacity), and a closure that puts them back: a check changes
+  /// them while it runs, and the user's own must be there afterwards.
+  static func keepCanvasSettings(_ model: CreateModel) -> @MainActor () -> Void {
+    let layer = model.canvasLayer, color = model.paintColor, recent = model.recentPaintColors
+    let paintSize = model.paintBrushSize, maskSize = model.brushSize, opacity = model.maskOpacity
+    let defaults = UserDefaults.standard
+    let stored = ["canvasLayer", "paintColor", "recentPaintColors", "paintBrushSize", "brushSize", "maskOpacity"]
+      .map { ($0, defaults.object(forKey: $0)) }
+    return {
+      model.canvasLayer = layer
+      model.paintColor = color
+      model.recentPaintColors = recent
+      model.paintBrushSize = paintSize
+      model.brushSize = maskSize
+      model.maskOpacity = opacity
+      // Exactly as they were: a key that wasn't set stays unset (the app's default).
+      for (key, value) in stored { defaults.set(value, forKey: key) }
+    }
+  }
+
   /// Checks painting colours on the canvas end to end (use a scratch `--project` and a fast image
   /// model with few steps): New Sketch puts an opaque white image the frame's size on the canvas as
   /// an Imported entry, in Edit mode, with Brush on the Color layer; paint strokes and mask strokes made in
@@ -19,6 +40,7 @@ extension Automation {
   /// `--size` is the frame's side (default 512), `--steps` the run's (default 4). Always pass a
   /// scratch `--project`: it adds steps to it.
   static func paintCheck(_ model: CreateModel) {
+    let restoreSettings = keepCanvasSettings(model)
     let args = CommandLine.arguments
     func value(_ name: String) -> String? {
       guard let index = args.firstIndex(of: name), index + 1 < args.count else { return nil }
@@ -32,6 +54,7 @@ extension Automation {
         fflush(stdout)
       }
       @MainActor func finish() {
+        restoreSettings()
         print(failures == 0 ? "paint check: all passed" : "paint check: \(failures) failed")
         fflush(stdout)
         if args.contains("--quit") { AppLifecycle.quit() }
