@@ -96,7 +96,7 @@ struct ShareTests {
       let name = "share-test-\(UUID().uuidString)"
       let provider = try #require(SharePicker.providers([PNGExport.image(smallImage(), name: name).shared]).first)
       let loaded = try await load(provider, .png)
-      #expect(loaded.name.hasPrefix(name))
+      #expect(loaded.name == name + ".png")
       #expect(ImageLoader.image(from: loaded.data)?.width == 4)
     }
 

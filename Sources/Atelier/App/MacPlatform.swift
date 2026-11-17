@@ -303,9 +303,9 @@ enum SharePicker {
     return NSRect(x: bounds.midX, y: bounds.midY, width: 1, height: 1)
   }
 
-  /// The items as `NSItemProvider`s that make each file only when a share target asks for it. A
-  /// target asking for an image file gets the PNG through its data representation, written to a
-  /// file by the provider itself; a clip's MP4 goes through the Shares area.
+  /// The items as `NSItemProvider`s that make each file only when a share target asks for it.
+  /// Whichever of `PNGExport`'s representations a target loads, it gets the PNG (or a clip's MP4)
+  /// under its export name: both representations and `suggestedName` carry the name.
   static func providers(_ exports: [PNGExport]) -> [NSItemProvider] {
     exports.map { export in
       let provider = NSItemProvider()
