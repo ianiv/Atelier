@@ -309,11 +309,11 @@ struct MoodboardColumn: View {
 
   private static let thumbnail: CGFloat = 72
 
-  /// What the column holds for the selected model: H3 FL2VA takes the last frame from it, H3
-  /// Ref2VA numbered pictures.
+  /// What the column holds for the selected model: H3 FL2VA takes the last frame from it (the
+  /// first and last with an empty canvas), H3 Ref2VA numbered pictures.
   private var title: String {
     let video = model.videoModel
-    if video?.takesLastFrame == true { return "Last Frame" }
+    if video?.takesLastFrame == true { return model.framesFromMoodboard ? "First & Last Frame" : "Last Frame" }
     if video?.takesReferences == true { return "References" }
     return "Moodboard"
   }
@@ -347,7 +347,10 @@ struct MoodboardColumn: View {
           Divider()
         }
         if moodboard.items.isEmpty {
-          Text(video?.takesLastFrame == true ? "Drop the last frame here" : "Drop reference images here")
+          Text(
+            video?.takesLastFrame == true
+              ? (model.framesFromMoodboard ? "Drop the first and last frames here" : "Drop the last frame here")
+              : "Drop reference images here")
             .font(.caption)
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
@@ -391,12 +394,15 @@ struct MoodboardColumn: View {
   }
 
   /// How the selected video model reads an image: H3 FL2VA's last frame is the first image it
-  /// gets, H3 Ref2VA calls the canvas (in Edit) Picture 1 and the moodboard images the ones after.
+  /// gets (with an empty canvas, the first two are the first and last frames), H3 Ref2VA calls the canvas (in Edit) Picture 1 and the moodboard images the ones after.
   private func role(of item: MoodboardItem) -> String? {
     guard let video = model.videoModel else { return nil }
     let sent = model.moodboard.items.filter { $0.weight > 0 }
     guard let index = sent.firstIndex(where: { $0.id == item.id }) else { return nil }
-    if video.takesLastFrame { return index == 0 ? "Last frame" : "Not used" }
+    if video.takesLastFrame {
+      let roles = model.framesFromMoodboard ? ["First frame", "Last frame"] : ["Last frame"]
+      return roles.indices.contains(index) ? roles[index] : "Not used"
+    }
     if video.takesReferences {
       let canvas = model.effectiveCanvasMode == .edit && model.image != nil && model.canvasClip == nil
       return "Picture \(index + (canvas ? 2 : 1))"

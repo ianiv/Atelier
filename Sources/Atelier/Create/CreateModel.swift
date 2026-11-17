@@ -1696,7 +1696,29 @@ final class CreateModel {
       }
     }
     if usesReferences { base.moodboard = moodboard.references }
+    // H3 FL2VA reads only one moodboard image, as the last frame after the canvas's first
+    // (`LocalImageGenerator.generate`'s `prefix(1)`). With nothing on the canvas, the moodboard's
+    // first image is the first frame and its second the last: the first goes in as the canvas
+    // would, filling the frame (cropped about its center: fitted, a different shape would leave
+    // bars in the video, where the engine stretches the last frame to fill), so the engine gets
+    // the same pair. A lone image stays a reference, which the engine puts at the first frame
+    // (`MiniMaxH3RotaryEmbedding` positions).
+    if framesFromMoodboard, base.moodboard.count >= 2 {
+      let first = base.moodboard.removeFirst()
+      let fill = max(
+        Double(base.configuration.width) / Double(first.image.width),
+        Double(base.configuration.height) / Double(first.image.height))
+      base.setRefineInputs(
+        source: first.image, sourceTensorId: nil, isImported: true, scale: fill, offset: .zero, mask: nil,
+        merge: false)
+    }
     return base
+  }
+
+  /// H3 FL2VA with nothing on the canvas to start from: the moodboard gives the first frame and
+  /// then the last (`screenRequest`).
+  var framesFromMoodboard: Bool {
+    videoModel?.takesLastFrame == true && !(effectiveCanvasMode == .edit && canvasClip == nil && canvasSource != nil)
   }
 
   /// Queues `count` images of the prompt; runs right away when nothing else is. A Select

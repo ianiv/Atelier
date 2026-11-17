@@ -7,7 +7,7 @@ Pick a video model in Create and the same screen makes videos: the prompt, inspe
 | Family | What it takes | Sound |
 | --- | --- | --- |
 | LTX-2, LTX-2.3 | The prompt; in Edit mode, the canvas as the first frame | Makes its own soundtrack |
-| MiniMax H3 (FL2VA) | The canvas as the first frame and the first moodboard image as the last | Makes its own soundtrack |
+| MiniMax H3 (FL2VA) | The canvas as the first frame and the first moodboard image as the last (with an empty canvas, the first two moodboard images) | Makes its own soundtrack |
 | MiniMax H3 (Ref2VA), FastH3 Omni | The canvas and moodboard images as references, and an audio file | Makes its own soundtrack, following the audio you give it |
 | Wan 2.1, Wan 2.2, SkyReels, Hunyuan Video | The prompt (T2V models); the canvas as the first frame (I2V models) | None |
 | Stable Video Diffusion | An image to animate | None |
@@ -53,7 +53,7 @@ MiniMax H3 models (including FastH3 Omni and HyperFlow H3 Flash) always decode i
 ## Starting from an image
 
 - **First frame.** With a model that takes one, put an image on the canvas and switch to **Edit**, as you would to edit an image. The video starts from what's inside the frame.
-- **Last frame (MiniMax H3 FL2VA).** The moodboard column is titled **Last Frame**: the first image on it is where the video ends.
+- **Last frame (MiniMax H3 FL2VA).** The moodboard column is titled **Last Frame**: the first image on it is where the video ends. With nothing on the canvas, or in Generate mode (which leaves the canvas out), it's titled **First & Last Frame**: its first image is where the video starts and its second where it ends (one image alone is only the start).
 - **References (MiniMax H3 Ref2VA).** The column is titled **References**, and each image says which picture it is. In Edit mode the canvas is Picture 1 and the moodboard images follow. Refer to them in the prompt as `<Picture 1>`, `<Picture 2>` and so on. The distilled Ref2VA models (FastH3 Omni, Pika H3 Flex and HyperFlow H3 Flash Ref2VA) need at least one reference image, referred to in the prompt; without one they don't make a video.
 
 ## Audio
