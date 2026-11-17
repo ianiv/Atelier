@@ -86,7 +86,7 @@ struct PaintBar: View {
       model.clearPaint(undoManager: undoManager)
     }
     .help("Clear Paint: takes every color off the image")
-    .disabled(!paints || model.canvasPaint == nil)
+    .disabled(!model.canClearPaint)
     Button("Fill Mask", systemImage: "drop.fill") {
       model.fillMask(undoManager: undoManager)
     }

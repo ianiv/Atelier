@@ -1470,11 +1470,13 @@ final class AgentTools {
     let mask = try stroke(shape, number: number, erases: false)
     if erases {
       // A shape taken away: as a bitmap of its area (`CanvasPaint.Stroke.Kind.erase`).
-      let area = bounds(of: mask.points).standardized
-      guard area.maxX > 0, area.maxY > 0,
-            let flat = CanvasMask(strokes: [mask]).flattenedStroke(width: Int(area.maxX.rounded(.up)), height: Int(area.maxY.rounded(.up)))
+      // At the shape's own rectangle, not from the image's top left.
+      let area = bounds(of: mask.points).standardized.integral
+      guard area.width > 0, area.height > 0,
+            let flat = CanvasMask(strokes: [mask]).translated(by: CGPoint(x: -area.minX, y: -area.minY))
+            .flattenedStroke(width: Int(area.width), height: Int(area.height))
       else { throw ToolError("Shape \(number) covers nothing.") }
-      return CanvasPaint.Stroke(kind: .erase, points: flat.points, bitmap: flat.bitmap)
+      return CanvasPaint.Stroke(kind: .erase, points: [area.origin], bitmap: flat.bitmap)
     }
     switch mask.kind {
     case .rect: return CanvasPaint.Stroke(kind: .rect, points: mask.points, color: color)

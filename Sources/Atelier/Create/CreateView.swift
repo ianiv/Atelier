@@ -164,6 +164,8 @@ struct CanvasView: View {
   @State private var maskTint: CGImage?
   /// The paint layer drawn for the canvas (`CanvasPaint.layer`), redrawn when the paint changes.
   @State private var paintLayer: CGImage?
+  /// The image and paint `paintLayer` was drawn for.
+  @State private var paintLayerSource: (image: CGImage, paint: CanvasPaint)?
   /// The Select tool's drag: where it began and is now, in image pixels.
   @State private var selectDrag: (start: CGPoint, end: CGPoint)?
   #if os(macOS)
@@ -626,7 +628,8 @@ struct CanvasView: View {
       if let liveStroke {
         Self.strokeCanvas(
           liveStroke.points, radius: liveStroke.radius, scale: scale,
-          color: liveStroke.erases ? .white.opacity(0.5) : .red.opacity(model.maskOpacity))
+          // Never quite invisible, even at Mask Opacity 0%, so you see what you're painting.
+          color: liveStroke.erases ? .white.opacity(0.5) : .red.opacity(max(model.maskOpacity, 0.3)))
       }
     }
   }
@@ -702,13 +705,31 @@ struct CanvasView: View {
     maskTint = mask.tint(sourceSize: CGSize(width: image.width, height: image.height), alpha: 1)
   }
 
-  /// The paint layer at the image's size, at most 2048 pixels on its long side.
+  /// The paint layer at the image's size, at most 2048 pixels on its long side. Left as it is while
+  /// a run's preview covers the image (the paint is the image beneath's, and comes back with it);
+  /// strokes added after the ones drawn go over the layer there is, so a stroke doesn't redraw
+  /// (and decode) every fill before it.
   private func updatePaintLayer() {
-    guard let image = model.image, let paint = model.canvasPaint else { return paintLayer = nil }
+    guard model.canvasShowsImage else { return }
+    guard let image = model.image, let paint = model.canvasPaint else {
+      paintLayer = nil
+      paintLayerSource = nil
+      return
+    }
+    let drawn = paintLayerSource.flatMap { $0.image === image ? $0.paint : nil }
+    if drawn == paint { return }
     let scale = min(1, 2048 / Double(max(image.width, image.height)))
     let width = max(Int((Double(image.width) * scale).rounded()), 1), height = max(Int((Double(image.height) * scale).rounded()), 1)
-    paintLayer = paint.layer(
-      width: width, height: height, scale: (Double(width) / Double(image.width), Double(height) / Double(image.height)))
+    let pixels = (Double(width) / Double(image.width), Double(height) / Double(image.height))
+    if let drawn, let base = paintLayer, paint.strokes.count > drawn.strokes.count,
+       Array(paint.strokes.prefix(drawn.strokes.count)) == drawn.strokes
+    {
+      paintLayer = CanvasPaint(strokes: Array(paint.strokes.dropFirst(drawn.strokes.count)))
+        .layer(width: width, height: height, scale: pixels, over: base)
+    } else {
+      paintLayer = paint.layer(width: width, height: height, scale: pixels)
+    }
+    paintLayerSource = (image, paint)
   }
 
   /// Pinch zoom, keeping the image point under the fingers in place.

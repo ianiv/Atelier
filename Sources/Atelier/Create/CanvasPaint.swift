@@ -203,12 +203,18 @@ nonisolated struct CanvasPaint: Codable, Sendable, Hashable {
   /// The layer over a `width` × `height` grid, as a transparent sRGB image (premultiplied alpha)
   /// with the colours where they lie, antialiased. An image point p lands on (p.x × scale.x +
   /// origin.x, p.y × scale.y + origin.y), as in `CanvasMask.coverage`. Nil when it shows nothing.
-  func layer(width: Int, height: Int, scale: (x: Double, y: Double) = (1, 1), origin: CGPoint = .zero) -> CGImage? {
-    guard width > 0, height > 0, mayHaveColor,
+  /// With `base` (a layer drawn before, the same size and placement), the strokes go over it
+  /// instead of a clear grid: the canvas adds a new stroke to the layer it shows this way, without
+  /// drawing (and decoding) the earlier ones again.
+  func layer(
+    width: Int, height: Int, scale: (x: Double, y: Double) = (1, 1), origin: CGPoint = .zero, over base: CGImage? = nil
+  ) -> CGImage? {
+    guard width > 0, height > 0, base != nil || mayHaveColor,
           let context = CGContext(
             data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
             space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
     else { return nil }
+    if let base { context.draw(base, in: CGRect(x: 0, y: 0, width: width, height: height)) }
     // Image pixels counting down, onto the grid's rows top to bottom.
     context.translateBy(x: 0, y: CGFloat(height))
     context.scaleBy(x: 1, y: -1)
@@ -291,23 +297,39 @@ nonisolated struct CanvasPaint: Codable, Sendable, Hashable {
     return context.makeImage()
   }
 
-  /// The bounding box of what the layer shows over a `width` × `height` image (its pixels, from the
-  /// top left); nil when it shows nothing there.
+  /// Where the colours can lie, from the strokes' own geometry (points and brush radius, a
+  /// bitmap's rectangle), without drawing them: whole image pixels, clipped to a `width` ×
+  /// `height` image; nil when nothing that paints lies on it. Erasing isn't subtracted, so it may
+  /// be larger than what shows.
   func bounds(width: Int, height: Int) -> CGRect? {
-    guard let layer = layer(width: width, height: height),
-          let alpha = CanvasMask.alpha(of: layer, width: width, height: height)
-    else { return nil }
-    var minX = width, minY = height, maxX = -1, maxY = -1
-    for y in 0..<height {
-      for x in 0..<width where alpha[y * width + x] != 0 {
-        minX = min(minX, x)
-        minY = min(minY, y)
-        maxX = max(maxX, x)
-        maxY = max(maxY, y)
+    var union = CGRect.null
+    for stroke in strokes where stroke.kind != .erase {
+      guard let first = stroke.points.first else { continue }
+      var rect: CGRect
+      switch stroke.kind {
+      case .fill, .image:
+        guard let size = stroke.bitmapSize else { continue }
+        rect = CGRect(origin: first, size: size)
+      default:
+        rect = stroke.points.dropFirst().reduce(CGRect(origin: first, size: .zero)) { $0.union(CGRect(origin: $1, size: .zero)) }
+        if stroke.kind == .brush { rect = rect.insetBy(dx: -stroke.radius, dy: -stroke.radius) }
       }
+      union = union.union(rect.standardized)
     }
-    guard maxX >= 0 else { return nil }
-    return CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)
+    let clipped = union.intersection(CGRect(x: 0, y: 0, width: width, height: height)).integral
+    return clipped.isNull || clipped.isEmpty ? nil : clipped
+  }
+
+  /// Whether any colour shows inside `rect` (image pixels, from the top left): drawn only there,
+  /// so a small rectangle costs little whatever the image's size.
+  func showsColor(in rect: CGRect) -> Bool {
+    let rect = rect.integral
+    guard rect.width > 0, rect.height > 0, let bounds = bounds(width: Int(rect.maxX), height: Int(rect.maxY)),
+          bounds.intersects(rect),
+          let layer = layer(width: Int(rect.width), height: Int(rect.height), origin: CGPoint(x: -rect.minX, y: -rect.minY)),
+          let alpha = CanvasMask.alpha(of: layer, width: layer.width, height: layer.height)
+    else { return false }
+    return alpha.contains { $0 != 0 }
   }
 
   static func png(_ image: CGImage) -> Data? {

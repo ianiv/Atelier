@@ -145,9 +145,12 @@ extension Automation {
             "fill: Fill paints exactly the selection (\(selected.count(where: { $0 != 0 })) px), leaves the mask alone and clears the selection, one “Fill Selection” step")
           history.undo()
           while model.autoMask.isBusy { try? await Task.sleep(for: .milliseconds(50)) }
+          // What's left to undo is the Select Subject step the selection was made with.
+          let noPaint = model.canvasPaint == nil, samePrompt = model.autoMask.prompt == prompt
+          let previewBack = model.autoMask.preview != nil, nextUndo = history.canUndo ? history.undoActionName : "nothing"
           check(
-            model.canvasPaint == nil && model.autoMask.prompt == prompt && model.autoMask.preview != nil && !history.canUndo,
-            "fill: one ⌘Z takes the paint away and brings back the selection")
+            noPaint && samePrompt && previewBack && nextUndo == "Select Subject",
+            "fill: one ⌘Z takes the paint away and brings back the selection (paint gone \(noPaint), selection back \(samePrompt), preview \(previewBack), next to undo “\(nextUndo)”)")
           model.autoMask.clearPoints(model: model, undoManager: nil)
         } catch {}
       }

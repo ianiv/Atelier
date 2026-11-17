@@ -194,8 +194,14 @@ extension CreateModel {
     recentPaintColors = Array(recent.prefix(8))
   }
 
+  /// Clear Paint: there's paint on the canvas image, whatever the model or editor (a video model
+  /// still takes the paint into its first frame), as Clear Mask works on any mask there is.
+  var canClearPaint: Bool {
+    canvasShowsImage && canvasImageIsCurrent && canvasPaint != nil
+  }
+
   func clearPaint(actionName: String = "Clear Paint", undoManager: UndoManager?) {
-    guard canvasPaint != nil, canPaintColor else { return }
+    guard canClearPaint else { return }
     setPaint(nil, actionName: actionName, undoManager: undoManager)
   }
 

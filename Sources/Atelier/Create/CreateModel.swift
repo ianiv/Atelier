@@ -1721,7 +1721,9 @@ final class CreateModel {
       base.setRefineInputs(
         source: source.image, sourceTensorId: step, isImported: source.isImported, scale: source.scale,
         offset: source.offset, mask: refines && runTargetTakesMasks ? canvasMask : nil,
-        merge: refines && mergeIntoImage, detail: source.detail, paint: source.paint)
+        merge: refines && mergeIntoImage, detail: source.detail, paint: source.paint,
+        // The very image its Draw entry holds, baked once.
+        baked: source.paint.flatMap { $0.mayHaveColor ? bakedCanvas(source.image, paint: $0) : nil })
       // The image remembers its mask even when this run can't take it (a video model, an older
       // server).
       base.canvasSourceMask = canvasMask.map {
@@ -3759,8 +3761,9 @@ extension CreateModel {
   /// there's any): the run then follows it, and Use brings that mask back. Nil when there's none to
   /// write, or while a clip plays on the canvas.
   private func maskEntryInput() -> HistoryStore.EntryInput? {
-    // With paint, the Draw entry holds the mask too (`drawEntryInput`).
-    guard canvasClip == nil, history.isLoaded, canvasSource?.paint?.mayHaveColor != true, let input = entryInput(.mask),
+    // With paint in Edit mode, the Draw entry holds the mask too (`drawEntryInput`).
+    guard canvasClip == nil, history.isLoaded, !(effectiveCanvasMode == .edit && canvasSource?.paint?.mayHaveColor == true),
+          let input = entryInput(.mask),
           case .step = input.canvas
     else { return nil }
     if let current = history.currentEntry {
@@ -3772,10 +3775,11 @@ extension CreateModel {
   /// The Draw entry Generate writes first when the canvas image has paint (`CanvasPaint`): the
   /// image with the paint baked in, and the mask, as Draw Things records a canvas drawn on
   /// (`Reason.draw`). The run then follows it, and restoring it brings back the painted image.
-  /// Nil when there's no paint, or the Draw entry written last holds this very canvas, paint and
-  /// mask and is still the current step.
+  /// Nil when there's no paint, in Generate mode (the run doesn't take the canvas: a Mask entry is
+  /// written as without paint), or when the Draw entry written last holds this very canvas, paint
+  /// and mask and is still the current step.
   func drawEntryInput() -> HistoryStore.EntryInput? {
-    guard canvasClip == nil, history.isLoaded, let source = canvasSource, !source.isPreview,
+    guard canvasClip == nil, history.isLoaded, effectiveCanvasMode == .edit, let source = canvasSource, !source.isPreview,
           let paint = source.paint, paint.mayHaveColor
     else { return nil }
     if let drawn = drawnEntry, drawn.image === source.image, drawn.paint == paint, drawn.mask == canvasMask,
