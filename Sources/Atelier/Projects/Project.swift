@@ -261,6 +261,36 @@ final nonisolated class Project: Sendable {
     return gone
   }
 
+  /// What a Draw entry was painted on (`HistoryStore.drawBase`), under `atelier_draw_<entry key>`
+  /// as `DrawRecord` JSON: the entry's own image has the paint baked in, so this is how opening it
+  /// gets back the picture underneath with the paint as a layer that can still be changed.
+  func storedDrawRecord(forEntry key: Int64) -> DrawRecord? {
+    workspace.dictionary[Self.drawKeyPrefix + String(key), String.self]
+      .flatMap { try? JSONDecoder().decode(DrawRecord.self, from: Data($0.utf8)) }
+  }
+
+  /// Keeps `record` for the Draw entry `key`; nil removes it.
+  func setStoredDrawRecord(_ record: DrawRecord?, forEntry key: Int64) {
+    workspace.dictionary[Self.drawKeyPrefix + String(key), String.self] =
+      record.flatMap { try? JSONEncoder().encode($0) }.map { String(decoding: $0, as: UTF8.self) }
+  }
+
+  /// Removes the records of Draw entries no step is any more (deleted). Returns their keys.
+  @discardableResult
+  func pruneStoredDrawRecords(keeping tree: ProjectTree) -> [Int64] {
+    let gone = workspace.dictionary.keys.filter { $0.hasPrefix(Self.drawKeyPrefix) }
+      .compactMap { Int64($0.dropFirst(Self.drawKeyPrefix.count)) }.filter { tree.step(tensorId: $0) == nil }
+    for key in gone { setStoredDrawRecord(nil, forEntry: key) }
+    return gone
+  }
+
+  /// A Draw entry's base: the image it was painted on (its tensor) and the paint, in its pixels.
+  nonisolated struct DrawRecord: Codable, Hashable, Sendable {
+    var baseTensorId: Int64
+    var paint: CanvasPaint
+  }
+
+  private static let drawKeyPrefix = "atelier_draw_"
   private static let paintKeyPrefix = "atelier_paint_"
   private static func paintKey(_ tensorId: Int64) -> String { paintKeyPrefix + String(tensorId) }
 

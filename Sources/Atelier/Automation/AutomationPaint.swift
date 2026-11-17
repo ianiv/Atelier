@@ -227,6 +227,23 @@ extension Automation {
           isRed(pixel(drawn, Int(s * 0.2), Int(s * 0.7))) && isWhite(pixel(drawn, Int(s * 0.9), Int(s * 0.3))),
           "the Draw entry's image is the sketch with the paint")
       }
+      // Reopened, the Draw entry shows the picture underneath with its paint as a layer again,
+      // which Eraser on the Color layer can take away.
+      if let draw, let blank = CreateModel.blankImage(width: size, height: size) {
+        model.setCanvasImage(blank)
+        await model.flushEntries()
+        model.restore(entry: draw)
+        let reopened = await settled { model.canvasShowsImage && model.canvasPaint == full }
+        check(
+          reopened && isWhite(pixel(model.image, Int(s * 0.2), Int(s * 0.7))) && model.canvasMask?.strokes == [maskA]
+            && history.currentItem == draw && model.drawEntryInput() == nil,
+          "a Draw entry reopened shows the unpainted picture, its paint as a layer and its mask, and writes no new Draw entry")
+        let eraser = CanvasPaint.Stroke(kind: .erase, points: [CGPoint(x: s * 0.2, y: s * 0.7)], radius: s * 0.05)
+        model.addPaintStrokes([eraser], actionName: "Erase Paint", undoManager: nil)
+        let erased = model.screenRequest()?.canvas
+        check(isWhite(pixel(erased, Int(s * 0.2), Int(s * 0.7))), "erasing the reopened entry's paint takes it away")
+        model.setPaint(full, actionName: "Paint", undoManager: nil)
+      }
       model.addPaintStrokes([.rect(CGRect(x: 0, y: s * 0.9, width: s * 0.1, height: s * 0.1), color: red)], undoManager: nil)
       check(model.drawEntryInput() != nil, "more paint makes a new Draw entry due")
       model.setPaint(full, actionName: "Paint", undoManager: nil)

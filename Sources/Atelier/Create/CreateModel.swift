@@ -3030,10 +3030,14 @@ final class CreateModel {
   /// current step), for callers without the view, with the mask it last had unless `restoresMask`
   /// is false. Returns once it's there; false for a video or an image that can't be read.
   func placeOnCanvas(_ item: HistoryItem, restoresMask: Bool = true) async -> Bool {
-    // An input entry's image is its canvas's (none for an empty one).
-    guard !item.isVideo, let tensorId = item.imageTensorId else { return false }
+    // An input entry's image is its canvas's (none for an empty one); a Draw entry's, the picture
+    // it was painted on, when there's a record of it (`restore(entry:)`).
+    let drawBase = history.drawBase(ofEntry: item)
+    guard !item.isVideo, let tensorId = drawBase?.tensorId ?? item.imageTensorId else { return false }
     let projectName = history.project.name
-    guard let full = await whileLoadingCanvasImage({ await history.image(at: item.id, in: projectName) }) else {
+    guard let full = await whileLoadingCanvasImage({
+      drawBase != nil ? await history.image(tensorId: tensorId, in: projectName) : await history.image(at: item.id, in: projectName)
+    }) else {
       return false
     }
     recordMoodboardChange()
@@ -3047,6 +3051,7 @@ final class CreateModel {
     canvas.zoomToFit()
     canvasMode = .edit
     await loadCanvasDetail(tensorId: tensorId, project: projectName)
+    if let drawBase { putBackDrawing(drawBase.paint, of: item, on: full, tensorId: tensorId) }
     if restoresMask, item.isEntry {
       putBackMask(item.entryMask, on: tensorId)
     } else if restoresMask {
@@ -3609,8 +3614,14 @@ extension CreateModel {
       // Remembered, so the next run from the same canvas follows this one rather than another.
       drawnEntry = (source.image, paint, canvasMask, nil)
       let image = source.image
+      // The picture painted on, when it's a step: opening the entry brings it back with the paint
+      // as a layer (`restore(entry:)`).
+      let base: Int64? = if case .step(let tensorId) = entryCanvas().canvas { tensorId } else { nil }
+      let size = CGSize(width: image.width, height: image.height)
       recordEntry(input) { [weak self] item in
-        guard let self, let item, let drawn = drawnEntry, drawn.image === image, drawn.paint == paint else { return }
+        guard let self, let item else { return }
+        if let base { history.setDrawBase(paint, baseTensorId: base, size: size, forEntry: item.tensorId) }
+        guard let drawn = drawnEntry, drawn.image === image, drawn.paint == paint else { return }
         drawnEntry?.key = item.tensorId
       }
       await entryChain?.value
@@ -3829,7 +3840,10 @@ extension CreateModel {
     Task { await restoreMoodboard(from: entry.id, in: projectName) }
     lastSavedTensorId = nil
     canvasIsImported = false
-    guard let tensorId = entry.canvasTensorId else {
+    // A Draw entry opens on the picture it was painted on, with its paint as a layer that can
+    // still be changed; without one, on its own image, the paint baked in.
+    let drawBase = history.drawBase(ofEntry: entry)
+    guard let tensorId = drawBase?.tensorId ?? entry.canvasTensorId else {
       imageStep = nil
       image = nil
       canvas.zoomToFit()
@@ -3844,9 +3858,21 @@ extension CreateModel {
       guard !Task.isCancelled, imageStep?.tensorId == tensorId, !imageIsPreview else { return }
       guard let full else { return canvasImageDidNotLoad("This image couldn't be read from the project.") }
       image = full
+      if let drawBase { putBackDrawing(drawBase.paint, of: entry, on: full, tensorId: tensorId) }
       putBackMask(entry.entryMask, on: tensorId)
       await loadCanvasDetail(tensorId: tensorId, project: projectName)
     }
+  }
+
+  /// Puts a Draw entry's paint back on the picture it was painted on (`image`, now on the canvas
+  /// as `tensorId`), as that image's own (no undo step; kept as its paint), and notes the entry
+  /// as the one this canvas already wrote, so the next run follows it rather than writing another.
+  private func putBackDrawing(_ paint: CanvasPaint, of entry: HistoryItem, on image: CGImage, tensorId: Int64) {
+    guard imageStep?.tensorId == tensorId else { return }
+    paintPendingTensorId = nil
+    canvasPaint = paint
+    landedPaint = nil
+    drawnEntry = (image, paint, entry.entryMask, entry.tensorId)
   }
 
   /// Puts a recorded moodboard back on the board (`replace`, which isn't recorded), remembering

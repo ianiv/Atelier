@@ -830,8 +830,12 @@ final class HistoryStore {
     // A later image could be given a deleted one's tensor: don't let it inherit the mask either.
     let gone = await project.read { $0.pruneStoredMasks(keeping: $0.tree(items: false)) }
     if project === self.project { for tensorId in gone { storedMasks[tensorId] = nil } }
-    // Nor its paint.
-    await project.read { _ = $0.pruneStoredPaint(keeping: $0.tree(items: false)) }
+    // Nor its paint, nor a deleted Draw entry's record.
+    await project.read {
+      let tree = $0.tree(items: false)
+      $0.pruneStoredPaint(keeping: tree)
+      $0.pruneStoredDrawRecords(keeping: tree)
+    }
     // A later image could be given a deleted one's tensor: don't let it inherit the rating.
     let kept = ratings.filter { byTensor[$0.key] != nil }
     if kept.count != ratings.count { ratings = kept; project.ratings = kept }
@@ -903,6 +907,23 @@ final class HistoryStore {
   }
 
   // MARK: - Paint
+
+  /// The picture a Draw entry was painted on and its paint (`Project.DrawRecord`), when the entry
+  /// has a record and that image is still a step of the project; nil otherwise (an older entry, a
+  /// deleted image, one Draw Things wrote), and the entry's own baked image is all there is.
+  func drawBase(ofEntry entry: HistoryItem) -> (tensorId: Int64, paint: CanvasPaint)? {
+    guard entry.entryReason == .draw, let record = project.storedDrawRecord(forEntry: entry.tensorId),
+          record.paint.mayHaveColor, tree.step(tensorId: record.baseTensorId) != nil
+    else { return nil }
+    return (record.baseTensorId, record.paint)
+  }
+
+  /// Keeps what the Draw entry `key` was painted on: the image `baseTensorId` (of `size`, for
+  /// compacting) and `paint`.
+  func setDrawBase(_ paint: CanvasPaint, baseTensorId: Int64, size: CGSize?, forEntry key: Int64) {
+    guard tree.step(tensorId: key) != nil, tree.step(tensorId: baseTensorId) != nil else { return }
+    project.setStoredDrawRecord(Project.DrawRecord(baseTensorId: baseTensorId, paint: paint.compacted(for: size)), forEntry: key)
+  }
 
   /// The paint layer the image last had on the canvas (`CreateModel.canvasPaint`), in its pixels;
   /// nil for none.

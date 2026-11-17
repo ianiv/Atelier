@@ -167,6 +167,23 @@ struct MaskMemoryTests {
     await reopened.close()
   }
 
+  @Test func aDrawEntrysRecordIsKeptUntilTheEntryGoes() async throws {
+    let (project, folder) = try Self.project()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let base = try await Self.append(project)
+    let entry = try await Self.append(project, after: base.tensorId)
+    let paint = CanvasPaint(strokes: [.rect(CGRect(x: 2, y: 2, width: 8, height: 8), color: CanvasPaint.Color(red: 0, green: 1, blue: 0))])
+    let record = Project.DrawRecord(baseTensorId: base.tensorId, paint: paint)
+    project.setStoredDrawRecord(record, forEntry: entry.tensorId)
+    #expect(project.storedDrawRecord(forEntry: entry.tensorId) == record && project.storedDrawRecord(forEntry: base.tensorId) == nil)
+    // Its own key: no paint memory is listed for it.
+    #expect(project.storedPaintImages().isEmpty)
+    _ = try await project.delete(tensorId: entry.tensorId)
+    let gone = await project.read { $0.pruneStoredDrawRecords(keeping: $0.tree(items: false)) }
+    #expect(gone == [entry.tensorId] && project.storedDrawRecord(forEntry: entry.tensorId) == nil)
+    await project.close()
+  }
+
   @Test func olderProjectsFallBackToTheNewestChildsMask() async throws {
     let (project, folder) = try Self.project()
     defer { try? FileManager.default.removeItem(at: folder) }
