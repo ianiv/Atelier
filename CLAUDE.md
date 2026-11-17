@@ -17,11 +17,12 @@ Scripts/install-hooks.sh                               # once per clone: pre-com
 Scripts/ipad-layout-shots.sh [outdir]                  # screenshots every screen at many window sizes (needs Debug ipad-sim build)
 Scripts/generate_project_format.sh                     # regenerate Sources/ProjectFormat from the pinned engine's .fbs schemas (needs bazelisk)
 Scripts/build-tailscale.sh [--with-test-control]      # build TailscaleKit into build/Tailscale (needs Go); optional, see Compute below
+Scripts/set-version.sh <version>                       # commit the release's version + build number into the project (run before release.sh)
 Scripts/release.sh [version]                           # signed/notarized zip + Sparkle appcast.xml in build/release/
 ```
 
 - The first build resolves Swift packages into `build/SourcePackages` (slow). The engine source is browsable at `build/SourcePackages/checkouts/draw-things-community`.
-- Signing: `Config/Atelier.xcconfig` signs ad hoc by default; an untracked `Config/Local.xcconfig` may set `DEVELOPMENT_TEAM` / `CODE_SIGN_IDENTITY`. Don't put a team into the project file.
+- Signing: `Config/Atelier.xcconfig` signs ad hoc by default (`build.sh` then turns off the Hardened Runtime, whose library validation would refuse the ad hoc Sparkle framework); an untracked `Config/Local.xcconfig` may set `DEVELOPMENT_TEAM` / `CODE_SIGN_IDENTITY`. Don't put a team into the project file.
 - A build phase copies `*_tae.zip` preview decoders from `/Applications/Draw Things.app` if present (release builds exclude them).
 - Installing over an existing app breaks its signature: remove `/Applications/Atelier.app` first, then `ditto build/Atelier.app /Applications/Atelier.app`.
 
@@ -62,4 +63,4 @@ Core flow:
 - Formatting: 2-space indent, no line limit (see `.swiftformat`). `redundantSelf` and `preferForLoop` are disabled deliberately — enabling them broke the build.
 - Doc comments explain *why* and name the engine code being followed; match that style.
 - User-facing docs live in `docs/` and `MCP.md`; update them when behavior they describe changes.
-- Releases: `release.sh` sets the build number to the commit count (Sparkle compares it); attach both the zip and `appcast.xml` to a `v<version>` GitHub release.
+- Releases: `set-version.sh` first, so builds from the tagged source (source zips have no git history) report the release's version; `release.sh` and `build.sh` set the build number to the commit count (Sparkle compares it); attach both the zip and `appcast.xml` to a `v<version>` GitHub release.

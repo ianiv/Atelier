@@ -22,6 +22,14 @@ if [ -z "$DEVELOPER_DIR" ] && ! xcodebuild -version >/dev/null 2>&1; then
 fi
 
 SIGNING=()
+HAS_TEAM=false
+grep -qE '^[[:space:]]*DEVELOPMENT_TEAM[[:space:]]*=[[:space:]]*[A-Z0-9]+' Config/Local.xcconfig 2>/dev/null && HAS_TEAM=true
+# The build number is the commit count, as release.sh makes it. A source zip has no git history; it
+# builds with the version in the project, which Scripts/set-version.sh sets for each release.
+VERSION_SETTINGS=()
+if COUNT="$(git rev-list --count HEAD 2>/dev/null)"; then
+  VERSION_SETTINGS=(CURRENT_PROJECT_VERSION="$COUNT")
+fi
 # Mac builds are Apple silicon only. The app target says so (ARCHS), but Swift packages would
 # still build an Intel slice in Release, and the engine's Float16 code doesn't compile for Intel.
 ARCH_SETTINGS=()
@@ -32,13 +40,17 @@ case "$PLATFORM" in
     DERIVED=build/DerivedData
     PRODUCTS="$CONFIGURATION"
     OUTPUT=build/Atelier.app
+    # Without a team the app is signed ad hoc, and the Hardened Runtime's library validation then
+    # refuses the embedded frameworks (Sparkle), which have no Team ID either: the app won't launch.
+    # Release builds keep it; notarization needs it.
+    $HAS_TEAM || SIGNING=(ENABLE_HARDENED_RUNTIME=NO)
     ;;
   ipad)
     DESTINATION='generic/platform=iOS'
     DERIVED=build/DerivedData-iOS
     PRODUCTS="$CONFIGURATION-iphoneos"
     OUTPUT=build/Atelier-iPad.app
-    if ! grep -qE '^[[:space:]]*DEVELOPMENT_TEAM[[:space:]]*=[[:space:]]*[A-Z0-9]+' Config/Local.xcconfig 2>/dev/null; then
+    if ! $HAS_TEAM; then
       echo "warning: no DEVELOPMENT_TEAM in Config/Local.xcconfig; building unsigned"
       SIGNING=(CODE_SIGNING_ALLOWED=NO)
     else
@@ -60,7 +72,7 @@ esac
 
 xcodebuild -project Atelier.xcodeproj -scheme Atelier -configuration "$CONFIGURATION" \
   -derivedDataPath "$DERIVED" -clonedSourcePackagesDirPath build/SourcePackages \
-  -destination "$DESTINATION" -quiet "${SIGNING[@]}" "${ARCH_SETTINGS[@]}" build
+  -destination "$DESTINATION" -quiet "${SIGNING[@]}" "${ARCH_SETTINGS[@]}" "${VERSION_SETTINGS[@]}" build
 
 rm -rf "$OUTPUT"
 cp -R "$DERIVED/Build/Products/$PRODUCTS/Atelier.app" "$OUTPUT"

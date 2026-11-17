@@ -4,6 +4,8 @@
 # version. Attach both to the release, tagged v<version>: the app reads the latest release's appcast.xml.
 # Usage: release.sh [version] (default: MARKETING_VERSION in the project). The build number is the commit
 # count, so every release from a newer commit has a higher one, which is what Sparkle compares.
+# Run Scripts/set-version.sh <version> first: it commits the version and build number into the project,
+# so a build from the tagged source (a source zip has no git history) reports the same ones.
 # RELEASE_NOTES=<file.md> embeds those notes in the appcast, so the update dialog shows them.
 #
 # One-time setup on the Mac that signs:
@@ -28,6 +30,11 @@ source "$SCRIPT_DIR/hide-build-from-spotlight.sh"
 NOTARY_PROFILE="${NOTARY_PROFILE:-atelier-notary}"
 VERSION_SETTINGS=(CURRENT_PROJECT_VERSION="$(git rev-list --count HEAD)")
 [ -n "$1" ] && VERSION_SETTINGS+=(MARKETING_VERSION="$1")
+PROJECT_VERSION="$(sed -n 's/.*MARKETING_VERSION = \([^;]*\);/\1/p' Atelier.xcodeproj/project.pbxproj | head -1)"
+PROJECT_BUILD="$(sed -n 's/.*CURRENT_PROJECT_VERSION = \([^;]*\);/\1/p' Atelier.xcodeproj/project.pbxproj | head -1)"
+if [ "${1:-$PROJECT_VERSION}" != "$PROJECT_VERSION" ] || [ "$PROJECT_BUILD" != "$(git rev-list --count HEAD)" ]; then
+  echo "warning: the project says $PROJECT_VERSION ($PROJECT_BUILD), so builds from this commit's source won't match this release; run Scripts/set-version.sh ${1:-$PROJECT_VERSION} first"
+fi
 
 if [ -z "$DEVELOPER_DIR" ] && ! xcodebuild -version >/dev/null 2>&1; then
   export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
