@@ -156,27 +156,31 @@ extension CreateModel {
 
   /// Replaces the mask as one undo step. It belongs to the image on the canvas: once another
   /// image is there the step leaves the history (`retireCanvasUndo`), and it never changes
-  /// another image's mask. Changing a hidden mask shows it (`maskHidden`), in the same step.
+  /// another image's mask. Changing a hidden mask shows it (`layersHidden`), in the same step.
   func setMask(_ mask: CanvasMask?, actionName: String, undoManager: UndoManager?, hidden: Bool = false) {
-    let previous = canvasMask, previousHidden = maskHidden
+    let previous = canvasMask, previousHidden = layersHidden
     canvasMask = mask
-    maskHidden = hidden
+    layersHidden = hidden
     guard let undoManager, let image = canvasUndoImage else { return }
     registerCanvasUndo(on: image, undoManager: undoManager, actionName: actionName) { [weak self] in
       self?.setMask(previous, actionName: actionName, undoManager: undoManager, hidden: previousHidden)
     }
   }
 
-  /// Show/Hide Mask: there's a mask to show or hide.
-  var canToggleMask: Bool {
-    canvasShowsImage && canvasImageIsCurrent && canvasMask != nil
+  /// Show/Hide Mask and Paint: there's a mask or paint to show or hide.
+  var canToggleLayers: Bool {
+    canvasShowsImage && canvasImageIsCurrent && (canvasMask != nil || canvasPaint != nil)
   }
 
-  /// Hides or shows the mask, as one undo step: hidden, it's kept but not drawn, and runs go as if
-  /// there were none (`activeMask`).
-  func setMaskHidden(_ hidden: Bool, undoManager: UndoManager?) {
-    guard canToggleMask, hidden != maskHidden else { return }
-    setMask(canvasMask, actionName: hidden ? "Hide Mask" : "Show Mask", undoManager: undoManager, hidden: hidden)
+  /// Hides or shows the mask and the paint together, as one undo step: hidden, they're kept but
+  /// not drawn, and runs go as if there were neither (`activeMask`, `activePaint`).
+  func setLayersHidden(_ hidden: Bool, undoManager: UndoManager?) {
+    guard canToggleLayers, hidden != layersHidden else { return }
+    layersHidden = hidden
+    guard let undoManager, let image = canvasUndoImage else { return }
+    registerCanvasUndo(on: image, undoManager: undoManager, actionName: hidden ? "Hide Mask and Paint" : "Show Mask and Paint") {
+      [weak self] in self?.setLayersHidden(!hidden, undoManager: undoManager)
+    }
   }
 
   /// Mask Colored Areas: there are colours to mask, and a mask can be painted.
@@ -214,7 +218,7 @@ extension CreateModel {
   /// Strength 100% with no mask the whole frame is generated afresh.
   var paintProblem: String? {
     guard canvasShowsImage, canvasPaint?.mayHaveColor == true, videoModel == nil, canvasMode == .edit,
-          (settings?.strength ?? 1) >= 1, activeMask?.mayHavePaint != true
+          (settings?.strength ?? 1) >= 1, activeMask?.mayHavePaint != true, !layersHidden
     else { return nil }
     return "At Strength 100% the painted colors will be replaced: lower Strength, or mask what to regenerate."
   }
@@ -278,12 +282,14 @@ extension CreateModel {
 
   /// Replaces the paint layer as one undo step, on the canvas image's own undo target as a mask
   /// change is (`setMask`): it never reaches another image.
-  func setPaint(_ paint: CanvasPaint?, actionName: String, undoManager: UndoManager?) {
-    let previous = canvasPaint
+  /// Changing hidden paint shows it and the mask (`layersHidden`), in the same step.
+  func setPaint(_ paint: CanvasPaint?, actionName: String, undoManager: UndoManager?, hidden: Bool = false) {
+    let previous = canvasPaint, previousHidden = layersHidden
     canvasPaint = paint?.strokes.isEmpty == true ? nil : paint
+    layersHidden = hidden
     guard let undoManager, let image = canvasUndoImage else { return }
     registerCanvasUndo(on: image, undoManager: undoManager, actionName: actionName) { [weak self] in
-      self?.setPaint(previous, actionName: actionName, undoManager: undoManager)
+      self?.setPaint(previous, actionName: actionName, undoManager: undoManager, hidden: previousHidden)
     }
   }
 
@@ -582,7 +588,7 @@ extension CanvasMask {
 // MARK: - Controls
 
 /// Move / Brush / Eraser / Select, the Mask | Color switch (what Brush and Eraser draw on), the
-/// brush size of that layer, Mask Opacity and Show/Hide Mask, in the status bar beside the zoom
+/// brush size of that layer, Mask Opacity and Show/Hide Mask and Paint, in the status bar beside the zoom
 /// controls. Always there; disabled when there's nothing to paint on. Invert and Clear Mask are in
 /// the mask's own bar (`MaskBar`).
 struct CanvasToolControls: View {
@@ -648,16 +654,20 @@ struct CanvasToolControls: View {
       .menuIndicator(.hidden)
       .fixedSize()
       .help("Mask Opacity: how strongly the mask shows over the image. What a run regenerates stays the same.")
-      .disabled(model.image == nil)
+      .disabled(model.image == nil || (model.layersHidden && model.canToggleLayers))
       // Hidden, the mask is kept but not drawn and runs go without it.
       Toggle(
-        isOn: Binding(get: { !model.maskHidden }, set: { model.setMaskHidden(!$0, undoManager: undoManager) })
+        isOn: Binding(get: { !model.layersHidden }, set: { model.setLayersHidden(!$0, undoManager: undoManager) })
       ) {
-        Label(model.maskHidden ? "Show Mask" : "Hide Mask", systemImage: model.maskHidden ? "eye.slash" : "eye").touchTarget()
+        Label(model.layersHidden ? "Show Mask and Paint" : "Hide Mask and Paint", systemImage: model.layersHidden ? "eye.slash" : "eye")
+          .touchTarget()
       }
       .toggleStyle(.button)
-      .help(model.maskHidden ? "Show Mask: draw it again, and runs take it" : "Hide Mask: keep it, but don't draw it or send it with runs")
-      .disabled(!model.canToggleMask)
+      .help(
+        model.layersHidden
+          ? "Show Mask and Paint: draw them again, and runs take them"
+          : "Hide Mask and Paint: keep them, but don't draw them or send them with runs")
+      .disabled(!model.canToggleLayers)
     }
     .labelStyle(.iconOnly)
     .buttonStyle(.borderless)

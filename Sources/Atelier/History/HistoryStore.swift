@@ -513,6 +513,9 @@ final class HistoryStore {
     }
     if let resultMask {
       keepMask(resultMask, forImage: item.tensorId, size: refined.map { CGSize(width: $0.composite.width, height: $0.composite.height) }, in: project)
+      // A result starts with the mask it was made with hidden (`CreateModel.layersHidden`), shown
+      // on the canvas or not.
+      project.setStoredLayersHidden(true, forImage: item.tensorId)
     }
     if project === self.project {
       // A fork may have renumbered other steps.
@@ -840,7 +843,7 @@ final class HistoryStore {
     await project.read {
       let tree = $0.tree(items: false)
       $0.pruneStoredPaint(keeping: tree)
-      $0.pruneStoredMaskHidden(keeping: tree)
+      $0.pruneStoredLayersHidden(keeping: tree)
       $0.pruneStoredDrawRecords(keeping: tree)
     }
     // A later image could be given a deleted one's tensor: don't let it inherit the rating.
@@ -894,16 +897,16 @@ final class HistoryStore {
     keepMask(mask, forImage: tensorId, size: size, in: project)
   }
 
-  /// Whether the image's mask was hidden (`Project.storedMaskHidden`).
-  func storedMaskHidden(tensorId: Int64) async -> Bool {
+  /// Whether the image's mask was hidden (`Project.storedLayersHidden`).
+  func storedLayersHidden(tensorId: Int64) async -> Bool {
     let project = project
-    return await project.read { $0.storedMaskHidden(forImage: tensorId) }
+    return await project.read { $0.storedLayersHidden(forImage: tensorId) }
   }
 
   /// Keeps whether the image's mask is hidden.
-  func setMaskHidden(_ hidden: Bool, forImage tensorId: Int64) {
+  func setLayersHidden(_ hidden: Bool, forImage tensorId: Int64) {
     guard tree.step(tensorId: tensorId) != nil else { return }
-    project.setStoredMaskHidden(hidden, forImage: tensorId)
+    project.setStoredLayersHidden(hidden, forImage: tensorId)
   }
 
   private func keepMask(_ mask: CanvasMask?, forImage tensorId: Int64, size: CGSize?, in project: Project) {

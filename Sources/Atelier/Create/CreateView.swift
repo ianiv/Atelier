@@ -634,7 +634,7 @@ struct CanvasView: View {
   /// The mask in red over the image at Mask Opacity, with the stroke being painted.
   private func maskOverlay(imageSize _: CGSize, scale: Double) -> some View {
     ZStack {
-      if let maskTint, !model.maskHidden {
+      if let maskTint, !model.layersHidden {
         Image(decorative: maskTint, scale: 1)
           .resizable()
           .interpolation(.none)
@@ -669,7 +669,7 @@ struct CanvasView: View {
   /// The paint layer over the image, with the colour stroke being drawn.
   private func paintOverlay(scale: Double) -> some View {
     ZStack {
-      if let paintLayer {
+      if let paintLayer, !model.layersHidden {
         Image(decorative: paintLayer, scale: 1)
           .resizable()
           .interpolation(.high)

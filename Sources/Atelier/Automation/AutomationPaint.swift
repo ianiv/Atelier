@@ -35,7 +35,8 @@ extension Automation {
   /// past the mask's edge, follows it, and paint being only its input, its result has none of it
   /// outside the mask, and the stored source layer is the unpainted image, and it keeps the mask,
   /// hidden. Along the way: Mask Colored Areas adds the paint's coverage to the mask in one undo
-  /// step; a hidden mask (Show/Hide Mask) is kept but the request has none, and a stroke shows it.
+  /// step; hidden mask and paint (Show/Hide Mask and Paint) are kept but the request has neither
+  /// (and no Draw entry is due), and a mask or paint stroke shows them.
   /// Prints PASS/FAIL lines.
   ///
   ///   Atelier --paint-check --project NAME --model M [--steps N] [--size S] [--quit]
@@ -201,21 +202,27 @@ extension Automation {
       undo.undo()
       check(model.canvasMask?.strokes == [maskA], "one ⌘Z takes Mask Colored Areas back")
 
-      // Show/Hide Mask: hidden, the mask stays but runs go without it.
-      act { model.setMaskHidden(true, undoManager: undo) }
+      // Show/Hide Mask and Paint: hidden, both stay but runs go without them.
+      act { model.setLayersHidden(true, undoManager: undo) }
+      let hiddenRequest = model.screenRequest()
       check(
-        model.maskHidden && model.canvasMask?.strokes == [maskA] && model.screenRequest()?.mask == nil
-          && undo.undoActionName == "Hide Mask",
-        "a hidden mask is kept, and the run's request has no mask (\(undo.undoActionName))")
+        model.layersHidden && model.canvasMask?.strokes == [maskA] && model.canvasPaint == full && hiddenRequest?.mask == nil
+          && isWhite(pixel(hiddenRequest?.canvas, Int(s * 0.65), Int(s * 0.65))) && model.drawEntryInput() == nil
+          && undo.undoActionName == "Hide Mask and Paint",
+        "hidden mask and paint are kept, and the run's request has no mask, no paint and no Draw entry (\(undo.undoActionName))")
       undo.undo()
-      check(!model.maskHidden && model.screenRequest()?.mask != nil, "undoing Hide Mask shows it, and runs take it again")
-      act { model.setMaskHidden(true, undoManager: undo) }
+      check(!model.layersHidden && model.screenRequest()?.mask != nil, "undoing Hide Mask and Paint shows them, and runs take them again")
+      act { model.setLayersHidden(true, undoManager: undo) }
       act { model.addMaskStrokes([.rect(CGRect(x: s * 0.85, y: s * 0.85, width: 8, height: 8))], undoManager: undo) }
-      check(!model.maskHidden && model.canvasMask?.strokes.count == 2, "a mask stroke while it's hidden shows it")
+      check(!model.layersHidden && model.canvasMask?.strokes.count == 2, "a mask stroke while they're hidden shows both")
       undo.undo()
-      check(model.maskHidden && model.canvasMask?.strokes == [maskA], "undoing that stroke hides it again")
+      check(model.layersHidden && model.canvasMask?.strokes == [maskA], "undoing that stroke hides them again")
+      act { model.addPaintStrokes([.rect(CGRect(x: s * 0.05, y: s * 0.9, width: 8, height: 8), color: red)], undoManager: undo) }
+      check(!model.layersHidden && model.canvasPaint?.strokes.count == 3, "a paint stroke while they're hidden shows both")
       undo.undo()
-      check(!model.maskHidden, "and undoing Hide Mask shows it")
+      check(model.layersHidden && model.canvasPaint == full, "undoing that stroke hides them again")
+      undo.undo()
+      check(!model.layersHidden, "and undoing Hide Mask and Paint shows them")
 
       // Mask Opacity: only what shows.
       let opacity = model.maskOpacity
@@ -339,10 +346,40 @@ extension Automation {
       }
       check(model.canvasPaint == nil, "the result on the canvas has no paint of its own")
       check(
-        model.canvasMask != nil && model.maskHidden && model.screenRequest()?.mask == nil,
+        model.canvasMask != nil && model.layersHidden && model.screenRequest()?.mask == nil,
         "the result keeps the mask it was made with, hidden, and the next run takes none")
+
+      // A masked run the canvas doesn't follow (another image put there while it runs) still
+      // leaves its result's mask hidden in the project.
+      if let entry = history.items.first(where: { $0.isEntry && $0.canvasTensorId == sketchTensor && $0.entryReason == .imported }),
+         let blank = CreateModel.blankImage(width: size, height: size)
+      {
+        model.restore(entry: entry)
+        _ = await settled { model.canvasShowsImage && model.canPaintMask }
+        if model.canvasMask == nil { model.addMaskStrokes([maskA], undoManager: nil) }
+        model.setLayersHidden(false, undoManager: nil)
+        let before = model.lastSavedStep
+        model.generate()
+        while model.waitsForEntries { try? await Task.sleep(for: .milliseconds(50)) }
+        model.setCanvasImage(blank)
+        await idle()
+        let newest = history.items.filter { !$0.isEntry }.max { $0.id.logicalTime < $1.id.logicalTime }
+        let background = newest.flatMap { $0.id != before ? $0 : nil }
+        let hidden = await background.asyncHidden(history)
+        check(
+          background != nil && model.image === blank && hidden == true,
+          "a masked run the canvas didn't follow keeps its result's mask hidden (\(hidden.map(String.init) ?? "no result"))")
+      }
       finish()
     }
+  }
+}
+@MainActor
+private extension HistoryItem? {
+  /// Whether the item's mask is kept hidden, with one to keep; nil without an item or mask.
+  func asyncHidden(_ history: HistoryStore) async -> Bool? {
+    guard let item = self, history.hasStoredMask(tensorId: item.tensorId) else { return nil }
+    return await history.storedLayersHidden(tensorId: item.tensorId)
   }
 }
 #endif

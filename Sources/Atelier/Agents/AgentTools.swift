@@ -233,6 +233,7 @@ final class AgentTools {
           "color": ["type": "string", "description": "The default color, \"#RRGGBB\" or \"#RRGGBBAA\"."],
           "fill_from_mask": ["type": "boolean", "description": "Fill what the canvas mask covers with `color`, after the shapes. The mask stays."],
           "clear": ["type": "boolean", "description": "Clear the paint, first. Alone, it just clears it."],
+          "hidden": ["type": "boolean", "description": "Hide (true) or show (false) the mask and the paint together, last, as the app's Show/Hide Mask and Paint does: hidden, they're kept but not drawn, and runs go as if there were neither. Any other change shows them first. Alone, it just hides or shows them."],
         ],
       ],
     ],
@@ -269,7 +270,7 @@ final class AgentTools {
           "mode": ["type": "string", "enum": ["replace", "add", "subtract"], "description": "What `from_history_step`, `image` and `shapes` do to the mask there is. Default replace."],
           "invert": ["type": "boolean", "description": "Flip the mask over the whole image, last."],
           "clear": ["type": "boolean", "description": "Clear the mask, first. Alone, it just clears it."],
-          "hidden": ["type": "boolean", "description": "Hide (true) or show (false) the mask, last, as Show/Hide Mask does: hidden, it's kept but not drawn, and runs (generate use_canvas included) go as if there were none. Any other change shows it first. Alone, it just hides or shows it."],
+          "hidden": ["type": "boolean", "description": "Hide (true) or show (false) the mask and the paint together, last, as the app's Show/Hide Mask and Paint does: hidden, they're kept but not drawn, and runs (generate use_canvas included) go as if there were neither. Any other change shows them first. Alone, it just hides or shows them."],
         ],
       ],
     ],
@@ -1210,8 +1211,9 @@ final class AgentTools {
       "can_paint_mask": create.canPaintMask,
       // Colours painted on the image (set_canvas_paint), which the next Edit run takes.
       "has_paint": create.canvasShowsImage && create.canvasPaint?.mayHaveColor == true,
-      // Show/Hide Mask: a hidden mask is kept but runs go without it (set_canvas_mask hidden).
-      "mask_hidden": create.canvasShowsImage && create.canvasMask != nil && create.maskHidden,
+      // Show/Hide Mask and Paint: hidden, both are kept but runs go without them (`hidden` on
+      // set_canvas_mask and set_canvas_paint).
+      "layers_hidden": create.canvasShowsImage && create.canToggleLayers && create.layersHidden,
     ]
     // The Select tool's selection not yet in the mask, which Generate (and use_canvas) adds first.
     let session = create.autoMask
@@ -1256,6 +1258,8 @@ final class AgentTools {
       "coverage_in_region": stats.frameFraction ?? NSNull(),
       // Painted inside the frame, in Edit, for a target that takes masks: what Generate sends.
       "sent_with_next_run": create.runTargetTakesMasks && create.screenFrameHasPaint,
+      // Hidden (Show/Hide Mask): kept, but runs go without it.
+      "layers_hidden": create.layersHidden,
     ]
   }
 
@@ -1348,10 +1352,10 @@ final class AgentTools {
     }
     guard create.canEditMask else { throw ToolError(maskUnavailableReason()) }
     if let hidden, !(clear || invert || shapes != nil || maskSource != nil || stored != nil) {
-      guard create.canvasMask != nil else { throw ToolError("There's no mask to hide or show.") }
-      Self.asOneUndoStep { create.setMaskHidden(hidden, undoManager: $0) }
+      guard create.canToggleLayers else { throw ToolError("There's no mask or paint to hide or show.") }
+      Self.asOneUndoStep { create.setLayersHidden(hidden, undoManager: $0) }
       var result = maskSummary()
-      result["mask_hidden"] = create.maskHidden
+      result["layers_hidden"] = create.layersHidden
       return try Self.textResult(json: result)
     }
 
@@ -1405,10 +1409,14 @@ final class AgentTools {
     }
     Self.asOneUndoStep {
       create.setMask(mask.strokes.isEmpty ? nil : mask, actionName: CreateModel.agentMaskActionName, undoManager: $0)
-      if hidden == true { create.setMaskHidden(true, undoManager: $0) }
+      if hidden == true {
+        create.setLayersHidden(true, undoManager: $0)
+        // The step is the mask change, hidden after.
+        $0?.setActionName(CreateModel.agentMaskActionName)
+      }
     }
     var result = maskSummary()
-    result["mask_hidden"] = create.maskHidden
+    result["layers_hidden"] = create.layersHidden
     if !notes.isEmpty { result["notes"] = notes }
     return try Self.textResult(json: result)
   }
@@ -1422,8 +1430,17 @@ final class AgentTools {
     let fills = arguments["fill_from_mask"] as? Bool == true
     let shapes = arguments["shapes"] as? [Any]
     if arguments["shapes"] != nil, shapes == nil { throw ToolError("`shapes` is an array of shapes.") }
-    guard clear || fills || shapes != nil else { throw ToolError("Pass `shapes`, `fill_from_mask` or `clear`.") }
+    if arguments["hidden"] != nil, !(arguments["hidden"] is Bool) { throw ToolError("`hidden` is true or false.") }
+    let hidden = arguments["hidden"] as? Bool
+    guard clear || fills || shapes != nil || hidden != nil else {
+      throw ToolError("Pass `shapes`, `fill_from_mask`, `clear` or `hidden`.")
+    }
     guard create.canPaintColor else { throw ToolError(maskUnavailableReason()) }
+    if let hidden, !(clear || fills || shapes != nil) {
+      guard create.canToggleLayers else { throw ToolError("There's no mask or paint to hide or show.") }
+      Self.asOneUndoStep { create.setLayersHidden(hidden, undoManager: $0) }
+      return try Self.textResult(json: ["layers_hidden": create.layersHidden, "has_paint": create.canvasPaint?.mayHaveColor == true])
+    }
     let color = try (arguments["color"] as? String).map { try Self.paintColor($0, what: "`color`") } ?? create.paintColor
     var strokes: [CanvasPaint.Stroke] = []
     for (index, entry) in (shapes ?? []).enumerated() {
@@ -1446,6 +1463,11 @@ final class AgentTools {
     paint.strokes += strokes
     Self.asOneUndoStep {
       create.setPaint(paint.strokes.isEmpty ? nil : paint, actionName: CreateModel.agentPaintActionName, undoManager: $0)
+      if hidden == true {
+        create.setLayersHidden(true, undoManager: $0)
+        // The step is the paint change, hidden after.
+        $0?.setActionName(CreateModel.agentPaintActionName)
+      }
     }
     for used in strokes.compactMap(\.color).reversed() { create.noteRecentPaintColor(used) }
     let shown = create.canvasPaint
@@ -1454,6 +1476,7 @@ final class AgentTools {
       "has_paint": shown?.mayHaveColor == true && bounds != nil,
       "strokes": shown?.strokes.count ?? 0,
       "bounds": bounds.map(Self.json) ?? NSNull(),
+      "layers_hidden": create.layersHidden,
     ]
     if create.paintProblem != nil { result["note"] = create.paintProblem }
     return try Self.textResult(json: result)

@@ -373,13 +373,15 @@ final class CreateModel {
   /// The inpainting mask painted on the canvas image (`CanvasTools.swift` changes it). Each image
   /// remembers the last one it had (`persistCanvasMask`, `restoreCanvasMask`).
   var canvasMask: CanvasMask?
-  /// Show/Hide Mask: the mask is kept but not drawn, and runs go as if there were none
-  /// (`activeMask`). Each image remembers it with its mask.
-  var maskHidden = false
+  /// Show/Hide Mask and Paint: the mask and the paint are kept but not drawn, and runs go as if
+  /// there were neither (`activeMask`, `activePaint`). Each image remembers it with its mask.
+  var layersHidden = false
   /// The mask runs take: none while it's hidden.
-  var activeMask: CanvasMask? { maskHidden ? nil : canvasMask }
-  /// Whether the canvas image's hidden state has been written as it arrived (`persistMaskHidden`).
-  @ObservationIgnored private var landedMaskHidden: (tensorId: Int64, hidden: Bool)?
+  var activeMask: CanvasMask? { layersHidden ? nil : canvasMask }
+  /// The paint runs take: none while it's hidden.
+  var activePaint: CanvasPaint? { layersHidden ? nil : canvasPaint }
+  /// Whether the canvas image's hidden state has been written as it arrived (`persistLayersHidden`).
+  @ObservationIgnored private var landedLayersHidden: (tensorId: Int64, hidden: Bool)?
   /// The mask Copy Mask took, with the size of the image it was on, for Paste Mask. Kept in the
   /// app: a mask means nothing to other apps.
   var copiedMask: CopiedMask?
@@ -569,8 +571,8 @@ final class CreateModel {
       // source's back on the result, as Draw Things keeps it. Paint the same, but a result has
       // it baked in, so none goes back.
       canvasMask = nil
-      maskHidden = false
-      landedMaskHidden = nil
+      layersHidden = false
+      landedLayersHidden = nil
       canvasPaint = nil
     }
   }
@@ -1955,7 +1957,7 @@ final class CreateModel {
     return image.map {
       CanvasSnapshot(
         image: $0, detail: canvasDetail, step: imageStep, isImported: canvasIsImported, isPreview: imageIsPreview,
-        scale: canvas.scale, offset: canvas.offset, paint: imageIsPreview ? nil : canvasPaint)
+        scale: canvas.scale, offset: canvas.offset, paint: imageIsPreview ? nil : activePaint)
     }
   }
 
@@ -2333,8 +2335,9 @@ final class CreateModel {
             canvasMask = keptMask
             // The result starts with the mask it was made with hidden: it's there to use again,
             // but the next run doesn't take it unless it's shown.
-            maskHidden = keptMask != nil
-            landedMaskHidden = nil
+            layersHidden = keptMask != nil
+            // Saved with it just now (`HistoryStore.save`).
+            landedLayersHidden = (item.tensorId, layersHidden)
           } else {
             canvas.zoomToFit()
           }
@@ -3376,19 +3379,19 @@ extension CreateModel {
     // Its paint layer the same way.
     persistCanvasPaint(for: step)
     if canvasMask == nil, maskPendingTensorId == step.tensorId { return }
-    persistMaskHidden(for: step)
+    persistLayersHidden(for: step)
     if let landedMask, landedMask.tensorId == step.tensorId, landedMask.mask == canvasMask { return }
     history.setMask(canvasMask, forImage: step.tensorId, size: canvasStepSize(for: step))
     landedMask = (step.tensorId, canvasMask)
   }
 
-  /// The image remembers whether its mask is hidden (`HistoryStore.setMaskHidden`), unless that's
+  /// The image remembers whether its mask is hidden (`HistoryStore.setLayersHidden`), unless that's
   /// as it arrived.
-  private func persistMaskHidden(for step: (project: String, tensorId: Int64)) {
-    let hidden = maskHidden && canvasMask != nil
-    if let landedMaskHidden, landedMaskHidden.tensorId == step.tensorId, landedMaskHidden.hidden == hidden { return }
-    history.setMaskHidden(hidden, forImage: step.tensorId)
-    landedMaskHidden = (step.tensorId, hidden)
+  private func persistLayersHidden(for step: (project: String, tensorId: Int64)) {
+    let hidden = layersHidden && (canvasMask != nil || canvasPaint != nil)
+    if let landedLayersHidden, landedLayersHidden.tensorId == step.tensorId, landedLayersHidden.hidden == hidden { return }
+    history.setLayersHidden(hidden, forImage: step.tensorId)
+    landedLayersHidden = (step.tensorId, hidden)
   }
 
   /// The size of `step`'s image, for compacting what it keeps: the image under a run's preview,
@@ -3498,16 +3501,18 @@ extension CreateModel {
     await restoreCanvasPaint()
     guard let step = imageStep, step.project == history.project.name else { return false }
     let mask = await history.storedMask(tensorId: step.tensorId)
+    // Whether its mask and paint were hidden, read with them.
+    let hidden = await history.storedLayersHidden(tensorId: step.tensorId)
     guard let current = imageStep, current.project == step.project, current.tensorId == step.tensorId else { return false }
     if maskPendingTensorId == step.tensorId { maskPendingTensorId = nil }
     guard canvasMask == nil else { return false }
     landedMask = (step.tensorId, mask)
+    if mask != nil || canvasPaint != nil, landedLayersHidden == nil {
+      layersHidden = hidden
+      landedLayersHidden = (step.tensorId, hidden)
+    }
     guard let mask else { return false }
-    let hidden = await history.storedMaskHidden(tensorId: step.tensorId)
-    guard imageStep?.tensorId == step.tensorId, canvasMask == nil else { return false }
     canvasMask = mask
-    maskHidden = hidden
-    landedMaskHidden = (step.tensorId, hidden)
     return true
   }
 
@@ -3814,7 +3819,7 @@ extension CreateModel {
     guard let item, let tensorId = item.canvasTensorId else { return }
     adoptedImport = (newImage, tensorId)
     guard image === newImage, imageStep == nil, canvasIsImported else { return }
-    let mask = canvasMask, hidden = maskHidden
+    let mask = canvasMask, hidden = layersHidden
     let paint = canvasPaint
     imageStep = (history.project.name, tensorId)
     canvasIsImported = false
@@ -3822,7 +3827,7 @@ extension CreateModel {
     maskPendingTensorId = nil
     landedMask = (tensorId, nil)
     canvasMask = mask
-    maskHidden = hidden
+    layersHidden = hidden
     paintPendingTensorId = nil
     landedPaint = (tensorId, nil)
     canvasPaint = paint
@@ -3967,8 +3972,8 @@ extension CreateModel {
     maskPendingTensorId = nil
     canvasMask = mask
     // As the run went in with it: shown.
-    maskHidden = false
-    landedMaskHidden = nil
+    layersHidden = false
+    landedLayersHidden = nil
     // Written whatever the image had, none included.
     landedMask = nil
     rememberCanvasMask()
