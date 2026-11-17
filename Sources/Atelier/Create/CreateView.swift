@@ -158,7 +158,7 @@ struct CanvasView: View {
   @Environment(\.undoManager) private var undoManager
   /// The brush stroke being drawn, in image pixels, until it's added to the mask.
   @State private var liveStroke: CanvasMask.Stroke?
-  /// The Paint tool's stroke being drawn, in image pixels, until it's added to the paint layer.
+  /// The colour stroke being drawn (Brush or Eraser on the Color layer), in image pixels, until it's added to the paint layer.
   @State private var livePaint: CanvasPaint.Stroke?
   /// The red tint of the canvas mask, redrawn when the mask changes.
   @State private var maskTint: CGImage?
@@ -361,7 +361,7 @@ struct CanvasView: View {
         .overlay(alignment: .bottom) {
           if model.canvasTool == .select {
             AutoMaskBar().padding(.bottom, 8).padding(.horizontal, 16)
-          } else if model.canvasTool == .paint {
+          } else if model.canvasTool.drawsOnLayer, model.canvasLayer == .color {
             PaintBar().padding(.bottom, 8).padding(.horizontal, 16)
           }
         }
@@ -460,7 +460,7 @@ struct CanvasView: View {
     liveStroke?.points.append(point)
   }
 
-  /// Extends the Paint tool's stroke (or starts one) at `location`, in the paint colour.
+  /// Extends the colour stroke (or starts one) at `location`, in the paint colour.
   private func paintColor(at location: CGPoint, erases: Bool, center: CGPoint, zoom: Double, points: Double) {
     guard let point = imagePoint(location, center: center, zoom: zoom, points: points) else { return }
     if livePaint == nil {
@@ -519,11 +519,11 @@ struct CanvasView: View {
   }
 
   #if os(macOS)
-    /// A drag paints with Brush or Eraser, paints colours with Paint (erasing them with Option or
-    /// the bar's Erase), selects with Select (a click marks a point, Option-click one to leave out,
-    /// a drag a box), and moves the image with Move or while Space is held.
+    /// A drag paints with Brush and erases with Eraser (or Option-drag with Brush), on the mask or
+    /// the colours as Mask | Color says, selects with Select (a click marks a point, Option-click
+    /// one to leave out, a drag a box), and moves the image with Move or while Space is held.
     private func dragGesture(_ canvas: CanvasState, points: Double, center: CGPoint, zoom: Double, frame: CGRect) -> some Gesture {
-      let colors = model.canvasTool == .paint
+      let colors = model.canvasTool.drawsOnLayer && model.canvasLayer == .color
       let paints = colors ? model.canPaintColor : model.canPaintMask && model.canvasTool != .move
       let selects = model.canvasTool == .select
       return DragGesture(minimumDistance: paints ? 0 : 2)
@@ -533,9 +533,9 @@ struct CanvasView: View {
             if selects {
               dragSelection(from: value.startLocation, to: value.location, frame: frame, points: points)
             } else if colors {
-              paintColor(at: value.location, erases: model.paintErases || optionDown, center: center, zoom: zoom, points: points)
+              paintColor(at: value.location, erases: model.canvasTool == .eraser || optionDown, center: center, zoom: zoom, points: points)
             } else {
-              paint(at: value.location, erases: model.canvasTool == .eraser, center: center, zoom: zoom, points: points)
+              paint(at: value.location, erases: model.canvasTool == .eraser || optionDown, center: center, zoom: zoom, points: points)
             }
           } else if liveStroke == nil, livePaint == nil, selectDrag == nil {
             pan(canvas, by: value.translation, points: points)
@@ -550,8 +550,8 @@ struct CanvasView: View {
         }
     }
   #else
-    /// Apple Pencil paints (Eraser erases), whatever the tool, colours with Paint (the bar's Erase
-    /// erasing them); one finger moves the image, and two zoom (`zoomGesture`).
+    /// Apple Pencil paints (Eraser erases) on the layer Mask | Color picks, as a drag does on the
+    /// Mac; one finger moves the image, and two zoom (`zoomGesture`).
     private func dragGesture(_ canvas: CanvasState, points: Double, center: CGPoint, zoom: Double, frame: CGRect) -> some Gesture {
       SpatialEventGesture()
         .onChanged { events in
@@ -568,9 +568,9 @@ struct CanvasView: View {
               pencilMarkedAt = Date()
             }
           } else if let pencil = active.first(where: { $0.kind == .pencil }) {
-            if model.canvasTool == .paint {
+            if model.canvasLayer == .color {
               guard model.canPaintColor else { return }
-              paintColor(at: pencil.location, erases: model.paintErases, center: center, zoom: zoom, points: points)
+              paintColor(at: pencil.location, erases: model.canvasTool == .eraser, center: center, zoom: zoom, points: points)
             } else {
               guard model.canPaintMask else { return }
               paint(at: pencil.location, erases: model.canvasTool == .eraser, center: center, zoom: zoom, points: points)
@@ -651,7 +651,7 @@ struct CanvasView: View {
     }
   }
 
-  /// The paint layer over the image, with the Paint tool's stroke being drawn in its colour.
+  /// The paint layer over the image, with the colour stroke being drawn.
   private func paintOverlay(scale: Double) -> some View {
     ZStack {
       if let paintLayer {

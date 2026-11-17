@@ -30,6 +30,8 @@ struct CanvasPaintTests {
     #expect(decoded == paint && decoded.hashValue == paint.hashValue)
     #expect(CanvasPaint.Color(hex: "#FF0000") == Self.red && Self.red.hex == "#FF0000")
     #expect(CanvasPaint.Color(hex: "00000080")?.alpha == 128.0 / 255 && CanvasPaint.Color(hex: "#12") == nil)
+    // A colour picked again comes back a hair off: the same at 8 bits.
+    #expect(Self.blue.matches(CanvasPaint.Color(red: 0.0004, green: 0, blue: 0.9996)) && !Self.blue.matches(Self.red))
   }
 
   @Test func strokesStretchLikeAMask() {
@@ -68,6 +70,9 @@ struct CanvasPaintTests {
     #expect(paint.showsColor(in: CGRect(x: 56, y: 56, width: 8, height: 8)))
     #expect(!paint.showsColor(in: CGRect(x: 20, y: 20, width: 24, height: 24)))
     #expect(!paint.showsColor(in: CGRect(x: 50, y: 0, width: 14, height: 14)))
+    // A brush of radius 0 still draws a hairline, so it counts.
+    let hairline = CanvasPaint(strokes: [CanvasPaint.Stroke(kind: .brush, points: [CGPoint(x: 2, y: 8), CGPoint(x: 30, y: 8)], color: Self.red)])
+    #expect(hairline.bounds(width: 32, height: 32) != nil && hairline.showsColor(in: CGRect(x: 10, y: 6, width: 4, height: 4)))
     // Erased paint isn't there.
     var erased = paint
     erased.strokes.append(CanvasPaint.Stroke(kind: .erase, points: [CGPoint(x: 4, y: 4)], radius: 6))

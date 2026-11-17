@@ -112,7 +112,7 @@ struct AutoMaskBar: View {
       model.fillAutoMaskPreview(undoManager: undoManager)
     }
     .disabled(!hasPreview || session.isBusy || !model.canPaintColor)
-    .help("Fill the selection with the paint color (the Paint tool's), leaving the mask as it is")
+    .help("Fill the selection with the paint color (the Color layer's), leaving the mask as it is")
     Button("Clear Points", systemImage: "xmark.circle") {
       model.autoMask.clearPoints(model: model, undoManager: undoManager)
     }

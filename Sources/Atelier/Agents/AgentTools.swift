@@ -201,7 +201,7 @@ final class AgentTools {
       "name": "set_canvas_paint",
       "title": "Paint colors on the canvas",
       "description": """
-        Paints colors on the canvas image, as the Paint tool does: a layer over the image that \
+        Paints colors on the canvas image, as Brush on the Color layer does: a layer over the image that \
         the next Edit run takes as part of its input (it doesn't change the mask; at Strength \
         100% with no mask the run replaces it, so lower `strength` or mask what to regenerate). \
         Coordinates are the canvas image's pixels from its top left (see get_create_screen's \

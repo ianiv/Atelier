@@ -6,8 +6,8 @@ import SwiftUI
 /// and Space-drag moves. Select picks what to mask by clicking and dragging a box
 /// (`AutoMaskSession`).
 enum CanvasTool: String, CaseIterable, Identifiable {
-  /// `paint` paints colours on the image (`CanvasPaint`), not the mask.
-  case move, brush, eraser, select, paint
+  /// Brush and Eraser work on the layer the Mask | Color switch picks (`CanvasLayer`).
+  case move, brush, eraser, select
 
   var id: Self { self }
 
@@ -17,7 +17,6 @@ enum CanvasTool: String, CaseIterable, Identifiable {
     case .brush: "Brush"
     case .eraser: "Eraser"
     case .select: "Select"
-    case .paint: "Paint"
     }
   }
 
@@ -27,7 +26,24 @@ enum CanvasTool: String, CaseIterable, Identifiable {
     case .brush: "paintbrush.pointed"
     case .eraser: "eraser"
     case .select: "wand.and.sparkles"
-    case .paint: "paintbrush"
+    }
+  }
+
+  /// Brush or Eraser: the tools that draw on a layer.
+  var drawsOnLayer: Bool { self == .brush || self == .eraser }
+}
+
+/// What Brush and Eraser draw on: the mask (the area a run regenerates) or the colours painted on
+/// the image (`CanvasPaint`). Picked with the Mask | Color switch, and remembered.
+enum CanvasLayer: String, CaseIterable, Identifiable {
+  case mask, color
+
+  var id: Self { self }
+
+  var title: String {
+    switch self {
+    case .mask: "Mask"
+    case .color: "Color"
     }
   }
 }
@@ -187,9 +203,10 @@ extension CreateModel {
     return true
   }
 
-  /// Puts `color` first among the recent colours (at most eight).
+  /// Puts `color` first among the recent colours (at most eight); one already there (the same at
+  /// 8 bits, `CanvasPaint.Color.matches`) moves to the front instead of coming in twice.
   func noteRecentPaintColor(_ color: CanvasPaint.Color) {
-    var recent = recentPaintColors.filter { $0 != color }
+    var recent = recentPaintColors.filter { !$0.matches(color) }
     recent.insert(color, at: 0)
     recentPaintColors = Array(recent.prefix(8))
   }
@@ -243,12 +260,13 @@ extension CreateModel {
   }
 
   /// New Sketch: an opaque white image the size of the frame on the canvas, brought in as any
-  /// image is (an Imported entry, Edit mode), with the Paint tool picked to draw on it.
+  /// image is (an Imported entry, Edit mode), with Brush on the Color layer picked to draw on it.
   func newSketch() {
     let size = frameSize ?? CGSize(width: 1024, height: 1024)
     guard let blank = Self.blankImage(width: Int(size.width), height: Int(size.height)) else { return }
     setCanvasImage(blank)
-    canvasTool = .paint
+    canvasTool = .brush
+    canvasLayer = .color
   }
 
   /// An opaque white image.
@@ -535,9 +553,10 @@ extension CanvasMask {
 
 // MARK: - Controls
 
-/// Move / Brush / Eraser / Select / Paint, the brush size, Mask Opacity, Clear Mask and Invert
-/// Mask, in the status bar beside the zoom controls. Always there; disabled when there's nothing
-/// to paint on.
+/// Move / Brush / Eraser / Select, the Mask | Color switch (what Brush and Eraser draw on), the
+/// brush size of that layer, Mask Opacity, Invert Mask and Clear Mask, in the status bar beside
+/// the zoom controls. Always there; disabled when there's nothing to paint on. The mask's buttons
+/// stay enabled with Color picked: the mask still shows.
 struct CanvasToolControls: View {
   @Environment(CreateModel.self) private var model
   @Environment(\.undoManager) private var undoManager
@@ -560,19 +579,34 @@ struct CanvasToolControls: View {
       .labelsHidden()
       .fixedSize()
       .help(Self.toolHelp)
-      // Paint needs only an image to paint on; the mask tools check the target themselves.
+      // Color needs only an image to paint on; the mask tools check the target themselves.
       .disabled(!edits)
+      Picker("Layer", selection: $model.canvasLayer) {
+        ForEach(CanvasLayer.allCases) { layer in
+          Text(layer.title).tag(layer)
+        }
+      }
+      .pickerStyle(.segmented)
+      .labelsHidden()
+      .fixedSize()
+      .help("What Brush and Eraser draw on: the mask (the area to regenerate) or colors on the image")
+      .disabled(!edits)
+      // One size, the current layer's: each layer keeps its own.
+      let colors = model.canvasLayer == .color
+      let size = colors ? model.paintBrushSize : model.brushSize
       Menu {
         ForEach(Self.sizes, id: \.self) { size in
-          Button("\(Int(size)) px") { model.brushSize = size }
+          Button("\(Int(size)) px") {
+            if colors { model.paintBrushSize = size } else { model.brushSize = size }
+          }
         }
       } label: {
-        Text("\(Int(model.brushSize)) px").monospacedDigit().frame(minWidth: 44).touchTarget()
+        Text("\(Int(size)) px").monospacedDigit().frame(minWidth: 44).touchTarget()
       }
       .menuIndicator(.hidden)
       .fixedSize()
-      .help("Brush Size, in frame pixels")
-      .disabled(!paints)
+      .help(colors ? "Color Brush Size, in frame pixels" : "Mask Brush Size, in frame pixels")
+      .disabled(colors ? !model.canPaintColor : !paints)
       Menu {
         Picker("Mask Opacity", selection: $model.maskOpacity) {
           ForEach(Self.opacities, id: \.self) { opacity in
@@ -610,9 +644,9 @@ struct CanvasToolControls: View {
 
   private static var toolHelp: String {
     #if os(iOS)
-      "Paint the area to regenerate with Apple Pencil: Brush paints, Eraser erases. Paint paints colors on the image. Fingers move and zoom."
+      "Paint with Apple Pencil: Brush paints, Eraser erases, on the mask (the area to regenerate) or the colors, as Mask | Color says. Fingers move and zoom."
     #else
-      "Move drags the image; Brush and Eraser paint the area to regenerate; Paint paints colors on the image. Hold Space to drag the image while painting."
+      "Move drags the image; Brush and Eraser paint and erase the mask (the area to regenerate) or the colors, as Mask | Color says. Option-drag with Brush erases. Hold Space to drag the image while painting."
     #endif
   }
 }

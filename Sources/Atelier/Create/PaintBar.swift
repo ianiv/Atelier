@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// The Paint tool's controls, over the bottom of the canvas while Paint is the tool (as
-/// `AutoMaskBar` is for Select): the colour (the system picker and the colours used last), the
-/// paint brush's size, Erase, Clear Paint and Fill Mask. Every control stays; ones that can't act
+/// The colour controls, over the bottom of the canvas while Brush or Eraser draws on the Color layer
+/// (as `AutoMaskBar` is for Select): the colour (the system picker and the colours used last),
+/// Clear Paint and Fill Mask. The brush size is the status bar's. Every control stays; ones that can't act
 /// are disabled.
 struct PaintBar: View {
   @Environment(CreateModel.self) private var model
@@ -51,7 +51,7 @@ struct PaintBar: View {
         } label: {
           Circle()
             .fill(color.map { Color(cgColor: $0.cgColor) } ?? Color.clear)
-            .overlay(Circle().strokeBorder(.secondary.opacity(color == model.paintColor ? 1 : 0.4), lineWidth: color == model.paintColor ? 2 : 1))
+            .overlay(Circle().strokeBorder(.secondary.opacity(color?.matches(model.paintColor) == true ? 1 : 0.4), lineWidth: color?.matches(model.paintColor) == true ? 2 : 1))
             .frame(width: 16, height: 16)
             .touchTarget()
         }
@@ -62,26 +62,8 @@ struct PaintBar: View {
     }
   }
 
-  /// Size, Erase, Clear Paint and Fill Mask.
-  @ViewBuilder private func tools(_ paints: Bool) -> some View {
-    @Bindable var model = model
-    Menu {
-      ForEach(CanvasToolControls.sizes, id: \.self) { size in
-        Button("\(Int(size)) px") { model.paintBrushSize = size }
-      }
-    } label: {
-      Text("\(Int(model.paintBrushSize)) px").monospacedDigit().frame(minWidth: 44).touchTarget()
-    }
-    .menuIndicator(.hidden)
-    .fixedSize()
-    .help("Paint Brush Size, in frame pixels")
-    .disabled(!paints)
-    Toggle(isOn: $model.paintErases) {
-      Label("Erase", systemImage: "eraser").touchTarget()
-    }
-    .toggleStyle(.button)
-    .help(Self.eraseHelp)
-    .disabled(!paints)
+  /// Clear Paint and Fill Mask.
+  @ViewBuilder private func tools(_: Bool) -> some View {
     Button("Clear Paint", systemImage: "xmark.circle") {
       model.clearPaint(undoManager: undoManager)
     }
@@ -94,19 +76,11 @@ struct PaintBar: View {
     .disabled(!model.canFillMask)
   }
 
-  private static var eraseHelp: String {
-    #if os(iOS)
-      "Erase: Apple Pencil takes paint away instead"
-    #else
-      "Erase: dragging takes paint away instead (or hold Option while painting)"
-    #endif
-  }
-
   private static var gestureHelp: String {
     #if os(iOS)
-      "Paint colors on the image with Apple Pencil. Fingers move and zoom. Colors go into the next Edit run; they don't change the mask."
+      "Brush paints colors on the image with Apple Pencil, Eraser takes them away. Fingers move and zoom. Colors go into the next Edit run; they don't change the mask."
     #else
-      "Drag to paint colors on the image; Option-drag erases. Hold Space to drag the image. Colors go into the next Edit run; they don't change the mask."
+      "Brush paints colors on the image (Option-drag erases), Eraser takes them away. Hold Space to drag the image. Colors go into the next Edit run; they don't change the mask."
     #endif
   }
 }

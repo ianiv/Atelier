@@ -4,7 +4,7 @@ import SwiftUI
 extension Automation {
   /// Checks painting colours on the canvas end to end (use a scratch `--project` and a fast image
   /// model with few steps): New Sketch puts an opaque white image the frame's size on the canvas as
-  /// an Imported entry, in Edit mode, with the Paint tool; paint strokes and mask strokes made in
+  /// an Imported entry, in Edit mode, with Brush on the Color layer; paint strokes and mask strokes made in
   /// turn are one undo step each and undo and redo in that order, each changing only its own
   /// layer, as do Clear Paint and Fill Mask with Color; the paint goes with the image: another
   /// image on the canvas has none, and coming back brings it back; Mask Opacity changes only what
@@ -101,9 +101,10 @@ extension Automation {
       let sketch = history.currentItem
       check(
         model.image?.width == size && model.image?.height == size && isWhite(pixel(model.image, size / 2, size / 2))
-          && sketch?.entryReason == .imported && model.canvasMode == .edit && model.canvasTool == .paint,
-        "New Sketch: a white \(size)×\(size) image, an Imported entry, Edit mode, the Paint tool (\(sketch?.entryReason?.rawValue ?? "none"))")
+          && sketch?.entryReason == .imported && model.canvasMode == .edit && model.canvasTool == .brush && model.canvasLayer == .color,
+        "New Sketch: a white \(size)×\(size) image, an Imported entry, Edit mode, Brush on the Color layer (\(sketch?.entryReason?.rawValue ?? "none"))")
       check(await settled { model.canPaintColor && model.canvasUndoImage === model.image }, "the sketch can be painted")
+      check(UserDefaults.standard.string(forKey: "canvasLayer") == "color", "the Color layer is remembered")
       guard let sketchTensor = sketch?.canvasTensorId else { return finish() }
 
       // Paint and mask strokes in turn, one undo step each.
@@ -127,6 +128,12 @@ extension Automation {
         full?.strokes == [paintA, paintB] && model.canvasMask?.strokes == [maskA] && undo.undoActionName == "Paint"
           && model.recentPaintColors.first == red,
         "two paint strokes and a mask stroke between them, each in its own layer (\(undo.undoActionName)); red is the latest color")
+      // The same colour again, a hair off as a picker gives it back, moves to the front once.
+      model.noteRecentPaintColor(CanvasPaint.Color(red: 0, green: 0, blue: 1))
+      model.noteRecentPaintColor(CanvasPaint.Color(red: 0.0001, green: 0, blue: 0.9999))
+      check(
+        model.recentPaintColors.prefix(2).map(\.hex) == ["#0000FF", "#FF0000"] && model.recentPaintColors.count(where: { $0.hex == "#0000FF" }) == 1,
+        "a recent color picked again moves to the front instead of coming in twice")
       undo.undo()
       check(model.canvasPaint?.strokes == [paintA] && model.canvasMask?.strokes == [maskA], "undo 1 takes the second paint stroke away")
       undo.undo()

@@ -410,20 +410,25 @@ final class CreateModel {
   /// The Draw entry last written before a run (`drawEntryInput`): the canvas image, paint and mask
   /// it held, and its key once written, so the next run from the same canvas doesn't write another.
   @ObservationIgnored var drawnEntry: (image: CGImage, paint: CanvasPaint, mask: CanvasMask?, key: Int64?)?
-  /// The Paint tool's brush width in frame pixels, apart from the mask brush's.
+  /// The brush width for colours (Brush and Eraser on the Color layer) in frame pixels, apart from
+  /// the mask brush's.
   var paintBrushSize = UserDefaults.standard.object(forKey: "paintBrushSize") as? Double ?? 32 {
     didSet { UserDefaults.standard.set(paintBrushSize, forKey: "paintBrushSize") }
   }
-  /// The colour the Paint tool and the fills paint with.
+  /// The colour Brush on the Color layer and the fills paint with.
   var paintColor = (UserDefaults.standard.string(forKey: "paintColor")).flatMap(CanvasPaint.Color.init(hex:)) ?? .black {
     didSet { UserDefaults.standard.set(paintColor.hex, forKey: "paintColor") }
   }
-  /// The colours painted with last, newest first (`PaintBar`'s swatches).
-  var recentPaintColors = (UserDefaults.standard.stringArray(forKey: "recentPaintColors") ?? []).compactMap(CanvasPaint.Color.init(hex:)) {
+  /// The colours painted with last, newest first (`PaintBar`'s swatches), each once.
+  var recentPaintColors = (UserDefaults.standard.stringArray(forKey: "recentPaintColors") ?? []).compactMap(CanvasPaint.Color.init(hex:))
+    .reduce(into: [CanvasPaint.Color]()) { kept, color in if !kept.contains(where: { $0.matches(color) }) { kept.append(color) } }
+  {
     didSet { UserDefaults.standard.set(recentPaintColors.map(\.hex), forKey: "recentPaintColors") }
   }
-  /// The Paint tool erases paint instead (the bar's Erase; Option-drag on the Mac too).
-  var paintErases = false
+  /// What Brush and Eraser draw on (the Mask | Color switch), remembered.
+  var canvasLayer = UserDefaults.standard.string(forKey: "canvasLayer").flatMap(CanvasLayer.init(rawValue:)) ?? .mask {
+    didSet { UserDefaults.standard.set(canvasLayer.rawValue, forKey: "canvasLayer") }
+  }
   /// How strongly the mask's red shows over the image (Mask Opacity), for every image. Only what
   /// the canvas shows: the mask a run takes is the same at any opacity.
   var maskOpacity = UserDefaults.standard.object(forKey: "maskOpacity") as? Double ?? 0.5 {

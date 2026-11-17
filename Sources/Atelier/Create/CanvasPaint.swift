@@ -3,7 +3,7 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-/// Colour painted onto the canvas image (the Paint tool, Select's Fill, Fill Mask with Color,
+/// Colour painted onto the canvas image (Brush and Eraser on the Color layer, Select's Fill, Fill Mask with Color,
 /// agents' `set_canvas_paint`): a layer of its own over the image, as vector strokes in the image's
 /// pixels (from its top left) like `CanvasMask`, so it stays sharp at any zoom and each stroke
 /// undoes on its own. Called the paint layer, and its strokes colours: elsewhere "painted" means
@@ -46,6 +46,14 @@ nonisolated struct CanvasPaint: Codable, Sendable, Hashable {
       self.init(
         red: Double(bytes >> 24 & 0xFF) / 255, green: Double(bytes >> 16 & 0xFF) / 255,
         blue: Double(bytes >> 8 & 0xFF) / 255, alpha: Double(bytes & 0xFF) / 255)
+    }
+
+    /// The same colour at 8 bits a component: what the picker gives back for a colour picked
+    /// again can differ in the last digits.
+    func matches(_ other: Color) -> Bool {
+      func byte(_ value: Double) -> Int { Int((value * 255).rounded()) }
+      return byte(red) == byte(other.red) && byte(green) == byte(other.green) && byte(blue) == byte(other.blue)
+        && byte(alpha) == byte(other.alpha)
     }
 
     static let black = Color(red: 0, green: 0, blue: 0)
@@ -258,11 +266,12 @@ nonisolated struct CanvasPaint: Codable, Sendable, Hashable {
       case .erase where stroke.bitmap != nil:
         drawBitmap()
       case .brush, .erase:
-        context.setLineWidth(stroke.radius * 2)
+        // At least a pixel wide (an agent can send radius 0), as `reach` reckons it.
+        let radius = max(stroke.radius, 0.5)
+        context.setLineWidth(radius * 2)
         if stroke.points.count == 1, let point = stroke.points.first {
           // A dot: Core Graphics draws nothing for a zero-length line.
-          context.fillEllipse(
-            in: CGRect(x: point.x - stroke.radius, y: point.y - stroke.radius, width: stroke.radius * 2, height: stroke.radius * 2))
+          context.fillEllipse(in: CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2))
         } else if stroke.points.count > 1 {
           context.addLines(between: stroke.points)
           context.strokePath()
@@ -302,31 +311,38 @@ nonisolated struct CanvasPaint: Codable, Sendable, Hashable {
   /// `height` image; nil when nothing that paints lies on it. Erasing isn't subtracted, so it may
   /// be larger than what shows.
   func bounds(width: Int, height: Int) -> CGRect? {
-    var union = CGRect.null
-    for stroke in strokes where stroke.kind != .erase {
-      guard let first = stroke.points.first else { continue }
-      var rect: CGRect
-      switch stroke.kind {
-      case .fill, .image:
-        guard let size = stroke.bitmapSize else { continue }
-        rect = CGRect(origin: first, size: size)
-      default:
-        rect = stroke.points.dropFirst().reduce(CGRect(origin: first, size: .zero)) { $0.union(CGRect(origin: $1, size: .zero)) }
-        if stroke.kind == .brush { rect = rect.insetBy(dx: -stroke.radius, dy: -stroke.radius) }
-      }
-      union = union.union(rect.standardized)
-    }
+    let union = strokes.filter { $0.kind != .erase }.compactMap(Self.reach).reduce(CGRect.null) { $0.union($1) }
     let clipped = union.intersection(CGRect(x: 0, y: 0, width: width, height: height)).integral
     return clipped.isNull || clipped.isEmpty ? nil : clipped
   }
 
-  /// Whether any colour shows inside `rect` (image pixels, from the top left): drawn only there,
-  /// so a small rectangle costs little whatever the image's size.
+  /// Where one stroke can change pixels (image pixels): a brush's or eraser's points grown by its
+  /// radius (at least half a pixel, as `layer` draws it), a shape's
+  /// points, a bitmap's rectangle.
+  private static func reach(_ stroke: Stroke) -> CGRect? {
+    guard let first = stroke.points.first else { return nil }
+    if stroke.bitmap != nil {
+      guard let size = stroke.bitmapSize else { return nil }
+      return CGRect(origin: first, size: size).standardized
+    }
+    var rect = stroke.points.dropFirst().reduce(CGRect(origin: first, size: .zero)) { $0.union(CGRect(origin: $1, size: .zero)) }
+    if stroke.kind == .brush || stroke.kind == .erase {
+      let radius = max(stroke.radius, 0.5)
+      rect = rect.insetBy(dx: -radius, dy: -radius)
+    }
+    return rect.standardized
+  }
+
+  /// Whether any colour shows inside `rect` (image pixels, from the top left): only the strokes
+  /// that reach it are drawn, and only there, so it costs little whatever the image's size.
   func showsColor(in rect: CGRect) -> Bool {
     let rect = rect.integral
-    guard rect.width > 0, rect.height > 0, let bounds = bounds(width: Int(rect.maxX), height: Int(rect.maxY)),
-          bounds.intersects(rect),
-          let layer = layer(width: Int(rect.width), height: Int(rect.height), origin: CGPoint(x: -rect.minX, y: -rect.minY)),
+    guard rect.width > 0, rect.height > 0 else { return false }
+    // A pixel's margin for antialiased edges.
+    let near = rect.insetBy(dx: -1, dy: -1)
+    let reaching = CanvasPaint(strokes: strokes.filter { Self.reach($0)?.intersects(near) == true })
+    guard reaching.mayHaveColor,
+          let layer = reaching.layer(width: Int(rect.width), height: Int(rect.height), origin: CGPoint(x: -rect.minX, y: -rect.minY)),
           let alpha = CanvasMask.alpha(of: layer, width: layer.width, height: layer.height)
     else { return false }
     return alpha.contains { $0 != 0 }

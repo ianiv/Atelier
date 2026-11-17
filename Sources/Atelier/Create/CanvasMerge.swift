@@ -54,7 +54,8 @@ nonisolated struct RefineMerge: Sendable {
     Record(
       sourceTensorId: sourceTensorId, scale: scale, offsetX: offset.width, offsetY: offset.height,
       frameWidth: frameSize.width, frameHeight: frameSize.height, mask: mask, canvasMask: canvasMask,
-      detailTensorId: detailTensorId, paint: paint)
+      // Compacted: a queued or remote job keeps one flattened image of the fills, not each.
+      detailTensorId: detailTensorId, paint: paint?.compacted(for: CGSize(width: source.width, height: source.height)))
   }
 
   init(
