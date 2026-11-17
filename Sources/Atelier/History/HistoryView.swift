@@ -962,8 +962,36 @@ struct HistorySelectionDetail: View {
   }
 }
 
+/// A LoRA an entry was made with, as the History detail panel lists it.
+nonisolated struct HistoryLoRA: Equatable {
+  var file: String
+  /// The LoRA library's name for it, or the file name when no list on this device names it (an
+  /// entry made on a server, or from a LoRA since removed).
+  var name: String
+  var weight: Double
+  var isInstalled: Bool
+
+  /// The LoRAs in a step's settings dump. Read from the dump rather than the sidecar's own
+  /// fields because every step, made here or imported from a Draw Things project, gets its
+  /// dump from the project row (`ProjectMapping.dump(of:)`), which keeps the node's LoRAs.
+  /// Only this device's library names them: History shows what this device can use, as the
+  /// model row does.
+  static func rows(of configuration: [String: JSONValue], installed: [ModelLibrary.LoRA]) -> [HistoryLoRA] {
+    guard case .array(let entries)? = configuration["loras"] else { return [] }
+    return entries.compactMap { entry in
+      guard case .object(let fields) = entry, case .string(let file)? = fields["file"], !file.isEmpty
+      else { return nil }
+      let lora = installed.first { $0.file == file }
+      return HistoryLoRA(
+        file: file, name: lora?.name ?? file, weight: fields["weight"]?.doubleValue ?? 1,
+        isInstalled: lora?.isDownloaded == true)
+    }
+  }
+}
+
 struct HistoryDetail: View {
   @Environment(CreateModel.self) private var create
+  @Environment(ModelLibrary.self) private var library
   @Environment(HistoryStore.self) private var history
   @Environment(TimelineStore.self) private var timelines
   @Environment(\.undoManager) private var undoManager
@@ -1041,6 +1069,29 @@ struct HistoryDetail: View {
         }
         Section("Settings") {
           LabeledContent("Model", value: modelName(sidecar.model))
+          LabeledContent("LoRAs") {
+            let loras = HistoryLoRA.rows(of: sidecar.configuration, installed: library.loras)
+            if loras.isEmpty {
+              Text("None")
+            } else {
+              VStack(alignment: .trailing, spacing: 4) {
+                ForEach(Array(loras.enumerated()), id: \.offset) { _, lora in
+                  VStack(alignment: .trailing, spacing: 0) {
+                    HStack(spacing: 6) {
+                      Text(lora.name).lineLimit(1).truncationMode(.middle)
+                      Text(lora.weight, format: .number.precision(.fractionLength(0...2)))
+                        .monospacedDigit()
+                    }
+                    if !lora.isInstalled {
+                      Text("Not installed").font(.caption).foregroundStyle(.secondary)
+                    }
+                  }
+                  .help(lora.file)
+                }
+              }
+              .textSelection(.enabled)
+            }
+          }
           LabeledContent("Size", value: "\(sidecar.width) × \(sidecar.height)")
           if let clip = item.clip {
             LabeledContent("Length", value: ClipBadge.length(clip))

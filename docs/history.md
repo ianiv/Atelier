@@ -14,7 +14,7 @@ Every image you generate is saved to the **current project**. Click **History** 
 - **Rating**: show only images with at least that many stars, or only unrated ones.
 - Videos show as one tile each, with a film badge. **Images / Videos** in the toolbar shows only one kind. See [Making videos](video.md#in-history).
 - **Show Inputs** in the toolbar (on iPad, in the **Filter** menu) shows or hides [input entries](#input-entries). It's on by default, and the strip under the canvas in Create follows the same setting.
-- Click an image to make it the **current image** (see Branches below) and see its prompt, negative prompt and settings (model, size, seed, steps, guidance, shift, sampler, hires fix and more) in the panel on the right. Prompts and seeds can be selected and copied.
+- Click an image to make it the **current image** (see Branches below) and see its prompt, negative prompt and settings (model, LoRAs with their weights, size, seed, steps, guidance, shift, sampler, hires fix and more) in the panel on the right. LoRAs show by their name in your LoRA list; one this device doesn't have (removed since, or used on a [server](remote.md)) shows its file name, marked **Not installed**. Prompts and seeds can be selected and copied.
 - Select several images with ⌘-click or ⇧-click to copy, export or delete them together. On iPad, tap **Select** in the toolbar, then tap images to add or remove them; tap **Done** when you're finished.
 - On iPad, a tap shows an image's details and a double tap uses its settings. In a narrow window the details open over the grid and close when you're done.
 
