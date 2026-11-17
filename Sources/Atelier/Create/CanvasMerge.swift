@@ -133,17 +133,18 @@ nonisolated struct RefineInputs: @unchecked Sendable {
     let placement = CanvasPlacement(sourceSize: sourceSize, frameSize: frame, scale: scale, offset: offset)
     let paint = paint?.mayHaveColor == true ? paint : nil
     var fadeKey = ""
-    guard var rendered = CanvasState.render(source, placement: placement, detail: detail, paint: paint) else { return nil }
-    let maskPNG = mask.flatMap { $0.mayHavePaint ? $0.frameMask(placement, canvas: rendered) : nil }
-    // A masked run takes the paint only where it regenerates (`CanvasPaint.Fade`, in frame pixels,
-    // where the engine applies Mask Blur); without a mask it guides the whole frame.
-    if let paint, let mask, maskPNG != nil {
-      let fade = CanvasPaint.Fade(mask: mask, maskBlur: maskBlur, maskBlurOutset: maskBlurOutset)
-      guard let faded = CanvasState.render(source, placement: placement, detail: detail, paint: paint, paintFade: fade)
-      else { return nil }
-      rendered = faded
+    // Rendered once without paint: the mask's codes come from it, and a merge blends over it.
+    guard let unpainted = CanvasState.render(source, placement: placement, detail: detail) else { return nil }
+    let maskPNG = mask.flatMap { $0.mayHavePaint ? $0.frameMask(placement, canvas: unpainted) : nil }
+    var rendered = unpainted
+    if let paint {
+      // A masked run takes the paint only where it regenerates (`CanvasPaint.Fade`, in frame
+      // pixels, where the engine applies Mask Blur); without a mask it guides the whole frame.
+      let fade = maskPNG == nil ? nil : mask.map { CanvasPaint.Fade(mask: $0, maskBlur: maskBlur, maskBlurOutset: maskBlurOutset) }
+      guard let painted = CanvasState.painting(unpainted, with: paint, placement: placement, fade: fade) else { return nil }
+      rendered = painted
       // The faded paint depends on the mask and blur too: part of the key that shares the input.
-      fadeKey = " fade \(fade.hashValue)"
+      if let fade { fadeKey = " fade \(fade.hashValue)" }
     }
     let stepId = isImported ? nil : sourceTensorId
     var inputs = RefineInputs(
@@ -157,7 +158,7 @@ nonisolated struct RefineInputs: @unchecked Sendable {
       inputs.merge = RefineMerge(
         source: source, sourceTensorId: stepId, scale: scale, offset: offset,
         frameSize: frame, mask: maskPNG != nil ? mask : nil, canvasMask: mask, painted: paint != nil,
-        unpaintedInput: paint == nil ? nil : CanvasState.render(source, placement: placement, detail: detail))
+        unpaintedInput: paint == nil ? nil : unpainted)
       // The input step is the source itself, saved once for every job from it; with paint, the
       // painted frame (or its Draw entry, `CreateModel.screenRequest`), which the run follows.
       inputs.canvasTensorId = paint == nil ? inputs.merge?.sourceTensorId : nil

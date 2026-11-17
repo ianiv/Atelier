@@ -310,7 +310,7 @@ nonisolated struct CanvasPaint: Codable, Sendable, Hashable {
   /// original pixels, and outside the mask there's none. (Scaling by w itself would leave up to a
   /// quarter of the paint in the band: the run keeps 1 − w of an input painted by w.) `maskBlur`
   /// and `maskBlurOutset` are in the pixels of the grid the layer is drawn on.
-  nonisolated struct Fade: Hashable, Sendable {
+  nonisolated struct Fade: Codable, Hashable, Sendable {
     var mask: CanvasMask
     var maskBlur: Double
     var maskBlurOutset: Int

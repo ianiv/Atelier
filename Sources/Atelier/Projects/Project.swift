@@ -275,19 +275,33 @@ final nonisolated class Project: Sendable {
       record.flatMap { try? JSONEncoder().encode($0) }.map { String(decoding: $0, as: UTF8.self) }
   }
 
-  /// Removes the records of Draw entries no step is any more (deleted). Returns their keys.
+  /// Removes the records of Draw entries no step is any more (deleted), and of those whose base
+  /// image is gone: a later image could be given its tensor id. Returns their keys.
   @discardableResult
   func pruneStoredDrawRecords(keeping tree: ProjectTree) -> [Int64] {
     let gone = workspace.dictionary.keys.filter { $0.hasPrefix(Self.drawKeyPrefix) }
-      .compactMap { Int64($0.dropFirst(Self.drawKeyPrefix.count)) }.filter { tree.step(tensorId: $0) == nil }
+      .compactMap { Int64($0.dropFirst(Self.drawKeyPrefix.count)) }
+      .filter { key in
+        tree.step(tensorId: key) == nil || storedDrawRecord(forEntry: key).map { tree.step(tensorId: $0.baseTensorId) == nil } ?? true
+      }
     for key in gone { setStoredDrawRecord(nil, forEntry: key) }
     return gone
   }
 
-  /// A Draw entry's base: the image it was painted on (its tensor) and the paint, in its pixels.
+  /// A Draw entry's base: the image it was painted on (its tensor and pixel size, to tell it from
+  /// another image given the same tensor id later), the paint in its pixels, and how the entry's
+  /// image faded it (`CanvasPaint.Fade`, nil for none), which a run from it must match.
   nonisolated struct DrawRecord: Codable, Hashable, Sendable {
     var baseTensorId: Int64
     var paint: CanvasPaint
+    var width: Int?
+    var height: Int?
+    var fade: CanvasPaint.Fade?
+
+    /// Whether `image` can be the base: the size recorded, if any.
+    func fits(_ image: CGImage) -> Bool {
+      (width ?? image.width) == image.width && (height ?? image.height) == image.height
+    }
   }
 
   private static let drawKeyPrefix = "atelier_draw_"

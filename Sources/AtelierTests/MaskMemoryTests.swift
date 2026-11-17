@@ -184,6 +184,27 @@ struct MaskMemoryTests {
     await project.close()
   }
 
+  @Test func aDrawEntrysRecordGoesWithItsBase() async throws {
+    let (project, folder) = try Self.project()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let first = try await Self.append(project)
+    let other = try await Self.append(project, after: first.tensorId)
+    let entry = try await Self.append(project, after: first.tensorId)
+    let paint = CanvasPaint(strokes: [.rect(CGRect(x: 2, y: 2, width: 8, height: 8), color: CanvasPaint.Color(red: 0, green: 1, blue: 0))])
+    let fade = CanvasPaint.Fade(mask: CanvasMask(rects: [CGRect(x: 0, y: 0, width: 16, height: 16)]), maskBlur: 1.5, maskBlurOutset: 2)
+    let record = Project.DrawRecord(baseTensorId: other.tensorId, paint: paint, width: 64, height: 64, fade: fade)
+    project.setStoredDrawRecord(record, forEntry: entry.tensorId)
+    #expect(project.storedDrawRecord(forEntry: entry.tensorId) == record)
+    // The base's size tells it from another image given its tensor id later.
+    #expect(record.fits(try CanvasRefineTests.pattern(width: 64, height: 64)))
+    #expect(!record.fits(try CanvasRefineTests.pattern(width: 32, height: 64)))
+    // The base deleted, the entry kept: the record goes, as a later image could take the base's id.
+    _ = try await project.delete(tensorId: other.tensorId)
+    let gone = await project.read { $0.pruneStoredDrawRecords(keeping: $0.tree(items: false)) }
+    #expect(gone == [entry.tensorId] && project.storedDrawRecord(forEntry: entry.tensorId) == nil)
+    await project.close()
+  }
+
   @Test func olderProjectsFallBackToTheNewestChildsMask() async throws {
     let (project, folder) = try Self.project()
     defer { try? FileManager.default.removeItem(at: folder) }

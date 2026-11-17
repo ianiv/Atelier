@@ -917,18 +917,22 @@ final class HistoryStore {
   /// The picture a Draw entry was painted on and its paint (`Project.DrawRecord`), when the entry
   /// has a record and that image is still a step of the project; nil otherwise (an older entry, a
   /// deleted image, one Draw Things wrote), and the entry's own baked image is all there is.
-  func drawBase(ofEntry entry: HistoryItem) -> (tensorId: Int64, paint: CanvasPaint)? {
+  /// Its image must still be the size recorded (`Project.DrawRecord.fits`), checked once loaded.
+  func drawBase(ofEntry entry: HistoryItem) -> Project.DrawRecord? {
     guard entry.entryReason == .draw, let record = project.storedDrawRecord(forEntry: entry.tensorId),
           record.paint.mayHaveColor, tree.step(tensorId: record.baseTensorId) != nil
     else { return nil }
-    return (record.baseTensorId, record.paint)
+    return record
   }
 
-  /// Keeps what the Draw entry `key` was painted on: the image `baseTensorId` (of `size`, for
-  /// compacting) and `paint`.
-  func setDrawBase(_ paint: CanvasPaint, baseTensorId: Int64, size: CGSize?, forEntry key: Int64) {
+  /// Keeps what the Draw entry `key` was painted on: the image `baseTensorId` of `size`, `paint`,
+  /// and the fade its image was made with.
+  func setDrawBase(_ paint: CanvasPaint, baseTensorId: Int64, size: CGSize, fade: CanvasPaint.Fade?, forEntry key: Int64) {
     guard tree.step(tensorId: key) != nil, tree.step(tensorId: baseTensorId) != nil else { return }
-    project.setStoredDrawRecord(Project.DrawRecord(baseTensorId: baseTensorId, paint: paint.compacted(for: size)), forEntry: key)
+    project.setStoredDrawRecord(
+      Project.DrawRecord(
+        baseTensorId: baseTensorId, paint: paint.compacted(for: size), width: Int(size.width), height: Int(size.height), fade: fade),
+      forEntry: key)
   }
 
   /// The paint layer the image last had on the canvas (`CreateModel.canvasPaint`), in its pixels;

@@ -300,15 +300,33 @@ extension CanvasState {
         width: layer.rect.width * zoom.x, height: layer.rect.height * zoom.y)
       context.draw(layer.image, in: CGRect(x: rect.minX, y: Double(height) - rect.maxY, width: rect.width, height: rect.height))
     }
-    if let paint, let layer = paint.layer(
-      width: width, height: height, scale: zoom, origin: placement.imageRect.origin, fade: paintFade)
-    {
-      context.saveGState()
-      context.clip(to: placement.imageRectYUp)
-      context.draw(layer, in: CGRect(x: 0, y: 0, width: width, height: height))
-      context.restoreGState()
-    }
+    if let paint { drawPaint(paint, in: context, placement: placement, fade: paintFade) }
     return context.makeImage()
+  }
+
+  /// `frame` (rendered for `placement`) with `paint` drawn over it, as `render` draws it.
+  nonisolated static func painting(_ frame: CGImage, with paint: CanvasPaint, placement: CanvasPlacement, fade: CanvasPaint.Fade? = nil)
+    -> CGImage?
+  {
+    let width = frame.width, height = frame.height
+    guard let context = CGContext(
+      data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+      space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    else { return nil }
+    context.draw(frame, in: CGRect(x: 0, y: 0, width: width, height: height))
+    drawPaint(paint, in: context, placement: placement, fade: fade)
+    return context.makeImage()
+  }
+
+  /// The paint at the frame's pixels, only on the image.
+  private nonisolated static func drawPaint(_ paint: CanvasPaint, in context: CGContext, placement: CanvasPlacement, fade: CanvasPaint.Fade?) {
+    let width = context.width, height = context.height
+    guard let layer = paint.layer(width: width, height: height, scale: placement.zoom, origin: placement.imageRect.origin, fade: fade)
+    else { return }
+    context.saveGState()
+    context.clip(to: placement.imageRectYUp)
+    context.draw(layer, in: CGRect(x: 0, y: 0, width: width, height: height))
+    context.restoreGState()
   }
 }
 
