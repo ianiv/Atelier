@@ -521,6 +521,154 @@ extension Automation {
     await project.close()
   }
 
+  /// Deletes scratch projects the way Delete Project… does (`CreateModel.deleteProject`), as
+  /// PASS/FAIL lines: the current project switches to the next one, its files go to the Trash,
+  /// its cached clip videos go (another project's stay), a queued Match Colors job for it is
+  /// cancelled, the canvas image isn't taken for a step of a later project of the same name, and
+  /// thumbnails aren't either.
+  ///
+  ///   Atelier --delete-project-check --project delete-check-<random> [--quit]
+  ///
+  /// It makes `<name>-z` and `<name>-zz` beside the scratch project, so the projects it opens in
+  /// place of the deleted ones are its own, never the user's; it refuses any other project name.
+  /// It deletes `<name>` (twice: again after making it anew) and `<name>-z`, and empties what they
+  /// put in the Trash. `<name>-zz` is left current at the end, for the caller to remove.
+  static func deleteProjectCheck(_ model: CreateModel) {
+    let args = CommandLine.arguments
+    Task { @MainActor in
+      var failures = 0
+      func check(_ ok: Bool, _ message: String) {
+        if !ok { failures += 1 }
+        print("\(ok ? "PASS" : "FAIL") \(message)")
+        fflush(stdout)
+      }
+      @MainActor func finish() {
+        print(failures == 0 ? "delete project check: all passed" : "delete project check: \(failures) failed")
+        fflush(stdout)
+        if args.contains("--quit") { AppLifecycle.quit() }
+      }
+      let history = model.history
+      while !history.isLoaded || model.isBusy {
+        try? await Task.sleep(for: .milliseconds(100))
+      }
+      let name = history.project.name
+      guard name.hasPrefix("delete-check-") else {
+        check(false, "run with --project delete-check-<random> (got “\(name)”)")
+        return finish()
+      }
+      let sibling = name + "-z"
+      let last = name + "-zz"
+      guard history.items.isEmpty, !HistoryStore.scanProjectNames().contains(where: { $0 == sibling || $0 == last }) else {
+        check(false, "“\(name)” and its siblings must be new")
+        return finish()
+      }
+      let fileManager = FileManager.default
+      func exists(_ url: URL, _ suffix: String = "") -> Bool { fileManager.fileExists(atPath: url.path + suffix) }
+      @MainActor func add(to project: Project, seed: Int) async -> HistoryItem? {
+        guard let image = gradient(width: 64, height: 64, seed: seed), let tensor = ImageTensor.tensor(from: image) else { return nil }
+        return try? await project.append(
+          tensor: tensor, model: model.selectedModel ?? "check.ckpt", prompt: "delete check \(seed)", negativePrompt: "",
+          seed: UInt32(seed), settings: [:], createdAt: Date(), duration: 1)
+      }
+      func pixels(_ image: CGImage?) -> Data? { image?.dataProvider?.data as Data? }
+      /// Removes what a delete put in the Trash: it's this check's scratch file.
+      func emptyTrashed(_ trashed: URL?) {
+        guard let trashed else { return }
+        for suffix in ["", "-wal", "-shm"] {
+          try? fileManager.removeItem(atPath: trashed.path + suffix)
+        }
+      }
+
+      // Each project with an image.
+      guard let first = await add(to: history.project, seed: 1) else {
+        check(false, "couldn't add an image to “\(name)”")
+        return finish()
+      }
+      for (other, seed) in [(sibling, 2), (last, 3)] {
+        let project = Project(url: HistoryStore.url(for: other))
+        check(await add(to: project, seed: seed) != nil, "made scratch project “\(other)”")
+        await project.close()
+      }
+      await history.reload()
+      let next = history.projectToOpen(afterDeleting: name)
+      check(next == sibling, "the project after “\(name)” is “\(sibling)” (got “\(next)”)")
+      guard next == sibling else { return finish() }
+
+      // A cached clip video of each.
+      let clips = URL.cachesDirectory.appending(path: "Atelier/Clips", directoryHint: .isDirectory)
+      try? fileManager.createDirectory(at: clips, withIntermediateDirectories: true)
+      let ownClips = ["\(name)-1-2-h264.mp4", "\(name)-1-2-hevc.mp4"].map { clips.appending(path: $0) }
+      let siblingClip = clips.appending(path: "\(sibling)-1-2-h264.mp4")
+      for url in ownClips + [siblingClip] {
+        fileManager.createFile(atPath: url.path, contents: Data())
+      }
+
+      let firstThumbnail = await history.thumbnail(for: first, half: false)
+      model.show(first)
+      for _ in 0..<50 where model.imageItem?.tensorId != first.tensorId {
+        try? await Task.sleep(for: .milliseconds(100))
+      }
+      check(model.imageItem?.tensorId == first.tensorId, "the image is on the canvas")
+
+      // A Match Colors job for the project, held in the paused queue.
+      model.setQueuePaused(true)
+      if let settings = model.settings {
+        var request = GenerationEngine.Request(
+          model: first.sidecar.model, prompt: first.sidecar.prompt, negativePrompt: "", seed: first.sidecar.seed,
+          configuration: settings)
+        request.colorMatch = ColorMatch.Job(project: name, sourceTensorId: first.tensorId, options: ColorMatch.Options())
+        model.queue.append([request], currentTensorId: history.currentTensorId)
+        check(model.colorMatchJobs(in: name).count == 1, "a Match Colors job for “\(name)” waits")
+      }
+
+      let deleted = history.project
+      let url = deleted.url
+      do {
+        let trashed = try await model.deleteProject(name)
+        check(history.project.name == sibling, "“\(sibling)” is open in its place (got “\(history.project.name)”)")
+        check(history.items.count == 1, "and lists its own image")
+        check(!exists(url) && !exists(url, "-wal") && !exists(url, "-shm"), "the project's files are gone from Projects")
+        check(trashed.map { exists($0) } == true, "the project file is in the Trash")
+        emptyTrashed(trashed)
+        check(!history.projectNames.contains(name), "the project menu no longer lists it")
+        check(!deleted.isOpen, "the project that was open is closed")
+        check(!ownClips.contains(where: { exists($0) }), "its cached clip videos are gone")
+        check(exists(siblingClip), "another project's cached clip video stays")
+        check(model.colorMatchJobs(in: name).isEmpty, "its Match Colors job is cancelled")
+      } catch {
+        check(false, "delete “\(name)”: \(error.localizedDescription)")
+      }
+      model.setQueuePaused(false)
+      try? fileManager.removeItem(at: siblingClip)
+
+      // A new project under the same name: its first image has the same tensor id as the old one's.
+      await history.open(name)
+      if let again = await add(to: history.project, seed: 4) {
+        await history.reload()
+        check(history.items.count == 1, "“\(name)” made anew is empty but for its new image")
+        if again.tensorId == first.tensorId {
+          check(model.imageItem == nil, "the canvas image isn't taken for the new project's image of the same id")
+        }
+        let thumbnail = await history.thumbnail(for: again, half: false)
+        check(
+          thumbnail != nil && pixels(thumbnail) != pixels(firstThumbnail),
+          "the new image's thumbnail isn't the deleted one's")
+      } else {
+        check(false, "couldn't add an image to “\(name)” made anew")
+      }
+      do {
+        emptyTrashed(try await model.deleteProject(name))
+        check(history.project.name == sibling, "deleting it again opens “\(sibling)”")
+        emptyTrashed(try await model.deleteProject(sibling))
+        check(history.project.name == last, "deleting “\(sibling)” opens “\(last)”")
+        check(!exists(HistoryStore.url(for: sibling)), "“\(sibling)” is gone")
+      } catch {
+        check(false, "delete again: \(error.localizedDescription)")
+      }
+      finish()
+    }
+  }
+
   /// A test image with distinct values in every channel; `seed` varies the blue channel.
   private static func gradient(width: Int, height: Int, seed: Int = 0) -> CGImage? {
     var bytes = [UInt8](repeating: 255, count: width * height * 4)

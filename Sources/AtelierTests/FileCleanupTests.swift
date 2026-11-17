@@ -86,6 +86,19 @@ struct ClipCacheTests {
       #expect(names(clips) == ["P-1-3-h264.mp4", "Q-1-2-h264.mp4"])
     }
   }
+
+  @Test func deletingAProjectRemovesItsVideosOnly() {
+    withTestFolder { clips in
+      for name in [
+        "My-Project-1-2-h264.mp4", "My-Project-3-4-hevc.mp4", "My-Project-2-1-2-h264.mp4", "My-1-2-h264.mp4",
+        "My-Project-5-6-h264.partial.mp4", "notes.txt",
+      ] {
+        touch(clips.appending(path: name))
+      }
+      HistoryStore.removeClipFiles(in: clips, project: "My-Project")
+      #expect(names(clips) == ["My-1-2-h264.mp4", "My-Project-2-1-2-h264.mp4", "My-Project-5-6-h264.partial.mp4", "notes.txt"])
+    }
+  }
 }
 
 struct OrphanTests {

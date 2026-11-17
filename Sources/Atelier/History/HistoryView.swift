@@ -1249,13 +1249,15 @@ struct Thumbnail: View {
   }
 }
 
-/// The current project, with switching, New Project… and Rename….
+/// The current project, with switching, New Project…, Rename… and Delete….
 struct ProjectMenu: View {
   @Environment(HistoryStore.self) private var history
   @Environment(CreateModel.self) private var create
   @State private var naming: Naming?
-  @State private var error: String?
+  @State private var error: (title: String, message: String)?
   @State private var editingOutput = false
+  /// The project Delete… asks about, while it asks.
+  @State private var deleting: String?
 
   enum Naming: Identifiable {
     case new(suggested: String), rename(current: String)
@@ -1283,6 +1285,8 @@ struct ProjectMenu: View {
       Divider()
       Button("New Project…") { naming = .new(suggested: history.availableName()) }
       Button("Rename “\(history.project.name)”…") { naming = .rename(current: history.project.name) }
+      Button("Delete “\(history.project.name)”…", role: .destructive) { deleting = history.project.name }
+        .disabled(!history.isLoaded)
       Button("Output Folder…") { editingOutput = true }
       Button(Finder.showTitle) {
         Finder.reveal([history.project.url])
@@ -1306,11 +1310,60 @@ struct ProjectMenu: View {
         history.setOutput($0)
       }
     }
+    .confirmationDialog(
+      "Delete “\(deleting ?? "")”?",
+      isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+      titleVisibility: .visible,
+      presenting: deleting
+    ) { name in
+      Button("Delete Project", role: .destructive) { delete(name) }
+      Button("Cancel", role: .cancel) {}
+    } message: { name in
+      Text(deleteMessage(name))
+    }
+    .debugPresents(
+      "deleteProject",
+      Binding(get: { deleting != nil }, set: { if $0 { deleting = history.project.name } }))
     .alert(
-      "Couldn't rename the project",
+      error?.title ?? "",
       isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } }),
       actions: { Button("OK") { error = nil } },
-      message: { Text(error ?? "") })
+      message: { Text(error?.message ?? "") })
+  }
+
+  /// What deleting `name` does: where its files go, which project opens in its place, and what
+  /// becomes of jobs in the queue.
+  private func deleteMessage(_ name: String) -> String {
+    let isCurrent = name == history.project.name
+    let count = isCurrent ? history.items.count(where: { !$0.isEntry }) : 0
+    let contents = count == 0 ? "" : count == 1 ? ", with its 1 image or video," : ", with its \(count) images and videos,"
+    #if os(macOS)
+      var parts = ["The project file\(contents) moves to the Trash."]
+    #else
+      var parts = ["The project\(contents) is deleted. This can't be undone."]
+    #endif
+    guard isCurrent else { return parts.joined() }
+    let next = history.projectToOpen(afterDeleting: name)
+    parts.append(
+      history.projectNames.contains(next) ? "“\(next)” opens in its place." : "A new project, “\(next)”, opens in its place.")
+    // Generations save into whichever project is open; Match Colors jobs only into their own.
+    let queue = create.queue
+    let jobs = (queue.running.map { [$0] } ?? []) + queue.runningRemote + queue.waiting
+    if jobs.contains(where: { $0.request.map { $0.colorMatch == nil } == true && $0.remoteDevice == nil && $0.styleThumbnail == nil }) {
+      parts.append("Jobs in the queue save into “\(next)” instead.")
+    }
+    if !create.colorMatchJobs(in: name).isEmpty { parts.append("Its Match Colors jobs are cancelled.") }
+    return parts.joined(separator: " ")
+  }
+
+  private func delete(_ name: String) {
+    Task {
+      do {
+        try await create.deleteProject(name)
+      } catch {
+        self.error = ("Couldn't delete the project", error.localizedDescription)
+      }
+    }
   }
 
   /// Switches projects, the canvas image remembering its mask first: it's in the project going.
@@ -1334,7 +1387,7 @@ struct ProjectMenu: View {
           try await history.renameCurrent(to: name)
           create.projectRenamed(from: old, to: history.project.name)
         } catch {
-          self.error = error.localizedDescription
+          self.error = ("Couldn't rename the project", error.localizedDescription)
         }
       }
     }
