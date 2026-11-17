@@ -1734,9 +1734,14 @@ final class CreateModel {
       base.setRefineInputs(
         source: source.image, sourceTensorId: step, isImported: source.isImported, scale: source.scale,
         offset: source.offset, mask: refines && runTargetTakesMasks ? canvasMask : nil,
-        merge: refines && mergeIntoImage, detail: source.detail, paint: source.paint,
-        // The very image its Draw entry holds, baked once.
-        baked: source.paint.flatMap { $0.mayHaveColor ? bakedCanvas(source.image, paint: $0) : nil })
+        merge: refines && mergeIntoImage, detail: source.detail, paint: source.paint)
+      // A painted merge's input is its Draw entry, when it was just written for this very canvas
+      // (`recordEntriesBeforeRun`): the entry holds the image with the paint, which the run follows.
+      if base.merge?.painted == true, let paint = source.paint, let drawn = drawnEntry, let key = drawn.key,
+         drawn.image === source.image, drawn.paint == paint, drawn.mask == canvasMask, history.currentTensorId == key
+      {
+        base.canvasTensorId = key
+      }
       // The image remembers its mask even when this run can't take it (a video model, an older
       // server).
       base.canvasSourceMask = canvasMask.map {
@@ -2267,7 +2272,8 @@ final class CreateModel {
         if let merge = request.merge, !output.isVideo, let frame = output.frames.first {
           setRunMessage("Merging into the image…", job)
           let merged = try await CanvasMerge.merged(
-            frame, into: merge, input: request.canvas, maskBlur: Double(request.configuration.maskBlur),
+            // Paint is only the run's input: a zoomed refine blends over the frame without it.
+            frame, into: merge, input: merge.painted ? merge.unpaintedInput : request.canvas, maskBlur: Double(request.configuration.maskBlur),
             maskBlurOutset: request.configuration.maskBlurOutset)
           output.frames = [merged.tensor]
           refined = merged.step

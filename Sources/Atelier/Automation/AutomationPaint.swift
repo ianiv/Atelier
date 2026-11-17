@@ -31,9 +31,9 @@ extension Automation {
   /// image on the canvas has none, and coming back brings it back; Mask Opacity changes only what
   /// shows (the run's mask bytes stay the same); the run's input has the paint drawn in; before a
   /// run a Draw entry holding the painted image and the mask is recorded once (not again while it's
-  /// current and nothing changed); a masked Edit run with Merge into Image follows it, and its
-  /// result keeps the paint outside the mask, in the stored source layer too. Prints PASS/FAIL
-  /// lines.
+  /// current and nothing changed); a masked Edit run with Merge into Image, with paint reaching
+  /// past the mask's edge, follows it, and paint being only its input, its result has none of it
+  /// outside the mask, and the stored source layer is the unpainted image. Prints PASS/FAIL lines.
   ///
   ///   Atelier --paint-check --project NAME --model M [--steps N] [--size S] [--quit]
   ///
@@ -248,7 +248,9 @@ extension Automation {
       check(model.drawEntryInput() != nil, "more paint makes a new Draw entry due")
       model.setPaint(full, actionName: "Paint", undoManager: nil)
 
-      // A masked Edit run with Merge into Image.
+      // A masked Edit run with Merge into Image, with paint reaching past the mask's left edge.
+      let crossing = CanvasPaint.Stroke.rect(CGRect(x: s * 0.4, y: s * 0.6, width: s * 0.2, height: s * 0.1), color: red)
+      model.addPaintStrokes([crossing], undoManager: nil)
       let previous = model.lastSavedStep
       model.generate()
       await idle()
@@ -260,20 +262,42 @@ extension Automation {
       var ancestor = history.parent(of: result)
       while let item = ancestor, !item.isEntry { ancestor = history.parent(of: item) }
       check(
-        ancestor?.entryReason == .draw && ancestor?.entryMask?.strokes == [maskA],
-        "the run follows a Draw entry holding the mask (\(ancestor?.entryReason?.rawValue ?? "none"))")
+        ancestor?.entryReason == .draw && ancestor?.entryMask?.strokes == [maskA] && result.inputTensorId == ancestor?.tensorId,
+        "the run follows a Draw entry holding the mask, its input (\(ancestor?.entryReason?.rawValue ?? "none"))")
       let merged = await history.image(tensorId: result.tensorId, in: history.project.name)
-      check(isRed(pixel(merged, Int(s * 0.2), Int(s * 0.7))), "the merged result keeps the paint outside the mask")
+      // Outside the mask (and a margin for Mask Blur), the sketch as it was: white, no paint.
+      let masked = CGRect(x: s * 0.5, y: s * 0.5, width: s * 0.3, height: s * 0.3).insetBy(dx: -16, dy: -16)
+      var painted = 0
+      if let merged {
+        let width = merged.width, height = merged.height
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        bytes.withUnsafeMutableBytes { raw in
+          CGContext(
+            data: raw.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+          )?.draw(merged, in: CGRect(x: 0, y: 0, width: width, height: height))
+        }
+        for y in 0..<height {
+          for x in 0..<width where !masked.contains(CGPoint(x: x, y: y)) {
+            let index = (y * width + x) * 4
+            if !isWhite(Array(bytes[index..<index + 4])) { painted += 1 }
+          }
+        }
+      }
+      check(
+        merged != nil && painted == 0 && isWhite(pixel(merged, Int(s * 0.45), Int(s * 0.65))),
+        "the merged result has no paint outside the mask, even where it reached past its edge (\(painted) pixels not white)")
       let layers = await history.project.read { $0.layerSummary(tensorId: result.tensorId) }
       if let bottom = layers.first {
         let source = await history.image(tensorId: bottom.tensorId, in: history.project.name)
         check(
-          layers.count >= 2 && isRed(pixel(source, Int(s * 0.2), Int(s * 0.7))),
-          "the stored source layer has the paint (\(layers.count) layers)")
+          layers.count >= 2 && isWhite(pixel(source, Int(s * 0.2), Int(s * 0.7)))
+            && isWhite(pixel(source, Int(s * 0.55), Int(s * 0.65))),
+          "the stored source layer is the unpainted sketch (\(layers.count) layers)")
       } else {
         check(false, "the merged result is stored as layers")
       }
-      check(model.canvasPaint == nil, "the result on the canvas has no paint of its own (it's baked in)")
+      check(model.canvasPaint == nil, "the result on the canvas has no paint of its own")
       finish()
     }
   }

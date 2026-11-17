@@ -68,7 +68,8 @@ nonisolated enum SavedQueue {
         request.mask = mask
         if let record = entry.merge, let mergeSource {
           request.merge = RefineMerge(record: record, source: mergeSource, sameProject: sameProject)
-          request.canvasTensorId = request.merge?.sourceTensorId
+          // With paint the input was the painted frame, saved anew (`RefineInputs.make`).
+          request.canvasTensorId = request.merge?.painted == true ? nil : request.merge?.sourceTensorId
         }
         request.canvasSourceMask = entry.canvasSourceMask.map { mask in
           var mask = mask

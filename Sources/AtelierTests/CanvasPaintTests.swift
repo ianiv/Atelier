@@ -60,23 +60,12 @@ struct CanvasPaintTests {
     #expect(dot.bounds(width: 32, height: 32) == CGRect(x: 0, y: 26, width: 6, height: 6))
   }
 
-  @Test func colorIsFoundOnlyWhereItLies() {
-    // Two dabs in opposite corners: a rectangle between them has none.
-    let paint = CanvasPaint(strokes: [
-      CanvasPaint.Stroke(kind: .brush, points: [CGPoint(x: 4, y: 4)], radius: 3, color: Self.red),
-      CanvasPaint.Stroke(kind: .brush, points: [CGPoint(x: 60, y: 60)], radius: 3, color: Self.red),
-    ])
-    #expect(paint.showsColor(in: CGRect(x: 0, y: 0, width: 10, height: 10)))
-    #expect(paint.showsColor(in: CGRect(x: 56, y: 56, width: 8, height: 8)))
-    #expect(!paint.showsColor(in: CGRect(x: 20, y: 20, width: 24, height: 24)))
-    #expect(!paint.showsColor(in: CGRect(x: 50, y: 0, width: 14, height: 14)))
-    // A brush of radius 0 still draws a hairline, so it counts.
+  @Test func aHairlineBrushHasBounds() throws {
+    // A brush of radius 0 (an agent can send one) draws a pixel-wide line, and counts as such.
     let hairline = CanvasPaint(strokes: [CanvasPaint.Stroke(kind: .brush, points: [CGPoint(x: 2, y: 8), CGPoint(x: 30, y: 8)], color: Self.red)])
-    #expect(hairline.bounds(width: 32, height: 32) != nil && hairline.showsColor(in: CGRect(x: 10, y: 6, width: 4, height: 4)))
-    // Erased paint isn't there.
-    var erased = paint
-    erased.strokes.append(CanvasPaint.Stroke(kind: .erase, points: [CGPoint(x: 4, y: 4)], radius: 6))
-    #expect(!erased.showsColor(in: CGRect(x: 0, y: 0, width: 10, height: 10)))
+    #expect(hairline.bounds(width: 32, height: 32) != nil)
+    let layer = try #require(hairline.layer(width: 32, height: 32))
+    #expect(Self.pixel(layer, 16, 8)[3] != 0)
   }
 
   @Test func newStrokesDrawOverTheLayerDrawnBefore() throws {
@@ -146,38 +135,16 @@ struct CanvasPaintTests {
     #expect(Self.pixel(bars, 16, 2)[3] == 0 && Self.pixel(bars, 16, 16) == [255, 0, 0, 255])
   }
 
-  @Test func aSavedJobKeepsItsFillsCompacted() throws {
-    // Two fills of a 32×32 image's halves: a queued job's record keeps one image of them.
-    var bytes = [UInt8](repeating: 0, count: 16 * 32)
-    for index in bytes.indices { bytes[index] = 255 }
-    let half = try #require(CanvasMask.grayPNG(bytes, width: 16, height: 32))
-    let paint = CanvasPaint(strokes: [
-      CanvasPaint.Stroke(kind: .fill, points: [.zero], color: Self.red, bitmap: half),
-      CanvasPaint.Stroke(kind: .fill, points: [CGPoint(x: 16, y: 0)], color: Self.blue, bitmap: half),
-      CanvasPaint.Stroke(kind: .erase, points: [CGPoint(x: 8, y: 8)], radius: 2),
-    ])
-    let source = try CanvasRefineTests.pattern(width: 32, height: 32)
-    let merge = RefineMerge(
-      source: source, sourceTensorId: nil, scale: 2, offset: .zero, frameSize: CGSize(width: 32, height: 32), mask: nil,
-      detailTensorId: 7, paint: paint)
-    let data = try JSONEncoder().encode(merge.record)
-    let record = try JSONDecoder().decode(RefineMerge.Record.self, from: data)
-    #expect(record.paint?.strokes.count == 1 && record.paint?.strokes.first?.kind == .image)
-    let restored = RefineMerge(record: record, source: source, sameProject: true)
-    let before = try #require(paint.layer(width: 32, height: 32))
-    let after = try #require(restored.paint?.layer(width: 32, height: 32))
-    #expect(CanvasRefineTests.rgba(before) == CanvasRefineTests.rgba(after))
-    #expect(restored.detailTensorId == 7 && Self.pixel(after, 8, 8)[3] == 0 && Self.pixel(after, 4, 20) == [255, 0, 0, 255])
-  }
-
   @Test func paintChangesWhatARunTakes() throws {
     let image = try CanvasRefineTests.pattern(width: 64, height: 64)
     let frame = CGSize(width: 64, height: 64)
     let paint = CanvasPaint(strokes: [.rect(CGRect(x: 0, y: 0, width: 16, height: 16), color: Self.red)])
-    func inputs(_ paint: CanvasPaint?, mask: CanvasMask? = nil, merge: Bool = false) throws -> RefineInputs {
+    func inputs(
+      _ paint: CanvasPaint?, mask: CanvasMask? = nil, merge: Bool = false, scale: Double? = nil, offset: CGSize = .zero
+    ) throws -> RefineInputs {
       try #require(
         RefineInputs.make(
-          source: image, sourceTensorId: 42, isImported: false, scale: nil, offset: .zero, frame: frame, mask: mask,
+          source: image, sourceTensorId: 42, isImported: false, scale: scale, offset: offset, frame: frame, mask: mask,
           merge: merge, paint: paint))
     }
     let plain = try inputs(nil), painted = try inputs(paint)
@@ -191,30 +158,35 @@ struct CanvasPaintTests {
     let erased = try inputs(CanvasPaint(strokes: [CanvasPaint.Stroke(kind: .erase, points: [.zero], radius: 4)]))
     #expect(erased.canvasTensorId == 42 && erased.canvasKey == plain.canvasKey)
 
-    // Merging with a mask: the source has the paint baked in at its own pixels and is no step's
-    // image, but the detail of the step it was painted on is still carried, clear of the paint.
-    let mask = CanvasMask(rects: [CGRect(x: 32, y: 32, width: 16, height: 16)])
+    // Merging with a mask: paint is only the input. The merge goes back into the unpainted source,
+    // its step kept for the bottom layer (the input is the painted frame, saved anew), so paint
+    // outside the mask (here partly over it) is gone from the result.
+    let mask = CanvasMask(rects: [CGRect(x: 8, y: 8, width: 16, height: 16)])
     let plainMerge = try #require(try inputs(nil, mask: mask, merge: true).merge)
     let merging = try inputs(paint, mask: mask, merge: true)
     let merge = try #require(merging.merge)
-    #expect(plainMerge.sourceTensorId == 42 && plainMerge.detailTensorId == nil && plainMerge.paint == nil)
-    #expect(merge.sourceTensorId == nil && merging.canvasTensorId == nil && merge.detailTensorId == 42)
-    #expect(merge.paint == paint)
-    // A source baked by the caller (its Draw entry's) is the one the merge takes.
-    let shared = try #require(paint.baked(onto: image))
-    #expect(try #require(RefineInputs.make(
-      source: image, sourceTensorId: 42, isImported: false, scale: nil, offset: .zero, frame: frame, mask: mask,
-      merge: true, paint: paint, baked: shared)).merge?.source === shared)
-    #expect(merge.source.width == 64 && Self.pixel(merge.source, 4, 4) == [255, 0, 0, 255])
-    #expect(Self.pixel(merge.source, 40, 4) == Self.pixel(image, 40, 4))
-    // Saved with a queued job, the record keeps them.
+    #expect(!plainMerge.painted && plainMerge.unpaintedInput == nil)
+    #expect(merge.painted && merge.source === image && merge.sourceTensorId == 42 && merging.canvasTensorId == nil)
+    #expect(Self.pixel(merging.canvas, 4, 4) == [255, 0, 0, 255])
+    let unpainted = try #require(merge.unpaintedInput)
+    #expect(Self.pixel(unpainted, 4, 4) == Self.pixel(image, 4, 4))
+    // Saved with a queued job, the record says it was painted; an older record decodes as not.
     let restored = RefineMerge(record: merge.record, source: merge.source, sameProject: true)
-    #expect(restored.detailTensorId == 42 && restored.paint == paint)
-    #expect(RefineMerge(record: merge.record, source: merge.source, sameProject: false).detailTensorId == nil)
-    // The merged result keeps the paint outside the mask.
+    #expect(restored.painted && restored.unpaintedInput == nil)
+    let old = #"{"scale":null,"offsetX":0,"offsetY":0,"frameWidth":64,"frameHeight":64,"detailTensorId":42,"paint":{"strokes":[]}}"#
+    let decoded = try JSONDecoder().decode(RefineMerge.Record.self, from: Data(old.utf8))
+    #expect(decoded.painted == nil)
     let result = try CanvasRefineTests.solid(width: 64, height: 64, red: 0, green: 0, blue: 255)
-    let merged = try #require(CanvasMerge.merge(result, into: merge, maskBlur: 0, maskBlurOutset: 0))
-    #expect(Self.pixel(merged.image, 4, 4) == [255, 0, 0, 255] && Self.pixel(merged.image, 40, 40) == [0, 0, 255, 255])
-    #expect(merged.step.layers?.detailTensorId == 42 && merged.step.layers?.paintLayer == paint)
+    let merged = try #require(CanvasMerge.merge(result, into: merge, input: merge.unpaintedInput, maskBlur: 0, maskBlurOutset: 0))
+    // Paint outside the mask: the source as it was. Inside: the result.
+    #expect(Self.pixel(merged.image, 4, 4) == Self.pixel(image, 4, 4) && Self.pixel(merged.image, 12, 12) == [0, 0, 255, 255])
+    #expect(merged.step.layers?.source === image)
+    // Zoomed in (a dense frame) and without a mask (the whole frame generated): no paint either.
+    let zoomed = try #require(try inputs(paint, mask: mask, merge: true, scale: 2, offset: CGSize(width: 32, height: 32)).merge)
+    let zoomedMerge = try #require(CanvasMerge.merge(result, into: zoomed, input: zoomed.unpaintedInput, maskBlur: 2, maskBlurOutset: 0))
+    #expect(Self.pixel(zoomedMerge.image, 4, 4) == Self.pixel(image, 4, 4))
+    let whole = try #require(try inputs(paint, merge: true, scale: 2, offset: CGSize(width: 32, height: 32)).merge)
+    let wholeMerge = try #require(CanvasMerge.merge(result, into: whole, input: whole.unpaintedInput, maskBlur: 0, maskBlurOutset: 0))
+    #expect(Self.pixel(wholeMerge.image, 4, 4) == [0, 0, 255, 255] && Self.pixel(wholeMerge.image, 40, 40) == Self.pixel(image, 40, 40))
   }
 }

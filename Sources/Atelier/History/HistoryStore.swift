@@ -451,7 +451,9 @@ final class HistoryStore {
     var inputTensorId: Int64?
     // The input's image, which an entry shares with the canvas's own step.
     var inputImageTensorId: Int64?
-    if let canvas = request.merge?.source ?? request.canvas {
+    // With paint, the input is the painted frame (or the Draw entry holding it), not the
+    // unpainted source the result merges into.
+    if let canvas = request.merge.flatMap({ $0.painted ? nil : $0.source }) ?? request.canvas {
       if let key = request.canvasTensorId, let image = await imageTensor(ofKey: key, in: project) {
         inputImageTensorId = image
         inputTensorId = key
@@ -488,7 +490,11 @@ final class HistoryStore {
     } else {
       // A layered refine's bottom layer is its input's image, the step just found or saved.
       var refined = refined
-      if request.merge != nil, let inputImageTensorId { refined?.layers?.sourceTensorId = inputImageTensorId }
+      // With paint it's the unpainted source's own step (none for an image from outside: written
+      // afresh), never the painted input.
+      if let merge = request.merge, let inputImageTensorId {
+        refined?.layers?.sourceTensorId = merge.painted ? merge.sourceTensorId : inputImageTensorId
+      }
       // A layered refine's own image is its top layer: the frame.
       let image = refined?.layers.flatMap { ImageTensor.tensor(from: $0.frame) } ?? ImageTensor.rgb(output.frames[0])
       item = try await project.append(

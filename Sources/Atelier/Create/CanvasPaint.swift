@@ -7,9 +7,9 @@ import UniformTypeIdentifiers
 /// agents' `set_canvas_paint`): a layer of its own over the image, as vector strokes in the image's
 /// pixels (from its top left) like `CanvasMask`, so it stays sharp at any zoom and each stroke
 /// undoes on its own. Called the paint layer, and its strokes colours: elsewhere "painted" means
-/// masked (`CanvasMask.Code.painted`). It isn't the mask and adds nothing to it. A run bakes it
-/// into its input (`CanvasState.render`, `RefineMerge.source`), and Generate records the baked
-/// image as a Draw entry first, as Draw Things records a canvas drawn on (`Reason.draw`). The same
+/// masked (`CanvasMask.Code.painted`). It isn't the mask and adds nothing to it. A run takes it
+/// as part of its input only (`CanvasState.render`): the result has none of it, even outside the
+/// mask (`RefineMerge.painted`). Generate records the image with it baked in as a Draw entry first, as Draw Things records a canvas drawn on (`Reason.draw`). The same
 /// rendering (`layer`) draws it on screen and for a run.
 nonisolated struct CanvasPaint: Codable, Sendable, Hashable {
   /// An sRGB colour, each component 0–1, with straight (not premultiplied) alpha.
@@ -293,7 +293,7 @@ nonisolated struct CanvasPaint: Codable, Sendable, Hashable {
   }
 
   /// `image` with the layer drawn over it at its own pixels, opaque where `image` is: the canvas
-  /// image as a run takes it (`RefineMerge.source`) and as its Draw entry records it.
+  /// image as its Draw entry records it.
   func baked(onto image: CGImage) -> CGImage? {
     let width = image.width, height = image.height
     guard let context = CGContext(
@@ -331,21 +331,6 @@ nonisolated struct CanvasPaint: Codable, Sendable, Hashable {
       rect = rect.insetBy(dx: -radius, dy: -radius)
     }
     return rect.standardized
-  }
-
-  /// Whether any colour shows inside `rect` (image pixels, from the top left): only the strokes
-  /// that reach it are drawn, and only there, so it costs little whatever the image's size.
-  func showsColor(in rect: CGRect) -> Bool {
-    let rect = rect.integral
-    guard rect.width > 0, rect.height > 0 else { return false }
-    // A pixel's margin for antialiased edges.
-    let near = rect.insetBy(dx: -1, dy: -1)
-    let reaching = CanvasPaint(strokes: strokes.filter { Self.reach($0)?.intersects(near) == true })
-    guard reaching.mayHaveColor,
-          let layer = reaching.layer(width: Int(rect.width), height: Int(rect.height), origin: CGPoint(x: -rect.minX, y: -rect.minY)),
-          let alpha = CanvasMask.alpha(of: layer, width: layer.width, height: layer.height)
-    else { return false }
-    return alpha.contains { $0 != 0 }
   }
 
   static func png(_ image: CGImage) -> Data? {

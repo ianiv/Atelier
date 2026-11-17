@@ -1253,10 +1253,8 @@ final nonisolated class Project: Sendable {
       tensorId: frameTensorId, maskId: frameMaskId, x: layers.frameX, y: layers.frameY,
       width: Int32(layers.frame.width), height: Int32(layers.frame.height),
       scaleFactorBy120: layers.frameScaleFactorBy120)
-    // Paint baked into the source carries the detail of the step it was painted on, less what
-    // would hide the paint.
-    let carried = (layers.detailTensorId ?? layers.sourceTensorId).map {
-      carriedDetail(from: $0, under: frame, frameAlpha: frameAlpha, frameWidth: layers.frame.width, clearOf: layers.paintLayer)
+    let carried = layers.sourceTensorId.map {
+      carriedDetail(from: $0, under: frame, frameAlpha: frameAlpha, frameWidth: layers.frame.width)
     } ?? []
     return (
       [LayerRow(tensorId: sourceTensorId, maskId: sourceMaskId, x: 0, y: 0, width: Int32(width), height: Int32(height))]
@@ -1274,12 +1272,8 @@ final nonisolated class Project: Sendable {
   /// the source's top left was on its canvas. One the new frame covers wholly and opaquely is
   /// dropped, whatever its density: it could never show again. Past `maxRefineLayers` the oldest go: the source layer
   /// below them already has them, at its own pixels (it's the step's image), so dropping one
-  /// flattens it into the source. One over any colour of `paint` (baked into the source, in its
-  /// pixels) is dropped too: drawn over the source it would hide the paint, which the source layer
-  /// alone has. Each layer's own rectangle is tested, so paint elsewhere leaves it be.
-  private func carriedDetail(
-    from sourceTensorId: Int64, under frame: LayerRow, frameAlpha: [UInt8], frameWidth: Int, clearOf paint: CanvasPaint? = nil
-  ) -> [LayerRow] {
+  /// flattens it into the source.
+  private func carriedDetail(from sourceTensorId: Int64, under frame: LayerRow, frameAlpha: [UInt8], frameWidth: Int) -> [LayerRow] {
     guard let layers = canvasLayers(imageTensorId: sourceTensorId),
           let start = layers.firstIndex(where: { $0.scaleFactorBy120 > 120 })
     else { return [] }
@@ -1291,7 +1285,6 @@ final nonisolated class Project: Sendable {
     var carried: [LayerRow] = []
     for row in layers[start...] {
       let rect = Self.units(row).offsetBy(dx: -union.minX, dy: -union.minY)
-      if let paint, paint.showsColor(in: rect) { continue }
       if frameUnits.contains(rect) {
         // Covered when every frame pixel over it is opaque.
         let x0 = Int(((rect.minX - frameUnits.minX) * frameScale).rounded(.down))
