@@ -840,6 +840,7 @@ final class HistoryStore {
     await project.read {
       let tree = $0.tree(items: false)
       $0.pruneStoredPaint(keeping: tree)
+      $0.pruneStoredMaskHidden(keeping: tree)
       $0.pruneStoredDrawRecords(keeping: tree)
     }
     // A later image could be given a deleted one's tensor: don't let it inherit the rating.
@@ -891,6 +892,18 @@ final class HistoryStore {
   func setMask(_ mask: CanvasMask?, forImage tensorId: Int64, size: CGSize?) {
     guard tree.step(tensorId: tensorId) != nil else { return }
     keepMask(mask, forImage: tensorId, size: size, in: project)
+  }
+
+  /// Whether the image's mask was hidden (`Project.storedMaskHidden`).
+  func storedMaskHidden(tensorId: Int64) async -> Bool {
+    let project = project
+    return await project.read { $0.storedMaskHidden(forImage: tensorId) }
+  }
+
+  /// Keeps whether the image's mask is hidden.
+  func setMaskHidden(_ hidden: Bool, forImage tensorId: Int64) {
+    guard tree.step(tensorId: tensorId) != nil else { return }
+    project.setStoredMaskHidden(hidden, forImage: tensorId)
   }
 
   private func keepMask(_ mask: CanvasMask?, forImage tensorId: Int64, size: CGSize?, in project: Project) {

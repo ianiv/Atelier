@@ -269,6 +269,7 @@ final class AgentTools {
           "mode": ["type": "string", "enum": ["replace", "add", "subtract"], "description": "What `from_history_step`, `image` and `shapes` do to the mask there is. Default replace."],
           "invert": ["type": "boolean", "description": "Flip the mask over the whole image, last."],
           "clear": ["type": "boolean", "description": "Clear the mask, first. Alone, it just clears it."],
+          "hidden": ["type": "boolean", "description": "Hide (true) or show (false) the mask, last, as Show/Hide Mask does: hidden, it's kept but not drawn, and runs (generate use_canvas included) go as if there were none. Any other change shows it first. Alone, it just hides or shows it."],
         ],
       ],
     ],
@@ -1209,6 +1210,8 @@ final class AgentTools {
       "can_paint_mask": create.canPaintMask,
       // Colours painted on the image (set_canvas_paint), which the next Edit run takes.
       "has_paint": create.canvasShowsImage && create.canvasPaint?.mayHaveColor == true,
+      // Show/Hide Mask: a hidden mask is kept but runs go without it (set_canvas_mask hidden).
+      "mask_hidden": create.canvasShowsImage && create.canvasMask != nil && create.maskHidden,
     ]
     // The Select tool's selection not yet in the mask, which Generate (and use_canvas) adds first.
     let session = create.autoMask
@@ -1338,10 +1341,19 @@ final class AgentTools {
     let shapes = arguments["shapes"] as? [Any]
     let maskSource = arguments["image"] as? String
     if arguments["shapes"] != nil, shapes == nil { throw ToolError("`shapes` is an array of shapes.") }
-    guard clear || invert || shapes != nil || maskSource != nil || stored != nil else {
-      throw ToolError("Pass `shapes`, `image`, `from_history_step`, `invert` or `clear`.")
+    if arguments["hidden"] != nil, !(arguments["hidden"] is Bool) { throw ToolError("`hidden` is true or false.") }
+    let hidden = arguments["hidden"] as? Bool
+    guard clear || invert || shapes != nil || maskSource != nil || stored != nil || hidden != nil else {
+      throw ToolError("Pass `shapes`, `image`, `from_history_step`, `invert`, `clear` or `hidden`.")
     }
     guard create.canEditMask else { throw ToolError(maskUnavailableReason()) }
+    if let hidden, !(clear || invert || shapes != nil || maskSource != nil || stored != nil) {
+      guard create.canvasMask != nil else { throw ToolError("There's no mask to hide or show.") }
+      Self.asOneUndoStep { create.setMaskHidden(hidden, undoManager: $0) }
+      var result = maskSummary()
+      result["mask_hidden"] = create.maskHidden
+      return try Self.textResult(json: result)
+    }
 
     let erases = mode == "subtract"
     var strokes: [CanvasMask.Stroke] = []
@@ -1393,8 +1405,10 @@ final class AgentTools {
     }
     Self.asOneUndoStep {
       create.setMask(mask.strokes.isEmpty ? nil : mask, actionName: CreateModel.agentMaskActionName, undoManager: $0)
+      if hidden == true { create.setMaskHidden(true, undoManager: $0) }
     }
     var result = maskSummary()
+    result["mask_hidden"] = create.maskHidden
     if !notes.isEmpty { result["notes"] = notes }
     return try Self.textResult(json: result)
   }

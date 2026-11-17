@@ -373,6 +373,13 @@ final class CreateModel {
   /// The inpainting mask painted on the canvas image (`CanvasTools.swift` changes it). Each image
   /// remembers the last one it had (`persistCanvasMask`, `restoreCanvasMask`).
   var canvasMask: CanvasMask?
+  /// Show/Hide Mask: the mask is kept but not drawn, and runs go as if there were none
+  /// (`activeMask`). Each image remembers it with its mask.
+  var maskHidden = false
+  /// The mask runs take: none while it's hidden.
+  var activeMask: CanvasMask? { maskHidden ? nil : canvasMask }
+  /// Whether the canvas image's hidden state has been written as it arrived (`persistMaskHidden`).
+  @ObservationIgnored private var landedMaskHidden: (tensorId: Int64, hidden: Bool)?
   /// The mask Copy Mask took, with the size of the image it was on, for Paste Mask. Kept in the
   /// app: a mask means nothing to other apps.
   var copiedMask: CopiedMask?
@@ -562,6 +569,8 @@ final class CreateModel {
       // source's back on the result, as Draw Things keeps it. Paint the same, but a result has
       // it baked in, so none goes back.
       canvasMask = nil
+      maskHidden = false
+      landedMaskHidden = nil
       canvasPaint = nil
     }
   }
@@ -947,7 +956,7 @@ final class CreateModel {
   /// Strength, as in Draw Things).
   var canEdit: Bool {
     usesReferences || videoModel?.needsImage == true || (settings?.strength ?? 1) < 1
-      || (videoModel == nil && canvasMask?.mayHavePaint == true)
+      || (videoModel == nil && activeMask?.mayHavePaint == true)
   }
   /// The mode runs use: Generate while Edit means nothing, keeping the chosen mode for when it does.
   /// A model that only animates an image (LongCat, Stable Video) has no Generate to fall back to.
@@ -1733,12 +1742,12 @@ final class CreateModel {
       let refines = videoModel == nil
       base.setRefineInputs(
         source: source.image, sourceTensorId: step, isImported: source.isImported, scale: source.scale,
-        offset: source.offset, mask: refines && runTargetTakesMasks ? canvasMask : nil,
+        offset: source.offset, mask: refines && runTargetTakesMasks ? activeMask : nil,
         merge: refines && mergeIntoImage, detail: source.detail, paint: source.paint)
       // A painted merge's input is its Draw entry, when it was just written for this very canvas
       // (`recordEntriesBeforeRun`): the entry holds the image with the paint, which the run follows.
       if base.merge?.painted == true, let paint = source.paint, let drawn = drawnEntry, let key = drawn.key,
-         drawn.image === source.image, drawn.paint == paint, drawn.mask == canvasMask, drawn.fade == drawFade(for: source),
+         drawn.image === source.image, drawn.paint == paint, drawn.mask == activeMask, drawn.fade == drawFade(for: source),
          history.currentTensorId == key
       {
         base.canvasTensorId = key
@@ -2322,6 +2331,10 @@ final class CreateModel {
             keepRefinePlacement(
               merge: merge, sourceOrigin: mergedOrigin, resultSize: CGSize(width: finished.width, height: finished.height))
             canvasMask = keptMask
+            // The result starts with the mask it was made with hidden: it's there to use again,
+            // but the next run doesn't take it unless it's shown.
+            maskHidden = keptMask != nil
+            landedMaskHidden = nil
           } else {
             canvas.zoomToFit()
           }
@@ -3363,9 +3376,19 @@ extension CreateModel {
     // Its paint layer the same way.
     persistCanvasPaint(for: step)
     if canvasMask == nil, maskPendingTensorId == step.tensorId { return }
+    persistMaskHidden(for: step)
     if let landedMask, landedMask.tensorId == step.tensorId, landedMask.mask == canvasMask { return }
     history.setMask(canvasMask, forImage: step.tensorId, size: canvasStepSize(for: step))
     landedMask = (step.tensorId, canvasMask)
+  }
+
+  /// The image remembers whether its mask is hidden (`HistoryStore.setMaskHidden`), unless that's
+  /// as it arrived.
+  private func persistMaskHidden(for step: (project: String, tensorId: Int64)) {
+    let hidden = maskHidden && canvasMask != nil
+    if let landedMaskHidden, landedMaskHidden.tensorId == step.tensorId, landedMaskHidden.hidden == hidden { return }
+    history.setMaskHidden(hidden, forImage: step.tensorId)
+    landedMaskHidden = (step.tensorId, hidden)
   }
 
   /// The size of `step`'s image, for compacting what it keeps: the image under a run's preview,
@@ -3480,7 +3503,11 @@ extension CreateModel {
     guard canvasMask == nil else { return false }
     landedMask = (step.tensorId, mask)
     guard let mask else { return false }
+    let hidden = await history.storedMaskHidden(tensorId: step.tensorId)
+    guard imageStep?.tensorId == step.tensorId, canvasMask == nil else { return false }
     canvasMask = mask
+    maskHidden = hidden
+    landedMaskHidden = (step.tensorId, hidden)
     return true
   }
 
@@ -3632,7 +3659,7 @@ extension CreateModel {
     if let input = drawEntryInput(), let source = canvasSource, let paint = source.paint {
       // Remembered, so the next run from the same canvas follows this one rather than another.
       let fade = drawFade(for: source)
-      drawnEntry = (source.image, paint, canvasMask, fade, nil)
+      drawnEntry = (source.image, paint, activeMask, fade, nil)
       let image = source.image
       // The picture painted on, when it's a step: opening the entry brings it back with the paint
       // as a layer (`restore(entry:)`).
@@ -3696,7 +3723,7 @@ extension CreateModel {
     let styled = styledPrompts
     return HistoryStore.EntryInput(
       reason: reason, parent: history.currentTensorId, canvas: canvas.canvas, canvasImage: canvas.image,
-      mask: canvas.image != nil ? canvasMask : nil, moodboard: moodboard.items, model: selectedModel ?? "",
+      mask: canvas.image != nil ? activeMask : nil, moodboard: moodboard.items, model: selectedModel ?? "",
       prompt: styled.prompt, negativePrompt: styled.negativePrompt, seed: seed,
       settings: settings.map(JSONValue.fields(of:)) ?? [:])
   }
@@ -3787,7 +3814,7 @@ extension CreateModel {
     guard let item, let tensorId = item.canvasTensorId else { return }
     adoptedImport = (newImage, tensorId)
     guard image === newImage, imageStep == nil, canvasIsImported else { return }
-    let mask = canvasMask
+    let mask = canvasMask, hidden = maskHidden
     let paint = canvasPaint
     imageStep = (history.project.name, tensorId)
     canvasIsImported = false
@@ -3795,6 +3822,7 @@ extension CreateModel {
     maskPendingTensorId = nil
     landedMask = (tensorId, nil)
     canvasMask = mask
+    maskHidden = hidden
     paintPendingTensorId = nil
     landedPaint = (tensorId, nil)
     canvasPaint = paint
@@ -3813,7 +3841,7 @@ extension CreateModel {
     if let current = history.currentEntry {
       return HistoryStore.isDuplicate(history.signature(of: input), of: current) ? nil : input
     }
-    return canvasMask?.mayHavePaint == true ? input : nil
+    return activeMask?.mayHavePaint == true ? input : nil
   }
 
   /// The Draw entry Generate writes first when the canvas image has paint (`CanvasPaint`): the
@@ -3827,7 +3855,7 @@ extension CreateModel {
           let paint = source.paint, paint.mayHaveColor
     else { return nil }
     // The same canvas, paint, mask and fade (Mask Blur, Outset and zoom), still current.
-    if let drawn = drawnEntry, drawn.image === source.image, drawn.paint == paint, drawn.mask == canvasMask,
+    if let drawn = drawnEntry, drawn.image === source.image, drawn.paint == paint, drawn.mask == activeMask,
        drawn.fade == drawFade(for: source), let key = drawn.key, history.currentTensorId == key
     {
       return nil
@@ -3836,7 +3864,7 @@ extension CreateModel {
     else { return nil }
     input.canvas = .image(baked)
     input.canvasImage = baked
-    input.mask = canvasMask
+    input.mask = activeMask
     return input
   }
 
@@ -3853,7 +3881,7 @@ extension CreateModel {
   /// pixels, so its Draw entry holds the input the run takes: with a mask the run sends, the
   /// settings' Mask Blur and Outset (frame pixels) at the canvas zoom. Nil without one.
   private func drawFade(for source: CanvasSnapshot) -> CanvasPaint.Fade? {
-    guard runTargetTakesMasks, screenFrameHasPaint, let mask = canvasMask, let settings, let frameSize else { return nil }
+    guard runTargetTakesMasks, screenFrameHasPaint, let mask = activeMask, let settings, let frameSize else { return nil }
     let placement = CanvasPlacement(
       sourceSize: CGSize(width: source.image.width, height: source.image.height), frameSize: frameSize, scale: source.scale,
       offset: source.offset)
@@ -3938,6 +3966,9 @@ extension CreateModel {
     guard imageStep?.tensorId == tensorId else { return }
     maskPendingTensorId = nil
     canvasMask = mask
+    // As the run went in with it: shown.
+    maskHidden = false
+    landedMaskHidden = nil
     // Written whatever the image had, none included.
     landedMask = nil
     rememberCanvasMask()

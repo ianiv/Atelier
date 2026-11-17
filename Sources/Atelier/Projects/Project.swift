@@ -304,6 +304,26 @@ final nonisolated class Project: Sendable {
     }
   }
 
+  /// Whether the image's mask was hidden (Show/Hide Mask, `CreateModel.maskHidden`), under
+  /// `atelier_maskhidden_<image tensor id>` beside its mask: present when hidden.
+  func storedMaskHidden(forImage tensorId: Int64) -> Bool {
+    workspace.dictionary[Self.maskHiddenKeyPrefix + String(tensorId), String.self] != nil
+  }
+
+  func setStoredMaskHidden(_ hidden: Bool, forImage tensorId: Int64) {
+    workspace.dictionary[Self.maskHiddenKeyPrefix + String(tensorId), String.self] = hidden ? "1" : nil
+  }
+
+  /// Removes the hidden flags of images no step shows any more. Returns those images.
+  @discardableResult
+  func pruneStoredMaskHidden(keeping tree: ProjectTree) -> [Int64] {
+    let gone = workspace.dictionary.keys.filter { $0.hasPrefix(Self.maskHiddenKeyPrefix) }
+      .compactMap { Int64($0.dropFirst(Self.maskHiddenKeyPrefix.count)) }.filter { tree.step(tensorId: $0) == nil }
+    for tensorId in gone { setStoredMaskHidden(false, forImage: tensorId) }
+    return gone
+  }
+
+  private static let maskHiddenKeyPrefix = "atelier_maskhidden_"
   private static let drawKeyPrefix = "atelier_draw_"
   private static let paintKeyPrefix = "atelier_paint_"
   private static func paintKey(_ tensorId: Int64) -> String { paintKeyPrefix + String(tensorId) }

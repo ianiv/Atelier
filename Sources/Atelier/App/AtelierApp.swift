@@ -171,6 +171,8 @@ struct AtelierApp: App {
         MaskCopyItems(model: create, undoManager: undoManager, enabled: navigation.section == .create)
         Button("Fill Mask with Color") { create.fillMask(undoManager: undoManager) }
           .disabled(navigation.section != .create || !create.canFillMask)
+        Button("Mask Colored Areas") { create.maskColoredAreas(undoManager: undoManager) }
+          .disabled(navigation.section != .create || !create.canMaskColoredAreas)
         Divider()
         Picker("Mode", selection: Binding(get: { create.effectiveCanvasMode }, set: { create.canvasMode = $0 })) {
           Text("Generate").tag(CreateModel.CanvasMode.generate)

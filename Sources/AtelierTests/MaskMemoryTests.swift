@@ -205,6 +205,28 @@ struct MaskMemoryTests {
     await project.close()
   }
 
+  @Test func aHiddenMaskIsRememberedWithTheImage() async throws {
+    let (project, folder) = try Self.project()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let first = try await Self.append(project)
+    let second = try await Self.append(project, after: first.tensorId)
+    project.setStoredMask(CanvasMask(rects: [CGRect(x: 0, y: 0, width: 8, height: 8)]), forImage: second.tensorId)
+    project.setStoredMaskHidden(true, forImage: second.tensorId)
+    #expect(project.storedMaskHidden(forImage: second.tensorId) && !project.storedMaskHidden(forImage: first.tensorId))
+    // Its own key: the masks listed are the masks.
+    #expect(project.storedMaskImages() == [second.tensorId: true])
+    await project.close()
+    let reopened = Project(url: project.url)
+    #expect(await reopened.read { $0.storedMaskHidden(forImage: second.tensorId) })
+    reopened.setStoredMaskHidden(true, forImage: first.tensorId)
+    _ = try await reopened.delete(tensorId: second.tensorId)
+    let gone = await reopened.read { $0.pruneStoredMaskHidden(keeping: $0.tree(items: false)) }
+    #expect(gone == [second.tensorId] && !reopened.storedMaskHidden(forImage: second.tensorId))
+    reopened.setStoredMaskHidden(false, forImage: first.tensorId)
+    #expect(!reopened.storedMaskHidden(forImage: first.tensorId))
+    await reopened.close()
+  }
+
   @Test func olderProjectsFallBackToTheNewestChildsMask() async throws {
     let (project, folder) = try Self.project()
     defer { try? FileManager.default.removeItem(at: folder) }

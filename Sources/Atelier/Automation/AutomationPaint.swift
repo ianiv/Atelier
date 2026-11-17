@@ -33,7 +33,10 @@ extension Automation {
   /// run a Draw entry holding the painted image and the mask is recorded once (not again while it's
   /// current and nothing changed); a masked Edit run with Merge into Image, with paint reaching
   /// past the mask's edge, follows it, and paint being only its input, its result has none of it
-  /// outside the mask, and the stored source layer is the unpainted image. Prints PASS/FAIL lines.
+  /// outside the mask, and the stored source layer is the unpainted image, and it keeps the mask,
+  /// hidden. Along the way: Mask Colored Areas adds the paint's coverage to the mask in one undo
+  /// step; a hidden mask (Show/Hide Mask) is kept but the request has none, and a stroke shows it.
+  /// Prints PASS/FAIL lines.
   ///
   ///   Atelier --paint-check --project NAME --model M [--steps N] [--size S] [--quit]
   ///
@@ -187,6 +190,33 @@ extension Automation {
       undo.undo()
       check(model.canvasPaint == full, "undoing the fill takes it away")
 
+      // Mask Colored Areas: the paint's coverage into the mask, one step.
+      act { model.maskColoredAreas(undoManager: undo) }
+      let coloredMask = model.canvasMask?.coverage(width: size, height: size) ?? []
+      check(
+        undo.undoActionName == "Mask Colored Areas" && coloredMask.count == size * size
+          && coloredMask[Int(s * 0.7) * size + Int(s * 0.2)] != 0 && coloredMask[Int(s * 0.65) * size + Int(s * 0.65)] != 0
+          && coloredMask[Int(s * 0.3) * size + Int(s * 0.9)] == 0,
+        "Mask Colored Areas adds the painted areas to the mask, one step (\(undo.undoActionName))")
+      undo.undo()
+      check(model.canvasMask?.strokes == [maskA], "one ⌘Z takes Mask Colored Areas back")
+
+      // Show/Hide Mask: hidden, the mask stays but runs go without it.
+      act { model.setMaskHidden(true, undoManager: undo) }
+      check(
+        model.maskHidden && model.canvasMask?.strokes == [maskA] && model.screenRequest()?.mask == nil
+          && undo.undoActionName == "Hide Mask",
+        "a hidden mask is kept, and the run's request has no mask (\(undo.undoActionName))")
+      undo.undo()
+      check(!model.maskHidden && model.screenRequest()?.mask != nil, "undoing Hide Mask shows it, and runs take it again")
+      act { model.setMaskHidden(true, undoManager: undo) }
+      act { model.addMaskStrokes([.rect(CGRect(x: s * 0.85, y: s * 0.85, width: 8, height: 8))], undoManager: undo) }
+      check(!model.maskHidden && model.canvasMask?.strokes.count == 2, "a mask stroke while it's hidden shows it")
+      undo.undo()
+      check(model.maskHidden && model.canvasMask?.strokes == [maskA], "undoing that stroke hides it again")
+      undo.undo()
+      check(!model.maskHidden, "and undoing Hide Mask shows it")
+
       // Mask Opacity: only what shows.
       let opacity = model.maskOpacity
       model.maskOpacity = 0.25
@@ -308,6 +338,9 @@ extension Automation {
         check(false, "the merged result is stored as layers")
       }
       check(model.canvasPaint == nil, "the result on the canvas has no paint of its own")
+      check(
+        model.canvasMask != nil && model.maskHidden && model.screenRequest()?.mask == nil,
+        "the result keeps the mask it was made with, hidden, and the next run takes none")
       finish()
     }
   }

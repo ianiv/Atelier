@@ -389,6 +389,17 @@ nonisolated struct CanvasPaint: Codable, Sendable, Hashable {
     return rect.standardized
   }
 
+  /// Where the colours show on a `width` × `height` image (any alpha), as a mask stroke: Mask
+  /// Colored Areas. Nil when they show nowhere.
+  func maskStroke(width: Int, height: Int) -> CanvasMask.Stroke? {
+    guard let layer = layer(width: width, height: height),
+          let alpha = CanvasMask.alpha(of: layer, width: width, height: height)
+    else { return nil }
+    let coverage = alpha.map { $0 != 0 ? UInt8(255) : 0 }
+    guard coverage.contains(255), let png = CanvasMask.grayPNG(coverage, width: width, height: height) else { return nil }
+    return CanvasMask.Stroke(kind: .bitmap, points: [.zero], bitmap: png)
+  }
+
   static func png(_ image: CGImage) -> Data? {
     let data = NSMutableData()
     guard let destination = CGImageDestinationCreateWithData(data as CFMutableData, UTType.png.identifier as CFString, 1, nil)

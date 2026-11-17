@@ -361,8 +361,12 @@ struct CanvasView: View {
         .overlay(alignment: .bottom) {
           if model.canvasTool == .select {
             AutoMaskBar().padding(.bottom, 8).padding(.horizontal, 16)
-          } else if model.canvasLayer == .color, Self.colorBarShows(for: model.canvasTool) {
-            PaintBar().padding(.bottom, 8).padding(.horizontal, 16)
+          } else if Self.layerBarShows(for: model.canvasTool) {
+            if model.canvasLayer == .color {
+              PaintBar().padding(.bottom, 8).padding(.horizontal, 16)
+            } else {
+              MaskBar().padding(.bottom, 8).padding(.horizontal, 16)
+            }
           }
         }
     }
@@ -422,10 +426,10 @@ struct CanvasView: View {
     }
   }
 
-  /// Whether the colour bar (`PaintBar`) shows with the Color layer picked: on the Mac while Brush
-  /// or Eraser draws there; on iPad with any tool but Select, as the Pencil paints the layer
-  /// whatever the tool.
-  private static func colorBarShows(for tool: CanvasTool) -> Bool {
+  /// Whether the picked layer's bar (`PaintBar` for Color, `MaskBar` for Mask) shows: on the Mac
+  /// while Brush or Eraser draws there; on iPad with any tool but Select, as the Pencil paints the
+  /// layer whatever the tool.
+  private static func layerBarShows(for tool: CanvasTool) -> Bool {
     #if os(iOS)
       tool != .select
     #else
@@ -630,7 +634,7 @@ struct CanvasView: View {
   /// The mask in red over the image at Mask Opacity, with the stroke being painted.
   private func maskOverlay(imageSize _: CGSize, scale: Double) -> some View {
     ZStack {
-      if let maskTint {
+      if let maskTint, !model.maskHidden {
         Image(decorative: maskTint, scale: 1)
           .resizable()
           .interpolation(.none)
@@ -785,6 +789,8 @@ struct CanvasView: View {
     MaskCopyItems(model: model, undoManager: undoManager)
     Button("Fill Mask with Color") { model.fillMask(undoManager: undoManager) }
       .disabled(!model.canFillMask)
+    Button("Mask Colored Areas") { model.maskColoredAreas(undoManager: undoManager) }
+      .disabled(!model.canMaskColoredAreas)
     Divider()
     CanvasContentItems(
       noun: "Image", addToMoodboardTitle: "Add to Moodboard",

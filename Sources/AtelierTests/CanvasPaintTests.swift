@@ -168,6 +168,22 @@ struct CanvasPaintTests {
     #expect(CanvasRefineTests.rgba(baked) == CanvasRefineTests.rgba(blurred))
   }
 
+  @Test func coloredAreasBecomeAMask() throws {
+    // A soft-edged dab and a faint rectangle: any alpha counts; erased paint doesn't.
+    let paint = CanvasPaint(strokes: [
+      CanvasPaint.Stroke(kind: .brush, points: [CGPoint(x: 10, y: 10)], radius: 4, color: Self.red),
+      .rect(CGRect(x: 30, y: 30, width: 10, height: 10), color: CanvasPaint.Color(red: 0, green: 0, blue: 1, alpha: 0.1)),
+      CanvasPaint.Stroke(kind: .erase, points: [CGPoint(x: 35, y: 35)], radius: 2),
+    ])
+    let stroke = try #require(paint.maskStroke(width: 64, height: 64))
+    let mask = CanvasMask(strokes: [stroke]).coverage(width: 64, height: 64)
+    let layer = try #require(paint.layer(width: 64, height: 64))
+    let alpha = try #require(CanvasMask.alpha(of: layer, width: 64, height: 64))
+    #expect(mask == alpha.map { $0 != 0 ? 255 : 0 })
+    #expect(mask[10 * 64 + 10] == 255 && mask[32 * 64 + 32] == 255 && mask[35 * 64 + 35] == 0 && mask[50 * 64 + 50] == 0)
+    #expect(CanvasPaint(strokes: [CanvasPaint.Stroke(kind: .erase, points: [.zero], radius: 4)]).maskStroke(width: 8, height: 8) == nil)
+  }
+
   @Test func paintChangesWhatARunTakes() throws {
     let image = try CanvasRefineTests.pattern(width: 64, height: 64)
     let frame = CGSize(width: 64, height: 64)
