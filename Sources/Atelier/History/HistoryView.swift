@@ -200,20 +200,7 @@ struct HistoryView: View {
           }
         }
       }
-      .confirmationDialog(
-        pendingDelete?.count ?? 0 > 1
-          ? "Delete \(pendingDelete?.count ?? 0) items from the project?"
-          : pendingDelete?.first?.isVideo == true
-          ? "Delete this video from the project?" : "Delete this image from the project?",
-        isPresented: Binding(
-          get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
-        presenting: pendingDelete
-      ) { items in
-        Button("Delete", role: .destructive) { delete(items) }
-        Button("Cancel", role: .cancel) { pendingDelete = nil }
-      } message: { items in
-        Text("\(items.count > 1 ? "They and their" : items.first?.isVideo == true ? "The video and its" : "The image and its") settings are removed from “\(history.project.name)”\(timelineNote(items)). This can't be undone.")
-      }
+      .historyDeleteConfirmation($pendingDelete) { delete($0) }
       .alert(
         "Something went wrong",
         isPresented: Binding(get: { deleteError != nil }, set: { if !$0 { deleteError = nil } }),
@@ -899,6 +886,44 @@ struct HistoryView: View {
     timelines.append(items, undoManager: undoManager)
   }
 
+  private func delete(_ items: [HistoryItem]) {
+    pendingDelete = nil
+    Task {
+      do {
+        try await create.deleteHistoryItems(items)
+      } catch {
+        deleteError = error.localizedDescription
+      }
+      selectOnly(history.currentItem?.tensorId ?? filtered.first?.tensorId)
+    }
+  }
+}
+
+/// History's delete confirmation, shared with Create's strip and canvas so a delete asks the same
+/// way wherever it starts: confirming calls `delete` with the items.
+struct HistoryDeleteConfirmation: ViewModifier {
+  @Environment(HistoryStore.self) private var history
+  @Environment(TimelineStore.self) private var timelines
+  @Binding var pending: [HistoryItem]?
+  let delete: ([HistoryItem]) -> Void
+
+  func body(content: Content) -> some View {
+    content.confirmationDialog(
+      pending?.count ?? 0 > 1
+        ? "Delete \(pending?.count ?? 0) items from the project?"
+        : pending?.first?.isVideo == true
+        ? "Delete this video from the project?" : "Delete this image from the project?",
+      isPresented: Binding(
+        get: { pending != nil }, set: { if !$0 { pending = nil } }),
+      presenting: pending
+    ) { items in
+      Button("Delete", role: .destructive) { delete(items) }
+      Button("Cancel", role: .cancel) { pending = nil }
+    } message: { items in
+      Text("\(items.count > 1 ? "They and their" : items.first?.isVideo == true ? "The video and its" : "The image and its") settings are removed from “\(history.project.name)”\(timelineNote(items)). This can't be undone.")
+    }
+  }
+
   /// ", and from the timeline “Timeline 1”" when deleting takes clips off timelines.
   private func timelineNote(_ items: [HistoryItem]) -> String {
     let names = Set(items.filter(\.isVideo).flatMap { timelines.timelines(using: $0.tensorId) }.map(\.name))
@@ -906,18 +931,12 @@ struct HistoryView: View {
     let list = names.sorted().map { "“\($0)”" }.formatted(.list(type: .and))
     return ", and from the timeline\(names.count > 1 ? "s" : "") \(list)"
   }
+}
 
-  private func delete(_ items: [HistoryItem]) {
-    pendingDelete = nil
-    Task {
-      do {
-        try await history.delete(items)
-        timelines.removeClips(Set(items.filter(\.isVideo).map(\.tensorId)))
-      } catch {
-        deleteError = error.localizedDescription
-      }
-      selectOnly(history.currentItem?.tensorId ?? filtered.first?.tensorId)
-    }
+extension View {
+  /// Asks before deleting `pending` from the project, as History does (`HistoryDeleteConfirmation`).
+  func historyDeleteConfirmation(_ pending: Binding<[HistoryItem]?>, delete: @escaping ([HistoryItem]) -> Void) -> some View {
+    modifier(HistoryDeleteConfirmation(pending: pending, delete: delete))
   }
 }
 

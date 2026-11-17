@@ -154,6 +154,7 @@ struct CanvasView: View {
   /// A video dropped on the canvas, choosing how to upscale it.
   @State private var droppedVideo: DroppedVideo?
   @State private var videoError: String?
+  @State private var deleteError: String?
   @Environment(\.undoManager) private var undoManager
   /// The brush stroke being drawn, in image pixels, until it's added to the mask.
   @State private var liveStroke: CanvasMask.Stroke?
@@ -364,6 +365,22 @@ struct CanvasView: View {
       isPresented: Binding(get: { videoError != nil }, set: { if !$0 { videoError = nil } }),
       actions: { Button("OK") { videoError = nil } },
       message: { Text(videoError ?? "") })
+    // Delete in the strip's and the canvas's menus: History's confirmation, and its error.
+    .historyDeleteConfirmation(Bindable(model).pendingHistoryDelete) { items in
+      model.pendingHistoryDelete = nil
+      Task {
+        do {
+          try await model.deleteHistoryItems(items, movesCanvas: true)
+        } catch {
+          deleteError = error.localizedDescription
+        }
+      }
+    }
+    .alert(
+      "Something went wrong",
+      isPresented: Binding(get: { deleteError != nil }, set: { if !$0 { deleteError = nil } }),
+      actions: { Button("OK") { deleteError = nil } },
+      message: { Text(deleteError ?? "") })
     .sheet(isPresented: Bindable(model).upscalingCanvasImage) {
       ImageUpscaleSheet(width: model.image?.width ?? 0, height: model.image?.height ?? 0)
     }
@@ -659,6 +676,11 @@ struct CanvasView: View {
       addToMoodboard: { model.addCanvasToMoodboard() })
     Divider()
     ZoomMenuItems(canvas: canvas)
+    Divider()
+    // The image's own History step; a video's frame isn't one (its clip's menu deletes the clip).
+    let deletable = model.imageItem.flatMap { $0.isVideo ? nil : $0 }
+    Button("Delete Image", role: .destructive) { model.pendingHistoryDelete = deletable.map { [$0] } }
+      .disabled(deletable == nil)
   }
 
   /// Adds the image to Photos as a PNG carrying its settings, like Save Image.
@@ -1143,6 +1165,8 @@ struct RecentStrip: View {
         Button("Copy Image") { Task { await history.copyImage(item) } }
           .disabled(!item.hasImage)
         MaskMenu(item: item, undoManager: undoManager)
+        Divider()
+        Button("Delete", role: .destructive) { model.pendingHistoryDelete = [item] }
       }
   }
 }

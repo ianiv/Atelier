@@ -515,6 +515,8 @@ struct CanvasClipMenu: View {
     // A clip always fills the frame: canvas zoom doesn't reach it.
     ZoomMenuItems(canvas: model.canvas)
       .disabled(true)
+    Divider()
+    Button("Delete Video", role: .destructive) { model.pendingHistoryDelete = [item] }
   }
 }
 

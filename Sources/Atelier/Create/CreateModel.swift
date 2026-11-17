@@ -948,6 +948,41 @@ final class CreateModel {
     if let input = entryInput(.cleared) { recordEntry(input) }
   }
 
+  /// History items Create's strip or canvas asked to delete, while History's confirmation is up
+  /// (`HistoryDeleteConfirmation`).
+  var pendingHistoryDelete: [HistoryItem]?
+
+  /// Deletes History items: the steps (`HistoryStore.delete`, one transaction per clip), then their
+  /// clips come off the timelines. History's Delete and Create's both come here. From Create
+  /// (`movesCanvas`), when the canvas showed one of them it moves to the step History then
+  /// selects: the one now current (a deleted current step hands over to its parent), else the
+  /// newest. The canvas's clip player is unloaded first when it holds a deleted clip, so none of its
+  /// frames stays up or is read from a step that's gone.
+  func deleteHistoryItems(_ items: [HistoryItem], movesCanvas: Bool = false) async throws {
+    let deleted = Set(items.flatMap { [$0.tensorId] + ($0.clip?.frames ?? []) })
+    let canvasShowedOne = movesCanvas && !imageIsPreview && imageStep.map { $0.project == history.project.name && deleted.contains($0.tensorId) } == true
+    if movesCanvas, let loaded = canvasPlayback.loadedTensorId, deleted.contains(loaded) { canvasPlayback.reset() }
+    defer { if canvasShowedOne { showAfterDelete() } }
+    try await history.delete(items)
+    timelines.removeClips(Set(items.filter(\.isVideo).map(\.tensorId)))
+  }
+
+  /// Puts the step History selects after a delete on the canvas (see `deleteHistoryItems`), or
+  /// empties the canvas when the project has none left. Nothing is recorded: the step is already
+  /// in the project, and an empty canvas here isn't a Clear the user made.
+  private func showAfterDelete() {
+    guard let next = history.currentItem ?? history.items.first else {
+      stopFollowingRun()
+      imageStep = nil
+      lastSavedTensorId = nil
+      image = nil
+      canvasIsImported = false
+      canvas.zoomToFit()
+      return
+    }
+    if next.isEntry { restore(entry: next) } else { show(next) }
+  }
+
   /// Sets the output size to the canvas image's, in whole 64-pixel units.
   func matchSizeToImage(undoManager: UndoManager?) {
     guard let image, let descriptor = SettingsRegistry.byID["size"] else { return }
