@@ -583,7 +583,7 @@ final class ModelLibrary {
     _ source: URL, modelName: String, displayName: String, into folder: URL,
     progress: @escaping @Sendable (Float) -> Void
   ) async throws -> ModelZoo.Specification {
-    if MOSSImporter.isMOSS(source) {
+    func convertMOSS() throws -> ModelZoo.Specification {
       try MOSSImporter.convert(source, to: folder.appendingPathComponent(modelName + "_f16.ckpt").path, progress: progress)
       guard
         let specification = MOSSImporter.specification(
@@ -591,12 +591,15 @@ final class ModelLibrary {
       else { throw ImportError.unconvertible("MOSS Image") }
       return specification
     }
+    if MOSSImporter.isMOSS(source) { return try convertMOSS() }
     let importer = ModelImporter(
       filePath: source.path, modelName: modelName, isTextEncoderCustomized: false,
       autoencoderFilePath: nil, textEncoderFilePath: nil, textEncoder2FilePath: nil,
       outputDirectory: folder.path)
     // Inspect first: the importer traps on families it can't convert.
     let detected = try importer.inspect().version
+    // A MOSS checkpoint isMOSS turned away: MOSSImporter says what about it it can't convert.
+    if detected == .mossImage { return try convertMOSS() }
     guard !unconvertibleVersions.contains(detected) else {
       throw ImportError.unconvertible(ModelZoo.humanReadableNameForVersion(detected))
     }
