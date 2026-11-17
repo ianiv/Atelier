@@ -162,7 +162,7 @@ final class ClipPlayback {
   /// The clip's first frame couldn't be read.
   private(set) var failed = false
   var isMuted = false {
-    didSet { audioPlayer.volume = isMuted ? 0 : 1 }
+    didSet { if engineState == .running { audioPlayer.volume = isMuted ? 0 : 1 } }
   }
 
   /// The tensor of the frame on screen, for `--canvas-clip-check`.
@@ -188,6 +188,13 @@ final class ClipPlayback {
   @ObservationIgnored private let engine = AVAudioEngine()
   @ObservationIgnored private let audioPlayer = AVAudioPlayerNode()
   @ObservationIgnored private var soundtrack: AVAudioPCMBuffer?
+  /// The engine's start and stop wait on coreaudiod, which can stop answering (a coreaudiod
+  /// stuck for a day froze the app on Play, 2026-11-17), and so can graph changes while one is
+  /// waiting. So all three run on this queue, never the main actor, and the main actor touches
+  /// the player only once the engine is running. Until then the picture runs on the system clock.
+  @ObservationIgnored private let audioQueue = DispatchQueue(label: "Atelier.ClipPlayback.audio")
+  @ObservationIgnored private var engineState = EngineState.stopped
+  private enum EngineState { case stopped, starting, running }
 
   /// How far ahead frames are decoded, and how many at once.
   private static let lookahead = 24
@@ -209,7 +216,11 @@ final class ClipPlayback {
     audioTask?.cancel()
     audioTask = nil
     soundtrack = nil
-    engine.stop()
+    if engineState != .stopped {
+      engineState = .stopped
+      nonisolated(unsafe) let engine = engine
+      audioQueue.async { engine.stop() }
+    }
     project = nil
     frameIds = []
     duration = 0
@@ -241,9 +252,11 @@ final class ClipPlayback {
               let buffer = Self.buffer(samples, sampleRate: audioSampleRate, length: length)
         else { return }
         self.soundtrack = buffer
-        self.engine.disconnectNodeOutput(self.audioPlayer)
-        self.engine.connect(self.audioPlayer, to: self.engine.mainMixerNode, format: buffer.format)
-        self.audioPlayer.volume = self.isMuted ? 0 : 1
+        nonisolated(unsafe) let engine = self.engine, player = self.audioPlayer, format = buffer.format
+        self.audioQueue.async {
+          engine.disconnectNodeOutput(player)
+          engine.connect(player, to: engine.mainMixerNode, format: format)
+        }
         // Already playing on the system clock: the sound takes over from here.
         if self.isPlaying { self.startClock(at: self.clockTime) }
       }
@@ -261,7 +274,7 @@ final class ClipPlayback {
   func pause() {
     if isPlaying { time = clockTime }
     isPlaying = false
-    audioPlayer.stop()
+    if engineState == .running { audioPlayer.stop() }
   }
 
   func togglePlaying() {
@@ -310,11 +323,15 @@ final class ClipPlayback {
     clockStart = start
     clockDate = Date()
     audioClock = false
-    audioPlayer.stop()
+    // The engine stops on its own when the output device changes.
+    if engineState == .running, !engine.isRunning { engineState = .stopped }
+    if engineState == .running { audioPlayer.stop() }
     guard let soundtrack else { return }
-    if !engine.isRunning {
-      do { try engine.start() } catch { return }
+    guard engineState == .running else {
+      startEngine()
+      return
     }
+    audioPlayer.volume = isMuted ? 0 : 1
     // From here to the end, then the whole soundtrack over and over.
     let offset = Int(start * soundtrack.format.sampleRate)
     if let rest = Self.tail(of: soundtrack, from: offset) {
@@ -323,6 +340,23 @@ final class ClipPlayback {
     audioPlayer.scheduleBuffer(soundtrack, at: nil, options: .loops)
     audioPlayer.play()
     audioClock = true
+  }
+
+  /// Starts the engine on `audioQueue`; once it's running, a clip still playing moves over to
+  /// the sound's clock. A start that never returns leaves the clip playing silently.
+  private func startEngine() {
+    guard engineState == .stopped else { return }
+    engineState = .starting
+    let current = generation
+    nonisolated(unsafe) let engine = engine
+    audioQueue.async { [weak self] in
+      let started = (try? engine.start()) != nil
+      Task { @MainActor in
+        guard let self, current == self.generation, self.engineState == .starting else { return }
+        self.engineState = started ? .running : .stopped
+        if started, self.isPlaying { self.startClock(at: self.clockTime) }
+      }
+    }
   }
 
   /// Where the clock is in the clip, wrapped round as it loops.
