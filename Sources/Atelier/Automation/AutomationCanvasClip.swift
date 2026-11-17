@@ -4,16 +4,17 @@ import Foundation
 import SwiftUI
 
 /// `--canvas-clip-check --project NAME [--snapshot-dir DIR] [--quit]` checks the Create canvas's
-/// shared clip player and opening videos from History, as PASS/FAIL lines: picking another clip
-/// drops the previous video while the next one loads (the old clip never stands in for the new
-/// one), a quick pick of B then C ends on C even after B's encode finishes, and opening a video
-/// made from an input image (History's double-click) shows the clip rather than its input still,
-/// while a rerun and an image edit step still bring back their input in Edit mode. It picks the
-/// project's shortest clips itself. The project needs at least three video clips (five for the
-/// quick-switch part), including one made from an input image. Run it on a scratch copy: copy a
-/// video project's `.sqlite3` (and its `-wal`/`-shm`) under a new name, so none of its clips are
-/// cached and the slow encode path is exercised; afterwards delete the copy and its
-/// `NAME-*` files in the Clips cache. `--snapshot-dir` saves window shots while loading and after.
+/// shared clip player and opening videos from History, as PASS/FAIL lines: a picked clip shows its
+/// first frame straight from the project (no video file is written first), picking another
+/// drops the previous clip (the old one never stands in for the new one), playing keeps up with
+/// the clip's frame rate, pause, seeking and the frame steps land on the right frame, a quick pick of B then C ends
+/// on C, and opening a video made from an input image (History's double-click) shows the clip
+/// rather than its input still, while a rerun and an image edit step still bring back their input
+/// in Edit mode. It picks the project's shortest clips itself. The project needs at least three
+/// video clips (five for the quick-switch part), including one made from an input image. It writes
+/// nothing to the project, but run it on a scratch copy anyway (`--project` with a copy of a video
+/// project's `.sqlite3`, `-wal` and `-shm`). `--snapshot-dir` saves window shots while playing
+/// and after.
 extension Automation {
   static func canvasClipCheck(
     _ model: CreateModel, navigation: Navigation, layouts: LayoutStore, presets: PresetStore
@@ -55,10 +56,15 @@ extension Automation {
       let playback = model.canvasPlayback
       let originalMode = model.canvasMode
       defer { model.canvasMode = originalMode }
-      func currentURL() -> String {
-        (playback.player.currentItem?.asset as? AVURLAsset)?.url.lastPathComponent ?? "none"
-      }
       func name(_ item: HistoryItem) -> String { "\(item.tensorId)" }
+      @MainActor func shown() -> String { playback.shownFrameTensorId.map(String.init) ?? "none" }
+      /// Waits for `item`'s frame `index` to be on screen; the time it took, nil if it never was.
+      @MainActor func waitForFrame(_ index: Int, of item: HistoryItem, seconds: Double = 5) async -> Double? {
+        let start = Date()
+        let id = item.clip?.frames[index]
+        guard await wait(seconds: seconds, until: { playback.shownFrameTensorId == id }) else { return nil }
+        return Date().timeIntervalSince(start)
+      }
 
       let videos = model.history.items.filter { $0.isVideo && model.canUse($0) }
       log("project \(model.history.project.name): \(videos.count) usable clips")
@@ -66,57 +72,82 @@ extension Automation {
         log("FAIL need at least three usable clips")
         return finish()
       }
-      // Prefer shorter clips: their encode is quicker but still not instant.
       let picks = videos.sorted { ($0.clip?.frames.count ?? 0) < ($1.clip?.frames.count ?? 0) }
       let a = picks[0], b = picks[1], c = picks[2]
-      log("A \(name(a)) (\(a.clip?.frames.count ?? 0) frames), B \(name(b)) (\(b.clip?.frames.count ?? 0)), C \(name(c)) (\(c.clip?.frames.count ?? 0))")
+      log("A \(name(a)) (\(a.clip?.frames.count ?? 0) frames), B \(name(b)) (\(b.clip?.frames.count ?? 0), audio \(b.clip?.audioId != nil)), C \(name(c)) (\(c.clip?.frames.count ?? 0))")
 
       // Picking clips, as the strip does.
       model.use(a, restoreInput: false)
-      check(await wait(seconds: 600) { playback.isReady(for: a.tensorId) }, "A loads on the canvas (\(currentURL()))")
+      let aFirst = await waitForFrame(0, of: a)
+      check(aFirst.map { $0 < 1 } ?? false, "A's first frame shows from the project (\(aFirst.map { String(format: "%.0f ms", $0 * 1000) } ?? "never"))")
       check(model.canvasClip?.tensorId == a.tensorId, "the canvas clip is A")
       try? await Task.sleep(for: .milliseconds(500))
 
       model.use(b, restoreInput: false)
-      // Watch the load: A must never stand in for B.
-      var staleSamples = 0, samples = 0, sawNoItem = false
-      let loadedB = await wait(seconds: 600) {
+      // Watch the load: A's frames must never stand in for B.
+      let aFrames = Set(a.clip?.frames ?? [])
+      var staleSamples = 0, samples = 0
+      let bFirstId = b.clip?.frames.first
+      let loadedB = await wait(seconds: 5) {
         samples += 1
-        // Ready with another clip loaded: what showing on `isReady` alone would have played.
-        if playback.isReady, playback.loadedTensorId != b.tensorId { staleSamples += 1 }
-        if playback.player.currentItem == nil { sawNoItem = true }
-        return playback.isReady(for: b.tensorId)
+        if let id = playback.shownFrameTensorId, aFrames.contains(id) { staleSamples += 1 }
+        return playback.shownFrameTensorId == bFirstId
       }
-      check(loadedB, "B loads after A")
-      check(samples > 3, "B's load took a while (\(samples) samples of 20 ms), so it was uncached")
+      check(loadedB, "B's first frame shows after A (\(samples) samples of 20 ms)")
       // The first sample comes before the view has re-rendered with B (its task resets then).
-      check(staleSamples <= 1, "A stayed loaded for \(staleSamples) of \(samples) samples while B loaded")
-      check(sawNoItem, "the player held no item during B's load")
-      check(currentURL().contains("-\(b.tensorId)-"), "the player plays B's file (\(currentURL()))")
+      check(staleSamples <= 1, "A's frame stayed up for \(staleSamples) of \(samples) samples while B loaded")
 
-      // Quick B then C, both uncached: the next two clips.
+      // Playing: the clock runs and the picture keeps up with it.
+      playback.play()
+      var seen = Set<Int64>()
+      let playStart = Date()
+      while Date().timeIntervalSince(playStart) < 2 {
+        if let id = playback.shownFrameTensorId { seen.insert(id) }
+        try? await Task.sleep(for: .milliseconds(10))
+      }
+      let expected = Int(2 * playback.framesPerSecond)
+      log("played 2 s: time \(String(format: "%.2f", playback.time)) s, \(seen.count) distinct frames of \(expected)")
+      check(playback.isPlaying && playback.time > 0.5, "B plays (time \(String(format: "%.2f", playback.time)))")
+      check(seen.count >= expected * 3 / 4, "the picture keeps up: \(seen.count) of \(expected) frames shown in 2 s")
+      if let snapshotDir {
+        try? FileManager.default.createDirectory(at: snapshotDir, withIntermediateDirectories: true)
+        snapshot(to: snapshotDir.appendingPathComponent("playing.png"))
+      }
+      playback.pause()
+      let pausedAt = playback.time
+      try? await Task.sleep(for: .milliseconds(500))
+      check(!playback.isPlaying && playback.time == pausedAt, "pause holds the time (\(String(format: "%.2f", pausedAt)))")
+      let count = b.clip?.frames.count ?? 1
+      let target = count / 2
+      playback.seek(to: Double(target) / playback.framesPerSecond + 0.001)
+      let seekTime = await waitForFrame(target, of: b)
+      check(seekTime != nil, "seeking while paused shows frame \(target) (\(seekTime.map { String(format: "%.0f ms", $0 * 1000) } ?? "shown \(shown())"))")
+      check(playback.pauseOnFrame(count: count) == target, "the frame on screen is the one Use This Frame takes")
+      playback.step(1)
+      check(await waitForFrame(target + 1, of: b) != nil, "Next Frame shows frame \(target + 1) (\(shown()))")
+      playback.step(-1)
+      playback.step(-1)
+      check(await waitForFrame(target - 1, of: b) != nil, "Previous Frame twice shows frame \(target - 1) (\(shown()))")
+      check(playback.pauseOnFrame(count: count) == target - 1, "Use This Frame takes the stepped-to frame")
+      playback.seek(to: 0)
+      playback.step(-1)
+      check(await waitForFrame(0, of: b) != nil, "Previous Frame stops at the first frame (\(shown()))")
+
+      // Quick B then C: the next two clips.
       guard picks.count >= 5 else {
-        log("only \(picks.count) clips: B-then-C done with C cached? skipping")
+        log("only \(picks.count) clips: quick switch skipped")
         return finish()
       }
       let b2 = picks[3], c2 = picks[4]
-      log("quick switch: B \(name(b2)) then C \(name(c2)), both uncached")
+      log("quick switch: B \(name(b2)) then C \(name(c2))")
       model.use(b2, restoreInput: false)
       try? await Task.sleep(for: .milliseconds(150))
-      let b2Ready = playback.isReady(for: b2.tensorId)
-      check(!b2Ready, "B isn't ready 150 ms after picking it")
-      check(playback.loadedTensorId != b.tensorId, "the earlier clip was dropped (loaded \(playback.loadedTensorId.map(String.init) ?? "nil"))")
-      if let snapshotDir {
-        try? FileManager.default.createDirectory(at: snapshotDir, withIntermediateDirectories: true)
-        snapshot(to: snapshotDir.appendingPathComponent("loading.png"))
-      }
       model.use(c2, restoreInput: false)
-      check(await wait(seconds: 600) { playback.isReady(for: c2.tensorId) }, "C loads")
-      // Give B's encode time to finish and try to take over.
-      try? await model.history.videoFile(for: b2)
-      try? await Task.sleep(for: .seconds(2))
-      check(playback.loadedTensorId == c2.tensorId, "after B's encode finishes the canvas still has C (loaded \(playback.loadedTensorId.map(String.init) ?? "nil"))")
-      check(currentURL().contains("-\(c2.tensorId)-"), "the player plays C's file (\(currentURL()))")
+      let cFirst = await waitForFrame(0, of: c2)
+      check(cFirst != nil, "C's first frame shows")
+      try? await Task.sleep(for: .seconds(1))
+      check(playback.loadedTensorId == c2.tensorId, "a second later the canvas still has C (loaded \(playback.loadedTensorId.map(String.init) ?? "nil"))")
+      check(playback.shownFrameTensorId == c2.clip?.frames.first, "and shows C's first frame (\(shown()))")
       check(model.canvasClip?.tensorId == c2.tensorId, "the canvas clip is C")
       if let snapshotDir { snapshot(to: snapshotDir.appendingPathComponent("c.png")) }
 
@@ -132,7 +163,7 @@ extension Automation {
         check(model.canvasMode != .edit, "History open: not in Edit mode (\(model.canvasMode))")
         log("current \(model.history.currentTensorId.map(String.init) ?? "nil"), clip frames first \(made.clip?.frames.first ?? 0) last \(made.clip?.frames.last ?? 0)")
         check(model.history.currentTensorId != made.inputTensorId, "History open: the input isn't current")
-        check(await wait(seconds: 600) { playback.isReady(for: made.tensorId) }, "History open: the clip plays (\(currentURL()), playing \(playback.isPlaying))")
+        check(await waitForFrame(0, of: made) != nil, "History open: the clip shows (\(shown()), playing \(playback.isPlaying))")
         if let snapshotDir { snapshot(to: snapshotDir.appendingPathComponent("history-open.png")) }
 
         // A rerun (newSeed true) passes restoreInput true: that path restores the input.

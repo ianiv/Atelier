@@ -398,6 +398,13 @@ final nonisolated class Project: Sendable {
     return tensor(id: tensorId).flatMap(ImageTensor.cgImage(from:))
   }
 
+  /// A clip frame for playback (`ClipPlayback`): read through a store opened for it alone, like
+  /// a canvas read, so several frames decode at once instead of one after another behind
+  /// `storeAccess`, and a read the player no longer wants is skipped.
+  func clipFrame(tensorId: Int64) -> CGImage? {
+    Self.$isCanvasRead.withValue(true) { image(tensorId: tensorId) }
+  }
+
   /// Whether the step whose image is `tensorId` has a layer finer than its image's own pixels (a
   /// zoomed refine, or a Draw Things upscale), so a full-detail read differs from the image.
   func hasDetail(tensorId: Int64) -> Bool {

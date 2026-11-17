@@ -1,11 +1,14 @@
 import AVFoundation
-import AVKit
+@preconcurrency import NNC
 import SwiftUI
 
-/// Plays a clip from History or the canvas, looping, over the first frame until the video file
-/// is ready. The system player only draws the video: its own controls would take over the context
-/// menu once one of them has focus, so the transport is drawn here and the menu (Save Video, Use
-/// This Frame as Input, …) stays Atelier's.
+/// Plays a clip from History or the canvas, looping, straight from the project: its frames are
+/// decoded from their tensors just ahead of the playhead and its soundtrack from its audio
+/// tensor, so a clip plays at once instead of after it's encoded to a video file (which only
+/// Save Video, drags and exports need). The frames are drawn here rather than by the system
+/// player, whose own controls showed over the video beside this transport and took over the
+/// context menu once one of them had focus; the menu (Save Video, Use This Frame as Input, …)
+/// stays Atelier's.
 struct ClipPlayer: View {
   let item: HistoryItem
   /// Starts playing once loaded. Neither the canvas nor History's detail does: both wait for Play.
@@ -16,7 +19,6 @@ struct ClipPlayer: View {
   @Environment(HistoryStore.self) private var history
   @Environment(CreateModel.self) private var model
   @State private var ownPlayback = ClipPlayback()
-  @State private var failure: String?
   @State private var hovering = false
 
   private var playback: ClipPlayback { onCanvas ? model.canvasPlayback : ownPlayback }
@@ -25,10 +27,16 @@ struct ClipPlayer: View {
     ZStack {
       // The canvas's playback is shared, so it may still hold the clip shown before this one.
       if playback.isReady(for: item.tensorId) {
-        VideoPlayer(player: playback.player)
-          .allowsHitTesting(false)
+        ClipFrames(item: item, playback: playback)
           .contentShape(.rect)
           .onTapGesture { playback.togglePlaying() }
+          .overlay {
+            if playback.failed {
+              Label("The video's frames couldn't be read.", systemImage: "exclamationmark.triangle")
+                .padding(8)
+                .glassEffect(in: .rect(cornerRadius: 8))
+            }
+          }
           .overlay(alignment: .bottom) {
             // Always there on iPad, where there's no pointer to hover with.
             if hovering || !playback.isPlaying || Self.alwaysShowsControls {
@@ -39,15 +47,6 @@ struct ClipPlayer: View {
           .onHover { hovering = $0 }
       } else {
         Thumbnail(item: item, half: false, fill: false)
-          .overlay {
-            if let failure {
-              Label(failure, systemImage: "exclamationmark.triangle")
-                .padding(8)
-                .glassEffect(in: .rect(cornerRadius: 8))
-            } else {
-              ProgressView().controlSize(.small)
-            }
-          }
       }
     }
     .contextMenu {
@@ -58,22 +57,11 @@ struct ClipPlayer: View {
       }
     }
     .task(id: item.tensorId) {
-      failure = nil
-      // Drop the previous clip now rather than when this one loads: encoding an uncached clip
-      // can take seconds, and meanwhile the old video would stand in for this one.
-      if playback.loadedTensorId != item.tensorId { playback.reset() }
-      do {
-        let url = try await history.videoFile(for: item)
-        // A newer clip took the view while this one encoded; loading now would replace it.
-        guard !Task.isCancelled else { return }
-        playback.load(
-          url, tensorId: item.tensorId, framesPerSecond: item.clip?.framesPerSecond ?? 24,
-          duration: item.clip?.duration ?? 0, play: autoplay)
-      } catch {
-        // Same as above: a clip the user has moved off mustn't show its error over the new one.
-        guard !Task.isCancelled else { return }
-        failure = error.localizedDescription
-      }
+      // Coming back to the clip the canvas already has keeps its place.
+      guard !playback.isReady(for: item.tensorId), let clip = item.clip else { return }
+      playback.load(
+        clip, tensorId: item.tensorId, project: history.project,
+        audioSampleRate: RemoteModelTraits.audioSampleRate(of: item.sidecar.model), play: autoplay)
     }
     .onDisappear { playback.pause() }
   }
@@ -85,6 +73,30 @@ struct ClipPlayer: View {
   #endif
 }
 
+/// The clip's frames, fitted, on black; its first frame's thumbnail until that's decoded.
+private struct ClipFrames: View {
+  let item: HistoryItem
+  let playback: ClipPlayback
+
+  var body: some View {
+    // Paced by the display, and paused by SwiftUI while the view isn't on screen.
+    TimelineView(.animation(paused: !playback.isPlaying)) { timeline in
+      ZStack {
+        Color.black
+        if let frame = playback.frame {
+          Image(decorative: frame, scale: 1)
+            .resizable()
+            .interpolation(.high)
+            .aspectRatio(contentMode: .fit)
+        } else {
+          Thumbnail(item: item, half: false, fill: false)
+        }
+      }
+      .onChange(of: timeline.date) { playback.displayDidTick() }
+    }
+  }
+}
+
 /// Play/pause, a scrubber with the time, and mute, over the bottom of the video.
 private struct ClipTransport: View {
   let playback: ClipPlayback
@@ -92,10 +104,14 @@ private struct ClipTransport: View {
 
   var body: some View {
     HStack(spacing: 8) {
+      Button("Previous Frame", systemImage: "backward.frame.fill") { playback.step(-1) }
+        .touchTarget()
       Button(playback.isPlaying ? "Pause" : "Play", systemImage: playback.isPlaying ? "pause.fill" : "play.fill") {
         playback.togglePlaying()
       }
       .touchTarget()
+      Button("Next Frame", systemImage: "forward.frame.fill") { playback.step(1) }
+        .touchTarget()
       Slider(
         value: Binding(get: { playback.time }, set: { playback.seek(to: $0) }),
         in: 0...max(duration, 0.01)
@@ -121,13 +137,16 @@ private struct ClipTransport: View {
   }
 }
 
-/// A looping player for one clip.
+/// A looping player for one clip, reading it from its project. Frames are decoded a second
+/// ahead of the playhead, several at once: one frame's fpzip tensor takes ~75 ms to read
+/// (1280×832), longer than a frame lasts at 24 fps, but each read opens the store on its own
+/// (`Project.clipFrame`), so four together keep up. The soundtrack, when there is one, is the
+/// clock (an `AVAudioPlayerNode` looping it), so the picture follows the sound; a silent clip
+/// runs on the system clock. A frame that isn't decoded in time is skipped: the one before it
+/// stays up.
 @MainActor
 @Observable
 final class ClipPlayback {
-  let player = AVQueuePlayer()
-  @ObservationIgnored private var looper: AVPlayerLooper?
-  @ObservationIgnored private var timeObserver: Any?
   private(set) var isReady = false
   /// The clip loaded, by first-frame tensor id, so a view can tell its own clip from the one a
   /// shared playback held before.
@@ -136,9 +155,44 @@ final class ClipPlayback {
   /// Seconds into the clip, kept current while it plays.
   private(set) var time: Double = 0
   private(set) var framesPerSecond: Double = 24
-  private var duration: Double = 0
+  /// The frame on screen, nil until the clip's first one is decoded.
+  private(set) var frame: CGImage?
+  /// The clip's first frame couldn't be read.
+  private(set) var failed = false
   var isMuted = false {
-    didSet { player.isMuted = isMuted }
+    didSet { audioPlayer.volume = isMuted ? 0 : 1 }
+  }
+
+  /// The tensor of the frame on screen, for `--canvas-clip-check`.
+  @ObservationIgnored private(set) var shownFrameTensorId: Int64?
+  @ObservationIgnored private var project: Project?
+  @ObservationIgnored private var frameIds: [Int64] = []
+  @ObservationIgnored private var duration: Double = 0
+  @ObservationIgnored private var shownIndex: Int?
+  @ObservationIgnored private var decoded: [Int: CGImage] = [:]
+  /// Decodes running, by frame index, each with a token so a cancelled one that finishes late
+  /// can't clear the entry of a newer one for the same frame.
+  @ObservationIgnored private var decoding: [Int: (token: Int, task: Task<Void, Never>)] = [:]
+  @ObservationIgnored private var nextToken = 0
+  /// Goes up when the clip changes, so nothing of the old one lands in the new one.
+  @ObservationIgnored private var generation = 0
+  @ObservationIgnored private var audioTask: Task<Void, Never>?
+
+  /// The clock: the clip time it started at, and when (the system clock), or the audio player's
+  /// own time since it started when it plays the soundtrack.
+  @ObservationIgnored private var clockStart: Double = 0
+  @ObservationIgnored private var clockDate = Date()
+  @ObservationIgnored private var audioClock = false
+  @ObservationIgnored private let engine = AVAudioEngine()
+  @ObservationIgnored private let audioPlayer = AVAudioPlayerNode()
+  @ObservationIgnored private var soundtrack: AVAudioPCMBuffer?
+
+  /// How far ahead frames are decoded, and how many at once.
+  private static let lookahead = 24
+  private static let concurrentDecodes = 4
+
+  init() {
+    engine.attach(audioPlayer)
   }
 
   func isReady(for tensorId: Int64) -> Bool { isReady && loadedTensorId == tensorId }
@@ -146,45 +200,66 @@ final class ClipPlayback {
   /// Unloads the clip, so nothing plays until the next `load`.
   func reset() {
     pause()
-    looper?.disableLooping()
-    looper = nil
-    player.removeAllItems()
+    generation += 1
+    for entry in decoding.values { entry.task.cancel() }
+    decoding = [:]
+    decoded = [:]
+    audioTask?.cancel()
+    audioTask = nil
+    soundtrack = nil
+    engine.stop()
+    project = nil
+    frameIds = []
+    duration = 0
+    frame = nil
+    shownIndex = nil
+    shownFrameTensorId = nil
+    failed = false
     isReady = false
     time = 0
     loadedTensorId = nil
   }
 
-  func load(_ url: URL, tensorId: Int64, framesPerSecond: Double, duration: Double, play: Bool) {
-    self.framesPerSecond = framesPerSecond
-    self.duration = duration
-    // A looper left looping keeps re-inserting its items into the player.
-    looper?.disableLooping()
-    player.removeAllItems()
-    looper = AVPlayerLooper(player: player, templateItem: AVPlayerItem(url: url))
-    if timeObserver == nil {
-      timeObserver = player.addPeriodicTimeObserver(
-        forInterval: CMTime(value: 1, timescale: 30), queue: .main
-      ) { [weak self] time in
-        MainActor.assumeIsolated {
-          guard let self, time.seconds.isFinite else { return }
-          // Looping restarts the item, so the time wraps within the clip.
-          self.time = self.duration > 0 ? time.seconds.truncatingRemainder(dividingBy: self.duration) : time.seconds
-        }
-      }
-    }
+  func load(_ clip: ClipInfo, tensorId: Int64, project: Project, audioSampleRate: Int, play: Bool) {
+    reset()
+    guard !clip.frames.isEmpty else { return }
+    self.project = project
+    frameIds = clip.frames
+    framesPerSecond = clip.framesPerSecond > 0 ? clip.framesPerSecond : 24
+    duration = Double(clip.frames.count) / framesPerSecond
     isReady = true
     loadedTensorId = tensorId
+    if let audioId = clip.audioId, audioSampleRate > 0 {
+      let current = generation
+      // As long as the picture, so the sound loops with it.
+      let length = Int((duration * Double(audioSampleRate)).rounded())
+      audioTask = Task { [weak self] in
+        let samples = await project.read { $0.audio(id: audioId) }
+        guard let self, current == self.generation, let samples,
+              let buffer = Self.buffer(samples, sampleRate: audioSampleRate, length: length)
+        else { return }
+        self.soundtrack = buffer
+        self.engine.disconnectNodeOutput(self.audioPlayer)
+        self.engine.connect(self.audioPlayer, to: self.engine.mainMixerNode, format: buffer.format)
+        self.audioPlayer.volume = self.isMuted ? 0 : 1
+        // Already playing on the system clock: the sound takes over from here.
+        if self.isPlaying { self.startClock(at: self.clockTime) }
+      }
+    }
+    show(index: 0)
     if play { self.play() }
   }
 
   func play() {
-    player.play()
+    guard isReady else { return }
     isPlaying = true
+    startClock(at: time)
   }
 
   func pause() {
-    player.pause()
+    if isPlaying { time = clockTime }
     isPlaying = false
+    audioPlayer.stop()
   }
 
   func togglePlaying() {
@@ -192,9 +267,23 @@ final class ClipPlayback {
   }
 
   func seek(to seconds: Double) {
-    time = seconds
-    player.seek(
-      to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+    guard isReady else { return }
+    // The slider's end is the clip's end, which is its start again; stay on the last frame.
+    time = min(max(seconds, 0), max(duration - 1 / framesPerSecond, 0))
+    if isPlaying { startClock(at: time) }
+    show(index: index(at: time))
+  }
+
+  /// Pauses and moves `frames` frames from the one on screen, stopping at the clip's ends (as
+  /// the Video Editor's frame steps do).
+  func step(_ frames: Int) {
+    guard isReady, !frameIds.isEmpty else { return }
+    pause()
+    // From the playhead's frame, not the one up now: a step back waits for its frame to decode,
+    // and a second step made meanwhile goes on from the first.
+    let index = min(max(index(at: time) + frames, 0), frameIds.count - 1)
+    time = Double(index) / framesPerSecond
+    show(index: index)
   }
 
   /// The frame on screen (pausing playback, so it stays there).
@@ -202,9 +291,141 @@ final class ClipPlayback {
     pause()
     // Nothing loaded yet: the clip's first frame is what's on screen.
     guard isReady else { return 0 }
-    let seconds = player.currentTime().seconds
-    guard seconds.isFinite else { return 0 }
-    return min(max(Int((seconds * framesPerSecond).rounded(.down)), 0), max(count - 1, 0))
+    // The playhead's frame: on screen, or about to be once it's decoded.
+    return min(index(at: time), max(count - 1, 0))
+  }
+
+  /// Moves the picture along while playing: `ClipFrames` calls this for each frame of the display.
+  func displayDidTick() {
+    guard isPlaying else { return }
+    time = clockTime
+    show(index: index(at: time))
+  }
+
+  // MARK: Clock
+
+  private func startClock(at start: Double) {
+    clockStart = start
+    clockDate = Date()
+    audioClock = false
+    audioPlayer.stop()
+    guard let soundtrack else { return }
+    if !engine.isRunning {
+      do { try engine.start() } catch { return }
+    }
+    // From here to the end, then the whole soundtrack over and over.
+    let offset = Int(start * soundtrack.format.sampleRate)
+    if let rest = Self.tail(of: soundtrack, from: offset) {
+      audioPlayer.scheduleBuffer(rest)
+    }
+    audioPlayer.scheduleBuffer(soundtrack, at: nil, options: .loops)
+    audioPlayer.play()
+    audioClock = true
+  }
+
+  /// Where the clock is in the clip, wrapped round as it loops.
+  private var clockTime: Double {
+    guard isPlaying, duration > 0 else { return time }
+    var elapsed = Date().timeIntervalSince(clockDate)
+    if audioClock {
+      // Before the player has rendered anything it has no time yet: it hasn't started.
+      elapsed = 0
+      if let now = audioPlayer.lastRenderTime, let played = audioPlayer.playerTime(forNodeTime: now) {
+        elapsed = max(Double(played.sampleTime) / played.sampleRate, 0)
+      }
+    }
+    return (clockStart + elapsed).truncatingRemainder(dividingBy: duration)
+  }
+
+  private func index(at seconds: Double) -> Int {
+    // A hair over, so a frame's own start time (index / rate) isn't rounded into the frame before.
+    min(max(Int((seconds * framesPerSecond + 1e-6).rounded(.down)), 0), max(frameIds.count - 1, 0))
+  }
+
+  // MARK: Frames
+
+  /// Puts frame `index` up if it's decoded (otherwise the one up now stays until it is), and
+  /// keeps the frames after it decoding.
+  private func show(index: Int) {
+    if index != shownIndex, let image = decoded[index] {
+      frame = image
+      shownIndex = index
+      shownFrameTensorId = frameIds[index]
+    }
+    prefetch(from: index)
+  }
+
+  private func prefetch(from index: Int) {
+    guard let project, !frameIds.isEmpty else { return }
+    let count = frameIds.count
+    let wanted = (0..<min(Self.lookahead, count)).map { (index + $0) % count }
+    let keep = Set(wanted).union(shownIndex.map { [$0] } ?? [])
+    for key in decoded.keys where !keep.contains(key) {
+      decoded[key] = nil
+    }
+    for (key, entry) in decoding where !keep.contains(key) {
+      entry.task.cancel()
+      decoding[key] = nil
+    }
+    for next in wanted where decoded[next] == nil && decoding[next] == nil {
+      guard decoding.count < Self.concurrentDecodes else { break }
+      let id = frameIds[next], current = generation, token = nextToken
+      nextToken += 1
+      let task = Task { [weak self] in
+        let image = await project.read { $0.clipFrame(tensorId: id) }
+        guard let self, current == self.generation, self.decoding[next]?.token == token else { return }
+        self.decoding[next] = nil
+        if let image {
+          self.decoded[next] = image
+        } else if next == 0, self.frame == nil, !Task.isCancelled {
+          self.failed = true
+          return
+        }
+        // Paused, the frame wanted is the playhead's; playing, the next tick shows it.
+        self.show(index: self.isPlaying ? self.index(at: self.clockTime) : self.index(at: self.time))
+      }
+      decoding[next] = (token, task)
+    }
+  }
+
+  // MARK: Sound
+
+  /// The soundtrack (PCM in [channels, samples] order) as a buffer `length` samples long,
+  /// trimmed or padded with silence to the picture's length.
+  private static func buffer(_ samples: Tensor<Float>, sampleRate: Int, length: Int) -> AVAudioPCMBuffer? {
+    let shape = samples.shape
+    guard shape.count == 2, shape[0] > 0, shape[1] > 0, length > 0,
+          let format = AVAudioFormat(
+            standardFormatWithSampleRate: Double(sampleRate), channels: AVAudioChannelCount(shape[0])),
+          let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(length)),
+          let channels = buffer.floatChannelData
+    else { return nil }
+    buffer.frameLength = AVAudioFrameCount(length)
+    let available = min(shape[1], length)
+    samples.withUnsafeBytes { raw in
+      let values = raw.bindMemory(to: Float.self)
+      for channel in 0..<shape[0] {
+        let row = channels[channel]
+        for sample in 0..<length {
+          row[sample] = sample < available ? values[channel * shape[1] + sample] : 0
+        }
+      }
+    }
+    return buffer
+  }
+
+  /// `buffer` from sample `start` on; nil when that's at or past its end.
+  private static func tail(of buffer: AVAudioPCMBuffer, from start: Int) -> AVAudioPCMBuffer? {
+    let count = Int(buffer.frameLength) - start
+    guard start >= 0, count > 0,
+          let rest = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: AVAudioFrameCount(count)),
+          let source = buffer.floatChannelData, let destination = rest.floatChannelData
+    else { return nil }
+    rest.frameLength = AVAudioFrameCount(count)
+    for channel in 0..<Int(buffer.format.channelCount) {
+      destination[channel].update(from: source[channel] + start, count: count)
+    }
+    return rest
   }
 }
 
