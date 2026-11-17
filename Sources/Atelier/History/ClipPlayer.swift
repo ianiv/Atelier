@@ -445,6 +445,7 @@ struct ClipFrameMenu: View {
     let frameKnown = playback.isReady(for: item.tensorId)
     Button("Save Video…") { ClipActions.save(item, history: history, dialogs: fileDialogs) }
     Button("Save to Photos") { ClipActions.saveToPhotos(item, history: history, model: model) }
+    ShareItem(exports: [history.dragExport(item)])
     Divider()
     Button("Use This Frame as Input") {
       let index = playback.pauseOnFrame(count: count)
@@ -491,6 +492,7 @@ struct CanvasClipMenu: View {
     .disabled(!frameKnown)
     Button("Save Video…") { ClipActions.save(item, history: history, dialogs: fileDialogs) }
     Button("Save to Photos") { ClipActions.saveToPhotos(item, history: history, model: model) }
+    ShareItem(exports: [history.dragExport(item)])
     Divider()
     Button("Use This Frame as Input") {
       let index = playback.pauseOnFrame(count: count)

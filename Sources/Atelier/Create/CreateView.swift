@@ -659,6 +659,7 @@ struct CanvasView: View {
       .disabled(model.image == nil)
     Button("Save to Photos") { saveToPhotos() }
       .disabled(model.image == nil)
+    ShareItem(exports: model.image.map { [history.canvasShare(image: $0, item: model.imageItem)] } ?? [])
     Divider()
     Button("Upscale…") { model.upscalingCanvasImage = true }
       .disabled(!model.canUpscaleCanvasImage)

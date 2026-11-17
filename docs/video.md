@@ -72,7 +72,7 @@ The canvas plays the run's preview as it forms, frame by frame, and the status b
 
 A finished video waits on the canvas until you press Play, then loops. Right-click it for:
 
-- **Save Video…** and **Save to Photos**.
+- **Save Video…**, **Save to Photos** and **Share** (the MP4, to AirDrop, Mail, Messages and other apps).
 - **Use This Frame as Input**: pauses on the frame on screen and puts it on the canvas in Edit mode. The next run follows that frame. From the last frame, that continues the video; from any other frame, it starts a branch there. **Load Settings from Image** then loads the video's settings, whichever frame it is.
 - **Use Last Frame as Input**: the same, from the last frame, to make the next part of a longer video.
 - **Copy Frame** and **Add Frame to Moodboard**.
@@ -82,7 +82,7 @@ While a video is on the canvas, Edit mode doesn't send it: pick a frame with one
 
 ## In History
 
-A video is one tile in History, with a film badge showing its length (and a speaker when it has sound). On the Mac, moving the pointer across the tile scrubs through its frames. The detail panel plays it and lists its length, frame count and frame rate. **Export Video…** saves it as an MP4, as it is or upscaled (see [Exporting videos](#exporting-videos)), and dragging it out of Atelier drags the MP4. Use **Images / Videos** in the toolbar to show only one kind. **Add to Timeline** puts it on a timeline, to make a longer video from several (see [Putting videos together](video-editor.md)). Deleting a video deletes all of its frames.
+A video is one tile in History, with a film badge showing its length (and a speaker when it has sound). On the Mac, moving the pointer across the tile scrubs through its frames. The detail panel plays it and lists its length, frame count and frame rate. **Export Video…** saves it as an MP4, as it is or upscaled (see [Exporting videos](#exporting-videos)), and dragging it out of Atelier, or **Share**, sends the MP4. Use **Images / Videos** in the toolbar to show only one kind. **Add to Timeline** puts it on a timeline, to make a longer video from several (see [Putting videos together](video-editor.md)). Deleting a video deletes all of its frames.
 
 Videos are stored in the project the way Draw Things stores them: one step per frame, plus the soundtrack, so Draw Things can open them too. That makes them large: a few seconds of video at 720p adds as much to the project file as a hundred images.
 

@@ -9,6 +9,8 @@ nonisolated enum TemporaryFiles {
     case exports = "Exports"
     /// Files dragged out of History.
     case drags = "Drags"
+    /// Files handed to a share target (AirDrop, Mail, Messages…).
+    case shares = "Shares"
     case quickLook = "QuickLook"
     /// What agents generate when they don't say where to save it.
     case agent = "Agent"
@@ -16,6 +18,9 @@ nonisolated enum TemporaryFiles {
 
   /// A drag's receiver reads the file when the drag ends; well after that, nothing needs it.
   private static let dragLifetime: TimeInterval = 60 * 60
+  /// A share target may read its file long after it was picked: an AirDrop waiting on the other
+  /// device to accept, a Mail message left unsent for a while.
+  static let shareLifetime: TimeInterval = 24 * 60 * 60
 
   static var root: URL {
     FileManager.default.temporaryDirectory.appending(path: "Atelier", directoryHint: .isDirectory)
@@ -46,6 +51,13 @@ nonisolated enum TemporaryFiles {
     return newFolder(in: .drags)
   }
 
+  /// A new folder for a shared file. Clears out shares older than `shareLifetime`, so a long
+  /// session's don't pile up, while the share targets still reading theirs keep them.
+  static func newShareFolder() -> URL {
+    sweep([.shares], olderThan: shareLifetime)
+    return newFolder(in: .shares)
+  }
+
   /// Empties the areas' folders, or with `olderThan`, removes what hasn't changed for that long.
   static func sweep(_ areas: [Area], in root: URL = root, olderThan age: TimeInterval? = nil) {
     let fileManager = FileManager.default
@@ -72,8 +84,9 @@ nonisolated enum TemporaryFiles {
     removeEngineFolders(in: temporary, olderThan: 60 * 60)
   }
 
-  /// What nothing needs once the app is gone. Dragged files stay until the next launch, as the
-  /// app they went to may still be reading them, and agents' files too: they may read them later.
+  /// What nothing needs once the app is gone. Dragged and shared files stay until the next launch,
+  /// as the app they went to may still be reading them, and agents' files too: they may read them
+  /// later.
   static func cleanAtQuit() {
     sweep([.exports, .quickLook])
     if let engineFolder = GenerationEngine.temporaryDirectory {

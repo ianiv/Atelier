@@ -94,6 +94,7 @@ struct QueueView: View {
       Button("Remove from List") { queue.removeRecent(job.id) }
     case .exported(let url):
       Button(Finder.showTitle) { Finder.reveal([url]) }
+      ShareFileItem(url: url)
       Button("Export Again") { create.retry(job.id) }
       Button("Remove from List") { queue.removeRecent(job.id) }
     case .madeThumbnail, .ranForDevice:

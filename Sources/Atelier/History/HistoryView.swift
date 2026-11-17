@@ -594,6 +594,7 @@ struct HistoryView: View {
       Button("Copy \(items.count) Images") { Task { await history.copyImages(items) } }
       Button("Export \(items.count) Files…") { export(items) }
       Button("Save \(items.count) Images to Photos") { saveToPhotos(items) }
+      ShareItem(exports: shareExports(items), title: "Share \(items.count) Files")
       Divider()
       ratingMenu(items)
       Divider()
@@ -613,6 +614,7 @@ struct HistoryView: View {
         .disabled(!item.hasImage)
       Button("Save to Photos") { saveToPhotos([item]) }
         .disabled(!item.hasImage)
+      ShareItem(exports: shareExports([item]))
       Divider()
       MaskMenu(item: item, undoManager: undoManager)
       if item.isVideo {
@@ -626,6 +628,12 @@ struct HistoryView: View {
       Divider()
       Button("Delete", role: .destructive) { pendingDelete = [item] }
     }
+  }
+
+  /// The items with something to share (an input entry with an empty canvas has none), as
+  /// exports that write their files only when a share target asks.
+  private func shareExports(_ items: [HistoryItem]) -> [PNGExport] {
+    items.filter(\.hasImage).map(history.dragExport)
   }
 
   /// Rating: a check on the items' rating when they share one.
@@ -970,6 +978,7 @@ struct HistorySelectionDetail: View {
         ButtonRow {
           Button("Copy Images") { Task { await history.copyImages(items) } }
           Button("Export…", action: export)
+          ShareItem(exports: items.filter(\.hasImage).map(history.dragExport))
         }
         ButtonRow {
           Button("Save to Photos", action: saveToPhotos)
@@ -1051,6 +1060,7 @@ struct HistoryDetail: View {
         ButtonRow {
           Button(item.isVideo ? "Copy Frame" : "Copy Image") { Task { await history.copyImage(item) } }
           Button(item.isVideo ? "Export Video…" : "Export PNG…", action: export)
+          ShareItem(exports: [history.dragExport(item)])
         }
         .disabled(!item.hasImage)
         ButtonRow {
