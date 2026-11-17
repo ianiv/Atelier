@@ -214,9 +214,17 @@ nonisolated struct CanvasPaint: Codable, Sendable, Hashable {
   /// With `base` (a layer drawn before, the same size and placement), the strokes go over it
   /// instead of a clear grid: the canvas adds a new stroke to the layer it shows this way, without
   /// drawing (and decoding) the earlier ones again.
+  ///
+  /// With `fade`, each pixel's colour is faded by how strongly a run with that mask regenerates
+  /// it (`Fade`).
   func layer(
-    width: Int, height: Int, scale: (x: Double, y: Double) = (1, 1), origin: CGPoint = .zero, over base: CGImage? = nil
+    width: Int, height: Int, scale: (x: Double, y: Double) = (1, 1), origin: CGPoint = .zero, over base: CGImage? = nil,
+    fade: Fade? = nil
   ) -> CGImage? {
+    if let fade {
+      guard let layer = layer(width: width, height: height, scale: scale, origin: origin, over: base) else { return nil }
+      return fade.applied(to: layer, scale: scale, origin: origin)
+    }
     guard width > 0, height > 0, base != nil || mayHaveColor,
           let context = CGContext(
             data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
@@ -292,9 +300,57 @@ nonisolated struct CanvasPaint: Codable, Sendable, Hashable {
     return context.makeImage()
   }
 
-  /// `image` with the layer drawn over it at its own pixels, opaque where `image` is: the canvas
-  /// image as its Draw entry records it.
-  func baked(onto image: CGImage) -> CGImage? {
+  /// How a masked run takes the paint: only where it regenerates. The engine grows the mask by
+  /// Mask Blur Outset and feathers it by Mask Blur (`LocalImageGenerator.imageWithMask`: dilate,
+  /// then blur), so in the soft band at its edge it regenerates only partly and keeps the input
+  /// there, paint and all, which would leave an outline of paint around the regenerated area
+  /// (Fill Mask paints right up to the edge). So the paint's alpha is scaled by that same grown
+  /// and feathered mask (`MaskFilter`), weight w: none where w is below 0.9, rising to whole at 1,
+  /// so it shows only where the run regenerates (all but) fully; the soft band starts from the
+  /// original pixels, and outside the mask there's none. (Scaling by w itself would leave up to a
+  /// quarter of the paint in the band: the run keeps 1 − w of an input painted by w.) `maskBlur`
+  /// and `maskBlurOutset` are in the pixels of the grid the layer is drawn on.
+  nonisolated struct Fade: Hashable, Sendable {
+    var mask: CanvasMask
+    var maskBlur: Double
+    var maskBlurOutset: Int
+
+    /// The regeneration weight paint starts to show at.
+    static let fullFrom: Float = 0.9
+
+    /// `layer` (premultiplied sRGB, drawn with `scale` and `origin`) faded by the mask's weight.
+    func applied(to layer: CGImage, scale: (x: Double, y: Double), origin: CGPoint) -> CGImage? {
+      let width = layer.width, height = layer.height
+      var bytes = [UInt8](repeating: 0, count: width * height * 4)
+      let drawn = bytes.withUnsafeMutableBytes { raw -> Bool in
+        guard let context = CGContext(
+          data: raw.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+          space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return false }
+        context.draw(layer, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return true
+      }
+      guard drawn else { return nil }
+      var weight = mask.coverage(width: width, height: height, scale: scale, origin: origin).map { Float($0 != 0 ? 1 : 0) }
+      weight = MaskFilter.outset(weight, width: width, height: height, by: maskBlurOutset)
+      weight = MaskFilter.blur(weight, width: width, height: height, sigma: maskBlur)
+      for index in weight.indices where weight[index] < 1 {
+        let amount = min(max((weight[index] - Self.fullFrom) / (1 - Self.fullFrom), 0), 1)
+        // Premultiplied: fading is scaling every channel.
+        for c in 0..<4 { bytes[index * 4 + c] = UInt8((Float(bytes[index * 4 + c]) * amount).rounded()) }
+      }
+      guard let provider = CGDataProvider(data: Data(bytes) as CFData) else { return nil }
+      return CGImage(
+        width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
+        space: CGColorSpace(name: CGColorSpace.sRGB)!,
+        bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+        provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
+    }
+  }
+
+  /// `image` with the layer drawn over it at its own pixels, opaque where `image` is (faded by
+  /// `fade` for a masked run): the canvas image as its Draw entry records it.
+  func baked(onto image: CGImage, fade: Fade? = nil) -> CGImage? {
     let width = image.width, height = image.height
     guard let context = CGContext(
       data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
@@ -302,7 +358,7 @@ nonisolated struct CanvasPaint: Codable, Sendable, Hashable {
     else { return nil }
     let rect = CGRect(x: 0, y: 0, width: width, height: height)
     context.draw(image, in: rect)
-    if let layer = layer(width: width, height: height) { context.draw(layer, in: rect) }
+    if let layer = layer(width: width, height: height, fade: fade) { context.draw(layer, in: rect) }
     return context.makeImage()
   }
 

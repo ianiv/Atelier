@@ -281,7 +281,8 @@ extension CanvasState {
   /// `paint` (`CanvasPaint`, in the image's pixels) goes over all of them, at the frame's own
   /// pixels and only on the image, as the canvas shows it.
   nonisolated static func render(
-    _ image: CGImage, placement: CanvasPlacement, detail: [Project.DetailLayer] = [], paint: CanvasPaint? = nil
+    _ image: CGImage, placement: CanvasPlacement, detail: [Project.DetailLayer] = [], paint: CanvasPaint? = nil,
+    paintFade: CanvasPaint.Fade? = nil
   ) -> CGImage? {
     let width = Int(placement.frameSize.width), height = Int(placement.frameSize.height)
     guard width > 0, height > 0,
@@ -299,7 +300,9 @@ extension CanvasState {
         width: layer.rect.width * zoom.x, height: layer.rect.height * zoom.y)
       context.draw(layer.image, in: CGRect(x: rect.minX, y: Double(height) - rect.maxY, width: rect.width, height: rect.height))
     }
-    if let paint, let layer = paint.layer(width: width, height: height, scale: zoom, origin: placement.imageRect.origin) {
+    if let paint, let layer = paint.layer(
+      width: width, height: height, scale: zoom, origin: placement.imageRect.origin, fade: paintFade)
+    {
       context.saveGState()
       context.clip(to: placement.imageRectYUp)
       context.draw(layer, in: CGRect(x: 0, y: 0, width: width, height: height))

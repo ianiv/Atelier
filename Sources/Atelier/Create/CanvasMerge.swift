@@ -121,7 +121,8 @@ nonisolated struct RefineInputs: @unchecked Sendable {
   /// jobs).
   static func make(
     source: CGImage, sourceTensorId: Int64?, isImported: Bool, scale: Double?, offset: CGSize, frame: CGSize,
-    mask: CanvasMask?, merge: Bool, detail: [Project.DetailLayer] = [], paint: CanvasPaint? = nil
+    mask: CanvasMask?, merge: Bool, detail: [Project.DetailLayer] = [], paint: CanvasPaint? = nil, maskBlur: Double = 0,
+    maskBlurOutset: Int = 0
   ) -> RefineInputs? {
     let sourceSize = CGSize(width: source.width, height: source.height)
     // A merging run at a near-whole zoom takes that zoom, so its kept layer is its pixels.
@@ -131,8 +132,19 @@ nonisolated struct RefineInputs: @unchecked Sendable {
     let scale = snapped.scale, offset = snapped.offset
     let placement = CanvasPlacement(sourceSize: sourceSize, frameSize: frame, scale: scale, offset: offset)
     let paint = paint?.mayHaveColor == true ? paint : nil
-    guard let rendered = CanvasState.render(source, placement: placement, detail: detail, paint: paint) else { return nil }
+    var fadeKey = ""
+    guard var rendered = CanvasState.render(source, placement: placement, detail: detail, paint: paint) else { return nil }
     let maskPNG = mask.flatMap { $0.mayHavePaint ? $0.frameMask(placement, canvas: rendered) : nil }
+    // A masked run takes the paint only where it regenerates (`CanvasPaint.Fade`, in frame pixels,
+    // where the engine applies Mask Blur); without a mask it guides the whole frame.
+    if let paint, let mask, maskPNG != nil {
+      let fade = CanvasPaint.Fade(mask: mask, maskBlur: maskBlur, maskBlurOutset: maskBlurOutset)
+      guard let faded = CanvasState.render(source, placement: placement, detail: detail, paint: paint, paintFade: fade)
+      else { return nil }
+      rendered = faded
+      // The faded paint depends on the mask and blur too: part of the key that shares the input.
+      fadeKey = " fade \(fade.hashValue)"
+    }
     let stepId = isImported ? nil : sourceTensorId
     var inputs = RefineInputs(
       canvas: rendered, mask: maskPNG,
@@ -140,7 +152,7 @@ nonisolated struct RefineInputs: @unchecked Sendable {
         CanvasSourceMask(tensorId: stepId, width: Double(source.width), height: Double(source.height), mask: $0)
       },
       canvasKey: "")
-    let paintKey = paint.map { " paint \($0.hashValue)" } ?? ""
+    let paintKey = (paint.map { " paint \($0.hashValue)" } ?? "") + fadeKey
     if merge, RefineMerge.applies(placement: placement, scale: scale, offset: offset, hasMask: maskPNG != nil) {
       inputs.merge = RefineMerge(
         source: source, sourceTensorId: stepId, scale: scale, offset: offset,
@@ -178,7 +190,8 @@ extension GenerationEngine.Request {
     let frame = CGSize(width: configuration.width, height: configuration.height)
     guard let inputs = RefineInputs.make(
       source: source, sourceTensorId: sourceTensorId, isImported: isImported, scale: scale, offset: offset, frame: frame,
-      mask: mask, merge: merge, detail: detail, paint: paint)
+      mask: mask, merge: merge, detail: detail, paint: paint, maskBlur: Double(configuration.maskBlur),
+      maskBlurOutset: configuration.maskBlurOutset)
     else { return false }
     canvas = inputs.canvas
     canvasIsImported = isImported

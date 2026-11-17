@@ -141,7 +141,8 @@ extension Automation {
       model.paintColor = red
       let paintA = CanvasPaint.Stroke(
         kind: .brush, points: [CGPoint(x: s * 0.1, y: s * 0.1), CGPoint(x: s * 0.4, y: s * 0.1)], radius: s * 0.04, color: red)
-      let paintB = CanvasPaint.Stroke.rect(CGRect(x: s * 0.1, y: s * 0.6, width: s * 0.2, height: s * 0.2), color: red)
+      // Reaching into the mask (0.5–0.8): a masked run takes only the part it regenerates.
+      let paintB = CanvasPaint.Stroke.rect(CGRect(x: s * 0.1, y: s * 0.6, width: s * 0.6, height: s * 0.15), color: red)
       let maskA = CanvasMask.Stroke.rect(CGRect(x: s * 0.5, y: s * 0.5, width: s * 0.3, height: s * 0.3))
       act { model.addPaintStrokes([paintA], undoManager: undo) }
       act { model.addMaskStrokes([maskA], undoManager: undo) }
@@ -196,9 +197,17 @@ extension Automation {
       check(quarter != nil && quarter == whole, "Mask Opacity leaves the run's mask bytes the same")
       let request = model.screenRequest()
       check(
-        isRed(pixel(request?.canvas, Int(s * 0.2), Int(s * 0.7))) && isWhite(pixel(request?.canvas, Int(s * 0.9), Int(s * 0.3)))
-          && request?.canvasTensorId == nil,
-        "the run's input has the paint drawn in, and isn't the sketch's own step")
+        isRed(pixel(request?.canvas, Int(s * 0.65), Int(s * 0.65))) && isWhite(pixel(request?.canvas, Int(s * 0.2), Int(s * 0.7)))
+          && isWhite(pixel(request?.canvas, Int(s * 0.9), Int(s * 0.3))) && request?.canvasTensorId == nil,
+        "the masked run's input has the paint inside the mask and the original outside, and isn't the sketch's own step")
+      // At the mask's soft edge (Mask Blur), paint only as far as the run regenerates: just inside
+      // it's faded, deeper in it's whole (`CanvasPaint.Fade`).
+      if (model.settings?.maskBlur ?? 0) > 0 {
+        let edge = pixel(request?.canvas, Int(s * 0.5), Int(s * 0.65)), inner = pixel(request?.canvas, Int(s * 0.5) + 8, Int(s * 0.65))
+        check(
+          edge.count == 4 && inner.count == 4 && edge[1] > 40 && isRed(inner),
+          "paint at the mask's soft edge is faded into the image (edge \(edge), deeper \(inner))")
+      }
 
       // The paint goes with the image.
       @MainActor func backToSketch() async -> Bool {
@@ -224,8 +233,9 @@ extension Automation {
       if let canvasTensor = draw?.canvasTensorId {
         let drawn = await history.image(tensorId: canvasTensor, in: history.project.name)
         check(
-          isRed(pixel(drawn, Int(s * 0.2), Int(s * 0.7))) && isWhite(pixel(drawn, Int(s * 0.9), Int(s * 0.3))),
-          "the Draw entry's image is the sketch with the paint")
+          isRed(pixel(drawn, Int(s * 0.65), Int(s * 0.65))) && isWhite(pixel(drawn, Int(s * 0.2), Int(s * 0.7)))
+            && isWhite(pixel(drawn, Int(s * 0.9), Int(s * 0.3))),
+          "the Draw entry's image is the run's input: the sketch with the paint the mask takes")
       }
       // Reopened, the Draw entry shows the picture underneath with its paint as a layer again,
       // which Eraser on the Color layer can take away.
@@ -238,10 +248,10 @@ extension Automation {
           reopened && isWhite(pixel(model.image, Int(s * 0.2), Int(s * 0.7))) && model.canvasMask?.strokes == [maskA]
             && history.currentItem == draw && model.drawEntryInput() == nil,
           "a Draw entry reopened shows the unpainted picture, its paint as a layer and its mask, and writes no new Draw entry")
-        let eraser = CanvasPaint.Stroke(kind: .erase, points: [CGPoint(x: s * 0.2, y: s * 0.7)], radius: s * 0.05)
+        let eraser = CanvasPaint.Stroke(kind: .erase, points: [CGPoint(x: s * 0.65, y: s * 0.65)], radius: s * 0.05)
         model.addPaintStrokes([eraser], actionName: "Erase Paint", undoManager: nil)
         let erased = model.screenRequest()?.canvas
-        check(isWhite(pixel(erased, Int(s * 0.2), Int(s * 0.7))), "erasing the reopened entry's paint takes it away")
+        check(isWhite(pixel(erased, Int(s * 0.65), Int(s * 0.65))), "erasing the reopened entry's paint takes it away")
         model.setPaint(full, actionName: "Paint", undoManager: nil)
       }
       model.addPaintStrokes([.rect(CGRect(x: 0, y: s * 0.9, width: s * 0.1, height: s * 0.1), color: red)], undoManager: nil)

@@ -135,6 +135,39 @@ struct CanvasPaintTests {
     #expect(Self.pixel(bars, 16, 2)[3] == 0 && Self.pixel(bars, 16, 16) == [255, 0, 0, 255])
   }
 
+  @Test func aMaskedRunTakesPaintOnlyWhereItRegenerates() throws {
+    // A white image, its middle masked and filled green right up to the mask's edge (Fill Mask).
+    let image = try CanvasRefineTests.solid(width: 64, height: 64, red: 255, green: 255, blue: 255)
+    let mask = CanvasMask(rects: [CGRect(x: 16, y: 16, width: 32, height: 32)])
+    let flat = try #require(mask.flattenedStroke(width: 64, height: 64))
+    let green = CanvasPaint.Color(red: 0, green: 1, blue: 0)
+    let paint = CanvasPaint(strokes: [try #require(CanvasPaint.Stroke.fill(flat, color: green))])
+    func canvas(_ mask: CanvasMask?, blur: Double) throws -> CGImage {
+      try #require(
+        RefineInputs.make(
+          source: image, sourceTensorId: 1, isImported: false, scale: nil, offset: .zero, frame: CGSize(width: 64, height: 64),
+          mask: mask, merge: true, paint: paint, maskBlur: blur, maskBlurOutset: 0)?.canvas)
+    }
+    func greenness(_ pixel: [UInt8]) -> Int { Int(pixel[1]) - Int(pixel[0]) }
+    // Mask Blur 1.5: full paint deep inside, none in the soft band at the edge, where the run only
+    // partly regenerates, rising to whole where it regenerates all but fully; none outside.
+    let blurred = try canvas(mask, blur: 1.5)
+    #expect(Self.pixel(blurred, 32, 32) == [0, 255, 0, 255] && Self.pixel(blurred, 22, 32) == [0, 255, 0, 255])
+    #expect(Self.pixel(blurred, 16, 32) == [255, 255, 255, 255] && Self.pixel(blurred, 17, 32) == [255, 255, 255, 255])
+    let ramp = greenness(Self.pixel(blurred, 18, 32))
+    #expect(ramp > -255 && ramp < 255 && Self.pixel(blurred, 18, 32) != [255, 255, 255, 255])
+    #expect(Self.pixel(blurred, 14, 32) == [255, 255, 255, 255] && Self.pixel(blurred, 8, 8) == [255, 255, 255, 255])
+    // Mask Blur 0: the hard mask, paint exactly over it.
+    let hard = try canvas(mask, blur: 0)
+    #expect(Self.pixel(hard, 16, 32) == [0, 255, 0, 255] && Self.pixel(hard, 15, 32) == [255, 255, 255, 255])
+    // No mask: the paint guides the whole frame, unfaded.
+    #expect(Self.pixel(try canvas(nil, blur: 1.5), 16, 32) == [0, 255, 0, 255])
+    // The Draw entry's image is faded the same way, at the image's pixels.
+    let fade = CanvasPaint.Fade(mask: mask, maskBlur: 1.5, maskBlurOutset: 0)
+    let baked = try #require(paint.baked(onto: image, fade: fade))
+    #expect(CanvasRefineTests.rgba(baked) == CanvasRefineTests.rgba(blurred))
+  }
+
   @Test func paintChangesWhatARunTakes() throws {
     let image = try CanvasRefineTests.pattern(width: 64, height: 64)
     let frame = CGSize(width: 64, height: 64)
@@ -167,7 +200,8 @@ struct CanvasPaintTests {
     let merge = try #require(merging.merge)
     #expect(!plainMerge.painted && plainMerge.unpaintedInput == nil)
     #expect(merge.painted && merge.source === image && merge.sourceTensorId == 42 && merging.canvasTensorId == nil)
-    #expect(Self.pixel(merging.canvas, 4, 4) == [255, 0, 0, 255])
+    // The run takes the paint where the mask regenerates; outside it, the image as it was.
+    #expect(Self.pixel(merging.canvas, 12, 12) == [255, 0, 0, 255] && Self.pixel(merging.canvas, 4, 4) == Self.pixel(image, 4, 4))
     let unpainted = try #require(merge.unpaintedInput)
     #expect(Self.pixel(unpainted, 4, 4) == Self.pixel(image, 4, 4))
     // Saved with a queued job, the record says it was painted; an older record decodes as not.

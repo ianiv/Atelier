@@ -406,7 +406,7 @@ final class CreateModel {
   @ObservationIgnored var landedPaint: (tensorId: Int64, paint: CanvasPaint?)?
   /// The canvas image with its paint baked in (`CanvasPaint.baked`), for the paint and image it was
   /// made from: the same image object each time, so a Draw entry and the jobs from it share it.
-  @ObservationIgnored var bakedCanvasCache: (image: CGImage, paint: CanvasPaint, baked: CGImage)?
+  @ObservationIgnored var bakedCanvasCache: (image: CGImage, paint: CanvasPaint, fade: CanvasPaint.Fade?, baked: CGImage)?
   /// The Draw entry last written before a run (`drawEntryInput`): the canvas image, paint and mask
   /// it held, and its key once written, so the next run from the same canvas doesn't write another.
   @ObservationIgnored var drawnEntry: (image: CGImage, paint: CanvasPaint, mask: CanvasMask?, key: Int64?)?
@@ -3817,19 +3817,34 @@ extension CreateModel {
     {
       return nil
     }
-    guard let baked = bakedCanvas(source.image, paint: paint), var input = entryInput(.draw) else { return nil }
+    guard let baked = bakedCanvas(source.image, paint: paint, fade: drawFade(for: source)), var input = entryInput(.draw)
+    else { return nil }
     input.canvas = .image(baked)
     input.canvasImage = baked
     input.mask = canvasMask
     return input
   }
 
-  /// `image` with `paint` baked in (`CanvasPaint.baked`), made once per image and paint.
-  func bakedCanvas(_ image: CGImage, paint: CanvasPaint) -> CGImage? {
-    if let cached = bakedCanvasCache, cached.image === image, cached.paint == paint { return cached.baked }
-    guard let baked = paint.baked(onto: image) else { return nil }
-    bakedCanvasCache = (image, paint, baked)
+  /// `image` with `paint` baked in (`CanvasPaint.baked`, faded by `fade`), made once per image,
+  /// paint and fade.
+  func bakedCanvas(_ image: CGImage, paint: CanvasPaint, fade: CanvasPaint.Fade? = nil) -> CGImage? {
+    if let cached = bakedCanvasCache, cached.image === image, cached.paint == paint, cached.fade == fade { return cached.baked }
+    guard let baked = paint.baked(onto: image, fade: fade) else { return nil }
+    bakedCanvasCache = (image, paint, fade, baked)
     return baked
+  }
+
+  /// How the next run from the screen fades the paint (`CanvasPaint.Fade`), in the canvas image's
+  /// pixels, so its Draw entry holds the input the run takes: with a mask the run sends, the
+  /// settings' Mask Blur and Outset (frame pixels) at the canvas zoom. Nil without one.
+  private func drawFade(for source: CanvasSnapshot) -> CanvasPaint.Fade? {
+    guard runTargetTakesMasks, screenFrameHasPaint, let mask = canvasMask, let settings, let frameSize else { return nil }
+    let placement = CanvasPlacement(
+      sourceSize: CGSize(width: source.image.width, height: source.image.height), frameSize: frameSize, scale: source.scale,
+      offset: source.offset)
+    let zoom = max((placement.zoom.x + placement.zoom.y) / 2, 0.0001)
+    return CanvasPaint.Fade(
+      mask: mask, maskBlur: Double(settings.maskBlur) / zoom, maskBlurOutset: Int((Double(settings.maskBlurOutset) / zoom).rounded()))
   }
 
   /// Puts an input entry back: its canvas image (or an empty canvas), fitted, with its mask, and its
