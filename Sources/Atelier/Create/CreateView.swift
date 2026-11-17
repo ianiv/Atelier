@@ -361,7 +361,7 @@ struct CanvasView: View {
         .overlay(alignment: .bottom) {
           if model.canvasTool == .select {
             AutoMaskBar().padding(.bottom, 8).padding(.horizontal, 16)
-          } else if model.canvasTool.drawsOnLayer, model.canvasLayer == .color {
+          } else if model.canvasLayer == .color, Self.colorBarShows(for: model.canvasTool) {
             PaintBar().padding(.bottom, 8).padding(.horizontal, 16)
           }
         }
@@ -420,6 +420,17 @@ struct CanvasView: View {
     .sheet(isPresented: Bindable(model).viewingCanvasImage) {
       CanvasImageViewer()
     }
+  }
+
+  /// Whether the colour bar (`PaintBar`) shows with the Color layer picked: on the Mac while Brush
+  /// or Eraser draws there; on iPad with any tool but Select, as the Pencil paints the layer
+  /// whatever the tool.
+  private static func colorBarShows(for tool: CanvasTool) -> Bool {
+    #if os(iOS)
+      tool != .select
+    #else
+      tool.drawsOnLayer
+    #endif
   }
 
   /// The configured output size in pixels, else the image's.

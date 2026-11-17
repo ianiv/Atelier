@@ -146,6 +146,30 @@ struct CanvasPaintTests {
     #expect(Self.pixel(bars, 16, 2)[3] == 0 && Self.pixel(bars, 16, 16) == [255, 0, 0, 255])
   }
 
+  @Test func aSavedJobKeepsItsFillsCompacted() throws {
+    // Two fills of a 32×32 image's halves: a queued job's record keeps one image of them.
+    var bytes = [UInt8](repeating: 0, count: 16 * 32)
+    for index in bytes.indices { bytes[index] = 255 }
+    let half = try #require(CanvasMask.grayPNG(bytes, width: 16, height: 32))
+    let paint = CanvasPaint(strokes: [
+      CanvasPaint.Stroke(kind: .fill, points: [.zero], color: Self.red, bitmap: half),
+      CanvasPaint.Stroke(kind: .fill, points: [CGPoint(x: 16, y: 0)], color: Self.blue, bitmap: half),
+      CanvasPaint.Stroke(kind: .erase, points: [CGPoint(x: 8, y: 8)], radius: 2),
+    ])
+    let source = try CanvasRefineTests.pattern(width: 32, height: 32)
+    let merge = RefineMerge(
+      source: source, sourceTensorId: nil, scale: 2, offset: .zero, frameSize: CGSize(width: 32, height: 32), mask: nil,
+      detailTensorId: 7, paint: paint)
+    let data = try JSONEncoder().encode(merge.record)
+    let record = try JSONDecoder().decode(RefineMerge.Record.self, from: data)
+    #expect(record.paint?.strokes.count == 1 && record.paint?.strokes.first?.kind == .image)
+    let restored = RefineMerge(record: record, source: source, sameProject: true)
+    let before = try #require(paint.layer(width: 32, height: 32))
+    let after = try #require(restored.paint?.layer(width: 32, height: 32))
+    #expect(CanvasRefineTests.rgba(before) == CanvasRefineTests.rgba(after))
+    #expect(restored.detailTensorId == 7 && Self.pixel(after, 8, 8)[3] == 0 && Self.pixel(after, 4, 20) == [255, 0, 0, 255])
+  }
+
   @Test func paintChangesWhatARunTakes() throws {
     let image = try CanvasRefineTests.pattern(width: 64, height: 64)
     let frame = CGSize(width: 64, height: 64)

@@ -420,10 +420,18 @@ final class CreateModel {
     didSet { UserDefaults.standard.set(paintColor.hex, forKey: "paintColor") }
   }
   /// The colours painted with last, newest first (`PaintBar`'s swatches), each once.
-  var recentPaintColors = (UserDefaults.standard.stringArray(forKey: "recentPaintColors") ?? []).compactMap(CanvasPaint.Color.init(hex:))
-    .reduce(into: [CanvasPaint.Color]()) { kept, color in if !kept.contains(where: { $0.matches(color) }) { kept.append(color) } }
-  {
+  var recentPaintColors = CreateModel.storedRecentPaintColors {
     didSet { UserDefaults.standard.set(recentPaintColors.map(\.hex), forKey: "recentPaintColors") }
+  }
+  /// The recent colours as stored, each once (`CanvasPaint.Color.matches`).
+  private static var storedRecentPaintColors: [CanvasPaint.Color] {
+    var kept: [CanvasPaint.Color] = []
+    for color in (UserDefaults.standard.stringArray(forKey: "recentPaintColors") ?? []).compactMap(CanvasPaint.Color.init(hex:))
+      where !kept.contains(where: { $0.matches(color) })
+    {
+      kept.append(color)
+    }
+    return kept
   }
   /// What Brush and Eraser draw on (the Mask | Color switch), remembered.
   var canvasLayer = UserDefaults.standard.string(forKey: "canvasLayer").flatMap(CanvasLayer.init(rawValue:)) ?? .mask {

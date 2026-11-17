@@ -15,11 +15,11 @@ struct PaintBar: View {
       HStack(spacing: 8) {
         colors(paints)
         Divider().frame(height: 18)
-        tools(paints)
+        tools
       }
       VStack(spacing: 6) {
         HStack(spacing: 8) { colors(paints) }
-        HStack(spacing: 8) { tools(paints) }
+        HStack(spacing: 8) { tools }
       }
     }
     .buttonStyle(.borderless)
@@ -63,7 +63,7 @@ struct PaintBar: View {
   }
 
   /// Clear Paint and Fill Mask.
-  @ViewBuilder private func tools(_: Bool) -> some View {
+  @ViewBuilder private var tools: some View {
     Button("Clear Paint", systemImage: "xmark.circle") {
       model.clearPaint(undoManager: undoManager)
     }
