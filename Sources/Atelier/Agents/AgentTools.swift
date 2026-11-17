@@ -180,7 +180,9 @@ final class AgentTools {
         Puts an image on the Create screen's canvas, as clicking it in History or dropping it \
         there does: fitted to the frame, in Edit mode. Give a History step (see list_history), \
         which the next run then follows and which comes back with the mask it last had on the \
-        canvas (`mask: false` leaves it off), or an image file or data: URL, which has no mask. \
+        canvas (`mask: false` leaves it off), or an image file or data: URL, which has no mask, \
+        or `blank: "white"` for a new sketch: an opaque white image the size of the frame to \
+        paint on (set_canvas_paint). \
         Returns the canvas as get_create_screen's `canvas` describes it, with mask_restored. \
         Then paint a mask (set_canvas_mask), pick a region (set_canvas_region), or generate with \
         use_canvas.
@@ -191,6 +193,46 @@ final class AgentTools {
           "history_step": ["type": "integer", "description": "A history step from list_history or generate (images only; not a video)."],
           "image": ["type": "string", "description": "Instead: path to an image, or a data: URL."],
           "mask": ["type": "boolean", "description": "With history_step: bring back the step's mask (the default). False puts the image there with no mask."],
+          "blank": ["type": "string", "enum": ["white"], "description": "Instead: a new sketch, an opaque white image the size of the frame (New Sketch in the app)."],
+        ],
+      ],
+    ],
+    [
+      "name": "set_canvas_paint",
+      "title": "Paint colors on the canvas",
+      "description": """
+        Paints colors on the canvas image, as the Paint tool does: a layer over the image that \
+        the next Edit run takes as part of its input (it doesn't change the mask; at Strength \
+        100% with no mask the run replaces it, so lower `strength` or mask what to regenerate). \
+        Coordinates are the canvas image's pixels from its top left (see get_create_screen's \
+        canvas.source_size). Applied in order: `clear`, then `shapes`, then `fill_from_mask` \
+        (what the mask covers, filled). Colors are \"#RRGGBB\" or \"#RRGGBBAA\"; `color` is \
+        the default for shapes without one and for the fill (else the app's paint color). The \
+        whole call is one ⌘Z step, “Agent Paint”. Returns has_paint, the number of strokes and \
+        the painted bounds. Needs an image on the canvas (set_canvas_image, or blank: "white" \
+        for a sketch) in Edit mode.
+        """,
+      "inputSchema": [
+        "type": "object",
+        "properties": [
+          "shapes": [
+            "type": "array",
+            "description": "Shapes to paint: {\"shape\": \"rect\" or \"ellipse\", \"x\", \"y\", \"width\", \"height\"}, {\"shape\": \"polygon\", \"points\": [[x, y], …]} (3 points or more), or {\"shape\": \"stroke\", \"points\": [[x, y], …], \"radius\"} (a brush stroke, radius in image pixels, default 8). Each may have its own `color`, or `erase: true` to take paint away instead.",
+            "items": [
+              "type": "object", "required": ["shape"],
+              "properties": [
+                "shape": ["type": "string", "enum": ["rect", "ellipse", "polygon", "stroke"]],
+                "x": ["type": "number"], "y": ["type": "number"], "width": ["type": "number"], "height": ["type": "number"],
+                "points": ["type": "array", "items": ["type": "array", "items": ["type": "number"]]],
+                "radius": ["type": "number"],
+                "color": ["type": "string"],
+                "erase": ["type": "boolean"],
+              ],
+            ],
+          ],
+          "color": ["type": "string", "description": "The default color, \"#RRGGBB\" or \"#RRGGBBAA\"."],
+          "fill_from_mask": ["type": "boolean", "description": "Fill what the canvas mask covers with `color`, after the shapes. The mask stays."],
+          "clear": ["type": "boolean", "description": "Clear the paint, first. Alone, it just clears it."],
         ],
       ],
     ],
@@ -320,7 +362,7 @@ final class AgentTools {
       "name": "list_history",
       "title": "List history",
       "description":
-        "Lists the newest images and videos in the current Atelier project, newest first: history step, prompt (shortened), model, seed, size, star rating, whether it's a video, and has_mask (it remembers a mask: set_canvas_image brings it back, set_canvas_mask from_history_step applies it, get_canvas_mask history_step shows it). Includes what the user generated themselves, and input entries (kind \"input\", with a reason: imported, moodboard, cleared or mask): the canvas and moodboard as they were before runs, which aren't runs themselves and have no settings of their own. Use get_image to look at one.",
+        "Lists the newest images and videos in the current Atelier project, newest first: history step, prompt (shortened), model, seed, size, star rating, whether it's a video, and has_mask (it remembers a mask: set_canvas_image brings it back, set_canvas_mask from_history_step applies it, get_canvas_mask history_step shows it). Includes what the user generated themselves, and input entries (kind \"input\", with a reason: imported, moodboard, cleared, mask or draw): the canvas and moodboard as they were before runs, which aren't runs themselves and have no settings of their own. Use get_image to look at one.",
       "inputSchema": [
         "type": "object",
         "properties": [
@@ -476,6 +518,7 @@ final class AgentTools {
     case "set_create_screen": return try await setCreateScreen(arguments)
     case "set_canvas_image": return try await setCanvasImage(arguments)
     case "set_canvas_mask": return try await setCanvasMask(arguments)
+    case "set_canvas_paint": return try await setCanvasPaint(arguments)
     case "get_canvas_mask": return try await getCanvasMask(arguments)
     case "set_canvas_region": return try await setCanvasRegion(arguments)
     case "auto_mask": return try await autoMask(arguments)
@@ -1164,6 +1207,8 @@ final class AgentTools {
       "merge_into_image": create.mergeIntoImage,
       "merge_applies": create.canMergeIntoImage,
       "can_paint_mask": create.canPaintMask,
+      // Colours painted on the image (set_canvas_paint), which the next Edit run takes.
+      "has_paint": create.canvasShowsImage && create.canvasPaint?.mayHaveColor == true,
     ]
     // The Select tool's selection not yet in the mask, which Generate (and use_canvas) adds first.
     let session = create.autoMask
@@ -1229,8 +1274,16 @@ final class AgentTools {
   private func setCanvasImage(_ arguments: [String: Any]) async throws -> [String: Any] {
     let step = Self.int(arguments["history_step"])
     let source = arguments["image"] as? String
+    if let blank = arguments["blank"] {
+      guard blank as? String == "white" else { throw ToolError("`blank` is \"white\".") }
+      guard step == nil, source == nil else { throw ToolError("Pass `blank`, `history_step` or `image`, only one.") }
+      create.newSketch()
+      var state = canvasState()
+      state["mask_restored"] = false
+      return try Self.textResult(json: state)
+    }
     guard (step == nil) != (source == nil) else {
-      throw ToolError("Pass `history_step` (see list_history) or `image` (a path or data: URL), not both.")
+      throw ToolError("Pass `history_step` (see list_history), `image` (a path or data: URL) or `blank`, only one.")
     }
     if arguments["mask"] != nil, !(arguments["mask"] is Bool) { throw ToolError("`mask` is true or false.") }
     let restoresMask = arguments["mask"] as? Bool ?? true
@@ -1344,6 +1397,90 @@ final class AgentTools {
     var result = maskSummary()
     if !notes.isEmpty { result["notes"] = notes }
     return try Self.textResult(json: result)
+  }
+
+  private func setCanvasPaint(_ arguments: [String: Any]) async throws -> [String: Any] {
+    await Self.settleUndo()
+    let image = try canvasImage()
+    let sourceRect = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+    let size = "\(image.width)×\(image.height)"
+    let clear = arguments["clear"] as? Bool == true
+    let fills = arguments["fill_from_mask"] as? Bool == true
+    let shapes = arguments["shapes"] as? [Any]
+    if arguments["shapes"] != nil, shapes == nil { throw ToolError("`shapes` is an array of shapes.") }
+    guard clear || fills || shapes != nil else { throw ToolError("Pass `shapes`, `fill_from_mask` or `clear`.") }
+    guard create.canPaintColor else { throw ToolError(maskUnavailableReason()) }
+    let color = try (arguments["color"] as? String).map { try Self.paintColor($0, what: "`color`") } ?? create.paintColor
+    var strokes: [CanvasPaint.Stroke] = []
+    for (index, entry) in (shapes ?? []).enumerated() {
+      guard let shape = entry as? [String: Any] else { throw ToolError("Shape \(index + 1) isn't an object.") }
+      let stroke = try Self.paintStroke(shape, number: index + 1, color: color)
+      let bounds = Self.bounds(of: stroke.points).standardized.insetBy(dx: -stroke.radius, dy: -stroke.radius)
+      guard bounds.intersects(sourceRect) else {
+        throw ToolError("Shape \(index + 1) lies wholly outside the \(size) canvas image (coordinates are its pixels from the top left).")
+      }
+      strokes.append(stroke)
+    }
+    if fills {
+      guard let mask = create.canvasMask, mask.mayHavePaint,
+            let flat = mask.flattenedStroke(width: image.width, height: image.height),
+            let fill = CanvasPaint.Stroke.fill(flat, color: color)
+      else { throw ToolError("There's no mask to fill. Paint one with set_canvas_mask or auto_mask first.") }
+      strokes.append(fill)
+    }
+    var paint = clear ? CanvasPaint() : create.canvasPaint ?? CanvasPaint()
+    paint.strokes += strokes
+    Self.asOneUndoStep {
+      create.setPaint(paint.strokes.isEmpty ? nil : paint, actionName: CreateModel.agentPaintActionName, undoManager: $0)
+    }
+    for used in strokes.compactMap(\.color).reversed() { create.noteRecentPaintColor(used) }
+    let shown = create.canvasPaint
+    let bounds = shown?.bounds(width: image.width, height: image.height)
+    var result: [String: Any] = [
+      "has_paint": shown?.mayHaveColor == true && bounds != nil,
+      "strokes": shown?.strokes.count ?? 0,
+      "bounds": bounds.map(Self.json) ?? NSNull(),
+    ]
+    if create.paintProblem != nil { result["note"] = create.paintProblem }
+    return try Self.textResult(json: result)
+  }
+
+  /// A colour as `set_canvas_paint` takes it.
+  private static func paintColor(_ text: String, what: String) throws -> CanvasPaint.Color {
+    guard let color = CanvasPaint.Color(hex: text) else { throw ToolError("\(what) is \"#RRGGBB\" or \"#RRGGBBAA\" (got \"\(text)\").") }
+    return color
+  }
+
+  /// One `set_canvas_paint` shape as a paint stroke.
+  private static func paintStroke(_ shape: [String: Any], number: Int, color: CanvasPaint.Color) throws -> CanvasPaint.Stroke {
+    let erases = shape["erase"] as? Bool == true
+    let color = try (shape["color"] as? String).map { try paintColor($0, what: "Shape \(number)'s `color`") } ?? color
+    if shape["shape"] as? String == "stroke" {
+      let points = (shape["points"] as? [Any] ?? []).compactMap { point -> CGPoint? in
+        if let pair = point as? [Any], pair.count == 2, let x = double(pair[0]), let y = double(pair[1]) { return CGPoint(x: x, y: y) }
+        if let object = point as? [String: Any], let x = double(object["x"]), let y = double(object["y"]) { return CGPoint(x: x, y: y) }
+        return nil
+      }
+      guard !points.isEmpty else { throw ToolError("Shape \(number), a stroke, needs `points`: [x, y] pairs.") }
+      let radius = double(shape["radius"]) ?? 8
+      guard radius > 0 else { throw ToolError("Shape \(number)'s `radius` must be above 0.") }
+      return CanvasPaint.Stroke(kind: erases ? .erase : .brush, points: points, radius: radius, color: erases ? nil : color)
+    }
+    // The mask's shapes, read the same way, in colour.
+    let mask = try stroke(shape, number: number, erases: false)
+    if erases {
+      // A shape taken away: as a bitmap of its area (`CanvasPaint.Stroke.Kind.erase`).
+      let area = bounds(of: mask.points).standardized
+      guard area.maxX > 0, area.maxY > 0,
+            let flat = CanvasMask(strokes: [mask]).flattenedStroke(width: Int(area.maxX.rounded(.up)), height: Int(area.maxY.rounded(.up)))
+      else { throw ToolError("Shape \(number) covers nothing.") }
+      return CanvasPaint.Stroke(kind: .erase, points: flat.points, bitmap: flat.bitmap)
+    }
+    switch mask.kind {
+    case .rect: return CanvasPaint.Stroke(kind: .rect, points: mask.points, color: color)
+    case .ellipse: return CanvasPaint.Stroke(kind: .ellipse, points: mask.points, color: color)
+    default: return CanvasPaint.Stroke(kind: .polygon, points: mask.points, color: color)
+    }
   }
 
   /// Why the mask can't change now (`canEditMask` is false with an image on the canvas).
