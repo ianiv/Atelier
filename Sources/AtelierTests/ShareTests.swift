@@ -48,4 +48,17 @@ struct ShareTests {
       #expect(names(root.appending(path: "Shares")) == ["recent"])
     }
   }
+
+  @Test func aRelaunchKeepsRecentSharesAndEmptiesTheOtherAreas() {
+    withTestFolder { root in
+      touch(root.appending(path: "Shares/recent"), age: 2 * 60 * 60)
+      touch(root.appending(path: "Shares/old"), age: 2 * TemporaryFiles.shareLifetime)
+      touch(root.appending(path: "Drags/recent"))
+      touch(root.appending(path: "Exports/recent"))
+      TemporaryFiles.sweepAreasAtLaunch(in: root)
+      #expect(names(root.appending(path: "Shares")) == ["recent"])
+      #expect(names(root.appending(path: "Drags")).isEmpty)
+      #expect(names(root.appending(path: "Exports")).isEmpty)
+    }
+  }
 }

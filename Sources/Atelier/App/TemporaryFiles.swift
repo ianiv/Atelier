@@ -75,18 +75,26 @@ nonisolated enum TemporaryFiles {
     }
   }
 
-  /// What the last run left behind: every area, and the engine folders of runs that ended.
+  /// What the last run left behind: every area (shares only once `shareLifetime` is up), and the
+  /// engine folders of runs that ended.
   @concurrent static func cleanAtLaunch() async {
-    sweep(Area.allCases)
+    sweepAreasAtLaunch()
     let temporary = FileManager.default.temporaryDirectory
     // Where Quick Look files went before they moved to their area.
     try? FileManager.default.removeItem(at: temporary.appending(path: "Atelier Quick Look"))
     removeEngineFolders(in: temporary, olderThan: 60 * 60)
   }
 
-  /// What nothing needs once the app is gone. Dragged and shared files stay until the next launch,
-  /// as the app they went to may still be reading them, and agents' files too: they may read them
-  /// later.
+  /// Every area but Shares emptied; shares outlive a relaunch until `shareLifetime` is up, as a
+  /// share target (an AirDrop waiting to be accepted, an unsent Mail message) may still read one.
+  static func sweepAreasAtLaunch(in root: URL = root) {
+    sweep(Area.allCases.filter { $0 != .shares }, in: root)
+    sweep([.shares], in: root, olderThan: shareLifetime)
+  }
+
+  /// What nothing needs once the app is gone. Dragged files stay until the next launch, as the
+  /// app they went to may still be reading them, shared files until `shareLifetime` is up, and
+  /// agents' files too: they may read them later.
   static func cleanAtQuit() {
     sweep([.exports, .quickLook])
     if let engineFolder = GenerationEngine.temporaryDirectory {

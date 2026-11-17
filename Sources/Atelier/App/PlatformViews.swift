@@ -265,14 +265,18 @@ extension ToolbarPickerMenu where Actions == EmptyView {
   }
 }
 
-/// A row of buttons in a detail pane's Form. On iPad, where buttons take more room, they go one
-/// per line when the row doesn't fit; the Mac keeps the row.
+/// A row of buttons in a detail pane's Form, going one per line when the row doesn't fit. On the
+/// Mac too: History's detail row with Share (Copy Image, Export PNG…, Share) is wider than the
+/// inspector at its narrowest, and a plain row would clip there.
 struct ButtonRow<Content: View>: View {
   @ViewBuilder var content: Content
 
   var body: some View {
     #if os(macOS)
-      HStack { content }
+      ViewThatFits(in: .horizontal) {
+        HStack { content }.fixedSize()
+        VStack(alignment: .leading) { content }
+      }
     #else
       ViewThatFits(in: .horizontal) {
         HStack(spacing: 16) { content }.fixedSize()

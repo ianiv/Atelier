@@ -43,8 +43,9 @@ struct ShareFileItem: View {
 }
 
 /// A file the user saved to a place they picked, to share. On iPad that place is reachable only
-/// through its security scope, which a share target doesn't get, so the file is copied into the
-/// Shares area (a clone on the same volume) while the scope is open.
+/// through its security scope, which a share target doesn't get, so on iPad the export is copied
+/// into the Shares area while the scope is open: a clone when it's on the same volume, a full
+/// copy otherwise. The Mac shares the file where it is.
 nonisolated struct SharedFile: Transferable {
   var url: URL
 
