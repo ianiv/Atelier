@@ -96,4 +96,26 @@ struct ProjectMappingTests {
     #expect(ProjectMapping.Profile([]) == nil)
     #expect(ProjectMapping.Profile([UInt8]("not json".utf8)) == nil)
   }
+
+  /// History's detail panel lists a step's LoRAs from the project row: named by the library when
+  /// it lists the file, by file name otherwise (a server's LoRA), and marked when not downloaded.
+  @Test func historyLoRAsComeFromTheProjectRow() {
+    let lora = { (file: String, weight: Double) -> JSONValue in
+      .object(["file": .string(file), "weight": .number(weight), "mode": .string("all")])
+    }
+    let settings: [String: JSONValue] = [
+      "loras": .array([lora("here.safetensors", 0.6), lora("listed.safetensors", 1.25), lora("server.safetensors", -0.5)])
+    ]
+    let dump = ProjectMapping.dump(of: ProjectMapping.node(for: step(), settings: settings))
+    let library = [
+      ModelLibrary.LoRA(name: "Here", file: "here.safetensors", prefix: "", version: "flux1", size: 1, registry: URL(fileURLWithPath: "/")),
+      ModelLibrary.LoRA(name: "Listed", file: "listed.safetensors", prefix: "", version: "flux1", size: nil, registry: URL(fileURLWithPath: "/")),
+    ]
+    #expect(HistoryLoRA.rows(of: dump, installed: library) == [
+      HistoryLoRA(file: "here.safetensors", name: "Here", weight: 0.6, isInstalled: true),
+      HistoryLoRA(file: "listed.safetensors", name: "Listed", weight: 1.25, isInstalled: false),
+      HistoryLoRA(file: "server.safetensors", name: "server.safetensors", weight: -0.5, isInstalled: false),
+    ])
+    #expect(HistoryLoRA.rows(of: ProjectMapping.dump(of: ProjectMapping.node(for: step(), settings: [:])), installed: library).isEmpty)
+  }
 }

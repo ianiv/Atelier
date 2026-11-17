@@ -79,6 +79,7 @@ enum Automation {
       "--remote-check", "--remote-net-check", "--remote-shots", "--remote-url-check", "--remote-tailnet-check",
       "--catalog-retry-check", "--model-move-check", "--add-folder-check", "--color-match-check", "--canvas-clip-check",
       "--create-delete-check",
+      "--history-loras-check",
       "--input-entries-check", "--entries-freeze-check", "--tab-switch-bench",
     ]
     // The unit tests run inside the app. Like a scripted run, that leaves the user's data alone: no
@@ -161,6 +162,10 @@ enum Automation {
     }
     if args.contains("--create-delete-check") {
       createDeleteCheck(model, navigation: navigation, layouts: layouts, presets: presets)
+      return
+    }
+    if args.contains("--history-loras-check") {
+      historyLoRAsCheck(model, navigation: navigation, layouts: layouts, presets: presets, library: library)
       return
     }
     if args.contains("--canvas-clip-check") {
