@@ -3297,6 +3297,28 @@ extension CreateModel {
     relabelsImageStep = false
   }
 
+  /// The Match Colors to Original jobs, waiting or running, that read from and save into the
+  /// project called `name`.
+  func colorMatchJobs(in name: String) -> [JobQueue.Job] {
+    ((queue.running.map { [$0] } ?? []) + queue.waiting).filter { $0.request?.colorMatch?.project == name }
+  }
+
+  /// Deletes the project called `name` (Delete Project…), switching to another first when it's
+  /// current (`HistoryStore.delete`). Its Match Colors to Original jobs stop: they read from and
+  /// save into that project alone. Every other job saves into whichever project is open, as after
+  /// any switch, so it carries on into the one opened in its place. The canvas keeps showing its
+  /// image, no longer a step of any project, so a project made later under the same name doesn't
+  /// take it for one of its own.
+  /// Returns the trashed project file (`HistoryStore.delete`).
+  @discardableResult
+  func deleteProject(_ name: String) async throws -> URL? {
+    for job in colorMatchJobs(in: name) { cancel(job.id) }
+    defer {
+      if let step = imageStep, step.project == name, step.project != history.project.name { imageStep = nil }
+    }
+    return try await history.delete(name)
+  }
+
   /// The canvas shows its step's own image, loaded: what mask tools may change
   /// (`canEditMask`).
   var canvasImageIsCurrent: Bool { !awaitsStepImage && !isLoadingCanvasImage }

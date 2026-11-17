@@ -334,6 +334,77 @@ final class HistoryStore {
     await reload()
   }
 
+  /// The project opened in place of `name` when it's deleted while current: the one after it in
+  /// the list, else the one before, else a new empty one (not `name` again, which would bring the
+  /// deleted project's name straight back).
+  func projectToOpen(afterDeleting name: String) -> String {
+    let others = Self.scanProjectNames()
+    let all = (others.contains(name) ? others : (others + [name])).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    if let index = all.firstIndex(of: name) {
+      if index + 1 < all.count { return all[index + 1] }
+      if index > 0 { return all[index - 1] }
+    }
+    return availableName()
+  }
+
+  /// Deletes the project called `name`: its file (and -wal/-shm) go to the Trash, its cached clip
+  /// videos are removed. The current project is switched away from first (`projectToOpen`), so
+  /// nothing is open on the file when it moves; one still held for a job (`heldProjects`) is
+  /// closed, so the job finds it closed (`Project.isOpen`) rather than writing into the Trash.
+  /// Returns the trashed project file, nil when it went for good (iPad, see `trashProjectFiles`).
+  @discardableResult
+  func delete(_ name: String) async throws -> URL? {
+    if name == project.name {
+      await open(projectToOpen(afterDeleting: name))
+    }
+    // Never the file that's open (another switch brought it back meanwhile).
+    guard name != project.name else { throw DeleteError.stillOpen(name) }
+    if let held = heldProjects.removeValue(forKey: name)?.project { await held.close() }
+    let trashed = try await Self.trashProjectFiles(at: Self.url(for: name))
+    Self.removeClipFiles(in: Self.clipCache, project: name)
+    // Thumbnails are cached by the file's path: a project made later under the same name mustn't
+    // show this one's.
+    Self.thumbnails.removeAllObjects()
+    projectNames = Self.scanProjectNames()
+    if !projectNames.contains(project.name) { projectNames = (projectNames + [project.name]).sorted() }
+    return trashed
+  }
+
+  enum DeleteError: LocalizedError {
+    case stillOpen(String)
+    var errorDescription: String? {
+      switch self {
+      case .stillOpen(let name): "“\(name)” is open again. Switch to another project and try again."
+      }
+    }
+  }
+
+  /// Moves a project file and its -wal/-shm to the Trash. On iPad they're removed instead: the
+  /// Trash is the Mac's (Files' Recently Deleted only takes what's deleted in Files), and the
+  /// confirmation says it can't be undone. On the Mac a failure leaves the files where they are
+  /// rather than removing them outright.
+  @concurrent nonisolated static func trashProjectFiles(at url: URL) async throws -> URL? {
+    let fileManager = FileManager.default
+    func discard(_ file: URL) throws -> URL? {
+      #if os(macOS)
+        var trashed: NSURL?
+        try fileManager.trashItem(at: file, resultingItemURL: &trashed)
+        return trashed as URL?
+      #else
+        try fileManager.removeItem(at: file)
+        return nil
+      #endif
+    }
+    // The database first: when it can't move, nothing else has.
+    let trashed = fileManager.fileExists(atPath: url.path) ? try discard(url) : nil
+    for suffix in ["-wal", "-shm"] {
+      let side = URL(fileURLWithPath: url.path + suffix)
+      guard fileManager.fileExists(atPath: side.path) else { continue }
+      Log.attempt(Log.project, "Deleting a project's \(suffix) file") { _ = try discard(side) }
+    }
+    return trashed
+  }
+
   nonisolated static func scanProjectNames() -> [String] {
     let files = (try? FileManager.default.contentsOfDirectory(
       at: projectsDirectory, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? []
@@ -1142,6 +1213,26 @@ final class HistoryStore {
     "\(project)-\(clipId)-\(tensorId)-\(codec.rawValue).mp4"
   }
 
+  /// Removes every cached video of the project called `project` (deleted).
+  nonisolated static func removeClipFiles(in folder: URL, project: String) {
+    for file in (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [] {
+      guard clipFileParts(file)?.project == project else { continue }
+      try? FileManager.default.removeItem(at: folder.appendingPathComponent(file))
+    }
+  }
+
+  /// A cached clip video's project and codec, read back from its name
+  /// ("<project>-<clip>-<tensor>-<codec>.mp4"; a project's name can hold dashes itself). Nil for
+  /// anything else, a half-written one too.
+  private nonisolated static func clipFileParts(_ file: String) -> (project: String, codec: VideoCodec)? {
+    guard file.hasSuffix(".mp4"), !file.hasSuffix("." + partialExtension) else { return nil }
+    let parts = file.dropLast(4).split(separator: "-", omittingEmptySubsequences: false)
+    guard parts.count >= 4, Int64(parts[parts.count - 2]) != nil, Int64(parts[parts.count - 3]) != nil,
+          let codec = VideoCodec(rawValue: String(parts[parts.count - 1]))
+    else { return nil }
+    return (parts.dropLast(3).joined(separator: "-"), codec)
+  }
+
   /// Removes a deleted clip's cached videos, in every codec.
   nonisolated static func removeClipFiles(
     in folder: URL = clipCache, project: String, clipId: Int64, tensorId: Int64
@@ -1167,13 +1258,7 @@ final class HistoryStore {
         try? fileManager.removeItem(at: url)
         continue
       }
-      guard file.hasSuffix(".mp4") else { continue }
-      // "<project>-<clip>-<tensor>-<codec>"; a project's name can hold dashes itself.
-      let parts = file.dropLast(4).split(separator: "-", omittingEmptySubsequences: false)
-      guard parts.count >= 4, Int64(parts[parts.count - 2]) != nil, Int64(parts[parts.count - 3]) != nil,
-            let fileCodec = VideoCodec(rawValue: String(parts[parts.count - 1]))
-      else { continue }
-      let project = parts.dropLast(3).joined(separator: "-")
+      guard let (project, fileCodec) = clipFileParts(file) else { continue }
       if fileCodec != codec || !projects.contains(project) {
         try? fileManager.removeItem(at: url)
       }

@@ -81,6 +81,7 @@ A project is one file holding the images, their branches and their settings. Use
 - Switch to another project.
 - **New Project…**
 - **Rename** the current project.
+- **Delete** the current project, after asking. On the Mac its file goes to the Trash; on iPad it's deleted for good. The next project in the list opens in its place (a new empty one if there's no other). Jobs still in the queue carry on and save into the project that opens, as they do when you switch projects; Match Colors jobs for the deleted project are cancelled.
 - **Output Folder…**: choose whether the project's new images are also saved to an output folder, and which one. **Save generated images** is **As in Settings** until you pick **On** or **Off**, and **Use a different folder for this project** sends them somewhere other than the folder in Settings. These choices are kept in the project file, so they stay with it when you rename it. See [Output folder](settings.md#output-folder).
 - **Show in Finder** (on iPad, **Show in Files**).
 

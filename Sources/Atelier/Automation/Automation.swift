@@ -30,8 +30,9 @@ import SwiftUI
 ///
 /// `--styles-check` reads a style file (AutomationStyles.swift).
 ///
-/// `--project-check` exercises the project format on a scratch project, and `--edit-input-check`
-/// Use Settings on Edit steps (AutomationProject.swift). `--refine-check` refines part of an image
+/// `--project-check` exercises the project format on a scratch project, `--edit-input-check`
+/// Use Settings on Edit steps, and `--delete-project-check` Delete Project… on scratch projects
+/// (AutomationProject.swift). `--refine-check` refines part of an image
 /// and merges it back (AutomationRefine.swift); `--agent-canvas-check` does it through the agent
 /// canvas tools (AutomationAgentCanvas.swift). `--automask-check` selects with Vision and SAM
 /// into the canvas mask (AutomationAutoMask.swift). `--queue-check` runs the queue
@@ -80,7 +81,7 @@ enum Automation {
       "--catalog-retry-check", "--model-move-check", "--add-folder-check", "--color-match-check", "--canvas-clip-check",
       "--create-delete-check",
       "--history-loras-check",
-      "--input-entries-check", "--entries-freeze-check", "--tab-switch-bench",
+      "--input-entries-check", "--entries-freeze-check", "--tab-switch-bench", "--delete-project-check",
     ]
     // The unit tests run inside the app. Like a scripted run, that leaves the user's data alone: no
     // cleanup at launch, no saving the session or queue.
@@ -150,6 +151,10 @@ enum Automation {
     }
     if args.contains("--project-check") {
       projectCheck(model)
+      return
+    }
+    if args.contains("--delete-project-check") {
+      deleteProjectCheck(model)
       return
     }
     if args.contains("--flashvsr-check") {
