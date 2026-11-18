@@ -18,11 +18,9 @@
 # Options:
 #   --checks --model FILE [--project NAME]   with --changed: run the printed checks with the
 #                       worktree's build/Atelier.app, in a scratch project (default test-checks)
-#   --parallel          run suites in parallel. Off by default: parallel full runs hung in 2 of 3
-#                       tries (light load), with ~90 threads waiting in dflat's
-#                       SQLiteWorkspace.performChanges; serial ones never did. Serial costs ~3x the
-#                       test time for --all (76 s against 26 s, mostly ColorMatchTests), ~1 s for
-#                       the smoke set
+#   --serial            run suites one at a time instead of in parallel (the default), ~3x the
+#                       test time for --all; for telling a test that breaks only alongside others
+#   --parallel          run suites in parallel (the default)
 # Anything else goes to xcodebuild, e.g. -only-testing:AtelierTests/StyleTests.
 # Bash 3.2 (macOS /bin/bash): no associative arrays.
 
@@ -43,7 +41,7 @@ SUITE_ARG=
 RUN_CHECKS=false
 CHECK_MODEL=
 CHECK_PROJECT=test-checks
-PARALLEL=
+PARALLEL=YES
 TIMINGS=false
 PASSTHROUGH=()
 
@@ -78,6 +76,7 @@ while [ $# -gt 0 ]; do
       shift
       ;;
     --parallel) PARALLEL=YES ;;
+    --serial) PARALLEL=NO ;;
     --timings) TIMINGS=true ;;
     *) PASSTHROUGH+=("$1") ;;
   esac
@@ -382,10 +381,10 @@ case "$MODE" in
       exit 1
     fi
     echo "Smoke set: ${SMOKE[*]}"
-    run_tests "${PARALLEL:-NO}" "${SMOKE[@]}"
+    run_tests "$PARALLEL" "${SMOKE[@]}"
     ;;
   all)
-    run_tests "${PARALLEL:-NO}"
+    run_tests "$PARALLEL"
     ;;
   suite)
     SUITES=()
@@ -400,7 +399,7 @@ case "$MODE" in
       echo "error: --suite needs suite names, e.g. --suite StyleTests,ValueTests" >&2
       exit 2
     fi
-    run_tests "${PARALLEL:-NO}" "${SUITES[@]}"
+    run_tests "$PARALLEL" "${SUITES[@]}"
     ;;
   changed)
     if ! git rev-parse --verify -q "$BASE" >/dev/null; then
@@ -469,11 +468,11 @@ case "$MODE" in
     if $RUN_LINT; then lint_map; fi
     if $RUN_ALL; then
       echo "Shared or build files changed: running every suite."
-      run_tests "${PARALLEL:-NO}"
+      run_tests "$PARALLEL"
     elif [ -n "${SUITES// /}" ]; then
       echo "Suites: $SUITES"
       # shellcheck disable=SC2086
-      run_tests "${PARALLEL:-NO}" $SUITES
+      run_tests "$PARALLEL" $SUITES
     else
       echo "No unit suite covers this change."
     fi
