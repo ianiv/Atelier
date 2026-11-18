@@ -1736,16 +1736,19 @@ final class CreateModel {
     var base = GenerationEngine.Request(
       model: model, prompt: styled.prompt, negativePrompt: styled.negativePrompt, seed: seed,
       configuration: settings)
+    let references = usesReferences ? moodboard.references : []
     // A clip playing on the canvas isn't an input: Use Last Frame as Input picks a frame.
     if effectiveCanvasMode == .edit, canvasClip == nil, let source = canvasSource {
       let step = !source.isImported && !source.isPreview && source.step?.project == history.project.name
         ? source.step?.tensorId : nil
       // Video models take the frame as is: they refuse a mask, and a clip has nothing to merge into.
       let refines = videoModel == nil
-      base.setRefineInputs(
-        source: source.image, sourceTensorId: step, isImported: source.isImported, scale: source.scale,
-        offset: source.offset, mask: refines && runTargetTakesMasks ? activeMask : nil,
-        merge: refines && mergeIntoImage, detail: source.detail, paint: source.paint)
+      // The canvas as a value, which a run off the canvas builds from its own inputs (`CanvasEdit`).
+      base.apply(
+        CanvasEdit(
+          source: source.image, sourceTensorId: step, isImported: source.isImported, scale: source.scale,
+          offset: source.offset, mask: refines && runTargetTakesMasks ? activeMask : nil, paint: source.paint,
+          detail: source.detail, merge: refines && mergeIntoImage, moodboard: references))
       // A painted merge's input is its Draw entry, when it was just written for this very canvas
       // (`recordEntriesBeforeRun`): the entry holds the image with the paint, which the run follows.
       if base.merge?.painted == true, let paint = source.paint, let drawn = drawnEntry, let key = drawn.key,
@@ -1765,8 +1768,9 @@ final class CreateModel {
         base.placement = pending
         pendingPlacement = nil
       }
+    } else {
+      base.moodboard = references
     }
-    if usesReferences { base.moodboard = moodboard.references }
     // H3 FL2VA reads only one moodboard image, as the last frame after the canvas's first
     // (`LocalImageGenerator.generate`'s `prefix(1)`). With nothing on the canvas, the moodboard's
     // first image is the first frame and its second the last: the first goes in as the canvas
@@ -1966,17 +1970,24 @@ final class CreateModel {
   /// and moodboard are left alone. Cancelling the caller cancels the job. `target` defaults to
   /// this device for its own models; a request taken from the screen (`screenRequest`) passes
   /// Run on, so it runs where Generate would.
+  ///
+  /// `detached` runs it off the canvas (`JobQueue.Job.detached`): the result is saved to the
+  /// project and returned, but no preview or result shows on the canvas and the current step
+  /// stays where it is. Progress still shows in the status bar and the Queue. Such a request
+  /// brings its own inputs (`CanvasEdit`) and names the step it follows (`parentTensorId`), so
+  /// nothing of the screen is written to History for it first.
   func generate(
-    forAgent request: GenerationEngine.Request, target: JobTarget? = nil,
+    forAgent request: GenerationEngine.Request, target: JobTarget? = nil, detached: Bool = false,
     progress: @escaping (GenerationEngine.Progress) -> Void
   ) async throws -> HistoryItem {
     // It follows what History has, as Generate's runs do (`recordEntriesBeforeRun`, which an
     // agent's run from the screen has done before taking it).
-    await flushEntries()
+    if !detached { await flushEntries() }
     // A model only the selected server has runs there; any other runs on this device, as agents
     // choose among this device's models.
     let target = target ?? (models.contains(where: { $0.file == request.model }) ? JobTarget.local : runTarget)
-    let id = queue.append([request], currentTensorId: history.currentTensorId, target: target, fromAgent: true)[0]
+    let id = queue.append(
+      [request], currentTensorId: history.currentTensorId, target: target, fromAgent: true, detached: detached)[0]
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
         agentCallbacks[id] = (progress, { continuation.resume(with: $0) })
@@ -2182,6 +2193,12 @@ final class CreateModel {
     }
   }
 
+  /// The running job the status bar and canvas are about (`foregroundJobID`).
+  private var foregroundJob: JobQueue.Job? {
+    guard let foregroundJobID else { return nil }
+    return queue.running?.id == foregroundJobID ? queue.running : queue.runningRemote.first { $0.id == foregroundJobID }
+  }
+
   /// With nothing in the foreground, the status bar and canvas go to a job still on a server.
   private func adoptRemoteRun() {
     guard foregroundJobID == nil, let job = queue.runningRemote.first, let run = remoteRuns[job.id] else { return }
@@ -2196,7 +2213,7 @@ final class CreateModel {
     lastStepAt = nil
     livePreview = run.preview
     livePreviewFrames = run.previewFrames
-    if canvasFollowsRun, let preview = run.preview { coverCanvas(with: preview) }
+    if canvasFollowsRun, !job.detached, let preview = run.preview { coverCanvas(with: preview) }
   }
 
   /// Saves one result at a time. Results from servers arrive whenever they're ready, alongside a
@@ -2235,7 +2252,7 @@ final class CreateModel {
             if case .state(let state) = progress { self.timingRecorders[job.id]?.note(state, at: arrived) }
             self.noteRemoteProgress(progress, job)
             if job.id == self.foregroundJobID {
-              self.handle(progress, showsOnCanvas: job.remoteDevice == nil)
+              self.handle(progress, showsOnCanvas: job.remoteDevice == nil && !job.detached)
             }
             self.agentCallbacks[job.id]?.progress(progress)
             self.deviceCallbacks[job.id]?.progress(progress)
@@ -2303,7 +2320,8 @@ final class CreateModel {
         // Runs on a server report the server's states, so their timings would mislead.
         var timings = job.target == .local ? timingRecorders[job.id]?.timings(returnedAt: returnedAt) : nil
         if output.isVideo { setRunMessage("Saving \(output.frames.count) frames…", job) }
-        let followsRun = { self.canvasFollowsRun && job.id == self.foregroundJobID }
+        // A detached job's result is saved and returned, never shown or made current.
+        let followsRun = { !job.detached && self.canvasFollowsRun && job.id == self.foregroundJobID }
         let history = history
         // The mask painted on the source stays with the result, moved as the image grew.
         let keptMask = mergedOrigin.flatMap { origin in request.merge?.canvasMask?.translated(by: origin) }
@@ -3158,8 +3176,10 @@ final class CreateModel {
   }
 
   private func coverCanvas(with preview: CGImage) {
-    // A style thumbnail's previews show in the status bar only: the canvas keeps your image.
-    guard queue.running?.styleThumbnail == nil else { return }
+    // A style thumbnail's previews show in the status bar only: the canvas keeps your image. So
+    // do a detached job's, however this was reached (its progress, a server's run taking the
+    // foreground, a click on the live thumbnail: `followRun`).
+    guard queue.running?.styleThumbnail == nil, foregroundJob?.detached != true else { return }
     if !previewCoversCanvas {
       canvasBeforePreview = canvasSource
       previewCoversCanvas = true

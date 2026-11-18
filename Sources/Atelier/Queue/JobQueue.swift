@@ -49,6 +49,10 @@ final class JobQueue {
     var resumesRemoteJob = false
     /// Makes the thumbnail of the style with this name (Styles screen); not kept across quits.
     var styleThumbnail: String?
+    /// Off-canvas: saved to the project, never shown. Its previews and result stay off the canvas
+    /// and the current step stays where it is (`CreateModel.run`); it's on no line, following the
+    /// step its request names.
+    var detached = false
     /// Jobs queued one after another, while you didn't pick another step, form a line: each
     /// follows the line's latest result when it starts, whatever order they end up running in.
     var line: UUID?
@@ -137,11 +141,21 @@ final class JobQueue {
 
   /// Adds jobs at the end. Ones without a step to follow go on the line being queued, or start
   /// a new line after the current step when you picked another step since. Returns their ids.
+  /// `detached` jobs (`Job.detached`) are apart from the lines: they neither join one nor change
+  /// what the next jobs queued follow.
   @discardableResult
   func append(
     _ requests: [GenerationEngine.Request], currentTensorId: Int64?, target: JobTarget = .local,
-    fromAgent: Bool = false, styleThumbnail: String? = nil
+    fromAgent: Bool = false, styleThumbnail: String? = nil, detached: Bool = false
   ) -> [UUID] {
+    if detached {
+      for request in requests {
+        var job = Job(request: request, target: target, fromAgent: fromAgent)
+        job.detached = true
+        waiting.append(job)
+      }
+      return waiting.suffix(requests.count).map(\.id)
+    }
     let line: UUID
     if let lastLine, !isEmpty, currentTensorId == expectedCurrent {
       line = lastLine
@@ -251,7 +265,8 @@ final class JobQueue {
     }
     job.status = status
     job.finishedAt = Date()
-    if case .finished(let tensorId) = status, inOpenProject {
+    // A detached job's result isn't made current, and no line follows it.
+    if case .finished(let tensorId) = status, inOpenProject, !job.detached {
       // Saving a result makes it the current step.
       let tip = tipTensorId ?? tensorId
       expectedCurrent = tip
@@ -313,7 +328,10 @@ final class JobQueue {
   /// same step.
   func retry(_ id: UUID) {
     guard let job = recent.first(where: { $0.id == id }) else { return }
-    waiting.append(Job(work: job.work, target: job.target))
+    var again = Job(work: job.work, target: job.target)
+    // Run again off the canvas, as it ran.
+    again.detached = job.detached
+    waiting.append(again)
   }
 
   /// Takes every waiting job out of the queue; returns their ids.
