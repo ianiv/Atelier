@@ -1360,8 +1360,8 @@ final class HistoryStore {
   /// The image as PNG carrying its settings, unless Settings turns that off: Draw Things'
   /// metadata (`ImageMetadata`) and Atelier's sidecar in an `Atelier` iTXt chunk. At full detail
   /// unless Settings says otherwise (`exportImage`).
-  func pngData(_ item: HistoryItem) async throws -> Data {
-    guard let image = await exportImage(for: item) else { throw ProjectError.badImage }
+  func pngData(_ item: HistoryItem, in project: Project? = nil) async throws -> Data {
+    guard let image = await exportImage(for: item, in: project) else { throw ProjectError.badImage }
     return try Self.pngData(image, sidecar: item.sidecar)
   }
 
@@ -1396,8 +1396,8 @@ final class HistoryStore {
 
   /// The image as exports, copies and drags take it: at full detail (`Project.finestDensity`),
   /// unless Settings ▸ Images says the image's own size (`AppSettings.exportsFullDetail`).
-  func exportImage(for item: HistoryItem) async -> CGImage? {
-    let project = project
+  func exportImage(for item: HistoryItem, in project: Project? = nil) async -> CGImage? {
+    let project = project ?? self.project
     let density = AppSettings.exportsFullDetail ? Project.finestDensity : 120
     guard let tensorId = item.imageTensorId else { return nil }
     return await project.read { $0.image(tensorId: tensorId, density: density) }

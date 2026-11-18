@@ -1055,8 +1055,9 @@ struct StatusBar: View {
           Text("Ready").foregroundStyle(.secondary)
         }
       case .running(let message):
-        // Only while the canvas shows something else: the way back to the running image.
-        if !model.canvasFollowsRun { LiveThumbnail() }
+        // Only while the canvas shows something else: the way back to the running image. A
+        // detached job (an agent's edit_image) has no place on the canvas to go back to.
+        if !model.canvasFollowsRun, !model.foregroundRunIsDetached { LiveThumbnail() }
         Text(message).monospacedDigit()
         if model.totalSteps > 0 {
           ProgressView(value: Double(model.step), total: Double(model.totalSteps))

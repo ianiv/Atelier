@@ -38,13 +38,13 @@ struct MoodboardTests {
     board.onChange = { changes += 1 }
     var items = Array(board.items.reversed())
     items[0].weight = 4
-    board.set(items)
+    #expect(board.set(items))
     #expect(board.items.map(\.id) == [ids[1], ids[0]])
     // A weight is held to 0–1, as `setWeight` holds it.
     #expect(board.items.map(\.weight) == [1, 1])
     #expect(changes == 1)
-    // The same board again isn't a change.
-    board.set(board.items)
+    // The same board again isn't a change, and says so (no undo step is made for it).
+    #expect(!board.set(board.items))
     #expect(changes == 1)
     items[1].weight = 0
     board.set(items)

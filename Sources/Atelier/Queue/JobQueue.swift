@@ -53,6 +53,9 @@ final class JobQueue {
     /// and the current step stays where it is (`CreateModel.run`); it's on no line, following the
     /// step its request names.
     var detached = false
+    /// The project a detached job was queued in, which its result is saved into whichever
+    /// project is open when it ends: the step it follows is named by an id of that project's.
+    var project: String?
     /// Jobs queued one after another, while you didn't pick another step, form a line: each
     /// follows the line's latest result when it starts, whatever order they end up running in.
     var line: UUID?
@@ -122,9 +125,11 @@ final class JobQueue {
     ((running.map { [$0] } ?? []) + waiting).first { $0.request?.colorMatch?.isSameMatch(as: match) == true }
   }
 
-  /// Waiting Match Colors to Original jobs for a project that was renamed follow it.
-  func renameColorMatchProject(from old: String, to name: String) {
+  /// Waiting jobs that name their own project (Match Colors to Original, and detached jobs)
+  /// follow one that was renamed.
+  func renameProject(from old: String, to name: String) {
     for index in waiting.indices {
+      if waiting[index].project == old { waiting[index].project = name }
       guard case .generation(var request) = waiting[index].work, request.colorMatch?.project == old else { continue }
       request.colorMatch?.project = name
       waiting[index].work = .generation(request)
@@ -142,16 +147,17 @@ final class JobQueue {
   /// Adds jobs at the end. Ones without a step to follow go on the line being queued, or start
   /// a new line after the current step when you picked another step since. Returns their ids.
   /// `detached` jobs (`Job.detached`) are apart from the lines: they neither join one nor change
-  /// what the next jobs queued follow.
+  /// what the next jobs queued follow. `project` is the one they save into (`Job.project`).
   @discardableResult
   func append(
     _ requests: [GenerationEngine.Request], currentTensorId: Int64?, target: JobTarget = .local,
-    fromAgent: Bool = false, styleThumbnail: String? = nil, detached: Bool = false
+    fromAgent: Bool = false, styleThumbnail: String? = nil, detached: Bool = false, project: String? = nil
   ) -> [UUID] {
     if detached {
       for request in requests {
         var job = Job(request: request, target: target, fromAgent: fromAgent)
         job.detached = true
+        job.project = project
         waiting.append(job)
       }
       return waiting.suffix(requests.count).map(\.id)
@@ -329,8 +335,11 @@ final class JobQueue {
   func retry(_ id: UUID) {
     guard let job = recent.first(where: { $0.id == id }) else { return }
     var again = Job(work: job.work, target: job.target)
-    // Run again off the canvas, as it ran.
+    // Run again off the canvas and into its own project, as it ran. It answers no caller now,
+    // but stays a job that isn't kept across a quit (`SavedQueue.save`): brought back it would
+    // be an ordinary job, showing on the canvas.
     again.detached = job.detached
+    again.project = job.project
     waiting.append(again)
   }
 
