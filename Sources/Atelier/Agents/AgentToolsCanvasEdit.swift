@@ -20,9 +20,11 @@ extension AgentTools {
         degrees, when known) and `landmarks` (left_eye, right_eye, nose, outer_lips and \
         face_contour as [x, y] points; left and right are the image's). A face that is a small \
         part of a large image can be missed: pass `region` around the head to search only there, \
-        at its own resolution. To redo a face: mask it (set_canvas_mask with an ellipse over \
-        `box`, or auto_mask with a point at `center`), grow_canvas_mask, set_canvas_frame, then \
-        generate with use_canvas.
+        at its own resolution. To redo a face on the canvas: mask it (set_canvas_mask with an \
+        ellipse over `box`, or auto_mask with a point at `center`), grow_canvas_mask, \
+        set_canvas_frame with the box and a `scale`, optionally set_canvas_paint to fill the \
+        mask and set_moodboard for a reference face, then generate with use_canvas. Or pass the \
+        box to edit_image, which does all of it in one call without touching the Create screen.
         """,
       "inputSchema": [
         "type": "object",
@@ -72,7 +74,8 @@ extension AgentTools {
         912×1152 region at scale 4 is a 3648×4608 output), sides in multiples of 64; or neither, \
         which keeps the output size (its pixel count, when `aspect_ratio` changes its shape). An \
         Edit run then regenerates that region at the output's resolution and, with Merge into \
-        Image, puts it back into the whole image. A changed output size is one ⌘Z step, “Agent \
+        Image, puts it back into the whole image. Give the model a few megapixels: a face \
+        250 pixels wide wants a scale of 4 or more. A changed output size is one ⌘Z step, “Agent \
         Settings”; the zoom isn't undoable, as with set_canvas_region. Returns the canvas as \
         get_create_screen's `canvas` describes it (`region` is what the frame shows, with \
         `frame` and `scale`), plus requested_box, padded_box, clamped and notes.
@@ -127,8 +130,8 @@ extension AgentTools {
         `position`, default the end); `weights` ({"id" or "position", "weight"}, positions as \
         before the call); `order` (every image's id, in the new order). The order is what a \
         prompt's Picture numbers count: with an image on the canvas in Edit the canvas is \
-        Picture 1 and the first moodboard image Picture 2. Images are scaled down to 1536 px on \
-        the long side. The whole call is one ⌘Z step, “Agent Moodboard”. Returns the moodboard \
+        Picture 1 and the first moodboard image Picture 2, so a prompt can say “the face from \
+        Picture 2”. Images are scaled down to 1536 px on the long side. The whole call is one ⌘Z step, “Agent Moodboard”. Returns the moodboard \
         as get_moodboard lists it, with a note when the selected model takes no reference \
         images (they stay on the board but aren't sent).
         """,

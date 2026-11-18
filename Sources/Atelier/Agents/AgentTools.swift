@@ -12,7 +12,8 @@ import SwiftUI
 /// Generate (progress and previews on the canvas, saved to the current project, one run at a
 /// time) and leaves the Create screen's prompt, inspector and moodboard alone;
 /// `get_create_screen` and `set_create_screen` read and change them, so an agent and the user
-/// can work on the same screen.
+/// can work on the same screen. `edit_image` (`AgentToolsEditImage.swift`) is the one that runs
+/// off the canvas, leaving the whole screen as it is.
 @MainActor
 @Observable
 final class AgentTools {
@@ -24,7 +25,7 @@ final class AgentTools {
     var isQueued = false
   }
 
-  /// One `generate` or `match_colors` run. A run outlives the call that started it: `background`
+  /// One `generate`, `edit_image` or `match_colors` run. A run outlives the call that started it: `background`
   /// returns its id at once, and a waiting call whose client hangs up leaves it running for
   /// `get_job`.
   @MainActor
@@ -33,7 +34,7 @@ final class AgentTools {
     let id: String
     /// The tool that started it.
     let tool: String
-    /// What list_jobs shows: a generate job's prompt, else what it does ("Match colors of step 12").
+    /// What list_jobs shows: a generate or edit_image job's prompt, else what it does ("Match colors of step 12").
     let label: String
     /// A match_colors job's step, so a second call for it joins this one.
     let colorMatch: ColorMatch.Job?
@@ -188,8 +189,8 @@ final class AgentTools {
         or `blank: "white"` for a new sketch: an opaque white image the size of the frame to \
         paint on (set_canvas_paint). \
         Returns the canvas as get_create_screen's `canvas` describes it, with mask_restored. \
-        Then paint a mask (set_canvas_mask), pick a region (set_canvas_region), or generate with \
-        use_canvas.
+        Then paint a mask (set_canvas_mask, auto_mask), pick a region (set_canvas_region, or \
+        set_canvas_frame around a box or the mask), or generate with use_canvas.
         """,
       "inputSchema": [
         "type": "object",
@@ -214,7 +215,10 @@ final class AgentTools {
         the default for shapes without one and for the fill (else the app's paint color). The \
         whole call is one ⌘Z step, “Agent Paint”. Returns has_paint, the number of strokes and \
         the painted bounds. Needs an image on the canvas (set_canvas_image, or blank: "white" \
-        for a sketch) in Edit mode.
+        for a sketch) in Edit mode. To point an edit model at what to replace, fill the mask \
+        with a flat color the picture doesn't have (fill_from_mask with color "#00FF00") and \
+        name that color in the prompt (“replace the green area with the face from Picture 2”): \
+        paint is only the run's input, so none of it is left outside the mask.
         """,
       "inputSchema": [
         "type": "object",
@@ -314,7 +318,8 @@ final class AgentTools {
         default), add or subtract, as for set_canvas_mask. One ⌘Z step, “Agent Mask”. Returns \
         get_canvas_mask's overlay and summary, plus selected_pixels, SAM's score and the time \
         taken. There's no text prompt: to select by a description, look at the image \
-        (get_image) and pass a point on what you mean.
+        (get_image) and pass a point on what you mean (find_faces gives a face's center). A \
+        selection hugs its subject: grow_canvas_mask gives an edit room to blend in.
         """,
       "inputSchema": [
         "type": "object",
@@ -347,7 +352,9 @@ final class AgentTools {
         cropped), `fit`, `actual_size` (1 image pixel per frame pixel, keeping the center), or \
         `scale` (frame pixels per image pixel) with an optional `center`. The frame size stays \
         unless `size_to_region` is true. Returns the canvas, with the region the frame actually \
-        shows: larger or smaller than asked when the zoom needed is outside 0.05×–32×.
+        shows: larger or smaller than asked when the zoom needed is outside 0.05×–32×. To frame \
+        a box or the mask with padding, at a shape and a zoom you name, use set_canvas_frame, \
+        which works the region and the output size out.
         """,
       "inputSchema": [
         "type": "object",
@@ -398,7 +405,7 @@ final class AgentTools {
       "name": "match_colors",
       "title": "Match colors to original",
       "description":
-        "Matches an edited image's colors to the image it was made from (Reinhard color transfer in Lab), taking out the warm or cool shift edit models often add, like Match Colors to Original in the canvas menu. The original is the step's input (the canvas it was edited from), else its first moodboard image; a step this tool made goes back to that same original. Runs as a job in Atelier's Queue on this device, after what's queued there: by default it waits and returns the new history step (saved after it in the step's project, and shown on the canvas when that follows the queue), the shift removed (delta_b > 0: the edit had come out warmer/yellower; delta_a > 0: more magenta) and job_id. With background: true it returns a job_id at once for get_job, list_jobs and cancel_job. By default the colors move fully and the lightness not at all; tint, saturation, brightness and contrast set how far each moves, and unchanged_only measures the two images only where the edit left the picture alone, for edits that add or remove something colorful. A step already waiting or being matched with the same settings isn't queued twice: the call joins that job. Other settings queue another job. Not for videos.",
+        "Matches an edited image's colors to the image it was made from (Reinhard color transfer in Lab), taking out the warm or cool shift edit models often add, like Match Colors to Original in the canvas menu. The original is the step's input (the canvas it was edited from), else its first moodboard image, or the step original_history_step names: pass the source image's step for an edit made with paint (edit_image `paint`, set_canvas_paint), whose recorded input is the painted frame, with unchanged_only true. A step this tool made goes back to that same original. Runs as a job in Atelier's Queue on this device, after what's queued there: by default it waits and returns the new history step (saved after it in the step's project, and shown on the canvas when that follows the queue), the shift removed (delta_b > 0: the edit had come out warmer/yellower; delta_a > 0: more magenta) and job_id. With background: true it returns a job_id at once for get_job, list_jobs and cancel_job. By default the colors move fully and the lightness not at all; tint, saturation, brightness and contrast set how far each moves, and unchanged_only measures the two images only where the edit left the picture alone, for edits that add or remove something colorful. A step already waiting or being matched with the same settings isn't queued twice: the call joins that job. Other settings queue another job. Not for videos.",
       "inputSchema": [
         "type": "object",
         "properties": [
@@ -469,7 +476,7 @@ final class AgentTools {
           "audio": ["type": "string", "description": "Video models that take audio (see list_models): path to an audio file."],
           "save_to": ["type": "string", "description": "Where to write the PNG or MP4: a file path, or a folder. Defaults to a temporary folder."],
           "include_image": ["type": "boolean", "description": "Return the image inline (scaled to 1024 px on the long side). Default true."],
-          "use_canvas": ["type": "boolean", "description": "With use_app_settings: run exactly what the Generate button would, taking the canvas image, the region the frame shows (set_canvas_region), its mask (set_canvas_mask), the moodboard and Merge into Image. Takes no prompt, settings or input_image: change those with set_create_screen and set_canvas_image first. Returns the result (the merged whole image when it merges) and the step it followed."],
+          "use_canvas": ["type": "boolean", "description": "With use_app_settings: run exactly what the Generate button would, taking the canvas image, the region the frame shows (set_canvas_region), its mask (set_canvas_mask), the moodboard and Merge into Image. Takes no prompt, settings or input_image: change those with set_create_screen and set_canvas_image first. Returns the result (the merged whole image when it merges) and the step it followed. For the same edit without touching the Create screen, use edit_image."],
           "background": ["type": "boolean", "description": "Return a job_id right away instead of waiting for the result, then check on it with get_job. Use it for videos and anything that may take more than a couple of minutes, since some clients give up on long calls. Either way the run keeps going if the call is cancelled or dropped; only cancel_job stops it."],
         ],
       ],
@@ -478,8 +485,8 @@ final class AgentTools {
       "name": "get_job",
       "title": "Get job",
       "description": """
-        Checks on a generate or match_colors job: waiting (queued behind other runs), running (with step and \
-        total), done (with everything the job's tool returns: for generate text, image and structured result), \
+        Checks on a generate, edit_image or match_colors job: waiting (queued behind other runs), running (with step and \
+        total), done (with everything the job's tool returns: for generate and edit_image text, image and structured result), \
         failed or cancelled. Waits up to wait_seconds for it to finish first, so calling it in a \
         loop checks in periodically without busy polling.
         """,
@@ -487,7 +494,7 @@ final class AgentTools {
         "type": "object",
         "required": ["job_id"],
         "properties": [
-          "job_id": ["type": "string", "description": "From generate with background, or list_jobs."],
+          "job_id": ["type": "string", "description": "From generate, edit_image or match_colors with background, or list_jobs."],
           "wait_seconds": ["type": "integer", "description": "How long to wait for the job to finish before returning its progress, 0–60. Default 30."],
         ],
       ],
@@ -496,14 +503,14 @@ final class AgentTools {
     [
       "name": "list_jobs",
       "title": "List jobs",
-      "description": "Lists generate and match_colors jobs from the last hour, newest first: job_id, tool, status, progress, elapsed time and prompt (label for match_colors). A generate call that timed out, was cancelled or lost its connection keeps running and shows here.",
+      "description": "Lists generate, edit_image and match_colors jobs from the last hour, newest first: job_id, tool, status, progress, elapsed time and prompt (label for match_colors). A generate or edit_image call that timed out, was cancelled or lost its connection keeps running and shows here.",
       "inputSchema": ["type": "object", "properties": [String: Any]()],
       "annotations": ["readOnlyHint": true],
     ],
     [
       "name": "cancel_job",
       "title": "Cancel job",
-      "description": "Stops a generate or match_colors job, like Cancel in Atelier's Queue: a waiting job leaves the queue and a running one stops.",
+      "description": "Stops a generate, edit_image or match_colors job, like Cancel in Atelier's Queue: a waiting job leaves the queue and a running one stops.",
       "inputSchema": [
         "type": "object",
         "required": ["job_id"],

@@ -60,7 +60,18 @@ final class AgentServer {
     use_app_settings (no prompt). To see an image, including ones the user generated, use \
     get_image (the canvas by default) and list_history. For videos and other long runs, call \
     generate with background: true and check on the job_id with get_job, which waits up to \
-    wait_seconds per call.
+    wait_seconds per call. \
+    To redo part of an image (a small face, a hand), work zoomed in: on the canvas, \
+    set_canvas_image, then find_faces or get_image to locate it, set_canvas_mask or auto_mask \
+    and grow_canvas_mask to mask it, set_canvas_frame to zoom the frame onto it at a scale, \
+    and generate with use_app_settings and use_canvas, which merges the result back into the \
+    whole image. With a model that takes reference images (list_models), set_canvas_paint can \
+    fill the mask with a flat color the prompt names and set_moodboard can add the picture to \
+    take from (get_moodboard gives its Picture number). edit_image does the whole of that in \
+    one call, as a job that leaves the Create screen exactly as the user has it: use it when \
+    they are working there, or for a batch. After an edit, match_colors takes out a color \
+    shift; after one made with paint, pass original_history_step (the source) and \
+    unchanged_only true. Coordinates are always the image's own pixels from its top left.
     """
 
   init(create: CreateModel, presets: PresetStore) {
