@@ -68,8 +68,11 @@ struct MaskMorphologyTests {
     #expect(CanvasMask().grown(by: 5, width: 40, height: 40) == nil)
     // What's left is one bitmap stroke painting the same pixels.
     let grown = try #require(mask.grown(by: 3, width: 40, height: 40))
-    #expect(grown.strokes.count == 1 && grown.strokes[0].kind == .bitmap)
-    #expect(grown.coverage(width: 40, height: 40) == MaskMorphology.grown(square, width: 40, height: 40, by: 3))
+    #expect(grown.mask.strokes.count == 1 && grown.mask.strokes[0].kind == .bitmap)
+    #expect(grown.mask.coverage(width: 40, height: 40) == MaskMorphology.grown(square, width: 40, height: 40, by: 3))
+    // It comes with the pixels it paints, and takes the mask's own when the caller has them.
+    #expect(grown.coverage == MaskMorphology.grown(square, width: 40, height: 40, by: 3))
+    #expect(mask.grown(by: 3, width: 40, height: 40, from: square)?.coverage == grown.coverage)
   }
 
   @Test func aMaskAtTheEdgeKeepsToIt() {

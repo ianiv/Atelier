@@ -46,17 +46,46 @@ struct FrameSelectionTests {
     let region = CGRect(x: 1100, y: 640, width: 912, height: 1152)
     let exact = FrameSelection.frame(for: region, width: nil, height: nil, scale: 4, pixelCount: 1024 * 1024)
     #expect(exact.size == CGSize(width: 3648, height: 4608) && exact.region == region)
-    // A region that isn't: the size rounds to 64s and the region follows, about the same centre.
+    // A region that isn't: the size rounds up to 64s and the region follows, about the same centre.
     let loose = CGRect(x: 100, y: 200, width: 900, height: 1150)
     let frame = FrameSelection.frame(for: loose, width: nil, height: nil, scale: 4, pixelCount: 1024 * 1024)
-    #expect(frame.size == CGSize(width: 3584, height: 4608))
-    #expect(frame.region == CGRect(x: 102, y: 199, width: 896, height: 1152))
+    #expect(frame.size == CGSize(width: 3648, height: 4608))
+    #expect(frame.region == CGRect(x: 94, y: 199, width: 912, height: 1152))
     let placement = FrameSelection.placement(showing: frame.region, sourceSize: CGSize(width: 3200, height: 5056), frameSize: frame.size)
     #expect(placement.scale == 4 && !placement.clamped)
     // The merge then takes it as it is (`RefineMerge.snapped`).
     let snapped = RefineMerge.snapped(
       scale: placement.scale, offset: placement.offset, sourceSize: CGSize(width: 3200, height: 5056), frameSize: frame.size)
     #expect(snapped.scale == 4 && snapped.offset == placement.offset)
+  }
+
+  @Test func aScaledRegionHoldsTheOneAskedFor() {
+    // Rounded to the nearest 64, 200 at 1× would be 192: part of the padded box cropped.
+    let box = CGRect(x: 300, y: 400, width: 200, height: 200)
+    let one = FrameSelection.frame(for: box, width: nil, height: nil, scale: 1, pixelCount: 1024 * 1024)
+    #expect(one.size == CGSize(width: 256, height: 256) && one.region == CGRect(x: 272, y: 372, width: 256, height: 256))
+    for scale in [0.5, 1, 1.5, 2, 3, 4, 7.3, 8] {
+      for side in [10.0, 63, 64, 65, 200, 333.3, 912, 1000] {
+        let region = CGRect(x: 17.25, y: 40.5, width: side, height: side * 1.25)
+        let frame = FrameSelection.frame(for: region, width: nil, height: nil, scale: scale, pixelCount: 1024 * 1024)
+        #expect(frame.region.insetBy(dx: -1e-6, dy: -1e-6).contains(region), "\(side) at \(scale)")
+        #expect(frame.size.width.truncatingRemainder(dividingBy: 64) == 0 && frame.size.height.truncatingRemainder(dividingBy: 64) == 0)
+        // Less than a unit more than it needs.
+        #expect(frame.size.width - side * scale < 64 + 1e-6 || frame.size.width == 64)
+        #expect(abs(frame.size.width / frame.region.width - scale) < 1e-9)
+      }
+    }
+  }
+
+  @Test func aScaledRegionStartsOnAWholePixel() {
+    // Across, the box is centred on half a pixel: at 3× the region is 512 of the image's pixels
+    // from a whole one, so a merge reaching past the image grows it by whole pixels (960, never
+    // 961). Down, the region is exactly the box, which starts on half a pixel: it stays there
+    // rather than crop it.
+    let box = CGRect(x: 233, y: 310.5, width: 501, height: 640)
+    let frame = FrameSelection.frame(for: box, width: nil, height: nil, scale: 3, pixelCount: 1024 * 1024)
+    #expect(frame.size == CGSize(width: 1536, height: 1920))
+    #expect(frame.region == CGRect(x: 228, y: 310.5, width: 512, height: 640))
   }
 
   @Test func sizesAreMultiplesOf64() {

@@ -107,10 +107,13 @@ nonisolated enum MaskMorphology {
 
 nonisolated extension CanvasMask {
   /// What the mask paints over a `width` × `height` image, grown by `pixels` (shrunk when
-  /// negative; `MaskMorphology.grown`), as a mask of one bitmap stroke. Nil when nothing is left.
-  func grown(by pixels: Int, width: Int, height: Int) -> CanvasMask? {
-    let grown = MaskMorphology.grown(coverage(width: width, height: height), width: width, height: height, by: pixels)
+  /// negative; `MaskMorphology.grown`), as a mask of one bitmap stroke: its edge moved, the mask
+  /// is the pixels themselves. It comes with those pixels, for a caller that goes on to measure
+  /// or fill them; one that has already rasterized the mask passes that as `coverage`. Nil when
+  /// nothing is left.
+  func grown(by pixels: Int, width: Int, height: Int, from coverage: [UInt8]? = nil) -> (mask: CanvasMask, coverage: [UInt8])? {
+    let grown = MaskMorphology.grown(coverage ?? self.coverage(width: width, height: height), width: width, height: height, by: pixels)
     guard grown.contains(255), let png = Self.grayPNG(grown, width: width, height: height) else { return nil }
-    return CanvasMask(strokes: [Stroke(kind: .bitmap, points: [.zero], bitmap: png)])
+    return (CanvasMask(strokes: [Stroke(kind: .bitmap, points: [.zero], bitmap: png)]), grown)
   }
 }
