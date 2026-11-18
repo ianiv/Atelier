@@ -17,11 +17,23 @@ extension Automation {
   /// Strength below 1. Then auto_mask: its errors, Vision finding no subject in the input, and on
   /// `--subject-input` (an image with a subject at `--subject-point`, default 620,550) Vision's
   /// subject, with and without the point, one undo step, and SAM 2.1 Small on the point when it's
-  /// installed (skipped otherwise). Prints PASS/FAIL lines.
+  /// installed (skipped otherwise). Before auto_mask, the edit tools: grow_canvas_mask (grow,
+  /// shrink, one “Agent Mask” step, its errors), set_canvas_frame (the mask's bounds padded, a box
+  /// at a scale sizing the output as one “Agent Settings” step, staying inside the image or not,
+  /// its errors) and find_faces (its errors, and on `--face-input`, an image with a face, the
+  /// face's box and landmarks, and the same face found in a region). Prints PASS/FAIL lines.
+  ///
+  /// The canvas tools' remembered settings, Merge into Image, the canvas mode and the moodboard
+  /// are put back as they were when it ends.
   ///
   ///   Atelier --agent-canvas-check --project NAME --input FILE [--subject-input FILE]
-  ///           [--subject-point x,y] [--model M] [--steps N] [--quit]
+  ///           [--subject-point x,y] [--face-input FILE] [--model M] [--steps N] [--quit]
   static func agentCanvasCheck(_ model: CreateModel, presets: PresetStore) {
+    // What the check changes that outlives it (the settings are UserDefaults'), as it is now.
+    let restoreCanvasSettings = keepCanvasSettings(model)
+    let mergeBefore = model.mergeIntoImage, modeBefore = model.canvasMode
+    let moodboardBefore = model.moodboard.items
+    let storedBefore = ["mergeIntoImage", "canvasMode"].map { ($0, UserDefaults.standard.object(forKey: $0)) }
     let args = CommandLine.arguments
     func value(_ name: String) -> String? {
       guard let index = args.firstIndex(of: name), index + 1 < args.count else { return nil }
@@ -35,6 +47,12 @@ extension Automation {
         fflush(stdout)
       }
       @MainActor func finish() {
+        restoreCanvasSettings()
+        model.mergeIntoImage = mergeBefore
+        model.canvasMode = modeBefore
+        // Exactly as they were: a key that wasn't set stays unset (the app's default).
+        for (key, value) in storedBefore { UserDefaults.standard.set(value, forKey: key) }
+        model.moodboard.replace(with: moodboardBefore.map { ($0.image, $0.weight) })
         print(failures == 0 ? "agent canvas check: all passed" : "agent canvas check: \(failures) failed")
         fflush(stdout)
         if args.contains("--quit") { AppLifecycle.quit() }
@@ -451,6 +469,112 @@ extension Automation {
       undoManager.undo()
       check(near(coverage(), 0.25), "⌘Z undoes the whole call (\(coverage()))")
       _ = try? await call("set_canvas_mask", ["clear": true])
+
+      // grow_canvas_mask, on the input with the centered rect: out by 8, back, in by 8.
+      _ = try? await call("set_canvas_image", ["image": "data:image/png;base64," + png.base64EncodedString()])
+      await expectError("grow_canvas_mask", ["pixels": 8], "mask is empty", "growing no mask")
+      _ = try? await call("set_canvas_mask", ["shapes": [rectShape]])
+      let rectPixels = model.canvasMaskStats?.paintedPixels ?? 0
+      summary = try? await call("grow_canvas_mask", ["pixels": 8])
+      let grownPixels = (summary?["painted_pixels"] as? NSNumber)?.intValue ?? 0
+      // A rect grown by a disc: 8 more on every side, less the four rounded corners.
+      let grownArea = Double(rectPixels) + 16 * (center.width + center.height) + Double.pi * 64
+      check(
+        same(rect(summary?["bounds"]), center.insetBy(dx: -8, dy: -8)) && abs(Double(grownPixels) - grownArea) < grownArea * 0.01
+          && (summary?["grown_by"] as? NSNumber)?.intValue == 8,
+        "grow_canvas_mask by 8 moves the edge out 8 px, corners rounded (\(grownPixels) px, expected about \(Int(grownArea)); bounds \(summary?["bounds"] ?? "?"))")
+      check(undoManager.undoActionName == CreateModel.agentMaskActionName, "growing is an “Agent Mask” undo step (\(undoManager.undoActionName))")
+      undoManager.undo()
+      check(model.canvasMaskStats?.paintedPixels == rectPixels, "⌘Z puts the mask back as it was (\(model.canvasMaskStats?.paintedPixels ?? -1) px)")
+      summary = try? await call("grow_canvas_mask", ["pixels": -8])
+      check(
+        same(rect(summary?["bounds"]), center.insetBy(dx: 8, dy: 8)) && (summary?["grown_by"] as? NSNumber)?.intValue == -8,
+        "a negative amount shrinks it (bounds \(summary?["bounds"] ?? "?"))")
+      await expectError("grow_canvas_mask", ["pixels": 0], "1 to 512", "growing by nothing")
+      await expectError("grow_canvas_mask", ["pixels": 600], "1 to 512", "growing by too much")
+      await expectError("grow_canvas_mask", [:], "pixels", "no amount")
+      _ = try? await call("set_canvas_mask", ["shapes": [["shape": "rect", "x": 20, "y": 20, "width": 10, "height": 10]]])
+      await expectError("grow_canvas_mask", ["pixels": -20], "leaves nothing", "shrinking a small mask away")
+
+      // set_canvas_frame: the mask's bounds, padded, at the output's shape and size.
+      _ = try? await call("set_canvas_mask", ["shapes": [rectShape]])
+      state = try? await call("set_canvas_frame")
+      let framePadding = 0.25 * max(center.width, center.height)
+      var framed = rect(state?["region"])
+      check(
+        (framed.map { $0.insetBy(dx: -1.5, dy: -1.5).contains(center.insetBy(dx: -framePadding, dy: -framePadding).intersection(CGRect(x: 0, y: 0, width: width, height: height))) } ?? false)
+          && same(rect(state?["requested_box"]), center) && same(rect(state?["padded_box"]), center.insetBy(dx: -framePadding, dy: -framePadding))
+          && state?["clamped"] as? Bool == false && model.settings?.width == Int(frame.width) && model.settings?.height == Int(frame.height),
+        "set_canvas_frame frames the mask's bounds with a quarter's padding, keeping the output size (\(state?["region"] ?? "?"))")
+      // A box at a scale: the output is sized to the region, one “Agent Settings” step.
+      let side = (min(width, height) / 8).rounded()
+      state = try? await call(
+        "set_canvas_frame", ["box": ["x": width / 2, "y": height / 2, "width": side, "height": side], "padding": 0, "aspect_ratio": "1:1", "scale": 2])
+      framed = rect(state?["region"])
+      let sized = max((side * 2 / 64).rounded(), 1) * 64
+      check(
+        model.settings?.width == Int(sized) && model.settings?.height == Int(sized) && near(state?["scale"] as? Double ?? 0, 2, 0.001)
+          && (framed.map { abs($0.width - sized / 2) < 1 && abs($0.midX - (width / 2 + side / 2)) < 1.5 } ?? false),
+        "a box at scale 2 sizes the output to the region at exactly 2× (\(model.settings?.width ?? 0)×\(model.settings?.height ?? 0), scale \(state?["scale"] ?? "?"), region \(state?["region"] ?? "?"))")
+      check(undoManager.undoActionName == "Agent Settings", "the size change is an “Agent Settings” undo step (\(undoManager.undoActionName))")
+      undoManager.undo()
+      check(model.settings?.width == Int(frame.width) && model.settings?.height == Int(frame.height), "⌘Z puts the output size back")
+      // A box in the corner: moved inside the image, or left centered on the box.
+      let corner: [String: Any] = ["x": 0, "y": 0, "width": side, "height": side]
+      state = try? await call("set_canvas_frame", ["box": corner, "padding": side])
+      framed = rect(state?["region"])
+      check(
+        state?["extends_past_image"] as? Bool == false && (framed.map { $0.minX > -1 && $0.minY > -1 } ?? false),
+        "a box in the corner is framed inside the image (\(state?["region"] ?? "?"))")
+      state = try? await call("set_canvas_frame", ["box": corner, "padding": side, "stay_inside_image": false])
+      framed = rect(state?["region"])
+      check(
+        state?["extends_past_image"] as? Bool == true && (framed.map { abs($0.midX - side / 2) < 1.5 } ?? false),
+        "with stay_inside_image false it stays centered on the box, past the edge (\(state?["region"] ?? "?"))")
+      await expectError("set_canvas_frame", ["width": 512, "height": 512, "scale": 2], "not both", "a size and a scale")
+      await expectError("set_canvas_frame", ["box": ["x": width + 50, "y": 0, "width": 10, "height": 10]], "overlap", "a box off the image")
+      await expectError("set_canvas_frame", ["aspect_ratio": "wide"], "aspect_ratio", "a shape that isn't one")
+      _ = try? await call("set_canvas_mask", ["clear": true])
+      await expectError("set_canvas_frame", [:], "nothing to frame", "no mask and no box")
+      _ = try? await call("set_canvas_region", ["fit": true])
+
+      // find_faces: errors, then a face when the run has an image with one.
+      await expectError("find_faces", ["history_step": 999_999], "list_history", "a missing step")
+      await expectError("find_faces", ["region": ["x": width + 50, "y": 0, "width": 10, "height": 10]], "overlap", "a region off the image")
+      if let facePath = value("--face-input"), let faceImage = ImageLoader.image(at: URL(fileURLWithPath: facePath)),
+         let facePNG = ImageTensor.png(faceImage)
+      {
+        _ = try? await call("set_canvas_image", ["image": "data:image/png;base64," + facePNG.base64EncodedString()])
+        let found = try? await call("find_faces")
+        let faces = found?["faces"] as? [[String: Any]] ?? []
+        let faceBox = rect(faces.first?["box"])
+        let faceCenter = faces.first?["center"] as? [Double] ?? []
+        let landmarks = faces.first?["landmarks"] as? [String: Any] ?? [:]
+        let imageRect = CGRect(x: 0, y: 0, width: faceImage.width, height: faceImage.height)
+        check(
+          !faces.isEmpty && (faceBox.map { imageRect.contains($0) && $0.width > 8 } ?? false) && faceCenter.count == 2
+            && (faceBox.map { $0.contains(CGPoint(x: faceCenter.first ?? -1, y: faceCenter.last ?? -1)) } ?? false)
+            && landmarks["left_eye"] != nil && (found?["source_size"] as? [String: Any])?["width"] as? Int == faceImage.width,
+          "find_faces finds a face on the canvas image, with its box, center and landmarks (\(faces.count) found, box \(faces.first?["box"] ?? "none"))")
+        if let faceBox {
+          // The same face, searched for only around it.
+          let around = faceBox.insetBy(dx: -faceBox.width / 2, dy: -faceBox.height / 2).intersection(imageRect)
+          let again = try? await call(
+            "find_faces", ["region": ["x": around.minX, "y": around.minY, "width": around.width, "height": around.height], "max_faces": 1])
+          let nearBox = rect((again?["faces"] as? [[String: Any]])?.first?["box"])
+          check(
+            (again?["faces"] as? [[String: Any]])?.count == 1 && (nearBox.map { abs($0.midX - faceBox.midX) < faceBox.width / 4 && abs($0.midY - faceBox.midY) < faceBox.height / 4 } ?? false),
+            "find_faces in a region gives the face in the whole image's pixels (\((again?["faces"] as? [[String: Any]])?.first?["box"] ?? "none"))")
+          // The face's box frames it: set_canvas_frame around it holds the whole box.
+          state = try? await call(
+            "set_canvas_frame", ["box": ["x": faceBox.minX, "y": faceBox.minY, "width": faceBox.width, "height": faceBox.height]])
+          check(
+            rect(state?["region"]).map { $0.insetBy(dx: -1.5, dy: -1.5).contains(faceBox) } ?? false,
+            "set_canvas_frame on the face's box shows the whole face (\(state?["region"] ?? "?"))")
+        }
+      } else {
+        print("SKIP find_faces on a face: no --face-input")
+      }
 
       // auto_mask: errors first, on the input (which has no subject Vision finds).
       _ = try? await call("set_canvas_image", ["image": "data:image/png;base64," + png.base64EncodedString()])

@@ -92,7 +92,11 @@ final class AgentTools {
 
   // MARK: - Definitions
 
-  static let definitions: [[String: Any]] = [
+  /// Every tool, as tools/list gives them: the ones here, then the canvas edit tools
+  /// (`AgentToolsCanvasEdit.swift`).
+  static let definitions: [[String: Any]] = baseDefinitions + canvasEditDefinitions
+
+  private static let baseDefinitions: [[String: Any]] = [
     [
       "name": "list_models",
       "title": "List models",
@@ -524,6 +528,9 @@ final class AgentTools {
     case "get_canvas_mask": return try await getCanvasMask(arguments)
     case "set_canvas_region": return try await setCanvasRegion(arguments)
     case "auto_mask": return try await autoMask(arguments)
+    case "find_faces": return try await findFaces(arguments)
+    case "grow_canvas_mask": return try await growCanvasMask(arguments)
+    case "set_canvas_frame": return try await setCanvasFrame(arguments)
     case "list_history": return try Self.textResult(json: listHistory(arguments))
     case "get_image": return try await getImage(arguments)
     case "match_colors": return try await matchColors(arguments, progress: progress)
@@ -722,7 +729,7 @@ final class AgentTools {
 
   /// What a finished run answers with: the file written, the image inline and the structured
   /// result (plus `extra`).
-  private func result(
+  func result(
     of item: HistoryItem, model: String, configuration: PipelineConfiguration, seed: UInt32, summary: String,
     notes: [String], arguments: [String: Any], extra: [String: Any] = [:]
   ) async throws -> [String: Any] {
@@ -908,7 +915,7 @@ final class AgentTools {
 
   /// Runs `work` as a job (see `startGenerate`): `work` reports progress, and its first report
   /// means its arguments checked out.
-  private func startJob(
+  func startJob(
     tool: String, label: String, colorMatch: ColorMatch.Job? = nil, background: Bool,
     progress: @escaping (Progress) -> Void,
     work: @escaping (@escaping (Progress) -> Void) async throws -> [String: Any]
@@ -1040,7 +1047,7 @@ final class AgentTools {
 
   // MARK: - Create screen
 
-  private func createScreen() -> [String: Any] {
+  func createScreen() -> [String: Any] {
     let all = create.values(for: SettingsRegistry.all.map(\.id))
     let changed = create.values(for: create.changedSettings.map(\.id))
     return [
@@ -1197,7 +1204,7 @@ final class AgentTools {
 
   /// The canvas as an agent sees it: what's on it, the frame, the region of the image the frame
   /// shows (all in the image's pixels from its top left), the mode and the mask.
-  private func canvasState() -> [String: Any] {
+  func canvasState() -> [String: Any] {
     let shows =
       create.canvasClip != nil ? "video" : create.canvasShowsImage ? "image" : create.image != nil ? "run preview" : "empty"
     var state: [String: Any] = [
@@ -1247,7 +1254,7 @@ final class AgentTools {
   }
 
   /// get_canvas_mask's summary, also what set_canvas_mask returns.
-  private func maskSummary() -> [String: Any] {
+  func maskSummary() -> [String: Any] {
     guard let stats = create.canvasMaskStats, let image = create.image else { return ["has_mask": false] }
     return [
       "has_mask": stats.paintedPixels > 0,
@@ -1265,7 +1272,7 @@ final class AgentTools {
 
   /// The canvas image an agent can work on, or why there isn't one.
   @discardableResult
-  private func canvasImage() throws -> CGImage {
+  func canvasImage() throws -> CGImage {
     if create.canvasClip != nil {
       throw ToolError("The canvas plays a video. Put an image on it with set_canvas_image first.")
     }
@@ -1307,7 +1314,7 @@ final class AgentTools {
   }
 
   /// A History step that's an image, or why not.
-  private func historyImage(_ step: Int) throws -> HistoryItem {
+  func historyImage(_ step: Int) throws -> HistoryItem {
     guard let item = create.history.items.first(where: { $0.id.logicalTime == step }) else {
       throw ToolError("No history step \(step) in “\(create.history.project.name)”. See list_history.")
     }
@@ -1483,13 +1490,13 @@ final class AgentTools {
   }
 
   /// A colour as `set_canvas_paint` takes it.
-  private static func paintColor(_ text: String, what: String) throws -> CanvasPaint.Color {
+  nonisolated static func paintColor(_ text: String, what: String) throws -> CanvasPaint.Color {
     guard let color = CanvasPaint.Color(hex: text) else { throw ToolError("\(what) is \"#RRGGBB\" or \"#RRGGBBAA\" (got \"\(text)\").") }
     return color
   }
 
   /// One `set_canvas_paint` shape as a paint stroke.
-  private static func paintStroke(_ shape: [String: Any], number: Int, color: CanvasPaint.Color) throws -> CanvasPaint.Stroke {
+  nonisolated static func paintStroke(_ shape: [String: Any], number: Int, color: CanvasPaint.Color) throws -> CanvasPaint.Stroke {
     let erases = shape["erase"] as? Bool == true
     let color = try (shape["color"] as? String).map { try paintColor($0, what: "Shape \(number)'s `color`") } ?? color
     if shape["shape"] as? String == "stroke" {
@@ -1523,7 +1530,7 @@ final class AgentTools {
   }
 
   /// Why the mask can't change now (`canEditMask` is false with an image on the canvas).
-  private func maskUnavailableReason() -> String {
+  func maskUnavailableReason() -> String {
     if create.videoModel != nil { return "\(create.selectedModel ?? "This model") makes video, which takes no mask." }
     if create.layout != nil { return "The Layout editor is open over the canvas. Close it with set_create_screen {layout_editor: false}." }
     if create.canvasMode != .edit {
@@ -1533,7 +1540,7 @@ final class AgentTools {
   }
 
   /// One `set_canvas_mask` shape as a mask stroke.
-  private static func stroke(_ shape: [String: Any], number: Int, erases: Bool) throws -> CanvasMask.Stroke {
+  nonisolated static func stroke(_ shape: [String: Any], number: Int, erases: Bool) throws -> CanvasMask.Stroke {
     switch shape["shape"] as? String {
     case "rect", "ellipse":
       guard let x = double(shape["x"]), let y = double(shape["y"]), let width = double(shape["width"]),
@@ -1561,7 +1568,7 @@ final class AgentTools {
     }
   }
 
-  private static func bounds(of points: [CGPoint]) -> CGRect {
+  nonisolated static func bounds(of points: [CGPoint]) -> CGRect {
     guard let first = points.first else { return .null }
     return points.dropFirst().reduce(CGRect(origin: first, size: .zero)) { $0.union(CGRect(origin: $1, size: .zero)) }
   }
@@ -1680,7 +1687,7 @@ final class AgentTools {
     return try await getCanvasMask(["view": "overlay"], extra: extra)
   }
 
-  private static func hint(for error: AutoMaskError) -> String {
+  static func hint(for error: AutoMaskError) -> String {
     switch error {
     case .notDownloaded(let size):
       "SAM 2.1 \(size.title) isn't downloaded. Ask the user to download it from the Select tool's bar in Atelier, or use `subject: true`."
@@ -1692,7 +1699,7 @@ final class AgentTools {
     }
   }
 
-  private static func milliseconds(_ duration: Duration) -> Double {
+  static func milliseconds(_ duration: Duration) -> Double {
     (Double(duration.components.seconds) + Double(duration.components.attoseconds) / 1e18) * 1000
   }
 
@@ -1853,11 +1860,11 @@ final class AgentTools {
     return try Self.textResult(json: result)
   }
 
-  private static func json(_ rect: CGRect) -> [String: Any] {
+  static func json(_ rect: CGRect) -> [String: Any] {
     ["x": Double(rect.minX), "y": Double(rect.minY), "width": Double(rect.width), "height": Double(rect.height)]
   }
 
-  private static func json(_ size: CGSize) -> [String: Any] {
+  static func json(_ size: CGSize) -> [String: Any] {
     ["width": Int(size.width), "height": Int(size.height)]
   }
 
@@ -2062,7 +2069,7 @@ final class AgentTools {
     }
   }
 
-  private static func shortened(_ prompt: String) -> String {
+  static func shortened(_ prompt: String) -> String {
     let line = prompt.split(whereSeparator: \.isNewline).joined(separator: " ")
     return line.count > 160 ? String(line.prefix(160)) + "…" : line
   }
@@ -2088,7 +2095,7 @@ final class AgentTools {
   /// so the change after it can be a ⌘Z step of its own. Called before a tool reads the state it
   /// changes, so an edit the user makes meanwhile isn't overwritten. Gives up when the call is
   /// cancelled.
-  private static func settleUndo() async {
+  static func settleUndo() async {
     guard let undoManager = mainWindowUndoManager else { return }
     let deadline = Date().addingTimeInterval(0.3)
     while undoManager.groupingLevel > 0, Date() < deadline {
@@ -2104,7 +2111,7 @@ final class AgentTools {
   /// grouping by event off just while it's open, and leaves nothing open. In the rare case a
   /// user's group is still open after `settleUndo`, the change joins it, keeping its name.
   @discardableResult
-  private static func asOneUndoStep<T>(_ change: (UndoManager?) throws -> T) rethrows -> T {
+  static func asOneUndoStep<T>(_ change: (UndoManager?) throws -> T) rethrows -> T {
     guard let undoManager = mainWindowUndoManager else { return try change(nil) }
     guard undoManager.groupingLevel == 0 else {
       let name = undoManager.undoActionName
@@ -2124,7 +2131,7 @@ final class AgentTools {
   // MARK: - Helpers
 
   /// The model's recommended settings with its default preset, as Create starts from.
-  private func defaults(for model: String) async throws -> PipelineConfiguration {
+  func defaults(for model: String) async throws -> PipelineConfiguration {
     let template = try await create.backend(for: .local).loadPipeline(for: model)
     var configuration = ModelDefaults.recommended(for: model, configuration: template)
     for (id, value) in presets.defaultPreset(for: model)?.values ?? [:] {
@@ -2133,7 +2140,7 @@ final class AgentTools {
     return configuration
   }
 
-  private func apply(presetNamed name: String, model: String, to configuration: inout PipelineConfiguration) throws {
+  func apply(presetNamed name: String, model: String, to configuration: inout PipelineConfiguration) throws {
     let usable = presets.presets(for: model)
     guard
       let preset = (usable.own + usable.shared).first(where: {
@@ -2148,7 +2155,7 @@ final class AgentTools {
   }
 
   /// A downloaded model by file or name; nil means the app's selected model.
-  private func resolveModel(_ name: String?) throws -> String {
+  func resolveModel(_ name: String?) throws -> String {
     guard let name, !name.isEmpty else {
       guard let selected = create.selectedModel else { throw ToolError("No model is downloaded.") }
       return try resolveModel(selected)
@@ -2164,7 +2171,7 @@ final class AgentTools {
 
   /// Mirrors `CreateModel.usesReferences`. ModelZoo only knows a community model's version once
   /// its pipeline has loaded, so the catalog's version name is checked too.
-  private func takesReferences(model: String, loras: [String]) -> Bool {
+  func takesReferences(model: String, loras: [String]) -> Bool {
     if ModelZoo.versionForModel(model) == .qwenImage2_1
       || create.models.first(where: { $0.file == model })?.version == "Qwen Image 2.1"
     {
@@ -2179,7 +2186,7 @@ final class AgentTools {
     }
   }
 
-  private static func loadImage(_ source: String) throws -> CGImage {
+  static func loadImage(_ source: String) throws -> CGImage {
     if source.hasPrefix("data:") {
       guard let comma = source.firstIndex(of: ","),
         let data = Data(base64Encoded: String(source[source.index(after: comma)...])),
@@ -2212,7 +2219,7 @@ final class AgentTools {
     return folder.appending(path: name).appendingPathExtension(ext)
   }
 
-  private nonisolated static func describe(_ state: MediaGenerationPipeline.State) -> String {
+  nonisolated static func describe(_ state: MediaGenerationPipeline.State) -> String {
     switch state {
     case .downloading(let received, let total):
       return total > 0 ? "Downloading \(received * 100 / total)%" : "Downloading"
@@ -2227,7 +2234,7 @@ final class AgentTools {
   }
 
   /// The inline copy: JPEG keeps the response small; the full PNG is on disk.
-  private static func jpeg(_ image: CGImage) -> Data? {
+  static func jpeg(_ image: CGImage) -> Data? {
     let data = NSMutableData()
     guard let destination = CGImageDestinationCreateWithData(data, "public.jpeg" as CFString, 1, nil)
     else { return nil }
@@ -2237,7 +2244,7 @@ final class AgentTools {
   }
 
   /// Settings are Floats; printed as Doubles they read 0.69999999999999996.
-  private static func tidy(_ value: Any) -> Any {
+  static func tidy(_ value: Any) -> Any {
     switch value {
     case let dictionary as [String: Any]: return dictionary.mapValues(tidy)
     case let array as [Any]: return array.map(tidy)
@@ -2247,29 +2254,29 @@ final class AgentTools {
     }
   }
 
-  private static func roundTo64(_ value: Int) -> Int {
+  nonisolated static func roundTo64(_ value: Int) -> Int {
     max(Int((Double(value) / 64).rounded()), 1) * 64
   }
 
-  private static func int(_ value: Any?) -> Int? {
+  nonisolated static func int(_ value: Any?) -> Int? {
     (value as? NSNumber).map(\.intValue) ?? (value as? String).flatMap { Int($0) }
   }
 
   /// Whether a JSON value is true or false rather than a number: both arrive as `NSNumber`, and
   /// `as? Bool` / `as? NSNumber` take either.
-  private static func isBoolean(_ value: Any) -> Bool {
+  nonisolated static func isBoolean(_ value: Any) -> Bool {
     (value as? NSNumber).map { CFGetTypeID($0) == CFBooleanGetTypeID() } ?? false
   }
 
-  private static func double(_ value: Any?) -> Double? {
+  nonisolated static func double(_ value: Any?) -> Double? {
     (value as? NSNumber).map(\.doubleValue) ?? (value as? String).flatMap { Double($0) }
   }
 
-  private static func jsonObject(_ data: Data?) -> Any {
+  static func jsonObject(_ data: Data?) -> Any {
     data.flatMap { try? JSONSerialization.jsonObject(with: $0) } ?? NSNull()
   }
 
-  private static func textResult(json: Any) throws -> [String: Any] {
+  static func textResult(json: Any) throws -> [String: Any] {
     let data = try JSONSerialization.data(
       withJSONObject: tidy(json), options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
     return ["content": [["type": "text", "text": String(decoding: data, as: UTF8.self)]]]
