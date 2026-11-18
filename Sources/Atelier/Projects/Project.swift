@@ -55,7 +55,15 @@ final nonisolated class Project: Sendable {
     #else
       let protection = SQLiteWorkspace.FileProtectionLevel.noProtection
     #endif
-    workspace = SQLiteWorkspace(filePath: url.path, fileProtectionLevel: protection)
+    // Serial writes. dflat's default `.concurrent` mode runs a transaction over several tables on
+    // the first table's queue, which then blocks a dispatch worker in `group.wait()` until each
+    // other table's queue runs a block that suspends it (`SQLiteWorkspace.performChanges`,
+    // `ConcurrentSQLiteTableSpace.enterAndSuspend`). Nearly every write here spans several tables,
+    // so enough projects writing at once (parallel tests: ~90) used up the worker threads those
+    // blocks need and deadlocked. The suspends are also queued one table at a time, so two
+    // overlapping writes to one project can each suspend a queue the other waits on. `.serial`
+    // runs each project's transactions one after another on one queue and never waits.
+    workspace = SQLiteWorkspace(filePath: url.path, fileProtectionLevel: protection, writeConcurrency: .serial)
   }
 
   deinit {
