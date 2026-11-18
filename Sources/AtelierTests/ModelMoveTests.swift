@@ -2,6 +2,7 @@
 import Foundation
 import Testing
 
+@Suite(.tags(.smoke))
 struct ModelMoveTests {
   private func write(_ text: String, _ url: URL) {
     try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)

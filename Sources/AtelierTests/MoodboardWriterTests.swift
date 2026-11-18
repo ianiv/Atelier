@@ -6,6 +6,7 @@ import Testing
 /// The moodboard's files, written off the main actor (`MoodboardWriter`): in order, the index
 /// naming only images on disk, an image already written kept rather than written again, and the
 /// images the board let go removed.
+@Suite(.tags(.smoke))
 struct MoodboardWriterTests {
   private struct Entry: Decodable {
     var id: UUID

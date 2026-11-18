@@ -1,6 +1,7 @@
 @testable import Atelier
 import Testing
 
+@Suite(.tags(.smoke))
 @MainActor struct HistoryGraphTests {
   /// A graph from "image: the image it follows", newest first.
   func graph(_ steps: [(Int64, Int64?)]) -> HistoryGraph {

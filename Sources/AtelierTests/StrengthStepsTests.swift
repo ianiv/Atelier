@@ -5,6 +5,7 @@ import Testing
 
 /// Strength's start step, worked out as the engine's samplers work it out
 /// (`DDIMSampler.timestep(for:sampling:)`), pinned so a change in the engine's schedules shows.
+@Suite(.tags(.smoke))
 struct StrengthStepsTests {
   private static let flow = Denoiser.Parameterization.rf(.init())
   private static let flowObjective = Denoiser.Objective.u(conditionScale: 1000)

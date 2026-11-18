@@ -4,6 +4,7 @@ import Foundation
 import Testing
 
 @MainActor
+@Suite(.tags(.smoke))
 struct StyleLibraryStoreTests {
   /// Thumbnail size, so only the square is kept and not a full image beside it.
   private func image() -> CGImage {
@@ -145,6 +146,7 @@ struct StyleLibraryStoreTests {
   }
 }
 
+@Suite(.tags(.smoke))
 struct StyleTests {
   func style(_ template: String, negative: String = "") -> Style {
     Style(name: "S", template: template, negative: negative)

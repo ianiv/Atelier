@@ -3,6 +3,7 @@ import Foundation
 import Synchronization
 import Testing
 
+@Suite(.tags(.smoke))
 struct ShareTests {
   @Test func aCanvasImageThatIsNoStepSharesAsAPlainPNGNamedAsGiven() async throws {
     let export = PNGExport.image(smallImage(), name: "My Project")
@@ -68,6 +69,7 @@ struct ShareTests {
   import UniformTypeIdentifiers
 
   @MainActor
+  @Suite(.tags(.smoke))
   struct SharePickerTests {
     @Test func anImageProviderOffersAPNGAndAClipsAnMP4() {
       var clip = PNGExport(id: 2, name: "Clip") { Data() }

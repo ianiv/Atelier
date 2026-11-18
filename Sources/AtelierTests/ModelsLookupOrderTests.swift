@@ -4,6 +4,7 @@ import Testing
 
 /// The order the engine looks through the models folders for a file already there
 /// (`GenerationEngine.lookupOrder`): internal drives first, the person's order kept within each.
+@Suite(.tags(.smoke))
 struct ModelsLookupOrderTests {
   private static func folder(_ name: String) -> URL {
     URL(fileURLWithPath: "/folders/\(name)", isDirectory: true)

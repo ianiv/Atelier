@@ -16,6 +16,7 @@
 		B7A1F0C2B3D4A59687786206 /* WaitUntilTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A1F0C2B3D4A59687786306 /* WaitUntilTests.swift */; };
 		C7A1F0C2B3D4A59687786206 /* CanvasDropTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A1F0C2B3D4A59687786306 /* CanvasDropTests.swift */; };
 		EB6EC16C5C8D9C4C67D558FA /* CanvasRefineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 267DD52FE466641E172AB19D /* CanvasRefineTests.swift */; };
+		7E5A65000000000000000002 /* Tags.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E5A65000000000000000001 /* Tags.swift */; };
 		A7E1F0C2B3D4A5968778699B /* WaitUntil.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1F0C2B3D4A5968778699A /* WaitUntil.swift */; };
 		A7E1F0C2B3D4A5968778698B /* BackgroundQueueTask.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1F0C2B3D4A5968778698A /* BackgroundQueueTask.swift */; };
 		A7E1F0C2B3D4A5968778697B /* AutomationPlayback.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1F0C2B3D4A5968778697A /* AutomationPlayback.swift */; };
@@ -260,6 +261,7 @@
 		B7A1F0C2B3D4A59687786306 /* WaitUntilTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaitUntilTests.swift; sourceTree = "<group>"; };
 		C7A1F0C2B3D4A59687786306 /* CanvasDropTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasDropTests.swift; sourceTree = "<group>"; };
 		267DD52FE466641E172AB19D /* CanvasRefineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasRefineTests.swift; sourceTree = "<group>"; };
+		7E5A65000000000000000001 /* Tags.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tags.swift; sourceTree = "<group>"; };
 		A7E1F0C2B3D4A5968778699A /* WaitUntil.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaitUntil.swift; sourceTree = "<group>"; };
 		A7E1F0C2B3D4A5968778698A /* BackgroundQueueTask.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundQueueTask.swift; sourceTree = "<group>"; };
 		A7E1F0C2B3D4A5968778697A /* AutomationPlayback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationPlayback.swift; sourceTree = "<group>"; };
@@ -847,6 +849,7 @@
 				B7A1F0C2B3D4A59687786306 /* WaitUntilTests.swift */,
 				C7A1F0C2B3D4A59687786306 /* CanvasDropTests.swift */,
 				267DD52FE466641E172AB19D /* CanvasRefineTests.swift */,
+				7E5A65000000000000000001 /* Tags.swift */,
 			);
 			path = AtelierTests;
 			sourceTree = "<group>";
@@ -1265,6 +1268,7 @@
 				B7A1F0C2B3D4A59687786206 /* WaitUntilTests.swift in Sources */,
 				C7A1F0C2B3D4A59687786206 /* CanvasDropTests.swift in Sources */,
 				EB6EC16C5C8D9C4C67D558FA /* CanvasRefineTests.swift in Sources */,
+				7E5A65000000000000000002 /* Tags.swift in Sources */,
 				39581119081A4BFFD6967A0B /* AutoMaskTests.swift in Sources */,
 				C0104A7C11A0000000000005 /* ColorMatchTests.swift in Sources */,
 				D1E2F3A4B5C682C98498EB8C /* MOSSImportTests.swift in Sources */,

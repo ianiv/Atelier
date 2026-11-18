@@ -10,7 +10,7 @@ Build only through the script; outputs land in `build/` (gitignored, a symlink t
 
 ```bash
 Scripts/build.sh [Debug|Release] [mac|ipad|ipad-sim]   # default: Release mac → build/Atelier.app
-Scripts/test.sh                                        # unit tests (Sources/AtelierTests), Mac only; needs no models
+Scripts/test.sh [--changed [base]|--all|--suite A,B]    # unit tests (Sources/AtelierTests), Mac only; needs no models. Bare = smoke set
 Scripts/clean-builds.sh [--all]                        # unregister stray builds from Launch Services; --all wipes build caches
 swiftformat .                                          # format (config in .swiftformat)
 Scripts/install-hooks.sh                               # once per clone: pre-commit hook formats staged Swift files
@@ -28,14 +28,22 @@ Scripts/release.sh [version]                           # signed/notarized zip + 
 
 ### Tests
 
-`Scripts/test.sh` runs the Swift Testing unit tests in `Sources/AtelierTests`, for pure logic that needs no models. They run inside the app as a scripted run does, so the user's data is left alone; files go in a test-only folder. Everything else is verified by launching the built Mac app with scripted-run flags (`Sources/Atelier/Automation/`), which drive the real UI and engine and print progress / `PASS`/`FAIL` lines:
+`Scripts/test.sh` runs the Swift Testing unit tests in `Sources/AtelierTests`, for pure logic that needs no models. They run inside the app as a scripted run does, so the user's data is left alone; files go in a test-only folder. Pick the tier by what you're doing:
+
+- **While iterating:** bare `Scripts/test.sh` (same as `--smoke`) runs the smoke set, the suites tagged `@Suite(.tags(.smoke))` (tag in `Tags.swift`): fast pure logic, a couple of seconds of test time (about 15 s with the incremental build). `--suite A,B` runs named suites.
+- **Before a commit:** `Scripts/test.sh --changed [base]` (base defaults to `origin/main`) runs the suites for the files changed since the merge base plus the working tree: `Foo.swift` runs the suites in `*Foo*Tests.swift`, and `Scripts/test-map.txt` maps each folder to suites and automation checks. It prints those checks as command lines; when models are present, run them (`--checks --model FILE [--project NAME]` runs them on `build/Atelier.app` in a scratch project, and refuses while Atelier is open). Docs-only changes need nothing; an unmapped file runs the smoke set with a warning; shared or build files (project file, `Config/`, `Sources/ProjectFormat`, `SettingsRegistry.swift`, the shared test helpers in `ValueTests.swift`) run everything.
+- **Before a release, or after touching shared types:** `Scripts/test.sh --all`.
+
+Suites run serially; `--parallel` opts in, about 3× faster for `--all`, but parallel full runs have hung with ~90 threads waiting in dflat's `SQLiteWorkspace.performChanges`. `--timings` prints the slowest suites from the run's result bundle. A new suite needs a `.smoke` tag or a line in `Scripts/test-map.txt`, and a new source folder or automation flag needs a map line: `Scripts/test.sh --lint-map` fails otherwise (`--changed` runs it when the tests or the map change).
+
+Everything else is verified by launching the built Mac app with scripted-run flags (`Sources/Atelier/Automation/`), which drive the real UI and engine and print progress / `PASS`/`FAIL` lines:
 
 ```bash
 build/Atelier.app/Contents/MacOS/Atelier --generate --model <file.ckpt> --prompt "…" --width 1024 --height 1024 [--steps N] [--snapshot-dir DIR] --quit
 build/Atelier.app/Contents/MacOS/Atelier --queue-check --project <scratch project> [--model M] [--steps N] --quit
 ```
 
-Other checks: `--project-check`, `--edit-input-check`, `--refine-check`, `--agent-canvas-check`, `--automask-check`, `--paint-check`, `--inspector-check`, `--library-check`, `--ux-check`, `--timeline-check`, `--timeline-export-check`, `--upscale-check`, `--color-match-check`, `--flashvsr-check`, `--model-folders-check`, `--model-move-check`, `--styles-check`, `--cleanup-check`, `--engine-check`, `--playback-check`, `--canvas-clip-check`, `--create-delete-check`, `--remote-check`, `--remote-net-check`, `--remote-url-check`, `--remote-tailnet-check`, `--remote-shots`, `--reuse latest|STEP`, `--resize-bench`, `--tab-switch-bench`, `--show <section>`. Usage for each is in the doc comment at the top of its `Automation*.swift` file. Always pass `--project NAME` for checks that write, so the user's current project isn't touched; scripted runs also skip saving `SessionState`. These need real models in the user's models folder — never hardcode its path. Automation is Mac-only (`#if os(macOS)`).
+Other checks: `--project-check`, `--edit-input-check`, `--refine-check`, `--agent-canvas-check`, `--automask-check`, `--paint-check`, `--inspector-check`, `--library-check`, `--ux-check`, `--timeline-check`, `--timeline-export-check`, `--upscale-check`, `--color-match-check`, `--flashvsr-check`, `--model-folders-check`, `--model-move-check`, `--styles-check`, `--cleanup-check`, `--engine-check`, `--playback-check`, `--canvas-clip-check`, `--create-delete-check`, `--delete-project-check`, `--history-loras-check`, `--input-entries-check`, `--entries-freeze-check`, `--add-folder-check`, `--catalog-retry-check`, `--recavsr-check`, `--remote-check`, `--remote-net-check`, `--remote-url-check`, `--remote-tailnet-check`, `--remote-shots`, `--reuse latest|STEP`, `--resize-bench`, `--tab-switch-bench`, `--show <section>`. Usage for each is in the doc comment at the top of its `Automation*.swift` file. Always pass `--project NAME` for checks that write, so the user's current project isn't touched; scripted runs also skip saving `SessionState`. These need real models in the user's models folder — never hardcode its path. Automation is Mac-only (`#if os(macOS)`).
 
 ## Architecture
 
