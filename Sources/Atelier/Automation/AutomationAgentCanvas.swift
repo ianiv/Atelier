@@ -33,9 +33,19 @@ extension Automation {
   /// after its source, the source's size, unchanged away from the mask. Again in the background
   /// with the mask filled with paint (get_job, list_jobs), and from an image file; its errors;
   /// match_colors with original_history_step on the painted edit. With `--edit-model` (a model
-  /// that takes reference images) and `--face-input`, the face-fix shape: the face's box as the
-  /// region at `--edit-scale` (default 2), masked, filled green, with the face as Picture 2, at
-  /// `--edit-steps` (default 6), its result written to `--edit-save` when given. It notes which models list_models says take reference images.
+  /// that takes reference images) and `--face-input`, the face-fix shape: a region around the face
+  /// at `--edit-scale` (default 2), masked, filled green, with the face as Picture 2, at
+  /// `--edit-steps` (default 6), its result written to `--edit-save` when given. The region is
+  /// whatever lies inside the image and comes to at most 1536×2048 at that scale (the face and
+  /// room around it when that fits, else the middle of the face), so any scale is a run of a
+  /// sensible size that merges at the image's size. It notes which models list_models says take
+  /// reference images. Then, a region reaching past the image: edit_image says the result grew.
+  /// While an edit_image runs, a History step shown and Generate pressed: the user's run still
+  /// shows on the canvas and becomes current. And with `--edit-model` and `--face-input` again,
+  /// the same face fix on the canvas, a tool call at a time as an agent would make them
+  /// (set_canvas_image, find_faces, set_canvas_frame, set_canvas_mask, grow_canvas_mask,
+  /// set_canvas_paint, set_moodboard, set_create_screen, generate with use_canvas, match_colors
+  /// with original_history_step), after which the model, settings and prompt are put back.
   /// Prints PASS/FAIL lines.
   ///
   /// The canvas tools' remembered settings, Merge into Image, the canvas mode and the moodboard
@@ -861,6 +871,26 @@ extension Automation {
       } catch {
         check(false, "edit_image on an image file (\(error.localizedDescription))")
       }
+      // A region reaching past the image: the merged result grows to hold it, and says so.
+      do {
+        var arguments = editArguments
+        arguments["region"] = ["x": -width / 8, "y": -height / 8, "width": width / 2, "height": height / 2]
+        arguments["seed"] = 10
+        let past = try await call("edit_image", arguments)
+        let size = past["canvas_size"] as? [String: Any], sourceSize = past["source_size"] as? [String: Any]
+        let pastRegion = rect(past["region"])
+        // Whole pixels: the image and the part of the region outside it.
+        let grownWidth = pastRegion.map { Int(max($0.maxX, width).rounded(.up) - min($0.minX, 0).rounded(.down)) }
+        let grownHeight = pastRegion.map { Int(max($0.maxY, height).rounded(.up) - min($0.minY, 0).rounded(.down)) }
+        let text = (past["notes"] as? [String])?.joined(separator: " ") ?? ""
+        check(
+          past["extends_past_image"] as? Bool == true && past["merged"] as? Bool == true && size?["width"] as? Int == grownWidth
+            && size?["height"] as? Int == grownHeight && (grownWidth ?? 0) > input.width && sourceSize?["width"] as? Int == input.width
+            && sourceSize?["height"] as? Int == input.height,
+          "edit_image on a region past the image's edges says so, and that the result grew to hold it (extends_past_image \(past["extends_past_image"] ?? "missing"), canvas_size \(size ?? [:]) for region \(past["region"] ?? "?"), source_size \(sourceSize ?? [:])\(text.isEmpty ? "" : ", notes given"))")
+      } catch {
+        check(false, "edit_image on a region past the image (\(error.localizedDescription))")
+      }
       await settled()
       screenAfter = await screenState()
       check(
@@ -906,38 +936,69 @@ extension Automation {
         print("note: list_models: \(entry["name"] ?? "?") (\(entry["file"] ?? "?")) takes_reference_images \(entry["takes_reference_images"] ?? "?"), video \(entry["video"] ?? "?")")
       }
 
-      // The face fix, with a model that takes references: the face's box as the region, masked,
+      /// The face fix's frame for any `--edit-scale`. The region wanted is the face's box with half
+      /// its longer side around it, 3:4. It's held to the image (a region larger than the image
+      /// makes the merge grow it) and to an output of at most 1536×2048 (a face filling a
+      /// portrait at 8× would be a run of tens of megapixels), each side whole 64s at the scale
+      /// exactly, about the face's center and moved inside the image. The mask is an ellipse on
+      /// the face's box when the region holds it with room to spare, else on the region's middle
+      /// half; `grow` moves its edge out, and `margin` is how far beyond that the Mask Blur may
+      /// reach (96 frame pixels), both in the image's pixels. Nil when no such region fits.
+      func faceFixFrame(_ box: CGRect, in size: CGSize, scale: Double)
+        -> (region: CGRect, output: CGSize, ellipse: CGRect, grow: Int, margin: Double)?
+      {
+        var wanted = FrameSelection.region(around: box, padding: 0.5 * max(box.width, box.height), aspect: 0.75, inside: nil).size
+        let fit = min(1, size.width / wanted.width, size.height / wanted.height)
+        wanted = CGSize(width: wanted.width * fit, height: wanted.height * fit)
+        func side(_ length: Double, _ most: Double) -> Double { min(max((length * scale / 64).rounded(.down), 1) * 64, most) }
+        let output = CGSize(width: side(wanted.width, 1536), height: side(wanted.height, 2048))
+        let shown = CGSize(width: output.width / scale, height: output.height / scale)
+        guard shown.width <= size.width, shown.height <= size.height else { return nil }
+        let centered = CGRect(
+          x: (box.midX - shown.width / 2).rounded(), y: (box.midY - shown.height / 2).rounded(), width: shown.width, height: shown.height)
+        let region = FrameSelection.region(around: centered, padding: 0, aspect: 0, inside: size)
+        let ellipse =
+          region.insetBy(dx: region.width / 8, dy: region.height / 8).contains(box)
+          ? box : region.insetBy(dx: region.width / 4, dy: region.height / 4)
+        let grow = max(1, Int(min(box.width / 4, region.width / 16).rounded()))
+        return (region, output, ellipse, grow, max(8, 96 / scale))
+      }
+      func json(_ rect: CGRect) -> [String: Any] { ["x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height] }
+      let editScale = Double(value("--edit-scale") ?? "2") ?? 2
+      let editSteps = Int(value("--edit-steps") ?? "6") ?? 6
+      let faceFixPrompt =
+        "Replace the green area in Picture 1 with the face of the person in Picture 2, same expression, natural skin, matching the lighting of the scene. Keep everything else unchanged."
+
+      // The face fix, with a model that takes references: a region around the face, masked,
       // filled green, with the face itself as Picture 2.
       if let editModel = value("--edit-model"), let facePath = value("--face-input"),
          let faceImage = ImageLoader.image(at: URL(fileURLWithPath: facePath)),
-         let face = (try? FaceFinder.faces(in: faceImage))?.first
+         let face = (try? FaceFinder.faces(in: faceImage))?.first,
+         let fix = faceFixFrame(face.box, in: CGSize(width: faceImage.width, height: faceImage.height), scale: editScale)
       {
-        let faceSize = CGSize(width: faceImage.width, height: faceImage.height)
-        let faceRegion = FrameSelection.region(around: face.box, padding: 0.5 * max(face.box.width, face.box.height), aspect: 0.75, inside: faceSize)
-        let grow = Int((face.box.width / 4).rounded())
+        let faceRegion = fix.region
+        let grow = fix.grow
         do {
           let fixed = try await call(
             "edit_image",
             [
-              "image": facePath, "model": editModel,
-              "prompt": "Replace the green area in Picture 1 with the face of the person in Picture 2, same expression, natural skin, matching the lighting of the scene. Keep everything else unchanged.",
-              "region": ["x": faceRegion.minX, "y": faceRegion.minY, "width": faceRegion.width, "height": faceRegion.height],
-              "scale": Double(value("--edit-scale") ?? "2") ?? 2,
-              "mask": ["shapes": [["shape": "ellipse", "x": face.box.minX, "y": face.box.minY, "width": face.box.width, "height": face.box.height]], "grow": grow],
+              "image": facePath, "model": editModel, "prompt": faceFixPrompt, "region": json(faceRegion), "scale": editScale,
+              "mask": ["shapes": [["shape": "ellipse"].merging(json(fix.ellipse)) { first, _ in first }], "grow": grow],
               "paint": ["fill_mask": true, "color": "#00FF00"], "reference_images": [facePath],
-              "steps": Int(value("--edit-steps") ?? "6") ?? 6, "guidance_scale": 1, "include_image": false,
+              "steps": editSteps, "guidance_scale": 1, "include_image": false,
             ])
           let size = fixed["canvas_size"] as? [String: Any]
           let fixedStep = (fixed["history_step"] as? NSNumber)?.int64Value
           let fixedItem = model.history.items.first { $0.id.logicalTime == fixedStep }
           let fixedImage: CGImage? = if let fixedItem { await model.history.image(for: fixedItem) } else { nil }
-          let grownBox = face.box.insetBy(dx: -Double(grow) - 24, dy: -Double(grow) - 24)
+          let grownBox = fix.ellipse.insetBy(dx: -Double(grow) - fix.margin, dy: -Double(grow) - fix.margin)
           let away = fixedImage.flatMap { difference($0, faceImage) { !grownBox.contains($0) } }
-          let within = fixedImage.flatMap { difference($0, faceImage) { face.box.insetBy(dx: face.box.width / 4, dy: face.box.height / 4).contains($0) } }
+          let within = fixedImage.flatMap { difference($0, faceImage) { fix.ellipse.insetBy(dx: fix.ellipse.width / 4, dy: fix.ellipse.height / 4).contains($0) } }
           check(
             fixed["merged"] as? Bool == true && size?["width"] as? Int == faceImage.width && size?["height"] as? Int == faceImage.height
-              && fixed["references"] as? Int == 1 && fixed["has_paint"] as? Bool == true,
-            "the face fix with \(editModel): the face's region at \(fixed["width"] ?? "?")×\(fixed["height"] ?? "?") (scale \(fixed["scale"] ?? "?")), merged at the image's size, one reference, painted (\(fixed["duration_seconds"] ?? "?") s)")
+              && fixed["references"] as? Int == 1 && fixed["has_paint"] as? Bool == true && fixed["extends_past_image"] as? Bool == false
+              && fixed["width"] as? Int == Int(fix.output.width) && fixed["height"] as? Int == Int(fix.output.height) && same(rect(fixed["region"]), faceRegion),
+            "the face fix with \(editModel): the face's region \(fixed["region"] ?? "?") at \(fixed["width"] ?? "?")×\(fixed["height"] ?? "?") (scale \(fixed["scale"] ?? "?")), inside the image, merged at the image's size (\(size ?? [:])), one reference, painted (\(fixed["duration_seconds"] ?? "?") s)")
           check(
             away?.maxDelta == 0 && (within?.meanDelta ?? 0) > 0.5,
             "it changed the face and nothing away from it (max delta away \(away?.maxDelta ?? -1), mean delta on the face \(String(format: "%.1f", within?.meanDelta ?? 0)))")
@@ -953,7 +1014,7 @@ extension Automation {
           screenAfter.differences(from: screenBefore).isEmpty,
           "the Create screen is as it was after the face fix (changed: \(screenAfter.differences(from: screenBefore)))")
       } else {
-        print("SKIP the face fix with a reference: needs --edit-model (one that takes reference images) and --face-input")
+        print("SKIP the face fix with a reference: needs --edit-model (one that takes reference images) and --face-input with a face a region fits around at --edit-scale")
       }
 
       // match_colors after a painted edit: its recorded input is the painted frame, so the source
@@ -975,6 +1036,151 @@ extension Automation {
           "match_colors", ["history_step": paintedStep, "original_history_step": 999_999], "list_history", "a missing original")
         await expectError(
           "match_colors", ["history_step": paintedStep, "original_history_step": paintedStep], "edited from", "itself as the original")
+      }
+
+      // While an agent's edit runs off the canvas, the user looks at a History step and presses
+      // Generate: looking away from a run the canvas never followed must not keep their own run
+      // off it. It shows there (its previews, when it sends any) and its result becomes current.
+      do {
+        var arguments = editArguments
+        arguments["seed"] = 11
+        arguments["background"] = true
+        // Long enough to still be running when Generate is pressed.
+        arguments["steps"] = max(runSteps, 12)
+        let started = try await call("edit_image", arguments)
+        for _ in 0..<2400 where !model.foregroundRunIsDetached { try? await Task.sleep(for: .milliseconds(25)) }
+        let editInFront = model.foregroundRunIsDetached
+        if let shown = model.history.item(tensorId: item.tensorId) { model.show(shown) }
+        for _ in 0..<200 where !(model.canvasShowsImage && model.imageItem?.tensorId == item.tensorId) {
+          try? await Task.sleep(for: .milliseconds(10))
+        }
+        let followsAfterLooking = model.canvasFollowsRun
+        let finishedBefore = Set(model.queue.recent.map(\.id))
+        let editStillRunning = model.foregroundRunIsDetached
+        model.generate()
+        // The user's run: on the canvas whenever it has a preview to show.
+        var sawOwnRun = false, previews = 0, previewsOffCanvas = 0, followedAtStart: Bool?
+        for _ in 0..<6000 {
+          try? await Task.sleep(for: .milliseconds(20))
+          if model.foregroundJobID != nil, !model.foregroundRunIsDetached {
+            sawOwnRun = true
+            if followedAtStart == nil { followedAtStart = model.canvasFollowsRun }
+            if model.livePreview != nil {
+              previews += 1
+              if model.canvasShowsImage { previewsOffCanvas += 1 }
+            }
+          }
+          if sawOwnRun, !model.isBusy, model.queue.isEmpty { break }
+        }
+        await idle()
+        let own = model.queue.recent.first { !finishedBefore.contains($0.id) && !$0.detached }
+        var ownTensor: Int64?
+        if case .finished(let tensorId)? = own?.status { ownTensor = tensorId }
+        check(
+          editInFront && editStillRunning && model.queue.recent.contains { !finishedBefore.contains($0.id) && $0.detached },
+          "edit_image was running, in the status bar, when a History step was shown and Generate pressed (job \(started["job_id"] ?? "none"))")
+        check(
+          followsAfterLooking && followedAtStart == true && model.canvasFollowsRun,
+          "showing a History step during edit_image leaves the canvas following runs (after looking \(followsAfterLooking), as the user's run started \(followedAtStart.map { "\($0)" } ?? "never started"))")
+        check(previewsOffCanvas == 0, "the user's run showed its previews on the canvas (\(previews) seen, \(previewsOffCanvas) not on it)")
+        check(
+          ownTensor != nil && model.imageItem?.tensorId == ownTensor && model.history.currentTensorId == ownTensor && model.canvasShowsImage,
+          "the user's result landed on the canvas and is the current step (\(own.map { "\($0.status)" } ?? "no run"))")
+      } catch {
+        check(false, "Generate during an edit_image run (\(error.localizedDescription))")
+      }
+
+      // The face fix on the canvas, a tool call at a time, as an agent following MCP.md makes them.
+      if let editModel = value("--edit-model"), let facePath = value("--face-input"),
+         let faceImage = ImageLoader.image(at: URL(fileURLWithPath: facePath))
+      {
+        // Put back afterwards: the rest of the check runs the first model at its small size.
+        let modelBefore = model.selectedModel, settingsBefore = model.settings, promptBefore = model.prompt
+        do {
+          _ = try await call(
+            "set_create_screen",
+            ["model": editModel, "steps": editSteps, "guidance_scale": 1, "merge_into_image": true, "canvas_mode": "edit"])
+          await idle()
+          _ = try await call("set_canvas_image", ["image": facePath])
+          let found = try await call("find_faces")
+          guard let box = rect((found["faces"] as? [[String: Any]])?.first?["box"]),
+                let fix = faceFixFrame(box, in: CGSize(width: faceImage.width, height: faceImage.height), scale: editScale)
+          else { throw AgentTools.ToolError("find_faces found no face a region fits around at scale \(editScale)") }
+          let framed = try await call(
+            "set_canvas_frame", ["box": json(fix.region), "padding": 0, "aspect_ratio": fix.region.width / fix.region.height, "scale": editScale])
+          let framedSize = framed["frame"] as? [String: Any]
+          check(
+            (framedSize?["width"] as? NSNumber)?.intValue == Int(fix.output.width) && (framedSize?["height"] as? NSNumber)?.intValue == Int(fix.output.height)
+              && same(rect(framed["region"]), fix.region) && framed["extends_past_image"] as? Bool == false
+              && undoManager.undoActionName == "Agent Settings",
+            "on the canvas: set_canvas_frame puts the frame around the face at scale \(editScale), inside the image, one “Agent Settings” step (frame \(framedSize ?? [:]), region \(framed["region"] ?? "?"), “\(undoManager.undoActionName)”)")
+          _ = try await call("set_canvas_mask", ["shapes": [["shape": "ellipse"].merging(json(fix.ellipse)) { first, _ in first }]])
+          let grown = try await call("grow_canvas_mask", ["pixels": fix.grow])
+          check(
+            grown["grown_by"] as? Int == fix.grow && undoManager.undoActionName == CreateModel.agentMaskActionName,
+            "on the canvas: the face is masked and the mask grown, an “Agent Mask” step (“\(undoManager.undoActionName)”)")
+          let painted = try await call("set_canvas_paint", ["fill_from_mask": true, "color": "#00FF00"])
+          check(
+            painted["has_paint"] as? Bool == true && undoManager.undoActionName == CreateModel.agentPaintActionName,
+            "on the canvas: the mask is filled green, an “Agent Paint” step (“\(undoManager.undoActionName)”)")
+          let board = try await call("set_moodboard", ["clear": true, "add": [["image": facePath]]])
+          check(
+            images(board).count == 1 && images(board).first?["picture"] as? Int == 2 && board["model_takes_references"] as? Bool == true
+              && undoManager.undoActionName == CreateModel.agentMoodboardActionName,
+            "on the canvas: the reference is the moodboard's one image, Picture 2, an “Agent Moodboard” step (“\(undoManager.undoActionName)”)")
+          _ = try await call("set_create_screen", ["prompt": faceFixPrompt])
+          let ran = try await call("generate", ["use_app_settings": true, "use_canvas": true, "include_image": false])
+          let size = ran["canvas_size"] as? [String: Any]
+          let ranStep = (ran["history_step"] as? NSNumber)?.int64Value
+          let ranItem = model.history.items.first { $0.id.logicalTime == ranStep }
+          let ranImage: CGImage? = if let ranItem { await model.history.image(for: ranItem) } else { nil }
+          let grownBox = fix.ellipse.insetBy(dx: -Double(fix.grow) - fix.margin, dy: -Double(fix.grow) - fix.margin)
+          let away = ranImage.flatMap { difference($0, faceImage) { !grownBox.contains($0) } }
+          let within = ranImage.flatMap { difference($0, faceImage) { fix.ellipse.insetBy(dx: fix.ellipse.width / 4, dy: fix.ellipse.height / 4).contains($0) } }
+          check(
+            ran["merged"] as? Bool == true && size?["width"] as? Int == faceImage.width && size?["height"] as? Int == faceImage.height
+              && ran["width"] as? Int == Int(fix.output.width) && ran["height"] as? Int == Int(fix.output.height) && ran["model"] as? String == editModel,
+            "on the canvas: generate with use_canvas runs the face fix with \(editModel) at \(ran["width"] ?? "?")×\(ran["height"] ?? "?") and merges at the image's size (\(size ?? [:]), \(ran["duration_seconds"] ?? "?") s)")
+          check(
+            away?.maxDelta == 0 && (within?.meanDelta ?? 0) > 0.5,
+            "on the canvas: it changed the face and nothing away from it (max delta away \(away?.maxDelta ?? -1), mean delta on the face \(String(format: "%.1f", within?.meanDelta ?? 0)))")
+          // The source's step: the image as it was put on the canvas, which an edit made with
+          // paint doesn't record as its input (that's the painted frame).
+          var sourceStep: Int64?
+          for candidate in model.history.items.sorted(by: { $0.id.logicalTime > $1.id.logicalTime }).prefix(16)
+          where candidate.tensorId != ranItem?.tensorId && !candidate.isVideo && candidate.imageTensorId != nil {
+            guard let image = await model.history.image(for: candidate), image.width == faceImage.width, image.height == faceImage.height,
+                  difference(image, faceImage, where: { _ in true })?.maxDelta == 0
+            else { continue }
+            sourceStep = candidate.id.logicalTime
+            break
+          }
+          if let ranStep, let sourceStep {
+            let matched = try await call(
+              "match_colors", ["history_step": ranStep, "original_history_step": sourceStep, "unchanged_only": true])
+            let matchedItem = (matched["history_step"] as? NSNumber).flatMap { step in model.history.items.first { $0.id.logicalTime == step.int64Value } }
+            let matchedImage: CGImage? = if let matchedItem { await model.history.image(for: matchedItem) } else { nil }
+            check(
+              (matched["original_history_step"] as? NSNumber)?.int64Value == sourceStep && matched["unchanged_fraction"] is NSNumber
+                && matchedImage?.width == faceImage.width && matchedImage?.height == faceImage.height,
+              "on the canvas: match_colors with original_history_step \(sourceStep) and unchanged_only matches the fix to the source, at its size (unchanged_fraction \(matched["unchanged_fraction"] ?? "none"), delta_a \(matched["delta_a"] ?? "?"), delta_b \(matched["delta_b"] ?? "?"))")
+          } else {
+            check(false, "on the canvas: the source image's step is in History, to name as match_colors' original (result step \(ranStep.map { "\($0)" } ?? "none"))")
+          }
+        } catch {
+          check(false, "the face fix on the canvas with \(editModel) (\(error.localizedDescription))")
+        }
+        await idle()
+        model.selectedModel = modelBefore
+        await idle()
+        if let settingsBefore { model.replaceSettings(with: settingsBefore, actionName: "", undoManager: nil) }
+        model.prompt = promptBefore
+        check(
+          model.selectedModel == modelBefore && model.settings?.width == settingsBefore?.width && model.settings?.steps == settingsBefore?.steps
+            && model.prompt == promptBefore,
+          "the model, settings and prompt are back as they were before the face fix on the canvas")
+      } else {
+        print("SKIP the face fix on the canvas: needs --edit-model (one that takes reference images) and --face-input")
       }
       _ = try? await call("set_moodboard", ["clear": true])
 
