@@ -194,18 +194,23 @@ extension GenerationEngine.Request {
       mask: mask, merge: merge, detail: detail, paint: paint, maskBlur: Double(configuration.maskBlur),
       maskBlurOutset: configuration.maskBlurOutset)
     else { return false }
+    setRefineInputs(inputs, isImported: isImported)
+    return true
+  }
+
+  /// Takes Edit inputs already worked out (`RefineInputs.make`, `CanvasEdit.refineInputs`).
+  mutating func setRefineInputs(_ inputs: RefineInputs, isImported: Bool) {
     canvas = inputs.canvas
     canvasIsImported = isImported
-    self.mask = inputs.mask
+    mask = inputs.mask
     canvasSourceMask = inputs.sourceMask
-    self.merge = inputs.merge
+    merge = inputs.merge
     canvasKey = inputs.canvasKey
-    if self.merge != nil {
+    if merge != nil {
       canvasTensorId = inputs.canvasTensorId
     } else if let id = inputs.canvasTensorId {
       canvasTensorId = id
     }
-    return true
   }
 }
 

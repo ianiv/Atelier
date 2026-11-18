@@ -339,6 +339,44 @@ final class AutoMaskSession {
   }
 }
 
+// MARK: - Auto masking any image
+
+extension AutoMaskSession {
+  /// A selection on any image, on the canvas or not: Vision's subject when `subjectAt` is given
+  /// (the subject under its point, image pixels from the top left, or every subject for a nil
+  /// point), else SAM 2.1's for `prompt` with the `size` model. The selection comes with its mask
+  /// stroke and pixel count (`AutoMaskSelection`), SAM's result with its score and timings (nil
+  /// for a subject), and how long the model took. The canvas's own selections come through here
+  /// (`CreateModel.samSelection`, `subjectSelection`), so one made off the canvas is the same.
+  static func autoMaskStroke(
+    on image: CGImage, prompt: SAMSegmenter.Prompt?, subjectAt: CGPoint??, size: SAMFiles.Size
+  ) async throws -> (selection: AutoMaskSelection, result: SAMSegmenter.Result?, time: Duration) {
+    let clock = ContinuousClock()
+    let start = clock.now
+    if let point = subjectAt {
+      let coverage = try await Task.detached(priority: .userInitiated) { try SubjectMask.coverage(image, at: point) }.value
+      let time = clock.now - start
+      return (await selection(coverage, width: image.width, height: image.height, image: image), nil, time)
+    }
+    guard let prompt, !prompt.isEmpty else { throw AutoMaskError.emptyPrompt }
+    guard let files = SAMFiles.installed(size) else { throw AutoMaskError.notDownloaded(size) }
+    let result = try await SAMSegmenter.shared.segment(image, prompt: prompt, files: files)
+    let time = clock.now - start
+    return (await selection(result.coverage, width: result.width, height: result.height, image: image), result, time)
+  }
+
+  /// The selection with its tint, pixel count and mask stroke, all worked out off the main actor.
+  private static func selection(_ coverage: [UInt8], width: Int, height: Int, image: CGImage) async -> AutoMaskSelection {
+    let (tint, count, stroke) = await Task.detached(priority: .userInitiated) {
+      let count = coverage.reduce(0) { $0 + ($1 != 0 ? 1 : 0) }
+      let stroke = count == 0 ? nil : SAMGeometry.grayImage(coverage, width: width, height: height).flatMap { CanvasMask.Stroke.bitmap($0) }
+      return (AutoMaskSession.tint(coverage, width: width, height: height), count, stroke)
+    }.value
+    return AutoMaskSelection(
+      coverage: coverage, width: width, height: height, image: image, tint: tint, selectedPixels: count, stroke: stroke)
+  }
+}
+
 // MARK: - Auto masking from the Create screen
 
 /// Auto masking for the Select tool and for callers without the view (scripted checks, and the
@@ -351,36 +389,18 @@ extension CreateModel {
   /// SAM 2.1's selection for `prompt` (image pixels) on the canvas image, with its timing.
   func samSelection(_ prompt: SAMSegmenter.Prompt, size: SAMFiles.Size? = nil) async throws -> (selection: AutoMaskSelection, result: SAMSegmenter.Result) {
     guard canEditMask, let image else { throw AutoMaskError.cannotPaint }
-    guard !prompt.isEmpty else { throw AutoMaskError.emptyPrompt }
-    let size = size ?? autoMask.size
-    guard let files = SAMFiles.installed(size) else { throw AutoMaskError.notDownloaded(size) }
-    let result = try await SAMSegmenter.shared.segment(image, prompt: prompt, files: files)
-    guard self.image === image else { throw AutoMaskError.imageChanged }
-    let selection = await Self.selection(result.coverage, width: result.width, height: result.height, image: image)
-    return (selection, result)
+    let found = try await AutoMaskSession.autoMaskStroke(on: image, prompt: prompt, subjectAt: nil, size: size ?? autoMask.size)
+    guard self.image === image, let result = found.result else { throw AutoMaskError.imageChanged }
+    return (found.selection, result)
   }
 
   /// Vision's subject selection on the canvas image: the subject under `point` (image pixels),
   /// else every subject.
   func subjectSelection(at point: CGPoint? = nil) async throws -> (selection: AutoMaskSelection, time: Duration) {
     guard canEditMask, let image else { throw AutoMaskError.cannotPaint }
-    let clock = ContinuousClock()
-    let start = clock.now
-    let coverage = try await Task.detached(priority: .userInitiated) { try SubjectMask.coverage(image, at: point) }.value
+    let found = try await AutoMaskSession.autoMaskStroke(on: image, prompt: nil, subjectAt: .some(point), size: autoMask.size)
     guard self.image === image else { throw AutoMaskError.imageChanged }
-    let selection = await Self.selection(coverage, width: image.width, height: image.height, image: image)
-    return (selection, clock.now - start)
-  }
-
-  /// The selection with its tint, pixel count and mask stroke, all worked out off the main actor.
-  private static func selection(_ coverage: [UInt8], width: Int, height: Int, image: CGImage) async -> AutoMaskSelection {
-    let (tint, count, stroke) = await Task.detached(priority: .userInitiated) {
-      let count = coverage.reduce(0) { $0 + ($1 != 0 ? 1 : 0) }
-      let stroke = count == 0 ? nil : SAMGeometry.grayImage(coverage, width: width, height: height).flatMap { CanvasMask.Stroke.bitmap($0) }
-      return (AutoMaskSession.tint(coverage, width: width, height: height), count, stroke)
-    }.value
-    return AutoMaskSelection(
-      coverage: coverage, width: width, height: height, image: image, tint: tint, selectedPixels: count, stroke: stroke)
+    return (found.selection, found.time)
   }
 
   /// Puts `selection` into the canvas mask (`mode`), as one undo step. False when it can't: the

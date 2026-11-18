@@ -99,9 +99,11 @@ nonisolated enum SavedQueue {
     // Exports write where a save panel allowed for this session only, so they aren't kept, and
     // agent, paired device and style thumbnail jobs answer a caller that's gone after a quit.
     // A job for a server isn't kept here either: bringing it back would run it on this device.
-    // Once sent, `RemoteClientJobs` keeps it.
+    // Once sent, `RemoteClientJobs` keeps it. A detached job (an agent's, or one run again from
+    // Recent) isn't kept: an entry doesn't say it's off the canvas, or which project it's for.
     let jobs = jobs.filter {
-      !$0.fromAgent && $0.remoteDevice == nil && $0.styleThumbnail == nil && $0.request != nil && $0.target == .local
+      !$0.fromAgent && !$0.detached && $0.remoteDevice == nil && $0.styleThumbnail == nil && $0.request != nil
+        && $0.target == .local
     }
     guard !jobs.isEmpty, (try? manager.createDirectory(at: folder, withIntermediateDirectories: true)) != nil
     else { return }

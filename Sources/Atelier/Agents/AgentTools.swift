@@ -12,7 +12,8 @@ import SwiftUI
 /// Generate (progress and previews on the canvas, saved to the current project, one run at a
 /// time) and leaves the Create screen's prompt, inspector and moodboard alone;
 /// `get_create_screen` and `set_create_screen` read and change them, so an agent and the user
-/// can work on the same screen.
+/// can work on the same screen. `edit_image` (`AgentToolsEditImage.swift`) is the one that runs
+/// off the canvas, leaving the whole screen as it is.
 @MainActor
 @Observable
 final class AgentTools {
@@ -24,7 +25,7 @@ final class AgentTools {
     var isQueued = false
   }
 
-  /// One `generate` or `match_colors` run. A run outlives the call that started it: `background`
+  /// One `generate`, `edit_image` or `match_colors` run. A run outlives the call that started it: `background`
   /// returns its id at once, and a waiting call whose client hangs up leaves it running for
   /// `get_job`.
   @MainActor
@@ -33,7 +34,7 @@ final class AgentTools {
     let id: String
     /// The tool that started it.
     let tool: String
-    /// What list_jobs shows: a generate job's prompt, else what it does ("Match colors of step 12").
+    /// What list_jobs shows: a generate or edit_image job's prompt, else what it does ("Match colors of step 12").
     let label: String
     /// A match_colors job's step, so a second call for it joins this one.
     let colorMatch: ColorMatch.Job?
@@ -92,7 +93,11 @@ final class AgentTools {
 
   // MARK: - Definitions
 
-  static let definitions: [[String: Any]] = [
+  /// Every tool, as tools/list gives them: the ones here, then the canvas edit tools
+  /// (`AgentToolsCanvasEdit.swift`) and edit_image (`AgentToolsEditImage.swift`).
+  static let definitions: [[String: Any]] = baseDefinitions + canvasEditDefinitions + [editImageDefinition]
+
+  private static let baseDefinitions: [[String: Any]] = [
     [
       "name": "list_models",
       "title": "List models",
@@ -132,7 +137,7 @@ final class AgentTools {
       "name": "get_create_screen",
       "title": "Get Create screen",
       "description":
-        "Returns what's on Atelier's Create screen right now: the selected model, prompt, negative prompt, the selected style (Generate writes the prompt into its template; styled_prompt is the result), seed and whether it's random, the image count, every inspector setting as Draw Things configuration JSON, the settings that differ from the model's defaults, how many reference images there are, and `canvas`: the canvas image (its history step and size), the frame (output size), the region of the image it shows (source pixels, from the top left), its zoom and offset, the canvas mode, the mask summary and Merge into Image. The user may have changed any of it since your last call.",
+        "Returns what's on Atelier's Create screen right now: the selected model, prompt, negative prompt, the selected style (Generate writes the prompt into its template; styled_prompt is the result), seed and whether it's random, the image count, every inspector setting as Draw Things configuration JSON, the settings that differ from the model's defaults, how many reference images there are and `moodboard` (each one's position, id, size, weight and the Picture number a prompt calls it by, as get_moodboard lists them), and `canvas`: the canvas image (its history step and size), the frame (output size), the region of the image it shows (source pixels, from the top left), its zoom and offset, the canvas mode, the mask summary and Merge into Image. The user may have changed any of it since your last call.",
       "inputSchema": ["type": "object", "properties": [String: Any]()],
       "annotations": ["readOnlyHint": true],
     ],
@@ -184,8 +189,8 @@ final class AgentTools {
         or `blank: "white"` for a new sketch: an opaque white image the size of the frame to \
         paint on (set_canvas_paint). \
         Returns the canvas as get_create_screen's `canvas` describes it, with mask_restored. \
-        Then paint a mask (set_canvas_mask), pick a region (set_canvas_region), or generate with \
-        use_canvas.
+        Then paint a mask (set_canvas_mask, auto_mask), pick a region (set_canvas_region, or \
+        set_canvas_frame around a box or the mask), or generate with use_canvas.
         """,
       "inputSchema": [
         "type": "object",
@@ -210,7 +215,10 @@ final class AgentTools {
         the default for shapes without one and for the fill (else the app's paint color). The \
         whole call is one ⌘Z step, “Agent Paint”. Returns has_paint, the number of strokes and \
         the painted bounds. Needs an image on the canvas (set_canvas_image, or blank: "white" \
-        for a sketch) in Edit mode.
+        for a sketch) in Edit mode. To point an edit model at what to replace, fill the mask \
+        with a flat color the picture doesn't have (fill_from_mask with color "#00FF00") and \
+        name that color in the prompt (“replace the green area with the face from Picture 2”): \
+        paint is only the run's input, so none of it is left outside the mask.
         """,
       "inputSchema": [
         "type": "object",
@@ -310,7 +318,8 @@ final class AgentTools {
         default), add or subtract, as for set_canvas_mask. One ⌘Z step, “Agent Mask”. Returns \
         get_canvas_mask's overlay and summary, plus selected_pixels, SAM's score and the time \
         taken. There's no text prompt: to select by a description, look at the image \
-        (get_image) and pass a point on what you mean.
+        (get_image) and pass a point on what you mean (find_faces gives a face's center). A \
+        selection hugs its subject: grow_canvas_mask gives an edit room to blend in.
         """,
       "inputSchema": [
         "type": "object",
@@ -343,7 +352,9 @@ final class AgentTools {
         cropped), `fit`, `actual_size` (1 image pixel per frame pixel, keeping the center), or \
         `scale` (frame pixels per image pixel) with an optional `center`. The frame size stays \
         unless `size_to_region` is true. Returns the canvas, with the region the frame actually \
-        shows: larger or smaller than asked when the zoom needed is outside 0.05×–32×.
+        shows: larger or smaller than asked when the zoom needed is outside 0.05×–32×. To frame \
+        a box or the mask with padding, at a shape and a zoom you name, use set_canvas_frame, \
+        which works the region and the output size out.
         """,
       "inputSchema": [
         "type": "object",
@@ -394,7 +405,7 @@ final class AgentTools {
       "name": "match_colors",
       "title": "Match colors to original",
       "description":
-        "Matches an edited image's colors to the image it was made from (Reinhard color transfer in Lab), taking out the warm or cool shift edit models often add, like Match Colors to Original in the canvas menu. The original is the step's input (the canvas it was edited from), else its first moodboard image; a step this tool made goes back to that same original. Runs as a job in Atelier's Queue on this device, after what's queued there: by default it waits and returns the new history step (saved after it in the step's project, and shown on the canvas when that follows the queue), the shift removed (delta_b > 0: the edit had come out warmer/yellower; delta_a > 0: more magenta) and job_id. With background: true it returns a job_id at once for get_job, list_jobs and cancel_job. By default the colors move fully and the lightness not at all; tint, saturation, brightness and contrast set how far each moves, and unchanged_only measures the two images only where the edit left the picture alone, for edits that add or remove something colorful. A step already waiting or being matched with the same settings isn't queued twice: the call joins that job. Other settings queue another job. Not for videos.",
+        "Matches an edited image's colors to the image it was made from (Reinhard color transfer in Lab), taking out the warm or cool shift edit models often add, like Match Colors to Original in the canvas menu. The original is the step's input (the canvas it was edited from), else its first moodboard image, or the step original_history_step names: pass the source image's step for an edit made with paint (edit_image `paint`, set_canvas_paint), whose recorded input is the painted frame, with unchanged_only true. A step this tool made goes back to that same original. Runs as a job in Atelier's Queue on this device, after what's queued there: by default it waits and returns the new history step (saved after it in the step's project, and shown on the canvas when that follows the queue), the shift removed (delta_b > 0: the edit had come out warmer/yellower; delta_a > 0: more magenta) and job_id. With background: true it returns a job_id at once for get_job, list_jobs and cancel_job. By default the colors move fully and the lightness not at all; tint, saturation, brightness and contrast set how far each moves, and unchanged_only measures the two images only where the edit left the picture alone, for edits that add or remove something colorful. A step already waiting or being matched with the same settings isn't queued twice: the call joins that job. Other settings queue another job. Not for videos.",
       "inputSchema": [
         "type": "object",
         "properties": [
@@ -404,6 +415,7 @@ final class AgentTools {
           "brightness": ["type": "number", "minimum": 0, "maximum": 1, "description": "How far the brightness (the average of L) moves to the original's, 0–1. Default 0: edits often mean to change the light."],
           "contrast": ["type": "number", "minimum": 0, "maximum": 1, "description": "How far the contrast (the spread of L) moves to the original's, 0–1. Default 0."],
           "unchanged_only": ["type": "boolean", "description": "Measure both images only where the edit left the picture alone, so what it added or removed isn't taken for a color shift. Measures the parts that barely changed from the original, and falls back to the whole image when less than a quarter of the picture qualifies (most of it was edited, or the whole picture shifted) or when the original has another shape. Default false."],
+          "original_history_step": ["type": "integer", "description": "The history step to match to, instead of the step's own input. Pass the source image's step after an edit made with paint (edit_image `paint`, or set_canvas_paint and use_canvas), whose recorded input is the painted frame: that has the paint's color in it, and zoomed in it's only the region. Use it with unchanged_only true."],
           "strength": ["type": "number", "minimum": 0, "maximum": 1, "description": "Shortcut: sets tint and saturation together, 0–1. tint and saturation override it."],
           "luminance": [
             "type": ["boolean", "number"], "minimum": 0, "maximum": 1,
@@ -464,7 +476,7 @@ final class AgentTools {
           "audio": ["type": "string", "description": "Video models that take audio (see list_models): path to an audio file."],
           "save_to": ["type": "string", "description": "Where to write the PNG or MP4: a file path, or a folder. Defaults to a temporary folder."],
           "include_image": ["type": "boolean", "description": "Return the image inline (scaled to 1024 px on the long side). Default true."],
-          "use_canvas": ["type": "boolean", "description": "With use_app_settings: run exactly what the Generate button would, taking the canvas image, the region the frame shows (set_canvas_region), its mask (set_canvas_mask), the moodboard and Merge into Image. Takes no prompt, settings or input_image: change those with set_create_screen and set_canvas_image first. Returns the result (the merged whole image when it merges) and the step it followed."],
+          "use_canvas": ["type": "boolean", "description": "With use_app_settings: run exactly what the Generate button would, taking the canvas image, the region the frame shows (set_canvas_region), its mask (set_canvas_mask), the moodboard and Merge into Image. Takes no prompt, settings or input_image: change those with set_create_screen and set_canvas_image first. Returns the result (the merged whole image when it merges) and the step it followed. For the same edit without touching the Create screen, use edit_image."],
           "background": ["type": "boolean", "description": "Return a job_id right away instead of waiting for the result, then check on it with get_job. Use it for videos and anything that may take more than a couple of minutes, since some clients give up on long calls. Either way the run keeps going if the call is cancelled or dropped; only cancel_job stops it."],
         ],
       ],
@@ -473,8 +485,8 @@ final class AgentTools {
       "name": "get_job",
       "title": "Get job",
       "description": """
-        Checks on a generate or match_colors job: waiting (queued behind other runs), running (with step and \
-        total), done (with everything the job's tool returns: for generate text, image and structured result), \
+        Checks on a generate, edit_image or match_colors job: waiting (queued behind other runs), running (with step and \
+        total), done (with everything the job's tool returns: for generate and edit_image text, image and structured result), \
         failed or cancelled. Waits up to wait_seconds for it to finish first, so calling it in a \
         loop checks in periodically without busy polling.
         """,
@@ -482,7 +494,7 @@ final class AgentTools {
         "type": "object",
         "required": ["job_id"],
         "properties": [
-          "job_id": ["type": "string", "description": "From generate with background, or list_jobs."],
+          "job_id": ["type": "string", "description": "From generate, edit_image or match_colors with background, or list_jobs."],
           "wait_seconds": ["type": "integer", "description": "How long to wait for the job to finish before returning its progress, 0–60. Default 30."],
         ],
       ],
@@ -491,14 +503,14 @@ final class AgentTools {
     [
       "name": "list_jobs",
       "title": "List jobs",
-      "description": "Lists generate and match_colors jobs from the last hour, newest first: job_id, tool, status, progress, elapsed time and prompt (label for match_colors). A generate call that timed out, was cancelled or lost its connection keeps running and shows here.",
+      "description": "Lists generate, edit_image and match_colors jobs from the last hour, newest first: job_id, tool, status, progress, elapsed time and prompt (label for match_colors). A generate or edit_image call that timed out, was cancelled or lost its connection keeps running and shows here.",
       "inputSchema": ["type": "object", "properties": [String: Any]()],
       "annotations": ["readOnlyHint": true],
     ],
     [
       "name": "cancel_job",
       "title": "Cancel job",
-      "description": "Stops a generate or match_colors job, like Cancel in Atelier's Queue: a waiting job leaves the queue and a running one stops.",
+      "description": "Stops a generate, edit_image or match_colors job, like Cancel in Atelier's Queue: a waiting job leaves the queue and a running one stops.",
       "inputSchema": [
         "type": "object",
         "required": ["job_id"],
@@ -524,10 +536,16 @@ final class AgentTools {
     case "get_canvas_mask": return try await getCanvasMask(arguments)
     case "set_canvas_region": return try await setCanvasRegion(arguments)
     case "auto_mask": return try await autoMask(arguments)
+    case "get_moodboard": return try getMoodboard(arguments)
+    case "set_moodboard": return try await setMoodboard(arguments)
+    case "find_faces": return try await findFaces(arguments)
+    case "grow_canvas_mask": return try await growCanvasMask(arguments)
+    case "set_canvas_frame": return try await setCanvasFrame(arguments)
     case "list_history": return try Self.textResult(json: listHistory(arguments))
     case "get_image": return try await getImage(arguments)
     case "match_colors": return try await matchColors(arguments, progress: progress)
     case "generate": return try await startGenerate(arguments, progress: progress)
+    case "edit_image": return try await startEditImage(arguments, progress: progress)
     case "get_job": return try await getJob(arguments, progress: progress)
     case "list_jobs": return try Self.textResult(json: jobs.values.sorted { $0.startedAt > $1.startedAt }.map(Self.summary))
     case "cancel_job": return try cancelJob(arguments)
@@ -590,53 +608,11 @@ final class AgentTools {
     }
     if create.models.isEmpty { await create.refreshModelList() }
     let model = try resolveModel(arguments["model"] as? String)
-    var notes: [String] = []
-
-    var configuration: PipelineConfiguration
-    if arguments["use_app_settings"] as? Bool == true {
-      guard model == create.selectedModel, let settings = create.settings else {
-        throw ToolError("use_app_settings needs `model` to be the app's selected model (\(create.selectedModel ?? "none")).")
-      }
-      configuration = settings
-    } else {
-      configuration = try await defaults(for: model)
-    }
-    if let name = arguments["preset"] as? String {
-      try apply(presetNamed: name, model: model, to: &configuration)
-    }
-    var sizeGiven = false
-    if let settings = arguments["settings"] as? [String: Any], !settings.isEmpty {
-      let data = try JSONSerialization.data(withJSONObject: settings)
-      guard let pasted = DrawThingsJSON.decode(data) else {
-        throw ToolError("None of the keys in `settings` are settings Atelier knows. See get_settings.")
-      }
-      SettingsRegistry.apply(dump: pasted.dump, to: &configuration)
-      sizeGiven = pasted.dump["width"] != nil || pasted.dump["height"] != nil
-      let ignored = settings.keys.filter {
-        pasted.dump[$0] == nil && $0 != "model" && $0 != "seed"
-      }
-      if !ignored.isEmpty { notes.append("Ignored unknown settings: \(ignored.sorted().joined(separator: ", ")).") }
-    }
-    let width = Self.int(arguments["width"])
-    let height = Self.int(arguments["height"])
-    if width != nil || height != nil {
-      configuration.width = Self.roundTo64(width ?? configuration.width)
-      configuration.height = Self.roundTo64(height ?? configuration.height)
-      sizeGiven = true
-    }
-    if let steps = Self.int(arguments["steps"]) { configuration.steps = max(steps, 1) }
-    if let guidance = Self.double(arguments["guidance_scale"]) { configuration.guidanceScale = Float(guidance) }
-    if let strength = Self.double(arguments["strength"]) { configuration.strength = Float(min(max(strength, 0), 1)) }
+    let layered = try await configuration(arguments, model: model)
+    var configuration = layered.configuration
+    let sizeGiven = layered.sizeGiven
+    var notes = layered.notes
     let video = VideoModel(model: model, loras: configuration.loras.compactMap(\.file))
-    if let video {
-      if let frames = Self.int(arguments["num_frames"]) {
-        configuration.numFrames = video.snapped(frames)
-      } else if let seconds = Self.double(arguments["seconds"]) {
-        configuration.numFrames = video.snapped(Int((seconds * video.framesPerSecond).rounded()) + 1)
-      } else {
-        configuration.numFrames = video.snapped(configuration.numFrames)
-      }
-    }
 
     let seed: UInt32
     if let value = Self.int(arguments["seed"]) {
@@ -700,10 +676,79 @@ final class AgentTools {
     }
 
     let summary = String(prompt.prefix(60))
+    let item = try await run(request, summary: summary, progress: progress)
+    return try await result(
+      of: item, model: model, configuration: configuration, seed: seed, summary: summary, notes: notes,
+      arguments: arguments)
+  }
+
+  /// The settings a run starts from, layered as Create layers them: the model's recommended
+  /// settings and default preset (or with use_app_settings the inspector's values), then `preset`,
+  /// then `settings`, then the explicit fields, with a video model's length snapped to the counts
+  /// it takes. `sizeGiven` says the caller named the output size; `notes` what was ignored.
+  /// `generate` and `edit_image` both start here, so the same arguments mean the same settings.
+  func configuration(
+    _ arguments: [String: Any], model: String
+  ) async throws -> (configuration: PipelineConfiguration, sizeGiven: Bool, notes: [String]) {
+    var notes: [String] = []
+    var configuration: PipelineConfiguration
+    if arguments["use_app_settings"] as? Bool == true {
+      guard model == create.selectedModel, let settings = create.settings else {
+        throw ToolError("use_app_settings needs `model` to be the app's selected model (\(create.selectedModel ?? "none")).")
+      }
+      configuration = settings
+    } else {
+      configuration = try await defaults(for: model)
+    }
+    if let name = arguments["preset"] as? String {
+      try apply(presetNamed: name, model: model, to: &configuration)
+    }
+    var sizeGiven = false
+    if let settings = arguments["settings"] as? [String: Any], !settings.isEmpty {
+      let data = try JSONSerialization.data(withJSONObject: settings)
+      guard let pasted = DrawThingsJSON.decode(data) else {
+        throw ToolError("None of the keys in `settings` are settings Atelier knows. See get_settings.")
+      }
+      SettingsRegistry.apply(dump: pasted.dump, to: &configuration)
+      sizeGiven = pasted.dump["width"] != nil || pasted.dump["height"] != nil
+      let ignored = settings.keys.filter {
+        pasted.dump[$0] == nil && $0 != "model" && $0 != "seed"
+      }
+      if !ignored.isEmpty { notes.append("Ignored unknown settings: \(ignored.sorted().joined(separator: ", ")).") }
+    }
+    let width = Self.int(arguments["width"])
+    let height = Self.int(arguments["height"])
+    if width != nil || height != nil {
+      configuration.width = Self.roundTo64(width ?? configuration.width)
+      configuration.height = Self.roundTo64(height ?? configuration.height)
+      sizeGiven = true
+    }
+    if let steps = Self.int(arguments["steps"]) { configuration.steps = max(steps, 1) }
+    if let guidance = Self.double(arguments["guidance_scale"]) { configuration.guidanceScale = Float(guidance) }
+    if let strength = Self.double(arguments["strength"]) { configuration.strength = Float(min(max(strength, 0), 1)) }
+    if let video = VideoModel(model: model, loras: configuration.loras.compactMap(\.file)) {
+      if let frames = Self.int(arguments["num_frames"]) {
+        configuration.numFrames = video.snapped(frames)
+      } else if let seconds = Self.double(arguments["seconds"]) {
+        configuration.numFrames = video.snapped(Int((seconds * video.framesPerSecond).rounded()) + 1)
+      } else {
+        configuration.numFrames = video.snapped(configuration.numFrames)
+      }
+    }
+    return (configuration, sizeGiven, notes)
+  }
+
+  /// Queues `request` as an agent's run and waits for the step it saves, showing what it's doing
+  /// in the Agents settings tab and reporting its progress. `target`, `detached` and `project`
+  /// are `CreateModel.generate(forAgent:)`'s.
+  func run(
+    _ request: GenerationEngine.Request, target: JobTarget? = nil, detached: Bool = false, project: String? = nil,
+    summary: String, progress: @escaping (Progress) -> Void
+  ) async throws -> HistoryItem {
     activity = "Waiting: “\(summary)”"
     progress(Progress(step: 0, total: nil, message: "Waiting for the current run to finish", isQueued: true))
     defer { activity = nil }
-    let item = try await create.generate(forAgent: request) { [weak self] update in
+    return try await create.generate(forAgent: request, target: target, detached: detached, project: project) { [weak self] update in
       guard case .state(let state) = update else { return }
       let message = Self.describe(state)
       var step = 0
@@ -715,20 +760,19 @@ final class AgentTools {
       self?.activity = "\(message): “\(summary)”"
       progress(Progress(step: step, total: total, message: message))
     }
-    return try await result(
-      of: item, model: model, configuration: configuration, seed: seed, summary: summary, notes: notes,
-      arguments: arguments)
   }
 
   /// What a finished run answers with: the file written, the image inline and the structured
-  /// result (plus `extra`).
-  private func result(
-    of item: HistoryItem, model: String, configuration: PipelineConfiguration, seed: UInt32, summary: String,
-    notes: [String], arguments: [String: Any], extra: [String: Any] = [:]
+  /// result (plus `extra`). `saved` is the project the step is in when that may not be the open
+  /// one (a detached job's, `JobQueue.Job.project`).
+  func result(
+    of item: HistoryItem, in saved: Project? = nil, model: String, configuration: PipelineConfiguration, seed: UInt32,
+    summary: String, notes: [String], arguments: [String: Any], extra: [String: Any] = [:]
   ) async throws -> [String: Any] {
-    let png = try await create.history.pngData(item)
+    let saved = saved ?? create.history.project
+    let png = try await create.history.pngData(item, in: saved)
     let url = try Self.outputURL(
-      arguments["save_to"] as? String, name: create.history.fileName(for: item),
+      arguments["save_to"] as? String, name: "\(saved.name) \(item.id.logicalTime)-\(item.sidecar.seed)",
       extension: item.isVideo ? "mp4" : "png")
     if item.isVideo {
       try await create.history.exportVideo(item, to: url)
@@ -736,7 +780,7 @@ final class AgentTools {
       try png.write(to: url)
     }
 
-    let project = create.history.project.name
+    let project = saved.name
     let seconds = item.sidecar.durationSeconds
     lastResult = "“\(summary)” saved to \(project) in \(GenerationTime.text(seconds))"
     var text =
@@ -852,21 +896,7 @@ final class AgentTools {
     let merged = request.merge != nil
 
     let summary = String(request.prompt.prefix(60))
-    activity = "Waiting: “\(summary)”"
-    progress(Progress(step: 0, total: nil, message: "Waiting for the current run to finish", isQueued: true))
-    defer { activity = nil }
-    let item = try await create.generate(forAgent: request, target: create.runTarget) { [weak self] update in
-      guard case .state(let state) = update else { return }
-      let message = Self.describe(state)
-      var step = 0
-      var total: Int?
-      if case .generating(let current, let all) = state {
-        step = current
-        total = all
-      }
-      self?.activity = "\(message): “\(summary)”"
-      progress(Progress(step: step, total: total, message: message))
-    }
+    let item = try await run(request, target: create.runTarget, summary: summary, progress: progress)
     let parent = item.inputTensorId.flatMap { create.history.item(tensorId: $0) }
     // The saved image's own size: a merged one is the whole (maybe grown) image, not the frame.
     let saved = await create.history.image(for: item)
@@ -908,7 +938,7 @@ final class AgentTools {
 
   /// Runs `work` as a job (see `startGenerate`): `work` reports progress, and its first report
   /// means its arguments checked out.
-  private func startJob(
+  func startJob(
     tool: String, label: String, colorMatch: ColorMatch.Job? = nil, background: Bool,
     progress: @escaping (Progress) -> Void,
     work: @escaping (@escaping (Progress) -> Void) async throws -> [String: Any]
@@ -1021,7 +1051,7 @@ final class AgentTools {
 
   private static func summary(_ job: Job) -> [String: Any] {
     var summary: [String: Any] = [
-      "job_id": job.id, "tool": job.tool, job.tool == "generate" ? "prompt" : "label": shortened(job.label),
+      "job_id": job.id, "tool": job.tool, job.tool == "match_colors" ? "label" : "prompt": shortened(job.label),
       "elapsed_seconds": Int((job.finishedAt ?? Date()).timeIntervalSince(job.startedAt)),
     ]
     if job.finishedAt == nil {
@@ -1040,7 +1070,7 @@ final class AgentTools {
 
   // MARK: - Create screen
 
-  private func createScreen() -> [String: Any] {
+  func createScreen() -> [String: Any] {
     let all = create.values(for: SettingsRegistry.all.map(\.id))
     let changed = create.values(for: create.changedSettings.map(\.id))
     return [
@@ -1060,6 +1090,7 @@ final class AgentTools {
       "settings": create.settings == nil ? NSNull() : Self.jsonObject(DrawThingsJSON.encode(all, model: nil, seed: nil)),
       "changed_from_defaults": Self.jsonObject(DrawThingsJSON.encode(changed, model: nil, seed: nil)),
       "reference_images": create.moodboard.items.count,
+      "moodboard": moodboardState(),
       "layout_editor": create.layout != nil ? "open" : create.layoutFormat == nil ? "not available for this model" : "closed",
       "canvas_has_image": create.image != nil,
       "canvas": canvasState(),
@@ -1197,7 +1228,7 @@ final class AgentTools {
 
   /// The canvas as an agent sees it: what's on it, the frame, the region of the image the frame
   /// shows (all in the image's pixels from its top left), the mode and the mask.
-  private func canvasState() -> [String: Any] {
+  func canvasState() -> [String: Any] {
     let shows =
       create.canvasClip != nil ? "video" : create.canvasShowsImage ? "image" : create.image != nil ? "run preview" : "empty"
     var state: [String: Any] = [
@@ -1247,7 +1278,7 @@ final class AgentTools {
   }
 
   /// get_canvas_mask's summary, also what set_canvas_mask returns.
-  private func maskSummary() -> [String: Any] {
+  func maskSummary() -> [String: Any] {
     guard let stats = create.canvasMaskStats, let image = create.image else { return ["has_mask": false] }
     return [
       "has_mask": stats.paintedPixels > 0,
@@ -1265,7 +1296,7 @@ final class AgentTools {
 
   /// The canvas image an agent can work on, or why there isn't one.
   @discardableResult
-  private func canvasImage() throws -> CGImage {
+  func canvasImage() throws -> CGImage {
     if create.canvasClip != nil {
       throw ToolError("The canvas plays a video. Put an image on it with set_canvas_image first.")
     }
@@ -1307,7 +1338,7 @@ final class AgentTools {
   }
 
   /// A History step that's an image, or why not.
-  private func historyImage(_ step: Int) throws -> HistoryItem {
+  func historyImage(_ step: Int) throws -> HistoryItem {
     guard let item = create.history.items.first(where: { $0.id.logicalTime == step }) else {
       throw ToolError("No history step \(step) in “\(create.history.project.name)”. See list_history.")
     }
@@ -1483,13 +1514,13 @@ final class AgentTools {
   }
 
   /// A colour as `set_canvas_paint` takes it.
-  private static func paintColor(_ text: String, what: String) throws -> CanvasPaint.Color {
+  nonisolated static func paintColor(_ text: String, what: String) throws -> CanvasPaint.Color {
     guard let color = CanvasPaint.Color(hex: text) else { throw ToolError("\(what) is \"#RRGGBB\" or \"#RRGGBBAA\" (got \"\(text)\").") }
     return color
   }
 
   /// One `set_canvas_paint` shape as a paint stroke.
-  private static func paintStroke(_ shape: [String: Any], number: Int, color: CanvasPaint.Color) throws -> CanvasPaint.Stroke {
+  nonisolated static func paintStroke(_ shape: [String: Any], number: Int, color: CanvasPaint.Color) throws -> CanvasPaint.Stroke {
     let erases = shape["erase"] as? Bool == true
     let color = try (shape["color"] as? String).map { try paintColor($0, what: "Shape \(number)'s `color`") } ?? color
     if shape["shape"] as? String == "stroke" {
@@ -1523,7 +1554,7 @@ final class AgentTools {
   }
 
   /// Why the mask can't change now (`canEditMask` is false with an image on the canvas).
-  private func maskUnavailableReason() -> String {
+  func maskUnavailableReason() -> String {
     if create.videoModel != nil { return "\(create.selectedModel ?? "This model") makes video, which takes no mask." }
     if create.layout != nil { return "The Layout editor is open over the canvas. Close it with set_create_screen {layout_editor: false}." }
     if create.canvasMode != .edit {
@@ -1533,7 +1564,7 @@ final class AgentTools {
   }
 
   /// One `set_canvas_mask` shape as a mask stroke.
-  private static func stroke(_ shape: [String: Any], number: Int, erases: Bool) throws -> CanvasMask.Stroke {
+  nonisolated static func stroke(_ shape: [String: Any], number: Int, erases: Bool) throws -> CanvasMask.Stroke {
     switch shape["shape"] as? String {
     case "rect", "ellipse":
       guard let x = double(shape["x"]), let y = double(shape["y"]), let width = double(shape["width"]),
@@ -1561,7 +1592,7 @@ final class AgentTools {
     }
   }
 
-  private static func bounds(of points: [CGPoint]) -> CGRect {
+  nonisolated static func bounds(of points: [CGPoint]) -> CGRect {
     guard let first = points.first else { return .null }
     return points.dropFirst().reduce(CGRect(origin: first, size: .zero)) { $0.union(CGRect(origin: $1, size: .zero)) }
   }
@@ -1680,7 +1711,7 @@ final class AgentTools {
     return try await getCanvasMask(["view": "overlay"], extra: extra)
   }
 
-  private static func hint(for error: AutoMaskError) -> String {
+  static func hint(for error: AutoMaskError) -> String {
     switch error {
     case .notDownloaded(let size):
       "SAM 2.1 \(size.title) isn't downloaded. Ask the user to download it from the Select tool's bar in Atelier, or use `subject: true`."
@@ -1692,7 +1723,7 @@ final class AgentTools {
     }
   }
 
-  private static func milliseconds(_ duration: Duration) -> Double {
+  static func milliseconds(_ duration: Duration) -> Double {
     (Double(duration.components.seconds) + Double(duration.components.attoseconds) / 1e18) * 1000
   }
 
@@ -1853,11 +1884,11 @@ final class AgentTools {
     return try Self.textResult(json: result)
   }
 
-  private static func json(_ rect: CGRect) -> [String: Any] {
+  static func json(_ rect: CGRect) -> [String: Any] {
     ["x": Double(rect.minX), "y": Double(rect.minY), "width": Double(rect.width), "height": Double(rect.height)]
   }
 
-  private static func json(_ size: CGSize) -> [String: Any] {
+  static func json(_ size: CGSize) -> [String: Any] {
     ["width": Int(size.width), "height": Int(size.height)]
   }
 
@@ -1975,8 +2006,24 @@ final class AgentTools {
       item = onCanvas
     }
     guard !item.isVideo else { throw ToolError("History step \(item.id.logicalTime) is a video; match_colors takes images.") }
-    guard create.hasOriginal(item) else {
-      throw ToolError("History step \(item.id.logicalTime) has no original to match: it wasn't made from the canvas or a moodboard image.")
+    // The original named by the caller, in place of the step's recorded input.
+    var original: (step: Int, tensorId: Int64)?
+    if arguments["original_history_step"] != nil {
+      guard let step = Self.int(arguments["original_history_step"]) else {
+        throw ToolError("`original_history_step` is a history step number (see list_history).")
+      }
+      guard let found = create.history.items.first(where: { $0.id.logicalTime == step }) else {
+        throw ToolError("No history step \(step) in “\(create.history.project.name)”. See list_history.")
+      }
+      guard !found.isVideo, let tensorId = found.imageTensorId else {
+        throw ToolError("History step \(step) has no image to match to (a video, or an input entry with an empty canvas).")
+      }
+      guard tensorId != item.tensorId else { throw ToolError("`original_history_step` is the step being matched; name the image it was edited from.") }
+      original = (step, tensorId)
+    }
+    guard original != nil || create.hasOriginal(item) else {
+      throw ToolError(
+        "History step \(item.id.logicalTime) has no original to match: it wasn't made from the canvas or a moodboard image. Name one with original_history_step.")
     }
     // The two settings there were first, which still set the four: colors by `strength`,
     // lightness by `strength × luminance`.
@@ -2018,7 +2065,7 @@ final class AgentTools {
     // In whole percents, as the job is queued, so the same settings find the same job below.
     options = options.snapped
     let project = create.history.project.name
-    let match = ColorMatch.Job(project: project, sourceTensorId: item.tensorId, options: options)
+    let match = ColorMatch.Job(project: project, sourceTensorId: item.tensorId, options: options, originalTensorId: original?.tensorId)
     // Another call's job for the same step and settings: this call answers with it.
     if let existing = jobs.values.first(where: { $0.finishedAt == nil && $0.colorMatch?.isSameMatch(as: match) == true }) {
       return try await answer(existing, background: background, progress: progress)
@@ -2030,7 +2077,7 @@ final class AgentTools {
     ) { [weak self] update in
       guard let self else { throw CancellationError() }
       update(Progress(step: 0, total: nil, message: "Waiting for the current run to finish", isQueued: true))
-      let saved = try await self.create.matchColors(forAgent: item, options: options) { step, message in
+      let saved = try await self.create.matchColors(forAgent: item, options: options, original: original?.tensorId) { step, message in
         update(Progress(step: step, total: 1_000, message: message))
       }
       // What the saved step records.
@@ -2044,6 +2091,7 @@ final class AgentTools {
         "tint": used.tint, "saturation": used.saturation, "brightness": used.brightness, "contrast": used.contrast,
         "unchanged_only": used.unchangedOnly, "strength": used.tint, "luminance": used.matchesLightness,
       ]
+      if let original { result["original_history_step"] = original.step }
       // Only when the unchanged areas were what was measured: not when it fell back to the whole image.
       if let counted = record?.counted { result["unchanged_fraction"] = rounded(counted) }
       if let shift = record?.shift {
@@ -2062,7 +2110,7 @@ final class AgentTools {
     }
   }
 
-  private static func shortened(_ prompt: String) -> String {
+  static func shortened(_ prompt: String) -> String {
     let line = prompt.split(whereSeparator: \.isNewline).joined(separator: " ")
     return line.count > 160 ? String(line.prefix(160)) + "…" : line
   }
@@ -2088,7 +2136,7 @@ final class AgentTools {
   /// so the change after it can be a ⌘Z step of its own. Called before a tool reads the state it
   /// changes, so an edit the user makes meanwhile isn't overwritten. Gives up when the call is
   /// cancelled.
-  private static func settleUndo() async {
+  static func settleUndo() async {
     guard let undoManager = mainWindowUndoManager else { return }
     let deadline = Date().addingTimeInterval(0.3)
     while undoManager.groupingLevel > 0, Date() < deadline {
@@ -2104,7 +2152,7 @@ final class AgentTools {
   /// grouping by event off just while it's open, and leaves nothing open. In the rare case a
   /// user's group is still open after `settleUndo`, the change joins it, keeping its name.
   @discardableResult
-  private static func asOneUndoStep<T>(_ change: (UndoManager?) throws -> T) rethrows -> T {
+  static func asOneUndoStep<T>(_ change: (UndoManager?) throws -> T) rethrows -> T {
     guard let undoManager = mainWindowUndoManager else { return try change(nil) }
     guard undoManager.groupingLevel == 0 else {
       let name = undoManager.undoActionName
@@ -2124,7 +2172,7 @@ final class AgentTools {
   // MARK: - Helpers
 
   /// The model's recommended settings with its default preset, as Create starts from.
-  private func defaults(for model: String) async throws -> PipelineConfiguration {
+  func defaults(for model: String) async throws -> PipelineConfiguration {
     let template = try await create.backend(for: .local).loadPipeline(for: model)
     var configuration = ModelDefaults.recommended(for: model, configuration: template)
     for (id, value) in presets.defaultPreset(for: model)?.values ?? [:] {
@@ -2133,7 +2181,7 @@ final class AgentTools {
     return configuration
   }
 
-  private func apply(presetNamed name: String, model: String, to configuration: inout PipelineConfiguration) throws {
+  func apply(presetNamed name: String, model: String, to configuration: inout PipelineConfiguration) throws {
     let usable = presets.presets(for: model)
     guard
       let preset = (usable.own + usable.shared).first(where: {
@@ -2148,7 +2196,7 @@ final class AgentTools {
   }
 
   /// A downloaded model by file or name; nil means the app's selected model.
-  private func resolveModel(_ name: String?) throws -> String {
+  func resolveModel(_ name: String?) throws -> String {
     guard let name, !name.isEmpty else {
       guard let selected = create.selectedModel else { throw ToolError("No model is downloaded.") }
       return try resolveModel(selected)
@@ -2164,7 +2212,7 @@ final class AgentTools {
 
   /// Mirrors `CreateModel.usesReferences`. ModelZoo only knows a community model's version once
   /// its pipeline has loaded, so the catalog's version name is checked too.
-  private func takesReferences(model: String, loras: [String]) -> Bool {
+  func takesReferences(model: String, loras: [String]) -> Bool {
     if ModelZoo.versionForModel(model) == .qwenImage2_1
       || create.models.first(where: { $0.file == model })?.version == "Qwen Image 2.1"
     {
@@ -2179,7 +2227,7 @@ final class AgentTools {
     }
   }
 
-  private static func loadImage(_ source: String) throws -> CGImage {
+  nonisolated static func loadImage(_ source: String) throws -> CGImage {
     if source.hasPrefix("data:") {
       guard let comma = source.firstIndex(of: ","),
         let data = Data(base64Encoded: String(source[source.index(after: comma)...])),
@@ -2212,7 +2260,7 @@ final class AgentTools {
     return folder.appending(path: name).appendingPathExtension(ext)
   }
 
-  private nonisolated static func describe(_ state: MediaGenerationPipeline.State) -> String {
+  nonisolated static func describe(_ state: MediaGenerationPipeline.State) -> String {
     switch state {
     case .downloading(let received, let total):
       return total > 0 ? "Downloading \(received * 100 / total)%" : "Downloading"
@@ -2227,7 +2275,7 @@ final class AgentTools {
   }
 
   /// The inline copy: JPEG keeps the response small; the full PNG is on disk.
-  private static func jpeg(_ image: CGImage) -> Data? {
+  static func jpeg(_ image: CGImage) -> Data? {
     let data = NSMutableData()
     guard let destination = CGImageDestinationCreateWithData(data, "public.jpeg" as CFString, 1, nil)
     else { return nil }
@@ -2237,7 +2285,7 @@ final class AgentTools {
   }
 
   /// Settings are Floats; printed as Doubles they read 0.69999999999999996.
-  private static func tidy(_ value: Any) -> Any {
+  static func tidy(_ value: Any) -> Any {
     switch value {
     case let dictionary as [String: Any]: return dictionary.mapValues(tidy)
     case let array as [Any]: return array.map(tidy)
@@ -2247,29 +2295,29 @@ final class AgentTools {
     }
   }
 
-  private static func roundTo64(_ value: Int) -> Int {
+  nonisolated static func roundTo64(_ value: Int) -> Int {
     max(Int((Double(value) / 64).rounded()), 1) * 64
   }
 
-  private static func int(_ value: Any?) -> Int? {
+  nonisolated static func int(_ value: Any?) -> Int? {
     (value as? NSNumber).map(\.intValue) ?? (value as? String).flatMap { Int($0) }
   }
 
   /// Whether a JSON value is true or false rather than a number: both arrive as `NSNumber`, and
   /// `as? Bool` / `as? NSNumber` take either.
-  private static func isBoolean(_ value: Any) -> Bool {
+  nonisolated static func isBoolean(_ value: Any) -> Bool {
     (value as? NSNumber).map { CFGetTypeID($0) == CFBooleanGetTypeID() } ?? false
   }
 
-  private static func double(_ value: Any?) -> Double? {
+  nonisolated static func double(_ value: Any?) -> Double? {
     (value as? NSNumber).map(\.doubleValue) ?? (value as? String).flatMap { Double($0) }
   }
 
-  private static func jsonObject(_ data: Data?) -> Any {
+  static func jsonObject(_ data: Data?) -> Any {
     data.flatMap { try? JSONSerialization.jsonObject(with: $0) } ?? NSNull()
   }
 
-  private static func textResult(json: Any) throws -> [String: Any] {
+  static func textResult(json: Any) throws -> [String: Any] {
     let data = try JSONSerialization.data(
       withJSONObject: tidy(json), options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
     return ["content": [["type": "text", "text": String(decoding: data, as: UTF8.self)]]]

@@ -47,6 +47,8 @@
 		5A4E1C0D2B3F4A6E8D9C7B02 /* ShareItems.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A4E1C0D2B3F4A6E8D9C7B01 /* ShareItems.swift */; };
 		C442D7B6FB6852DA4CD2C251 /* AgentServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 859B3EF300FEC1C99AACF6D2 /* AgentServer.swift */; };
 		0B152D751338FB383E5A2E19 /* AgentTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = 400358130C88D5B11EEB3F3E /* AgentTools.swift */; };
+		146267891D445BC0FE7E77C8 /* AgentToolsEditImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4D5596332FF646F1C82C12C /* AgentToolsEditImage.swift */; };
+		1BFC5D1B722914415819FDC0 /* AgentToolsCanvasEdit.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF78568751059397B92BD819 /* AgentToolsCanvasEdit.swift */; };
 		2D94FAD45270F10383644DDE /* LoopbackHTTPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3BEC1F1293FFB633DE61829 /* LoopbackHTTPServer.swift */; };
 		0113D79A95442376FD07EB82 /* clip_query_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FEF4CE7AD32E77D359D8F85 /* clip_query_generated.swift */; };
 		019DECB5A1E70541745FDF70 /* ModelLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 248FF150659188D7C4B12A12 /* ModelLibrary.swift */; };
@@ -121,6 +123,9 @@
 		CD51EF1BACB5E5D84E0E11A6 /* PaintBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = D752F0E60F93A219BA545DA1 /* PaintBar.swift */; };
 		35582F32C5693095E7A1A7C6 /* MaskBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3FE68CCA56D990CD35D04F4 /* MaskBar.swift */; };
 		ADA3C31159D0B477D4527B0C /* CanvasPaint.swift in Sources */ = {isa = PBXBuildFile; fileRef = C871C71AD4AF48D504339092 /* CanvasPaint.swift */; };
+		25FB77D2263844D88FA14114 /* CanvasEdit.swift in Sources */ = {isa = PBXBuildFile; fileRef = D84F79287107503626106B26 /* CanvasEdit.swift */; };
+		38B1D646871D6163256EC749 /* FrameSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 185101C0BADA8AE0F522323F /* FrameSelection.swift */; };
+		CE8F0DAB6D91E54115E2D666 /* MaskMorphology.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA631F06092DF114FA10EEE7 /* MaskMorphology.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E103 /* LayoutEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E104 /* LayoutEditor.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E101 /* LayoutPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E102 /* LayoutPrompt.swift */; };
 		A1D7E0C1B2F34A5D6E7F8091 /* Moodboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2E8F1D2C3A45B6E7F809102 /* Moodboard.swift */; };
@@ -194,6 +199,7 @@
 		9DC808D389DA848DBB3FF679 /* SAMDownload.swift in Sources */ = {isa = PBXBuildFile; fileRef = A97F2C5CC7432652EFDEE0C1 /* SAMDownload.swift */; };
 		3276916BDDF49FCECD9BC80A /* SAMSegmenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55BD7AB3A5F393BDDEA7E79D /* SAMSegmenter.swift */; };
 		DD7B1B704350CC07217B960B /* SubjectMask.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8A27E0F10C779523A431B40 /* SubjectMask.swift */; };
+		B908C537C64A752F2FE356A3 /* FaceFinder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1FA4D39BC2BC4443930E113 /* FaceFinder.swift */; };
 		251EE7CC7085758DB96F5ABD /* AutoMaskSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D59EEAE1B0E02FE2DA055D2 /* AutoMaskSession.swift */; };
 		A22FE4A30B0DC7FF13ACDCE6 /* AutoMaskBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8038A15556420887CF8415C5 /* AutoMaskBar.swift */; };
 		CA9420258E514629F01CC732 /* AutomationAutoMask.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60B649AE442AE955874615B1 /* AutomationAutoMask.swift */; };
@@ -204,8 +210,14 @@
 		E17E00000000000000000003 /* InputEntryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E17E00000000000000000004 /* InputEntryTests.swift */; };
 		F2EE5A000000000000000001 /* EntryTreeFuzzTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2EE5A000000000000000002 /* EntryTreeFuzzTests.swift */; };
 		F2EE5A000000000000000003 /* MoodboardWriterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2EE5A000000000000000004 /* MoodboardWriterTests.swift */; };
+		62A3CF63D6B04C7CA99E52BC /* MoodboardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D3810675097A508C59174F3 /* MoodboardTests.swift */; };
 		A1B2C3D4E5F60718293A4B5C /* MaskMemoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E4F5A60718293A4B5D /* MaskMemoryTests.swift */; };
 		F7BDCE83BC20EC1A650D038B /* CanvasPaintTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85A51EA9C886F73666DD39F5 /* CanvasPaintTests.swift */; };
+		CA233C72EE664C4483CEEC45 /* CanvasEditTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD3EB2AC39F419465F5DED48 /* CanvasEditTests.swift */; };
+		D22A7CEC9B5AAA46C537E856 /* CanvasEditArgumentsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E1F4C269F9BD5B0B0D290FE /* CanvasEditArgumentsTests.swift */; };
+		29EED6EA6B1533D925F7106D /* FaceFinderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4016383986FE6FE25ABB0D1F /* FaceFinderTests.swift */; };
+		B248F521B1272E7DC078A070 /* FrameSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0F71804140D577A7CE4FB91 /* FrameSelectionTests.swift */; };
+		60941E8999586F9C054E18C6 /* MaskMorphologyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09C4105B3CFE06C11E679984 /* MaskMorphologyTests.swift */; };
 		C11DDE1E7E57000000000001 /* ClipDeleteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11DDE1E7E57000000000002 /* ClipDeleteTests.swift */; };
 		2A05F48827FD4DE65A99F665 /* ReCaVSRWeights.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8F1CB5990A8A39715A331D1 /* ReCaVSRWeights.swift */; };
 		3B39EB61034D8D57DC9373DD /* ReCaVSRDownload.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2732EB193DD8D208A0C54CC /* ReCaVSRDownload.swift */; };
@@ -293,6 +305,8 @@
 		5A4E1C0D2B3F4A6E8D9C7B01 /* ShareItems.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareItems.swift; sourceTree = "<group>"; };
 		859B3EF300FEC1C99AACF6D2 /* AgentServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentServer.swift; sourceTree = "<group>"; };
 		400358130C88D5B11EEB3F3E /* AgentTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTools.swift; sourceTree = "<group>"; };
+		D4D5596332FF646F1C82C12C /* AgentToolsEditImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentToolsEditImage.swift; sourceTree = "<group>"; };
+		AF78568751059397B92BD819 /* AgentToolsCanvasEdit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentToolsCanvasEdit.swift; sourceTree = "<group>"; };
 		C3BEC1F1293FFB633DE61829 /* LoopbackHTTPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopbackHTTPServer.swift; sourceTree = "<group>"; };
 		0141CE30714817680C910054 /* tensor_data_data_model_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = tensor_data_data_model_generated.swift; sourceTree = "<group>"; };
 		020B954C3465D02C24F95C3C /* ProjectMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectMapping.swift; sourceTree = "<group>"; };
@@ -347,6 +361,9 @@
 		D752F0E60F93A219BA545DA1 /* PaintBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaintBar.swift; sourceTree = "<group>"; };
 		F3FE68CCA56D990CD35D04F4 /* MaskBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaskBar.swift; sourceTree = "<group>"; };
 		C871C71AD4AF48D504339092 /* CanvasPaint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasPaint.swift; sourceTree = "<group>"; };
+		D84F79287107503626106B26 /* CanvasEdit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasEdit.swift; sourceTree = "<group>"; };
+		185101C0BADA8AE0F522323F /* FrameSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameSelection.swift; sourceTree = "<group>"; };
+		EA631F06092DF114FA10EEE7 /* MaskMorphology.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaskMorphology.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E104 /* LayoutEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutEditor.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E102 /* LayoutPrompt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutPrompt.swift; sourceTree = "<group>"; };
 		B2E8F1D2C3A45B6E7F809102 /* Moodboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Moodboard.swift; sourceTree = "<group>"; };
@@ -436,6 +453,7 @@
 		A97F2C5CC7432652EFDEE0C1 /* SAMDownload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SAMDownload.swift; sourceTree = "<group>"; };
 		55BD7AB3A5F393BDDEA7E79D /* SAMSegmenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SAMSegmenter.swift; sourceTree = "<group>"; };
 		D8A27E0F10C779523A431B40 /* SubjectMask.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubjectMask.swift; sourceTree = "<group>"; };
+		C1FA4D39BC2BC4443930E113 /* FaceFinder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FaceFinder.swift; sourceTree = "<group>"; };
 		5D59EEAE1B0E02FE2DA055D2 /* AutoMaskSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoMaskSession.swift; sourceTree = "<group>"; };
 		8038A15556420887CF8415C5 /* AutoMaskBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoMaskBar.swift; sourceTree = "<group>"; };
 		60B649AE442AE955874615B1 /* AutomationAutoMask.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationAutoMask.swift; sourceTree = "<group>"; };
@@ -446,8 +464,14 @@
 		E17E00000000000000000004 /* InputEntryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputEntryTests.swift; sourceTree = "<group>"; };
 		F2EE5A000000000000000002 /* EntryTreeFuzzTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntryTreeFuzzTests.swift; sourceTree = "<group>"; };
 		F2EE5A000000000000000004 /* MoodboardWriterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoodboardWriterTests.swift; sourceTree = "<group>"; };
+		9D3810675097A508C59174F3 /* MoodboardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoodboardTests.swift; sourceTree = "<group>"; };
 		B1C2D3E4F5A60718293A4B5D /* MaskMemoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaskMemoryTests.swift; sourceTree = "<group>"; };
 		85A51EA9C886F73666DD39F5 /* CanvasPaintTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasPaintTests.swift; sourceTree = "<group>"; };
+		AD3EB2AC39F419465F5DED48 /* CanvasEditTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasEditTests.swift; sourceTree = "<group>"; };
+		6E1F4C269F9BD5B0B0D290FE /* CanvasEditArgumentsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasEditArgumentsTests.swift; sourceTree = "<group>"; };
+		4016383986FE6FE25ABB0D1F /* FaceFinderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FaceFinderTests.swift; sourceTree = "<group>"; };
+		A0F71804140D577A7CE4FB91 /* FrameSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameSelectionTests.swift; sourceTree = "<group>"; };
+		09C4105B3CFE06C11E679984 /* MaskMorphologyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaskMorphologyTests.swift; sourceTree = "<group>"; };
 		C11DDE1E7E57000000000002 /* ClipDeleteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipDeleteTests.swift; sourceTree = "<group>"; };
 		A8F1CB5990A8A39715A331D1 /* ReCaVSRWeights.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReCaVSRWeights.swift; sourceTree = "<group>"; };
 		B2732EB193DD8D208A0C54CC /* ReCaVSRDownload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReCaVSRDownload.swift; sourceTree = "<group>"; };
@@ -528,6 +552,8 @@
 			children = (
 				859B3EF300FEC1C99AACF6D2 /* AgentServer.swift */,
 				400358130C88D5B11EEB3F3E /* AgentTools.swift */,
+				D4D5596332FF646F1C82C12C /* AgentToolsEditImage.swift */,
+				AF78568751059397B92BD819 /* AgentToolsCanvasEdit.swift */,
 				C3BEC1F1293FFB633DE61829 /* LoopbackHTTPServer.swift */,
 			);
 			path = Agents;
@@ -605,6 +631,9 @@
 				D752F0E60F93A219BA545DA1 /* PaintBar.swift */,
 				F3FE68CCA56D990CD35D04F4 /* MaskBar.swift */,
 				C871C71AD4AF48D504339092 /* CanvasPaint.swift */,
+				D84F79287107503626106B26 /* CanvasEdit.swift */,
+				185101C0BADA8AE0F522323F /* FrameSelection.swift */,
+				EA631F06092DF114FA10EEE7 /* MaskMorphology.swift */,
 				A1B2C3D4E5F6A7B8C9D0E104 /* LayoutEditor.swift */,
 				A1B2C3D4E5F6A7B8C9D0E102 /* LayoutPrompt.swift */,
 			);
@@ -827,9 +856,15 @@
 				E17E00000000000000000004 /* InputEntryTests.swift */,
 				F2EE5A000000000000000002 /* EntryTreeFuzzTests.swift */,
 				F2EE5A000000000000000004 /* MoodboardWriterTests.swift */,
+				9D3810675097A508C59174F3 /* MoodboardTests.swift */,
 				9716C5CC927EB4F63FBFC0A9 /* ReCaVSRTests.swift */,
 				B1C2D3E4F5A60718293A4B5D /* MaskMemoryTests.swift */,
 				85A51EA9C886F73666DD39F5 /* CanvasPaintTests.swift */,
+				AD3EB2AC39F419465F5DED48 /* CanvasEditTests.swift */,
+				6E1F4C269F9BD5B0B0D290FE /* CanvasEditArgumentsTests.swift */,
+				4016383986FE6FE25ABB0D1F /* FaceFinderTests.swift */,
+				A0F71804140D577A7CE4FB91 /* FrameSelectionTests.swift */,
+				09C4105B3CFE06C11E679984 /* MaskMorphologyTests.swift */,
 				C11DDE1E7E57000000000002 /* ClipDeleteTests.swift */,
 				B7A1F0C2B3D4A59687786300 /* ProjectMappingTests.swift */,
 				B7A1F0C2B3D4A59687786301 /* StyleTests.swift */,
@@ -860,6 +895,7 @@
 				8038A15556420887CF8415C5 /* AutoMaskBar.swift */,
 				5D59EEAE1B0E02FE2DA055D2 /* AutoMaskSession.swift */,
 				D8A27E0F10C779523A431B40 /* SubjectMask.swift */,
+				C1FA4D39BC2BC4443930E113 /* FaceFinder.swift */,
 				55BD7AB3A5F393BDDEA7E79D /* SAMSegmenter.swift */,
 				A97F2C5CC7432652EFDEE0C1 /* SAMDownload.swift */,
 				392C9CDF31D729905C3E1867 /* SAMFiles.swift */,
@@ -1088,6 +1124,8 @@
 				B7FB8865E905277764CD70D9 /* Automation.swift in Sources */,
 				C442D7B6FB6852DA4CD2C251 /* AgentServer.swift in Sources */,
 				0B152D751338FB383E5A2E19 /* AgentTools.swift in Sources */,
+				146267891D445BC0FE7E77C8 /* AgentToolsEditImage.swift in Sources */,
+				1BFC5D1B722914415819FDC0 /* AgentToolsCanvasEdit.swift in Sources */,
 				2D94FAD45270F10383644DDE /* LoopbackHTTPServer.swift in Sources */,
 				4549FF9554EB66628271351A /* AutomationProject.swift in Sources */,
 				630B47EDE111FFF08AD8B4DC /* AutomationAgentCanvas.swift in Sources */,
@@ -1187,6 +1225,7 @@
 				A22FE4A30B0DC7FF13ACDCE6 /* AutoMaskBar.swift in Sources */,
 				251EE7CC7085758DB96F5ABD /* AutoMaskSession.swift in Sources */,
 				DD7B1B704350CC07217B960B /* SubjectMask.swift in Sources */,
+				B908C537C64A752F2FE356A3 /* FaceFinder.swift in Sources */,
 				3276916BDDF49FCECD9BC80A /* SAMSegmenter.swift in Sources */,
 				9DC808D389DA848DBB3FF679 /* SAMDownload.swift in Sources */,
 				2A6072AF219230DBEA3909DA /* SAMFiles.swift in Sources */,
@@ -1197,6 +1236,9 @@
 				CD51EF1BACB5E5D84E0E11A6 /* PaintBar.swift in Sources */,
 				35582F32C5693095E7A1A7C6 /* MaskBar.swift in Sources */,
 				ADA3C31159D0B477D4527B0C /* CanvasPaint.swift in Sources */,
+				25FB77D2263844D88FA14114 /* CanvasEdit.swift in Sources */,
+				38B1D646871D6163256EC749 /* FrameSelection.swift in Sources */,
+				CE8F0DAB6D91E54115E2D666 /* MaskMorphology.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E103 /* LayoutEditor.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E101 /* LayoutPrompt.swift in Sources */,
 				16E53F5DAD3A2F11B88D6688 /* InspectorLayoutMenu.swift in Sources */,
@@ -1275,9 +1317,15 @@
 				E17E00000000000000000003 /* InputEntryTests.swift in Sources */,
 				F2EE5A000000000000000001 /* EntryTreeFuzzTests.swift in Sources */,
 				F2EE5A000000000000000003 /* MoodboardWriterTests.swift in Sources */,
+				62A3CF63D6B04C7CA99E52BC /* MoodboardTests.swift in Sources */,
 				21E31F9C3FD8B3C49DB10302 /* ReCaVSRTests.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* MaskMemoryTests.swift in Sources */,
 				F7BDCE83BC20EC1A650D038B /* CanvasPaintTests.swift in Sources */,
+				CA233C72EE664C4483CEEC45 /* CanvasEditTests.swift in Sources */,
+				D22A7CEC9B5AAA46C537E856 /* CanvasEditArgumentsTests.swift in Sources */,
+				29EED6EA6B1533D925F7106D /* FaceFinderTests.swift in Sources */,
+				B248F521B1272E7DC078A070 /* FrameSelectionTests.swift in Sources */,
+				60941E8999586F9C054E18C6 /* MaskMorphologyTests.swift in Sources */,
 				C11DDE1E7E57000000000001 /* ClipDeleteTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

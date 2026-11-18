@@ -136,6 +136,33 @@ final class Moodboard {
     onChange?()
   }
 
+  /// Moves an image to `index`, its place on the board afterwards. The order is the order the
+  /// images are sent in, so it's what a prompt's Picture numbers count.
+  func move(_ id: MoodboardItem.ID, to index: Int) {
+    guard let from = items.firstIndex(where: { $0.id == id }) else { return }
+    let to = min(max(index, 0), items.count - 1)
+    guard to != from else { return }
+    items.insert(items.remove(at: from), at: to)
+    save()
+    onChange?()
+  }
+
+  /// Makes the board these items, in this order, as one change made on it (recorded like any
+  /// other, unlike `replace`). The items keep their ids, so an image that stays isn't written
+  /// again and undoing brings back the very items there were. False when that's the board
+  /// already, and nothing was changed or recorded.
+  @discardableResult
+  func set(_ items: [MoodboardItem]) -> Bool {
+    let items = items.map { MoodboardItem(id: $0.id, image: $0.image, weight: min(max($0.weight, 0), 1)) }
+    let unchanged = items.count == self.items.count
+      && zip(items, self.items).allSatisfy { $0.id == $1.id && $0.weight == $1.weight && $0.image === $1.image }
+    guard !unchanged else { return false }
+    self.items = items
+    save()
+    onChange?()
+    return true
+  }
+
   /// Replaces the board with a recorded one (a History step's or entry's), without recording it
   /// again. Returns the new items' ids, in order.
   @discardableResult

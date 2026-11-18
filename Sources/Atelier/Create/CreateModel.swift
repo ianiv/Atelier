@@ -1674,6 +1674,39 @@ final class CreateModel {
     self.settings = configuration
   }
 
+  /// The undo step's name for a moodboard change an agent made (`set_moodboard`).
+  static let agentMoodboardActionName = "Agent Moodboard"
+
+  /// Makes the moodboard `items` (`Moodboard.set`) as one undo step, for an agent's changes: the
+  /// board's own controls aren't undoable, but an agent can change several images in a call, and
+  /// ⌘Z is how the user takes that back. A call that leaves the board as it is makes no step.
+  func setMoodboard(_ items: [MoodboardItem], actionName: String, undoManager: UndoManager?) {
+    let previous = moodboard.items
+    guard moodboard.set(items), let undoManager else { return }
+    registerMoodboardUndo(restoring: previous, from: moodboard.items, undoManager, actionName: actionName)
+  }
+
+  /// Undo for a moodboard change: back to `snapshot`, while the board is still `made`, the one
+  /// the change left (the same images in the same order at the same weights). The board's own
+  /// controls aren't undoable, so after an image was added, removed or reweighted by hand the
+  /// snapshot is stale: restoring it would silently take that back too. The step then does
+  /// nothing, as a settings step from another model does (`registerUndo(restoring:)`).
+  private func registerMoodboardUndo(
+    restoring snapshot: [MoodboardItem], from made: [MoodboardItem], _ undoManager: UndoManager, actionName: String
+  ) {
+    undoManager.registerUndo(withTarget: self) { target in
+      MainActor.assumeIsolated {
+        let current = target.moodboard.items
+        guard current.count == made.count, zip(current, made).allSatisfy({ $0.id == $1.id && $0.weight == $1.weight }),
+              target.moodboard.set(snapshot)
+        else { return }
+        // Redo, under the same condition.
+        target.registerMoodboardUndo(restoring: made, from: target.moodboard.items, undoManager, actionName: actionName)
+      }
+    }
+    undoManager.setActionName(actionName)
+  }
+
   /// Returns once a model switch has loaded the new model's defaults into the inspector.
   func modelLoaded() async {
     await loadTask?.value
@@ -1736,16 +1769,19 @@ final class CreateModel {
     var base = GenerationEngine.Request(
       model: model, prompt: styled.prompt, negativePrompt: styled.negativePrompt, seed: seed,
       configuration: settings)
+    let references = usesReferences ? moodboard.references : []
     // A clip playing on the canvas isn't an input: Use Last Frame as Input picks a frame.
     if effectiveCanvasMode == .edit, canvasClip == nil, let source = canvasSource {
       let step = !source.isImported && !source.isPreview && source.step?.project == history.project.name
         ? source.step?.tensorId : nil
       // Video models take the frame as is: they refuse a mask, and a clip has nothing to merge into.
       let refines = videoModel == nil
-      base.setRefineInputs(
-        source: source.image, sourceTensorId: step, isImported: source.isImported, scale: source.scale,
-        offset: source.offset, mask: refines && runTargetTakesMasks ? activeMask : nil,
-        merge: refines && mergeIntoImage, detail: source.detail, paint: source.paint)
+      // The canvas as a value, which a run off the canvas builds from its own inputs (`CanvasEdit`).
+      base.apply(
+        CanvasEdit(
+          source: source.image, sourceTensorId: step, isImported: source.isImported, scale: source.scale,
+          offset: source.offset, mask: refines && runTargetTakesMasks ? activeMask : nil, paint: source.paint,
+          detail: source.detail, merge: refines && mergeIntoImage, moodboard: references))
       // A painted merge's input is its Draw entry, when it was just written for this very canvas
       // (`recordEntriesBeforeRun`): the entry holds the image with the paint, which the run follows.
       if base.merge?.painted == true, let paint = source.paint, let drawn = drawnEntry, let key = drawn.key,
@@ -1765,8 +1801,9 @@ final class CreateModel {
         base.placement = pending
         pendingPlacement = nil
       }
+    } else {
+      base.moodboard = references
     }
-    if usesReferences { base.moodboard = moodboard.references }
     // H3 FL2VA reads only one moodboard image, as the last frame after the canvas's first
     // (`LocalImageGenerator.generate`'s `prefix(1)`). With nothing on the canvas, the moodboard's
     // first image is the first frame and its second the last: the first goes in as the canvas
@@ -1966,17 +2003,27 @@ final class CreateModel {
   /// and moodboard are left alone. Cancelling the caller cancels the job. `target` defaults to
   /// this device for its own models; a request taken from the screen (`screenRequest`) passes
   /// Run on, so it runs where Generate would.
+  ///
+  /// `detached` runs it off the canvas (`JobQueue.Job.detached`): the result is saved to the
+  /// project and returned, but no preview or result shows on the canvas and the current step
+  /// stays where it is. Progress still shows in the status bar and the Queue. Such a request
+  /// brings its own inputs (`CanvasEdit`) and names the step it follows (`parentTensorId`), so
+  /// nothing of the screen is written to History for it first. That step is one of `project`'s
+  /// (default: the open one), so that's where the result is saved, whichever project is open by
+  /// the time it ends; the item returned is that project's.
   func generate(
-    forAgent request: GenerationEngine.Request, target: JobTarget? = nil,
+    forAgent request: GenerationEngine.Request, target: JobTarget? = nil, detached: Bool = false, project: String? = nil,
     progress: @escaping (GenerationEngine.Progress) -> Void
   ) async throws -> HistoryItem {
     // It follows what History has, as Generate's runs do (`recordEntriesBeforeRun`, which an
     // agent's run from the screen has done before taking it).
-    await flushEntries()
+    if !detached { await flushEntries() }
     // A model only the selected server has runs there; any other runs on this device, as agents
     // choose among this device's models.
     let target = target ?? (models.contains(where: { $0.file == request.model }) ? JobTarget.local : runTarget)
-    let id = queue.append([request], currentTensorId: history.currentTensorId, target: target, fromAgent: true)[0]
+    let id = queue.append(
+      [request], currentTensorId: history.currentTensorId, target: target, fromAgent: true, detached: detached,
+      project: detached ? project ?? history.project.name : nil)[0]
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
         agentCallbacks[id] = (progress, { continuation.resume(with: $0) })
@@ -2121,11 +2168,31 @@ final class CreateModel {
   }
 
   /// Sets up a run's progress, taking the foreground if it's this device's or nothing else has it.
+  /// A detached job (`JobQueue.Job.detached`) has the foreground only while no other run wants
+  /// it, for the status bar alone: the canvas never follows it. So it never takes the foreground
+  /// from another run (a server's run there may have its preview on the canvas, which it must go
+  /// on showing and then replace with its result), and it hands it to any other run that begins
+  /// (a server's, started while an agent's edit runs here: its previews and result belong on the
+  /// canvas, and Stop is about it). Either way the detached job keeps its progress under its own
+  /// id, as a server's does, for the Queue and for taking the foreground back once that run ends
+  /// (`adoptRemoteRun`).
   private func beginRun(_ job: JobQueue.Job, message: String, totalSteps: Int, startedAt: Date = Date()) {
-    if job.target != .local {
+    let yields = job.detached && foregroundJobID != nil
+    if job.target != .local || yields {
       remoteRuns[job.id] = RunProgress(message: message, totalSteps: totalSteps, startedAt: startedAt)
     }
-    guard job.target == .local || foregroundJobID == nil else { return }
+    var takesOver = false
+    if !job.detached, let detached = foregroundJob, detached.detached {
+      takesOver = true
+      var progress = RunProgress(step: step, totalSteps: self.totalSteps, preview: livePreview, previewFrames: livePreviewFrames, transfer: transfer)
+      if case .running(let shown) = phase { progress.message = shown }
+      if let runStartedAt { progress.startedAt = runStartedAt }
+      remoteRuns[detached.id] = progress
+      // The status bar's preview is the run's that has the foreground.
+      livePreview = nil
+      livePreviewFrames = []
+    }
+    guard (job.target == .local && !yields) || foregroundJobID == nil || takesOver else { return }
     foregroundJobID = job.id
     errorMessage = nil
     phase = .running(message)
@@ -2138,7 +2205,8 @@ final class CreateModel {
   }
 
   private func setRunMessage(_ message: String, _ job: JobQueue.Job) {
-    if job.target != .local { remoteRuns[job.id]?.message = message }
+    // Only a run with progress of its own has an entry (`beginRun`).
+    remoteRuns[job.id]?.message = message
     if job.id == foregroundJobID { phase = .running(message) }
   }
 
@@ -2149,9 +2217,10 @@ final class CreateModel {
     if job.id == foregroundJobID { generationTask = task }
   }
 
-  /// Records a remote run's progress under its own id.
+  /// Records a run's progress under its own id, when it keeps its own (`beginRun`): a server's,
+  /// or a detached job's that started behind another run.
   private func noteRemoteProgress(_ progress: GenerationEngine.Progress, _ job: JobQueue.Job) {
-    guard job.target != .local, var run = remoteRuns[job.id] else { return }
+    guard var run = remoteRuns[job.id] else { return }
     switch progress {
     case .preview(let preview, let step, let total):
       run.preview = preview
@@ -2182,9 +2251,21 @@ final class CreateModel {
     }
   }
 
-  /// With nothing in the foreground, the status bar and canvas go to a job still on a server.
+  /// The running job the status bar and canvas are about (`foregroundJobID`).
+  private var foregroundJob: JobQueue.Job? {
+    guard let foregroundJobID else { return nil }
+    return queue.running?.id == foregroundJobID ? queue.running : queue.runningRemote.first { $0.id == foregroundJobID }
+  }
+
+  /// Whether the status bar is about a detached job (`JobQueue.Job.detached`): one the canvas
+  /// doesn't follow, so there's no run to go back to on it, or to stop following.
+  var foregroundRunIsDetached: Bool { foregroundJob?.detached == true }
+
+  /// With nothing in the foreground, the status bar and canvas go to a job still on a server,
+  /// else the status bar to a detached job on this device that started behind the run just ended.
   private func adoptRemoteRun() {
-    guard foregroundJobID == nil, let job = queue.runningRemote.first, let run = remoteRuns[job.id] else { return }
+    let waitingLocal = queue.running.flatMap { remoteRuns[$0.id] != nil ? $0 : nil }
+    guard foregroundJobID == nil, let job = queue.runningRemote.first ?? waitingLocal, let run = remoteRuns[job.id] else { return }
     foregroundJobID = job.id
     generationTask = runTasks[job.id]
     phase = .running(run.message)
@@ -2196,7 +2277,7 @@ final class CreateModel {
     lastStepAt = nil
     livePreview = run.preview
     livePreviewFrames = run.previewFrames
-    if canvasFollowsRun, let preview = run.preview { coverCanvas(with: preview) }
+    if canvasFollowsRun, !job.detached, let preview = run.preview { coverCanvas(with: preview) }
   }
 
   /// Saves one result at a time. Results from servers arrive whenever they're ready, alongside a
@@ -2227,7 +2308,15 @@ final class CreateModel {
       var status = JobQueue.Job.Status.cancelled
       var inputTensorId: Int64?
       var tipTensorId: Int64?
+      var inOpenProject = true
       do {
+        // A detached job saves into the project it was queued in (`JobQueue.Job.project`), as a
+        // Match Colors to Original job does: the step it follows is that project's. Nil for any
+        // other job, which saves into the open project.
+        let pinned = try job.project.map { name in
+          guard let project = history.project(named: name), project.isOpen else { throw DetachedJobError.projectMissing(name) }
+          return project
+        }
         timingRecorders[job.id] = GenerationTimingRecorder(startedAt: startedAt)
         let progress: @Sendable (GenerationEngine.Progress) -> Void = { progress in
           let arrived = Date()
@@ -2235,7 +2324,7 @@ final class CreateModel {
             if case .state(let state) = progress { self.timingRecorders[job.id]?.note(state, at: arrived) }
             self.noteRemoteProgress(progress, job)
             if job.id == self.foregroundJobID {
-              self.handle(progress, showsOnCanvas: job.remoteDevice == nil)
+              self.handle(progress, showsOnCanvas: job.remoteDevice == nil && !job.detached)
             }
             self.agentCallbacks[job.id]?.progress(progress)
             self.deviceCallbacks[job.id]?.progress(progress)
@@ -2303,21 +2392,28 @@ final class CreateModel {
         // Runs on a server report the server's states, so their timings would mislead.
         var timings = job.target == .local ? timingRecorders[job.id]?.timings(returnedAt: returnedAt) : nil
         if output.isVideo { setRunMessage("Saving \(output.frames.count) frames…", job) }
-        let followsRun = { self.canvasFollowsRun && job.id == self.foregroundJobID }
+        // A detached job's result is saved and returned, never shown or made current.
+        let followsRun = { !job.detached && self.canvasFollowsRun && job.id == self.foregroundJobID }
         let history = history
         // The mask painted on the source stays with the result, moved as the image grew.
         let keptMask = mergedOrigin.flatMap { origin in request.merge?.canvasMask?.translated(by: origin) }
         let item = try await oneSaveAtATime {
-          try await history.save(
+          // A rename since it started closed the project it would save into (`renameCurrent`).
+          if let pinned, let name = job.project {
+            guard history.project(named: name) === pinned, pinned.isOpen else { throw DetachedJobError.projectMissing(name) }
+          }
+          return try await history.save(
             output, request: request, startedAt: startedAt, finishedAt: Date(), timings: timings,
-            refined: refined, resultMask: keptMask, makeCurrent: followsRun)
+            refined: refined, resultMask: keptMask, into: pinned, makeCurrent: followsRun)
         }
         if timings != nil {
           timings?.save = Date().timeIntervalSince(returnedAt)
           timings?.total = Date().timeIntervalSince(startedAt)
           queue.setTimings(timings, id: job.id)
         }
-        lastSavedTensorId = item.tensorId
+        // Saved into a project that isn't open now, it's no step of this screen's.
+        inOpenProject = pinned == nil || pinned === history.project
+        if inOpenProject { lastSavedTensorId = item.tensorId }
         // A merged refine shows as its project shows it: its whole canvas, transparent where empty.
         let finished = refined?.composite ?? output.frames.first.flatMap(ImageTensor.cgImage(from:))
           ?? runProgress(of: job)?.preview
@@ -2354,14 +2450,15 @@ final class CreateModel {
           }
         }
         if let placement = request.placement, item.isVideo { timelines.place(item, at: placement) }
-        if let failure = await history.writeToOutputFolder(item, image: finished) {
+        if let failure = await history.writeToOutputFolder(item, image: finished, in: inOpenProject ? nil : pinned) {
           errorMessage = failure
         }
         saveSession()
         FinishedNotice.post(
           prompt: request.prompt, seconds: item.sidecar.durationSeconds, isVideo: item.isVideo)
         status = .finished(tensorId: item.tensorId)
-        inputTensorId = item.inputTensorId
+        // An input step saved into another project is no step for later jobs here to reuse.
+        inputTensorId = inOpenProject ? item.inputTensorId : nil
         tipTensorId = item.clip?.frames.last
         agentCallbacks.removeValue(forKey: job.id)?.completion(.success(item))
         if keepsRemoteJob, let remote = backend as? RemoteBackend {
@@ -2387,9 +2484,20 @@ final class CreateModel {
         thumbnailCallbacks.removeValue(forKey: job.id)?(.failure(error))
         deviceCallbacks.removeValue(forKey: job.id)?.completion(.failure(error))
       }
-      finish(job, status: status, inputTensorId: inputTensorId, tipTensorId: tipTensorId)
+      finish(job, status: status, inputTensorId: inputTensorId, tipTensorId: tipTensorId, inOpenProject: inOpenProject)
     }
     track(task, for: job)
+  }
+
+  /// Why a detached job (`JobQueue.Job.detached`) couldn't save its result.
+  nonisolated enum DetachedJobError: LocalizedError {
+    case projectMissing(String)
+
+    var errorDescription: String? {
+      switch self {
+      case .projectMissing(let name): "The project “\(name)” the image was in is no longer there (renamed or deleted since), so the result wasn't saved."
+      }
+    }
   }
 
   /// Ends the running job and starts the next.
@@ -2409,14 +2517,19 @@ final class CreateModel {
     transfer = nil
     generationTask = nil
     runStartedAt = nil
-    canvasBeforePreview = nil
-    previewCoversCanvas = false
+    // A detached job never covered the canvas (`coverCanvas`), so whatever covers it isn't its
+    // to clear.
+    if !job.detached {
+      canvasBeforePreview = nil
+      previewCoversCanvas = false
+    }
     livePreview = nil
     livePreviewFrames = []
     runNext()
     adoptRemoteRun()
-    // Once the queue is empty, the next run shows on the canvas again.
-    if generationTask == nil { canvasFollowsRun = true }
+    // Once the queue is empty, the next run shows on the canvas again. A detached job doesn't
+    // count: the canvas follows none while only it runs, so your next Generate shows there.
+    if generationTask == nil || foregroundRunIsDetached { canvasFollowsRun = true }
   }
 
   /// Queues a style thumbnail (StyleStore) like Generate, with progress and previews in the status
@@ -2564,13 +2677,13 @@ final class CreateModel {
 
   /// The waiting or running Match Colors to Original job for `item`, a step of the current
   /// project, with the same settings as `options` (by default the one-click item's).
-  func pendingColorMatch(for item: HistoryItem, options: ColorMatch.Options = ColorMatch.Options()) -> JobQueue.Job? {
-    queue.pendingColorMatch(colorMatchJob(for: item, options: options))
+  func pendingColorMatch(for item: HistoryItem, options: ColorMatch.Options = ColorMatch.Options(), original: Int64? = nil) -> JobQueue.Job? {
+    queue.pendingColorMatch(colorMatchJob(for: item, options: options, original: original))
   }
 
   /// Its settings in whole percents, so the same ones always make the same job (`isSameMatch`).
-  private func colorMatchJob(for item: HistoryItem, options: ColorMatch.Options) -> ColorMatch.Job {
-    ColorMatch.Job(project: history.project.name, sourceTensorId: item.tensorId, options: options.snapped)
+  private func colorMatchJob(for item: HistoryItem, options: ColorMatch.Options, original: Int64? = nil) -> ColorMatch.Job {
+    ColorMatch.Job(project: history.project.name, sourceTensorId: item.tensorId, options: options.snapped, originalTensorId: original)
   }
 
   /// What the Match Colors… sheet previews `item` with: the step and its original, read and
@@ -2635,14 +2748,16 @@ final class CreateModel {
   /// the other jobs, and saves into that project even if another is open by then
   /// (`run(_:request:job:)`). Returns the job's id: the one already waiting or running for the
   /// same step with the same settings when there is one, since a second would make the same
-  /// image. Other settings make another image, so they queue beside it.
+  /// image. Other settings make another image, so they queue beside it. `original` names the
+  /// image to match to (its tensor in the same project) in place of the step's recorded input
+  /// (`ColorMatch.Job.originalTensorId`).
   @discardableResult
-  func queueColorMatch(_ item: HistoryItem, options: ColorMatch.Options = ColorMatch.Options(), fromAgent: Bool = false) throws
-    -> UUID
-  {
+  func queueColorMatch(
+    _ item: HistoryItem, options: ColorMatch.Options = ColorMatch.Options(), original: Int64? = nil, fromAgent: Bool = false
+  ) throws -> UUID {
     guard !item.isVideo else { throw ColorMatchError.video }
-    guard hasOriginal(item) else { throw ColorMatchError.noOriginal }
-    let match = colorMatchJob(for: item, options: options)
+    guard original != nil || hasOriginal(item) else { throw ColorMatchError.noOriginal }
+    let match = colorMatchJob(for: item, options: options, original: original)
     if let pending = queue.pendingColorMatch(match) { return pending.id }
     guard var configuration = settings else { throw ColorMatchError.noSettings }
     // Its settings, as an upscale carries them; the size is the step's own.
@@ -2681,10 +2796,10 @@ final class CreateModel {
   /// step with the same settings, and returns the step it saved. `progress` hears the step (of 1,000) and what it's
   /// doing. Cancelling the caller cancels the job.
   func matchColors(
-    forAgent item: HistoryItem, options: ColorMatch.Options, progress: @escaping (Int, String) -> Void
+    forAgent item: HistoryItem, options: ColorMatch.Options, original: Int64? = nil, progress: @escaping (Int, String) -> Void
   ) async throws -> HistoryItem {
-    let pending = pendingColorMatch(for: item, options: options)?.id
-    let id = try queueColorMatch(item, options: options, fromAgent: true)
+    let pending = pendingColorMatch(for: item, options: options, original: original)?.id
+    let id = try queueColorMatch(item, options: options, original: original, fromAgent: true)
     // A match someone else queued (the canvas menu) is theirs: giving up on it only ends this wait.
     let joined = id == pending
     return try await withTaskCancellationHandler {
@@ -2754,7 +2869,14 @@ final class CreateModel {
           item = found
         }
         guard !item.isVideo else { throw ColorMatchError.video }
-        guard let original = await originalImage(for: item, in: project) else { throw ColorMatchError.noOriginal }
+        // The image the caller named, else the one the step was made from.
+        var original: (image: CGImage, tensorId: Int64?, moodboard: GenerationEngine.Reference?)?
+        if let tensorId = match.originalTensorId {
+          original = await project.read { $0.image(tensorId: tensorId) }.map { ($0, tensorId, nil) }
+        } else {
+          original = await originalImage(for: item, in: project)
+        }
+        guard let original else { throw ColorMatchError.noOriginal }
         guard let edited = await project.read({ $0.image(tensorId: item.tensorId) }) else { throw ColorMatchError.unreadable }
         try Task.checkCancellation()
         setRunMessage("Measuring colors…", job)
@@ -3143,7 +3265,9 @@ final class CreateModel {
   /// The canvas is about to show something else: the running job's previews and result stop
   /// landing on it.
   private func stopFollowingRun() {
-    guard isRunning else { return }
+    // A detached job in the foreground isn't followed in the first place: looking at something
+    // else while an agent's edit runs must not keep your own next run off the canvas.
+    guard isRunning, !foregroundRunIsDetached else { return }
     canvasFollowsRun = false
     canvasBeforePreview = nil
     previewCoversCanvas = false
@@ -3152,14 +3276,16 @@ final class CreateModel {
   /// Puts the running job back on the canvas (clicking the live thumbnail); its previews and
   /// result show there again.
   func followRun() {
-    guard isRunning, !canvasFollowsRun else { return }
+    guard isRunning, !canvasFollowsRun, !foregroundRunIsDetached else { return }
     canvasFollowsRun = true
     if let livePreview { coverCanvas(with: livePreview) }
   }
 
   private func coverCanvas(with preview: CGImage) {
-    // A style thumbnail's previews show in the status bar only: the canvas keeps your image.
-    guard queue.running?.styleThumbnail == nil else { return }
+    // A style thumbnail's previews show in the status bar only: the canvas keeps your image. So
+    // do a detached job's, however this was reached (its progress, a server's run taking the
+    // foreground, a click on the live thumbnail: `followRun`).
+    guard queue.running?.styleThumbnail == nil, foregroundJob?.detached != true else { return }
     if !previewCoversCanvas {
       canvasBeforePreview = canvasSource
       previewCoversCanvas = true
@@ -3458,7 +3584,7 @@ extension CreateModel {
   /// The step on the canvas is in the project now called `name`, renamed from `old`: it's the same
   /// image, so nothing about it changes.
   func projectRenamed(from old: String, to name: String) {
-    queue.renameColorMatchProject(from: old, to: name)
+    queue.renameProject(from: old, to: name)
     guard let step = imageStep, step.project == old else { return }
     relabelsImageStep = true
     imageStep = (name, step.tensorId)
