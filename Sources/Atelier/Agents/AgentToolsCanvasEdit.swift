@@ -20,7 +20,8 @@ extension AgentTools {
         degrees, when known) and `landmarks` (left_eye, right_eye, nose, outer_lips and \
         face_contour as [x, y] points; left and right are the image's). A face that is a small \
         part of a large image can be missed: pass `region` around the head to search only there, \
-        at its own resolution. To redo a face on the canvas: mask it (set_canvas_mask with an \
+        at its own resolution. With no face found it fails with an error saying so (there is no \
+        empty list to check for). To redo a face on the canvas: mask it (set_canvas_mask with an \
         ellipse over `box`, or auto_mask with a point at `center`), grow_canvas_mask, \
         set_canvas_frame with the box and a `scale`, optionally set_canvas_paint to fill the \
         mask and set_moodboard for a reference face, then generate with use_canvas. Or pass the \
@@ -71,7 +72,8 @@ extension AgentTools {
         `aspect_ratio` (default: the output's shape), never cropped, and moved (not shrunk) to \
         stay inside the image. Then the output size: `width` and `height`; or `scale`, frame \
         pixels per image pixel, which sizes the output to the region at exactly that zoom (a \
-        912×1152 region at scale 4 is a 3648×4608 output), sides in multiples of 64; or neither, \
+        912×1152 region at scale 4 is a 3648×4608 output), sides rounded up to multiples of 64 \
+        and the region grown to match; or neither, \
         which keeps the output size (its pixel count, when `aspect_ratio` changes its shape). An \
         Edit run then regenerates that region at the output's resolution and, with Merge into \
         Image, puts it back into the whole image. Give the model a few megapixels: a face \
@@ -230,7 +232,13 @@ extension AgentTools {
       }
       region = rect
     }
-    let limit = max(Self.int(arguments["max_faces"]) ?? 10, 1)
+    var limit = 10
+    if let value = arguments["max_faces"] {
+      guard !Self.isBoolean(value), let given = Self.int(value), given >= 1 else {
+        throw ToolError("`max_faces` is how many faces to return at most, 1 or more (10 by default).")
+      }
+      limit = given
+    }
     // Vision takes a moment on a large image: off the main actor, as Select Subject runs.
     let searched = region
     let faces = try await Task.detached(priority: .userInitiated) { try FaceFinder.faces(in: image, region: searched) }.value
@@ -284,9 +292,7 @@ extension AgentTools {
       let coverage = mask.coverage(width: width, height: height)
       let painted = coverage.reduce(0) { $0 + ($1 != 0 ? 1 : 0) }
       guard painted > 0 else { return (nil, 0) }
-      let bytes = MaskMorphology.grown(coverage, width: width, height: height, by: pixels)
-      guard bytes.contains(255), let png = CanvasMask.grayPNG(bytes, width: width, height: height) else { return (nil, painted) }
-      return (CanvasMask(strokes: [CanvasMask.Stroke(kind: .bitmap, points: [.zero], bitmap: png)]), painted)
+      return (mask.grown(by: pixels, width: width, height: height, from: coverage)?.mask, painted)
     }.value
     guard painted > 0 else { throw ToolError("The mask is empty: paint one with set_canvas_mask or auto_mask first.") }
     guard let grown else {
@@ -328,18 +334,22 @@ extension AgentTools {
     }
     let padding: Double
     if let value = arguments["padding"] {
-      guard let pixels = Self.double(value), pixels >= 0, pixels.isFinite else { throw ToolError("`padding` is image pixels, 0 or more.") }
+      guard !Self.isBoolean(value), let pixels = Self.double(value), pixels >= 0, pixels.isFinite else {
+        throw ToolError("`padding` is image pixels, 0 or more.")
+      }
       padding = pixels
     } else {
       var ratio = 0.25
       if let value = arguments["padding_ratio"] {
-        guard let given = Self.double(value), given >= 0, given.isFinite else { throw ToolError("`padding_ratio` is a share of the box's longer side, 0 or more (0.25 by default).") }
+        guard !Self.isBoolean(value), let given = Self.double(value), given >= 0, given.isFinite else {
+          throw ToolError("`padding_ratio` is a share of the box's longer side, 0 or more (0.25 by default).")
+        }
         ratio = given
       }
       padding = ratio * max(box.width, box.height)
     }
     let width = Self.int(arguments["width"]), height = Self.int(arguments["height"])
-    let scale = Self.double(arguments["scale"])
+    let scale = arguments["scale"].flatMap { Self.isBoolean($0) ? nil : Self.double($0) }
     if width != nil || height != nil, scale != nil || arguments["scale"] != nil {
       throw ToolError("Pass `width` and `height`, or `scale`, not both.")
     }

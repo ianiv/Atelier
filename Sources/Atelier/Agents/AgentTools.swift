@@ -739,16 +739,16 @@ final class AgentTools {
   }
 
   /// Queues `request` as an agent's run and waits for the step it saves, showing what it's doing
-  /// in the Agents settings tab and reporting its progress. `target` and `detached` are
-  /// `CreateModel.generate(forAgent:)`'s.
+  /// in the Agents settings tab and reporting its progress. `target`, `detached` and `project`
+  /// are `CreateModel.generate(forAgent:)`'s.
   func run(
-    _ request: GenerationEngine.Request, target: JobTarget? = nil, detached: Bool = false, summary: String,
-    progress: @escaping (Progress) -> Void
+    _ request: GenerationEngine.Request, target: JobTarget? = nil, detached: Bool = false, project: String? = nil,
+    summary: String, progress: @escaping (Progress) -> Void
   ) async throws -> HistoryItem {
     activity = "Waiting: “\(summary)”"
     progress(Progress(step: 0, total: nil, message: "Waiting for the current run to finish", isQueued: true))
     defer { activity = nil }
-    return try await create.generate(forAgent: request, target: target, detached: detached) { [weak self] update in
+    return try await create.generate(forAgent: request, target: target, detached: detached, project: project) { [weak self] update in
       guard case .state(let state) = update else { return }
       let message = Self.describe(state)
       var step = 0
@@ -763,14 +763,16 @@ final class AgentTools {
   }
 
   /// What a finished run answers with: the file written, the image inline and the structured
-  /// result (plus `extra`).
+  /// result (plus `extra`). `saved` is the project the step is in when that may not be the open
+  /// one (a detached job's, `JobQueue.Job.project`).
   func result(
-    of item: HistoryItem, model: String, configuration: PipelineConfiguration, seed: UInt32, summary: String,
-    notes: [String], arguments: [String: Any], extra: [String: Any] = [:]
+    of item: HistoryItem, in saved: Project? = nil, model: String, configuration: PipelineConfiguration, seed: UInt32,
+    summary: String, notes: [String], arguments: [String: Any], extra: [String: Any] = [:]
   ) async throws -> [String: Any] {
-    let png = try await create.history.pngData(item)
+    let saved = saved ?? create.history.project
+    let png = try await create.history.pngData(item, in: saved)
     let url = try Self.outputURL(
-      arguments["save_to"] as? String, name: create.history.fileName(for: item),
+      arguments["save_to"] as? String, name: "\(saved.name) \(item.id.logicalTime)-\(item.sidecar.seed)",
       extension: item.isVideo ? "mp4" : "png")
     if item.isVideo {
       try await create.history.exportVideo(item, to: url)
@@ -778,7 +780,7 @@ final class AgentTools {
       try png.write(to: url)
     }
 
-    let project = create.history.project.name
+    let project = saved.name
     let seconds = item.sidecar.durationSeconds
     lastResult = "“\(summary)” saved to \(project) in \(GenerationTime.text(seconds))"
     var text =
@@ -2225,7 +2227,7 @@ final class AgentTools {
     }
   }
 
-  static func loadImage(_ source: String) throws -> CGImage {
+  nonisolated static func loadImage(_ source: String) throws -> CGImage {
     if source.hasPrefix("data:") {
       guard let comma = source.firstIndex(of: ","),
         let data = Data(base64Encoded: String(source[source.index(after: comma)...])),

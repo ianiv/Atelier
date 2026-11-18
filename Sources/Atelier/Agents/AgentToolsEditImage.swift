@@ -235,16 +235,22 @@ extension AgentTools {
       whole image) is what the model sees and regenerates, at `width`×`height`, or at `scale` \
       frame pixels per image pixel (a 912×1152 region at scale 4 is a 3648×4608 run), or with \
       neither at the model's usual pixel count; a region of another shape than the size is grown \
-      about its center, never cropped. `mask` limits what changes inside it; `paint` puts flat \
-      color on the input (`fill_mask` fills the mask, which a prompt can then name: “replace the \
+      about its center, never cropped (with `scale` the size is rounded up to 64s, so the run \
+      sees a little more than `region`), then moved to stay inside the image where it fits. \
+      Keep the region inside the image: where it reaches past the edges, or is larger than \
+      the image, the run fills in what's outside and the merged result grows to hold it, so \
+      it's larger than the source (extends_past_image, canvas_size and a note say so). `mask` \
+      limits what changes inside it; `paint` puts flat color on the input (`fill_mask` fills the mask, which a prompt can then name: “replace the \
       green area with the face from Picture 2”); `reference_images` go along as the pictures \
       after the image itself (Picture 1), for models that take them (see list_models). With \
       merge_into_image (the default) the result is put back into the whole image and saved as \
-      a new step after the source in the current project, and outside the mask nothing changes. \
+      a new step after the source in the project open when it was called (even if another is \
+      opened before it ends), and outside the mask nothing changes. \
       Settings layer as generate's do (the model's defaults, `preset`, `settings`, then the \
       fields). It runs as a job on this Mac, in the Queue with the rest: it waits, and returns \
-      what generate returns plus merged, parent_history_step, canvas_size, region, scale, \
-      mask, has_paint, references and job_id; with background: true it returns a job_id at \
+      what generate returns plus merged, parent_history_step, canvas_size (the saved image's \
+      size), source_size, extends_past_image, region, scale, mask, has_paint, references and \
+      job_id; with background: true it returns a job_id at \
       once for get_job, list_jobs and cancel_job. To match the result's colors to the source \
       afterwards, call match_colors with original_history_step (the source step) and \
       unchanged_only true.
@@ -272,7 +278,7 @@ extension AgentTools {
         ],
         "width": ["type": "integer", "description": "The run's width in pixels, rounded to a multiple of 64. With `height`; not with `scale`."],
         "height": ["type": "integer", "description": "The run's height in pixels, rounded to a multiple of 64."],
-        "scale": ["type": "number", "description": "Frame pixels per image pixel, 0.05–32: the run is the region at this zoom, sides rounded to 64 (the region follows, about its center). Instead of `width` and `height`."],
+        "scale": ["type": "number", "description": "Frame pixels per image pixel, 0.05–32: the run is the region at this zoom, sides rounded up to 64 (the region grows to match, about its center). Instead of `width` and `height`."],
         "mask": [
           "type": "object",
           "description": "What to regenerate, in the image's pixels; the rest of the region is kept and blended at the edge (the Mask Blur settings). Built in order: `shapes`, `image` and `select` together, then `grow`, then `invert`.",
@@ -331,11 +337,38 @@ extension AgentTools {
     }
   }
 
-  /// An image named by a caller, at its own size.
-  private func sourceImage(_ source: CanvasEditArguments.Source) async throws -> (image: CGImage, item: HistoryItem?) {
+  /// Reads and decodes an image file or data: URL off the main actor: a 16-megapixel PNG takes
+  /// a while.
+  @concurrent static func loadedImage(_ source: String) async throws -> CGImage {
+    try loadImage(source)
+  }
+
+  /// `mask.image` as a mask stroke, read and converted off the main actor (the stroke is the
+  /// mask's pixels as a PNG, written at the image's full size). Nil when it paints nothing.
+  @concurrent static func maskStroke(imageAt source: String, width: Int, height: Int) async throws -> CanvasMask.Stroke? {
+    let image = try loadImage(source)
+    guard image.width == width, image.height == height else {
+      throw ToolError(
+        "The mask image is \(image.width)×\(image.height), but the image is \(width)×\(height). Make it that size: white regenerates, black or transparent keeps.")
+    }
+    return CanvasMask.Stroke.bitmap(image)
+  }
+
+  /// A reference image at the size the moodboard keeps (`Moodboard.maxSide`), scaled off the main
+  /// actor.
+  @concurrent static func reference(_ image: CGImage, maxSide: Int) async -> CGImage {
+    ImageLoader.fitted(image, maxSide: maxSide)
+  }
+
+  /// An image named by a caller, at its own size. A History step is one of `project`'s, the
+  /// project the call started in: the steps of another opened since have other numbers.
+  private func sourceImage(_ source: CanvasEditArguments.Source, in project: Project) async throws -> (image: CGImage, item: HistoryItem?) {
     switch source {
-    case .image(let path): return (try Self.loadImage(path), nil)
+    case .image(let path): return (try await Self.loadedImage(path), nil)
     case .historyStep(let step):
+      guard create.history.project === project else {
+        throw ToolError("Another project was opened while edit_image was reading its images, so history step \(step) is no longer the one meant. Call edit_image again.")
+      }
       guard let item = create.history.items.first(where: { $0.id.logicalTime == step }) else {
         throw ToolError("No history step \(step) in “\(create.history.project.name)”. See list_history.")
       }
@@ -373,14 +406,17 @@ extension AgentTools {
     }
     if layered.sizeGiven, parsed.scale != nil { throw ToolError("Pass `width` and `height`, or `scale`, not both.") }
 
-    // The image, and the step it is.
-    let (source, sourceItem) = try await sourceImage(parsed.source)
-    let projectName = create.history.project.name
+    // The image, and the step it is. The step, the detail layers and the result's place all
+    // belong to the project open now: the job is tied to it (`JobQueue.Job.project`), so opening
+    // another while it waits or runs doesn't send the result there.
+    let project = create.history.project
+    let projectName = project.name
+    let (source, sourceItem) = try await sourceImage(parsed.source, in: project)
     let sourceSize = CGSize(width: source.width, height: source.height)
     let sourceRect = CGRect(origin: .zero, size: sourceSize)
     let size = "\(source.width)×\(source.height)"
     var detail: [Project.DetailLayer] = []
-    if let tensorId = sourceItem?.imageTensorId { detail = await create.history.detailLayers(tensorId: tensorId, in: projectName) }
+    if let tensorId = sourceItem?.imageTensorId { detail = await project.read { $0.detailLayers(tensorId: tensorId) } }
 
     // The frame: the output size, and where the image lies in it (`CanvasState`'s zoom and offset).
     var scale: Double?
@@ -389,9 +425,15 @@ extension AgentTools {
       guard region.intersects(sourceRect) else {
         throw ToolError("`region` doesn't overlap the \(size) image (its pixels from the top left).")
       }
-      let frame = FrameSelection.frame(
+      var frame = FrameSelection.frame(
         for: region, width: layered.sizeGiven ? configuration.width : nil, height: layered.sizeGiven ? configuration.height : nil,
         scale: parsed.scale, pixelCount: Double(configuration.width * configuration.height))
+      // Growing a region inside the image to the size's shape (or to whole 64s) can push it past
+      // an edge, which would grow the merged image: it's moved back inside where it fits, as
+      // set_canvas_frame does. One the caller put past the edges stays where it was asked for.
+      if sourceRect.contains(region) {
+        frame.region = FrameSelection.region(around: frame.region, padding: 0, aspect: 0, inside: sourceSize)
+      }
       configuration.width = Int(frame.size.width)
       configuration.height = Int(frame.size.height)
       let placement = FrameSelection.placement(showing: frame.region, sourceSize: sourceSize, frameSize: frame.size)
@@ -436,12 +478,8 @@ extension AgentTools {
         }
         strokes.append(stroke)
       }
-      if let path = mask.image {
-        let image = try Self.loadImage(path)
-        guard image.width == source.width, image.height == source.height else {
-          throw ToolError("The mask image is \(image.width)×\(image.height), but the image is \(size). Make it that size: white regenerates, black or transparent keeps.")
-        }
-        if let stroke = CanvasMask.Stroke.bitmap(image) { strokes.append(stroke) }
+      if let path = mask.image, let stroke = try await Self.maskStroke(imageAt: path, width: source.width, height: source.height) {
+        strokes.append(stroke)
       }
       if let select = mask.select { strokes += try await selected(select, on: source) }
     }
@@ -455,8 +493,8 @@ extension AgentTools {
     // Reference images, as the moodboard holds them.
     var references: [GenerationEngine.Reference] = []
     for reference in parsed.references {
-      let image = try await sourceImage(reference.source).image
-      references.append(.init(image: ImageLoader.fitted(image, maxSide: Moodboard.maxSide), weight: reference.weight))
+      let image = try await sourceImage(reference.source, in: project).image
+      references.append(.init(image: await Self.reference(image, maxSide: Moodboard.maxSide), weight: reference.weight))
     }
 
     // The mask grown and measured, the paint, and the frame drawn: off the main actor, where a
@@ -495,25 +533,50 @@ extension AgentTools {
     if parsed.merge, !merged {
       notes.append("Nothing to merge into: the run took the whole image with no mask, so its result is the new image.")
     }
-    if !sourceRect.insetBy(dx: -0.5, dy: -0.5).contains(region) {
-      notes.append(
-        merged
-          ? "The region reaches past the image's edges: the run fills in what's outside, and the merged image grows to hold it."
-          : "The region reaches past the image's edges: the run fills in what's outside.")
+    // As the canvas reports it (`canvasState`): half a pixel of slack for rounding to whole frame pixels.
+    let extendsPastImage = !sourceRect.insetBy(dx: -0.5, dy: -0.5).contains(region)
+    if extendsPastImage, !merged {
+      notes.append("The region reaches past the \(size) image's edges: the run fills in what's outside.")
     }
 
     let summary = String(parsed.prompt.prefix(60))
-    let item = try await run(request, target: .local, detached: true, summary: summary, progress: progress)
+    let item = try await run(request, target: .local, detached: true, project: projectName, summary: summary, progress: progress)
+    // The project it was saved into, which may no longer be the open one.
+    let savedIn = create.history.project(named: projectName) ?? project
+    let stillOpen = savedIn === create.history.project
     // The saved image's own size: a merged one is the whole (maybe grown) image, not the frame.
-    let saved = await create.history.image(for: item)
+    let saved = await savedIn.read { $0.image(for: item) }
     let savedSize = saved.map { ["width": $0.width, "height": $0.height] } ?? ["width": item.sidecar.width, "height": item.sidecar.height]
     // The step it edited, by its image: steps are renumbered when History forks.
-    let parent = sourceItem.flatMap { create.history.item(tensorId: $0.tensorId) }
-      ?? item.inputTensorId.flatMap { create.history.item(tensorId: $0) }
-    if merged { notes.append("Merged into the whole image (\(savedSize["width"]!)×\(savedSize["height"]!)).") }
+    var parent: HistoryItem?
+    if stillOpen {
+      parent = sourceItem.flatMap { create.history.item(tensorId: $0.tensorId) }
+        ?? item.inputTensorId.flatMap { create.history.item(tensorId: $0) }
+    } else {
+      let ids = [sourceItem?.tensorId, item.inputTensorId].compactMap(\.self)
+      parent = await savedIn.read { project in
+        let tree = project.tree()
+        return ids.lazy.compactMap { id in tree.step(tensorId: id).flatMap { tree.items[$0] } }.first
+      }
+    }
+    if merged {
+      let grew = savedSize["width"] != source.width || savedSize["height"] != source.height
+      if extendsPastImage || grew {
+        // Said plainly: a caller comparing the result with its source, or pasting it back
+        // somewhere, has an image of another size, with the source no longer at its top left.
+        notes.append(
+          "The region reaches past the \(size) image's edges, so the merged image grew to hold it: it is \(savedSize["width"]!)×\(savedSize["height"]!) (canvas_size), with what the run made outside the image at its edges. To keep the image's size, pass a `region` inside it.")
+      } else {
+        notes.append("Merged into the whole image (\(savedSize["width"]!)×\(savedSize["height"]!)).")
+      }
+    }
     if let parent { notes.append("It follows history step \(parent.id.logicalTime). The Create screen wasn't changed.") }
+    if !stillOpen {
+      notes.append("It was saved to “\(savedIn.name)”, the project it was called in, which isn't the open one now: its history_step is a step there.")
+    }
     var extra: [String: Any] = [
       "parent_history_step": parent?.id.logicalTime ?? NSNull(), "merged": merged, "canvas_size": savedSize,
+      "source_size": Self.json(sourceSize), "extends_past_image": extendsPastImage,
       "region": Self.json(region), "scale": (zoom.x + zoom.y) / 2, "has_paint": prepared.hasPaint, "references": references.count,
     ]
     if let stats = prepared.mask {
@@ -524,7 +587,7 @@ extension AgentTools {
       extra["mask"] = NSNull()
     }
     return try await result(
-      of: item, model: model, configuration: request.configuration, seed: seed, summary: summary, notes: notes,
+      of: item, in: savedIn, model: model, configuration: request.configuration, seed: seed, summary: summary, notes: notes,
       arguments: arguments, extra: extra)
   }
 
@@ -586,10 +649,10 @@ extension AgentTools {
       var mask = CanvasMask(strokes: strokes)
       var coverage = mask.coverage(width: width, height: height)
       if grow != 0 {
-        coverage = MaskMorphology.grown(coverage, width: width, height: height, by: grow)
-        // Its edge moved, the mask is the pixels themselves.
-        let png = coverage.contains(255) ? CanvasMask.grayPNG(coverage, width: width, height: height) : nil
-        mask = CanvasMask(strokes: png.map { [CanvasMask.Stroke(kind: .bitmap, points: [.zero], bitmap: $0)] } ?? [])
+        // As grow_canvas_mask grows the canvas's (`CanvasMask.grown`); nothing left is no mask.
+        let grown = mask.grown(by: grow, width: width, height: height, from: coverage)
+        mask = grown?.mask ?? CanvasMask(strokes: [])
+        coverage = grown?.coverage ?? [UInt8](repeating: 0, count: width * height)
       }
       if invert {
         mask.strokes.append(.invert)
