@@ -136,7 +136,7 @@ final class AgentTools {
       "name": "get_create_screen",
       "title": "Get Create screen",
       "description":
-        "Returns what's on Atelier's Create screen right now: the selected model, prompt, negative prompt, the selected style (Generate writes the prompt into its template; styled_prompt is the result), seed and whether it's random, the image count, every inspector setting as Draw Things configuration JSON, the settings that differ from the model's defaults, how many reference images there are, and `canvas`: the canvas image (its history step and size), the frame (output size), the region of the image it shows (source pixels, from the top left), its zoom and offset, the canvas mode, the mask summary and Merge into Image. The user may have changed any of it since your last call.",
+        "Returns what's on Atelier's Create screen right now: the selected model, prompt, negative prompt, the selected style (Generate writes the prompt into its template; styled_prompt is the result), seed and whether it's random, the image count, every inspector setting as Draw Things configuration JSON, the settings that differ from the model's defaults, how many reference images there are and `moodboard` (each one's position, id, size, weight and the Picture number a prompt calls it by, as get_moodboard lists them), and `canvas`: the canvas image (its history step and size), the frame (output size), the region of the image it shows (source pixels, from the top left), its zoom and offset, the canvas mode, the mask summary and Merge into Image. The user may have changed any of it since your last call.",
       "inputSchema": ["type": "object", "properties": [String: Any]()],
       "annotations": ["readOnlyHint": true],
     ],
@@ -528,6 +528,8 @@ final class AgentTools {
     case "get_canvas_mask": return try await getCanvasMask(arguments)
     case "set_canvas_region": return try await setCanvasRegion(arguments)
     case "auto_mask": return try await autoMask(arguments)
+    case "get_moodboard": return try getMoodboard(arguments)
+    case "set_moodboard": return try await setMoodboard(arguments)
     case "find_faces": return try await findFaces(arguments)
     case "grow_canvas_mask": return try await growCanvasMask(arguments)
     case "set_canvas_frame": return try await setCanvasFrame(arguments)
@@ -1067,6 +1069,7 @@ final class AgentTools {
       "settings": create.settings == nil ? NSNull() : Self.jsonObject(DrawThingsJSON.encode(all, model: nil, seed: nil)),
       "changed_from_defaults": Self.jsonObject(DrawThingsJSON.encode(changed, model: nil, seed: nil)),
       "reference_images": create.moodboard.items.count,
+      "moodboard": moodboardState(),
       "layout_editor": create.layout != nil ? "open" : create.layoutFormat == nil ? "not available for this model" : "closed",
       "canvas_has_image": create.image != nil,
       "canvas": canvasState(),

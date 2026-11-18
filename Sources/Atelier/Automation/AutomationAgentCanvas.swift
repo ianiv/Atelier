@@ -21,7 +21,10 @@ extension Automation {
   /// shrink, one “Agent Mask” step, its errors), set_canvas_frame (the mask's bounds padded, a box
   /// at a scale sizing the output as one “Agent Settings” step, staying inside the image or not,
   /// its errors) and find_faces (its errors, and on `--face-input`, an image with a face, the
-  /// face's box and landmarks, and the same face found in a region). Prints PASS/FAIL lines.
+  /// face's box and landmarks, and the same face found in a region), and the moodboard:
+  /// get_moodboard and set_moodboard (add, weights, order, remove, clear, one “Agent Moodboard”
+  /// step a call, the Picture numbers, its errors) and get_create_screen's listing. Prints
+  /// PASS/FAIL lines.
   ///
   /// The canvas tools' remembered settings, Merge into Image, the canvas mode and the moodboard
   /// are put back as they were when it ends.
@@ -537,6 +540,76 @@ extension Automation {
       _ = try? await call("set_canvas_mask", ["clear": true])
       await expectError("set_canvas_frame", [:], "nothing to frame", "no mask and no box")
       _ = try? await call("set_canvas_region", ["fit": true])
+
+      // The moodboard: listed, changed one ⌘Z step a call, numbered as a prompt names the pictures.
+      model.moodboard.removeAll()
+      var board = try? await call("get_moodboard")
+      check(
+        (board?["images"] as? [[String: Any]])?.isEmpty == true && board?["model_takes_references"] as? Bool == model.usesReferences
+          && (board?["note"] != nil) == !model.usesReferences,
+        "get_moodboard lists an empty board, and says whether the model takes references (\(board?["model_takes_references"] ?? "?"))")
+      @MainActor func images(_ board: [String: Any]?) -> [[String: Any]] { board?["images"] as? [[String: Any]] ?? [] }
+      board = try? await call(
+        "set_moodboard", ["add": [["image": "data:image/png;base64," + png.base64EncodedString()], ["history_step": step, "weight": 0.5]]])
+      // The canvas, in Edit with an image, is the first picture; the board's follow it.
+      let firstPicture = model.effectiveCanvasMode == .edit && model.image != nil ? 2 : 1
+      var listedImages = images(board)
+      check(
+        listedImages.count == 2 && model.moodboard.items.count == 2 && listedImages.first?["position"] as? Int == 1
+          && near(listedImages.last?["weight"] as? Double ?? 0, 0.5) && listedImages.first?["picture"] as? Int == firstPicture
+          && listedImages.last?["picture"] as? Int == firstPicture + 1 && listedImages.last?["width"] as? Int == model.moodboard.items.last?.image.width
+          && board?["canvas_is_picture_1"] as? Bool == (firstPicture == 2),
+        "set_moodboard adds an image and a History step, in order, numbered from Picture \(firstPicture) (\(listedImages.map { "\($0["position"] ?? "?"):\($0["picture"] ?? "?")@\($0["weight"] ?? "?")" }))")
+      check(undoManager.undoActionName == CreateModel.agentMoodboardActionName, "the change is an “Agent Moodboard” undo step (\(undoManager.undoActionName))")
+      undoManager.undo()
+      check(model.moodboard.items.isEmpty, "⌘Z takes both images off again")
+      undoManager.redo()
+      let boardIDs = model.moodboard.items.map(\.id.uuidString)
+      check(boardIDs.count == 2 && boardIDs == listedImages.compactMap { $0["id"] as? String }, "redo brings back the very images, with their ids")
+      // A weight of 0 keeps an image on the board but out of the run: the next one moves up.
+      board = try? await call("set_moodboard", ["weights": [["position": 1, "weight": 0]]])
+      listedImages = images(board)
+      check(
+        listedImages.first?["sent"] as? Bool == false && listedImages.first?["picture"] is NSNull
+          && listedImages.last?["picture"] as? Int == firstPicture && model.moodboard.references.count == 1,
+        "a weight of 0 leaves the image out, and the next takes its number")
+      board = try? await call("set_moodboard", ["order": Array(boardIDs.reversed())])
+      check(
+        images(board).compactMap { $0["id"] as? String } == Array(boardIDs.reversed()) && model.moodboard.items.map(\.id.uuidString) == Array(boardIDs.reversed()),
+        "order puts the images in the order given")
+      // One call that removes, adds at a position and sets a weight is one step.
+      board = try? await call(
+        "set_moodboard",
+        [
+          "remove": [1], "add": [["image": "data:image/png;base64," + png.base64EncodedString(), "position": 1, "weight": 0.25]],
+          "weights": [["id": boardIDs[0], "weight": 1]],
+        ])
+      listedImages = images(board)
+      check(
+        listedImages.count == 2 && near(listedImages.first?["weight"] as? Double ?? 0, 0.25) && listedImages.last?["id"] as? String == boardIDs[0]
+          && near(listedImages.last?["weight"] as? Double ?? 0, 1),
+        "remove, add at a position and a weight in one call (\(listedImages.map { "\($0["position"] ?? "?")@\($0["weight"] ?? "?")" }))")
+      undoManager.undo()
+      check(
+        model.moodboard.items.map(\.id.uuidString) == Array(boardIDs.reversed()) && model.moodboard.items.last?.weight == 0,
+        "⌘Z undoes the whole call")
+      let screenBoard = (try? await call("get_create_screen"))
+      check(
+        images(screenBoard?["moodboard"] as? [String: Any]).count == 2 && screenBoard?["reference_images"] as? Int == 2,
+        "get_create_screen lists the moodboard, and still counts it")
+      let withImages = try? await tools.call("get_moodboard", arguments: ["include_images": true]) { _ in }
+      check(
+        (withImages?["content"] as? [[String: Any]])?.filter { $0["type"] as? String == "image" }.count == 2,
+        "get_moodboard with include_images returns a thumbnail of each")
+      await expectError("set_moodboard", [:], "Pass `add`", "nothing to do")
+      await expectError("set_moodboard", ["remove": [9]], "No moodboard image 9 (there are 2)", "a position past the end")
+      await expectError("set_moodboard", ["weights": [["position": 1, "weight": 2]]], "`weight` is 0-1", "a weight out of range")
+      await expectError("set_moodboard", ["order": [boardIDs[0]]], "every image once", "an order that leaves one out")
+      await expectError("set_moodboard", ["add": [["history_step": 999_999]]], "list_history", "a missing step")
+      await expectError("set_moodboard", ["add": [["weight": 1]]], "history_step", "an image with no source")
+      check(model.moodboard.items.map(\.id.uuidString) == Array(boardIDs.reversed()), "a call that fails changes nothing")
+      board = try? await call("set_moodboard", ["clear": true])
+      check(images(board).isEmpty && model.moodboard.items.isEmpty, "clear empties the board")
 
       // find_faces: errors, then a face when the run has an image with one.
       await expectError("find_faces", ["history_step": 999_999], "list_history", "a missing step")

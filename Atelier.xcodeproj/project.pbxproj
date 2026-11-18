@@ -209,6 +209,7 @@
 		E17E00000000000000000003 /* InputEntryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E17E00000000000000000004 /* InputEntryTests.swift */; };
 		F2EE5A000000000000000001 /* EntryTreeFuzzTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2EE5A000000000000000002 /* EntryTreeFuzzTests.swift */; };
 		F2EE5A000000000000000003 /* MoodboardWriterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2EE5A000000000000000004 /* MoodboardWriterTests.swift */; };
+		62A3CF63D6B04C7CA99E52BC /* MoodboardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D3810675097A508C59174F3 /* MoodboardTests.swift */; };
 		A1B2C3D4E5F60718293A4B5C /* MaskMemoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E4F5A60718293A4B5D /* MaskMemoryTests.swift */; };
 		F7BDCE83BC20EC1A650D038B /* CanvasPaintTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85A51EA9C886F73666DD39F5 /* CanvasPaintTests.swift */; };
 		CA233C72EE664C4483CEEC45 /* CanvasEditTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD3EB2AC39F419465F5DED48 /* CanvasEditTests.swift */; };
@@ -460,6 +461,7 @@
 		E17E00000000000000000004 /* InputEntryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputEntryTests.swift; sourceTree = "<group>"; };
 		F2EE5A000000000000000002 /* EntryTreeFuzzTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntryTreeFuzzTests.swift; sourceTree = "<group>"; };
 		F2EE5A000000000000000004 /* MoodboardWriterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoodboardWriterTests.swift; sourceTree = "<group>"; };
+		9D3810675097A508C59174F3 /* MoodboardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoodboardTests.swift; sourceTree = "<group>"; };
 		B1C2D3E4F5A60718293A4B5D /* MaskMemoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaskMemoryTests.swift; sourceTree = "<group>"; };
 		85A51EA9C886F73666DD39F5 /* CanvasPaintTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasPaintTests.swift; sourceTree = "<group>"; };
 		AD3EB2AC39F419465F5DED48 /* CanvasEditTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasEditTests.swift; sourceTree = "<group>"; };
@@ -849,6 +851,7 @@
 				E17E00000000000000000004 /* InputEntryTests.swift */,
 				F2EE5A000000000000000002 /* EntryTreeFuzzTests.swift */,
 				F2EE5A000000000000000004 /* MoodboardWriterTests.swift */,
+				9D3810675097A508C59174F3 /* MoodboardTests.swift */,
 				9716C5CC927EB4F63FBFC0A9 /* ReCaVSRTests.swift */,
 				B1C2D3E4F5A60718293A4B5D /* MaskMemoryTests.swift */,
 				85A51EA9C886F73666DD39F5 /* CanvasPaintTests.swift */,
@@ -1307,6 +1310,7 @@
 				E17E00000000000000000003 /* InputEntryTests.swift in Sources */,
 				F2EE5A000000000000000001 /* EntryTreeFuzzTests.swift in Sources */,
 				F2EE5A000000000000000003 /* MoodboardWriterTests.swift in Sources */,
+				62A3CF63D6B04C7CA99E52BC /* MoodboardTests.swift in Sources */,
 				21E31F9C3FD8B3C49DB10302 /* ReCaVSRTests.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* MaskMemoryTests.swift in Sources */,
 				F7BDCE83BC20EC1A650D038B /* CanvasPaintTests.swift in Sources */,

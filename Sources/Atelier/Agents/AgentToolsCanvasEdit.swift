@@ -95,6 +95,78 @@ extension AgentTools {
         ],
       ],
     ],
+    [
+      "name": "get_moodboard",
+      "title": "Get moodboard",
+      "description": """
+        Lists the Create screen's moodboard, the reference images that go with a run on models \
+        that take them (see list_models): `images` in order, each with `position` (1 is first), \
+        `id`, `width`, `height`, `weight` (0–1; 0 keeps it on the board but leaves it out of \
+        runs), `sent` and `picture`, the number a prompt calls it by (“Picture 2”): images are \
+        numbered in order, counting only those sent, after the canvas when an Edit run sends it \
+        too (`canvas_is_picture_1`). Also model_takes_references for the selected model, with a \
+        note when it takes none. The moodboard belongs to the app, not to a project. With \
+        include_images, each image comes back too, in order, as a small thumbnail.
+        """,
+      "inputSchema": [
+        "type": "object",
+        "properties": [
+          "include_images": ["type": "boolean", "description": "Also return each image, in order, scaled to 256 px on its long side. Default false."]
+        ],
+      ],
+      "annotations": ["readOnlyHint": true],
+    ],
+    [
+      "name": "set_moodboard",
+      "title": "Change the moodboard",
+      "description": """
+        Changes the Create screen's moodboard: the reference images sent with the next run \
+        (generate with use_canvas, or the user's Generate) on models that take them. Applied in \
+        order: `clear`; `remove` (ids, or positions as they were before the call); `add` (each \
+        {"image": a path or data: URL} or {"history_step": N}, with `weight`, default 1, and \
+        `position`, default the end); `weights` ({"id" or "position", "weight"}, positions as \
+        before the call); `order` (every image's id, in the new order). The order is what a \
+        prompt's Picture numbers count: with an image on the canvas in Edit the canvas is \
+        Picture 1 and the first moodboard image Picture 2. Images are scaled down to 1536 px on \
+        the long side. The whole call is one ⌘Z step, “Agent Moodboard”. Returns the moodboard \
+        as get_moodboard lists it, with a note when the selected model takes no reference \
+        images (they stay on the board but aren't sent).
+        """,
+      "inputSchema": [
+        "type": "object",
+        "properties": [
+          "clear": ["type": "boolean", "description": "Empty the moodboard, first."],
+          "remove": [
+            "type": "array", "description": "Images to take off: ids (see get_moodboard), or positions as before the call (1 is first).",
+            "items": ["type": ["string", "integer"]],
+          ],
+          "add": [
+            "type": "array",
+            "description": "Images to add, in order: {\"image\": path or data: URL} or {\"history_step\": N}, each with an optional `weight` (0–1, default 1) and `position` (where it goes in the board as it then is, 1 is first; default the end). A bare path or data: URL works too.",
+            "items": [
+              "anyOf": [
+                ["type": "string"],
+                [
+                  "type": "object",
+                  "properties": [
+                    "image": ["type": "string"], "history_step": ["type": "integer"],
+                    "weight": ["type": "number", "minimum": 0, "maximum": 1], "position": ["type": "integer", "minimum": 1],
+                  ],
+                ],
+              ]
+            ],
+          ],
+          "weights": [
+            "type": "array", "description": "Weights to set: {\"id\" or \"position\" (as before the call), \"weight\": 0–1}. 0 leaves an image on the board but out of runs.",
+            "items": [
+              "type": "object", "required": ["weight"],
+              "properties": ["id": ["type": "string"], "position": ["type": "integer"], "weight": ["type": "number", "minimum": 0, "maximum": 1]],
+            ],
+          ],
+          "order": ["type": "array", "items": ["type": "string"], "description": "Every image's id once, in the new order, last. Images added in the same call have no id yet: place them with `position`."],
+        ],
+      ],
+    ],
   ]
 
   // MARK: - Arguments
@@ -331,6 +403,153 @@ extension AgentTools {
     }
     if !notes.isEmpty { result["notes"] = notes }
     return try Self.textResult(json: result)
+  }
+
+  // MARK: - Moodboard
+
+  /// The moodboard as get_moodboard lists it (and get_create_screen's `moodboard`): the images in
+  /// order, and how a prompt numbers them.
+  func moodboardState() -> [String: Any] {
+    let takes = create.usesReferences
+    // As the moodboard column numbers them (`MoodboardColumn.role`): an Edit run's canvas is the
+    // first picture, the board's images the ones after.
+    let canvasSent = create.effectiveCanvasMode == .edit && create.image != nil && create.canvasClip == nil
+    var number = canvasSent ? 1 : 0
+    let images = create.moodboard.items.enumerated().map { index, item -> [String: Any] in
+      let sent = item.weight > 0
+      if sent { number += 1 }
+      return [
+        "position": index + 1, "id": item.id.uuidString, "width": item.image.width, "height": item.image.height,
+        "weight": Double(item.weight), "sent": sent, "picture": sent ? number : NSNull(),
+      ]
+    }
+    var state: [String: Any] = ["images": images, "model_takes_references": takes, "canvas_is_picture_1": canvasSent]
+    if !takes {
+      state["note"] =
+        "\(create.selectedModel ?? "The selected model") doesn't take reference images (see list_models), so runs with it leave the moodboard out."
+    }
+    return state
+  }
+
+  func getMoodboard(_ arguments: [String: Any]) throws -> [String: Any] {
+    if let include = arguments["include_images"], !Self.isBoolean(include) { throw ToolError("`include_images` is true or false.") }
+    var result = try Self.textResult(json: moodboardState())
+    guard arguments["include_images"] as? Bool == true, var content = result["content"] as? [[String: Any]] else { return result }
+    for item in create.moodboard.items {
+      if let preview = Self.jpeg(ImageLoader.fitted(item.image, maxSide: 256)) {
+        content.append(["type": "image", "data": preview.base64EncodedString(), "mimeType": "image/jpeg"])
+      }
+    }
+    result["content"] = content
+    return result
+  }
+
+  func setMoodboard(_ arguments: [String: Any]) async throws -> [String: Any] {
+    if let clear = arguments["clear"], !Self.isBoolean(clear) { throw ToolError("`clear` is true or false.") }
+    let clear = arguments["clear"] as? Bool == true
+    func list(_ name: String) throws -> [Any]? {
+      guard let value = arguments[name] else { return nil }
+      guard let list = value as? [Any] else { throw ToolError("`\(name)` is an array.") }
+      return list
+    }
+    let remove = try list("remove"), add = try list("add"), weights = try list("weights"), order = try list("order")
+    guard clear || remove != nil || add != nil || weights != nil || order != nil else {
+      throw ToolError("Pass `add`, `remove`, `weights`, `order` or `clear`.")
+    }
+    func weight(_ value: Any?, default fallback: Float? = nil) throws -> Float {
+      guard let value else {
+        if let fallback { return fallback }
+        throw ToolError("`weight` is 0-1.")
+      }
+      guard !Self.isBoolean(value), let weight = Self.double(value), (0...1).contains(weight) else { throw ToolError("`weight` is 0-1.") }
+      return Float(weight)
+    }
+    // The images to add are read first: loading one from History waits, and nothing may wait
+    // between reading the board and changing it.
+    var added: [(item: MoodboardItem, position: Int?)] = []
+    for (index, entry) in (add ?? []).enumerated() {
+      let object = entry as? [String: Any]
+      let source = (entry as? String) ?? (object?["image"] as? String)
+      let step = Self.int(object?["history_step"])
+      guard (source == nil) != (step == nil) else {
+        throw ToolError("Image \(index + 1) in `add` is {\"image\": a path or data: URL} or {\"history_step\": N}, with an optional `weight` and `position`.")
+      }
+      let image: CGImage
+      if let source {
+        image = try Self.loadImage(source)
+      } else {
+        let step = step ?? 0
+        guard let item = create.history.items.first(where: { $0.id.logicalTime == step }) else {
+          throw ToolError("No history step \(step) in “\(create.history.project.name)”. See list_history.")
+        }
+        guard !item.isVideo else { throw ToolError("History step \(step) is a video. The moodboard takes images.") }
+        guard item.hasImage, let loaded = await create.history.image(for: item) else {
+          throw ToolError("Couldn't read history step \(step)'s image.")
+        }
+        image = loaded
+      }
+      var position: Int?
+      if let value = object?["position"] {
+        guard let given = Self.int(value), given >= 1 else { throw ToolError("`position` is where the image goes on the board, 1 for first.") }
+        position = given
+      }
+      added.append(
+        (MoodboardItem(image: ImageLoader.fitted(image, maxSide: Moodboard.maxSide), weight: try weight(object?["weight"], default: 1)), position))
+    }
+
+    await Self.settleUndo()
+    let before = create.moodboard.items
+    /// An image named by id, or by its position before the call.
+    func named(_ value: Any?) throws -> MoodboardItem.ID {
+      if let text = value as? String, Int(text) == nil {
+        guard let item = before.first(where: { $0.id.uuidString.caseInsensitiveCompare(text) == .orderedSame }) else {
+          throw ToolError("No moodboard image with id \(text). See get_moodboard.")
+        }
+        return item.id
+      }
+      guard let value, !Self.isBoolean(value), let position = Self.int(value) else {
+        throw ToolError("A moodboard image is named by its `id` or its position (1 is first). See get_moodboard.")
+      }
+      guard before.indices.contains(position - 1) else { throw ToolError("No moodboard image \(position) (there are \(before.count)).") }
+      return before[position - 1].id
+    }
+    var items = clear ? [] : before
+    for entry in remove ?? [] {
+      let id = try named(entry)
+      items.removeAll { $0.id == id }
+    }
+    for entry in added {
+      if let position = entry.position {
+        guard position <= items.count + 1 else {
+          throw ToolError("`position` \(position) is past the end: the board has \(items.count) image\(items.count == 1 ? "" : "s") then, so it's 1 to \(items.count + 1).")
+        }
+        items.insert(entry.item, at: position - 1)
+      } else {
+        items.append(entry.item)
+      }
+    }
+    for entry in weights ?? [] {
+      guard let object = entry as? [String: Any], (object["id"] == nil) != (object["position"] == nil) else {
+        throw ToolError("Each of `weights` is {\"id\" or \"position\", \"weight\": 0-1}.")
+      }
+      let id = try named(object["id"] ?? object["position"])
+      let value = try weight(object["weight"])
+      guard let index = items.firstIndex(where: { $0.id == id }) else {
+        throw ToolError("That moodboard image is taken off by this same call, so it has no weight to set.")
+      }
+      items[index].weight = value
+    }
+    if let order {
+      let ids = try order.map { entry -> MoodboardItem.ID in
+        guard let text = entry as? String, let id = items.first(where: { $0.id.uuidString.caseInsensitiveCompare(text) == .orderedSame })?.id
+        else { throw ToolError("`order` must list every image once, by id (see get_moodboard).") }
+        return id
+      }
+      guard ids.count == items.count, Set(ids).count == ids.count else { throw ToolError("`order` must list every image once, by id (see get_moodboard).") }
+      items = ids.compactMap { id in items.first { $0.id == id } }
+    }
+    Self.asOneUndoStep { create.setMoodboard(items, actionName: CreateModel.agentMoodboardActionName, undoManager: $0) }
+    return try Self.textResult(json: moodboardState())
   }
 }
 #endif

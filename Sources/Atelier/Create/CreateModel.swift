@@ -1674,6 +1674,22 @@ final class CreateModel {
     self.settings = configuration
   }
 
+  /// The undo step's name for a moodboard change an agent made (`set_moodboard`).
+  static let agentMoodboardActionName = "Agent Moodboard"
+
+  /// Makes the moodboard `items` (`Moodboard.set`) as one undo step, for an agent's changes: the
+  /// board's own controls aren't undoable, but an agent can change several images in a call, and
+  /// ⌘Z is how the user takes that back.
+  func setMoodboard(_ items: [MoodboardItem], actionName: String, undoManager: UndoManager?) {
+    let previous = moodboard.items
+    moodboard.set(items)
+    guard let undoManager else { return }
+    undoManager.registerUndo(withTarget: self) { target in
+      MainActor.assumeIsolated { target.setMoodboard(previous, actionName: actionName, undoManager: undoManager) }
+    }
+    undoManager.setActionName(actionName)
+  }
+
   /// Returns once a model switch has loaded the new model's defaults into the inspector.
   func modelLoaded() async {
     await loadTask?.value
