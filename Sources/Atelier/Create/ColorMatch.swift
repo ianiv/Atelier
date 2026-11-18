@@ -191,20 +191,28 @@ nonisolated enum ColorMatch {
     var options: Options
     /// What the saved step records, once the job has run.
     var record: Record?
+    /// The image to match to, named by the caller, instead of the one the step records as its
+    /// input (`CreateModel.originalImage`): an edit made with paint records the painted frame,
+    /// which is neither the picture's colors nor, zoomed in, its shape. Nil, as a rule, and absent
+    /// from jobs saved before it.
+    var originalTensorId: Int64?
 
-    /// The same match: the same step with the same settings, whose result would be the same
-    /// image, so it's never queued twice. Other settings make another image, and may queue.
+    /// The same match: the same step with the same settings against the same original, whose
+    /// result would be the same image, so it's never queued twice. Other settings make another
+    /// image, and may queue.
     func isSameMatch(as other: Job) -> Bool {
       project == other.project && sourceTensorId == other.sourceTensorId && options.snapped == other.options.snapped
+        && originalTensorId == other.originalTensorId
     }
 
-    private enum CodingKeys: String, CodingKey { case project, sourceTensorId, record }
+    private enum CodingKeys: String, CodingKey { case project, sourceTensorId, record, originalTensorId }
 
-    init(project: String, sourceTensorId: Int64, options: Options = Options(), record: Record? = nil) {
+    init(project: String, sourceTensorId: Int64, options: Options = Options(), record: Record? = nil, originalTensorId: Int64? = nil) {
       self.project = project
       self.sourceTensorId = sourceTensorId
       self.options = options
       self.record = record
+      self.originalTensorId = originalTensorId
     }
 
     init(from decoder: Decoder) throws {
@@ -213,6 +221,7 @@ nonisolated enum ColorMatch {
       sourceTensorId = try container.decode(Int64.self, forKey: .sourceTensorId)
       options = try Options(savedIn: decoder)
       record = try container.decodeIfPresent(Record.self, forKey: .record)
+      originalTensorId = try container.decodeIfPresent(Int64.self, forKey: .originalTensorId)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -221,6 +230,7 @@ nonisolated enum ColorMatch {
       try container.encode(sourceTensorId, forKey: .sourceTensorId)
       try options.save(in: encoder)
       try container.encodeIfPresent(record, forKey: .record)
+      try container.encodeIfPresent(originalTensorId, forKey: .originalTensorId)
     }
   }
 

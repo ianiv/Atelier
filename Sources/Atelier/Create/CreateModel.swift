@@ -2148,11 +2148,16 @@ final class CreateModel {
   }
 
   /// Sets up a run's progress, taking the foreground if it's this device's or nothing else has it.
+  /// A detached job (`JobQueue.Job.detached`) never takes it from another run: a server's run in
+  /// the foreground may have its preview on the canvas, which it must go on showing and then
+  /// replace with its result. Such a job keeps its progress under its own id, as a server's does,
+  /// for the Queue and for taking the foreground once that run ends (`adoptRemoteRun`).
   private func beginRun(_ job: JobQueue.Job, message: String, totalSteps: Int, startedAt: Date = Date()) {
-    if job.target != .local {
+    let yields = job.detached && foregroundJobID != nil
+    if job.target != .local || yields {
       remoteRuns[job.id] = RunProgress(message: message, totalSteps: totalSteps, startedAt: startedAt)
     }
-    guard job.target == .local || foregroundJobID == nil else { return }
+    guard (job.target == .local && !yields) || foregroundJobID == nil else { return }
     foregroundJobID = job.id
     errorMessage = nil
     phase = .running(message)
@@ -2165,7 +2170,8 @@ final class CreateModel {
   }
 
   private func setRunMessage(_ message: String, _ job: JobQueue.Job) {
-    if job.target != .local { remoteRuns[job.id]?.message = message }
+    // Only a run with progress of its own has an entry (`beginRun`).
+    remoteRuns[job.id]?.message = message
     if job.id == foregroundJobID { phase = .running(message) }
   }
 
@@ -2176,9 +2182,10 @@ final class CreateModel {
     if job.id == foregroundJobID { generationTask = task }
   }
 
-  /// Records a remote run's progress under its own id.
+  /// Records a run's progress under its own id, when it keeps its own (`beginRun`): a server's,
+  /// or a detached job's that started behind another run.
   private func noteRemoteProgress(_ progress: GenerationEngine.Progress, _ job: JobQueue.Job) {
-    guard job.target != .local, var run = remoteRuns[job.id] else { return }
+    guard var run = remoteRuns[job.id] else { return }
     switch progress {
     case .preview(let preview, let step, let total):
       run.preview = preview
@@ -2215,9 +2222,11 @@ final class CreateModel {
     return queue.running?.id == foregroundJobID ? queue.running : queue.runningRemote.first { $0.id == foregroundJobID }
   }
 
-  /// With nothing in the foreground, the status bar and canvas go to a job still on a server.
+  /// With nothing in the foreground, the status bar and canvas go to a job still on a server,
+  /// else the status bar to a detached job on this device that started behind the run just ended.
   private func adoptRemoteRun() {
-    guard foregroundJobID == nil, let job = queue.runningRemote.first, let run = remoteRuns[job.id] else { return }
+    let waitingLocal = queue.running.flatMap { remoteRuns[$0.id] != nil ? $0 : nil }
+    guard foregroundJobID == nil, let job = queue.runningRemote.first ?? waitingLocal, let run = remoteRuns[job.id] else { return }
     foregroundJobID = job.id
     generationTask = runTasks[job.id]
     phase = .running(run.message)
@@ -2443,8 +2452,12 @@ final class CreateModel {
     transfer = nil
     generationTask = nil
     runStartedAt = nil
-    canvasBeforePreview = nil
-    previewCoversCanvas = false
+    // A detached job never covered the canvas (`coverCanvas`), so whatever covers it isn't its
+    // to clear.
+    if !job.detached {
+      canvasBeforePreview = nil
+      previewCoversCanvas = false
+    }
     livePreview = nil
     livePreviewFrames = []
     runNext()
@@ -2598,13 +2611,13 @@ final class CreateModel {
 
   /// The waiting or running Match Colors to Original job for `item`, a step of the current
   /// project, with the same settings as `options` (by default the one-click item's).
-  func pendingColorMatch(for item: HistoryItem, options: ColorMatch.Options = ColorMatch.Options()) -> JobQueue.Job? {
-    queue.pendingColorMatch(colorMatchJob(for: item, options: options))
+  func pendingColorMatch(for item: HistoryItem, options: ColorMatch.Options = ColorMatch.Options(), original: Int64? = nil) -> JobQueue.Job? {
+    queue.pendingColorMatch(colorMatchJob(for: item, options: options, original: original))
   }
 
   /// Its settings in whole percents, so the same ones always make the same job (`isSameMatch`).
-  private func colorMatchJob(for item: HistoryItem, options: ColorMatch.Options) -> ColorMatch.Job {
-    ColorMatch.Job(project: history.project.name, sourceTensorId: item.tensorId, options: options.snapped)
+  private func colorMatchJob(for item: HistoryItem, options: ColorMatch.Options, original: Int64? = nil) -> ColorMatch.Job {
+    ColorMatch.Job(project: history.project.name, sourceTensorId: item.tensorId, options: options.snapped, originalTensorId: original)
   }
 
   /// What the Match Colors… sheet previews `item` with: the step and its original, read and
@@ -2669,14 +2682,16 @@ final class CreateModel {
   /// the other jobs, and saves into that project even if another is open by then
   /// (`run(_:request:job:)`). Returns the job's id: the one already waiting or running for the
   /// same step with the same settings when there is one, since a second would make the same
-  /// image. Other settings make another image, so they queue beside it.
+  /// image. Other settings make another image, so they queue beside it. `original` names the
+  /// image to match to (its tensor in the same project) in place of the step's recorded input
+  /// (`ColorMatch.Job.originalTensorId`).
   @discardableResult
-  func queueColorMatch(_ item: HistoryItem, options: ColorMatch.Options = ColorMatch.Options(), fromAgent: Bool = false) throws
-    -> UUID
-  {
+  func queueColorMatch(
+    _ item: HistoryItem, options: ColorMatch.Options = ColorMatch.Options(), original: Int64? = nil, fromAgent: Bool = false
+  ) throws -> UUID {
     guard !item.isVideo else { throw ColorMatchError.video }
-    guard hasOriginal(item) else { throw ColorMatchError.noOriginal }
-    let match = colorMatchJob(for: item, options: options)
+    guard original != nil || hasOriginal(item) else { throw ColorMatchError.noOriginal }
+    let match = colorMatchJob(for: item, options: options, original: original)
     if let pending = queue.pendingColorMatch(match) { return pending.id }
     guard var configuration = settings else { throw ColorMatchError.noSettings }
     // Its settings, as an upscale carries them; the size is the step's own.
@@ -2715,10 +2730,10 @@ final class CreateModel {
   /// step with the same settings, and returns the step it saved. `progress` hears the step (of 1,000) and what it's
   /// doing. Cancelling the caller cancels the job.
   func matchColors(
-    forAgent item: HistoryItem, options: ColorMatch.Options, progress: @escaping (Int, String) -> Void
+    forAgent item: HistoryItem, options: ColorMatch.Options, original: Int64? = nil, progress: @escaping (Int, String) -> Void
   ) async throws -> HistoryItem {
-    let pending = pendingColorMatch(for: item, options: options)?.id
-    let id = try queueColorMatch(item, options: options, fromAgent: true)
+    let pending = pendingColorMatch(for: item, options: options, original: original)?.id
+    let id = try queueColorMatch(item, options: options, original: original, fromAgent: true)
     // A match someone else queued (the canvas menu) is theirs: giving up on it only ends this wait.
     let joined = id == pending
     return try await withTaskCancellationHandler {
@@ -2788,7 +2803,14 @@ final class CreateModel {
           item = found
         }
         guard !item.isVideo else { throw ColorMatchError.video }
-        guard let original = await originalImage(for: item, in: project) else { throw ColorMatchError.noOriginal }
+        // The image the caller named, else the one the step was made from.
+        var original: (image: CGImage, tensorId: Int64?, moodboard: GenerationEngine.Reference?)?
+        if let tensorId = match.originalTensorId {
+          original = await project.read { $0.image(tensorId: tensorId) }.map { ($0, tensorId, nil) }
+        } else {
+          original = await originalImage(for: item, in: project)
+        }
+        guard let original else { throw ColorMatchError.noOriginal }
         guard let edited = await project.read({ $0.image(tensorId: item.tensorId) }) else { throw ColorMatchError.unreadable }
         try Task.checkCancellation()
         setRunMessage("Measuring colors…", job)

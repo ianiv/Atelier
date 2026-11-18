@@ -23,14 +23,27 @@ extension Automation {
   /// its errors) and find_faces (its errors, and on `--face-input`, an image with a face, the
   /// face's box and landmarks, and the same face found in a region), and the moodboard:
   /// get_moodboard and set_moodboard (add, weights, order, remove, clear, one “Agent Moodboard”
-  /// step a call, the Picture numbers, its errors) and get_create_screen's listing. Prints
-  /// PASS/FAIL lines.
+  /// step a call, the Picture numbers, its errors) and get_create_screen's listing. Then
+  /// edit_image, which must leave the Create screen alone: with a History image on the canvas,
+  /// zoomed, masked and painted, and an image on the moodboard, the screen is captured
+  /// (get_create_screen but `busy`, the canvas image by identity, its mask, paint and zoom, the
+  /// moodboard, History's current step, the next undo step, Merge into Image and the canvas mode)
+  /// before and after a masked edit of another region of that step, and compared; the canvas must
+  /// show its own image at every progress report and all through the run. The edit is a new step
+  /// after its source, the source's size, unchanged away from the mask. Again in the background
+  /// with the mask filled with paint (get_job, list_jobs), and from an image file; its errors;
+  /// match_colors with original_history_step on the painted edit. With `--edit-model` (a model
+  /// that takes reference images) and `--face-input`, the face-fix shape: the face's box as the
+  /// region at `--edit-scale` (default 2), masked, filled green, with the face as Picture 2, at
+  /// `--edit-steps` (default 6), its result written to `--edit-save` when given. It notes which models list_models says take reference images.
+  /// Prints PASS/FAIL lines.
   ///
   /// The canvas tools' remembered settings, Merge into Image, the canvas mode and the moodboard
   /// are put back as they were when it ends.
   ///
   ///   Atelier --agent-canvas-check --project NAME --input FILE [--subject-input FILE]
-  ///           [--subject-point x,y] [--face-input FILE] [--model M] [--steps N] [--quit]
+  ///           [--subject-point x,y] [--face-input FILE] [--edit-model M] [--edit-scale S]
+  ///           [--edit-steps N] [--edit-save FILE] [--model M] [--steps N] [--quit]
   static func agentCanvasCheck(_ model: CreateModel, presets: PresetStore) {
     // What the check changes that outlives it (the settings are UserDefaults'), as it is now.
     let restoreCanvasSettings = keepCanvasSettings(model)
@@ -648,6 +661,322 @@ extension Automation {
       } else {
         print("SKIP find_faces on a face: no --face-input")
       }
+
+      // edit_image, which edits off the canvas. First, what has to stay: a History image on the
+      // canvas, zoomed, with a mask and paint, and an image on the moodboard.
+      let sourceStep = model.history.item(tensorId: item.tensorId)?.id.logicalTime ?? step
+      _ = try? await call("set_canvas_image", ["history_step": sourceStep, "mask": false])
+      _ = try? await call("set_canvas_mask", ["shapes": [rectShape]])
+      _ = try? await call(
+        "set_canvas_paint",
+        ["shapes": [["shape": "ellipse", "x": width * 0.6, "y": height * 0.6, "width": width / 8, "height": height / 8, "color": "#3366FF"]]])
+      _ = try? await call("set_canvas_region", ["region": ["x": width / 2, "y": height / 2, "width": width / 2, "height": height / 2]])
+      _ = try? await call("set_moodboard", ["add": [["image": "data:image/png;base64," + png.base64EncodedString(), "weight": 0.5]]])
+      _ = try? await call("set_create_screen", ["prompt": "a prompt edit_image must leave alone", "seed": 4242])
+      // The moodboard change goes into History a moment later (an input entry): after that,
+      // nothing of the screen's is still on its way.
+      @MainActor func settled() async {
+        try? await Task.sleep(for: CreateModel.moodboardSettle + .milliseconds(500))
+        while model.waitsForEntries || model.isBusy { try? await Task.sleep(for: .milliseconds(100)) }
+      }
+      await settled()
+      /// What an edit off the canvas must leave as it is.
+      struct ScreenState {
+        var screen = ""
+        var image: ObjectIdentifier?
+        var imageTensor: Int64?
+        var showsImage = false
+        var mask: CanvasMask?
+        var paint: CanvasPaint?
+        var layersHidden = false
+        var scale: Double?
+        var offset = CGSize.zero
+        var moodboard: [String] = []
+        var current: Int64?
+        var undo = ""
+        var merge = false
+        var mode = ""
+
+        func differences(from other: ScreenState) -> [String] {
+          var names: [String] = []
+          if screen != other.screen { names.append("get_create_screen") }
+          if image != other.image { names.append("canvas image") }
+          if imageTensor != other.imageTensor { names.append("canvas step") }
+          if showsImage != other.showsImage { names.append("canvas shows its image") }
+          if mask != other.mask { names.append("mask") }
+          if paint != other.paint { names.append("paint") }
+          if layersHidden != other.layersHidden { names.append("layers hidden") }
+          if scale != other.scale || offset != other.offset { names.append("zoom") }
+          if moodboard != other.moodboard { names.append("moodboard") }
+          if current != other.current { names.append("History's current step") }
+          if undo != other.undo { names.append("next undo step") }
+          if merge != other.merge { names.append("Merge into Image") }
+          if mode != other.mode { names.append("canvas mode") }
+          return names
+        }
+      }
+      @MainActor func screenState() async -> ScreenState {
+        var state = ScreenState()
+        // get_create_screen but `busy` (the queue's own) and the canvas step's number, which a
+        // fork in History may change: the step itself is compared by its image.
+        if var screen = try? await call("get_create_screen") {
+          screen["busy"] = nil
+          if var canvas = screen["canvas"] as? [String: Any] {
+            canvas["source_step"] = nil
+            screen["canvas"] = canvas
+          }
+          let data = try? JSONSerialization.data(withJSONObject: screen, options: [.sortedKeys])
+          state.screen = data.map { String(decoding: $0, as: UTF8.self) } ?? ""
+        }
+        state.image = model.image.map { ObjectIdentifier($0) }
+        state.imageTensor = model.imageItem?.tensorId
+        state.showsImage = model.canvasShowsImage
+        state.mask = model.canvasMask
+        state.paint = model.canvasPaint
+        state.layersHidden = model.layersHidden
+        state.scale = model.canvas.scale
+        state.offset = model.canvas.offset
+        state.moodboard = model.moodboard.items.map { "\($0.id.uuidString)@\($0.weight)" }
+        state.current = model.history.currentTensorId
+        state.undo = undoManager.canUndo ? undoManager.undoActionName : "(nothing to undo)"
+        state.merge = model.mergeIntoImage
+        state.mode = model.canvasMode.rawValue
+        return state
+      }
+      let screenBefore = await screenState()
+      let beneath = model.image
+      check(
+        screenBefore.imageTensor == item.tensorId && screenBefore.mask != nil && screenBefore.paint != nil && screenBefore.scale != nil
+          && screenBefore.moodboard.count == 1 && !screenBefore.screen.isEmpty,
+        "before edit_image the canvas holds step \(sourceStep) zoomed, with a mask, paint and a moodboard image")
+      // Watched all through the run, and at every progress report: the canvas keeps its own image.
+      var reports = 0, strayed = 0
+      let watcher = Task { @MainActor in
+        while !Task.isCancelled {
+          if !(model.canvasShowsImage && model.image === beneath && model.canvasMask == screenBefore.mask) { strayed += 1 }
+          try? await Task.sleep(for: .milliseconds(30))
+        }
+      }
+      // Another part of the same step: its top left quadrant, masked in the middle.
+      let editRegion = CGRect(x: 0, y: 0, width: width / 2, height: height / 2)
+      let editMask = CGRect(x: width / 8, y: height / 8, width: width / 4, height: height / 4)
+      let editMaskShape: [String: Any] = ["shape": "rect", "x": editMask.minX, "y": editMask.minY, "width": editMask.width, "height": editMask.height]
+      let runSteps = Int(value("--steps") ?? "4") ?? 4
+      var editArguments: [String: Any] = [
+        "history_step": sourceStep, "prompt": "a bright blue flower",
+        "region": ["x": editRegion.minX, "y": editRegion.minY, "width": editRegion.width, "height": editRegion.height],
+        "width": Int(frame.width), "height": Int(frame.height), "mask": ["shapes": [editMaskShape], "grow": 4],
+        "steps": runSteps, "strength": 0.7, "seed": 7, "settings": ["maskBlur": 4, "maskBlurOutset": 0], "include_image": false,
+      ]
+      if let file = value("--model") { editArguments["model"] = file }
+      var edited: [String: Any]?
+      do {
+        let answer = try await tools.call("edit_image", arguments: editArguments) { _ in
+          reports += 1
+          if !(model.canvasShowsImage && model.image === beneath) { strayed += 1 }
+        }
+        edited = answer["structuredContent"] as? [String: Any]
+      } catch {
+        check(false, "edit_image ran (\(error.localizedDescription))")
+      }
+      watcher.cancel()
+      await settled()
+      var screenAfter = await screenState()
+      check(
+        reports > 0 && strayed == 0,
+        "the canvas showed its own image at every progress report (\(reports)) and all through the edit (\(strayed) times it didn't)")
+      check(
+        screenAfter.differences(from: screenBefore).isEmpty,
+        "the Create screen is as it was after edit_image: screen JSON, canvas image, mask, paint, zoom, moodboard, current step, undo, merge, mode (changed: \(screenAfter.differences(from: screenBefore)))")
+      let sourceNow = model.history.item(tensorId: item.tensorId)
+      let editedSize = edited?["canvas_size"] as? [String: Any]
+      let editedMask = edited?["mask"] as? [String: Any]
+      check(
+        edited?["merged"] as? Bool == true && editedSize?["width"] as? Int == input.width && editedSize?["height"] as? Int == input.height
+          && (edited?["parent_history_step"] as? NSNumber)?.int64Value == sourceNow?.id.logicalTime && same(rect(edited?["region"]), editRegion)
+          && same(rect(editedMask?["bounds"]), editMask.insetBy(dx: -4, dy: -4)) && edited?["has_paint"] as? Bool == false
+          && edited?["references"] as? Int == 0 && edited?["job_id"] is String,
+        "edit_image merges into the whole image and says what it did (parent \(edited?["parent_history_step"] ?? "none"), region \(edited?["region"] ?? "?"), mask \(editedMask?["bounds"] ?? "?"))")
+      if let editedStep = (edited?["history_step"] as? NSNumber)?.int64Value,
+         let found = model.history.items.first(where: { $0.id.logicalTime == editedStep }), let editedImage = await model.history.image(for: found)
+      {
+        check(found.inputTensorId == item.tensorId && found.tensorId != item.tensorId, "the edit is a new step whose input is the source step")
+        let away = difference(editedImage, image) { !editMask.insetBy(dx: -(4 + margin), dy: -(4 + margin)).contains($0) }
+        let within = difference(editedImage, image) { editMask.insetBy(dx: margin, dy: margin).contains($0) }
+        check(away?.maxDelta == 0, "away from the mask the edit is the source's pixels exactly (max delta \(away?.maxDelta ?? -1))")
+        check((within?.meanDelta ?? 0) > 1, "inside the mask it changed (mean delta \(String(format: "%.1f", within?.meanDelta ?? 0)))")
+      } else {
+        check(false, "edit_image's step isn't in History")
+      }
+
+      // In the background, with the mask filled with paint: get_job collects it, list_jobs shows it.
+      var paintedStep: Int64?
+      do {
+        var arguments = editArguments
+        arguments["paint"] = ["fill_mask": true, "color": "#00FF00"]
+        arguments["prompt"] = "replace the green area with a bright blue flower"
+        arguments["seed"] = 8
+        arguments["background"] = true
+        let started = try await call("edit_image", arguments)
+        var ran = started
+        if let job = started["job_id"] as? String {
+          for _ in 0..<10 where ran["history_step"] == nil {
+            ran = (try? await call("get_job", ["job_id": job, "wait_seconds": 30])) ?? ran
+          }
+        }
+        let jobsText = (try? await tools.call("list_jobs", arguments: [:]) { _ in })
+          .flatMap { ($0["content"] as? [[String: Any]])?.first?["text"] as? String }
+        let jobs = jobsText.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [[String: Any]]
+        let listedJob = jobs?.first { $0["job_id"] as? String == started["job_id"] as? String }
+        check(
+          started["job_id"] is String && started["history_step"] == nil && ran["has_paint"] as? Bool == true && ran["merged"] as? Bool == true
+            && listedJob?["tool"] as? String == "edit_image" && (listedJob?["prompt"] as? String)?.contains("green area") == true,
+          "edit_image in the background returns a job_id, get_job collects the painted edit and list_jobs lists it (\(listedJob?["tool"] ?? "not listed"))")
+        paintedStep = (ran["history_step"] as? NSNumber)?.int64Value
+        if let paintedStep, let found = model.history.items.first(where: { $0.id.logicalTime == paintedStep }),
+           let paintedImage = await model.history.image(for: found)
+        {
+          // Paint is only the run's input: outside the mask the result has none of it.
+          let away = difference(paintedImage, image) { !editMask.insetBy(dx: -(4 + margin), dy: -(4 + margin)).contains($0) }
+          check(away?.maxDelta == 0, "a painted edit is the source's pixels away from the mask too (max delta \(away?.maxDelta ?? -1))")
+        } else {
+          check(false, "the painted edit's step isn't in History")
+        }
+      } catch {
+        check(false, "edit_image in the background (\(error.localizedDescription))")
+      }
+      // From a file: the whole image at the frame's size, masked.
+      do {
+        var arguments = editArguments
+        arguments["history_step"] = nil
+        arguments["region"] = nil
+        arguments["image"] = path
+        arguments["mask"] = ["shapes": [rectShape]]
+        let fromFile = try await call("edit_image", arguments)
+        let size = fromFile["canvas_size"] as? [String: Any]
+        check(
+          fromFile["merged"] as? Bool == true && size?["width"] as? Int == input.width && size?["height"] as? Int == input.height
+            && same(rect(fromFile["region"]), CGRect(x: 0, y: 0, width: width, height: height)),
+          "edit_image on an image file edits the whole image and merges at its size (\(size ?? [:]), region \(fromFile["region"] ?? "?"))")
+      } catch {
+        check(false, "edit_image on an image file (\(error.localizedDescription))")
+      }
+      await settled()
+      screenAfter = await screenState()
+      check(
+        screenAfter.differences(from: screenBefore).isEmpty,
+        "the Create screen is still as it was after a background edit and one from a file (changed: \(screenAfter.differences(from: screenBefore)))")
+
+      // Its errors: each says what's missing.
+      await expectError("edit_image", ["prompt": "x"], "`image` or `history_step`", "no image")
+      await expectError("edit_image", ["history_step": 999_999, "prompt": "x", "strength": 0.5], "list_history", "a missing step")
+      await expectError("edit_image", ["history_step": sourceStep, "prompt": "x", "strength": 1], "Strength 100% with no mask", "nothing to edit from")
+      if !model.usesReferences {
+        await expectError(
+          "edit_image", ["history_step": sourceStep, "prompt": "x", "strength": 0.5, "reference_images": [path]], "doesn't take reference images",
+          "references for a model that takes none")
+      }
+      await expectError(
+        "edit_image",
+        [
+          "history_step": sourceStep, "prompt": "x", "region": ["x": 0, "y": 0, "width": width / 4, "height": height / 4],
+          "mask": ["shapes": [["shape": "rect", "x": width * 0.75, "y": height * 0.75, "width": 20, "height": 20]]],
+        ], "mask is empty", "a mask outside the region")
+      await expectError(
+        "edit_image", ["history_step": sourceStep, "prompt": "x", "strength": 0.5, "paint": ["fill_mask": true, "color": "#00FF00"]],
+        "needs a `mask`", "filling no mask")
+      await expectError(
+        "edit_image",
+        ["history_step": sourceStep, "prompt": "x", "strength": 0.5, "region": ["x": 10, "y": 10, "width": 2, "height": 2], "width": 2048, "height": 2048],
+        "needs a zoom", "a region too small for the size")
+      await expectError(
+        "edit_image", ["history_step": sourceStep, "prompt": "x", "strength": 0.5, "region": ["x": width + 50, "y": 0, "width": 10, "height": 10]],
+        "overlap", "a region off the image")
+      await expectError(
+        "edit_image", ["history_step": sourceStep, "prompt": "x", "strength": 0.5, "width": 512, "height": 512, "scale": 2], "not both",
+        "a size and a scale")
+
+      // Which models read reference images, as list_models says (the face fix needs one that does).
+      let modelsText = (try? await tools.call("list_models", arguments: [:]) { _ in })
+        .flatMap { ($0["content"] as? [[String: Any]])?.first?["text"] as? String }
+      let modelList = modelsText.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [[String: Any]] ?? []
+      let referenceModels = modelList.filter { $0["takes_reference_images"] as? Bool == true }.compactMap { $0["file"] as? String }
+      print("note: list_models says these take reference images: \(referenceModels.sorted().joined(separator: ", "))")
+      for entry in modelList where (entry["name"] as? String)?.localizedCaseInsensitiveContains("H3 Image") == true {
+        print("note: list_models: \(entry["name"] ?? "?") (\(entry["file"] ?? "?")) takes_reference_images \(entry["takes_reference_images"] ?? "?"), video \(entry["video"] ?? "?")")
+      }
+
+      // The face fix, with a model that takes references: the face's box as the region, masked,
+      // filled green, with the face itself as Picture 2.
+      if let editModel = value("--edit-model"), let facePath = value("--face-input"),
+         let faceImage = ImageLoader.image(at: URL(fileURLWithPath: facePath)),
+         let face = (try? FaceFinder.faces(in: faceImage))?.first
+      {
+        let faceSize = CGSize(width: faceImage.width, height: faceImage.height)
+        let faceRegion = FrameSelection.region(around: face.box, padding: 0.5 * max(face.box.width, face.box.height), aspect: 0.75, inside: faceSize)
+        let grow = Int((face.box.width / 4).rounded())
+        do {
+          let fixed = try await call(
+            "edit_image",
+            [
+              "image": facePath, "model": editModel,
+              "prompt": "Replace the green area in Picture 1 with the face of the person in Picture 2, same expression, natural skin, matching the lighting of the scene. Keep everything else unchanged.",
+              "region": ["x": faceRegion.minX, "y": faceRegion.minY, "width": faceRegion.width, "height": faceRegion.height],
+              "scale": Double(value("--edit-scale") ?? "2") ?? 2,
+              "mask": ["shapes": [["shape": "ellipse", "x": face.box.minX, "y": face.box.minY, "width": face.box.width, "height": face.box.height]], "grow": grow],
+              "paint": ["fill_mask": true, "color": "#00FF00"], "reference_images": [facePath],
+              "steps": Int(value("--edit-steps") ?? "6") ?? 6, "guidance_scale": 1, "include_image": false,
+            ])
+          let size = fixed["canvas_size"] as? [String: Any]
+          let fixedStep = (fixed["history_step"] as? NSNumber)?.int64Value
+          let fixedItem = model.history.items.first { $0.id.logicalTime == fixedStep }
+          let fixedImage: CGImage? = if let fixedItem { await model.history.image(for: fixedItem) } else { nil }
+          let grownBox = face.box.insetBy(dx: -Double(grow) - 24, dy: -Double(grow) - 24)
+          let away = fixedImage.flatMap { difference($0, faceImage) { !grownBox.contains($0) } }
+          let within = fixedImage.flatMap { difference($0, faceImage) { face.box.insetBy(dx: face.box.width / 4, dy: face.box.height / 4).contains($0) } }
+          check(
+            fixed["merged"] as? Bool == true && size?["width"] as? Int == faceImage.width && size?["height"] as? Int == faceImage.height
+              && fixed["references"] as? Int == 1 && fixed["has_paint"] as? Bool == true,
+            "the face fix with \(editModel): the face's region at \(fixed["width"] ?? "?")×\(fixed["height"] ?? "?") (scale \(fixed["scale"] ?? "?")), merged at the image's size, one reference, painted (\(fixed["duration_seconds"] ?? "?") s)")
+          check(
+            away?.maxDelta == 0 && (within?.meanDelta ?? 0) > 0.5,
+            "it changed the face and nothing away from it (max delta away \(away?.maxDelta ?? -1), mean delta on the face \(String(format: "%.1f", within?.meanDelta ?? 0)))")
+          if let saveTo = value("--edit-save"), let fixedImage, let data = ImageTensor.png(fixedImage) {
+            try? data.write(to: URL(fileURLWithPath: saveTo))
+          }
+        } catch {
+          check(false, "the face fix with \(editModel) (\(error.localizedDescription))")
+        }
+        await settled()
+        screenAfter = await screenState()
+        check(
+          screenAfter.differences(from: screenBefore).isEmpty,
+          "the Create screen is as it was after the face fix (changed: \(screenAfter.differences(from: screenBefore)))")
+      } else {
+        print("SKIP the face fix with a reference: needs --edit-model (one that takes reference images) and --face-input")
+      }
+
+      // match_colors after a painted edit: its recorded input is the painted frame, so the source
+      // is named. (These land on the canvas, as match_colors does: the screen checks are done.)
+      if let paintedStep {
+        let recorded = try? await call("match_colors", ["history_step": paintedStep, "unchanged_only": true])
+        print(
+          "note: match_colors on a painted edit against its recorded input (the painted frame): unchanged_fraction \(recorded?["unchanged_fraction"] ?? "none (measured the whole image: another shape, or too little unchanged)"), delta_a \(recorded?["delta_a"] ?? "?"), delta_b \(recorded?["delta_b"] ?? "?")")
+        let sourceStepNow = model.history.item(tensorId: item.tensorId)?.id.logicalTime ?? sourceStep
+        let paintedNow = model.history.items.first { $0.id.logicalTime == paintedStep }
+        let named = try? await call(
+          "match_colors", ["history_step": paintedNow?.id.logicalTime ?? paintedStep, "original_history_step": sourceStepNow, "unchanged_only": true])
+        let matched = (named?["history_step"] as? NSNumber).flatMap { step in model.history.items.first { $0.id.logicalTime == step.int64Value } }
+        check(
+          (named?["original_history_step"] as? NSNumber)?.int64Value == sourceStepNow && named?["unchanged_fraction"] is NSNumber
+            && matched?.sidecar.colorMatch?.originalTensorId == item.tensorId,
+          "match_colors with original_history_step measures the painted edit against the source, where it's unchanged (unchanged_fraction \(named?["unchanged_fraction"] ?? "none"), delta_a \(named?["delta_a"] ?? "?"), delta_b \(named?["delta_b"] ?? "?"))")
+        await expectError(
+          "match_colors", ["history_step": paintedStep, "original_history_step": 999_999], "list_history", "a missing original")
+        await expectError(
+          "match_colors", ["history_step": paintedStep, "original_history_step": paintedStep], "edited from", "itself as the original")
+      }
+      _ = try? await call("set_moodboard", ["clear": true])
 
       // auto_mask: errors first, on the input (which has no subject Vision finds).
       _ = try? await call("set_canvas_image", ["image": "data:image/png;base64," + png.base64EncodedString()])

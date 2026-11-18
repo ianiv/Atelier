@@ -360,6 +360,15 @@ struct ColorMatchTests {
     #expect(!match.isSameMatch(as: job(.init(unchangedOnly: true))))
     #expect(!match.isSameMatch(as: job(tensor: 5)))
     #expect(!match.isSameMatch(as: job(project: "Q")))
+    // Against another original it's another image too; the one named is kept with a saved job,
+    // and a job saved before there could be one reads as having none.
+    var named = job()
+    named.originalTensorId = 9
+    #expect(!match.isSameMatch(as: named) && named.isSameMatch(as: named))
+    let coded = try? JSONDecoder().decode(ColorMatch.Job.self, from: JSONEncoder().encode(named))
+    #expect(coded?.originalTensorId == 9 && coded.map(named.isSameMatch) == true)
+    let plain = try? JSONDecoder().decode(ColorMatch.Job.self, from: JSONEncoder().encode(match))
+    #expect(plain?.originalTensorId == nil && plain.map(match.isSameMatch) == true)
     // Within the same whole percent.
     let third = job(.init(tint: 0.1 + 0.2, saturation: 0.7, brightness: 0.2, contrast: 0.4))
     #expect(third.isSameMatch(as: job(.init(tint: 0.3, saturation: 0.7000001, brightness: 0.2001, contrast: 0.3999))))

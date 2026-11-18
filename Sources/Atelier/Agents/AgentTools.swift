@@ -93,8 +93,8 @@ final class AgentTools {
   // MARK: - Definitions
 
   /// Every tool, as tools/list gives them: the ones here, then the canvas edit tools
-  /// (`AgentToolsCanvasEdit.swift`).
-  static let definitions: [[String: Any]] = baseDefinitions + canvasEditDefinitions
+  /// (`AgentToolsCanvasEdit.swift`) and edit_image (`AgentToolsEditImage.swift`).
+  static let definitions: [[String: Any]] = baseDefinitions + canvasEditDefinitions + [editImageDefinition]
 
   private static let baseDefinitions: [[String: Any]] = [
     [
@@ -408,6 +408,7 @@ final class AgentTools {
           "brightness": ["type": "number", "minimum": 0, "maximum": 1, "description": "How far the brightness (the average of L) moves to the original's, 0–1. Default 0: edits often mean to change the light."],
           "contrast": ["type": "number", "minimum": 0, "maximum": 1, "description": "How far the contrast (the spread of L) moves to the original's, 0–1. Default 0."],
           "unchanged_only": ["type": "boolean", "description": "Measure both images only where the edit left the picture alone, so what it added or removed isn't taken for a color shift. Measures the parts that barely changed from the original, and falls back to the whole image when less than a quarter of the picture qualifies (most of it was edited, or the whole picture shifted) or when the original has another shape. Default false."],
+          "original_history_step": ["type": "integer", "description": "The history step to match to, instead of the step's own input. Pass the source image's step after an edit made with paint (edit_image `paint`, or set_canvas_paint and use_canvas), whose recorded input is the painted frame: that has the paint's color in it, and zoomed in it's only the region. Use it with unchanged_only true."],
           "strength": ["type": "number", "minimum": 0, "maximum": 1, "description": "Shortcut: sets tint and saturation together, 0–1. tint and saturation override it."],
           "luminance": [
             "type": ["boolean", "number"], "minimum": 0, "maximum": 1,
@@ -537,6 +538,7 @@ final class AgentTools {
     case "get_image": return try await getImage(arguments)
     case "match_colors": return try await matchColors(arguments, progress: progress)
     case "generate": return try await startGenerate(arguments, progress: progress)
+    case "edit_image": return try await startEditImage(arguments, progress: progress)
     case "get_job": return try await getJob(arguments, progress: progress)
     case "list_jobs": return try Self.textResult(json: jobs.values.sorted { $0.startedAt > $1.startedAt }.map(Self.summary))
     case "cancel_job": return try cancelJob(arguments)
@@ -599,53 +601,11 @@ final class AgentTools {
     }
     if create.models.isEmpty { await create.refreshModelList() }
     let model = try resolveModel(arguments["model"] as? String)
-    var notes: [String] = []
-
-    var configuration: PipelineConfiguration
-    if arguments["use_app_settings"] as? Bool == true {
-      guard model == create.selectedModel, let settings = create.settings else {
-        throw ToolError("use_app_settings needs `model` to be the app's selected model (\(create.selectedModel ?? "none")).")
-      }
-      configuration = settings
-    } else {
-      configuration = try await defaults(for: model)
-    }
-    if let name = arguments["preset"] as? String {
-      try apply(presetNamed: name, model: model, to: &configuration)
-    }
-    var sizeGiven = false
-    if let settings = arguments["settings"] as? [String: Any], !settings.isEmpty {
-      let data = try JSONSerialization.data(withJSONObject: settings)
-      guard let pasted = DrawThingsJSON.decode(data) else {
-        throw ToolError("None of the keys in `settings` are settings Atelier knows. See get_settings.")
-      }
-      SettingsRegistry.apply(dump: pasted.dump, to: &configuration)
-      sizeGiven = pasted.dump["width"] != nil || pasted.dump["height"] != nil
-      let ignored = settings.keys.filter {
-        pasted.dump[$0] == nil && $0 != "model" && $0 != "seed"
-      }
-      if !ignored.isEmpty { notes.append("Ignored unknown settings: \(ignored.sorted().joined(separator: ", ")).") }
-    }
-    let width = Self.int(arguments["width"])
-    let height = Self.int(arguments["height"])
-    if width != nil || height != nil {
-      configuration.width = Self.roundTo64(width ?? configuration.width)
-      configuration.height = Self.roundTo64(height ?? configuration.height)
-      sizeGiven = true
-    }
-    if let steps = Self.int(arguments["steps"]) { configuration.steps = max(steps, 1) }
-    if let guidance = Self.double(arguments["guidance_scale"]) { configuration.guidanceScale = Float(guidance) }
-    if let strength = Self.double(arguments["strength"]) { configuration.strength = Float(min(max(strength, 0), 1)) }
+    let layered = try await configuration(arguments, model: model)
+    var configuration = layered.configuration
+    let sizeGiven = layered.sizeGiven
+    var notes = layered.notes
     let video = VideoModel(model: model, loras: configuration.loras.compactMap(\.file))
-    if let video {
-      if let frames = Self.int(arguments["num_frames"]) {
-        configuration.numFrames = video.snapped(frames)
-      } else if let seconds = Self.double(arguments["seconds"]) {
-        configuration.numFrames = video.snapped(Int((seconds * video.framesPerSecond).rounded()) + 1)
-      } else {
-        configuration.numFrames = video.snapped(configuration.numFrames)
-      }
-    }
 
     let seed: UInt32
     if let value = Self.int(arguments["seed"]) {
@@ -709,10 +669,79 @@ final class AgentTools {
     }
 
     let summary = String(prompt.prefix(60))
+    let item = try await run(request, summary: summary, progress: progress)
+    return try await result(
+      of: item, model: model, configuration: configuration, seed: seed, summary: summary, notes: notes,
+      arguments: arguments)
+  }
+
+  /// The settings a run starts from, layered as Create layers them: the model's recommended
+  /// settings and default preset (or with use_app_settings the inspector's values), then `preset`,
+  /// then `settings`, then the explicit fields, with a video model's length snapped to the counts
+  /// it takes. `sizeGiven` says the caller named the output size; `notes` what was ignored.
+  /// `generate` and `edit_image` both start here, so the same arguments mean the same settings.
+  func configuration(
+    _ arguments: [String: Any], model: String
+  ) async throws -> (configuration: PipelineConfiguration, sizeGiven: Bool, notes: [String]) {
+    var notes: [String] = []
+    var configuration: PipelineConfiguration
+    if arguments["use_app_settings"] as? Bool == true {
+      guard model == create.selectedModel, let settings = create.settings else {
+        throw ToolError("use_app_settings needs `model` to be the app's selected model (\(create.selectedModel ?? "none")).")
+      }
+      configuration = settings
+    } else {
+      configuration = try await defaults(for: model)
+    }
+    if let name = arguments["preset"] as? String {
+      try apply(presetNamed: name, model: model, to: &configuration)
+    }
+    var sizeGiven = false
+    if let settings = arguments["settings"] as? [String: Any], !settings.isEmpty {
+      let data = try JSONSerialization.data(withJSONObject: settings)
+      guard let pasted = DrawThingsJSON.decode(data) else {
+        throw ToolError("None of the keys in `settings` are settings Atelier knows. See get_settings.")
+      }
+      SettingsRegistry.apply(dump: pasted.dump, to: &configuration)
+      sizeGiven = pasted.dump["width"] != nil || pasted.dump["height"] != nil
+      let ignored = settings.keys.filter {
+        pasted.dump[$0] == nil && $0 != "model" && $0 != "seed"
+      }
+      if !ignored.isEmpty { notes.append("Ignored unknown settings: \(ignored.sorted().joined(separator: ", ")).") }
+    }
+    let width = Self.int(arguments["width"])
+    let height = Self.int(arguments["height"])
+    if width != nil || height != nil {
+      configuration.width = Self.roundTo64(width ?? configuration.width)
+      configuration.height = Self.roundTo64(height ?? configuration.height)
+      sizeGiven = true
+    }
+    if let steps = Self.int(arguments["steps"]) { configuration.steps = max(steps, 1) }
+    if let guidance = Self.double(arguments["guidance_scale"]) { configuration.guidanceScale = Float(guidance) }
+    if let strength = Self.double(arguments["strength"]) { configuration.strength = Float(min(max(strength, 0), 1)) }
+    if let video = VideoModel(model: model, loras: configuration.loras.compactMap(\.file)) {
+      if let frames = Self.int(arguments["num_frames"]) {
+        configuration.numFrames = video.snapped(frames)
+      } else if let seconds = Self.double(arguments["seconds"]) {
+        configuration.numFrames = video.snapped(Int((seconds * video.framesPerSecond).rounded()) + 1)
+      } else {
+        configuration.numFrames = video.snapped(configuration.numFrames)
+      }
+    }
+    return (configuration, sizeGiven, notes)
+  }
+
+  /// Queues `request` as an agent's run and waits for the step it saves, showing what it's doing
+  /// in the Agents settings tab and reporting its progress. `target` and `detached` are
+  /// `CreateModel.generate(forAgent:)`'s.
+  func run(
+    _ request: GenerationEngine.Request, target: JobTarget? = nil, detached: Bool = false, summary: String,
+    progress: @escaping (Progress) -> Void
+  ) async throws -> HistoryItem {
     activity = "Waiting: “\(summary)”"
     progress(Progress(step: 0, total: nil, message: "Waiting for the current run to finish", isQueued: true))
     defer { activity = nil }
-    let item = try await create.generate(forAgent: request) { [weak self] update in
+    return try await create.generate(forAgent: request, target: target, detached: detached) { [weak self] update in
       guard case .state(let state) = update else { return }
       let message = Self.describe(state)
       var step = 0
@@ -724,9 +753,6 @@ final class AgentTools {
       self?.activity = "\(message): “\(summary)”"
       progress(Progress(step: step, total: total, message: message))
     }
-    return try await result(
-      of: item, model: model, configuration: configuration, seed: seed, summary: summary, notes: notes,
-      arguments: arguments)
   }
 
   /// What a finished run answers with: the file written, the image inline and the structured
@@ -861,21 +887,7 @@ final class AgentTools {
     let merged = request.merge != nil
 
     let summary = String(request.prompt.prefix(60))
-    activity = "Waiting: “\(summary)”"
-    progress(Progress(step: 0, total: nil, message: "Waiting for the current run to finish", isQueued: true))
-    defer { activity = nil }
-    let item = try await create.generate(forAgent: request, target: create.runTarget) { [weak self] update in
-      guard case .state(let state) = update else { return }
-      let message = Self.describe(state)
-      var step = 0
-      var total: Int?
-      if case .generating(let current, let all) = state {
-        step = current
-        total = all
-      }
-      self?.activity = "\(message): “\(summary)”"
-      progress(Progress(step: step, total: total, message: message))
-    }
+    let item = try await run(request, target: create.runTarget, summary: summary, progress: progress)
     let parent = item.inputTensorId.flatMap { create.history.item(tensorId: $0) }
     // The saved image's own size: a merged one is the whole (maybe grown) image, not the frame.
     let saved = await create.history.image(for: item)
@@ -1030,7 +1042,7 @@ final class AgentTools {
 
   private static func summary(_ job: Job) -> [String: Any] {
     var summary: [String: Any] = [
-      "job_id": job.id, "tool": job.tool, job.tool == "generate" ? "prompt" : "label": shortened(job.label),
+      "job_id": job.id, "tool": job.tool, job.tool == "match_colors" ? "label" : "prompt": shortened(job.label),
       "elapsed_seconds": Int((job.finishedAt ?? Date()).timeIntervalSince(job.startedAt)),
     ]
     if job.finishedAt == nil {
@@ -1985,8 +1997,24 @@ final class AgentTools {
       item = onCanvas
     }
     guard !item.isVideo else { throw ToolError("History step \(item.id.logicalTime) is a video; match_colors takes images.") }
-    guard create.hasOriginal(item) else {
-      throw ToolError("History step \(item.id.logicalTime) has no original to match: it wasn't made from the canvas or a moodboard image.")
+    // The original named by the caller, in place of the step's recorded input.
+    var original: (step: Int, tensorId: Int64)?
+    if arguments["original_history_step"] != nil {
+      guard let step = Self.int(arguments["original_history_step"]) else {
+        throw ToolError("`original_history_step` is a history step number (see list_history).")
+      }
+      guard let found = create.history.items.first(where: { $0.id.logicalTime == step }) else {
+        throw ToolError("No history step \(step) in “\(create.history.project.name)”. See list_history.")
+      }
+      guard !found.isVideo, let tensorId = found.imageTensorId else {
+        throw ToolError("History step \(step) has no image to match to (a video, or an input entry with an empty canvas).")
+      }
+      guard tensorId != item.tensorId else { throw ToolError("`original_history_step` is the step being matched; name the image it was edited from.") }
+      original = (step, tensorId)
+    }
+    guard original != nil || create.hasOriginal(item) else {
+      throw ToolError(
+        "History step \(item.id.logicalTime) has no original to match: it wasn't made from the canvas or a moodboard image. Name one with original_history_step.")
     }
     // The two settings there were first, which still set the four: colors by `strength`,
     // lightness by `strength × luminance`.
@@ -2028,7 +2056,7 @@ final class AgentTools {
     // In whole percents, as the job is queued, so the same settings find the same job below.
     options = options.snapped
     let project = create.history.project.name
-    let match = ColorMatch.Job(project: project, sourceTensorId: item.tensorId, options: options)
+    let match = ColorMatch.Job(project: project, sourceTensorId: item.tensorId, options: options, originalTensorId: original?.tensorId)
     // Another call's job for the same step and settings: this call answers with it.
     if let existing = jobs.values.first(where: { $0.finishedAt == nil && $0.colorMatch?.isSameMatch(as: match) == true }) {
       return try await answer(existing, background: background, progress: progress)
@@ -2040,7 +2068,7 @@ final class AgentTools {
     ) { [weak self] update in
       guard let self else { throw CancellationError() }
       update(Progress(step: 0, total: nil, message: "Waiting for the current run to finish", isQueued: true))
-      let saved = try await self.create.matchColors(forAgent: item, options: options) { step, message in
+      let saved = try await self.create.matchColors(forAgent: item, options: options, original: original?.tensorId) { step, message in
         update(Progress(step: step, total: 1_000, message: message))
       }
       // What the saved step records.
@@ -2054,6 +2082,7 @@ final class AgentTools {
         "tint": used.tint, "saturation": used.saturation, "brightness": used.brightness, "contrast": used.contrast,
         "unchanged_only": used.unchangedOnly, "strength": used.tint, "luminance": used.matchesLightness,
       ]
+      if let original { result["original_history_step"] = original.step }
       // Only when the unchanged areas were what was measured: not when it fell back to the whole image.
       if let counted = record?.counted { result["unchanged_fraction"] = rounded(counted) }
       if let shift = record?.shift {
