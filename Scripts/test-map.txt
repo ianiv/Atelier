@@ -1,0 +1,51 @@
+# What `Scripts/test.sh --changed` runs for a changed file, beyond the naming convention (a change
+# to Foo.swift runs the suites in Sources/AtelierTests/*Foo*Tests.swift).
+#
+#   path-prefix | unit suites | automation checks
+#
+# A prefix is a shell pattern matched against the start of the repo-relative path; the longest
+# matching line wins. Suites are struct names (comma-separated); `all` runs the whole suite, `smoke`
+# the smoke set, `none` nothing. Checks are the app's scripted-run flags, printed as command lines
+# (run with --checks). `Scripts/test.sh --lint-map` fails when a folder of Sources/Atelier, a suite
+# or a check flag is missing here, or a name here no longer exists.
+
+# Docs: nothing to test.
+*.md                         | none |
+docs/                        | none |
+LICENSE                      | none |
+NOTICE                       | none |
+.gitignore                   | none |
+.swiftformat                 | none |
+
+# Shared and build infrastructure: everything.
+Atelier.xcodeproj/           | all |
+Config/                      | all |
+Sources/ProjectFormat/       | all |
+Sources/Atelier/Inspector/SettingsRegistry.swift | all | --inspector-check,--engine-check
+Sources/AtelierTests/ValueTests.swift | all |
+Scripts/build.sh             | all |
+Scripts/hide-build-from-spotlight.sh | all |
+
+# The runner itself: the smoke set (and --lint-map, which --changed runs whenever these change).
+Scripts/test.sh              | smoke |
+Scripts/test-map.txt         | smoke |
+Sources/AtelierTests/Tags.swift | smoke |
+
+# Sources, one line per folder.
+Sources/Atelier/Agents/      | HostTests | --agent-canvas-check
+Sources/Atelier/App/         | HostTests,TemporaryFilesTests,ClipCacheTests,OrphanTests,ModelFolderTests,WaitUntilTests,ShareTests,SharePickerTests | --cleanup-check,--ux-check,--resize-bench,--tab-switch-bench,--model-folders-check
+Sources/Atelier/Automation/  | HostTests,AutomationSamplerTests | --generate
+Sources/Atelier/Create/      | CanvasDropTests,CanvasPaintTests,CanvasRefineTests,ColorMatchTests,MaskMemoryTests,CanvasUndoTests,MoodboardWriterTests,SizePresetTests | --edit-input-check,--refine-check,--paint-check,--color-match-check,--create-delete-check,--canvas-clip-check
+Sources/Atelier/Create/AutoMask/ | AutoMaskTests,MaskMemoryTests,SAMFolderTests | --automask-check
+Sources/Atelier/Generation/  | StrengthStepsTests,ModelsLookupOrderTests,RefinerKickInTests,RefinerModelSwitchTests,PreviewDecoderTests,AutomationSamplerTests | --engine-check,--generate,--reuse
+Sources/Atelier/History/     | HistoryGraphTests,InputEntryTests,EntryTreeFuzzTests,PNGTextTests,JSONValueTests,ClipTests | --input-entries-check,--entries-freeze-check,--history-loras-check,--canvas-clip-check
+Sources/Atelier/Inspector/   | SizePresetTests,PresetImportTests | --inspector-check
+Sources/Atelier/Library/     | DrawThingsImportTests,LoRACopiesTests,MOSSImportTests,ModelMoveTests,ModelFolderTests,OrphanTests | --library-check,--model-folders-check,--model-move-check,--add-folder-check,--catalog-retry-check
+Sources/Atelier/Projects/    | ProjectMappingTests,ClipDeleteTests,InputEntryTests,EntryTreeFuzzTests,MaskMemoryTests,HistoryGraphTests | --project-check,--delete-project-check,--input-entries-check
+Sources/Atelier/Queue/       | SavedQueueTests | --queue-check
+Sources/Atelier/Remote/      | RemoteFramingTests,RemotePairingTests,RemoteFilterTests,RemoteStoreTests,RemoteClientJobsTests,RemoteTraitsTests,RemoteClipTests,RemoteTailnetTests,RemoteStyleLibraryTests | --remote-check,--remote-net-check,--remote-url-check,--remote-tailnet-check,--remote-shots
+Sources/Atelier/Styles/      | StyleTests,StyleLibraryStoreTests,RemoteStyleLibraryTests | --styles-check
+Sources/Atelier/Timeline/    | TimelineLayoutTests,ClipTests | --timeline-check,--timeline-export-check,--playback-check
+Sources/Atelier/Upscale/     | ImageUpscaleTests | --upscale-check,--timeline-export-check
+Sources/Atelier/Upscale/FlashVSR/ | none | --flashvsr-check
+Sources/Atelier/Upscale/ReCaVSR/ | ReCaVSRTests | --recavsr-check
