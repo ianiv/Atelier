@@ -987,7 +987,7 @@ final class CanvasState {
   private static let levels: [Double] = [
     0.1, 0.125, 0.25, 1 / 3, 0.5, 2 / 3, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12, 16,
   ]
-  static let range = 0.05...32.0
+  nonisolated static let range = 0.05...32.0
 
   func zoomIn() {
     zoom(to: Self.levels.first { $0 > effectiveScale * 1.01 } ?? Self.range.upperBound)

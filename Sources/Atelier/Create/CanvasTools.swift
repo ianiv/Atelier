@@ -363,10 +363,9 @@ extension CreateModel {
   func showRegion(_ region: CGRect) -> CGRect? {
     guard canvasShowsImage, let image, let frameSize, region.width > 0, region.height > 0 else { return nil }
     let sourceSize = CGSize(width: image.width, height: image.height)
-    let wanted = CanvasPlacement.zoomAndOffset(showing: region, sourceSize: sourceSize, frameSize: frameSize)
-    let scale = min(max(wanted.scale, CanvasState.range.lowerBound), CanvasState.range.upperBound)
-    canvas.scale = scale
-    canvas.offset = CanvasPlacement.offset(centering: CGPoint(x: region.midX, y: region.midY), scale: scale, sourceSize: sourceSize)
+    let placement = FrameSelection.placement(showing: region, sourceSize: sourceSize, frameSize: frameSize)
+    canvas.scale = placement.scale
+    canvas.offset = placement.offset
     return canvasPlacement?.cropRect
   }
 
