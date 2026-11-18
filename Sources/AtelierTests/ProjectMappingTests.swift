@@ -4,6 +4,7 @@ import Foundation
 import ProjectFormat
 import Testing
 
+@Suite(.tags(.smoke))
 struct ProjectMappingTests {
   func step(lineage: Int64 = 2, time: Int64 = 3) -> ProjectMapping.Step {
     ProjectMapping.Step(

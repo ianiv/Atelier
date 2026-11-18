@@ -6,6 +6,7 @@ import Testing
 /// for steps 4-7. The engine swaps at the first step whose timestep is below
 /// `(1 - refinerStart) * 1000` (`DDIMSampler.sample`'s `refinerKickIn`), on the schedule
 /// `Denoiser.LinearDiscretization` gives DDIM Trailing; these pin that schedule and the default.
+@Suite(.tags(.smoke))
 struct RefinerKickInTests {
   /// The step at which the engine hands over, from the engine's own trailing schedule.
   private static func engineKickInStep(refinerStart: Float, steps: Int, shift: Double) -> Int {
@@ -61,6 +62,7 @@ struct RefinerKickInTests {
 
 /// A paired refiner (LongCat-Video Avatar 1.6's OPSD half) goes with its model when the model
 /// changes; a refiner the person picked stays (`ModelDefaults.refinerAfterModelSwitch`).
+@Suite(.tags(.smoke))
 struct RefinerModelSwitchTests {
   private static let opsd = ModelDefaults.longCat16OPSD
   private static let paired = ModelDefaults.pairedRefiners

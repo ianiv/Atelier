@@ -5,6 +5,7 @@ import Testing
 /// `SavedQueue.load` on a saved queue's files. MGK's `Configuration` has no public initializer and
 /// comes only from a loaded model, so a `GenerationEngine.Request` can't be made here and `save`
 /// isn't run; `--queue-check` covers the two together with a real model.
+@Suite(.tags(.smoke))
 struct SavedQueueTests {
   func entry(
     _ id: UUID = UUID(), model: String = "m.ckpt", project: String = "P", hasCanvas: Bool = false,

@@ -8,6 +8,7 @@ import Testing
 /// Input entries (`Project.appendEntry`): how `ProjectTree` lists and keys them beside the steps
 /// whose images they share, when one repeats another (`HistoryStore.isDuplicate`), and that
 /// deleting keeps a shared tensor until nothing uses it.
+@Suite(.tags(.smoke))
 struct InputEntryTests {
   private static func tensor(_ seed: Int = 0) throws -> Tensor<FloatType> {
     try #require(ImageTensor.tensor(from: CanvasRefineTests.pattern(width: 8 + seed, height: 8)))

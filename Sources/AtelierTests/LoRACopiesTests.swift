@@ -5,6 +5,7 @@ import Testing
 /// `ModelLibrary.linkingLoRACopies`: a missing LoRA and the 8-bit copy Draw Things left in its
 /// place are shown as one. The indexed version must give exactly what the pairwise one it replaced
 /// gave (`reference` below, kept verbatim), and stay fast with hundreds of each.
+@Suite(.tags(.smoke))
 struct LoRACopiesTests {
   private static let folder = URL(fileURLWithPath: "/tmp/models", isDirectory: true)
 

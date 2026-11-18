@@ -49,6 +49,7 @@ func smallImage() -> CGImage {
   return context.makeImage()!
 }
 
+@Suite(.tags(.smoke))
 struct HostTests {
   /// The tests run inside the app: this is what keeps it off the user's data at launch.
   @Test func theHostLaunchesAsAScriptedRun() {
@@ -57,6 +58,7 @@ struct HostTests {
   }
 }
 
+@Suite(.tags(.smoke))
 struct JSONValueTests {
   @Test func codableRoundTrip() throws {
     let value = JSONValue.object([
@@ -88,6 +90,7 @@ struct JSONValueTests {
   }
 }
 
+@Suite(.tags(.smoke))
 struct PNGTextTests {
   @Test func textReadsBackWhatWasInserted() throws {
     let png = try #require(ImageTensor.png(smallImage()))
@@ -108,6 +111,7 @@ struct PNGTextTests {
   }
 }
 
+@Suite(.tags(.smoke))
 struct SizePresetTests {
   @Test func snappingGoesToMultiplesOf64AndNeverBelow() {
     #expect(SizePreset.snap(1000) == 1024)
@@ -294,6 +298,7 @@ struct SizePresetTests {
   }
 }
 
+@Suite(.tags(.smoke))
 struct ClipTests {
   let clip = ClipInfo(clipId: 1, frames: [10, 11, 12, 13], framesPerSecond: 2, previewOffset: 100)
 
@@ -328,6 +333,7 @@ struct ClipTests {
   }
 }
 
+@Suite(.tags(.smoke))
 struct TimelineLayoutTests {
   /// Clips 1 and 2: 48 frames at 24 fps. Clip 3 is gone.
   func item(_ id: Int64) -> HistoryItem? {

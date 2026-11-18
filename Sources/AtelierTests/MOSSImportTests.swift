@@ -7,6 +7,7 @@ import Testing
 /// Importing MOSS Image fine-tunes saved by ComfyUI: the ConvRot Hadamard matrix, INT8 + ConvRot
 /// dequantization against a quantizer written the way comfy-kitchen's is, and a whole (tiny)
 /// ComfyUI-layout checkpoint converted to a store: prefixed names, fused q/k/v split.
+@Suite(.tags(.smoke))
 struct MOSSImportTests {
   /// A fixed sequence, so failures repeat.
   private struct Generator: RandomNumberGenerator {
