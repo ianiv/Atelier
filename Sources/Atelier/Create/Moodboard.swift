@@ -278,8 +278,11 @@ extension CanvasState {
   /// `image` drawn where `placement` puts it, in a frame of its size, with its `detail` layers
   /// (`Project.detailLayers`, in its pixels) drawn over it at their own resolution, so a zoomed
   /// frame takes the detail an earlier zoomed refine kept rather than the image's coarser pixels.
+  /// `paint` (`CanvasPaint`, in the image's pixels) goes over all of them, at the frame's own
+  /// pixels and only on the image, as the canvas shows it.
   nonisolated static func render(
-    _ image: CGImage, placement: CanvasPlacement, detail: [Project.DetailLayer] = []
+    _ image: CGImage, placement: CanvasPlacement, detail: [Project.DetailLayer] = [], paint: CanvasPaint? = nil,
+    paintFade: CanvasPaint.Fade? = nil
   ) -> CGImage? {
     let width = Int(placement.frameSize.width), height = Int(placement.frameSize.height)
     guard width > 0, height > 0,
@@ -297,7 +300,33 @@ extension CanvasState {
         width: layer.rect.width * zoom.x, height: layer.rect.height * zoom.y)
       context.draw(layer.image, in: CGRect(x: rect.minX, y: Double(height) - rect.maxY, width: rect.width, height: rect.height))
     }
+    if let paint { drawPaint(paint, in: context, placement: placement, fade: paintFade) }
     return context.makeImage()
+  }
+
+  /// `frame` (rendered for `placement`) with `paint` drawn over it, as `render` draws it.
+  nonisolated static func painting(_ frame: CGImage, with paint: CanvasPaint, placement: CanvasPlacement, fade: CanvasPaint.Fade? = nil)
+    -> CGImage?
+  {
+    let width = frame.width, height = frame.height
+    guard let context = CGContext(
+      data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+      space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    else { return nil }
+    context.draw(frame, in: CGRect(x: 0, y: 0, width: width, height: height))
+    drawPaint(paint, in: context, placement: placement, fade: fade)
+    return context.makeImage()
+  }
+
+  /// The paint at the frame's pixels, only on the image.
+  private nonisolated static func drawPaint(_ paint: CanvasPaint, in context: CGContext, placement: CanvasPlacement, fade: CanvasPaint.Fade?) {
+    let width = context.width, height = context.height
+    guard let layer = paint.layer(width: width, height: height, scale: placement.zoom, origin: placement.imageRect.origin, fade: fade)
+    else { return }
+    context.saveGState()
+    context.clip(to: placement.imageRectYUp)
+    context.draw(layer, in: CGRect(x: 0, y: 0, width: width, height: height))
+    context.restoreGState()
   }
 }
 

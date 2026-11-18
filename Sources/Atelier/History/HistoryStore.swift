@@ -48,7 +48,8 @@ nonisolated struct HistoryItem: Identifiable, Hashable, Sendable {
 
   /// What an input entry records, as Draw Things' history reasons (`tensor_history.fbs` `Reason`).
   nonisolated enum EntryReason: String, Sendable, Hashable, CaseIterable {
-    case imported, moodboard, cleared, mask
+    /// `draw`: the canvas image with its paint layer baked in (`CanvasPaint`), before a run.
+    case imported, moodboard, cleared, mask, draw
 
     var reason: ProjectFormat.Reason {
       switch self {
@@ -56,6 +57,7 @@ nonisolated struct HistoryItem: Identifiable, Hashable, Sendable {
       case .moodboard: .moodboard
       case .cleared: .clear
       case .mask: .mask
+      case .draw: .draw
       }
     }
 
@@ -65,6 +67,7 @@ nonisolated struct HistoryItem: Identifiable, Hashable, Sendable {
       case .moodboard: self = .moodboard
       case .clear: self = .cleared
       case .mask: self = .mask
+      case .draw: self = .draw
       default: return nil
       }
     }
@@ -76,6 +79,7 @@ nonisolated struct HistoryItem: Identifiable, Hashable, Sendable {
       case .moodboard: "Moodboard"
       case .cleared: "Cleared"
       case .mask: "Mask"
+      case .draw: "Draw"
       }
     }
   }
@@ -447,7 +451,9 @@ final class HistoryStore {
     var inputTensorId: Int64?
     // The input's image, which an entry shares with the canvas's own step.
     var inputImageTensorId: Int64?
-    if let canvas = request.merge?.source ?? request.canvas {
+    // With paint, the input is the painted frame (or the Draw entry holding it), not the
+    // unpainted source the result merges into.
+    if let canvas = request.merge.flatMap({ $0.painted ? nil : $0.source }) ?? request.canvas {
       if let key = request.canvasTensorId, let image = await imageTensor(ofKey: key, in: project) {
         inputImageTensorId = image
         inputTensorId = key
@@ -484,7 +490,11 @@ final class HistoryStore {
     } else {
       // A layered refine's bottom layer is its input's image, the step just found or saved.
       var refined = refined
-      if request.merge != nil, let inputImageTensorId { refined?.layers?.sourceTensorId = inputImageTensorId }
+      // With paint it's the unpainted source's own step (none for an image from outside: written
+      // afresh), never the painted input.
+      if let merge = request.merge, let inputImageTensorId {
+        refined?.layers?.sourceTensorId = merge.painted ? merge.sourceTensorId : inputImageTensorId
+      }
       // A layered refine's own image is its top layer: the frame.
       let image = refined?.layers.flatMap { ImageTensor.tensor(from: $0.frame) } ?? ImageTensor.rgb(output.frames[0])
       item = try await project.append(
@@ -503,6 +513,9 @@ final class HistoryStore {
     }
     if let resultMask {
       keepMask(resultMask, forImage: item.tensorId, size: refined.map { CGSize(width: $0.composite.width, height: $0.composite.height) }, in: project)
+      // A result starts with the mask it was made with hidden (`CreateModel.layersHidden`), shown
+      // on the canvas or not.
+      project.setStoredLayersHidden(true, forImage: item.tensorId)
     }
     if project === self.project {
       // A fork may have renumbered other steps.
@@ -826,6 +839,13 @@ final class HistoryStore {
     // A later image could be given a deleted one's tensor: don't let it inherit the mask either.
     let gone = await project.read { $0.pruneStoredMasks(keeping: $0.tree(items: false)) }
     if project === self.project { for tensorId in gone { storedMasks[tensorId] = nil } }
+    // Nor its paint, nor a deleted Draw entry's record.
+    await project.read {
+      let tree = $0.tree(items: false)
+      $0.pruneStoredPaint(keeping: tree)
+      $0.pruneStoredLayersHidden(keeping: tree)
+      $0.pruneStoredDrawRecords(keeping: tree)
+    }
     // A later image could be given a deleted one's tensor: don't let it inherit the rating.
     let kept = ratings.filter { byTensor[$0.key] != nil }
     if kept.count != ratings.count { ratings = kept; project.ratings = kept }
@@ -877,6 +897,18 @@ final class HistoryStore {
     keepMask(mask, forImage: tensorId, size: size, in: project)
   }
 
+  /// Whether the image's mask was hidden (`Project.storedLayersHidden`).
+  func storedLayersHidden(tensorId: Int64) async -> Bool {
+    let project = project
+    return await project.read { $0.storedLayersHidden(forImage: tensorId) }
+  }
+
+  /// Keeps whether the image's mask is hidden.
+  func setLayersHidden(_ hidden: Bool, forImage tensorId: Int64) {
+    guard tree.step(tensorId: tensorId) != nil else { return }
+    project.setStoredLayersHidden(hidden, forImage: tensorId)
+  }
+
   private func keepMask(_ mask: CanvasMask?, forImage tensorId: Int64, size: CGSize?, in project: Project) {
     let loaded = project === self.project
     if let mask, mask.mayHavePaint {
@@ -894,6 +926,43 @@ final class HistoryStore {
     } else {
       project.setStoredMask(nil, forImage: tensorId)
     }
+  }
+
+  // MARK: - Paint
+
+  /// The picture a Draw entry was painted on and its paint (`Project.DrawRecord`), when the entry
+  /// has a record and that image is still a step of the project; nil otherwise (an older entry, a
+  /// deleted image, one Draw Things wrote), and the entry's own baked image is all there is.
+  /// Its image must still be the size recorded (`Project.DrawRecord.fits`), checked once loaded.
+  func drawBase(ofEntry entry: HistoryItem) -> Project.DrawRecord? {
+    guard entry.entryReason == .draw, let record = project.storedDrawRecord(forEntry: entry.tensorId),
+          record.paint.mayHaveColor, tree.step(tensorId: record.baseTensorId) != nil
+    else { return nil }
+    return record
+  }
+
+  /// Keeps what the Draw entry `key` was painted on: the image `baseTensorId` of `size`, `paint`,
+  /// and the fade its image was made with.
+  func setDrawBase(_ paint: CanvasPaint, baseTensorId: Int64, size: CGSize, fade: CanvasPaint.Fade?, forEntry key: Int64) {
+    guard tree.step(tensorId: key) != nil, tree.step(tensorId: baseTensorId) != nil else { return }
+    project.setStoredDrawRecord(
+      Project.DrawRecord(
+        baseTensorId: baseTensorId, paint: paint.compacted(for: size), width: Int(size.width), height: Int(size.height), fade: fade),
+      forEntry: key)
+  }
+
+  /// The paint layer the image last had on the canvas (`CreateModel.canvasPaint`), in its pixels;
+  /// nil for none.
+  func storedPaint(tensorId: Int64) async -> CanvasPaint? {
+    let project = project
+    return await project.read { $0.storedPaint(forImage: tensorId) }
+  }
+
+  /// Keeps `paint` as the image's last paint layer, compacted for an image of `size`
+  /// (`CanvasPaint.compacted`); nil or one that shows nothing removes it.
+  func setPaint(_ paint: CanvasPaint?, forImage tensorId: Int64, size: CGSize?) {
+    guard tree.step(tensorId: tensorId) != nil else { return }
+    project.setStoredPaint(paint?.mayHaveColor == true ? paint?.compacted(for: size) : nil, forImage: tensorId)
   }
 
   /// Each image's newest Edit child's recorded mask (`refine_mask`, in the image's pixels), from

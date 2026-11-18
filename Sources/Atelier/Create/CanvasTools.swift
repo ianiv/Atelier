@@ -6,6 +6,7 @@ import SwiftUI
 /// and Space-drag moves. Select picks what to mask by clicking and dragging a box
 /// (`AutoMaskSession`).
 enum CanvasTool: String, CaseIterable, Identifiable {
+  /// Brush and Eraser work on the layer the Mask | Color switch picks (`CanvasLayer`).
   case move, brush, eraser, select
 
   var id: Self { self }
@@ -25,6 +26,24 @@ enum CanvasTool: String, CaseIterable, Identifiable {
     case .brush: "paintbrush.pointed"
     case .eraser: "eraser"
     case .select: "wand.and.sparkles"
+    }
+  }
+
+  /// Brush or Eraser: the tools that draw on a layer.
+  var drawsOnLayer: Bool { self == .brush || self == .eraser }
+}
+
+/// What Brush and Eraser draw on: the mask (the area a run regenerates) or the colours painted on
+/// the image (`CanvasPaint`). Picked with the Mask | Color switch, and remembered.
+enum CanvasLayer: String, CaseIterable, Identifiable {
+  case mask, color
+
+  var id: Self { self }
+
+  var title: String {
+    switch self {
+    case .mask: "Mask"
+    case .color: "Color"
     }
   }
 }
@@ -55,7 +74,7 @@ extension CreateModel {
   /// painted inside the frame where the canvas isn't empty (`CanvasMask.frameMask`). Rasterized
   /// once per mask and placement.
   var screenFrameHasPaint: Bool {
-    guard effectiveCanvasMode == .edit, videoModel == nil, let mask = canvasMask, mask.mayHavePaint,
+    guard effectiveCanvasMode == .edit, videoModel == nil, let mask = activeMask, mask.mayHavePaint,
           let image, let placement = canvasPlacement
     else { return false }
     let key = "\(mask.hashValue) \(ObjectIdentifier(image)) \(placement.imageRect) \(placement.frameSize)"
@@ -137,14 +156,163 @@ extension CreateModel {
 
   /// Replaces the mask as one undo step. It belongs to the image on the canvas: once another
   /// image is there the step leaves the history (`retireCanvasUndo`), and it never changes
-  /// another image's mask.
-  func setMask(_ mask: CanvasMask?, actionName: String, undoManager: UndoManager?) {
-    let previous = canvasMask
+  /// another image's mask. Changing a hidden mask shows it (`layersHidden`), in the same step.
+  func setMask(_ mask: CanvasMask?, actionName: String, undoManager: UndoManager?, hidden: Bool = false) {
+    let previous = canvasMask, previousHidden = layersHidden
     canvasMask = mask
+    layersHidden = hidden
     guard let undoManager, let image = canvasUndoImage else { return }
     registerCanvasUndo(on: image, undoManager: undoManager, actionName: actionName) { [weak self] in
-      self?.setMask(previous, actionName: actionName, undoManager: undoManager)
+      self?.setMask(previous, actionName: actionName, undoManager: undoManager, hidden: previousHidden)
     }
+  }
+
+  /// Show/Hide Mask and Paint: there's a mask or paint to show or hide.
+  var canToggleLayers: Bool {
+    canvasShowsImage && canvasImageIsCurrent && (canvasMask != nil || canvasPaint != nil)
+  }
+
+  /// Hides or shows the mask and the paint together, as one undo step: hidden, they're kept but
+  /// not drawn, and runs go as if there were neither (`activeMask`, `activePaint`).
+  func setLayersHidden(_ hidden: Bool, undoManager: UndoManager?) {
+    guard canToggleLayers, hidden != layersHidden else { return }
+    layersHidden = hidden
+    guard let undoManager, let image = canvasUndoImage else { return }
+    registerCanvasUndo(on: image, undoManager: undoManager, actionName: hidden ? "Hide Mask and Paint" : "Show Mask and Paint") {
+      [weak self] in self?.setLayersHidden(!hidden, undoManager: undoManager)
+    }
+  }
+
+  /// Mask Colored Areas: there are colours to mask, and a mask can be painted.
+  var canMaskColoredAreas: Bool {
+    canPaintMask && canvasPaint?.mayHaveColor == true
+  }
+
+  /// Mask Colored Areas: adds wherever the paint shows (`CanvasPaint.maskStroke`) to the mask, as
+  /// one undo step, showing a hidden mask.
+  @discardableResult
+  func maskColoredAreas(undoManager: UndoManager?) -> Bool {
+    guard canMaskColoredAreas, let image, let paint = canvasPaint,
+          let stroke = paint.maskStroke(width: image.width, height: image.height)
+    else { return false }
+    return addMaskStrokes([stroke], actionName: "Mask Colored Areas", undoManager: undoManager)
+  }
+
+  // MARK: Paint
+
+  /// The undo action name for paint changes an agent makes.
+  static let agentPaintActionName = "Agent Paint"
+
+  /// Colours can be painted on the canvas image: wherever the mask can change. Unlike a mask,
+  /// paint needs nothing of the run target: it goes in as part of the image.
+  var canPaintColor: Bool {
+    canEditMask
+  }
+
+  /// Fill Mask with Color: there's a mask to fill.
+  var canFillMask: Bool {
+    canPaintColor && canvasMask?.mayHavePaint == true
+  }
+
+  /// Why paint on the canvas would come to nothing in the next run, for the status bar: at
+  /// Strength 100% with no mask the whole frame is generated afresh.
+  var paintProblem: String? {
+    guard canvasShowsImage, canvasPaint?.mayHaveColor == true, videoModel == nil, canvasMode == .edit,
+          (settings?.strength ?? 1) >= 1, activeMask?.mayHavePaint != true, !layersHidden
+    else { return nil }
+    return "At Strength 100% the painted colors will be replaced: lower Strength, or mask what to regenerate."
+  }
+
+  /// Adds paint strokes (in the canvas image's pixels, from its top left) as one undo step. The
+  /// colours used go to the front of the recent ones. False when there's nothing to paint on.
+  @discardableResult
+  func addPaintStrokes(_ strokes: [CanvasPaint.Stroke], actionName: String = "Paint", undoManager: UndoManager?) -> Bool {
+    guard canPaintColor, !strokes.isEmpty else { return false }
+    var paint = canvasPaint ?? CanvasPaint()
+    paint.strokes += strokes
+    setPaint(paint, actionName: actionName, undoManager: undoManager)
+    for color in strokes.compactMap(\.color).reversed() { noteRecentPaintColor(color) }
+    return true
+  }
+
+  /// Puts `color` first among the recent colours (at most eight); one already there (the same at
+  /// 8 bits, `CanvasPaint.Color.matches`) moves to the front instead of coming in twice.
+  func noteRecentPaintColor(_ color: CanvasPaint.Color) {
+    var recent = recentPaintColors.filter { !$0.matches(color) }
+    recent.insert(color, at: 0)
+    recentPaintColors = Array(recent.prefix(8))
+  }
+
+  /// Clear Paint: there's paint on the canvas image, whatever the model or editor (a video model
+  /// still takes the paint into its first frame), as Clear Mask works on any mask there is.
+  var canClearPaint: Bool {
+    canvasShowsImage && canvasImageIsCurrent && canvasPaint != nil
+  }
+
+  func clearPaint(actionName: String = "Clear Paint", undoManager: UndoManager?) {
+    guard canClearPaint else { return }
+    setPaint(nil, actionName: actionName, undoManager: undoManager)
+  }
+
+  /// Fill Mask with Color: what the mask covers, filled with `color` (the paint colour by default),
+  /// as one undo step. The mask stays as it is.
+  @discardableResult
+  func fillMask(with color: CanvasPaint.Color? = nil, actionName: String = "Fill Mask", undoManager: UndoManager?) -> Bool {
+    guard canFillMask, let mask = canvasMask, let image,
+          let flat = mask.flattenedStroke(width: image.width, height: image.height),
+          let fill = CanvasPaint.Stroke.fill(flat, color: color ?? paintColor)
+    else { return false }
+    return addPaintStrokes([fill], actionName: actionName, undoManager: undoManager)
+  }
+
+  /// Select's Fill: the preview filled with the paint colour and the points cleared, as one undo
+  /// step, “Fill Selection”, which puts both back (as Add does for the mask,
+  /// `commitAutoMaskPreview`).
+  @discardableResult
+  func fillAutoMaskPreview(undoManager: UndoManager?) -> Bool {
+    guard canPaintColor, let preview = autoMask.preview, let image, image === preview.image, let stroke = preview.stroke,
+          let fill = CanvasPaint.Stroke.fill(stroke, color: paintColor)
+    else { return false }
+    undoManager?.beginUndoGrouping()
+    defer { undoManager?.endUndoGrouping() }
+    guard addPaintStrokes([fill], actionName: "Fill Selection", undoManager: undoManager) else { return false }
+    autoMask.change(to: AutoMaskPrompt(), actionName: "Fill Selection", model: self, undoManager: undoManager)
+    return true
+  }
+
+  /// Replaces the paint layer as one undo step, on the canvas image's own undo target as a mask
+  /// change is (`setMask`): it never reaches another image.
+  /// Changing hidden paint shows it and the mask (`layersHidden`), in the same step.
+  func setPaint(_ paint: CanvasPaint?, actionName: String, undoManager: UndoManager?, hidden: Bool = false) {
+    let previous = canvasPaint, previousHidden = layersHidden
+    canvasPaint = paint?.strokes.isEmpty == true ? nil : paint
+    layersHidden = hidden
+    guard let undoManager, let image = canvasUndoImage else { return }
+    registerCanvasUndo(on: image, undoManager: undoManager, actionName: actionName) { [weak self] in
+      self?.setPaint(previous, actionName: actionName, undoManager: undoManager, hidden: previousHidden)
+    }
+  }
+
+  /// New Sketch: an opaque white image the size of the frame on the canvas, brought in as any
+  /// image is (an Imported entry, Edit mode), with Brush on the Color layer picked to draw on it.
+  func newSketch() {
+    let size = frameSize ?? CGSize(width: 1024, height: 1024)
+    guard let blank = Self.blankImage(width: Int(size.width), height: Int(size.height)) else { return }
+    setCanvasImage(blank)
+    canvasTool = .brush
+    canvasLayer = .color
+  }
+
+  /// An opaque white image.
+  nonisolated static func blankImage(width: Int, height: Int) -> CGImage? {
+    guard width > 0, height > 0,
+          let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    else { return nil }
+    context.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1))
+    context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+    return context.makeImage()
   }
 
   // MARK: Undo on the canvas image
@@ -419,13 +587,16 @@ extension CanvasMask {
 
 // MARK: - Controls
 
-/// Move / Brush / Eraser, the brush size, Clear Mask and Invert Mask, in the status bar beside the
-/// zoom controls. Always there; disabled when there's nothing to paint on.
+/// Move / Brush / Eraser / Select, the Mask | Color switch (what Brush and Eraser draw on), the
+/// brush size of that layer, Mask Opacity and Show/Hide Mask and Paint, in the status bar beside the zoom
+/// controls. Always there; disabled when there's nothing to paint on. Invert and Clear Mask are in
+/// the mask's own bar (`MaskBar`).
 struct CanvasToolControls: View {
   @Environment(CreateModel.self) private var model
   @Environment(\.undoManager) private var undoManager
 
-  private static let sizes: [Double] = [8, 16, 32, 64, 128, 256]
+  static let sizes: [Double] = [8, 16, 32, 64, 128, 256]
+  private static let opacities: [Double] = [0, 0.25, 0.5, 0.75, 1]
 
   var body: some View {
     @Bindable var model = model
@@ -442,33 +613,61 @@ struct CanvasToolControls: View {
       .labelsHidden()
       .fixedSize()
       .help(Self.toolHelp)
-      .disabled(!paints)
+      // Color needs only an image to paint on; the mask tools check the target themselves.
+      .disabled(!edits)
+      Picker("Layer", selection: $model.canvasLayer) {
+        ForEach(CanvasLayer.allCases) { layer in
+          Text(layer.title).tag(layer)
+        }
+      }
+      .pickerStyle(.segmented)
+      .labelsHidden()
+      .fixedSize()
+      .help("What Brush and Eraser draw on: the mask (the area to regenerate) or colors on the image")
+      .disabled(!edits)
+      // One size, the current layer's: each layer keeps its own.
+      let colors = model.canvasLayer == .color
+      let size = colors ? model.paintBrushSize : model.brushSize
       Menu {
         ForEach(Self.sizes, id: \.self) { size in
-          Button("\(Int(size)) px") { model.brushSize = size }
+          Button("\(Int(size)) px") {
+            if colors { model.paintBrushSize = size } else { model.brushSize = size }
+          }
         }
       } label: {
-        Text("\(Int(model.brushSize)) px").monospacedDigit().frame(minWidth: 44).touchTarget()
+        Text("\(Int(size)) px").monospacedDigit().frame(minWidth: 44).touchTarget()
       }
       .menuIndicator(.hidden)
       .fixedSize()
-      .help("Brush Size, in frame pixels")
-      .disabled(!paints)
-      Button {
-        model.invertMask(undoManager: undoManager)
+      .help(colors ? "Color Brush Size, in frame pixels" : "Mask Brush Size, in frame pixels")
+      .disabled(colors ? !model.canPaintColor : !paints)
+      Menu {
+        Picker("Mask Opacity", selection: $model.maskOpacity) {
+          ForEach(Self.opacities, id: \.self) { opacity in
+            Text(opacity.formatted(.percent)).tag(opacity)
+          }
+        }
+        .pickerStyle(.inline)
       } label: {
-        Label("Invert Mask", systemImage: "circle.lefthalf.filled").touchTarget()
+        Label("Mask Opacity", systemImage: "circle.dotted.circle").touchTarget()
       }
-      .help("Invert Mask")
-      // Inverting nothing paints everything, which needs a target that takes masks.
-      .disabled(!edits || (model.canvasMask == nil && !paints))
-      Button {
-        model.clearMask(undoManager: undoManager)
-      } label: {
-        Label("Clear Mask", systemImage: "xmark.circle").touchTarget()
+      .menuIndicator(.hidden)
+      .fixedSize()
+      .help("Mask Opacity: how strongly the mask shows over the image. What a run regenerates stays the same.")
+      .disabled(model.image == nil || (model.layersHidden && model.canToggleLayers))
+      // Hidden, the mask is kept but not drawn and runs go without it.
+      Toggle(
+        isOn: Binding(get: { !model.layersHidden }, set: { model.setLayersHidden(!$0, undoManager: undoManager) })
+      ) {
+        Label(model.layersHidden ? "Show Mask and Paint" : "Hide Mask and Paint", systemImage: model.layersHidden ? "eye.slash" : "eye")
+          .touchTarget()
       }
-      .disabled(!edits || model.canvasMask == nil)
-      .help("Clear Mask")
+      .toggleStyle(.button)
+      .help(
+        model.layersHidden
+          ? "Show Mask and Paint: draw them again, and runs take them"
+          : "Hide Mask and Paint: keep them, but don't draw them or send them with runs")
+      .disabled(!model.canToggleLayers)
     }
     .labelStyle(.iconOnly)
     .buttonStyle(.borderless)
@@ -477,9 +676,9 @@ struct CanvasToolControls: View {
 
   private static var toolHelp: String {
     #if os(iOS)
-      "Paint the area to regenerate with Apple Pencil: Brush paints, Eraser erases. Fingers move and zoom."
+      "Paint with Apple Pencil: Brush paints, Eraser erases, on the mask (the area to regenerate) or the colors, as Mask | Color says. Fingers move and zoom."
     #else
-      "Move drags the image; Brush and Eraser paint the area to regenerate. Hold Space to drag the image while painting."
+      "Move drags the image; Brush and Eraser paint and erase the mask (the area to regenerate) or the colors, as Mask | Color says. Option-drag with Brush erases. Hold Space to drag the image while painting."
     #endif
   }
 }

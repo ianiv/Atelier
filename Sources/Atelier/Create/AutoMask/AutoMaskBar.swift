@@ -2,7 +2,8 @@ import SwiftUI
 
 /// The Select tool's controls, over the bottom of the canvas while Select is the tool: Select
 /// Subject (Vision, nothing to download), SAM 2.1's size and download, then Add / Subtract /
-/// Replace to put the preview into the mask, and Clear Points. Every control stays; ones that can't act are disabled.
+/// Replace to put the preview into the mask, Fill to paint it with the paint color, and Clear Points.
+/// Every control stays; ones that can't act are disabled.
 struct AutoMaskBar: View {
   @Environment(CreateModel.self) private var model
   @Environment(\.undoManager) private var undoManager
@@ -93,7 +94,7 @@ struct AutoMaskBar: View {
     #endif
   }
 
-  /// Add / Subtract / Replace and Clear Points.
+  /// Add / Subtract / Replace, Fill and Clear Points.
   @ViewBuilder private var committing: some View {
     let session = model.autoMask
     let paints = model.canPaintMask
@@ -106,6 +107,12 @@ struct AutoMaskBar: View {
       .disabled(!hasPreview || session.isBusy || (mode == .subtract ? model.canvasMask == nil : !paints))
       .help(Self.help(mode))
     }
+    // Into the paint layer instead of the mask.
+    Button("Fill") {
+      model.fillAutoMaskPreview(undoManager: undoManager)
+    }
+    .disabled(!hasPreview || session.isBusy || !model.canPaintColor)
+    .help("Fill the selection with the paint color (the Color layer's), leaving the mask as it is")
     Button("Clear Points", systemImage: "xmark.circle") {
       model.autoMask.clearPoints(model: model, undoManager: undoManager)
     }

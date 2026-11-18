@@ -232,6 +232,102 @@ final nonisolated class Project: Sendable {
   private static let maskKeyPrefix = "atelier_mask_"
   private static func maskKey(_ tensorId: Int64) -> String { maskKeyPrefix + String(tensorId) }
 
+  /// The paint layer an image last had on the canvas (`HistoryStore.setPaint`), under
+  /// `atelier_paint_<image tensor id>` as `CanvasPaint` JSON, kept as its mask is (`storedMask`):
+  /// by tensor, in the project file, which Draw Things ignores. Nil is no key; a cleared layer
+  /// removes it, as there's nothing older to fall back to.
+  func storedPaint(forImage tensorId: Int64) -> CanvasPaint? {
+    workspace.dictionary[Self.paintKey(tensorId), String.self]
+      .flatMap { try? JSONDecoder().decode(CanvasPaint.self, from: Data($0.utf8)) }
+  }
+
+  /// Keeps `paint` as the image's (`storedPaint`); nil removes the key.
+  func setStoredPaint(_ paint: CanvasPaint?, forImage tensorId: Int64) {
+    workspace.dictionary[Self.paintKey(tensorId), String.self] =
+      paint.flatMap { try? JSONEncoder().encode($0) }.map { String(decoding: $0, as: UTF8.self) }
+  }
+
+  /// The images with a kept paint layer. Reads every key (slow for a dictionary): for pruning.
+  func storedPaintImages() -> [Int64] {
+    workspace.dictionary.keys.filter { $0.hasPrefix(Self.paintKeyPrefix) }.compactMap { Int64($0.dropFirst(Self.paintKeyPrefix.count)) }
+  }
+
+  /// Removes the kept paint of images no step shows any more (deleted), as `pruneStoredMasks`
+  /// does for masks. Returns the images whose paint went.
+  @discardableResult
+  func pruneStoredPaint(keeping tree: ProjectTree) -> [Int64] {
+    let gone = storedPaintImages().filter { tree.step(tensorId: $0) == nil }
+    for tensorId in gone { setStoredPaint(nil, forImage: tensorId) }
+    return gone
+  }
+
+  /// What a Draw entry was painted on (`HistoryStore.drawBase`), under `atelier_draw_<entry key>`
+  /// as `DrawRecord` JSON: the entry's own image has the paint baked in, so this is how opening it
+  /// gets back the picture underneath with the paint as a layer that can still be changed.
+  func storedDrawRecord(forEntry key: Int64) -> DrawRecord? {
+    workspace.dictionary[Self.drawKeyPrefix + String(key), String.self]
+      .flatMap { try? JSONDecoder().decode(DrawRecord.self, from: Data($0.utf8)) }
+  }
+
+  /// Keeps `record` for the Draw entry `key`; nil removes it.
+  func setStoredDrawRecord(_ record: DrawRecord?, forEntry key: Int64) {
+    workspace.dictionary[Self.drawKeyPrefix + String(key), String.self] =
+      record.flatMap { try? JSONEncoder().encode($0) }.map { String(decoding: $0, as: UTF8.self) }
+  }
+
+  /// Removes the records of Draw entries no step is any more (deleted), and of those whose base
+  /// image is gone: a later image could be given its tensor id. Returns their keys.
+  @discardableResult
+  func pruneStoredDrawRecords(keeping tree: ProjectTree) -> [Int64] {
+    let gone = workspace.dictionary.keys.filter { $0.hasPrefix(Self.drawKeyPrefix) }
+      .compactMap { Int64($0.dropFirst(Self.drawKeyPrefix.count)) }
+      .filter { key in
+        tree.step(tensorId: key) == nil || storedDrawRecord(forEntry: key).map { tree.step(tensorId: $0.baseTensorId) == nil } ?? true
+      }
+    for key in gone { setStoredDrawRecord(nil, forEntry: key) }
+    return gone
+  }
+
+  /// A Draw entry's base: the image it was painted on (its tensor and pixel size, to tell it from
+  /// another image given the same tensor id later), the paint in its pixels, and how the entry's
+  /// image faded it (`CanvasPaint.Fade`, nil for none), which a run from it must match.
+  nonisolated struct DrawRecord: Codable, Hashable, Sendable {
+    var baseTensorId: Int64
+    var paint: CanvasPaint
+    var width: Int?
+    var height: Int?
+    var fade: CanvasPaint.Fade?
+
+    /// Whether `image` can be the base: the size recorded, if any.
+    func fits(_ image: CGImage) -> Bool {
+      (width ?? image.width) == image.width && (height ?? image.height) == image.height
+    }
+  }
+
+  /// Whether the image's mask was hidden (Show/Hide Mask, `CreateModel.layersHidden`), under
+  /// `atelier_layershidden_<image tensor id>` beside its mask: present when hidden.
+  func storedLayersHidden(forImage tensorId: Int64) -> Bool {
+    workspace.dictionary[Self.layersHiddenKeyPrefix + String(tensorId), String.self] != nil
+  }
+
+  func setStoredLayersHidden(_ hidden: Bool, forImage tensorId: Int64) {
+    workspace.dictionary[Self.layersHiddenKeyPrefix + String(tensorId), String.self] = hidden ? "1" : nil
+  }
+
+  /// Removes the hidden flags of images no step shows any more. Returns those images.
+  @discardableResult
+  func pruneStoredLayersHidden(keeping tree: ProjectTree) -> [Int64] {
+    let gone = workspace.dictionary.keys.filter { $0.hasPrefix(Self.layersHiddenKeyPrefix) }
+      .compactMap { Int64($0.dropFirst(Self.layersHiddenKeyPrefix.count)) }.filter { tree.step(tensorId: $0) == nil }
+    for tensorId in gone { setStoredLayersHidden(false, forImage: tensorId) }
+    return gone
+  }
+
+  private static let layersHiddenKeyPrefix = "atelier_layershidden_"
+  private static let drawKeyPrefix = "atelier_draw_"
+  private static let paintKeyPrefix = "atelier_paint_"
+  private static func paintKey(_ tensorId: Int64) -> String { paintKeyPrefix + String(tensorId) }
+
   /// A Draw Things canvas's painted mask, for the step whose image is `tensorId`, as one bitmap
   /// stroke in the composited image's pixels (`Self.paintedMask`); nil when no layer paints.
   /// Read-only: Atelier keeps its own masks as `storedMask`.
