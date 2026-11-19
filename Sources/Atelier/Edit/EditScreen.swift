@@ -1,11 +1,462 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The Edit screen (sidebar "Edit"): grain and colour grading of one image, previewed live and
-/// saved to History as a new step after it (Slice G fills it).
+/// saved to History as a new step after it, or exported. The preview takes the room the
+/// inspector leaves; the bottom bar holds the comparison, zoom and what to do with the result.
 struct EditScreen: View {
   @Environment(EditModel.self) private var edit
+  @Environment(HistoryStore.self) private var history
+  @Environment(FileDialogs.self) private var fileDialogs
+  /// Hold to See Original is pressed.
+  @State private var holding = false
+  @State private var error: String?
 
   var body: some View {
-    ContentUnavailableView("Edit", systemImage: Edit.symbol, description: Text("Grain and colour grading."))
+    VStack(spacing: 0) {
+      EditPreview(holding: holding)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      Divider()
+      bottomBar
+    }
+    .toolbar {
+      ToolbarItemGroup {
+        Button("Open Image…", systemImage: "folder") { EditFiles.openImage(edit, fileDialogs) }
+          .help("Open an image file to edit")
+        Button("Open from Photos…", systemImage: "photo.on.rectangle") { EditFiles.openPhoto(edit, fileDialogs) }
+          .help("Open a photo from the library to edit")
+        Button("Use Canvas Image", systemImage: "paintbrush") { Task { await edit.openCanvasImage() } }
+          .disabled(!edit.canUseCanvasImage)
+          .help("Edit the image on the Create screen's canvas")
+      }
+    }
+    .detailInspector(selection: 0, isEmpty: false, clearSelection: {}) {
+      EditInspector()
+        .inspectorColumnWidth(min: 280, ideal: 320, max: 440)
+    }
+    .navigationTitle("Edit")
+    // The step open at the last quit, once its project has loaded.
+    .task(id: history.isLoaded ? history.project.name : nil) {
+      guard history.isLoaded else { return }
+      await edit.restoreSession()
+    }
+    .alert(
+      "Something went wrong", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } }),
+      actions: { Button("OK") { error = nil } }, message: { Text(error ?? "") })
+  }
+
+  private var bottomBar: some View {
+    @Bindable var edit = edit
+    let canHold = edit.compareMode == .hold && edit.hasSource
+    return HStack(spacing: 12) {
+      Picker("Comparison", selection: $edit.compareMode) {
+        ForEach(Compare.Mode.allCases, id: \.self) { Text($0.title).tag($0) }
+      }
+      .pickerStyle(.segmented)
+      .labelsHidden()
+      .fixedSize()
+      // Pressed and held, not clicked: the original shows only while it's down.
+      Text("Hold to See Original")
+        .font(.callout)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(holding ? AnyShapeStyle(.tint.opacity(0.35)) : AnyShapeStyle(.quaternary), in: .capsule)
+        .contentShape(.capsule)
+        .onLongPressGesture(minimumDuration: 60, maximumDistance: 40, perform: {}, onPressingChanged: { holding = $0 && canHold })
+        .opacity(canHold ? 1 : 0.4)
+        .allowsHitTesting(canHold)
+        .accessibilityAddTraits(.isButton)
+        .help("Press and hold to see the original in place of the edit")
+      EditZoomControls(canvas: edit.canvas)
+        .disabled(!edit.hasSource || edit.compareMode == .slider)
+      Spacer(minLength: 8)
+      Group {
+        if edit.isExporting {
+          HStack(spacing: 6) {
+            ProgressView().controlSize(.small)
+            Text("Exporting…")
+          }
+        } else {
+          Text(edit.note ?? (edit.hasSource ? edit.saveProblem : nil) ?? edit.sourceTitle)
+            .lineLimit(1)
+            .truncationMode(.middle)
+        }
+      }
+      .font(.callout)
+      .foregroundStyle(.secondary)
+      Button("Reset") { edit.reset() }
+        .disabled(!edit.hasSource)
+        .help("Back to grain.py's default look, with no profile, reference or LUT")
+      Button("Add to History") {
+        Task {
+          do { try await edit.addToHistory() } catch { self.error = error.localizedDescription }
+        }
+      }
+      .disabled(!edit.isFromFile || !history.isLoaded)
+      .help("Put the opened image in the current project and save the edit after it")
+      Button("Save to History") {
+        do { try edit.save() } catch { self.error = error.localizedDescription }
+      }
+      .disabled(edit.saveProblem != nil)
+      .help("Render the edit at full size and save it as a new step after the image")
+      Button("Export…") { EditFiles.exportPNG(edit, fileDialogs) { self.error = $0 } }
+        .disabled(!edit.hasSource || edit.isExporting)
+        .help("Save the edit at full size as a PNG")
+    }
+    .padding(.horizontal, 12)
+    .frame(height: 40)
+  }
+}
+
+/// − / zoom level / +, as the Create screen's status bar has them.
+private struct EditZoomControls: View {
+  let canvas: CanvasState
+
+  var body: some View {
+    HStack(spacing: 2) {
+      Button { canvas.zoomOut() } label: { Label("Zoom Out", systemImage: "minus").touchTarget() }
+        .help("Zoom Out (⌘−)")
+      Menu {
+        Button("Zoom to Fit") { canvas.zoomToFit() }
+        Button("Zoom to Fill") { canvas.zoomToFill() }
+        Divider()
+        ForEach([0.25, 0.5, 1, 2, 4], id: \.self) { scale in
+          Button(scale.formatted(.percent)) { canvas.zoom(to: scale) }
+        }
+      } label: {
+        Text(canvas.scale == nil ? "Fit" : canvas.effectiveScale.formatted(.percent.precision(.fractionLength(0))))
+          .monospacedDigit()
+          .frame(minWidth: 44)
+          .touchTarget()
+      }
+      .menuIndicator(.hidden)
+      .fixedSize()
+      .help("Zoom level. Pinch or use ⌘+ and ⌘− to zoom, drag to move, double-click for actual size or to fit.")
+      Button { canvas.zoomIn() } label: { Label("Zoom In", systemImage: "plus").touchTarget() }
+        .help("Zoom In (⌘+)")
+    }
+    .labelStyle(.iconOnly)
+    .buttonStyle(.borderless)
+  }
+}
+
+/// The Open and Save panels the screen and its inspector ask for.
+@MainActor
+enum EditFiles {
+  static func openImage(_ edit: EditModel, _ dialogs: FileDialogs) {
+    dialogs.open = FileDialogs.Open(types: [.image]) { urls in
+      if let url = urls.first { edit.open(url: url) }
+    }
+  }
+
+  static func openPhoto(_ edit: EditModel, _ dialogs: FileDialogs) {
+    dialogs.photos = FileDialogs.Photos { photos, _ in
+      if let data = photos.first { edit.open(photo: data) } else { edit.note = "The photo couldn't be loaded." }
+    }
+  }
+
+  static func exportPNG(_ edit: EditModel, _ dialogs: FileDialogs, failed: @escaping @MainActor (String) -> Void) {
+    dialogs.save = FileDialogs.Save(
+      file: ExportedFile(type: .png) { try await edit.exportPNG() }, name: edit.exportName + ".png"
+    ) { result in
+      if case .failure(let error) = result { failed(error.localizedDescription) }
+    }
+  }
+}
+
+// MARK: - Preview
+
+/// Where the image sits in a pane, worked out from the zoom: what the preview renders (the whole
+/// image fitted, or zoomed past that only the part in view) and where it's drawn. `scale` is
+/// screen pixels per image pixel, so 100% is the image's own pixels on the screen's; `offset`
+/// moves the image's centre from the pane's, in points.
+nonisolated struct EditViewport: Equatable {
+  var imageWidth: Int
+  var imageHeight: Int
+  var viewSize: CGSize
+  var displayScale: Double
+  var scale: Double?
+  var offset: CGSize = .zero
+
+  /// Screen pixels per image pixel that fit the image in the pane.
+  var fitScale: Double {
+    guard imageWidth > 0, imageHeight > 0 else { return 1 }
+    return max(1e-3, min(viewSize.width * displayScale / Double(imageWidth), viewSize.height * displayScale / Double(imageHeight)))
+  }
+
+  /// Screen pixels per image pixel that cover the pane.
+  var fillScale: Double {
+    guard imageWidth > 0, imageHeight > 0 else { return 1 }
+    return max(1e-3, max(viewSize.width * displayScale / Double(imageWidth), viewSize.height * displayScale / Double(imageHeight)))
+  }
+
+  var zoom: Double { scale ?? fitScale }
+  var pointsPerPixel: Double { zoom / max(displayScale, 1e-3) }
+
+  /// The whole image's rectangle in the pane, in points.
+  var imageFrame: CGRect {
+    let width = Double(imageWidth) * pointsPerPixel, height = Double(imageHeight) * pointsPerPixel
+    return CGRect(
+      x: viewSize.width / 2 + offset.width - width / 2, y: viewSize.height / 2 + offset.height - height / 2,
+      width: width, height: height)
+  }
+
+  /// The fitted preview's size in pixels: the image at the fit scale, never above its own size.
+  var fitPixels: (width: Int, height: Int) {
+    let scale = min(1, fitScale)
+    return (max(1, Int((Double(imageWidth) * scale).rounded())), max(1, Int((Double(imageHeight) * scale).rounded())))
+  }
+
+  /// The part of the image to render on its own when the zoom is closer than the fitted preview
+  /// shows: the part in view plus a margin, on a 64 px grid (so a small move reuses the render),
+  /// at the zoom up to 1:1. Nil when the fitted preview is enough.
+  var window: EditPipeline.Window? {
+    guard imageWidth > 0, imageHeight > 0, zoom > min(1, fitScale) * 1.01 else { return nil }
+    let frame = imageFrame
+    let ppp = pointsPerPixel
+    let x0 = max(0, -frame.minX / ppp), y0 = max(0, -frame.minY / ppp)
+    let x1 = min(Double(imageWidth), (viewSize.width - frame.minX) / ppp)
+    let y1 = min(Double(imageHeight), (viewSize.height - frame.minY) / ppp)
+    guard x1 > x0, y1 > y0 else { return nil }
+    let grid = 64.0
+    let left = max(0, ((x0 - grid / 2) / grid).rounded(.down) * grid)
+    let top = max(0, ((y0 - grid / 2) / grid).rounded(.down) * grid)
+    let right = min(Double(imageWidth), ((x1 + grid / 2) / grid).rounded(.up) * grid)
+    let bottom = min(Double(imageHeight), ((y1 + grid / 2) / grid).rounded(.up) * grid)
+    guard right > left, bottom > top else { return nil }
+    return EditPipeline.Window(
+      x: Int(left), y: Int(top), width: Int(right - left), height: Int(bottom - top), scale: min(1, zoom))
+  }
+
+  /// Where a window's render is drawn, in points.
+  func frame(of window: EditPipeline.Window) -> CGRect {
+    let frame = imageFrame
+    let ppp = pointsPerPixel
+    return CGRect(
+      x: frame.minX + Double(window.x) * ppp, y: frame.minY + Double(window.y) * ppp,
+      width: Double(window.width) * ppp, height: Double(window.height) * ppp)
+  }
+}
+
+/// The preview, arranged as the comparison mode says: the edit (the original while Hold is
+/// pressed), the two side by side, or the slider.
+private struct EditPreview: View {
+  @Environment(EditModel.self) private var edit
+  @Environment(FileDialogs.self) private var fileDialogs
+  let holding: Bool
+  @State private var isTargeted = false
+
+  var body: some View {
+    Group {
+      if let image = edit.image {
+        switch edit.compareMode {
+        case .hold:
+          EditPane(image: image, showsOriginal: holding)
+        case .sideBySide:
+          HStack(spacing: 1) {
+            EditPane(image: image, showsOriginal: true, title: "Original")
+            EditPane(image: image, showsOriginal: false, title: "Edited")
+          }
+        case .slider:
+          EditSliderPane(image: image)
+            .padding(16)
+        }
+      } else {
+        ContentUnavailableView {
+          Label(edit.isLoading ? "Opening…" : "No image to edit", systemImage: Edit.symbol)
+        } description: {
+          Text("Open an image, take the one on the Create canvas, or drop an image here. Open in Edit, in History's and the canvas's menus, brings a step here.")
+        } actions: {
+          Button("Open Image…") { EditFiles.openImage(edit, fileDialogs) }
+          Button("Use Canvas Image") { Task { await edit.openCanvasImage() } }
+            .disabled(!edit.canUseCanvasImage)
+        }
+      }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(Color.underPageBackground)
+    .overlay {
+      if isTargeted { Rectangle().strokeBorder(Color.accentColor, lineWidth: 2).allowsHitTesting(false) }
+    }
+    .dropDestination(for: URL.self) { urls, _ in
+      guard let url = urls.first else { return false }
+      edit.open(url: url)
+      return true
+    } isTargeted: { isTargeted = $0 }
+  }
+}
+
+/// One pane of the preview: the edit rendered for what's in view, or the original, zoomed and
+/// moved with the screen's `CanvasState` (both panes of Side by Side share it).
+///
+/// The edit is drawn in two layers: the whole image fitted to the pane (rendered once per look
+/// and pane size), and, zoomed past that, the part in view rendered at the zoom (up to 1:1),
+/// laid over it where it belongs. Each renders in its own `.task(id:)`, so a newer look or a
+/// move cancels the render on its way; the last one stays up until the next arrives.
+private struct EditPane: View {
+  @Environment(EditModel.self) private var edit
+  @Environment(\.displayScale) private var displayScale
+  let image: CGImage
+  let showsOriginal: Bool
+  var title: String?
+  @State private var fitted: CGImage?
+  @State private var windowed: (window: EditPipeline.Window, image: CGImage)?
+  @State private var gestureStart: (scale: Double, offset: CGSize)?
+  @State private var failure: String?
+
+  /// What a render is for: a change to any of it renders again.
+  private struct RenderKey: Hashable {
+    var source: ObjectIdentifier
+    var options: EditOptions
+    var context: Int
+    var width: Int
+    var height: Int
+    var window: EditPipeline.Window?
+  }
+
+  var body: some View {
+    GeometryReader { geometry in
+      let canvas = edit.canvas
+      let viewport = EditViewport(
+        imageWidth: image.width, imageHeight: image.height, viewSize: geometry.size, displayScale: displayScale,
+        scale: canvas.scale, offset: canvas.offset)
+      let frame = viewport.imageFrame
+      let fit = viewport.fitPixels
+      let window = showsOriginal ? nil : viewport.window
+      ZStack(alignment: .topLeading) {
+        if showsOriginal {
+          // The source itself zoomed in; the fitted copy zoomed out, which draws smoother.
+          let picture = viewport.zoom > viewport.fitScale * 1.01 ? image : (edit.originalPreview ?? image)
+          Image(decorative: picture, scale: 1)
+            .resizable()
+            .interpolation(viewport.pointsPerPixel > 2 ? .none : .high)
+            .frame(width: frame.width, height: frame.height)
+            .offset(x: frame.minX, y: frame.minY)
+        } else {
+          if let fitted {
+            Image(decorative: fitted, scale: 1)
+              .resizable()
+              .interpolation(.high)
+              .frame(width: frame.width, height: frame.height)
+              .offset(x: frame.minX, y: frame.minY)
+          }
+          if window != nil, let windowed {
+            let rect = viewport.frame(of: windowed.window)
+            Image(decorative: windowed.image, scale: 1)
+              .resizable()
+              .interpolation(viewport.pointsPerPixel > 2 ? .none : .high)
+              .frame(width: rect.width, height: rect.height)
+              .offset(x: rect.minX, y: rect.minY)
+          }
+          if fitted == nil {
+            ProgressView().frame(width: geometry.size.width, height: geometry.size.height)
+          }
+        }
+      }
+      .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+      .clipped()
+      .overlay(alignment: .topLeading) {
+        if let title {
+          Text(title).font(.caption.weight(.medium))
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .glassEffect(.regular, in: .capsule)
+            .padding(8)
+        }
+      }
+      .overlay(alignment: .bottom) {
+        if let failure, !showsOriginal {
+          Text(failure).font(.caption).foregroundStyle(.red).padding(8)
+        }
+      }
+      .contentShape(.rect)
+      .gesture(
+        DragGesture(minimumDistance: 1)
+          .onChanged { value in
+            let start = gestureStart ?? (canvas.effectiveScale, canvas.offset)
+            gestureStart = start
+            canvas.scale = start.scale
+            canvas.offset = CGSize(width: start.offset.width + value.translation.width, height: start.offset.height + value.translation.height)
+          }
+          .onEnded { _ in gestureStart = nil }
+          .simultaneously(
+            with: MagnifyGesture()
+              .onChanged { value in
+                let start = gestureStart ?? (canvas.effectiveScale, canvas.offset)
+                gestureStart = start
+                let anchor = CGPoint(
+                  x: value.startLocation.x - geometry.size.width / 2, y: value.startLocation.y - geometry.size.height / 2)
+                canvas.offset = start.offset
+                canvas.scale = start.scale
+                canvas.zoom(to: start.scale * value.magnification, around: anchor)
+              }
+              .onEnded { _ in gestureStart = nil }))
+      .onTapGesture(count: 2) {
+        if canvas.scale == nil { canvas.zoom(to: 1) } else { canvas.zoomToFit() }
+      }
+      .onChange(of: viewport.fitScale, initial: true) { canvas.fitScale = viewport.fitScale }
+      .onChange(of: viewport.fillScale, initial: true) { canvas.fillScale = viewport.fillScale }
+      .task(id: showsOriginal ? nil : RenderKey(
+        source: ObjectIdentifier(image), options: edit.options, context: edit.contextVersion, width: fit.width, height: fit.height))
+      {
+        guard !showsOriginal else { return }
+        let renderer = edit.renderer, options = edit.options, context = edit.context
+        do {
+          fitted = try await renderer.preview(source: image, options: options, context: context, fitting: fit.width, height: fit.height)
+          failure = nil
+        } catch is CancellationError {
+        } catch {
+          failure = error.localizedDescription
+        }
+      }
+      .task(id: window.map {
+        RenderKey(source: ObjectIdentifier(image), options: edit.options, context: edit.contextVersion, width: 0, height: 0, window: $0)
+      }) {
+        guard let window else { return }
+        let renderer = edit.renderer, options = edit.options, context = edit.context
+        // A short pause first, so a drag in progress doesn't start a render per frame.
+        try? await Task.sleep(for: .milliseconds(40))
+        guard !Task.isCancelled,
+              let rendered = try? await renderer.window(source: image, options: options, context: context, window: window)
+        else { return }
+        windowed = (window, rendered)
+      }
+    }
+    .accessibilityElement()
+    .accessibilityLabel(showsOriginal ? "Original image" : "Edited image")
+    .accessibilityAddTraits(.isImage)
+  }
+}
+
+/// The Slider comparison: the fitted edit and the original, as Match Colors… compares them.
+private struct EditSliderPane: View {
+  @Environment(EditModel.self) private var edit
+  @Environment(\.displayScale) private var displayScale
+  let image: CGImage
+  @State private var fitted: CGImage?
+
+  private struct RenderKey: Hashable {
+    var source: ObjectIdentifier
+    var options: EditOptions
+    var context: Int
+    var width: Int
+    var height: Int
+  }
+
+  var body: some View {
+    GeometryReader { geometry in
+      let viewport = EditViewport(
+        imageWidth: image.width, imageHeight: image.height,
+        viewSize: CGSize(width: geometry.size.width, height: max(1, geometry.size.height - 22)), displayScale: displayScale)
+      let fit = viewport.fitPixels
+      SliderComparison(
+        matched: fitted, original: edit.originalPreview ?? image, matchedNote: "Rendering…",
+        shape: CGSize(width: image.width, height: image.height), matchedTitle: "Edited")
+        .task(id: RenderKey(source: ObjectIdentifier(image), options: edit.options, context: edit.contextVersion, width: fit.width, height: fit.height)) {
+          let renderer = edit.renderer, options = edit.options, context = edit.context
+          guard let rendered = try? await renderer.preview(source: image, options: options, context: context, fitting: fit.width, height: fit.height)
+          else { return }
+          fitted = rendered
+        }
+    }
   }
 }

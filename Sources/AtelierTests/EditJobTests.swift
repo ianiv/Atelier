@@ -339,3 +339,67 @@ struct EditProjectDataTests {
     await project.close()
   }
 }
+
+/// The Edit screen's model, the parts that need no window: remembered settings, which step an
+/// edited step opens as, and what the zoomed preview renders.
+struct EditModelTests {
+  @Test func rememberedOptionsRoundTripSnapped() throws {
+    var look = EditOptions.grainDefaults
+    look.grade.exposure = 0.123456
+    look.grain.seed = 99
+    look.lut = EditOptions.LUTRef(name: "Film.cube", digest: "abc", strength: 0.5)
+    let data = try #require(EditModel.encodeRemembered(look))
+    #expect(EditModel.decodeRemembered(data) == look.snapped)
+    // A setting missing from what was remembered starts as the default look has it.
+    let partial = Data(#"{"grade":{"exposure":1}}"#.utf8)
+    var expected = EditOptions.grainDefaults
+    expected.grade.exposure = 1
+    #expect(EditModel.decodeRemembered(partial) == expected)
+    #expect(EditModel.decodeRemembered(Data("not json".utf8)) == EditOptions.grainDefaults)
+  }
+
+  @Test func anEditedStepOpensAsItsSource() async throws {
+    let folder = FileManager.default.temporaryDirectory.appending(path: "EditModelTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let project = Project(url: folder.appending(path: "Reopen.sqlite3"))
+    func append(after parent: Int64?, _ job: Edit.Job? = nil) async throws -> HistoryItem {
+      let tensor = try #require(ImageTensor.tensor(from: CanvasRefineTests.pattern(width: 8, height: 8)))
+      return try await project.append(
+        tensor: tensor, model: "m", prompt: "p", negativePrompt: "", seed: 1, settings: [:], createdAt: Date(), duration: 0,
+        after: parent, edit: job?.record, editBlobs: job?.blobs ?? Edit.Blobs())
+    }
+    let source = try await append(after: nil)
+    let edited = try await append(after: source.tensorId, EditJobTests.job(source: source.tensorId))
+    let tree = await project.read { $0.tree() }
+    let record = try #require(tree.items.values.first { $0.tensorId == edited.tensorId }?.sidecar.edit)
+    #expect(EditModel.reopening(record, in: tree)?.tensorId == source.tensorId)
+    #expect(record.options == EditJobTests.job().options)
+    // Its source gone, there's nothing to go back to.
+    _ = try await project.delete(tensorId: source.tensorId)
+    let after = await project.read { $0.tree() }
+    #expect(EditModel.reopening(record, in: after) == nil)
+    await project.close()
+  }
+
+  @Test func theFittedPreviewIsEnoughUntilZoomedPastIt() {
+    var viewport = EditViewport(imageWidth: 4000, imageHeight: 3000, viewSize: CGSize(width: 800, height: 600), displayScale: 2)
+    #expect(viewport.fitScale == 0.4)
+    #expect(viewport.fitPixels.width == 1600 && viewport.fitPixels.height == 1200)
+    #expect(viewport.window == nil)
+    viewport.scale = 1
+    // 100%: the middle 1600 × 1200 image pixels are in view, rendered 1:1 with a margin on a grid.
+    let window = try? #require(viewport.window)
+    #expect(window?.scale == 1)
+    #expect(window.map { $0.x <= 1200 && $0.x + $0.width >= 2800 && $0.x % 64 == 0 } == true)
+    #expect(window.map { $0.y <= 900 && $0.y + $0.height >= 2100 } == true)
+    // Drawn where that part of the image is.
+    if let window {
+      let frame = viewport.frame(of: window)
+      #expect(abs(frame.minX - (400 - 1000 + Double(window.x) / 2)) < 1e-9)
+    }
+    // A small image already shown 1:1 fitted needs no window when zoomed to 100%.
+    let small = EditViewport(imageWidth: 400, imageHeight: 300, viewSize: CGSize(width: 800, height: 600), displayScale: 2, scale: 1)
+    #expect(small.window == nil)
+  }
+}

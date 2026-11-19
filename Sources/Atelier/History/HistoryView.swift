@@ -7,6 +7,7 @@ struct HistoryView: View {
   @Environment(HistoryStore.self) private var history
   @Environment(CreateModel.self) private var create
   @Environment(Navigation.self) private var navigation
+  @Environment(EditModel.self) private var edit
   @Environment(FileDialogs.self) private var fileDialogs
   @Environment(TimelineStore.self) private var timelines
   @Environment(\.undoManager) private var undoManager
@@ -619,6 +620,11 @@ struct HistoryView: View {
         .disabled(!item.hasImage)
       ShareItem(exports: shareExports([item]), anchor: ShareAnchor.historyCell(item.tensorId))
       Divider()
+      Button("Open in Edit") {
+        Task { await edit.open(item) }
+        navigation.section = .edit
+      }
+      .disabled(item.isVideo || !item.hasImage)
       MaskMenu(item: item, undoManager: undoManager)
       if item.isVideo {
         Divider()

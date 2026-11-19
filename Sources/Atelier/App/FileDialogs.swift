@@ -68,12 +68,16 @@ nonisolated struct ExportedFile: Transferable {
     DataRepresentation(exportedContentType: .mpeg4Movie) { try await $0.data() }
     DataRepresentation(exportedContentType: .markdownText) { try await $0.data() }
     DataRepresentation(exportedContentType: .html) { try await $0.data() }
+    DataRepresentation(exportedContentType: .cubeLUT) { try await $0.data() }
   }
 }
 
 nonisolated extension UTType {
   /// Markdown, as style files are written (docs/styles.md).
   static let markdownText = UTType("net.daringfireball.markdown") ?? .plainText
+  /// A 3D LUT in Adobe's `.cube` text format (the Edit screen's Load .cube… and Export LUT…),
+  /// which the system declares no type for.
+  static let cubeLUT = UTType(filenameExtension: "cube", conformingTo: .plainText) ?? .plainText
 }
 
 extension View {

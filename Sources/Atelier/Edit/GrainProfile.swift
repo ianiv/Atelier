@@ -89,7 +89,7 @@ nonisolated struct GrainProfile: Codable, Hashable, Sendable {
       options.grade.tint = tint
       options.grade.exposure = expo
       options.grain.real = real
-      options.grain.seed = seed ?? 7
+      if let seed { options.grain.seed = seed }
       return options
     }
 

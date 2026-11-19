@@ -67,6 +67,8 @@ enum Automation {
 
   /// The app's Compute server, for the checks that look at its Settings.
   static var remoteServer: RemoteServer?
+  /// The app's Edit screen, for the window snapshots host and the Edit checks.
+  static var editModel: EditModel?
   /// Opens the Settings window, set once a window is up (`openSettings` comes from a view).
   static var openSettingsWindow: (() -> Void)?
 
@@ -1530,6 +1532,7 @@ enum Automation {
         .environment(model.styles ?? StyleStore(persists: false))
         .environment(library ?? ModelLibrary(create: model))
         .environment(FileDialogs())
+        .environment(editModel ?? EditModel())
         .frame(width: 1280, height: 860)
     }, size: CGSize(width: 1280, height: 860))
   }

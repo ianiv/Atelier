@@ -31,6 +31,32 @@ nonisolated struct SessionState: Codable {
   }
 }
 
+/// The Edit screen's image at quit, a step of a project by its tensor (which a renumbering
+/// doesn't change), so a relaunch opens it again. Kept apart from `SessionState`, which the Create
+/// screen writes whole; like it, scripted runs neither read nor write it.
+nonisolated struct EditSession: Codable, Equatable {
+  var project: String
+  var tensorId: Int64
+
+  private static let key = "editSession"
+
+  static func load(_ defaults: UserDefaults = .standard) -> EditSession? {
+    guard SessionState.isEnabled, let data = defaults.data(forKey: key) else { return nil }
+    return try? JSONDecoder().decode(EditSession.self, from: data)
+  }
+
+  func save(_ defaults: UserDefaults = .standard) {
+    guard SessionState.isEnabled, let data = try? JSONEncoder().encode(self) else { return }
+    defaults.set(data, forKey: Self.key)
+  }
+
+  /// An image that isn't a step was opened: nothing to bring back.
+  static func clear(_ defaults: UserDefaults = .standard) {
+    guard SessionState.isEnabled else { return }
+    defaults.removeObject(forKey: key)
+  }
+}
+
 /// The one deadline every will-terminate handler that waits for writes shares (the moodboard's
 /// files, input entries still to be recorded), so together they stay within the few seconds iOS
 /// gives an app that's ending. The first handler to ask starts it; the later ones get what's left.

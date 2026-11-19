@@ -145,6 +145,8 @@ struct RunOnPicker: View {
 /// are the image input (`CanvasState.render`).
 struct CanvasView: View {
   @Environment(CreateModel.self) private var model
+  @Environment(EditModel.self) private var edit
+  @Environment(Navigation.self) private var navigation
   @Environment(HistoryStore.self) private var history
   /// The zoom and offset when the current pinch or drag began.
   @State private var gestureStart: (scale: Double, offset: CGSize)?
@@ -789,6 +791,11 @@ struct CanvasView: View {
       .disabled(!model.canMatchCanvasColors)
     Button("Match Colors…") { model.colorMatchSheetItem = model.imageItem }
       .disabled(!model.canOpenMatchColors)
+    Button("Open in Edit") {
+      Task { await edit.openCanvasImage() }
+      navigation.section = .edit
+    }
+    .disabled(!edit.canUseCanvasImage)
     Divider()
     MaskCopyItems(model: model, undoManager: undoManager)
     Button("Fill Mask with Color") { model.fillMask(undoManager: undoManager) }

@@ -22,7 +22,7 @@ struct AtelierApp: App {
   @State private var fileDialogs = FileDialogs()
   /// The Edit screen's state; it lives as long as the app so the image and look survive
   /// switching screens.
-  @State private var edit = EditModel()
+  @State private var edit: EditModel
   @AppStorage("inspectorShown") private var inspectorShown = true
   @AppStorage("moodboardShown") private var moodboardShown = true
 
@@ -44,6 +44,9 @@ struct AtelierApp: App {
     _create = State(initialValue: create)
     let navigation = Navigation()
     _navigation = State(initialValue: navigation)
+    let edit = EditModel()
+    edit.create = create
+    _edit = State(initialValue: edit)
     let layouts = LayoutStore()
     _layouts = State(initialValue: layouts)
     let presets = PresetStore()
@@ -68,6 +71,7 @@ struct AtelierApp: App {
       _agents = State(initialValue: AgentServer(create: create, presets: presets))
       AppLifecycle.workUnderway = { create.workUnderway }
       Automation.remoteServer = remoteServer
+      Automation.editModel = edit
       // Started here rather than from a view's .task: SwiftUI doesn't put windows up while the
       // screen is locked, and scripted checks still need to run then.
       Task { @MainActor in
@@ -108,6 +112,9 @@ struct AtelierApp: App {
         Divider()
         if navigation.section == .videoEditor {
           TimelineZoomMenuItems(store: create.timelines, history: history)
+        } else if navigation.section == .edit {
+          ZoomMenuItems(canvas: edit.canvas)
+            .disabled(!edit.hasSource || edit.compareMode == .slider)
         } else {
           // The full-size viewer takes the same shortcuts for its own zoom.
           ZoomMenuItems(canvas: create.canvas)

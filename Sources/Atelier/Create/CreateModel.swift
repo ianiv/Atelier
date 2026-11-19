@@ -2928,20 +2928,7 @@ final class CreateModel {
         queue.setColorMatchRecord(record, id: job.id)
         if job.id == foregroundJobID { step = 1_000 }
         if project === history.project {
-          lastSavedTensorId = saved.tensorId
-          if followsRun() {
-            imageStep = (history.project.name, saved.tensorId)
-            canvasBeforePreview = nil
-            previewCoversCanvas = false
-            canvasIsImported = false
-            image = matched
-            canvas.zoomToFit()
-            // A new step, with no mask or paint of its own yet.
-            landedMask = (saved.tensorId, canvasMask)
-            maskPendingTensorId = nil
-            landedPaint = (saved.tensorId, nil)
-            paintPendingTensorId = nil
-          }
+          landSavedImage(matched, tensorId: saved.tensorId, onCanvas: followsRun())
           statusNote = shift.summary
         }
         if let failure = await history.writeToOutputFolder(saved, image: matched, in: project) { errorMessage = failure }
@@ -2958,6 +2945,32 @@ final class CreateModel {
       finish(job, status: status, inputTensorId: inputTensorId, inOpenProject: inOpenProject)
     }
     track(task, for: job)
+  }
+
+  /// A job that made one image from another (Match Colors to Original, Edit) saved it into the
+  /// open project as `tensorId`: it's the last saved step, and with `onCanvas` (the canvas
+  /// follows the run) the canvas shows it, as a generation's result does.
+  func landSavedImage(_ saved: CGImage, tensorId: Int64, onCanvas: Bool) {
+    lastSavedTensorId = tensorId
+    guard onCanvas else { return }
+    imageStep = (history.project.name, tensorId)
+    canvasBeforePreview = nil
+    previewCoversCanvas = false
+    canvasIsImported = false
+    image = saved
+    canvas.zoomToFit()
+    // A new step, with no mask or paint of its own yet.
+    landedMask = (tensorId, canvasMask)
+    maskPendingTensorId = nil
+    landedPaint = (tensorId, nil)
+    paintPendingTensorId = nil
+  }
+
+  /// Sets the foreground run's step (of `totalSteps`), for a job run from another file.
+  func setRunStep(_ value: Int, _ job: JobQueue.Job) {
+    guard job.id == foregroundJobID, phase != .cancelling else { return }
+    step = value
+    syncBackgroundTask()
   }
 
   nonisolated enum ColorMatchError: LocalizedError {
