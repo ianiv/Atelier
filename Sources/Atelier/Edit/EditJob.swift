@@ -161,12 +161,16 @@ nonisolated enum Edit {
     /// The context, with the data the record names: from the queued job, or loaded from the
     /// project (`Project.editContext(for:)`). Data whose digest isn't the record's is left out.
     func context(with blobs: Blobs) -> EditPipeline.Context {
-      EditPipeline.Context(
-        refWidth: refWidth, curve: curve, refStats: refStats,
-        realNoise: blobs.realNoise.flatMap { realNoise?.digest == $0.digest ? $0 : nil },
-        referenceLab: referenceLab,
-        referenceHistogram: blobs.referenceHistogram.flatMap { referenceHistogram?.digest == $0.digest ? $0 : nil },
-        lut: blobs.lut.flatMap { lut?.digest == $0.digest ? $0 : nil })
+      // Each digest is taken once, here, and the context keeps the record's for what matched.
+      let noise = blobs.realNoise.flatMap { realNoise?.digest == $0.digest ? $0 : nil }
+      let histogram = blobs.referenceHistogram.flatMap { referenceHistogram?.digest == $0.digest ? $0 : nil }
+      let table = blobs.lut.flatMap { lut?.digest == $0.digest ? $0 : nil }
+      return EditPipeline.Context(
+        refWidth: refWidth, curve: curve, refStats: refStats, realNoise: noise, referenceLab: referenceLab,
+        referenceHistogram: histogram, lut: table,
+        digests: EditPipeline.Context.Digests(
+          realNoise: noise == nil ? nil : realNoise?.digest, referenceHistogram: histogram == nil ? nil : referenceHistogram?.digest,
+          lut: table == nil ? nil : lut?.digest))
     }
 
     /// What makes the image: everything but the names and where the data is stored, the options

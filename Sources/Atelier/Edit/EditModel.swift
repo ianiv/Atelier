@@ -379,21 +379,17 @@ final class EditModel {
     isMeasuring = true
     defer { isMeasuring = false }
     let name = reference.name
-    async let measuring = EditPipeline.measureReference(picture, name: name, source: name)
-    let report = await Self.matchReport(of: picture)
-    guard let measured = try? await measuring, let made = measured.profile else {
+    guard let measured = try? await EditPipeline.measureReference(picture, name: name, source: name), let made = measured.profile else {
       note = "The reference has no flat, mid-bright area to measure its grain on."
       return
     }
     applyProfile(made)
-    matchReport = report
+    matchReport = measured.match.map(Self.matchReport)
   }
 
   /// grain.py's printed comparison: the reference's grain shape and colour blotches against the
-  /// matched synthetic grain's. Measured apart from `measureReference`, whose result keeps only
-  /// the profile.
-  @concurrent private nonisolated static func matchReport(of image: CGImage) async -> String? {
-    guard let planes = EditPipeline.Planes(image), let match = Grain.matchReference(planes) else { return nil }
+  /// matched synthetic grain's.
+  private nonisolated static func matchReport(_ match: Grain.Match) -> String {
     func list(_ values: [Double]) -> String { values.map { String(format: "%.2f", $0) }.joined(separator: " ") }
     return """
     Grain shape: ref \(list(match.reference.yAC)) vs ours \(list(match.ours.luma.yAC))

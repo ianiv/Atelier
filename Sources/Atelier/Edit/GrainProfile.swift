@@ -266,6 +266,11 @@ nonisolated struct GrainProfile: Codable, Hashable, Sendable {
 
   init?(measuring planes: EditPipeline.Planes, name: String, source: String? = nil, created: Date = Date()) {
     guard let match = Grain.matchReference(planes) else { return nil }
+    self.init(match: match, of: planes, name: name, source: source, created: created)
+  }
+
+  /// The profile of a reference `planes` that Match Reference has already measured (`match`).
+  init(match: Grain.Match, of planes: EditPipeline.Planes, name: String, source: String? = nil, created: Date = Date()) {
     var settings = Settings()
     settings.size = match.size
     settings.csize = match.csize

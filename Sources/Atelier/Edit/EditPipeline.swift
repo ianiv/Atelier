@@ -23,18 +23,41 @@ nonisolated enum EditPipeline {
     /// The profile's reference RGB mean and spread, for `Match.colour`.
     var refStats: GrainProfile.ChannelStats?
     /// The profile's real-noise patches, for `Grain.real`.
-    var realNoise: GrainProfile.RealNoise?
+    var realNoise: GrainProfile.RealNoise? { didSet { digests.realNoise = realNoise?.digest } }
     /// The match target's Lab statistics, for the Reinhard match.
     var referenceLab: Edit.LabStats?
     /// The match target's cumulative histograms, for `Histogram`.
-    var referenceHistogram: Edit.HistogramTable?
+    var referenceHistogram: Edit.HistogramTable? { didSet { digests.referenceHistogram = referenceHistogram?.digest } }
     /// The LUT's table, for `EditOptions.lut`.
-    var lut: Edit.LUTTable?
+    var lut: Edit.LUTTable? { didSet { digests.lut = lut?.digest } }
+    /// The large data's digests, taken when it's set rather than on every render (the renderer's
+    /// cache keys name the data by them; a SHA-256 of the noise, LUT and histograms is about a
+    /// millisecond). Derived from the data, so it never disagrees with it.
+    private(set) var digests = Digests()
+
+    /// `realNoise.digest`, `referenceHistogram.digest` and `lut.digest`; nil where there's none.
+    struct Digests: Codable, Hashable, Sendable {
+      var realNoise: String?
+      var referenceHistogram: String?
+      var lut: String?
+    }
 
     init(
       refWidth: Int = 1440, curve: [Double]? = nil, refStats: GrainProfile.ChannelStats? = nil,
       realNoise: GrainProfile.RealNoise? = nil, referenceLab: Edit.LabStats? = nil,
       referenceHistogram: Edit.HistogramTable? = nil, lut: Edit.LUTTable? = nil
+    ) {
+      self.init(
+        refWidth: refWidth, curve: curve, refStats: refStats, realNoise: realNoise, referenceLab: referenceLab,
+        referenceHistogram: referenceHistogram, lut: lut,
+        digests: Digests(realNoise: realNoise?.digest, referenceHistogram: referenceHistogram?.digest, lut: lut?.digest))
+    }
+
+    /// A context whose data's digests are already known (`Edit.Record.context(with:)`, which has
+    /// just checked them against the record's), so they aren't taken again.
+    init(
+      refWidth: Int, curve: [Double]?, refStats: GrainProfile.ChannelStats?, realNoise: GrainProfile.RealNoise?,
+      referenceLab: Edit.LabStats?, referenceHistogram: Edit.HistogramTable?, lut: Edit.LUTTable?, digests: Digests
     ) {
       self.refWidth = refWidth
       self.curve = curve
@@ -43,6 +66,7 @@ nonisolated enum EditPipeline {
       self.referenceLab = referenceLab
       self.referenceHistogram = referenceHistogram
       self.lut = lut
+      self.digests = digests
     }
 
     /// The context with nothing loaded: no profile, reference or LUT.
@@ -410,6 +434,9 @@ nonisolated enum EditPipeline {
     /// grain.py's `--match --save-profile` profile of the reference; nil when it has no flat,
     /// mid-bright area to measure grain on, or when it wasn't asked for.
     var profile: GrainProfile?
+    /// What Match Reference found, behind `profile` (its comparison of the reference's grain with
+    /// Atelier's at the fitted sizes, for the screen's report); nil when `profile` is.
+    var match: Grain.Match?
 
     /// `context` with the reference's Lab statistics and histograms, and its profile's grain data
     /// when there is one.
@@ -432,8 +459,9 @@ nonisolated enum EditPipeline {
     let lab = ReferenceMatch.labStats(of: planes)
     let histogram = HistogramMatch.table(of: planes)
     try Task.checkCancellation()
-    let measured = profile ? GrainProfile(measuring: planes, name: name, source: source) : nil
-    return ReferenceMeasurement(lab: lab, histogram: histogram, profile: measured)
+    let match = profile ? Grain.matchReference(planes) : nil
+    let measured = match.map { GrainProfile(match: $0, of: planes, name: name, source: source) }
+    return ReferenceMeasurement(lab: lab, histogram: histogram, profile: measured, match: match)
   }
 }
 
@@ -587,7 +615,7 @@ actor EditRenderer {
     }
     var realField: [[Float]]?
     if grain.real > 0, let real = context.realNoise, real.count > 0 {
-      let key = RealKey(source: id, digest: real.digest, refWidth: context.refWidth, seed: grain.seed, layout: layout)
+      let key = RealKey(source: id, digest: context.digests.realNoise ?? "", refWidth: context.refWidth, seed: grain.seed, layout: layout)
       if case .real(let cached)? = await lookup(.real(key)) {
         realField = cached
       } else {
@@ -859,9 +887,9 @@ actor EditRenderer {
       options.grain = .identity
       self.options = options
       referenceLab = EditPipeline.matchesLab(options, context) ? context.referenceLab : nil
-      histogram = EditPipeline.matchesHistogram(options, context) ? context.referenceHistogram?.digest : nil
+      histogram = EditPipeline.matchesHistogram(options, context) ? context.digests.referenceHistogram : nil
       refStats = EditPipeline.matchesColour(options, context) ? context.refStats : nil
-      lut = options.lut.isIdentity ? nil : context.lut?.digest ?? ""
+      lut = options.lut.isIdentity ? nil : context.digests.lut ?? ""
       self.geometry = geometry
     }
   }

@@ -232,7 +232,7 @@ nonisolated enum Grain {
       return (radius * Foundation.cos(angle), radius * Foundation.sin(angle))
     }
 
-    /// SplitMix64, to give each row of a field its own seed.
+    /// SplitMix64, to give each row and chunk of a field its own seed.
     static func mix(_ value: UInt64) -> UInt64 {
       var z = value &+ 0x9E37_79B9_7F4A_7C15
       z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
@@ -242,8 +242,9 @@ nonisolated enum Grain {
   }
 
   /// grain.py's `noise_field(cells_w, cells_h, seed)`: unit Gaussian cells clipped at ±4σ, row-major.
-  /// Each row has its own generator (seeded from the seed and the row), so rows fill in parallel,
-  /// and any row can be made on its own (`noiseRow`).
+  /// Each run of `noiseChunk` cells in a row has its own generator (seeded from the seed, the row
+  /// and the run), so rows fill in parallel, and any part of any row can be made on its own
+  /// (`noiseRow`) without running a generator across the columns before it.
   static func noiseField(width: Int, height: Int, seed: Int) -> [Float] {
     guard width > 0, height > 0 else { return [] }
     var out = [Float](repeating: 0, count: width * height)
@@ -257,17 +258,30 @@ nonisolated enum Grain {
     return out
   }
 
+  /// The cells in a row each generator makes. Even, so a chunk's Box–Muller pairs never straddle
+  /// two chunks.
+  static let noiseChunk = 256
+
   /// Row `row` of a noise field, its `columns` written to `out` (`base` is the field's seed
-  /// mixed, `Random.mix(seed)`). The row's generator runs from column 0, so the values are the
-  /// whole field's.
+  /// mixed, `Random.mix(seed)`). Only the chunks the columns touch are made, each from its own
+  /// start, so the values are the whole field's: a 100% window at the right edge of a fine grain
+  /// makes a few chunks per row, not every cell to its left. Chunk `k`'s seed is the `k`th output
+  /// of SplitMix64 from the row's seed, the standard way to split one seed into many streams.
   static func noiseRow(_ row: Int, base: UInt64, columns: Range<Int>, into out: UnsafeMutablePointer<Float>) {
-    var random = Random(seed: Random.mix(base ^ UInt64(row)))
-    var x = 0
-    while x < columns.upperBound {
-      let (a, b) = random.gaussians()
-      if columns.contains(x) { out[x - columns.lowerBound] = Float(min(max(a, -4), 4)) }
-      if columns.contains(x + 1) { out[x + 1 - columns.lowerBound] = Float(min(max(b, -4), 4)) }
-      x += 2
+    guard !columns.isEmpty else { return }
+    let rowSeed = Random.mix(base ^ UInt64(row))
+    let lower = columns.lowerBound, upper = columns.upperBound
+    for chunk in lower / noiseChunk...(upper - 1) / noiseChunk {
+      var random = Random(seed: Random.mix(rowSeed &+ UInt64(chunk) &* 0x9E37_79B9_7F4A_7C15))
+      let start = chunk * noiseChunk
+      let end = min(start + noiseChunk, upper)
+      var x = start
+      while x < end {
+        let (a, b) = random.gaussians()
+        if x >= lower { out[x - lower] = Float(min(max(a, -4), 4)) }
+        if x + 1 >= lower, x + 1 < end { out[x + 1 - lower] = Float(min(max(b, -4), 4)) }
+        x += 2
+      }
     }
   }
 
