@@ -289,4 +289,244 @@ struct EditPipelineTests {
     #expect(lit.r[0] == 60 && lit.g[0] == 60 && lit.b[0] == 60)
     #expect(lit.r.allSatisfy { $0 <= 255 })
   }
+
+  // MARK: - Pipeline assembly (Slice F)
+
+  /// A look with every step on, and a context holding everything those steps use.
+  private func everything() -> (options: EditOptions, context: EditPipeline.Context) {
+    var options = EditOptions()
+    options.lens = .init(motion: 6, angle: 20, blur: 2)
+    options.match = .init(target: .reference, tint: 0.6, saturation: 0.5, brightness: 0.4, contrast: 0.5, colour: 0.4)
+    options.histogram = .init(amount: 0.5, space: .luma)
+    options.grade = .init(exposure: 0.2, temperature: 15, tint: 3, contrast: 0.1, saturation: 0.1, vibrance: 0.2)
+    let lut = CubeLUT.bake(size: 17, name: "Test") { planes in
+      for i in 0..<planes.r.count {
+        planes.r[i] = 255 * pow(planes.r[i] / 255, 0.9)
+        planes.b[i] = 255 * pow(planes.b[i] / 255, 1.1)
+      }
+    }
+    options.lut = .init(name: "Test", digest: lut.digest, strength: 0.7)
+    options.halation = .init(amount: 0.6, threshold: 0.6, radius: 6, warmth: 0.6)
+    options.vignette = .init(amount: 0.4, size: 0.4, softness: 0.6)
+    options.grain = .init(lum: 9, size: 1.3, chroma: 3, csize: 2, real: 0.8, seed: 11)
+    let reference = GrainTests.picture(width: 90, height: 70)
+    var shifted = reference
+    for i in 0..<shifted.r.count {
+      shifted.r[i] = shifted.r[i] * 0.8 + 30
+      shifted.b[i] = shifted.b[i] * 0.9
+    }
+    let context = EditPipeline.Context(
+      refWidth: 300, curve: [0.6, 1, 0.9, 0.7], refStats: Grain.channelStats(shifted), realNoise: realNoise(),
+      referenceLab: ReferenceMatch.labStats(of: shifted), referenceHistogram: HistogramMatch.table(of: shifted), lut: lut)
+    return (options, context)
+  }
+
+  /// A few 8 px patches of made-up real noise.
+  private func realNoise() -> GrainProfile.RealNoise {
+    var generator = Generator(state: 5)
+    let bytes = (0..<4 * 8 * 8 * 3).map { _ in UInt8.random(in: 100...156, using: &generator) }
+    return GrainProfile.RealNoise(patch: 8, count: 4, enc: 24, curve: [0.5, 1, 0.8, 0.6], data: Data(bytes))
+  }
+
+  private func image(_ planes: EditPipeline.Planes) throws -> CGImage {
+    try #require(planes.cgImage)
+  }
+
+  private func maxDifference(_ a: [UInt8], _ b: [UInt8]) -> Int {
+    zip(a, b).reduce(0) { max($0, abs(Int($1.0) - Int($1.1))) }
+  }
+
+  /// The render is the steps run by hand in the plan's order, and the identity look leaves the
+  /// image alone with everything loaded.
+  @Test func stepsRunInOrder() async throws {
+    let (options, context) = everything()
+    let source = GrainTests.picture(width: 120, height: 90)
+    let rendered = try await EditPipeline.render(source: image(source), options: options, context: context)
+
+    var a = Grain.motionSmear(source, length: 6, angle: 20)
+    a = Grain.blur(a, sigma: 2)
+    let target = ReferenceMatch.labStats(of: a)
+    ReferenceMatch.apply(options.match.colorMatchOptions, to: &a, target: try #require(target.stats), reference: try #require(context.referenceLab?.stats))
+    HistogramMatch.apply(options.histogram, to: &a, reference: try #require(context.referenceHistogram), source: HistogramMatch.table(of: a))
+    a = Grain.colourMatch(a, source: Grain.channelStats(source), reference: try #require(context.refStats), amount: 0.4)
+    Grade.apply(options.grade, to: &a)
+    CubeLUT.apply(try #require(context.lut), to: &a, strength: 0.7)
+    Halation.apply(options.halation, to: &a)
+    Grade.vignette(options.vignette, to: &a, fullWidth: 120, fullHeight: 90)
+    let l = Grain.luminance(a)
+    let layout = Grain.Layout.whole(width: 120, height: 90)
+    Grain.addGrain(&a, luminance: l, lum: 9, chroma: 3, size: 1.3, csize: 2, seed: 11, refWidth: 300, curve: context.curve, layout: layout)
+    Grain.addRealNoise(&a, luminance: l, real: realNoise(), amount: 0.8, refWidth: 300, seed: 11, layout: layout)
+    #expect(ColorMatch.rgba(rendered) == a.rgba)
+
+    let untouched = try await EditPipeline.render(source: image(source), options: .identity, context: context)
+    #expect(ColorMatch.rgba(untouched) == source.rgba)
+  }
+
+  /// With only grain.py's controls set, the render is grain.py's `process`, pixel for pixel.
+  @Test func grainControlsAloneAreGrainPy() async throws {
+    var settings = GrainProfile.Settings()
+    settings.blur = 2
+    settings.motion = 5
+    settings.angle = 30
+    settings.lum = 9
+    settings.chroma = 3
+    settings.size = 1.3
+    settings.csize = 2
+    settings.colour = 0.5
+    settings.tint = 4
+    settings.expo = 0.3
+    settings.real = 0.8
+    settings.seed = 11
+    let reference = GrainTests.picture(width: 50, height: 50)
+    let context = EditPipeline.Context(refWidth: 260, curve: [0.6, 1, 0.9, 0.7], refStats: Grain.channelStats(reference), realNoise: realNoise())
+    let source = GrainTests.picture(width: 160, height: 110)
+    let options = settings.applied(to: .identity)
+    let rendered = try await EditPipeline.render(source: image(source), options: options, context: context)
+    let expected = Grain.process(source, settings: settings, context: context)
+    #expect(ColorMatch.rgba(rendered) == expected.rgba)
+    // And the renderer's cached path gives the same.
+    let renderer = EditRenderer()
+    let first = try await renderer.full(source: image(source), options: options, context: context)
+    #expect(ColorMatch.rgba(first) == expected.rgba)
+  }
+
+  /// A window at 100% is that part of the full render, at an edge and inside, with every step on.
+  @Test func windowIsACropOfTheFullRender() async throws {
+    let (options, context) = everything()
+    let width = 260
+    let height = 180
+    let source = try image(GrainTests.picture(width: width, height: height))
+    let renderer = EditRenderer()
+    let fullImage = try await renderer.full(source: source, options: options, context: context)
+    let full = try #require(ColorMatch.rgba(fullImage))
+    let fullPlanes = EditPipeline.Planes(rgba: full, width: width, height: height)
+    for window in [
+      EditPipeline.Window(x: 83, y: 57, width: 90, height: 60), EditPipeline.Window(x: 0, y: 120, width: 70, height: 60),
+      EditPipeline.Window(x: 200, y: 0, width: 60, height: 50),
+    ] {
+      let part = try await renderer.window(source: source, options: options, context: context, window: window)
+      #expect(part.width == window.width && part.height == window.height)
+      let expected = fullPlanes.cropped(x: window.x, y: window.y, width: window.width, height: window.height).rgba
+      let partPixels = try #require(ColorMatch.rgba(part))
+      #expect(maxDifference(partPixels, expected) <= 1)
+    }
+  }
+
+  /// Changing only the grain reruns steps 10–12 from the kept pre-grain image; changing the seed
+  /// makes new fields; changing an earlier step renders again.
+  @Test func grainChangesReuseThePreGrainImage() async throws {
+    var (options, context) = everything()
+    let source = try image(GrainTests.picture(width: 200, height: 150))
+    let renderer = EditRenderer()
+    _ = try await renderer.preview(source: source, options: options, context: context, fitting: 100, height: 100)
+    var counters = await renderer.counters
+    #expect(counters.preGrainMisses == 1 && counters.preGrainHits == 0)
+    let fieldMisses = counters.fieldMisses
+
+    options.grain.lum = 14
+    options.grain.real = 1.2
+    _ = try await renderer.preview(source: source, options: options, context: context, fitting: 100, height: 100)
+    counters = await renderer.counters
+    #expect(counters.preGrainMisses == 1 && counters.preGrainHits == 1)
+    #expect(counters.fieldMisses == fieldMisses)
+
+    options.grain.seed = 12
+    _ = try await renderer.preview(source: source, options: options, context: context, fitting: 100, height: 100)
+    counters = await renderer.counters
+    #expect(counters.preGrainHits == 2 && counters.fieldMisses > fieldMisses)
+
+    options.grade.exposure = 0.5
+    _ = try await renderer.preview(source: source, options: options, context: context, fitting: 100, height: 100)
+    counters = await renderer.counters
+    #expect(counters.preGrainMisses == 2)
+  }
+
+  /// A fitted preview is the full render made smaller: its size follows the fit, and with the
+  /// blur, smear and halation scaled to it, it's close to the full render scaled down (closer
+  /// than leaving the lengths in full-size pixels would be).
+  @Test func previewScalesTheLengths() async throws {
+    var options = EditOptions.identity
+    options.lens = .init(motion: 12, angle: 0, blur: 6)
+    options.halation = .init(amount: 0.8, threshold: 0.5, radius: 16, warmth: 0.6)
+    let width = 400
+    let height = 300
+    // Hard-edged squares, which the blur and smear soften by their lengths.
+    var rgba = [UInt8](repeating: 255, count: width * height * 4)
+    for y in 0..<height {
+      for x in 0..<width {
+        let on = (x / 25 + y / 25) % 2 == 0
+        let i = (y * width + x) * 4
+        rgba[i] = on ? 240 : 20
+        rgba[i + 1] = on ? 230 : 30
+        rgba[i + 2] = on ? 220 : 40
+      }
+    }
+    let source = try #require(ColorMatch.cgImage(rgba: rgba, width: width, height: height))
+    let renderer = EditRenderer()
+    let preview = try await renderer.preview(source: source, options: options, fitting: 200, height: 200)
+    #expect(preview.width == 200 && preview.height == 150)
+    let full = try await renderer.full(source: source, options: options)
+    let fullPixels = try #require(ColorMatch.rgba(full))
+    let shrunk = try #require(ColorMatch.scaled(fullPixels, width: width, height: height, toWidth: 200, height: 150))
+    var unscaled = options
+    unscaled.lens = .init(motion: 24, angle: 0, blur: 12)
+    unscaled.halation.radius = 32
+    let wrong = try await renderer.preview(source: source, options: unscaled, fitting: 200, height: 200)
+    func meanDifference(_ a: [UInt8], _ b: [UInt8]) -> Double {
+      Double(zip(a, b).reduce(0) { $0 + abs(Int($1.0) - Int($1.1)) }) / Double(a.count)
+    }
+    let previewPixels = try #require(ColorMatch.rgba(preview))
+    let wrongPixels = try #require(ColorMatch.rgba(wrong))
+    let near = meanDifference(previewPixels, shrunk)
+    let far = meanDifference(wrongPixels, shrunk)
+    #expect(near < 3)
+    #expect(near < far / 2)
+  }
+
+  /// Export LUT's table, applied to the image, gives the render of steps 3–7 within two levels,
+  /// except where the render clips: a table stores 0–1, so between a grid point past white and
+  /// one inside, interpolation bends where the render's end clip does (a level or two more).
+  /// Histogram matching is RGB here: Luma's near-black scaling (new luma / old luma, below a
+  /// few levels) is steeper than a 33-point grid follows.
+  @Test func bakedLUTReproducesTheGrade() async throws {
+    var (options, context) = everything()
+    options.lens = .identity
+    options.halation = .init()
+    options.vignette = .init()
+    options.grain = .identity
+    options.histogram.space = .rgb
+    let picture = GrainTests.picture(width: 160, height: 120)
+    let source = try image(picture)
+    let renderer = EditRenderer()
+    let renderedImage = try await renderer.full(source: source, options: options, context: context)
+    let rendered = try #require(ColorMatch.rgba(renderedImage))
+    let table = try await renderer.bakeLUT(source: source, options: options, context: context, name: "Look")
+    #expect(table.size == 33)
+    var baked = picture
+    CubeLUT.apply(table, to: &baked)
+    let bakedPixels = baked.rgba
+    var inside = 0
+    var all = 0
+    for i in 0..<rendered.count where i % 4 != 3 {
+      let d = abs(Int(rendered[i]) - Int(bakedPixels[i]))
+      all = max(all, d)
+      let pixel = i / 4 * 4
+      if (0..<3).allSatisfy({ (4...251).contains(rendered[pixel + $0]) }) { inside = max(inside, d) }
+    }
+    #expect(inside <= 2)
+    #expect(all <= 4)
+  }
+
+  /// Measure Reference gives what the context needs in one call.
+  @Test func measureReferenceFillsTheContext() async throws {
+    let reference = GrainTests.picture(width: 80, height: 60)
+    let referenceImage = try image(reference)
+    let measurement = try await EditPipeline.measureReference(referenceImage, name: "Ref", profile: false)
+    let measured = try #require(measurement)
+    #expect(measured.lab == ReferenceMatch.labStats(of: reference))
+    #expect(measured.histogram == HistogramMatch.table(of: reference))
+    let context = measured.applied(to: .empty)
+    #expect(context.referenceLab == measured.lab && context.referenceHistogram == measured.histogram && context.refStats == nil)
+  }
 }

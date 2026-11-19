@@ -362,6 +362,24 @@ nonisolated enum Grain {
       bytes[i * 3 + 1] = byte(planes.g[i])
       bytes[i * 3 + 2] = byte(planes.b[i])
     }
+    return channelStats(rgb: bytes, width: w, height: h)
+  }
+
+  /// `channelStats` of an 8-bit image's RGBA (the same numbers as its planes give), without
+  /// making the planes.
+  static func channelStats(rgba: [UInt8], width w: Int, height h: Int) -> GrainProfile.ChannelStats {
+    guard w > 0, h > 0, rgba.count >= w * h * 4 else { return GrainProfile.ChannelStats(m: [0, 0, 0], s: [1, 1, 1]) }
+    var bytes = [UInt8](repeating: 0, count: w * h * 3)
+    for i in 0..<w * h {
+      bytes[i * 3] = rgba[i * 4]
+      bytes[i * 3 + 1] = rgba[i * 4 + 1]
+      bytes[i * 3 + 2] = rgba[i * 4 + 2]
+    }
+    return channelStats(rgb: bytes, width: w, height: h)
+  }
+
+  /// `channelStats` of interleaved 8-bit RGB.
+  static func channelStats(rgb bytes: [UInt8], width w: Int, height h: Int) -> GrainProfile.ChannelStats {
     let smallHeight = max(1, round(512 * Double(h) / Double(w)))
     let small = Resample.resizeRGB8(bytes, width: w, height: h, toWidth: 512, height: smallHeight)
     let count = small.count / 3
@@ -452,16 +470,20 @@ nonisolated enum Grain {
     return Double(Float(0.55) + Float(0.9) * l.squareRoot() * (1 - Float(0.5) * l))
   }
 
-  /// grain.py's random grain: a luma field (`seed`) at `lum × gain(L)`, and two colour fields
-  /// (`seed + 99`, `seed + 199`) at `chroma`, added as `R += n0 + c1`, `G += n0 − (c1 + c2)/2`,
-  /// `B += n0 + c2`. `luminance` is `luminance(planes)` from before; the planes are the layout's
-  /// region. A strength of 0 skips its fields, which adds the same as grain.py's zeros.
-  static func addGrain(
-    _ planes: inout EditPipeline.Planes, luminance: [Float], lum: Double, chroma: Double, size: Double, csize: Double,
-    seed: Int, refWidth: Int, curve: [Double]?, layout: Layout
-  ) {
-    let count = planes.r.count
-    guard count == luminance.count, count == layout.region.width * layout.region.height else { return }
+  /// The random grain's three fields, enlarged to the layout's region: the luma field (`seed`)
+  /// and the two colour fields (`seed + 99`, `seed + 199`), each nil when its strength is 0.
+  /// They depend only on the sizes, seed, reference width and layout, not on the picture, so
+  /// `EditRenderer` keeps them between renders.
+  struct GrainFields: Sendable {
+    var luma: [Float]?
+    var c1: [Float]?
+    var c2: [Float]?
+
+    var byteCount: Int { ((luma?.count ?? 0) + (c1?.count ?? 0) + (c2?.count ?? 0)) * MemoryLayout<Float>.size }
+  }
+
+  /// The fields `addGrain` adds for these settings.
+  static func grainFields(lum: Double, chroma: Double, size: Double, csize: Double, seed: Int, refWidth: Int, layout: Layout) -> GrainFields {
     let n0 = lum != 0 ? field(cells: lumaCells(refWidth: refWidth, size: size, aspect: layout.aspect), seed: seed, layout: layout) : nil
     var c1: [Float]?
     var c2: [Float]?
@@ -470,10 +492,39 @@ nonisolated enum Grain {
       c1 = field(cells: cells, seed: seed + 99, layout: layout)
       c2 = field(cells: cells, seed: seed + 199, layout: layout)
     }
+    return GrainFields(luma: n0, c1: c1, c2: c2)
+  }
+
+  /// grain.py's random grain: a luma field (`seed`) at `lum × gain(L)`, and two colour fields
+  /// (`seed + 99`, `seed + 199`) at `chroma`, added as `R += n0 + c1`, `G += n0 − (c1 + c2)/2`,
+  /// `B += n0 + c2`. `luminance` is `luminance(planes)` from before; the planes are the layout's
+  /// region. A strength of 0 skips its fields, which adds the same as grain.py's zeros.
+  static func addGrain(
+    _ planes: inout EditPipeline.Planes, luminance: [Float], lum: Double, chroma: Double, size: Double, csize: Double,
+    seed: Int, refWidth: Int, curve: [Double]?, layout: Layout
+  ) {
+    guard planes.r.count == luminance.count, planes.r.count == layout.region.width * layout.region.height else { return }
+    let fields = grainFields(lum: lum, chroma: chroma, size: size, csize: csize, seed: seed, refWidth: refWidth, layout: layout)
+    addGrain(&planes, luminance: luminance, lum: lum, chroma: chroma, curve: curve, fields: fields)
+  }
+
+  /// `addGrain` with its fields made beforehand (`grainFields`, the planes' size).
+  static func addGrain(
+    _ planes: inout EditPipeline.Planes, luminance: [Float], lum: Double, chroma: Double, curve: [Double]?, fields: GrainFields
+  ) {
+    let count = planes.r.count
+    guard count == luminance.count, planes.width * planes.height == count else { return }
+    let n0 = fields.luma.flatMap { $0.count == count ? $0 : nil }
+    var c1 = fields.c1.flatMap { $0.count == count ? $0 : nil }
+    var c2 = fields.c2.flatMap { $0.count == count ? $0 : nil }
+    if c1 == nil || c2 == nil {
+      c1 = nil
+      c2 = nil
+    }
     guard n0 != nil || c1 != nil else { return }
     let lumFloat = Float(lum), chromaFloat = Float(chroma), half = Float(0.5)
-    let width = layout.region.width
-    let rows = layout.region.height
+    let width = planes.width
+    let rows = planes.height
     planes.r.withUnsafeMutableBufferPointer { r in
       planes.g.withUnsafeMutableBufferPointer { g in
         planes.b.withUnsafeMutableBufferPointer { b in
@@ -540,6 +591,15 @@ nonisolated enum Grain {
     return (tw, th, planes)
   }
 
+  /// The real-noise texture (`realNoiseTexture`) enlarged to the layout's region, three planes:
+  /// what `addRealNoise` adds before its weight. Picture-independent, so `EditRenderer` keeps it.
+  static func realNoiseField(_ real: GrainProfile.RealNoise, refWidth: Int, seed: Int, layout: Layout) -> [[Float]] {
+    let texture = realNoiseTexture(real, refWidth: refWidth, aspect: layout.aspect, seed: seed)
+    return texture.planes.map {
+      Resample.resize($0, width: texture.width, height: texture.height, toWidth: layout.width, height: layout.height, region: layout.region)
+    }
+  }
+
   /// grain.py's real reference noise: the texture enlarged to the output (the layout's region)
   /// and added at `amount × interp(real.curve, L)`, in float64 as numpy does.
   static func addRealNoise(
@@ -547,16 +607,21 @@ nonisolated enum Grain {
     layout: Layout
   ) {
     guard amount > 0, real.count > 0, planes.r.count == luminance.count, planes.r.count == layout.region.width * layout.region.height else { return }
-    let texture = realNoiseTexture(real, refWidth: refWidth, aspect: layout.aspect, seed: seed)
-    let enlarged = texture.planes.map {
-      Resample.resize($0, width: texture.width, height: texture.height, toWidth: layout.width, height: layout.height, region: layout.region)
-    }
-    let curve = real.curve
-    for i in 0..<planes.r.count {
-      let weight = amount * interp(Double(luminance[i]), curve: curve)
-      planes.r[i] = Float(Double(planes.r[i]) + Double(enlarged[0][i]) * weight)
-      planes.g[i] = Float(Double(planes.g[i]) + Double(enlarged[1][i]) * weight)
-      planes.b[i] = Float(Double(planes.b[i]) + Double(enlarged[2][i]) * weight)
+    addRealNoise(&planes, luminance: luminance, curve: real.curve, amount: amount, field: realNoiseField(real, refWidth: refWidth, seed: seed, layout: layout))
+  }
+
+  /// `addRealNoise` with its field made beforehand (`realNoiseField`, the planes' size).
+  static func addRealNoise(_ planes: inout EditPipeline.Planes, luminance: [Float], curve: [Double], amount: Double, field enlarged: [[Float]]) {
+    let count = planes.r.count
+    guard amount > 0, count == luminance.count, enlarged.count == 3, enlarged.allSatisfy({ $0.count == count }) else { return }
+    let width = planes.width
+    planes.withRowBands { rows, r, g, b in
+      for i in rows.lowerBound * width..<rows.upperBound * width {
+        let weight = amount * interp(Double(luminance[i]), curve: curve)
+        r[i] = Float(Double(r[i]) + Double(enlarged[0][i]) * weight)
+        g[i] = Float(Double(g[i]) + Double(enlarged[1][i]) * weight)
+        b[i] = Float(Double(b[i]) + Double(enlarged[2][i]) * weight)
+      }
     }
   }
 
