@@ -191,7 +191,7 @@ extension ModelLibrary {
     Int64((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
   }
 
-  private nonisolated static func freeSpace(at folder: URL) -> Int64? {
+  nonisolated static func freeSpace(at folder: URL) -> Int64? {
     let values = try? folder.resourceValues(
       forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey])
     // External drives may not report the first.

@@ -230,6 +230,7 @@
 		6A58FD8E0BFFC6506DB5BE81 /* ReCaVSRDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF8A91B638D18A58BB90D54D /* ReCaVSRDecoder.swift */; };
 		23FB2D3DAD4EA4ADC51AD5FE /* ReCaVSRUpscaler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 485E0CAE10562C2B9DB6066E /* ReCaVSRUpscaler.swift */; };
 		D968BAB8929C6F4108F1F550 /* ReCaVSRQuantizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2472EAE24698CDF096EBCF5 /* ReCaVSRQuantizer.swift */; };
+		E8B17F11A0C4D2E69B3A5C08 /* ReCaVSREightBitFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8B17F11A0C4D2E69B3A5C07 /* ReCaVSREightBitFile.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -484,6 +485,7 @@
 		AF8A91B638D18A58BB90D54D /* ReCaVSRDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReCaVSRDecoder.swift; sourceTree = "<group>"; };
 		485E0CAE10562C2B9DB6066E /* ReCaVSRUpscaler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReCaVSRUpscaler.swift; sourceTree = "<group>"; };
 		E2472EAE24698CDF096EBCF5 /* ReCaVSRQuantizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReCaVSRQuantizer.swift; sourceTree = "<group>"; };
+		E8B17F11A0C4D2E69B3A5C07 /* ReCaVSREightBitFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReCaVSREightBitFile.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -915,6 +917,7 @@
 				AF8A91B638D18A58BB90D54D /* ReCaVSRDecoder.swift */,
 				485E0CAE10562C2B9DB6066E /* ReCaVSRUpscaler.swift */,
 				E2472EAE24698CDF096EBCF5 /* ReCaVSRQuantizer.swift */,
+				E8B17F11A0C4D2E69B3A5C07 /* ReCaVSREightBitFile.swift */,
 			);
 			path = ReCaVSR;
 			sourceTree = "<group>";
@@ -1104,6 +1107,7 @@
 				E360F3396B8D19F63D2D7763 /* SystemSuperResolution.swift in Sources */,
 				4E97E7417B4FBD4C0A2D4F5F /* FlashVSRWeights.swift in Sources */,
 				D968BAB8929C6F4108F1F550 /* ReCaVSRQuantizer.swift in Sources */,
+				E8B17F11A0C4D2E69B3A5C08 /* ReCaVSREightBitFile.swift in Sources */,
 				23FB2D3DAD4EA4ADC51AD5FE /* ReCaVSRUpscaler.swift in Sources */,
 				6A58FD8E0BFFC6506DB5BE81 /* ReCaVSRDecoder.swift in Sources */,
 				D5010C7DFC2D65069E88C1EA /* ReCaVSRDenoiser.swift in Sources */,
