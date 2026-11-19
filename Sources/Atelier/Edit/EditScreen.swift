@@ -72,7 +72,7 @@ struct EditScreen: View {
       .foregroundStyle(.secondary)
       Button("Reset") { edit.reset() }
         .disabled(!edit.hasSource)
-        .help("Back to grain.py's default look, with no profile, reference or LUT")
+        .help("Back to the default look, with no profile, reference or LUT")
       Button("Add to History") {
         Task {
           do {

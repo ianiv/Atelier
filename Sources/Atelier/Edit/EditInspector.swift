@@ -62,7 +62,7 @@ struct EditInspector: View {
       }
       HStack(spacing: 6) {
         Button("Open Profile…") { openProfile() }
-          .help("Open a .grain.json profile from anywhere, such as one from grain.py or Grain Studio")
+          .help("Open a .grain.json profile from anywhere, such as one saved by another copy of Atelier")
         Button("Save Profile…") { saveProfile() }
           .help("Save the current look as a .grain.json profile")
         Button("Add to Library") {
@@ -83,7 +83,7 @@ struct EditInspector: View {
       HStack(spacing: 6) {
         Button("Match Reference") { Task { await edit.matchReference() } }
           .disabled(!edit.canMatchReference)
-          .help("Measure the reference photo's grain and colour, as grain.py --match does, then set the grain sliders and Profile Colour to match it")
+          .help("Measure the reference photo's grain and colour, then set the grain sliders and Profile Colour to match it")
         // Always there, shown only while measuring, so the row never shifts.
         ProgressView().controlSize(.small)
           .opacity(edit.isMeasuring ? 1 : 0)
@@ -207,7 +207,7 @@ struct EditInspector: View {
         .accessibilityHint(Self.histogramOfHelp)
       }
       .disabled(noHistogram)
-      Self.slider("Profile Colour", options.match.colour, 0...1, step: 0.01, digits: 2, help: "grain.py's colour: moves each RGB channel's average and spread toward the loaded profile's reference photo, 0 to 1. Ignores Match to, and needs a profile with colour data; Match Reference sets it to 0.6.")
+      Self.slider("Profile Colour", options.match.colour, 0...1, step: 0.01, digits: 2, help: "Moves each RGB channel's average and spread toward the loaded profile's reference photo, 0 to 1. Ignores Match to, and needs a profile with colour data; Match Reference sets it to 0.6.")
         .disabled(edit.context.refStats == nil)
     }
   }
@@ -218,7 +218,7 @@ struct EditInspector: View {
     } content: {
       Self.slider("Exposure", grade.exposure, EditOptions.Grade.exposureRange, step: 0.01, digits: 2, help: "Brightens or darkens the image in stops: +1 doubles the light, −1 halves it.")
       Self.slider("Temperature", grade.temperature, EditOptions.Grade.temperatureRange, step: 1, digits: 0, help: "Warms (+) or cools (−) the white balance, −100 to 100.")
-      Self.slider("Tint", grade.tint, EditOptions.Grade.tintRange, step: 0.1, digits: 1, help: "Shifts the colour toward green (−) or magenta (+), by grain.py's tint formula.")
+      Self.slider("Tint", grade.tint, EditOptions.Grade.tintRange, step: 0.1, digits: 1, help: "Shifts the colour toward green (−) or magenta (+).")
       Self.slider("Contrast", grade.contrast, EditOptions.Grade.unitRange, step: 0.01, digits: 2, help: "Raises (+) or lowers (−) contrast around mid grey, −1 to 1.")
       Self.slider("Saturation", grade.saturation, EditOptions.Grade.unitRange, step: 0.01, digits: 2, help: "Makes colours stronger (+) or weaker (−); −1 is black and white.")
       Self.slider("Vibrance", grade.vibrance, EditOptions.Grade.unitRange, step: 0.01, digits: 2, help: "Saturation that boosts muted colours more than vivid ones and mostly spares skin tones, −1 to 1.")
@@ -273,7 +273,7 @@ struct EditInspector: View {
     } content: {
       Self.slider("Motion", lens.motion, EditOptions.Lens.motionRange, step: 0.1, digits: 1, help: "The length of a slow-shutter motion smear, in pixels at full size. Below 2 there's none.")
       Self.slider("Angle", lens.angle, EditOptions.Lens.angleRange, step: 1, digits: 0, help: "The direction of the motion smear, in degrees; 0 is horizontal.")
-      Self.slider("Blur", lens.blur, EditOptions.Lens.blurRange, step: 0.01, digits: 2, help: "Softens the image before the grain is added, in pixels. grain.py's default is 3.")
+      Self.slider("Blur", lens.blur, EditOptions.Lens.blurRange, step: 0.01, digits: 2, help: "Softens the image before the grain is added, in pixels. The default is 3.")
     }
   }
 
@@ -289,11 +289,11 @@ struct EditInspector: View {
 
   private func grain(_ grain: Binding<EditOptions.Grain>) -> some View {
     InspectorGroup {
-      Text("Grain").help("grain.py's film grain, plus the profile's real noise.")
+      Text("Grain").help("Film grain, plus the profile's real noise.")
     } content: {
-      Self.slider("Grain", grain.lum, EditOptions.Grain.strengthRange, step: 0.1, digits: 1, help: "The strength of the brightness grain. grain.py's default is 9.")
-      Self.slider("Size", grain.size, EditOptions.Grain.sizeRange, step: 0.01, digits: 2, help: "How coarse the grain is; 1 is grain.py's default, higher is coarser.")
-      Self.slider("Colour Noise", grain.chroma, EditOptions.Grain.strengthRange, step: 0.1, digits: 1, help: "The strength of the coloured grain. grain.py's default is 3.")
+      Self.slider("Grain", grain.lum, EditOptions.Grain.strengthRange, step: 0.1, digits: 1, help: "The strength of the brightness grain. The default is 9.")
+      Self.slider("Size", grain.size, EditOptions.Grain.sizeRange, step: 0.01, digits: 2, help: "How coarse the grain is; 1 is the default, higher is coarser.")
+      Self.slider("Colour Noise", grain.chroma, EditOptions.Grain.strengthRange, step: 0.1, digits: 1, help: "The strength of the coloured grain. The default is 3.")
       Self.slider("Colour Size", grain.csize, EditOptions.Grain.sizeRange, step: 0.01, digits: 2, help: "How large the colour noise blotches are; 1 is the default.")
       Self.slider("Real Noise", grain.real, EditOptions.Grain.realRange, step: 0.01, digits: 2, help: "Adds the profile's real noise, sampled from its reference photo; 1 is the reference's amount. Needs a profile with real noise.")
         .disabled(edit.context.realNoise == nil)

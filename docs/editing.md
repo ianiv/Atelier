@@ -1,6 +1,6 @@
 # Editing images
 
-The **Edit** screen (below History in the sidebar) finishes an image without a model: film grain, color matching to a reference, a grade, a 3D LUT, halation, lens blur and a vignette. Its grain is a port of grain.py and Grain Studio, and it reads and writes their `.grain.json` noise profiles. Editing is non-destructive: the screen always renders the image you opened with the current settings, and an edit saved to History remembers its settings, so you can open it again and change them.
+The **Edit** screen (below History in the sidebar) finishes an image without a model: film grain, color matching to a reference, a grade, a 3D LUT, halation, lens blur and a vignette. Its grain imitates a real camera's noise, and looks can be kept as `.grain.json` noise profiles. Editing is non-destructive: the screen always renders the image you opened with the current settings, and an edit saved to History remembers its settings, so you can open it again and change them.
 
 Edit works on images, not videos.
 
@@ -19,17 +19,17 @@ The inspector's sections are in the order the look is applied: lens smear and bl
 ### Look
 
 - **Profile** picks a grain profile from your library: its grain settings, blur and colour settings go on the screen, and its grain data (the reference's brightness curve, colors and real noise) goes with them. The seed stays the screen's. **None** clears the grain data and keeps the settings.
-- **Open Profile…** opens a `.grain.json` file from anywhere; **Save Profile…** saves the current settings as one anywhere; **Add to Library** adds the current look to the library (numbered, "Night 2", when the name is taken). The library is the folder Application Support/Atelier/Grain Profiles. Profiles Atelier writes load in grain.py and Grain Studio, and theirs load here. A profile is a look, so it doesn't keep a seed.
+- **Open Profile…** opens a `.grain.json` file from anywhere; **Save Profile…** saves the current settings as one anywhere; **Add to Library** adds the current look to the library (numbered, "Night 2", when the name is taken). The library is the folder Application Support/Atelier/Grain Profiles. A profile is a look, so it doesn't keep a seed.
 - **Reference** picks an image the matches move toward: **Choose File…**, **From Photos…**, **Step's Input**, a **Moodboard** picture, or **Choose History Step…**.
-- **Match Reference** measures the reference's grain the way `grain.py --match` does and takes it on: grain strength and size, colour noise and colour size, the brightness curve, the reference's colors at **Profile Colour** 0.6, and its real noise. The line below says how close it came: the reference's grain shape and colour blotches beside the matched grain's. It needs a reference with a flat, mid-bright area to measure; the result is the profile until you pick another, and **Add to Library** keeps it.
+- **Match Reference** measures the reference's grain and takes it on: grain strength and size, colour noise and colour size, the brightness curve, the reference's colors at **Profile Colour** 0.6, and its real noise. The line below says how close it came: the reference's grain shape and colour blotches beside the matched grain's. It needs a reference with a flat, mid-bright area to measure; the result is the profile until you pick another, and **Add to Library** keeps it.
 
 ### Match
 
-**Match to** picks **Reference** or **Step's Input** (the image the step was made from, such as the picture an image-to-image or inpainting edit started from). Each is disabled when there's nothing to match to: Reference until you choose one, Step's Input for a step that wasn't made from an image. **Tint**, **Saturation**, **Brightness** and **Contrast** move the image's colors toward the target's, as Match Colors… does, from 0% (leave it) to 100%. **Histogram** reshapes the image's tones to the target's, of **Luma** (the default, which keeps the image's own colors) or **RGB** (each channel on its own, which can move hues). **Profile Colour** is grain.py's `colour`: how far each color channel's average and spread move to the profile's reference.
+**Match to** picks **Reference** or **Step's Input** (the image the step was made from, such as the picture an image-to-image or inpainting edit started from). Each is disabled when there's nothing to match to: Reference until you choose one, Step's Input for a step that wasn't made from an image. **Tint**, **Saturation**, **Brightness** and **Contrast** move the image's colors toward the target's, as Match Colors… does, from 0% (leave it) to 100%. **Histogram** reshapes the image's tones to the target's, of **Luma** (the default, which keeps the image's own colors) or **RGB** (each channel on its own, which can move hues). **Profile Colour** is how far each color channel's average and spread move to the profile's reference.
 
 ### Grade
 
-**Exposure** (in stops), **Temperature**, **Tint** (grain.py's green to magenta), **Contrast**, **Saturation** and **Vibrance** (saturation that moves muted colors more than vivid ones), applied in that order.
+**Exposure** (in stops), **Temperature**, **Tint** (green to magenta), **Contrast**, **Saturation** and **Vibrance** (saturation that moves muted colors more than vivid ones), applied in that order.
 
 ### LUT
 
@@ -60,7 +60,7 @@ A warm glow around highlights, as film gives. **Amount** sets how strong it is, 
 
 ### Lens
 
-**Motion** is a slow-shutter smear (in pixels at full size, from 2) along **Angle**; **Blur** softens the image before the grain (grain.py's default 3). The smear repeats the edge pixels at the borders, where grain.py wraps around.
+**Motion** is a slow-shutter smear (in pixels at full size, from 2) along **Angle**; **Blur** softens the image before the grain (default 3). The smear repeats the edge pixels at the borders, where grain.py wraps around.
 
 ### Vignette
 
@@ -68,9 +68,9 @@ A warm glow around highlights, as film gives. **Amount** sets how strong it is, 
 
 ### Grain
 
-**Grain** (strength), **Size**, **Colour Noise** and **Colour Size** are grain.py's random grain. **Real Noise** adds the profile's real noise, copied from its reference photo, at 1 for the reference's amount. **Seed** picks the grain pattern, and **New Grain** rolls a new one. The grain follows the profile's brightness curve and scales with its reference's width.
+**Grain** (strength), **Size**, **Colour Noise** and **Colour Size** are the random grain. **Real Noise** adds the profile's real noise, copied from its reference photo, at 1 for the reference's amount. **Seed** picks the grain pattern, and **New Grain** rolls a new one. The grain follows the profile's brightness curve and scales with its reference's width.
 
-**Reset** (bottom bar) goes back to grain.py's default look (blur 3, grain 9, colour noise 3) with no profile, reference or LUT, keeping the seed.
+**Reset** (bottom bar) goes back to the default look (blur 3, grain 9, colour noise 3) with no profile, reference or LUT, keeping the seed.
 
 ## Comparing and zooming
 
