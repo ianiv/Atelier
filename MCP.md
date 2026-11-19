@@ -238,7 +238,7 @@ It's non-destructive like the screen. For a step saved from Edit (by the screen 
 
 `options` sections and keys:
 
-- `match`: `target` (`reference` or `original`, the image the step was made from), `tint`, `saturation`, `brightness`, `contrast` (0–1, how far each moves to the target's, as `match_colors`), `colour` (grain.py's per-channel color match to the profile's reference; needs a profile).
+- `match`: `target` (`reference` or `original`, the image the step was made from, shown as **Step's Input** on the Edit screen; a step made from no image has none), `tint`, `saturation`, `brightness`, `contrast` (0–1, how far each moves to the target's, as `match_colors`), `colour` (grain.py's per-channel color match to the profile's reference; needs a profile).
 - `histogram`: `amount` (0–1), `space` (`luma`, the default, or `rgb`).
 - `grade`: `exposure` (stops), `temperature` (−100 to 100), `tint` (grain.py's green − / magenta +, about −30 to 30), `contrast`, `saturation`, `vibrance` (−1 to 1).
 - `lut`: `strength` (0–1). The table comes from `lut` or `lut_path`.
@@ -247,7 +247,7 @@ It's non-destructive like the screen. For a step saved from Edit (by the screen 
 - `vignette`: `amount` (−1 to 1), `size`, `softness` (0–1).
 - `grain`: grain.py's `lum` (its default 9), `size` (1), `chroma` (3), `csize` (1), `real` (needs a profile with real noise) and `seed` (7). `grain` also takes grain.py's other flat names, `blur`, `motion`, `angle`, `colour`, `tint` and `expo`, and moves them to their sections, so a grain.py settings dict can go in as it is.
 
-For grain.py's own default look from a plain step, pass `{"grain": {"lum": 9, "chroma": 3, "blur": 3}}` or a profile. It checks what it's given and says what's wrong: an unknown section or key, a value of the wrong type or out of range, matches with nothing to match to (no reference, or `original` for a step that has none), `colour` or `real` without a profile that has the data, `match_reference` without a reference or with no flat, mid-bright area in it. `save_profile_to` also writes the look as a `.grain.json` profile (grain.py's format, no seed) to that file, or into that folder under the profile's name.
+For grain.py's own default look from a plain step, pass `{"grain": {"lum": 9, "chroma": 3, "blur": 3}}` or a profile. It checks what it's given and says what's wrong: an unknown section or key, a value of the wrong type or out of range, matches with nothing to match to (no reference, or `original` for a step not made from an image), `colour` or `real` without a profile that has the data, `match_reference` without a reference or with no flat, mid-bright area in it. `save_profile_to` also writes the look as a `.grain.json` profile (grain.py's format, no seed) to that file, or into that folder under the profile's name.
 
 It waits and returns the new `history_step`, `source_step`, `edited_step` (the step passed, when it was an edit of `source_step`), `options` (the full look used), `profile`, `reference` and `lut` names, `width` and `height`, `match_report` (with `match_reference`: what `measure_reference` returns), `saved_profile`, `notes` and `job_id`. With `background: true` it returns a `job_id` at once for `get_job`, `list_jobs` and `cancel_job`. The same edit that's already waiting or running (from the screen or another call) isn't queued again: the call joins it.
 

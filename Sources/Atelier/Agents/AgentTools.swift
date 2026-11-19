@@ -2525,16 +2525,11 @@ final class AgentTools {
       context.referenceLab = nil
       context.referenceHistogram = nil
       if options.match.target == .original, needsTarget {
-        var found: CGImage?
-        if let original = await create.originalImage(for: source, in: project) {
-          found = original.image
-        } else if let parent = create.history.parent(of: source), let tensorId = parent.imageTensorId {
-          found = await project.read { $0.image(tensorId: tensorId) }
+        // The step's input only, as the screen's "Step's Input": a step made from no image has none.
+        guard let found = await create.originalImage(for: source, in: project)?.image else {
+          throw ToolError("Step \(source.id.logicalTime) has no input image to match to (it wasn't made from an image). Set options.match.target to reference and pass a reference.")
         }
-        guard let found else {
-          throw ToolError("Step \(source.id.logicalTime) has no original to match to (it wasn't made from an image and has no parent). Set options.match.target to reference and pass a reference.")
-        }
-        if let measured = try await EditPipeline.measureReference(found, name: "Original", profile: false) {
+        if let measured = try await EditPipeline.measureReference(found, name: "Step's Input", profile: false) {
           context.referenceLab = measured.lab
           context.referenceHistogram = measured.histogram
         }

@@ -383,25 +383,18 @@ final class EditModel {
     fileLUT = builtInLUTName == nil ? lut : nil
   }
 
-  /// Measures the step's original (the image it was made from, else its parent's) for
-  /// `Match.Target.original`.
+  /// Measures the step's input (the image it was made from) for `Match.Target.original`, shown
+  /// as "Step's Input". A step made from no image has none, so that target stays disabled rather
+  /// than standing in its parent, which isn't what the step was made from.
   private func measureOriginal(of item: HistoryItem, in project: Project, generation: Int) async {
     original = nil
     rebuildContext()
-    guard let create else { return }
-    var found: (image: CGImage, tensorId: Int64?)?
-    if let original = await create.originalImage(for: item, in: project) {
-      found = (original.image, original.tensorId)
-    } else if let parent = create.history.parent(of: item), let tensorId = parent.imageTensorId,
-              let image = await project.read({ $0.image(tensorId: tensorId) })
-    {
-      found = (image, tensorId)
-    }
-    guard let found,
-          let measured = try? await EditPipeline.measureReference(found.image, name: "Original", profile: false),
+    guard let create, let input = await create.originalImage(for: item, in: project) else { return }
+    let found = (image: input.image, tensorId: input.tensorId)
+    guard let measured = try? await EditPipeline.measureReference(found.image, name: "Step's Input", profile: false),
           opens.isCurrent(generation), self.item?.tensorId == item.tensorId
     else { return }
-    original = Reference(name: "Original", tensorId: found.tensorId, lab: measured.lab, histogram: measured.histogram, image: found.image)
+    original = Reference(name: "Step's Input", tensorId: found.tensorId, lab: measured.lab, histogram: measured.histogram, image: found.image)
     rebuildContext()
   }
 

@@ -105,7 +105,7 @@ struct EditInspector: View {
   private var referenceStatus: String {
     if edit.isMeasuring { return "Measuring the reference…" }
     if let report = edit.matchReport { return report }
-    guard let reference = edit.reference else { return "No reference: matches go to the original when it has one." }
+    guard let reference = edit.reference else { return "No reference chosen." }
     return reference.image == nil
       ? "Matched to “\(reference.name)” when it was saved."
       : "“\(reference.name)”. Match Reference takes on its grain."
@@ -115,9 +115,9 @@ struct EditInspector: View {
     Menu {
       Button("Choose File…") { chooseReferenceFile() }
       Button("From Photos…") { chooseReferencePhoto() }
-      Button("Original of This Step") {
+      Button("Step's Input") {
         if let original = edit.original, let image = original.image {
-          Task { await edit.setReference(image: image, name: "Original", tensorId: original.tensorId) }
+          Task { await edit.setReference(image: image, name: "Step's Input", tensorId: original.tensorId) }
         }
       }
       .disabled(edit.originalImage == nil)
@@ -172,15 +172,11 @@ struct EditInspector: View {
       InspectorRow {
         Text("Match to")
       } control: {
-        Picker("Match to", selection: Binding(get: { edit.options.match.target }, set: { edit.setMatchTarget($0) })) {
-          Text("Reference").tag(EditOptions.Match.Target.reference)
-          Text("Original").tag(EditOptions.Match.Target.original)
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .fixedSize()
+        MatchTargetControl(
+          target: Binding(get: { edit.options.match.target }, set: { edit.setMatchTarget($0) }),
+          hasReference: edit.reference != nil, hasInput: edit.original != nil)
       }
-      Text(noLab ? (edit.options.match.target == .reference ? "Choose a reference to match to." : "This image has no original to match to.") : "Moves the colours toward \(target?.name ?? "it").")
+      Text(noLab ? (edit.options.match.target == .reference ? "Choose a reference to match to." : "This image wasn't made from an input image.") : "Moves the colours toward \(target?.name ?? "it").")
         .font(.caption).foregroundStyle(.secondary)
         .lineLimit(2, reservesSpace: true)
         .fixedSize(horizontal: false, vertical: true)
@@ -473,4 +469,58 @@ private struct EditStepPicker: View {
     .sheetPadding()
     .frame(minWidth: 520, minHeight: 420)
   }
+}
+
+/// Reference / Step's Input, drawn like a segmented picker. A stock segmented `Picker` ignores
+/// `.disabled` on its segments, and each target has to be unavailable when there's nothing to
+/// match to: Reference until one is chosen, Step's Input for a step made from no image.
+private struct MatchTargetControl: View {
+  @Binding var target: EditOptions.Match.Target
+  let hasReference: Bool
+  let hasInput: Bool
+  @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.isEnabled) private var isEnabled
+
+  var body: some View {
+    HStack(spacing: 0) {
+      segment("Reference", .reference, available: hasReference)
+      segment("Step's Input", .original, available: hasInput)
+    }
+    .padding(2)
+    .background(.fill.tertiary, in: .capsule)
+    .fixedSize()
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel("Match to")
+  }
+
+  private func segment(_ title: String, _ option: EditOptions.Match.Target, available: Bool) -> some View {
+    let selected = target == option
+    let enabled = isEnabled && available
+    return Text(title)
+      .lineLimit(1)
+      .padding(.horizontal, Self.horizontalPadding)
+      .padding(.vertical, Self.verticalPadding)
+      .foregroundStyle(enabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
+      .background {
+        if selected {
+          Capsule()
+            .fill(colorScheme == .dark ? Color.white.opacity(enabled ? 0.22 : 0.1) : Color.white.opacity(enabled ? 1 : 0.6))
+            .shadow(color: .black.opacity(colorScheme == .dark || !enabled ? 0 : 0.12), radius: 1, y: 0.5)
+        }
+      }
+      .contentShape(.capsule)
+      .onTapGesture { if enabled { target = option } }
+      .accessibilityElement(children: .combine)
+      .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+      .accessibilityAction { if enabled { target = option } }
+      .disabled(!available)
+  }
+
+  #if os(macOS)
+  private static let horizontalPadding: CGFloat = 10
+  private static let verticalPadding: CGFloat = 3
+  #else
+  private static let horizontalPadding: CGFloat = 12
+  private static let verticalPadding: CGFloat = 6
+  #endif
 }
