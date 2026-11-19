@@ -2127,31 +2127,41 @@ final nonisolated class Project: Sendable {
 
   /// What an Edit step renders with: its record's measurements and the data it names, read from
   /// the store and checked against the record's digests. Throws `ProjectError.missingEditData`
-  /// when any of it is gone or different.
+  /// when any of it is gone or different; `editData(for:)` says which.
   func editContext(for record: Edit.Record) throws -> EditPipeline.Context {
-    let blobs: Edit.Blobs? = storeAccess.withLock { _ in
-      var blobs: Edit.Blobs?
+    let loaded = editData(for: record)
+    guard loaded.missing.isEmpty else { throw ProjectError.missingEditData }
+    return record.context(with: loaded.blobs)
+  }
+
+  /// The data an Edit step's record names, each read on its own: what's there and matches its
+  /// digest, and which are gone or different, so opening the step turns off only the settings
+  /// whose data is lost (`Edit.Record.options(without:)`). A store that won't open is missing all.
+  func editData(for record: Edit.Record) -> Edit.LoadedData {
+    var named = Edit.MissingData()
+    if record.realNoise != nil { named.insert(.realNoise) }
+    if record.referenceHistogram != nil { named.insert(.referenceHistogram) }
+    if record.lut != nil { named.insert(.lut) }
+    guard !named.isEmpty else { return Edit.LoadedData(blobs: Edit.Blobs(), missing: []) }
+    return storeAccess.withLock { _ in
+      var loaded = Edit.LoadedData(blobs: Edit.Blobs(), missing: named)
       graph.openStore(url.path, flags: [.readOnly]) { store in
         func read(_ name: String?) -> AnyTensor? { name.flatMap { store.read($0, codec: [.fpzip, .zip]) } }
-        var loaded = Edit.Blobs()
-        if let ref = record.realNoise {
-          guard let noise = read(ref.tensorName).flatMap({ Self.realNoise(from: $0, ref) }), noise.digest == ref.digest else { return }
-          loaded.realNoise = noise
+        if let ref = record.realNoise, let noise = read(ref.tensorName).flatMap({ Self.realNoise(from: $0, ref) }), noise.digest == ref.digest {
+          loaded.blobs.realNoise = noise
+          loaded.missing.remove(.realNoise)
         }
-        if let ref = record.referenceHistogram {
-          guard let table = read(ref.tensorName).flatMap(Self.histogram(from:)), table.digest == ref.digest else { return }
-          loaded.referenceHistogram = table
+        if let ref = record.referenceHistogram, let table = read(ref.tensorName).flatMap(Self.histogram(from:)), table.digest == ref.digest {
+          loaded.blobs.referenceHistogram = table
+          loaded.missing.remove(.referenceHistogram)
         }
-        if let ref = record.lut {
-          guard let table = read(ref.tensorName).flatMap({ Self.lut(from: $0, ref) }), table.digest == ref.digest else { return }
-          loaded.lut = table
+        if let ref = record.lut, let table = read(ref.tensorName).flatMap({ Self.lut(from: $0, ref) }), table.digest == ref.digest {
+          loaded.blobs.lut = table
+          loaded.missing.remove(.lut)
         }
-        blobs = loaded
       }
-      return blobs
+      return loaded
     }
-    guard let blobs else { throw ProjectError.missingEditData }
-    return record.context(with: blobs)
   }
 
   /// grain.py's patch bytes as a `[count, patch, patch, 3]` tensor.

@@ -7,7 +7,7 @@ Edit works on images, not videos.
 ## Opening an image
 
 - **Open in Edit**, when you right-click an image in History or on the Create screen's canvas, brings that step here.
-- **Open Image…** and **Open from Photos…** (toolbar) open a file or a photo, and you can drop an image file on the screen.
+- **Open Image…** and **Open from Photos…** (toolbar) open a file or a photo, and you can drop an image on the screen: a file, or a picture dragged from Photos or a browser.
 - **Use Canvas Image** (toolbar) takes the image on the Create screen's canvas: its step when it's one, or the image itself.
 
 The image's name is in the bottom bar ("Project, step 12", or the file's name). The screen keeps the image and its look while you switch to other screens, and comes back to the same step at the next launch.
@@ -59,7 +59,7 @@ A warm glow around highlights, as film gives. **Amount** sets how strong it is, 
 
 The bottom bar's comparison picks how you see the original:
 
-- **Hold for Original** shows the edit; press and hold **Hold to See Original** to see the original in its place.
+- **Hold for Original** shows the edit; press and hold the **Hold for Original** button beside the picker to see the original in its place. With VoiceOver, the button's action turns the original on and off.
 - **Side by Side** shows the original and the edit next to each other.
 - **Slider** shows one picture with a divider you drag across it. It shows the whole image only.
 
@@ -75,11 +75,11 @@ A project records image sizes in steps of 64 pixels, as Draw Things does, so His
 
 ### Opening an edit again
 
-A step saved from Edit records its look: the settings, the profile's name, grain data and real noise, the reference's measurements, and the LUT's table. Opening it in Edit goes back to the image it was made from with that look, so you can change the settings rather than add grain over grain. The data is kept in the project, so the step can be opened again exactly even if the profile, reference or LUT file is gone; steps that share a profile or LUT share one copy. If the image it was made from has been deleted, the edit itself opens.
+A step saved from Edit records its look: the settings, the profile's name, grain data and real noise, the reference's measurements, and the LUT's table. Opening it in Edit goes back to the image it was made from with that look, so you can change the settings rather than add grain over grain. The data is kept in the project, so the step can be opened again exactly even if the profile, reference or LUT file is gone; steps that share a profile or LUT share one copy. If the image it was made from has been deleted, the edit itself opens. If some of the step's data is gone from the project (its real noise, its reference's histograms or its LUT), only the setting that needs it is turned off, and the screen says which.
 
 ## On iPad
 
-The inspector is a panel beside the image, as in the Video Editor. **Hold to See Original** is pressed and held with a finger; pinch to zoom. The profile library lives in Atelier's own storage; use **Open Profile…** and **Save Profile…** to move profiles to and from Files.
+The inspector is a panel beside the image, as in the Video Editor. **Hold for Original** is pressed and held with a finger; pinch to zoom. The profile library lives in Atelier's own storage; use **Open Profile…** and **Save Profile…** to move profiles to and from Files.
 
 ## Agents
 

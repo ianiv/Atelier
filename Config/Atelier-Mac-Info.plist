@@ -23,5 +23,28 @@
 	</array>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Save to Photos adds your generated images to your photo library.</string>
+	<!-- The Edit screen's .cube LUTs (UTType.cubeLUT): imported, since Atelier doesn't own the
+	     format, under the identifier DaVinci Resolve exports, so Save panels name files .cube. -->
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.blackmagicdesign.cube</string>
+			<key>UTTypeDescription</key>
+			<string>3D LUT</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.text</string>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>cube</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
 </dict>
 </plist>

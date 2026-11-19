@@ -100,6 +100,38 @@ nonisolated enum Edit {
     }
   }
 
+  /// Which of a record's stored data couldn't be read back from its project: gone, or not what
+  /// its digest says (`Project.editData(for:)`). Each counts on its own, so a lost histogram
+  /// doesn't also turn off the real noise and LUT that are still there.
+  struct MissingData: OptionSet, Hashable, Sendable {
+    let rawValue: Int
+    static let realNoise = MissingData(rawValue: 1)
+    static let referenceHistogram = MissingData(rawValue: 2)
+    static let lut = MissingData(rawValue: 4)
+
+    /// "`owner` real noise and LUT data is missing from the project, so Real Noise and the LUT
+    /// are off." Nil when nothing is.
+    func note(_ owner: String) -> String? {
+      let parts: [(data: String, setting: String)] = [
+        contains(.realNoise) ? ("real noise", "Real Noise") : nil,
+        contains(.referenceHistogram) ? ("reference histogram", "the histogram match") : nil,
+        contains(.lut) ? ("LUT", "the LUT") : nil,
+      ].compactMap(\.self)
+      guard !parts.isEmpty else { return nil }
+      func list(_ items: [String]) -> String {
+        items.count < 3 ? items.joined(separator: " and ") : items.dropLast().joined(separator: ", ") + " and " + items[items.count - 1]
+      }
+      return "\(owner) \(list(parts.map(\.data))) data is missing from the project, so \(list(parts.map(\.setting))) "
+        + (parts.count == 1 ? "is off." : "are off.")
+    }
+  }
+
+  /// A record's data as read back from its project: what was there, and what wasn't.
+  struct LoadedData: Sendable {
+    var blobs: Blobs
+    var missing: MissingData
+  }
+
   /// What a step saved from the Edit screen records (`profile_data` `edit`): its look, and what it
   /// was rendered with, so opening it in Edit goes back to its source with the same settings, and
   /// it renders again exactly even once the profile or LUT file is gone. By the user's choice each
@@ -171,6 +203,24 @@ nonisolated enum Edit {
         digests: EditPipeline.Context.Digests(
           realNoise: noise == nil ? nil : realNoise?.digest, referenceHistogram: histogram == nil ? nil : referenceHistogram?.digest,
           lut: table == nil ? nil : lut?.digest))
+    }
+
+    /// Of `missing`, the data whose settings can't render as saved. A match to the original
+    /// needs none of its stored histograms: the original is measured again when the step opens.
+    func lost(_ missing: MissingData) -> MissingData {
+      var lost = missing
+      if options.match.target == .original { lost.remove(.referenceHistogram) }
+      return lost
+    }
+
+    /// The look as it renders without the `lost` data: Real Noise off without its patches, the
+    /// histogram match off without its tables, the LUT off without its table. The rest stays.
+    func options(without lost: MissingData) -> EditOptions {
+      var look = options
+      if lost.contains(.realNoise) { look.grain.real = 0 }
+      if lost.contains(.referenceHistogram) { look.histogram.amount = 0 }
+      if lost.contains(.lut) { look.lut = EditOptions.LUTRef() }
+      return look
     }
 
     /// What makes the image: everything but the names and where the data is stored, the options

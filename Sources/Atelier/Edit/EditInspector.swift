@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The Edit screen's inspector: Look, Match, Grade, LUT, Halation, Lens, Vignette and Grain, in
 /// pipeline order. Every control is always there; one that can't do anything yet (no image, no
@@ -76,7 +77,10 @@ struct EditInspector: View {
         Button("Match Reference") { Task { await edit.matchReference() } }
           .disabled(!edit.canMatchReference)
           .help("Measure the reference's grain and colour noise and take them on, as grain.py --match does")
-        if edit.isMeasuring { ProgressView().controlSize(.small) }
+        // Always there, shown only while measuring, so the row never shifts.
+        ProgressView().controlSize(.small)
+          .opacity(edit.isMeasuring ? 1 : 0)
+          .accessibilityHidden(!edit.isMeasuring)
       }
       .controlSize(.small)
       .padding(.vertical, 4)
@@ -259,6 +263,7 @@ struct EditInspector: View {
         HStack(spacing: 6) {
           TextField("", value: grain.seed, format: .number.grouping(.never))
             .labelsHidden()
+            .accessibilityLabel("Seed")
             .multilineTextAlignment(.trailing)
             .frame(width: 80)
           Button("New Grain") { edit.newGrain() }
@@ -329,7 +334,7 @@ struct EditInspector: View {
   }
 
   private func loadLUT() {
-    fileDialogs.open = FileDialogs.Open(types: [.cubeLUT, .plainText]) { urls in
+    fileDialogs.open = FileDialogs.Open(types: UTType.cubeLUTFiles) { urls in
       guard let url = urls.first else { return }
       do { try edit.loadLUT(from: url) } catch { self.error = error.localizedDescription }
     }
@@ -344,26 +349,35 @@ struct EditInspector: View {
     }
   }
 
+  @concurrent private nonisolated static func decode(_ url: URL) async -> CGImage? {
+    let access = url.startAccessingSecurityScopedResource()
+    defer { if access { url.stopAccessingSecurityScopedResource() } }
+    return ImageLoader.image(at: url)
+  }
+
   private func chooseReferenceFile() {
     fileDialogs.open = FileDialogs.Open(types: [.image]) { urls in
       guard let url = urls.first else { return }
-      let access = url.startAccessingSecurityScopedResource()
-      defer { if access { url.stopAccessingSecurityScopedResource() } }
-      guard let image = ImageLoader.image(at: url) else {
-        error = "“\(url.lastPathComponent)” couldn't be read as an image."
-        return
+      Task {
+        // Read off the main actor: a large file takes a while to decode.
+        guard let image = await Self.decode(url) else {
+          error = "“\(url.lastPathComponent)” couldn't be read as an image."
+          return
+        }
+        await edit.setReference(image: image, name: url.deletingPathExtension().lastPathComponent)
       }
-      Task { await edit.setReference(image: image, name: url.deletingPathExtension().lastPathComponent) }
     }
   }
 
   private func chooseReferencePhoto() {
     fileDialogs.photos = FileDialogs.Photos { photos, _ in
-      guard let data = photos.first, let image = ImageLoader.image(from: data) else {
-        error = "The photo couldn't be loaded."
-        return
+      Task {
+        guard let data = photos.first, let image = await EditModel.decode(data) else {
+          error = "The photo couldn't be loaded."
+          return
+        }
+        await edit.setReference(image: image, name: "Photo")
       }
-      Task { await edit.setReference(image: image, name: "Photo") }
     }
   }
 

@@ -104,6 +104,8 @@ final class EditModel {
   private(set) var isMeasuring = false
   /// Exporting a PNG or LUT.
   private(set) var isExporting = false
+  /// Add to History is saving the entry.
+  private(set) var isAdding = false
 
   // MARK: Rendering
 
@@ -143,22 +145,22 @@ final class EditModel {
 
   /// Opens `item`, a step of the current project (the canvas's, or History's). A step saved from
   /// here opens as its source with its look and what it was rendered with, so its grain isn't
-  /// added twice (`reopening(_:in:)`); its data gone from the project (`missingEditData`), the
-  /// look comes back with Real Noise and the LUT off.
+  /// added twice (`reopening(_:in:)`); a piece of its data gone from the project
+  /// (`Project.editData(for:)`), the look comes back with only that setting off.
   func open(_ item: HistoryItem) async {
     guard let create, !item.isVideo, item.hasImage else { return }
+    let generation = beginOpen()
+    defer { endOpen(generation) }
     let project = create.history.project
-    isLoading = true
-    defer { isLoading = false }
     note = nil
     missingDataNote = nil
     var sourceItem = item
-    var restored: (record: Edit.Record, context: EditPipeline.Context?)?
+    var restored: (record: Edit.Record, data: Edit.LoadedData)?
     if let record = item.sidecar.edit {
       if let found = Self.reopening(record, in: create.history.tree) {
         sourceItem = found
-        let context = await project.read { try? $0.editContext(for: record) }
-        restored = (record, context)
+        let data = await project.read { $0.editData(for: record) }
+        restored = (record, data)
       } else {
         note = "The image this edit was made from is no longer in the project, so the edit itself opens."
       }
@@ -166,27 +168,60 @@ final class EditModel {
     guard let tensorId = sourceItem.imageTensorId,
           let picture = await project.read({ $0.image(tensorId: tensorId) })
     else {
-      note = "The image couldn't be read."
+      if opens.isCurrent(generation) { note = "The image couldn't be read." }
       return
     }
+    // A newer open (another step, a file, the session's restore) came in while this one read.
+    guard opens.isCurrent(generation) else { return }
     setSource(.step(project: project.name, tensorId: sourceItem.tensorId), item: sourceItem, image: picture)
     reference = nil
     matchReport = nil
-    if let restored { restore(restored.record, context: restored.context) }
+    if let restored { restore(restored.record, data: restored.data) }
     rebuildContext()
     EditSession(project: project.name, tensorId: sourceItem.tensorId).save()
-    await measureOriginal(of: sourceItem, in: project)
+    await measureOriginal(of: sourceItem, in: project, generation: generation)
   }
 
   /// The step an edited step's record says it came from, which Edit opens in its place; nil
-  /// when it's gone (or isn't an image any more).
+  /// when it's gone (or isn't an image any more). A source that is itself an edited step is
+  /// followed back to the first step with no record (`editSource(of:in:)`), so the look never
+  /// goes on over a look.
   nonisolated static func reopening(_ record: Edit.Record, in tree: ProjectTree) -> HistoryItem? {
-    tree.step(tensorId: record.sourceTensorId).flatMap { tree.items[$0] }.flatMap { $0.isVideo || !$0.hasImage ? nil : $0 }
+    imageStep(record.sourceTensorId, in: tree).map { editSource(of: $0, in: tree) }
+  }
+
+  /// What an edit of `item` starts from: `item`, or for an edited step the step its record names,
+  /// and so on back to a step with no record, stopping at the last one still in the project (and
+  /// at a step already passed, should records ever name each other).
+  nonisolated static func editSource(of item: HistoryItem, in tree: ProjectTree) -> HistoryItem {
+    editSource(of: item) { imageStep($0, in: tree) }
+  }
+
+  /// `editSource(of:in:)` over any lookup of a step by tensor id.
+  nonisolated static func editSource(of item: HistoryItem, lookup: (Int64) -> HistoryItem?) -> HistoryItem {
+    var current = item
+    var passed: Set<Int64> = [item.tensorId]
+    while let record = current.sidecar.edit, let next = lookup(record.sourceTensorId), passed.insert(next.tensorId).inserted {
+      current = next
+    }
+    return current
+  }
+
+  /// The image step `tensorId` names in `tree`; nil for a video, an empty entry or none.
+  private nonisolated static func imageStep(_ tensorId: Int64, in tree: ProjectTree) -> HistoryItem? {
+    tree.step(tensorId: tensorId).flatMap { tree.items[$0] }.flatMap { $0.isVideo || !$0.hasImage ? nil : $0 }
   }
 
   /// Opens an image that isn't a step (a file, a photo, a canvas image from outside the
   /// project): it can be exported, or added to History to save edits after it.
   func open(image: CGImage, name: String) {
+    let generation = beginOpen()
+    show(image: image, name: name)
+    endOpen(generation)
+  }
+
+  /// `open(image:name:)` once the open is known to be the latest.
+  private func show(image: CGImage, name: String) {
     note = nil
     missingDataNote = nil
     setSource(.file(name: name), item: nil, image: image)
@@ -196,24 +231,55 @@ final class EditModel {
     EditSession.clear()
   }
 
-  /// Opens an image file (Open Image…, a drop), reading it with security-scoped access.
-  func open(url: URL) {
-    let access = url.startAccessingSecurityScopedResource()
-    defer { if access { url.stopAccessingSecurityScopedResource() } }
-    guard let image = ImageLoader.image(at: url) else {
+  /// Opens an image file (Open Image…, a drop), read off the main actor with security-scoped access.
+  func open(url: URL) async {
+    let generation = beginOpen()
+    defer { endOpen(generation) }
+    let image = await Self.decode(url)
+    guard opens.isCurrent(generation) else { return }
+    guard let image else {
       note = "“\(url.lastPathComponent)” couldn't be read as an image."
       return
     }
-    open(image: image, name: url.deletingPathExtension().lastPathComponent)
+    show(image: image, name: url.deletingPathExtension().lastPathComponent)
   }
 
-  /// Opens a photo from the library (Open from Photos…).
-  func open(photo data: Data) {
-    guard let image = ImageLoader.image(from: data) else {
-      note = "The photo couldn't be read."
+  /// Opens a photo from the library (Open from Photos…), decoded off the main actor.
+  func open(photo data: Data) async {
+    await open(data: data, name: "Photo", failure: "The photo couldn't be read.")
+  }
+
+  /// Opens what's dropped on the preview: an image file or image data (a photo dragged from
+  /// Photos or a browser), as the canvas takes them (`CanvasDrop`). A video isn't for Edit.
+  func open(dropped provider: NSItemProvider) async {
+    let generation = beginOpen()
+    defer { endOpen(generation) }
+    let name = provider.suggestedName.map { ($0 as NSString).deletingPathExtension } ?? "Dropped Image"
+    let dropped: CanvasDrop?
+    do {
+      dropped = try await CanvasDrop.load(provider)
+    } catch {
+      if opens.isCurrent(generation) { note = "The dropped image couldn't be read." }
       return
     }
-    open(image: image, name: "Photo")
+    guard opens.isCurrent(generation) else { return }
+    switch dropped {
+    case .image(let image): show(image: image.image, name: name)
+    case .video: note = "Edit works on images, not videos."
+    case nil: note = "Only an image can be dropped here."
+    }
+  }
+
+  private func open(data: Data, name: String, failure: String) async {
+    let generation = beginOpen()
+    defer { endOpen(generation) }
+    let image = await Self.decode(data)
+    guard opens.isCurrent(generation) else { return }
+    guard let image else {
+      note = failure
+      return
+    }
+    show(image: image, name: name)
   }
 
   /// Opens what the Create screen's canvas shows: its step, or the image itself when it isn't one.
@@ -232,15 +298,47 @@ final class EditModel {
     return create.canvasShowsImage && create.imageItem?.isVideo != true
   }
 
-  /// Brings back the step open at the last quit, once its project is the current one.
+  /// Brings back the step open at the last quit, once its project is the current one. Not once
+  /// anything has been asked to open: a slow restore finishing after Open in Edit would replace
+  /// the image the user asked for.
   func restoreSession() async {
-    guard source == nil, let saved = EditSession.load(), let create, create.history.project.name == saved.project,
-          let item = create.history.item(tensorId: saved.tensorId)
+    guard source == nil, !isLoading, !opens.anyRequested, let saved = EditSession.load(), let create,
+          create.history.project.name == saved.project, let item = create.history.item(tensorId: saved.tensorId)
     else { return }
     await open(item)
   }
 
-  /// Puts `image` up as the source, dropping what the renderer kept for the last one.
+  // MARK: Open generations
+
+  /// Every open asked for, counted as it starts (before anything is read), so one that finishes
+  /// after a newer one drops its result rather than replacing the newer image.
+  private var opens = OpenGenerations()
+
+  private func beginOpen() -> Int {
+    isLoading = true
+    return opens.begin()
+  }
+
+  private func endOpen(_ generation: Int) {
+    if opens.isCurrent(generation) { isLoading = false }
+  }
+
+  @concurrent private nonisolated static func decode(_ url: URL) async -> CGImage? {
+    let access = url.startAccessingSecurityScopedResource()
+    defer { if access { url.stopAccessingSecurityScopedResource() } }
+    return ImageLoader.image(at: url)
+  }
+
+  @concurrent nonisolated static func decode(_ data: Data) async -> CGImage? {
+    ImageLoader.image(from: data)
+  }
+
+  @concurrent private nonisolated static func fitted(_ image: CGImage) async -> CGImage {
+    ImageLoader.fitted(image, maxSide: 2048)
+  }
+
+  /// Puts `image` up as the source, dropping what the renderer kept for the last one. The fitted
+  /// copy for the original's side is made off the main actor; the source stands in until then.
   private func setSource(_ source: Source, item: HistoryItem?, image: CGImage) {
     if let old = self.image, old !== image {
       let renderer = renderer
@@ -249,20 +347,21 @@ final class EditModel {
     self.source = source
     self.item = item
     self.image = image
-    originalPreview = ImageLoader.fitted(image, maxSide: 2048)
+    originalPreview = nil
     canvas.zoomToFit()
+    Task {
+      let fitted = await Self.fitted(image)
+      if self.image === image { originalPreview = fitted }
+    }
   }
 
-  /// A saved step's look and data back on the screen. Without its data (`context` nil) the
-  /// settings that need it are turned off.
-  private func restore(_ record: Edit.Record, context saved: EditPipeline.Context?) {
-    var look = record.options
-    let context = saved ?? record.context(with: Edit.Blobs())
-    if saved == nil {
-      missingDataNote = "This edit's real noise or LUT data is missing from the project, so Real Noise and the LUT are off."
-      look.grain.real = 0
-      look.lut = EditOptions.LUTRef()
-    }
+  /// A saved step's look and data back on the screen. A setting whose data is gone from the
+  /// project is turned off, and only that one (`Edit.Record.options(without:)`).
+  private func restore(_ record: Edit.Record, data: Edit.LoadedData) {
+    let lost = record.lost(data.missing)
+    let look = record.options(without: lost)
+    let context = record.context(with: data.blobs)
+    missingDataNote = lost.note("This edit's")
     options = look
     // The profile as it was rendered with, under its name: its file may have changed or gone.
     profile = record.profileName.map { name in
@@ -280,7 +379,7 @@ final class EditModel {
 
   /// Measures the step's original (the image it was made from, else its parent's) for
   /// `Match.Target.original`.
-  private func measureOriginal(of item: HistoryItem, in project: Project) async {
+  private func measureOriginal(of item: HistoryItem, in project: Project, generation: Int) async {
     original = nil
     rebuildContext()
     guard let create else { return }
@@ -294,7 +393,7 @@ final class EditModel {
     }
     guard let found,
           let measured = try? await EditPipeline.measureReference(found.image, name: "Original", profile: false),
-          self.item?.tensorId == item.tensorId
+          opens.isCurrent(generation), self.item?.tensorId == item.tensorId
     else { return }
     original = Reference(name: "Original", tensorId: found.tensorId, lab: measured.lab, histogram: measured.histogram, image: found.image)
     rebuildContext()
@@ -487,33 +586,50 @@ final class EditModel {
 
   /// Add to History: the opened file goes into the current project as an Imported entry (as an
   /// image opened on the canvas does), becomes the source, and the edit is queued after it.
+  ///
+  /// Once at a time (`isAdding`: the button is off meanwhile, and a second call throws `busy`).
+  /// The project and image are the ones at the start: if another image opens while the entry is
+  /// saved, the entry stays in History but isn't adopted and nothing is queued (it throws
+  /// `CancellationError`); if the project changes, the entry keeps its own project's name and
+  /// the edit isn't queued into the new one.
   @discardableResult
   func addToHistory() async throws -> UUID {
+    guard !isAdding else { throw EditError.busy }
     guard let create, case .file = source, let image else { throw EditError.noStep }
     guard var input = create.entryInput(.imported) else { throw EditError.notLoaded }
+    isAdding = true
+    defer { isAdding = false }
+    let history = create.history
+    let project = history.project
     input.canvas = .image(image)
     input.canvasImage = image
     input.mask = nil
     input.moodboard = []
-    guard let entry = try await create.history.saveEntry(input, after: create.history.currentTensorId, makeCurrent: false) else {
+    guard let entry = try await history.saveEntry(input, after: history.currentTensorId, makeCurrent: false) else {
       throw EditError.notLoaded
     }
-    source = .step(project: create.history.project.name, tensorId: entry.tensorId)
+    // Something else opened meanwhile: the entry is the old image's, not the screen's now.
+    guard self.image === image, isFromFile else { throw CancellationError() }
+    source = .step(project: project.name, tensorId: entry.tensorId)
     item = entry
-    EditSession(project: create.history.project.name, tensorId: entry.tensorId).save()
+    EditSession(project: project.name, tensorId: entry.tensorId).save()
+    guard history.project === project else { throw EditError.projectChanged(project.name) }
     return try save()
   }
 
   /// The source rendered at full size with the look, as a PNG: with the step's settings and the
   /// edit's record when it's a step (as History's exports carry them, unless Settings turns that
-  /// off), plain for a file.
+  /// off), plain for a file. The look, its data and the record are all taken at the start, so a
+  /// change made while it renders goes in neither the pixels nor the metadata.
   func exportPNG() async throws -> Data {
     guard let image else { throw EditError.noImage }
     isExporting = true
     defer { isExporting = false }
+    let options = options, context = context, item = item
+    let job = AppSettings.embedsSettings ? pendingJob : nil
     let rendered = try await renderer.full(source: image, options: options, context: context)
     var sidecar: HistoryStore.Sidecar?
-    if AppSettings.embedsSettings, let item, let job = pendingJob {
+    if let item, let job {
       sidecar = item.sidecar
       sidecar?.edit = job.record
       sidecar?.width = rendered.width
@@ -564,13 +680,15 @@ final class EditModel {
   }
 
   enum EditError: LocalizedError {
-    case noStep, noImage, notLoaded
+    case noStep, noImage, notLoaded, busy, projectChanged(String)
 
     var errorDescription: String? {
       switch self {
       case .noStep: "The image isn't a step in History."
       case .noImage: "There's no image open."
       case .notLoaded: "The project hasn't finished loading."
+      case .busy: "The image is already being added to History."
+      case .projectChanged(let name): "The image was added to “\(name)”, which is no longer open, so the edit wasn't saved after it."
       }
     }
   }
@@ -600,4 +718,21 @@ final class EditModel {
     guard SessionState.isEnabled, let data = encodeRemembered(options) else { return }
     UserDefaults.standard.set(data, forKey: optionsKey)
   }
+}
+
+/// Counts the Edit screen's opens (`EditModel.open`), each numbered as it starts, so only the
+/// latest one's result goes up: an older one finishing later is stale.
+nonisolated struct OpenGenerations: Equatable, Sendable {
+  private(set) var latest = 0
+
+  /// A new open's number; every earlier one is stale from now on.
+  mutating func begin() -> Int {
+    latest += 1
+    return latest
+  }
+
+  func isCurrent(_ generation: Int) -> Bool { generation == latest }
+
+  /// Whether anything has been asked to open yet.
+  var anyRequested: Bool { latest > 0 }
 }

@@ -311,6 +311,50 @@ struct EditProjectDataTests {
     await project.close()
   }
 
+  /// Each piece of a record's data is read on its own (`Project.editData(for:)`): a lost LUT
+  /// leaves the real noise and histograms, and opening the step turns off only the LUT.
+  @Test func eachPieceOfDataIsMissingOnItsOwn() async throws {
+    let folder = try Self.folder()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let (project, edits) = try await Self.build(folder)
+    let items = await project.read { $0.items() }
+    var record = try #require(items.first { $0.tensorId == edits[0] }?.sidecar.edit)
+    record.options.match.target = .reference
+    let shared = EditJobTests.context()
+    let whole = project.editData(for: record)
+    #expect(whole.missing.isEmpty && record.context(with: whole.blobs) == shared)
+
+    var noLUT = record
+    noLUT.lut?.digest = "00"
+    let lutGone = project.editData(for: noLUT)
+    #expect(lutGone.missing == .lut)
+    #expect(lutGone.blobs.realNoise == shared.realNoise && lutGone.blobs.referenceHistogram == shared.referenceHistogram && lutGone.blobs.lut == nil)
+    let look = noLUT.options(without: noLUT.lost(lutGone.missing))
+    #expect(look.lut.isIdentity && look.grain.real == record.options.grain.real && look.histogram.amount == record.options.histogram.amount)
+    #expect(noLUT.lost(lutGone.missing).note("This edit's") == "This edit's LUT data is missing from the project, so the LUT is off.")
+
+    var noHistogram = record
+    noHistogram.referenceHistogram?.id = nil
+    let histogramGone = project.editData(for: noHistogram)
+    #expect(histogramGone.missing == .referenceHistogram && histogramGone.blobs.lut == shared.lut && histogramGone.blobs.realNoise != nil)
+    let unmatched = noHistogram.options(without: noHistogram.lost(histogramGone.missing))
+    #expect(unmatched.histogram.amount == 0 && unmatched.grain.real == record.options.grain.real && unmatched.lut == record.options.lut)
+    // Matched to the original, which is measured again on opening: nothing is lost.
+    var toOriginal = noHistogram
+    toOriginal.options.match.target = .original
+    #expect(toOriginal.lost(histogramGone.missing).isEmpty)
+
+    var noNoise = record
+    noNoise.realNoise?.id = nil
+    let noiseGone = project.editData(for: noNoise)
+    #expect(noiseGone.missing == .realNoise && noiseGone.blobs.lut == shared.lut)
+    #expect(noNoise.options(without: noiseGone.missing).grain.real == 0)
+
+    let plain = Edit.Record(options: .identity, sourceTensorId: 1)
+    #expect(project.editData(for: plain).missing.isEmpty)
+    await project.close()
+  }
+
   @Test func dataGoesWithTheLastStepNamingIt() async throws {
     let folder = try Self.folder()
     defer { try? FileManager.default.removeItem(at: folder) }
@@ -380,6 +424,68 @@ struct EditModelTests {
     let after = await project.read { $0.tree() }
     #expect(EditModel.reopening(record, in: after) == nil)
     await project.close()
+  }
+
+  /// An edited step whose record names another edited step (an agent's, or older data) opens
+  /// as the first step with no record, so its look isn't put over a look.
+  @Test func anEditOfAnEditOpensAsTheFirstSource() async throws {
+    let folder = FileManager.default.temporaryDirectory.appending(path: "EditModelTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let project = Project(url: folder.appending(path: "Chain.sqlite3"))
+    func append(after parent: Int64?, _ job: Edit.Job? = nil) async throws -> HistoryItem {
+      let tensor = try #require(ImageTensor.tensor(from: CanvasRefineTests.pattern(width: 8, height: 8)))
+      return try await project.append(
+        tensor: tensor, model: "m", prompt: "p", negativePrompt: "", seed: 1, settings: [:], createdAt: Date(), duration: 0,
+        after: parent, edit: job?.record, editBlobs: job?.blobs ?? Edit.Blobs())
+    }
+    let source = try await append(after: nil)
+    let first = try await append(after: source.tensorId, EditJobTests.job(source: source.tensorId))
+    let second = try await append(after: first.tensorId, EditJobTests.job(source: first.tensorId))
+    let tree = await project.read { $0.tree() }
+    let record = try #require(tree.items.values.first { $0.tensorId == second.tensorId }?.sidecar.edit)
+    #expect(EditModel.reopening(record, in: tree)?.tensorId == source.tensorId)
+    let edited = try #require(tree.items.values.first { $0.tensorId == second.tensorId })
+    #expect(EditModel.editSource(of: edited, in: tree).tensorId == source.tensorId)
+    // With the first source gone, the chain stops at the last step still there.
+    _ = try await project.delete(tensorId: source.tensorId)
+    let after = await project.read { $0.tree() }
+    #expect(EditModel.reopening(record, in: after)?.tensorId == first.tensorId)
+    await project.close()
+  }
+
+  /// Records that name each other stop at the first step met twice instead of going round.
+  @Test func anEditChainStopsAtACycle() {
+    var a = makeItem(1), b = makeItem(2), c = makeItem(3)
+    a.sidecar.edit = Edit.Record(options: .identity, sourceTensorId: 2)
+    b.sidecar.edit = Edit.Record(options: .identity, sourceTensorId: 1)
+    c.sidecar.edit = Edit.Record(options: .identity, sourceTensorId: 99)
+    let items = [Int64(1): a, 2: b, 3: c]
+    #expect(EditModel.editSource(of: a) { items[$0] }.tensorId == 2)
+    #expect(EditModel.editSource(of: b) { items[$0] }.tensorId == 1)
+    // A source that isn't there leaves the step itself.
+    #expect(EditModel.editSource(of: c) { items[$0] }.tensorId == 3)
+    #expect(EditModel.editSource(of: makeItem(4)) { items[$0] }.tensorId == 4)
+  }
+
+  /// Only the latest open's result goes up: one started earlier is stale once another begins.
+  @Test func onlyTheLatestOpenIsCurrent() {
+    var opens = OpenGenerations()
+    #expect(!opens.anyRequested)
+    let restore = opens.begin()
+    #expect(opens.isCurrent(restore) && opens.anyRequested)
+    let picked = opens.begin()
+    #expect(!opens.isCurrent(restore) && opens.isCurrent(picked))
+  }
+
+  @Test func missingDataNotesNameEachSetting() {
+    #expect(Edit.MissingData().note("x") == nil)
+    #expect(
+      Edit.MissingData([.realNoise, .lut]).note("Step 3's")
+        == "Step 3's real noise and LUT data is missing from the project, so Real Noise and the LUT are off.")
+    #expect(
+      Edit.MissingData([.realNoise, .referenceHistogram, .lut]).note("This edit's")
+        == "This edit's real noise, reference histogram and LUT data is missing from the project, so Real Noise, the histogram match and the LUT are off.")
   }
 
   @Test func theFittedPreviewIsEnoughUntilZoomedPastIt() {

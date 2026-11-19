@@ -2447,15 +2447,15 @@ final class AgentTools {
         profileName = record.profileName
         referenceName = record.referenceName
         referenceTensorId = record.referenceTensorId
-        if let saved = await project.read({ try? $0.editContext(for: record) }) {
-          context = saved
-        } else {
-          context = record.context(with: Edit.Blobs())
-          options.grain.real = 0
-          options.lut = EditOptions.LUTRef()
-          notes.append("Step \(given.id.logicalTime)'s real noise or LUT data is missing from the project, so its Real Noise and LUT are off.")
-        }
-        if context.referenceLab != nil || context.referenceHistogram != nil { measuredTarget = record.options.match.target }
+        // Each piece of data on its own: only the setting whose data is gone goes off.
+        let data = await project.read { $0.editData(for: record) }
+        let lost = record.lost(data.missing)
+        context = record.context(with: data.blobs)
+        options = record.options(without: lost)
+        if let note = lost.note("Step \(given.id.logicalTime)'s") { notes.append(note) }
+        // A match to the original whose stored histograms are gone measures the original again.
+        let remeasure = record.options.match.target == .original && data.missing.contains(.referenceHistogram)
+        if !remeasure, context.referenceLab != nil || context.referenceHistogram != nil { measuredTarget = record.options.match.target }
       } else {
         notes.append("The image step \(given.id.logicalTime) was edited from is no longer in the project, so the edit itself is the source.")
       }
@@ -2495,13 +2495,13 @@ final class AgentTools {
       referenceName = reference.name
       referenceTensorId = reference.tensorId
       if matchesReference {
-        guard let made = measured.profile, let fit = await Self.grainMatch(of: reference.image) else {
+        guard let made = measured.profile, let match = measured.match, let stats = made.refStats else {
           throw ToolError("“\(reference.name)” has no flat, mid-bright area to measure its grain on, so match_reference can't fit grain to it.")
         }
         options = made.settings.applied(to: options)
         context = context.using(made)
         profileName = made.name
-        report = Self.matchReportJSON(fit.match, stats: fit.stats, width: reference.image.width, height: reference.image.height)
+        report = Self.matchReportJSON(match, stats: stats, width: reference.image.width, height: reference.image.height)
       }
     } else if matchesReference {
       throw ToolError("`match_reference` measures a reference: pass `reference_path` or `reference_history_step`.")

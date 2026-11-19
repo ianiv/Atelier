@@ -8,7 +8,7 @@ struct EditScreen: View {
   @Environment(EditModel.self) private var edit
   @Environment(HistoryStore.self) private var history
   @Environment(FileDialogs.self) private var fileDialogs
-  /// Hold to See Original is pressed.
+  /// Hold for Original is pressed (or, with VoiceOver, turned on).
   @State private var holding = false
   @State private var error: String?
 
@@ -55,8 +55,9 @@ struct EditScreen: View {
       .pickerStyle(.segmented)
       .labelsHidden()
       .fixedSize()
-      // Pressed and held, not clicked: the original shows only while it's down.
-      Text("Hold to See Original")
+      // Pressed and held, not clicked: the original shows only while it's down. Named as the
+      // comparison mode that offers it.
+      Text(Compare.Mode.hold.title)
         .font(.callout)
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
@@ -66,6 +67,10 @@ struct EditScreen: View {
         .opacity(canHold ? 1 : 0.4)
         .allowsHitTesting(canHold)
         .accessibilityAddTraits(.isButton)
+        // VoiceOver can't press and hold: its action turns the original on and off instead.
+        .accessibilityValue(holding ? "Showing the original" : "Showing the edit")
+        .accessibilityAction { if canHold { holding.toggle() } }
+        .onChange(of: canHold) { if !canHold { holding = false } }
         .help("Press and hold to see the original in place of the edit")
       EditZoomControls(canvas: edit.canvas)
         .disabled(!edit.hasSource || edit.compareMode == .slider)
@@ -89,10 +94,16 @@ struct EditScreen: View {
         .help("Back to grain.py's default look, with no profile, reference or LUT")
       Button("Add to History") {
         Task {
-          do { try await edit.addToHistory() } catch { self.error = error.localizedDescription }
+          do {
+            try await edit.addToHistory()
+          } catch is CancellationError {
+            // Another image opened meanwhile: the entry is in History, nothing was queued.
+          } catch {
+            self.error = error.localizedDescription
+          }
         }
       }
-      .disabled(!edit.isFromFile || !history.isLoaded)
+      .disabled(!edit.isFromFile || !history.isLoaded || edit.isAdding)
       .help("Put the opened image in the current project and save the edit after it")
       Button("Save to History") {
         do { try edit.save() } catch { self.error = error.localizedDescription }
@@ -145,13 +156,13 @@ private struct EditZoomControls: View {
 enum EditFiles {
   static func openImage(_ edit: EditModel, _ dialogs: FileDialogs) {
     dialogs.open = FileDialogs.Open(types: [.image]) { urls in
-      if let url = urls.first { edit.open(url: url) }
+      if let url = urls.first { Task { await edit.open(url: url) } }
     }
   }
 
   static func openPhoto(_ edit: EditModel, _ dialogs: FileDialogs) {
     dialogs.photos = FileDialogs.Photos { photos, _ in
-      if let data = photos.first { edit.open(photo: data) } else { edit.note = "The photo couldn't be loaded." }
+      if let data = photos.first { Task { await edit.open(photo: data) } } else { edit.note = "The photo couldn't be loaded." }
     }
   }
 
@@ -249,18 +260,23 @@ private struct EditPreview: View {
   var body: some View {
     Group {
       if let image = edit.image {
-        switch edit.compareMode {
-        case .hold:
-          EditPane(image: image, showsOriginal: holding)
-        case .sideBySide:
-          HStack(spacing: 1) {
-            EditPane(image: image, showsOriginal: true, title: "Original")
-            EditPane(image: image, showsOriginal: false, title: "Edited")
+        Group {
+          switch edit.compareMode {
+          case .hold:
+            EditPane(image: image, showsOriginal: holding)
+          case .sideBySide:
+            HStack(spacing: 1) {
+              EditPane(image: image, showsOriginal: true, title: "Original")
+              EditPane(image: image, showsOriginal: false, title: "Edited")
+            }
+          case .slider:
+            EditSliderPane(image: image)
+              .padding(16)
           }
-        case .slider:
-          EditSliderPane(image: image)
-            .padding(16)
         }
+        // New panes for a new source: their renders are of the old one, and drawn in the new
+        // one's frame they'd show the old image stretched until the first render lands.
+        .id(ObjectIdentifier(image))
       } else {
         ContentUnavailableView {
           Label(edit.isLoading ? "Opening…" : "No image to edit", systemImage: Edit.symbol)
@@ -278,11 +294,13 @@ private struct EditPreview: View {
     .overlay {
       if isTargeted { Rectangle().strokeBorder(Color.accentColor, lineWidth: 2).allowsHitTesting(false) }
     }
-    .dropDestination(for: URL.self) { urls, _ in
-      guard let url = urls.first else { return false }
-      edit.open(url: url)
+    // What the canvas takes (`CanvasDrop`): image files and image data, which Photos and
+    // browsers drag rather than a file.
+    .onDrop(of: CanvasDrop.types, isTargeted: $isTargeted) { providers in
+      guard let provider = providers.first else { return false }
+      Task { await edit.open(dropped: provider) }
       return true
-    } isTargeted: { isTargeted = $0 }
+    }
   }
 }
 

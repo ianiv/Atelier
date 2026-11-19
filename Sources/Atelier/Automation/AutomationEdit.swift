@@ -15,8 +15,13 @@ extension Automation {
   /// - Export PNG gives a PNG of the source's size;
   /// - Export LUT… of a grade, loaded back as a LUT over no change, renders within a few levels
   ///   of the grade itself;
+  /// - Export PNG's metadata records the look at the start, though the look changes while it
+  ///   renders;
   /// - Save Profile… to a scratch folder and Open Profile… of that file give back the look's
   ///   settings, and the run's profile library is its own folder, never the user's;
+  /// - Add to History pressed twice while the first is saving adds one entry; Open in Edit of a
+  ///   step while a session restore runs, and an older open finishing after a newer one, leave
+  ///   the newer step on the screen;
   /// - the agent tools (`AgentTools` called directly, as the agent canvas check does):
   ///   list_grain_profiles lists a profile saved to that library; measure_reference on an image
   ///   of known grain (grain at size 2 rendered over flat grey) fits it; edit_image_look with
@@ -54,7 +59,7 @@ extension Automation {
       }
       // What the check changes on the screen, and the settings that keep it, as they are now.
       let defaults = UserDefaults.standard
-      let storedKeys = ["editOptions", "editCompareMode", "editSession"].map { ($0, defaults.object(forKey: $0)) }
+      let storedKeys = ["editOptions", "editCompareMode", "editSession", AppSettings.embedsSettingsKey].map { ($0, defaults.object(forKey: $0)) }
       let optionsBefore = editModel?.options, compareBefore = editModel?.compareMode, sectionBefore = navigation.section
       let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("Atelier edit check \(UUID().uuidString)")
       @MainActor func finish() {
@@ -191,6 +196,32 @@ extension Automation {
         check(false, "Export PNG failed: \(error.localizedDescription)")
       }
 
+      // Export's metadata is the look at the start, though the look changes while it renders.
+      defaults.set(true, forKey: AppSettings.embedsSettingsKey)
+      do {
+        let atStart = edit.options
+        let export = Task { try await edit.exportPNG() }
+        var spins = 0
+        while !edit.isExporting, spins < 1_000 {
+          await Task.yield()
+          spins += 1
+        }
+        var changed = atStart
+        changed.vignette.amount = 0.9
+        changed.grain.seed = 1234
+        edit.options = changed
+        let png = try await export.value
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let embedded = PNGText.text(keyword: "Atelier", in: png).flatMap { try? decoder.decode(HistoryStore.Sidecar.self, from: Data($0.utf8)) }
+        check(
+          embedded?.edit?.options == atStart && edit.options == changed.snapped,
+          "Export's metadata records the look at the start, not one changed while it rendered")
+        edit.options = look
+      } catch {
+        check(false, "Export PNG with a change during it failed: \(error.localizedDescription)")
+      }
+
       // LUT round trip: a grade baked into a .cube, loaded back over no change.
       var grade = EditOptions.identity
       grade.grade.temperature = 25
@@ -244,9 +275,69 @@ extension Automation {
         check(false, "the profile round trip failed: \(error.localizedDescription)")
       }
 
+      await addAndOpenRaceChecks(model, edit: edit, source: source, check: check)
       await agentLookChecks(model, edit: edit, presets: presets, source: source, scratch: scratch, check: check)
       finish()
     }
+  }
+
+  /// Add to History pressed twice makes one entry; an open that finishes after a newer one
+  /// (a relaunch's restore, a slow read) doesn't replace the newer image.
+  private static func addAndOpenRaceChecks(_ model: CreateModel, edit: EditModel, source: HistoryItem, check: (Bool, String) -> Void) async {
+    let history = model.history
+    guard let file = testImage(width: 640, height: 512) else { return check(false, "the Add to History image couldn't be made") }
+    edit.open(image: file, name: "Edit Check File")
+    edit.options = EditOptions.grainDefaults
+    let entriesBefore = history.items.count(where: \.isEntry)
+    let firstAdd = Task { try await edit.addToHistory() }
+    var spins = 0
+    while !edit.isAdding, spins < 1_000 {
+      await Task.yield()
+      spins += 1
+    }
+    var secondError: Error?
+    do { _ = try await edit.addToHistory() } catch { secondError = error }
+    let jobID = try? await firstAdd.value
+    let entriesAfter = history.items.count(where: \.isEntry)
+    let busy = if case .busy? = secondError as? EditModel.EditError { true } else { false }
+    check(
+      jobID != nil && busy && entriesAfter == entriesBefore + 1 && !edit.isFromFile,
+      "Add to History pressed twice adds one entry (\(entriesAfter - entriesBefore) added; the second says “\(secondError?.localizedDescription ?? "nothing")”)")
+    if let jobID {
+      var waited = 0
+      while model.queue.recent.first(where: { $0.id == jobID }) == nil, waited < 600 {
+        try? await Task.sleep(for: .milliseconds(100))
+        waited += 1
+      }
+    }
+    guard let entry = edit.item, entry.tensorId != source.tensorId else { return check(false, "the added entry isn't the screen's step") }
+
+    // The session's restore while Open in Edit of another step is reading: the step asked for wins.
+    EditSession(project: history.project.name, tensorId: source.tensorId).save()
+    edit.open(image: file, name: "Edit Check File")
+    let openEntry = Task { await edit.open(entry) }
+    spins = 0
+    while !edit.isLoading, spins < 1_000 {
+      await Task.yield()
+      spins += 1
+    }
+    await edit.restoreSession()
+    await openEntry.value
+    check(edit.item?.tensorId == entry.tensorId, "a session restore during Open in Edit leaves the step asked for")
+
+    // An open started first (a restore reading its step) finishing after a newer one.
+    let openSource = Task { await edit.open(source) }
+    spins = 0
+    while !edit.isLoading, spins < 1_000 {
+      await Task.yield()
+      spins += 1
+    }
+    await edit.open(entry)
+    let shown = edit.image
+    await openSource.value
+    check(
+      edit.item?.tensorId == entry.tensorId && edit.image === shown && !edit.isLoading,
+      "an older open finishing after a newer one doesn't replace its image")
   }
 
   /// edit_image_look, list_grain_profiles and measure_reference, called as an agent's calls are.

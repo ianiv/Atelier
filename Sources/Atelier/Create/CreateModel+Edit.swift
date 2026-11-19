@@ -7,8 +7,20 @@ extension CreateModel {
   /// (it needs no model or GPU), in turn with the other jobs, and saves into its own project even
   /// if another is open by then. Returns the job's id: the one already waiting or running for the
   /// same edit when there is one (`JobQueue.pendingEdit`), since a second would make the same image.
+  ///
+  /// An edited step given as `item` is followed back to the step its record names, and so on to
+  /// one with no record (`EditModel.editSource(of:in:)`), as opening it in Edit does: the saved
+  /// record then names the real source, and opening the result doesn't put a look on a look.
   @discardableResult
   func queueEdit(_ job: Edit.Job, item: HistoryItem, fromAgent: Bool = false) throws -> UUID {
+    var job = job, item = item
+    if item.sidecar.edit != nil, job.project == history.project.name {
+      let source = EditModel.editSource(of: item, in: history.tree)
+      if source.tensorId != item.tensorId {
+        item = source
+        job.sourceTensorId = source.tensorId
+      }
+    }
     guard !item.isVideo, item.hasImage else { throw EditJobError.video }
     if let pending = queue.pendingEdit(job) { return pending.id }
     guard var configuration = settings else { throw EditJobError.noSettings }
