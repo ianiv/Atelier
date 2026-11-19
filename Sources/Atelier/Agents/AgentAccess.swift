@@ -2,6 +2,7 @@
 import Foundation
 import Network
 import Security
+import Synchronization
 
 /// Settings → Agents → Access: who can reach the MCP server. On the local network the server
 /// listens on every interface but answers only the addresses Compute's "Tailscale and local
@@ -76,11 +77,38 @@ nonisolated enum AgentAuth {
   /// A request from another device that carries an Origin is a web page; only a page from this
   /// Mac may call in, so a site the user browses elsewhere can't drive the server from their
   /// browser. Clients that aren't browsers send no Origin.
-  static func allowsRemote(origin: String?, ownHosts: Set<String>) -> Bool {
+  /// The page must also be on the server's own port (a scheme's default when the Origin names
+  /// none): another web server on this Mac is another site.
+  static func allowsRemote(origin: String?, ownHosts: Set<String>, port: Int) -> Bool {
     guard let origin else { return true }
-    guard let host = URLComponents(string: origin)?.host?.lowercased() else { return false }
+    guard let components = URLComponents(string: origin), let host = components.host?.lowercased() else { return false }
+    let defaultPort: Int? =
+      switch components.scheme?.lowercased() {
+      case "http": 80
+      case "https": 443
+      default: nil
+      }
+    guard (components.port ?? defaultPort) == port else { return false }
     let bare = host.hasPrefix("[") && host.hasSuffix("]") ? String(host.dropFirst().dropLast()) : host
     return loopbackHosts.contains(host) || ownHosts.contains(bare)
+  }
+
+  /// What the listener's access rules are now, as the HTTP server reads them off the main actor.
+  struct Gate: Sendable, Equatable {
+    /// Access is Local network: other devices may connect at all.
+    var networkOpen = false
+    var requireToken = true
+    var token: String?
+  }
+
+  /// Decided as soon as a request's headers are in, before its body is read, so a device
+  /// without the token can't make the server take in a large body: the status to answer with,
+  /// or nil to read on. A listener from before Access went back to This Mac only can still hand
+  /// over a connection, which is refused here (403) rather than let in without a token.
+  static func earlyRefusal(peer: RemoteIP?, authorization: String?, gate: Gate) -> Int? {
+    if isLoopback(peer) { return nil }
+    guard gate.networkOpen else { return 403 }
+    return isAuthorized(peerIsLoopback: false, requireToken: gate.requireToken, authorization: authorization, token: gate.token) ? nil : 401
   }
 
   /// Whether a request gets in. Clients on this Mac never need the token (a correct one is still
@@ -128,6 +156,12 @@ nonisolated enum AgentAuth {
   static func endpoint(host: String, port: Int) -> String {
     "http://\(host.contains(":") ? "[\(host)]" : host):\(port)/mcp"
   }
+}
+
+/// `AgentAuth.Gate` behind a lock, shared by the server (which sets it) and its listener's
+/// connections (which read it off the main actor).
+final nonisolated class AgentGateBox: Sendable {
+  let state = Mutex(AgentAuth.Gate())
 }
 
 /// Clients on other devices can't use this Mac's files: a path they send names a file on their
@@ -184,6 +218,21 @@ nonisolated enum AgentPathGuard {
     }
     return result
   }
+
+  /// Takes the paths out of a message for another device (an error quoting a file a client on
+  /// this Mac named, say): an absolute or `~` path, up to the end of its sentence or a closing
+  /// quote, becomes "…". Then any home folder left (a path cut short at a comma) goes too.
+  static func redactingPaths(_ text: String, home: String = NSHomeDirectory()) -> String {
+    let range = NSRange(text.startIndex..., in: text)
+    var redacted = pathPattern.stringByReplacingMatches(in: text, range: range, withTemplate: "…")
+    if home.count > 1 { redacted = redacted.replacingOccurrences(of: home, with: "…") }
+    return redacted
+  }
+
+  // A slash starts a path only after a space, quote or bracket and before a name, so "1/2" and
+  // "http://" are left alone.
+  private static let pathPattern = try! NSRegularExpression(
+    pattern: #"(?<=^|[\s“"'(])~?/[^\s/“”"'][^\n“”"']*?(?=\.?$|\.?\n|[.,;:]\s|[”"')])"#, options: [.anchorsMatchLines])
 
   /// Whether `source`, an image argument, may be read for this caller.
   static func allowsImageSource(_ source: String, isRemote: Bool) -> Bool {

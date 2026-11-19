@@ -54,12 +54,15 @@ final class AgentServer {
     didSet {
       defaults.set(requireToken, forKey: Self.requireTokenKey)
       if requireToken, activeAccess == .localNetwork { ensureToken() }
+      syncGate()
     }
   }
 
   /// The token other devices send; nil until it's first needed. Compared with each request, so a
   /// new one takes effect at once.
-  private(set) var token: String?
+  private(set) var token: String? {
+    didSet { syncGate() }
+  }
   /// The addresses other devices use, refreshed when the listener starts and Settings opens.
   private(set) var networkEndpoints: [String] = []
 
@@ -77,6 +80,8 @@ final class AgentServer {
   private let tokens: AgentTokenStore
 
   private var server: LoopbackHTTPServer?
+  /// What the listener checks before reading a request's body.
+  @ObservationIgnored private let gate = AgentGateBox()
   /// Running tool calls by JSON-RPC id, so `notifications/cancelled` can stop them.
   private var calls: [String: Task<Void, Never>] = [:]
 
@@ -142,6 +147,11 @@ final class AgentServer {
     restart()
   }
 
+  private func syncGate() {
+    let current = AgentAuth.Gate(networkOpen: activeAccess == .localNetwork, requireToken: requireToken, token: token)
+    gate.state.withLock { $0 = current }
+  }
+
   /// The token, made now if there isn't one yet.
   @discardableResult func ensureToken() -> String {
     if let token { return token }
@@ -172,6 +182,7 @@ final class AgentServer {
     server = nil
     isListening = false
     listenError = nil
+    syncGate()
     guard isEnabled || forcedOn else { return }
     guard let port = UInt16(exactly: activePort), port > 0 else {
       listenError = "Pick a port from 1 to 65535."
@@ -182,8 +193,13 @@ final class AgentServer {
       if requireToken { ensureToken() }
       refreshEndpoints()
     }
-    let server = LoopbackHTTPServer(port: port, binding: network ? .all(AgentAccess.networkFilter) : .loopback) {
-      [weak self] request, responder in
+    let gate = gate
+    let server = LoopbackHTTPServer(
+      port: port, binding: network ? .all(AgentAccess.networkFilter) : .loopback,
+      headCheck: { peer, headers in
+        AgentAuth.earlyRefusal(peer: peer, authorization: headers["authorization"], gate: gate.state.withLock { $0 })
+      }
+    ) { [weak self] request, responder in
       Task { @MainActor in self?.handle(request, responder) }
     }
     self.server = server
@@ -210,12 +226,16 @@ final class AgentServer {
     }
     // On the loopback binding every peer is, and the listener only lets in allowed networks.
     let isRemote = !AgentAuth.isLoopback(request.peer)
+    // A connection the old wildcard listener took just before Access went back to This Mac only.
+    if isRemote, activeAccess != .localNetwork {
+      return responder.send(status: 403, body: Data())
+    }
     if isRemote {
       // Other devices reach this Mac by whatever name or address, so the Host header says
       // nothing; a page from another site must still not drive the server from a browser.
       let own = AgentAuth.ownHosts(
         addresses: RemoteNetworkInfo.interfaces().map(\.address), hostName: ProcessInfo.processInfo.hostName)
-      guard AgentAuth.allowsRemote(origin: request.headers["origin"], ownHosts: own) else {
+      guard AgentAuth.allowsRemote(origin: request.headers["origin"], ownHosts: own, port: activePort) else {
         return responder.send(status: 403, body: Data())
       }
     } else {
@@ -314,7 +334,9 @@ final class AgentServer {
       } catch is CancellationError {
         result = ["content": [["type": "text", "text": "Cancelled."]], "isError": true]
       } catch {
-        result = ["content": [["type": "text", "text": error.localizedDescription]], "isError": true]
+        // A job's error can quote a file a client on this Mac named.
+        let message = context.isRemote ? AgentPathGuard.redactingPaths(error.localizedDescription) : error.localizedDescription
+        result = ["content": [["type": "text", "text": message]], "isError": true]
       }
       calls[key] = nil
       let response: [String: Any] = ["jsonrpc": "2.0", "id": id, "result": result]
@@ -364,7 +386,7 @@ struct AgentSettingsView: View {
 
   var body: some View {
     @Bindable var server = server
-    let network = server.access == .localNetwork
+    let network = server.activeAccess == .localNetwork
     Form {
       Section {
         Toggle(isOn: $server.isEnabled) {
@@ -452,22 +474,22 @@ struct AgentSettingsView: View {
     .onAppear {
       portText = String(server.port)
       server.refreshEndpoints()
-      if server.access == .localNetwork, server.requireToken { server.ensureToken() }
+      if server.activeAccess == .localNetwork, server.requireToken { server.ensureToken() }
       if address.isEmpty { address = server.endpoint }
     }
     .onChange(of: server.access) {
-      if server.access == .localNetwork, server.requireToken { server.ensureToken() }
+      if server.activeAccess == .localNetwork, server.requireToken { server.ensureToken() }
       server.refreshEndpoints()
     }
     .onChange(of: server.requireToken) {
-      if server.requireToken, server.access == .localNetwork { server.ensureToken() }
+      if server.requireToken, server.activeAccess == .localNetwork { server.ensureToken() }
     }
   }
 
   private static let masked = String(repeating: "•", count: 12)
 
   private var accessNote: String {
-    guard server.access == .localNetwork else { return "Only apps on this Mac can connect." }
+    guard server.activeAccess == .localNetwork else { return "Only apps on this Mac can connect." }
     let shared =
       server.requireToken
       ? "Anyone on your network with the token can generate and read or change the Create screen."
@@ -482,7 +504,7 @@ struct AgentSettingsView: View {
 
   /// This Mac's endpoint, then the network ones when other devices can connect.
   private var addresses: [String] {
-    [server.endpoint] + (server.access == .localNetwork ? server.networkEndpoints : [])
+    [server.endpoint] + (server.activeAccess == .localNetwork ? server.networkEndpoints : [])
   }
 
   private var chosenAddress: String {

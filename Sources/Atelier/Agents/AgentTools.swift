@@ -1141,7 +1141,7 @@ final class AgentTools {
       if job.progress.step > 0 { summary["step"] = job.progress.step }
       if let total = job.progress.total { summary["total_steps"] = total }
     }
-    if let error = job.error { summary["error"] = error }
+    if let error = job.error { summary["error"] = ToolContext.current.isRemote ? AgentPathGuard.redactingPaths(error) : error }
     if let structured = job.result?["structuredContent"] as? [String: Any] {
       summary["history_step"] = structured["history_step"]
       if !ToolContext.current.isRemote { summary["path"] = structured["path"] }

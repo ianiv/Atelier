@@ -75,15 +75,21 @@ struct AgentAccessTests {
     #expect(!AgentAuth.isLoopback(origin: "http://evil.example"))
 
     let own = AgentAuth.ownHosts(addresses: ["192.168.1.5", "fe80::1", "100.64.1.2"], hostName: "Studio.local")
-    #expect(AgentAuth.allowsRemote(origin: nil, ownHosts: own), "clients that aren't browsers")
-    #expect(AgentAuth.allowsRemote(origin: "http://192.168.1.5:7862", ownHosts: own))
-    #expect(AgentAuth.allowsRemote(origin: "http://studio.local:7862", ownHosts: own))
-    #expect(AgentAuth.allowsRemote(origin: "http://[fe80::1]:7862", ownHosts: own))
-    #expect(AgentAuth.allowsRemote(origin: "http://127.0.0.1", ownHosts: own))
-    #expect(!AgentAuth.allowsRemote(origin: "https://example.com", ownHosts: own))
-    #expect(!AgentAuth.allowsRemote(origin: "http://192.168.1.6", ownHosts: own))
-    #expect(!AgentAuth.allowsRemote(origin: "null", ownHosts: own))
+    #expect(AgentAuth.allowsRemote(origin: nil, ownHosts: own, port: 7862), "clients that aren't browsers")
+    #expect(AgentAuth.allowsRemote(origin: "http://192.168.1.5:7862", ownHosts: own, port: 7862))
+    #expect(AgentAuth.allowsRemote(origin: "http://studio.local:7862", ownHosts: own, port: 7862))
+    #expect(AgentAuth.allowsRemote(origin: "http://[fe80::1]:7862", ownHosts: own, port: 7862))
+    #expect(AgentAuth.allowsRemote(origin: "http://127.0.0.1:7862", ownHosts: own, port: 7862))
+    #expect(!AgentAuth.allowsRemote(origin: "https://example.com", ownHosts: own, port: 7862))
+    #expect(!AgentAuth.allowsRemote(origin: "http://192.168.1.6", ownHosts: own, port: 7862))
+    #expect(!AgentAuth.allowsRemote(origin: "null", ownHosts: own, port: 7862))
     #expect(!AgentAuth.ownHosts(addresses: [], hostName: "vimeswifi.home").contains("vimeswifi.home"))
+    // Another web server on this Mac is another site: the page must be on the server's port.
+    #expect(!AgentAuth.allowsRemote(origin: "http://192.168.1.5:8080", ownHosts: own, port: 7862))
+    #expect(!AgentAuth.allowsRemote(origin: "http://192.168.1.5", ownHosts: own, port: 7862), "http's default port is 80")
+    #expect(AgentAuth.allowsRemote(origin: "http://192.168.1.5", ownHosts: own, port: 80))
+    #expect(AgentAuth.allowsRemote(origin: "https://studio.local", ownHosts: own, port: 443))
+    #expect(!AgentAuth.allowsRemote(origin: "http://127.0.0.1:3000", ownHosts: own, port: 7862))
   }
 
   @Test func pathGuard() {
@@ -132,6 +138,39 @@ struct AgentAccessTests {
     let text = ((stripped["content"] as? [[String: Any]])?.first?["text"] as? String) ?? ""
     #expect(text == "Saved to Atelier project “P” (step 3).\nModel m.")
     #expect((stripped["content"] as? [[String: Any]])?.count == 2)
+  }
+
+  @Test func refusedBeforeTheBody() {
+    let open = AgentAuth.Gate(networkOpen: true, requireToken: true, token: "TOK")
+    let lan = RemoteIP("192.168.1.9")
+    #expect(AgentAuth.earlyRefusal(peer: RemoteIP("127.0.0.1"), authorization: nil, gate: open) == nil)
+    #expect(AgentAuth.earlyRefusal(peer: RemoteIP("127.0.0.1"), authorization: nil, gate: AgentAuth.Gate()) == nil, "this Mac, network closed")
+    #expect(AgentAuth.earlyRefusal(peer: lan, authorization: nil, gate: open) == 401)
+    #expect(AgentAuth.earlyRefusal(peer: lan, authorization: "Bearer nope", gate: open) == 401)
+    #expect(AgentAuth.earlyRefusal(peer: lan, authorization: "Bearer TOK", gate: open) == nil)
+    #expect(AgentAuth.earlyRefusal(peer: lan, authorization: nil, gate: AgentAuth.Gate(networkOpen: true, requireToken: false)) == nil)
+    // Access went back to This Mac only after the old listener took the connection.
+    #expect(AgentAuth.earlyRefusal(peer: lan, authorization: "Bearer TOK", gate: AgentAuth.Gate(networkOpen: false, requireToken: true, token: "TOK")) == 403)
+    #expect(AgentAuth.earlyRefusal(peer: lan, authorization: nil, gate: AgentAuth.Gate(networkOpen: false, requireToken: false)) == 403)
+    #expect(AgentAuth.earlyRefusal(peer: nil, authorization: nil, gate: open) == 401, "an unknown peer isn't this Mac")
+
+    // The headers are there before the body is.
+    let head = Data("POST /mcp HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer TOK\r\nContent-Length: 100000000\r\n\r\n{\"a\":".utf8)
+    let headers = LoopbackHTTPServer.headers(in: head)
+    #expect(headers?["authorization"] == "Bearer TOK" && headers?["content-length"] == "100000000")
+    #expect(LoopbackHTTPServer.headers(in: Data("POST /mcp HTTP/1.1\r\nHost: x\r\n".utf8)) == nil)
+  }
+
+  @Test func redactsPaths() {
+    let home = "/Users/someone"
+    #expect(AgentPathGuard.redactingPaths("Couldn't read an image at /Users/someone/My Pictures/a b.png.", home: home) == "Couldn't read an image at ….")
+    #expect(AgentPathGuard.redactingPaths("No audio file at ~/Music/x.wav", home: home) == "No audio file at …")
+    #expect(AgentPathGuard.redactingPaths("Couldn't save the profile to /tmp/p.grain.json: disk full", home: home) == "Couldn't save the profile to …: disk full")
+    #expect(AgentPathGuard.redactingPaths("Couldn't read “/Volumes/External 2TB/x.png”.", home: home) == "Couldn't read “…”.")
+    #expect(AgentPathGuard.redactingPaths("a, /Users/someone/x, y", home: home) == "a, …, y")
+    #expect(AgentPathGuard.redactingPaths("in /Users/someone/a, b/c.png", home: home).contains(home) == false)
+    let untouched = "Step 3 of 8 at 1/2 size; see http://example.com/x and JIT Always/Always (Partial)."
+    #expect(AgentPathGuard.redactingPaths(untouched, home: home) == untouched)
   }
 
   @Test func endpoints() {

@@ -103,6 +103,15 @@ extension Automation {
       check(foreign.status == 403, "\(lan) from a page on another site: 403 (got \(foreign.status))")
       let own = await post(lan, list, token: token, origin: "http://\(lan):\(port)")
       check(own.status == 200, "\(lan) from a page on this Mac's address: 200 (got \(own.status))")
+      let otherPort = await post(lan, list, token: token, origin: "http://\(lan):\(port + 1)")
+      check(otherPort.status == 403, "\(lan) from a page on another port of this Mac: 403 (got \(otherPort.status))")
+      // A large body without the token is answered from its headers alone.
+      var big = URLRequest(url: URL(string: AgentAuth.endpoint(host: lan, port: port))!)
+      big.httpMethod = "POST"
+      big.timeoutInterval = 10
+      big.httpBody = Data(count: 8 << 20)
+      let bigStatus = ((try? await session.data(for: big))?.1 as? HTTPURLResponse)?.statusCode
+      check(bigStatus == 401 || bigStatus == nil, "\(lan) sending 8 MB without the token: refused before the body (got \(bigStatus.map(String.init) ?? "connection closed"))")
 
       let saveTo = await post(lan, call("get_image", ["save_to": NSTemporaryDirectory()]), token: token)
       check(errorText(saveTo.body) == AgentPathGuard.saveToMessage, "get_image save_to from another device is refused (\(errorText(saveTo.body) ?? "no error"))")
@@ -130,6 +139,16 @@ extension Automation {
       check(open.status == 200, "Require Token off: \(lan) without a token 200 (got \(open.status))")
       let openPath = await post(lan, call("get_image", ["save_to": NSTemporaryDirectory()]))
       check(errorText(openPath.body) == AgentPathGuard.saveToMessage, "Require Token off: paths still refused")
+
+      // A restart on the local network (the port may still be held a moment): listening again.
+      started.isEnabled = false
+      started.isEnabled = true
+      let againDeadline = Date().addingTimeInterval(15)
+      while !started.isListening, started.listenError == nil, Date() < againDeadline {
+        try? await Task.sleep(for: .milliseconds(50))
+      }
+      let again = await post(lan, list)
+      check(started.isListening && again.status == 200, "restarted on the local network: listening again (\(started.listenError ?? "got \(again.status)"))")
 
       started.access = .thisMac
       let restartDeadline = Date().addingTimeInterval(10)
