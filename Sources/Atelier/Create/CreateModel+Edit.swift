@@ -25,6 +25,53 @@ extension CreateModel {
     return id
   }
 
+  /// Queues an edit for an agent (`edit_image_look`), or joins the one already waiting or
+  /// running for the same edit, and returns the step it saved, as `matchColors(forAgent:)` does.
+  /// `progress` hears the step (of 1,000) and what it's doing. Cancelling the caller cancels the
+  /// job, unless it joined one someone else queued (the Edit screen's Save to History).
+  func edit(
+    forAgent edit: Edit.Job, item: HistoryItem, progress: @escaping (Int, String) -> Void
+  ) async throws -> HistoryItem {
+    let pending = queue.pendingEdit(edit)?.id
+    let id = try queueEdit(edit, item: item, fromAgent: true)
+    let joined = id == pending
+    return try await withTaskCancellationHandler {
+      try await editResult(of: id, project: edit.project, progress: progress)
+    } onCancel: {
+      if !joined { Task { @MainActor in self.cancel(id) } }
+    }
+  }
+
+  /// Waits for Edit job `id` to end, and returns the step it saved, read from `project`.
+  private func editResult(of id: UUID, project name: String, progress: (Int, String) -> Void) async throws -> HistoryItem {
+    var reported: (Int, String)?
+    while true {
+      if let job = queue.recent.first(where: { $0.id == id }) {
+        switch job.status {
+        case .finished(let tensorId):
+          guard let project = history.project(named: job.request?.edit?.project ?? name) else { throw EditJobError.projectMissing(name) }
+          if project === history.project, let item = history.item(tensorId: tensorId) { return item }
+          let tree = await project.read { $0.tree() }
+          guard let item = tree.step(tensorId: tensorId).flatMap({ tree.items[$0] }) else { throw EditJobError.stepMissing(name) }
+          return item
+        case .failed(let message): throw EditJobError.failed(message)
+        default: throw CancellationError()
+        }
+      }
+      if let job = queue.running, job.id == id, let run = runProgress(of: job) {
+        let message = if case .running(let message) = phase { message } else { "Rendering the edit" }
+        if reported?.0 != run.step || reported?.1 != message {
+          reported = (run.step, message)
+          progress(run.step, message)
+        }
+      } else if !queue.waiting.contains(where: { $0.id == id }) {
+        // Taken off the lists without ending here (Clear Finished, say).
+        throw CancellationError()
+      }
+      try await Task.sleep(for: .milliseconds(100))
+    }
+  }
+
   /// Runs an Edit job on this device: reads the source step from the job's own project, renders
   /// it at full size with the job's look and data (`Edit.Job.context`, which it carries from the
   /// moment it's queued) off the main actor, and saves the result as a new step after the
@@ -109,7 +156,7 @@ extension CreateModel {
   }
 
   nonisolated enum EditJobError: LocalizedError {
-    case video, unreadable, noSettings, projectMissing(String), stepMissing(String)
+    case video, unreadable, noSettings, projectMissing(String), stepMissing(String), failed(String)
 
     var errorDescription: String? {
       switch self {
@@ -118,6 +165,7 @@ extension CreateModel {
       case .noSettings: "There are no settings to save the result with yet: wait for the model list to load."
       case .projectMissing(let name): "The project “\(name)” the image was in is no longer there."
       case .stepMissing(let name): "The image is no longer in the project “\(name)”."
+      case .failed(let message): message
       }
     }
   }

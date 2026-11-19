@@ -71,11 +71,13 @@ final class AgentServer {
     one call, as a job that leaves the Create screen exactly as the user has it: use it when \
     they are working there, or for a batch. After an edit, match_colors takes out a color \
     shift; after one made with paint, pass original_history_step (the source) and \
-    unchanged_only true. Coordinates are always the image's own pixels from its top left.
+    unchanged_only true. To finish an image without a model (film grain, a grade, a LUT, \
+    matching a reference photo's colors and grain), use edit_image_look, with \
+    list_grain_profiles and measure_reference. Coordinates are always the image's own pixels from its top left.
     """
 
-  init(create: CreateModel, presets: PresetStore) {
-    tools = AgentTools(create: create, presets: presets)
+  init(create: CreateModel, presets: PresetStore, grainProfiles: GrainProfileStore? = nil) {
+    tools = AgentTools(create: create, presets: presets, grainProfiles: grainProfiles)
     let args = CommandLine.arguments
     forcedOn = args.contains("--mcp")
     if let index = args.firstIndex(of: "--mcp"), index + 1 < args.count, let port = Int(args[index + 1]) {
