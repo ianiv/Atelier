@@ -141,6 +141,8 @@ final class HistoryStore {
     var refine: RefineRecord?
     /// For a step made by Match Colors to Original: how, and from which original.
     var colorMatch: ColorMatch.Record?
+    /// For a step saved from the Edit screen: its look and what it was rendered with.
+    var edit: Edit.Record?
   }
 
   private(set) var project: Project
@@ -502,7 +504,8 @@ final class HistoryStore {
         negativePrompt: request.negativePrompt, seed: request.seed,
         settings: dump, createdAt: finishedAt,
         duration: finishedAt.timeIntervalSince(startedAt), timings: timings, moodboard: moodboard,
-        inputTensorId: inputTensorId, after: parentTensorId, refined: refined, colorMatch: request.colorMatch?.record)
+        inputTensorId: inputTensorId, after: parentTensorId, refined: refined, colorMatch: request.colorMatch?.record,
+        edit: request.edit?.record)
     }
     // An image from outside the project, saved now as a merge's input (the image itself),
     // remembers the mask it was queued with. One already in the project remembered it when the job

@@ -39,6 +39,10 @@ nonisolated enum SavedQueue {
     /// A Match Colors to Original job: the step and its project, which it reads from and saves
     /// into whichever project is open.
     var colorMatch: ColorMatch.Job?
+    /// An Edit screen job (`Edit.Job`): as `colorMatch`, it names its project, and its record
+    /// carries the profile, reference measurements and LUT it renders with, so it needs no files
+    /// of its own.
+    var edit: Edit.Job?
   }
 
   /// A saved job, before its settings are put back on its model's defaults.
@@ -54,6 +58,7 @@ nonisolated enum SavedQueue {
 
     var target: JobTarget { entry.target ?? .local }
     var colorMatch: ColorMatch.Job? { entry.colorMatch }
+    var edit: Edit.Job? { entry.edit }
 
     /// The job's request, with `configuration` (the model's defaults with `settings` applied).
     func request(configuration: PipelineConfiguration) -> GenerationEngine.Request {
@@ -85,6 +90,8 @@ nonisolated enum SavedQueue {
       // It names its own project, so its step follows it there whichever project this is.
       request.colorMatch = entry.colorMatch
       if entry.colorMatch != nil { request.parentTensorId = entry.parentTensorId }
+      request.edit = entry.edit
+      if entry.edit != nil { request.parentTensorId = entry.parentTensorId }
       return request
     }
   }
@@ -146,7 +153,7 @@ nonisolated enum SavedQueue {
           moodboardWeights: request.moodboard.map(\.weight), audio: request.audio,
           placement: request.placement, upscale: request.upscale, imageUpscale: request.imageUpscale,
           target: job.target, hasMask: request.mask != nil, merge: mergeRecord,
-          canvasSourceMask: request.canvasSourceMask, colorMatch: request.colorMatch))
+          canvasSourceMask: request.canvasSourceMask, colorMatch: request.colorMatch, edit: request.edit))
     }
     if let data = try? JSONEncoder().encode(entries) {
       Log.attempt(Log.queue, "Saving the queue") {

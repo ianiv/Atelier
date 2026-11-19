@@ -26,6 +26,7 @@ struct ContentView: View {
     case create = "Create"
     case queue = "Queue"
     case history = "History"
+    case edit = "Edit"
     case videoEditor = "Video Editor"
     case models = "Models"
     case loras = "LoRAs"
@@ -38,6 +39,7 @@ struct ContentView: View {
       case .create: "paintbrush"
       case .queue: "list.number"
       case .history: "clock"
+      case .edit: Edit.symbol
       case .videoEditor: "film.stack"
       case .models: "shippingbox"
       case .loras: "slider.horizontal.3"
@@ -102,6 +104,8 @@ struct ContentView: View {
         QueueView()
       case .history:
         HistoryView()
+      case .edit:
+        EditScreen()
       case .videoEditor:
         TimelineScreen()
       case .models:

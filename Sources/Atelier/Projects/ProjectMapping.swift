@@ -47,6 +47,9 @@ nonisolated enum ProjectMapping {
     /// A step made by Match Colors to Original: how, and from which original. Kept in
     /// `profile_data`.
     var colorMatch: ColorMatch.Record?
+    /// A step saved from the Edit screen: its look and everything it was rendered with
+    /// (`Edit.Record`). Kept in `profile_data`.
+    var edit: Edit.Record?
     /// A layered step (a merged refine): how many layers it has (`data_stored`) and the top
     /// layer's position and density, which Draw Things keeps as the node's content offset and
     /// `scale_factor_by_120` (`ImageHistoryManager` reads both back with the step's layers).
@@ -95,6 +98,9 @@ nonisolated enum ProjectMapping {
     var refineOffset: [Double]?
     var refineMask: CanvasMask?
     var colorMatch: ColorMatch.Record?
+    /// A step saved from the Edit screen (`edit`): its look, and the profile's curve, real noise
+    /// and LUT it was rendered with, so it renders again exactly once the profile is gone.
+    var edit: Edit.Record?
     var entryKey: Int64?
     var entryMask: CanvasMask?
     /// Marks a step `Project.appendEntry` wrote (`input_entry`), an Imported one too, which has no
@@ -133,7 +139,7 @@ nonisolated enum ProjectMapping {
     init(
       duration: Double, inputTensorId: Int64?, parentTensorId: Int64?, inputAudioId: Int64? = nil,
       timings: [Timing] = [], refine: RefineRecord? = nil, colorMatch: ColorMatch.Record? = nil,
-      entryKey: Int64? = nil, entryMask: CanvasMask? = nil, inputEntry: Bool? = nil
+      edit: Edit.Record? = nil, entryKey: Int64? = nil, entryMask: CanvasMask? = nil, inputEntry: Bool? = nil
     ) {
       self.timings = timings
       self.duration = duration
@@ -142,6 +148,7 @@ nonisolated enum ProjectMapping {
       self.inputAudioId = inputAudioId
       self.refine = refine
       self.colorMatch = colorMatch
+      self.edit = edit
       self.entryKey = entryKey
       self.entryMask = entryMask
       self.inputEntry = inputEntry
@@ -230,7 +237,7 @@ nonisolated enum ProjectMapping {
         duration: step.generationTime, inputTensorId: step.inputTensorId,
         parentTensorId: step.parentTensorId ?? 0, inputAudioId: step.inputAudioId,
         timings: step.timings?.profileTimings ?? [], refine: step.refine,
-        colorMatch: step.colorMatch, entryKey: step.entryKey, entryMask: step.entryMask,
+        colorMatch: step.colorMatch, edit: step.edit, entryKey: step.entryKey, entryMask: step.entryMask,
         inputEntry: step.isEntry ? true : nil
       ).bytes,
       teaCacheStart: i32("teaCacheStart", 5), teaCacheEnd: i32("teaCacheEnd", -1),

@@ -410,7 +410,8 @@ final nonisolated class Project: Sendable {
       configuration: ProjectMapping.dump(of: node),
       timings: ProjectMapping.Profile(node.profileData).flatMap(GenerationTimings.init(profile:)),
       refine: ProjectMapping.Profile(node.profileData)?.refine,
-      colorMatch: ProjectMapping.Profile(node.profileData)?.colorMatch
+      colorMatch: ProjectMapping.Profile(node.profileData)?.colorMatch,
+      edit: ProjectMapping.Profile(node.profileData)?.edit
     )
   }
 
@@ -783,13 +784,13 @@ final nonisolated class Project: Sendable {
     reason: ProjectFormat.Reason = .generate, generated: Bool = true,
     moodboard: [MoodboardTensor] = [], inputTensorId: Int64? = nil,
     after parentTensorId: Int64? = nil, refined: RefinedStep? = nil,
-    colorMatch: ColorMatch.Record? = nil
+    colorMatch: ColorMatch.Record? = nil, edit: Edit.Record? = nil
   ) async throws -> HistoryItem {
     try await append(
       frames: [tensor], clip: nil, model: model, prompt: prompt, negativePrompt: negativePrompt,
       seed: seed, settings: settings, createdAt: createdAt, duration: duration, timings: timings,
       reason: reason, generated: generated, moodboard: moodboard, inputTensorId: inputTensorId,
-      after: parentTensorId, refined: refined, colorMatch: colorMatch)
+      after: parentTensorId, refined: refined, colorMatch: colorMatch, edit: edit)
   }
 
   /// A moodboard image going into a step.
@@ -822,7 +823,7 @@ final nonisolated class Project: Sendable {
       seed: seed, settings: settings, createdAt: createdAt, duration: duration, timings: timings,
       reason: .generate,
       generated: true, moodboard: moodboard, inputTensorId: inputTensorId, after: parentTensorId, refined: nil,
-      colorMatch: nil)
+      colorMatch: nil, edit: nil)
   }
 
   /// What an input entry's canvas holds.
@@ -1047,7 +1048,8 @@ final nonisolated class Project: Sendable {
     negativePrompt: String, seed: UInt32, settings: [String: JSONValue], createdAt: Date,
     duration: Double, timings: GenerationTimings?, reason: ProjectFormat.Reason, generated: Bool,
     moodboard: [MoodboardTensor], inputTensorId: Int64?,
-    after parentTensorId: Int64?, refined: RefinedStep?, colorMatch: ColorMatch.Record?
+    after parentTensorId: Int64?, refined: RefinedStep?, colorMatch: ColorMatch.Record?,
+    edit: Edit.Record?
   ) async throws -> HistoryItem {
     // Each frame's thumbnails, a few frames at a time across the cores (a clip's frames
     // together are large, so each image is dropped once its thumbnails are made).
@@ -1169,6 +1171,7 @@ final nonisolated class Project: Sendable {
             inputAudioId: inputAudioId, timings: index == 0 ? timings : nil,
             refine: index == 0 ? refined?.record : nil,
             colorMatch: index == 0 ? colorMatch : nil,
+            edit: index == 0 ? edit : nil,
             layerCount: index == 0 ? layered.map { Int32($0.rows.count) } : nil,
             contentOffset: index == 0 ? layered.map { ($0.rows.last!.x, $0.rows.last!.y) } : nil,
             canvasScale: index == 0 ? layered.map { $0.rows.last!.scaleFactorBy120 } : nil)

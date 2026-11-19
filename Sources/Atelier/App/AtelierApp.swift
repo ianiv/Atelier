@@ -20,6 +20,9 @@ struct AtelierApp: App {
     @State private var updater = Updater()
   #endif
   @State private var fileDialogs = FileDialogs()
+  /// The Edit screen's state; it lives as long as the app so the image and look survive
+  /// switching screens.
+  @State private var edit = EditModel()
   @AppStorage("inspectorShown") private var inspectorShown = true
   @AppStorage("moodboardShown") private var moodboardShown = true
 
@@ -91,6 +94,7 @@ struct AtelierApp: App {
           .environment(library)
           .environment(remoteServer)
           .environment(fileDialogs)
+          .environment(edit)
       }
       #if os(macOS)
         .frame(minWidth: 960, minHeight: 640)

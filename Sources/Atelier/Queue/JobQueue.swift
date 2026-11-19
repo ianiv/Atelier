@@ -112,10 +112,10 @@ final class JobQueue {
 
   var isEmpty: Bool { waiting.isEmpty && running == nil && runningRemote.isEmpty }
 
-  /// Whether a waiting or running job uses `model`. A Match Colors to Original job only names the
-  /// model its step was made with; it never loads it.
+  /// Whether a waiting or running job uses `model`. A Match Colors to Original or Edit job only
+  /// names the model its step was made with; it never loads it.
   func uses(_ model: String) -> Bool {
-    func uses(_ job: Job) -> Bool { job.request?.model == model && job.request?.colorMatch == nil }
+    func uses(_ job: Job) -> Bool { job.request?.model == model && job.request?.colorMatch == nil && job.request?.edit == nil }
     return running.map(uses) == true || waiting.contains(where: uses)
   }
 
@@ -125,13 +125,20 @@ final class JobQueue {
     ((running.map { [$0] } ?? []) + waiting).first { $0.request?.colorMatch?.isSameMatch(as: match) == true }
   }
 
-  /// Waiting jobs that name their own project (Match Colors to Original, and detached jobs)
+  /// The waiting or running Edit job for the same step and look as `edit` (`Edit.Job.isSameEdit`),
+  /// if any.
+  func pendingEdit(_ edit: Edit.Job) -> Job? {
+    ((running.map { [$0] } ?? []) + waiting).first { $0.request?.edit?.isSameEdit(as: edit) == true }
+  }
+
+  /// Waiting jobs that name their own project (Match Colors to Original, Edit, and detached jobs)
   /// follow one that was renamed.
   func renameProject(from old: String, to name: String) {
     for index in waiting.indices {
       if waiting[index].project == old { waiting[index].project = name }
-      guard case .generation(var request) = waiting[index].work, request.colorMatch?.project == old else { continue }
-      request.colorMatch?.project = name
+      guard case .generation(var request) = waiting[index].work, request.colorMatch?.project == old || request.edit?.project == old else { continue }
+      if request.colorMatch?.project == old { request.colorMatch?.project = name }
+      if request.edit?.project == old { request.edit?.project = name }
       waiting[index].work = .generation(request)
     }
   }
@@ -141,6 +148,13 @@ final class JobQueue {
   func setColorMatchRecord(_ record: ColorMatch.Record, id: UUID) {
     guard running?.id == id, case .generation(var request)? = running?.work else { return }
     request.colorMatch?.record = record
+    running?.work = .generation(request)
+  }
+
+  /// Records what a running Edit job saved, as `setColorMatchRecord(_:id:)` does.
+  func setEditRecord(_ record: Edit.Record, id: UUID) {
+    guard running?.id == id, case .generation(var request)? = running?.work else { return }
+    request.edit?.record = record
     running?.work = .generation(request)
   }
 

@@ -83,7 +83,7 @@ enum Automation {
       "--create-delete-check",
       "--history-loras-check",
       "--input-entries-check", "--entries-freeze-check", "--tab-switch-bench", "--delete-project-check",
-      "--paint-check",
+      "--paint-check", "--edit-screen-check",
     ]
     // The unit tests run inside the app. Like a scripted run, that leaves the user's data alone: no
     // cleanup at launch, no saving the session or queue.
@@ -245,6 +245,10 @@ enum Automation {
     }
     if args.contains("--color-match-check") {
       colorMatchCheck(model)
+      return
+    }
+    if args.contains("--edit-screen-check") {
+      editScreenCheck(model)
       return
     }
     if args.contains("--entries-freeze-check") {
