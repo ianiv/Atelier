@@ -1427,6 +1427,19 @@ enum Automation {
             && s.seedMode == .scaleAlike,
           "Draw Things sample: steps \(s.steps) \(s.width)x\(s.height) \(s.sampler) \(s.seedMode)")
         await shot("ux-frame-768x512.png")
+        // Zoom to Fill, in a frame of (usually) another shape than the image: the image covers
+        // the frame, centered, where fitted it left bands.
+        if let image = model.image {
+          let canvas = model.canvas
+          let fill = max(768 / Double(image.width), 512 / Double(image.height))
+          canvas.offset = CGSize(width: -200, height: 120)
+          canvas.zoomToFill()
+          check(
+            abs(canvas.effectiveScale - fill) < 1e-9 && canvas.offset == .zero && (canvas.scale == nil) == (canvas.fillScale == canvas.fitScale),
+            "zoom to fill covers the frame, centered: \(canvas.effectiveScale) of \(fill), fit \(canvas.fitScale), image \(image.width)x\(image.height)")
+          await shot("ux-fill.png")
+          canvas.zoomToFit()
+        }
       } else {
         check(false, "decode Draw Things sample")
       }

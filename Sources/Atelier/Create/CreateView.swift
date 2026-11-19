@@ -201,6 +201,9 @@ struct CanvasView: View {
       let imageFit = model.canvasDisplayImage.map {
         min(frame.width / Double($0.width), frame.height / Double($0.height))
       } ?? 1
+      let imageFill = model.canvasDisplayImage.map {
+        max(frame.width / Double($0.width), frame.height / Double($0.height))
+      } ?? 1
       let zoom = canvas.scale ?? imageFit
       let center = CGPoint(
         x: frameRect.midX + canvas.offset.width * points,
@@ -355,6 +358,7 @@ struct CanvasView: View {
           return true
         }
         .onChange(of: imageFit, initial: true) { canvas.fitScale = imageFit }
+        .onChange(of: imageFill, initial: true) { canvas.fillScale = imageFill }
         // The Select tool's own controls, over the canvas while it's the tool: outside the
         // canvas's gestures, so a click on them doesn't mark the image.
         // At the bottom: the moodboard sits at the top right.
@@ -924,7 +928,7 @@ struct CanvasContentItems: View {
   }
 }
 
-/// Zoom In, Zoom Out, Zoom to Fit and Actual Size, for the canvas menu and the View menu.
+/// Zoom In, Zoom Out, Zoom to Fit, Zoom to Fill and Actual Size, for the canvas menu and the View menu.
 struct ZoomMenuItems: View {
   let canvas: CanvasState
 
@@ -935,6 +939,7 @@ struct ZoomMenuItems: View {
       .keyboardShortcut("-", modifiers: .command)
     Button("Zoom to Fit") { canvas.zoomToFit() }
       .keyboardShortcut("9", modifiers: .command)
+    Button("Zoom to Fill") { canvas.zoomToFill() }
     Button("Actual Size") { canvas.zoom(to: 1) }
       .keyboardShortcut("0", modifiers: .command)
   }
@@ -950,6 +955,7 @@ private struct ZoomControls: View {
         .help("Zoom Out (⌘−)")
       Menu {
         Button("Zoom to Fit") { canvas.zoomToFit() }
+        Button("Zoom to Fill") { canvas.zoomToFill() }
         Divider()
         ForEach([0.25, 0.5, 1, 2, 4], id: \.self) { scale in
           Button(scale.formatted(.percent)) { canvas.zoom(to: scale) }
@@ -981,6 +987,8 @@ final class CanvasState {
   var offset: CGSize = .zero
   /// The scale that fits the image to the frame, kept current by the canvas.
   var fitScale: Double = 1
+  /// The scale at which the image covers the frame, kept current by the canvas.
+  var fillScale: Double = 1
 
   var effectiveScale: Double { scale ?? fitScale }
 
@@ -1000,6 +1008,13 @@ final class CanvasState {
   func zoomToFit() {
     scale = nil
     offset = .zero
+  }
+
+  /// Centers the image at the scale that covers the frame, so its longer side is cropped. An
+  /// image of the frame's shape fills it fitted, and stays fitted.
+  func zoomToFill() {
+    offset = .zero
+    scale = abs(fillScale - fitScale) < fitScale * 1e-6 ? nil : min(max(fillScale, Self.range.lowerBound), Self.range.upperBound)
   }
 
   /// Zooms keeping `anchor` (relative to the frame's center, in frame pixels) in place.
