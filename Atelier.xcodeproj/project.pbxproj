@@ -246,6 +246,7 @@
 		ED17ED17000000000000001B /* ReferenceMatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000001A /* ReferenceMatch.swift */; };
 		ED17ED17000000000000001D /* HistogramMatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000001C /* HistogramMatch.swift */; };
 		ED17ED17000000000000001F /* CubeLUT.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000001E /* CubeLUT.swift */; };
+		ED17ED17000000000000F001 /* BuiltInLUTs.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000F000 /* BuiltInLUTs.swift */; };
 		ED17ED170000000000000021 /* Halation.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000020 /* Halation.swift */; };
 		ED17ED170000000000000023 /* AutomationEdit.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000022 /* AutomationEdit.swift */; };
 		ED17ED170000000000000025 /* CreateModel+Edit.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000024 /* CreateModel+Edit.swift */; };
@@ -523,6 +524,7 @@
 		ED17ED17000000000000001A /* ReferenceMatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceMatch.swift; sourceTree = "<group>"; };
 		ED17ED17000000000000001C /* HistogramMatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistogramMatch.swift; sourceTree = "<group>"; };
 		ED17ED17000000000000001E /* CubeLUT.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CubeLUT.swift; sourceTree = "<group>"; };
+		ED17ED17000000000000F000 /* BuiltInLUTs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuiltInLUTs.swift; sourceTree = "<group>"; };
 		ED17ED170000000000000020 /* Halation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Halation.swift; sourceTree = "<group>"; };
 		ED17ED170000000000000022 /* AutomationEdit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationEdit.swift; sourceTree = "<group>"; };
 		ED17ED170000000000000024 /* CreateModel+Edit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CreateModel+Edit.swift"; sourceTree = "<group>"; };
@@ -990,6 +992,7 @@
 				ED17ED170000000000000018 /* Grade.swift */,
 				ED17ED17000000000000001A /* ReferenceMatch.swift */,
 				ED17ED17000000000000001C /* HistogramMatch.swift */,
+				ED17ED17000000000000F000 /* BuiltInLUTs.swift */,
 				ED17ED17000000000000001E /* CubeLUT.swift */,
 				ED17ED170000000000000020 /* Halation.swift */,
 			);
@@ -1191,6 +1194,7 @@
 				ED17ED17000000000000001B /* ReferenceMatch.swift in Sources */,
 				ED17ED17000000000000001D /* HistogramMatch.swift in Sources */,
 				ED17ED17000000000000001F /* CubeLUT.swift in Sources */,
+				ED17ED17000000000000F001 /* BuiltInLUTs.swift in Sources */,
 				ED17ED170000000000000021 /* Halation.swift in Sources */,
 				ED17ED170000000000000023 /* AutomationEdit.swift in Sources */,
 				ED17ED170000000000000025 /* CreateModel+Edit.swift in Sources */,

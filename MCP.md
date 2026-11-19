@@ -232,7 +232,7 @@ It says what's wrong rather than guessing: both or neither of `image` and `histo
 It's non-destructive like the screen. For a step saved from Edit (by the screen or this tool), it goes back to the image that step was made from and starts from the look the step records (settings, profile data, reference measurements and LUT), so a second call changes the look rather than adding grain over grain. For any other step it starts from no change: no blur, no grain, nothing. Over that base go, in order:
 
 1. The profile: `profile` (a name from `list_grain_profiles`) or `profile_path` (a `.grain.json` anywhere, grain.py's or Grain Studio's): its settings and grain data. Or, with `match_reference: true`, the profile Match Reference fits to the reference, as `grain.py --match` does: grain, size, colour noise and colour size, `colour` 0.6, its brightness curve, RGB statistics and real noise. `match_reference` takes the place of a profile, so passing both is an error.
-2. `lut_path`: a 3D `.cube` LUT (sizes 2–129), at strength 1.
+2. The LUT, at strength 1: `lut`, one of the [built-in looks](docs/editing.md#built-in-luts) by name (Warm Film, Teal and Orange, Faded Matte, Punchy Slide, Bleach Bypass, Sodium Night, Cool Phone Night, Golden Hour, Tri-X Mono, Cross Process), or `lut_path`, a 3D `.cube` LUT (sizes 2–129). Passing both is an error, as is a name that isn't a built-in (the error lists them).
 3. The reference: `reference_path` (an image file) or `reference_history_step`, measured for the color and histogram matches. It sets `options.match.target` to `reference`.
 4. `options`: a partial look, by section. A section or key left out stays as the layers below set it.
 
@@ -241,7 +241,7 @@ It's non-destructive like the screen. For a step saved from Edit (by the screen 
 - `match`: `target` (`reference` or `original`, the image the step was made from), `tint`, `saturation`, `brightness`, `contrast` (0–1, how far each moves to the target's, as `match_colors`), `colour` (grain.py's per-channel color match to the profile's reference; needs a profile).
 - `histogram`: `amount` (0–1), `space` (`luma`, the default, or `rgb`).
 - `grade`: `exposure` (stops), `temperature` (−100 to 100), `tint` (grain.py's green − / magenta +, about −30 to 30), `contrast`, `saturation`, `vibrance` (−1 to 1).
-- `lut`: `strength` (0–1). The table comes from `lut_path`.
+- `lut`: `strength` (0–1). The table comes from `lut` or `lut_path`.
 - `halation`: `amount`, `threshold` (default 0.8), `radius` (1–200 px, default 20), `warmth` (default 0.6).
 - `lens`: `motion` (px; smears above 1), `angle` (degrees), `blur` (px; grain.py's default is 3).
 - `vignette`: `amount` (−1 to 1), `size`, `softness` (0–1).

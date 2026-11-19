@@ -46,16 +46,18 @@ struct EditInspector: View {
       Text("Look")
     } content: {
       InspectorRow {
-        Text("Profile")
+        Text("Profile").layoutPriority(1)
       } control: {
-        Menu(edit.profile?.name ?? "None") {
+        Menu {
           Button("None") { edit.applyProfile(nil) }
           if !edit.profiles.profiles.isEmpty { Divider() }
           ForEach(edit.profiles.profiles, id: \.name) { profile in
             Button(profile.name) { edit.applyProfile(profile) }
           }
+        } label: {
+          Self.nameLabel(edit.profile?.name)
         }
-        .fixedSize()
+        .nameMenu(edit.profile?.name)
       }
       HStack(spacing: 6) {
         Button("Open Profile…") { openProfile() }
@@ -69,9 +71,9 @@ struct EditInspector: View {
       .padding(.vertical, 4)
       Divider().padding(.vertical, 4)
       InspectorRow {
-        Text("Reference")
+        Text("Reference").layoutPriority(1)
       } control: {
-        referenceMenu.fixedSize()
+        referenceMenu.nameMenu(edit.reference?.name)
       }
       HStack(spacing: 6) {
         Button("Match Reference") { Task { await edit.matchReference() } }
@@ -84,12 +86,18 @@ struct EditInspector: View {
       }
       .controlSize(.small)
       .padding(.vertical, 4)
-      Text(referenceStatus)
-        .font(.caption.monospacedDigit())
-        .foregroundStyle(.secondary)
-        .lineLimit(2, reservesSpace: true)
-        .fixedSize(horizontal: false, vertical: true)
-        .padding(.bottom, 4)
+      // Two lines kept for it so a short status doesn't move what's below; a long name or the
+      // match report wraps onto more.
+      ZStack(alignment: .topLeading) {
+        Text(" \n ").hidden().accessibilityHidden(true)
+        Text(referenceStatus)
+          .lineLimit(6)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      .font(.caption.monospacedDigit())
+      .foregroundStyle(.secondary)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.bottom, 4)
     }
   }
 
@@ -104,7 +112,7 @@ struct EditInspector: View {
   }
 
   private var referenceMenu: some View {
-    Menu(edit.reference?.name ?? "None") {
+    Menu {
       Button("Choose File…") { chooseReferenceFile() }
       Button("From Photos…") { chooseReferencePhoto() }
       Button("Original of This Step") {
@@ -124,7 +132,32 @@ struct EditInspector: View {
       Divider()
       Button("None") { edit.clearReference() }
         .disabled(edit.reference == nil)
+    } label: {
+      Self.nameLabel(edit.reference?.name)
     }
+  }
+
+  /// None, the built-in looks, and the LUT loaded from a file when there is one.
+  private var lutMenu: some View {
+    let builtIn = edit.builtInLUTName
+    return Menu {
+      Toggle("None", isOn: Binding(get: { edit.lut == nil }, set: { if $0 { edit.chooseLUT(nil) } }))
+      ForEach(BuiltInLUTs.names, id: \.self) { name in
+        Toggle(name, isOn: Binding(get: { builtIn == name }, set: { if $0 { edit.chooseBuiltInLUT(name) } }))
+      }
+      if let file = edit.fileLUT {
+        Divider()
+        Toggle(file.name, isOn: Binding(get: { edit.lut != nil && builtIn == nil }, set: { if $0 { edit.chooseLUT(file) } }))
+      }
+    } label: {
+      Self.nameLabel(edit.lut?.name)
+    }
+  }
+
+  /// A menu's label showing a name someone chose (a file's, a profile's): one line, cut in the
+  /// middle where file names differ least, so a long one never widens the column.
+  static func nameLabel(_ name: String?) -> some View {
+    Text(name ?? "None").lineLimit(1).truncationMode(.middle)
   }
 
   // MARK: Sections
@@ -149,7 +182,9 @@ struct EditInspector: View {
       }
       Text(noLab ? (edit.options.match.target == .reference ? "Choose a reference to match to." : "This image has no original to match to.") : "Moves the colours toward \(target?.name ?? "it").")
         .font(.caption).foregroundStyle(.secondary)
-        .lineLimit(1, reservesSpace: true)
+        .lineLimit(2, reservesSpace: true)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
       Self.percentSlider("Tint", options.match.tint).disabled(noLab)
       Self.percentSlider("Saturation", options.match.saturation).disabled(noLab)
       Self.percentSlider("Brightness", options.match.brightness).disabled(noLab)
@@ -191,15 +226,17 @@ struct EditInspector: View {
       Text("LUT")
     } content: {
       InspectorRow {
-        Text(edit.lut?.name ?? "None").lineLimit(1).truncationMode(.middle)
+        Text("LUT").layoutPriority(1)
       } control: {
-        HStack(spacing: 6) {
-          Button("Load .cube…") { loadLUT() }
-          Button("Remove") { edit.removeLUT() }
-            .disabled(edit.lut == nil)
-        }
-        .controlSize(.small)
+        lutMenu.nameMenu(edit.lut?.name)
       }
+      HStack(spacing: 6) {
+        Button("Load .cube…") { loadLUT() }
+        Button("Remove") { edit.removeLUT() }
+          .disabled(edit.lut == nil && edit.fileLUT == nil)
+      }
+      .controlSize(.small)
+      .padding(.vertical, 4)
       Self.percentSlider("Strength", lut.strength).disabled(edit.lut == nil)
       InspectorRow {
         Text("Match and Grade as a LUT").font(.caption).foregroundStyle(.secondary)
@@ -389,6 +426,16 @@ struct EditInspector: View {
     }
     let sameProject = if case .step(let project, _) = edit.source { project == create.history.project.name } else { false }
     await edit.setReference(image: image, name: "Step \(item.id.logicalTime)", tensorId: sameProject ? tensorId : nil)
+  }
+}
+
+private extension View {
+  /// A menu showing a chosen name, laid out as the Create inspector's file pickers are: no wider
+  /// than they go, shrinking with the column rather than setting its width, with the whole
+  /// name in its help.
+  func nameMenu(_ name: String?) -> some View {
+    frame(maxWidth: 190, alignment: .trailing)
+      .help(name ?? "")
   }
 }
 

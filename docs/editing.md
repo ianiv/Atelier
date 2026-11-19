@@ -33,7 +33,24 @@ The inspector's sections are in the order the look is applied: lens smear and bl
 
 ### LUT
 
-**Load .cube…** applies a 3D LUT in the Adobe/Resolve `.cube` format at full **Strength**; **Remove** takes it off. Sizes 2 to 129 are read, with `DOMAIN_MIN`/`DOMAIN_MAX`; 1D LUTs aren't.
+The **LUT** menu picks **None**, one of the built-in looks below, or the LUT you loaded from a file, listed under them; choosing one keeps the **Strength**. **Load .cube…** applies a 3D LUT in the Adobe/Resolve `.cube` format at full **Strength**; **Remove** takes it off and drops the file's LUT from the menu. Sizes 2 to 129 are read, with `DOMAIN_MIN`/`DOMAIN_MAX`; 1D LUTs aren't.
+
+#### Built-in LUTs
+
+Atelier's own looks, written from scratch (sRGB in and out):
+
+- **Warm Film**: lifted blacks, a gentle S-curve, cool shadows and warm highlights, tamed greens.
+- **Teal and Orange**: a firmer S-curve, teal shadows and orange highlights, a little warmth on skin.
+- **Faded Matte**: strongly lifted blacks and dimmed whites, soft contrast, muted color.
+- **Punchy Slide**: a strong S-curve with richer reds, yellows and blues, like slide film.
+- **Bleach Bypass**: half the saturation and a hard S-curve, for a gritty, silvery look.
+- **Sodium Night**: crushed blacks, cyan-green shadows and an orange street-light cast.
+- **Cool Phone Night**: slightly lifted shadows, a cool white balance and a little more color.
+- **Golden Hour**: a warm white balance, warm split toning and a light S-curve.
+- **Tri-X Mono**: black and white through a red filter's weights, with strong contrast.
+- **Cross Process**: contrasty reds, slightly brighter greens and lifted, flattened blues.
+
+A step saved with a built-in keeps its table, so it renders the same even if a later version of Atelier changes the look.
 
 **Export LUT…** bakes the matches, the grade and the LUT, as they are for this image, into a 33³ `.cube` for other apps. Blur, halation, the vignette and the grain aren't in it: they depend on where a pixel is, which a LUT can't hold. The baked LUT is within about 2 levels of the screen inside the colors it can hold, and up to 4 near clipping; a strong luma histogram match is too steep near black for 33 steps and comes out softer there.
 
@@ -59,7 +76,7 @@ A warm glow around highlights, as film gives. **Amount** sets how strong it is, 
 
 The bottom bar's comparison picks how you see the original:
 
-- **Hold for Original** shows the edit; press and hold the **Hold for Original** button beside the picker to see the original in its place. With VoiceOver, the button's action turns the original on and off.
+- **Hold for Original** shows the edit; press and hold the **Hold for Original** segment itself to see the original in its place until you let go. A click just picks the mode. With VoiceOver, once Hold for Original is picked, the segment's action turns the original on and off.
 - **Side by Side** shows the original and the edit next to each other.
 - **Slider** shows one picture with a divider you drag across it. It shows the whole image only.
 
@@ -79,7 +96,7 @@ A step saved from Edit records its look: the settings, the profile's name, grain
 
 ## On iPad
 
-The inspector is a panel beside the image, as in the Video Editor. **Hold for Original** is pressed and held with a finger; pinch to zoom. The profile library lives in Atelier's own storage; use **Open Profile…** and **Save Profile…** to move profiles to and from Files.
+The inspector is a panel beside the image, as in the Video Editor. The **Hold for Original** segment is pressed and held with a finger; pinch to zoom. The profile library lives in Atelier's own storage; use **Open Profile…** and **Save Profile…** to move profiles to and from Files.
 
 ## Agents
 

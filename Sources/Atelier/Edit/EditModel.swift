@@ -83,8 +83,13 @@ final class EditModel {
   private(set) var reference: Reference?
   /// The source step's original (`Match.Target.original`), measured when the step is opened.
   private(set) var original: Reference?
-  /// The loaded LUT.
+  /// The loaded LUT, a built-in or one from a file.
   private(set) var lut: Edit.LUTTable?
+  /// The LUT last loaded from a file (or kept in the opened step), so the LUT menu can go back to
+  /// it after trying a built-in. Remove and Reset let it go.
+  private(set) var fileLUT: Edit.LUTTable?
+  /// The built-in `lut` is, nil for a file's or none.
+  var builtInLUTName: String? { BuiltInLUTs.name(of: lut) }
 
   /// What the look renders with, rebuilt whenever the profile, reference, original, LUT or
   /// match target change. `contextVersion` counts the rebuilds: the render tasks key on it rather
@@ -375,6 +380,7 @@ final class EditModel {
         histogram: context.referenceHistogram)
     }
     lut = context.lut
+    fileLUT = builtInLUTName == nil ? lut : nil
   }
 
   /// Measures the step's original (the image it was made from, else its parent's) for
@@ -502,14 +508,33 @@ final class EditModel {
     defer { if access { url.stopAccessingSecurityScopedResource() } }
     let table = try CubeLUT.read(contentsOf: url)
     lut = table
+    fileLUT = table
     options.lut = EditOptions.LUTRef(name: table.name, digest: table.digest, strength: 1)
     missingDataNote = nil
     rebuildContext()
   }
 
+  /// The LUT menu's choice: a built-in by name, the file LUT, or none (nil), taken the way
+  /// loading a file is but keeping the strength. Unlike Remove, None keeps the file LUT in the
+  /// menu.
+  func chooseLUT(_ table: Edit.LUTTable?) {
+    lut = table
+    options.lut = EditOptions.LUTRef(name: table?.name, digest: table?.digest, strength: options.lut.strength)
+    missingDataNote = nil
+    rebuildContext()
+  }
+
+  /// Chooses the built-in LUT `name`; false for a name that isn't one.
+  @discardableResult func chooseBuiltInLUT(_ name: String) -> Bool {
+    guard let table = BuiltInLUTs.table(name) else { return false }
+    chooseLUT(table)
+    return true
+  }
+
   /// Takes the LUT off.
   func removeLUT() {
     lut = nil
+    fileLUT = nil
     options.lut = EditOptions.LUTRef()
     rebuildContext()
   }
@@ -522,6 +547,7 @@ final class EditModel {
     profile = nil
     reference = nil
     lut = nil
+    fileLUT = nil
     matchReport = nil
     missingDataNote = nil
     rebuildContext()

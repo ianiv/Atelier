@@ -31,7 +31,9 @@ extension Automation {
   ///   options are refused with an error naming the key.
   ///
   /// With `--snapshot-dir DIR` it also saves the window: the empty screen (`edit-empty.png`),
-  /// the look in each comparison mode (`edit-<mode>.png`) and zoomed to 200% (`edit-zoom200.png`).
+  /// the look in each comparison mode (`edit-<mode>.png`) and zoomed to 200% (`edit-zoom200.png`),
+  /// then, with a long-named reference matched, checks that the inspector still goes to its
+  /// narrowest and the window narrow (`edit-long-name*.png`).
   ///
   ///   Atelier --edit-screen-check --project NAME [--snapshot-dir DIR] [--quit]
   ///
@@ -140,6 +142,7 @@ extension Automation {
         try? await Task.sleep(for: .seconds(2))
         snapshot(to: snapshotDir.appendingPathComponent("edit-zoom200.png"))
         edit.canvas.zoomToFit()
+        await longNameSnapshots(edit, look: look, to: snapshotDir, check: check)
         print("snapshots in \(snapshotDir.path)")
       }
 
@@ -184,6 +187,7 @@ extension Automation {
       check(edit.item?.tensorId == source.tensorId, "opening the saved step goes back to its source")
       check(edit.options == look, "opening the saved step loads its look")
       check(edit.saveProblem == nil, "Save to History is available again once the job is done")
+      await builtInLUTCheck(model, edit: edit, look: look, source: source, check: check)
 
       // Export PNG.
       do {
@@ -283,6 +287,81 @@ extension Automation {
 
   /// Add to History pressed twice makes one entry; an open that finishes after a newer one
   /// (a relaunch's restore, a slow read) doesn't replace the newer image.
+  /// A built-in LUT chosen from the LUT menu saves with the step, which records the look's name,
+  /// digest and table, and opening the step shows that built-in chosen again. Puts `look` back.
+  private static func builtInLUTCheck(_ model: CreateModel, edit: EditModel, look: EditOptions, source: HistoryItem, check: (Bool, String) -> Void) async {
+    let name = "Teal and Orange"
+    let strength = edit.options.lut.strength
+    guard edit.chooseBuiltInLUT(name), let table = edit.lut else { return check(false, "the built-in LUT \(name) couldn't be chosen") }
+    check(
+      edit.options.lut.name == name && edit.options.lut.digest == table.digest && edit.options.lut.strength == strength && edit.builtInLUTName == name,
+      "choosing the built-in \(name) sets the look's LUT, keeping the strength")
+    guard let jobID = try? edit.save() else { return check(false, "Save to History with a built-in LUT failed") }
+    var waited = 0
+    while model.queue.recent.first(where: { $0.id == jobID }) == nil, waited < 600 {
+      try? await Task.sleep(for: .milliseconds(100))
+      waited += 1
+    }
+    guard case .finished(let tensorId)? = model.queue.recent.first(where: { $0.id == jobID })?.status,
+          let saved = model.history.item(tensorId: tensorId)
+    else { return check(false, "the Edit job with a built-in LUT didn't save a step") }
+    let record = saved.sidecar.edit
+    check(
+      record?.options.lut.name == name && record?.options.lut.digest == table.digest && record?.lut?.digest == table.digest && record?.lut?.size == 33,
+      "the step saved with \(name) records its name, digest and table (\(record?.lut.map { "\($0.name), \($0.size)³" } ?? "no table"))")
+    edit.chooseLUT(nil)
+    await edit.open(saved)
+    check(edit.builtInLUTName == name && edit.item?.tensorId == source.tensorId, "opening that step shows \(name) chosen in the LUT menu")
+    edit.reset()
+    await edit.open(source)
+    edit.options = look
+  }
+
+  /// A reference file with a long name (and the profile Match Reference names after it) must
+  /// leave the inspector free to go to its narrowest and the window to go narrow, the names cut
+  /// short in their menus and the notes wrapped. Saves `edit-long-name.png`,
+  /// `edit-long-name-narrow-inspector.png` and `edit-long-name-narrow-window.png`, then puts the
+  /// look, the inspector and the window back.
+  private static func longNameSnapshots(_ edit: EditModel, look: EditOptions, to snapshotDir: URL, check: (Bool, String) -> Void) async {
+    let name = "575633967_18540294724027661_3024696966612595715_n"
+    let file = snapshotDir.appendingPathComponent(name + ".png")
+    var grainy = EditOptions.identity
+    grainy.grain = EditOptions.Grain(lum: 9, size: 2, chroma: 3, csize: 2, seed: 3)
+    guard let grey = flatImage(width: 1440, height: 1080, level: 128),
+          let rendered = try? await EditPipeline.render(source: grey, options: grainy), let png = ImageTensor.png(rendered),
+          (try? png.write(to: file)) != nil, let reference = ImageLoader.image(at: file)
+    else { return check(false, "the long-named reference couldn't be made") }
+    // As Choose File… names it.
+    await edit.setReference(image: reference, name: file.deletingPathExtension().lastPathComponent)
+    await edit.matchReference()
+    check(edit.reference?.name == name && edit.profile?.name.contains(name) == true, "a long-named reference is the reference, and Match Reference's profile is named after it")
+    try? await Task.sleep(for: .seconds(1))
+    snapshot(to: snapshotDir.appendingPathComponent("edit-long-name.png"))
+    if let widths = AutomationWindows.setInspectorWidth(0) {
+      try? await Task.sleep(for: .seconds(1))
+      // The column's minimum is 280; a name setting it would hold it wider.
+      check(widths.after <= 290, "with a long-named reference the inspector goes to its narrowest, \(Int(widths.after)) points (was \(Int(widths.before)))")
+      snapshot(to: snapshotDir.appendingPathComponent("edit-long-name-narrow-inspector.png"))
+      AutomationWindows.setInspectorWidth(nil)
+    } else {
+      check(false, "the inspector's split wasn't found")
+    }
+    // The window as narrow as it goes, with the names and then without: they mustn't change it.
+    let window = AutomationWindows.setWindowWidth(400)
+    try? await Task.sleep(for: .seconds(1))
+    snapshot(to: snapshotDir.appendingPathComponent("edit-long-name-narrow-window.png"))
+    let withNames = AutomationWindows.setWindowWidth(400)?.after ?? 0
+    edit.clearReference()
+    edit.applyProfile(nil)
+    try? await Task.sleep(for: .seconds(1))
+    let without = AutomationWindows.setWindowWidth(400)?.after ?? 0
+    check(withNames > 0 && abs(withNames - without) < 1, "a long-named reference leaves the window's narrowest width alone (\(Int(withNames)) points, \(Int(without)) without)")
+    if let window { AutomationWindows.setWindowWidth(window.before) }
+    edit.clearReference()
+    edit.applyProfile(nil)
+    edit.options = look
+  }
+
   private static func addAndOpenRaceChecks(_ model: CreateModel, edit: EditModel, source: HistoryItem, check: (Bool, String) -> Void) async {
     let history = model.history
     guard let file = testImage(width: 640, height: 512) else { return check(false, "the Add to History image couldn't be made") }

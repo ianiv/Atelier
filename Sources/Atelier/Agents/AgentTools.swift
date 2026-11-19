@@ -439,7 +439,7 @@ final class AgentTools {
       "name": "edit_image_look",
       "title": "Edit image look",
       "description":
-        "Gives an image a look on Atelier's Edit screen and saves it as a new history step after its source, like the screen's Save to History: film grain (grain.py's random grain and a profile's real noise), color matching to a reference or the step's original (Reinhard Lab and histogram), a grade (exposure, temperature, tint, contrast, saturation, vibrance), a 3D LUT, halation, lens blur and motion smear, and a vignette. Needs no model. Non-destructive: for a step this tool or the Edit screen made, it goes back to that step's source and starts from the look the step records; for any other step it starts from no change. Over that base go, in order: the profile (`profile` from list_grain_profiles, or `profile_path`), or with `match_reference` the profile Match Reference fits to the reference (grain.py --match: grain, size, colour noise, colour size, colour 0.6, its brightness curve, RGB statistics and real noise); the LUT (`lut_path`, at strength 1); the reference (`reference_path` or `reference_history_step`, which sets options.match.target to reference); then `options`, where every key left out stays as the layers below set it. The seed is 7 unless the base or options say otherwise. Runs as a job in Atelier's Queue on this device, after what's queued there: by default it waits and returns the new history_step, source_step, the options used, the profile/reference/LUT names, match_report (with match_reference) and job_id. With background: true it returns a job_id at once for get_job, list_jobs and cancel_job. The same edit already waiting or running isn't queued twice: the call joins that job. The saved size snaps to multiples of 64. Leaves the Edit screen as the user has it. Not for videos.",
+        "Gives an image a look on Atelier's Edit screen and saves it as a new history step after its source, like the screen's Save to History: film grain (grain.py's random grain and a profile's real noise), color matching to a reference or the step's original (Reinhard Lab and histogram), a grade (exposure, temperature, tint, contrast, saturation, vibrance), a 3D LUT, halation, lens blur and motion smear, and a vignette. Needs no model. Non-destructive: for a step this tool or the Edit screen made, it goes back to that step's source and starts from the look the step records; for any other step it starts from no change. Over that base go, in order: the profile (`profile` from list_grain_profiles, or `profile_path`), or with `match_reference` the profile Match Reference fits to the reference (grain.py --match: grain, size, colour noise, colour size, colour 0.6, its brightness curve, RGB statistics and real noise); the LUT (`lut`, a built-in, or `lut_path`, at strength 1); the reference (`reference_path` or `reference_history_step`, which sets options.match.target to reference); then `options`, where every key left out stays as the layers below set it. The seed is 7 unless the base or options say otherwise. Runs as a job in Atelier's Queue on this device, after what's queued there: by default it waits and returns the new history_step, source_step, the options used, the profile/reference/LUT names, match_report (with match_reference) and job_id. With background: true it returns a job_id at once for get_job, list_jobs and cancel_job. The same edit already waiting or running isn't queued twice: the call joins that job. The saved size snaps to multiples of 64. Leaves the Edit screen as the user has it. Not for videos.",
       "inputSchema": [
         "type": "object",
         "properties": [
@@ -458,6 +458,7 @@ final class AgentTools {
           "reference_history_step": ["type": "integer", "description": "A history step of the current project to use as the reference, instead of reference_path."],
           "match_reference": ["type": "boolean", "description": "Measure the reference's grain and use the profile it makes, as grain.py --match does (a second or two). Default false. measure_reference shows the fit without editing."],
           "lut_path": ["type": "string", "description": "A .cube 3D LUT to apply (options.lut.strength sets how strongly)."],
+          "lut": ["type": "string", "description": "One of Atelier's built-in LUTs, instead of lut_path: \(BuiltInLUTs.names.joined(separator: ", ")). options.lut.strength sets how strongly."],
           "save_profile_to": ["type": "string", "description": "Also write the look as a .grain.json profile (grain.py's format) to this file, or into this folder under the profile's name."],
           "background": ["type": "boolean", "description": "Return a job_id at once instead of waiting. Default false."],
         ],
@@ -2301,7 +2302,7 @@ final class AgentTools {
       for (key, value) in section {
         guard let kind = keys[key] else {
           let extra = name == "grain" ? ", or grain.py's \(grainPyAliases.keys.sorted().joined(separator: ", "))" : ""
-          if name == "lut", key == "name" || key == "digest" { throw ToolError("Load a LUT with `lut_path`; `options.lut` takes only strength.") }
+          if name == "lut", key == "name" || key == "digest" { throw ToolError("Choose a LUT with `lut` or `lut_path`; `options.lut` takes only strength.") }
           throw ToolError("`options.\(name)` has no `\(key)`. It takes \(keys.keys.sorted().joined(separator: ", "))\(extra).")
         }
         switch kind {
@@ -2469,6 +2470,16 @@ final class AgentTools {
       context = context.using(profile)
       profileName = profile.name
     }
+    if arguments["lut"] != nil, arguments["lut_path"] != nil {
+      throw ToolError("Pass `lut` (a built-in) or `lut_path` (a .cube file), not both.")
+    }
+    if let name = arguments["lut"] {
+      guard let name = name as? String, let table = BuiltInLUTs.table(name) else {
+        throw ToolError("`lut` names a built-in LUT: one of \(BuiltInLUTs.names.joined(separator: ", ")).")
+      }
+      context.lut = table
+      options.lut = EditOptions.LUTRef(name: table.name, digest: table.digest, strength: 1)
+    }
     if let path = arguments["lut_path"] {
       guard let path = path as? String, !path.isEmpty else { throw ToolError("`lut_path` is a .cube file's path.") }
       let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
@@ -2543,7 +2554,7 @@ final class AgentTools {
       throw ToolError("options.grain.real adds the profile's real noise: it needs a profile with real noise (`profile`, `profile_path` or `match_reference`).")
     }
     if options.lut.name != nil, context.lut == nil {
-      throw ToolError("The look names a LUT whose table isn't loaded; pass `lut_path`.")
+      throw ToolError("The look names a LUT whose table isn't loaded; pass `lut` or `lut_path`.")
     }
 
     var savedProfile: String?

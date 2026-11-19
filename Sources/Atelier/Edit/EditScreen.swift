@@ -47,31 +47,10 @@ struct EditScreen: View {
 
   private var bottomBar: some View {
     @Bindable var edit = edit
-    let canHold = edit.compareMode == .hold && edit.hasSource
     return HStack(spacing: 12) {
-      Picker("Comparison", selection: $edit.compareMode) {
-        ForEach(Compare.Mode.allCases, id: \.self) { Text($0.title).tag($0) }
-      }
-      .pickerStyle(.segmented)
-      .labelsHidden()
-      .fixedSize()
-      // Pressed and held, not clicked: the original shows only while it's down. Named as the
-      // comparison mode that offers it.
-      Text(Compare.Mode.hold.title)
-        .font(.callout)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-        .background(holding ? AnyShapeStyle(.tint.opacity(0.35)) : AnyShapeStyle(.quaternary), in: .capsule)
-        .contentShape(.capsule)
-        .onLongPressGesture(minimumDuration: 60, maximumDistance: 40, perform: {}, onPressingChanged: { holding = $0 && canHold })
-        .opacity(canHold ? 1 : 0.4)
-        .allowsHitTesting(canHold)
-        .accessibilityAddTraits(.isButton)
-        // VoiceOver can't press and hold: its action turns the original on and off instead.
-        .accessibilityValue(holding ? "Showing the original" : "Showing the edit")
-        .accessibilityAction { if canHold { holding.toggle() } }
-        .onChange(of: canHold) { if !canHold { holding = false } }
-        .help("Press and hold to see the original in place of the edit")
+      // The Hold segment is itself what's held: a stock segmented Picker can't say when one
+      // segment is pressed and let go, so this is drawn as one.
+      EditCompareControl(mode: $edit.compareMode, holding: $holding, canHold: edit.hasSource)
       EditZoomControls(canvas: edit.canvas)
         .disabled(!edit.hasSource || edit.compareMode == .slider)
       Spacer(minLength: 8)
@@ -82,9 +61,11 @@ struct EditScreen: View {
             Text("Exporting…")
           }
         } else {
-          Text(edit.note ?? (edit.hasSource ? edit.saveProblem : nil) ?? edit.sourceTitle)
+          let status = edit.note ?? (edit.hasSource ? edit.saveProblem : nil) ?? edit.sourceTitle
+          Text(status)
             .lineLimit(1)
             .truncationMode(.middle)
+            .help(status)
         }
       }
       .font(.callout)
@@ -117,6 +98,92 @@ struct EditScreen: View {
     .padding(.horizontal, 12)
     .frame(height: 40)
   }
+}
+
+/// The comparison choice, drawn as a segmented control so that its Hold for Original segment
+/// can be pressed and held: pressing it chooses Hold and shows the original until it's let go,
+/// so a plain click just chooses Hold. With VoiceOver, each segment is a button marked selected
+/// as a picker's are, and the Hold segment's action turns the original on and off once Hold is
+/// chosen, since VoiceOver can't press and hold.
+private struct EditCompareControl: View {
+  @Binding var mode: Compare.Mode
+  @Binding var holding: Bool
+  /// There's an image whose original can show.
+  let canHold: Bool
+  @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.isEnabled) private var isEnabled
+  /// The Hold segment is down.
+  @State private var pressed = false
+
+  var body: some View {
+    HStack(spacing: 0) {
+      ForEach(Compare.Mode.allCases, id: \.self) { segment($0) }
+    }
+    .padding(2)
+    .background(.fill.tertiary, in: .capsule)
+    .fixedSize()
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel("Comparison")
+    .onChange(of: canHold) { if !canHold { holding = false } }
+    .onChange(of: mode) { if mode != .hold { holding = false } }
+  }
+
+  @ViewBuilder private func segment(_ option: Compare.Mode) -> some View {
+    let selected = mode == option
+    let label = Text(option.title)
+      .lineLimit(1)
+      .padding(.horizontal, Self.horizontalPadding)
+      .padding(.vertical, Self.verticalPadding)
+      .foregroundStyle(isEnabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
+      .background { if selected { selection(down: option == .hold && pressed) } }
+      .contentShape(.capsule)
+    if option == .hold {
+      label
+        .gesture(
+          DragGesture(minimumDistance: 0)
+            .onChanged { _ in
+              guard !pressed else { return }
+              pressed = true
+              mode = .hold
+              holding = canHold
+            }
+            .onEnded { _ in
+              pressed = false
+              holding = false
+            }
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityValue(selected && canHold ? (holding ? "Showing the original" : "Showing the edit") : "")
+        // VoiceOver can't press and hold: once Hold is chosen, its action turns the original on and off.
+        .accessibilityAction {
+          if mode != .hold { mode = .hold } else if canHold { holding.toggle() }
+        }
+        .help("Press and hold to see the original in place of the edit")
+    } else {
+      label
+        .onTapGesture { mode = option }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAction { mode = option }
+    }
+  }
+
+  /// The selected segment's raised capsule, as the system draws it: white over the grey track in
+  /// light mode, a lighter grey in dark mode, and tinted while Hold is held down.
+  private func selection(down: Bool) -> some View {
+    Capsule()
+      .fill(down ? AnyShapeStyle(.tint.opacity(0.35)) : AnyShapeStyle(colorScheme == .dark ? Color.white.opacity(0.22) : Color.white))
+      .shadow(color: .black.opacity(colorScheme == .dark ? 0 : 0.12), radius: 1, y: 0.5)
+  }
+
+  #if os(macOS)
+  private static let horizontalPadding: CGFloat = 10
+  private static let verticalPadding: CGFloat = 3
+  #else
+  private static let horizontalPadding: CGFloat = 12
+  private static let verticalPadding: CGFloat = 6
+  #endif
 }
 
 /// − / zoom level / +, as the Create screen's status bar has them.

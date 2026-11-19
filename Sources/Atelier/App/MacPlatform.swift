@@ -441,6 +441,53 @@ enum AutomationWindows {
     return (Date().timeIntervalSince(start) / Double(frames), worst)
   }
 
+  /// Asks for the visible window at `width` (the height kept) and returns its width before and
+  /// the width it took once laid out: wider when its content won't go that narrow. Nil with no
+  /// visible window.
+  @discardableResult static func setWindowWidth(_ width: CGFloat) -> (before: CGFloat, after: CGFloat)? {
+    guard let window = visibleWindow else { return nil }
+    let before = window.frame.width
+    var frame = window.frame
+    frame.size.width = width
+    window.setFrame(frame, display: true)
+    window.contentView?.layoutSubtreeIfNeeded()
+    window.displayIfNeeded()
+    return (before, window.frame.width)
+  }
+
+  /// The width constraint `setInspectorWidth` holds the inspector to.
+  private static var inspectorWidthConstraint: NSLayoutConstraint?
+
+  /// Holds the inspector at `width` (as a strong but not required width constraint, so its
+  /// column's minimum and its content's still win), or lets it go with nil. Returns its width
+  /// before and after layout: after is more than `width` when the column or its content won't go
+  /// that narrow. Nil when there's no inspector split.
+  @discardableResult static func setInspectorWidth(_ width: CGFloat?) -> (before: CGFloat, after: CGFloat)? {
+    inspectorWidthConstraint?.isActive = false
+    inspectorWidthConstraint = nil
+    guard let root = visibleWindow?.contentView else { return nil }
+    func splits(in view: NSView) -> [NSSplitView] {
+      var found = (view as? NSSplitView).map { [$0] } ?? []
+      for subview in view.subviews { found += splits(in: subview) }
+      return found
+    }
+    // The inspector is the trailing pane of the innermost side-by-side split.
+    guard let split = splits(in: root).last(where: { $0.isVertical && $0.arrangedSubviews.count > 1 }),
+          let inspector = split.arrangedSubviews.last
+    else { return nil }
+    let before = inspector.frame.width
+    if let width {
+      let constraint = inspector.widthAnchor.constraint(equalToConstant: width)
+      constraint.priority = .init(990)
+      constraint.isActive = true
+      inspectorWidthConstraint = constraint
+    }
+    split.adjustSubviews()
+    split.window?.contentView?.layoutSubtreeIfNeeded()
+    split.window?.displayIfNeeded()
+    return (before, inspector.frame.width)
+  }
+
   private static func png(of view: NSView) -> Data? {
     guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
     view.cacheDisplay(in: view.bounds, to: rep)
