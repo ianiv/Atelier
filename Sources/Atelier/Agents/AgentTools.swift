@@ -25,7 +25,7 @@ final class AgentTools {
     var isQueued = false
   }
 
-  /// One `generate`, `edit_image` or `match_colors` run. A run outlives the call that started it: `background`
+  /// One `generate`, `edit_image`, `match_colors` or `edit_image_look` run. A run outlives the call that started it: `background`
   /// returns its id at once, and a waiting call whose client hangs up leaves it running for
   /// `get_job`.
   @MainActor
@@ -38,6 +38,8 @@ final class AgentTools {
     let label: String
     /// A match_colors job's step, so a second call for it joins this one.
     let colorMatch: ColorMatch.Job?
+    /// An edit_image_look job's edit, likewise.
+    let edit: Edit.Job?
     let startedAt = Date()
     var progress = Progress(step: 0, total: nil, message: "Starting", isQueued: true)
     /// Checked its arguments and joined the queue (or failed doing so).
@@ -50,12 +52,16 @@ final class AgentTools {
     /// The waiting call's progress stream, while there is one.
     @ObservationIgnored var onProgress: ((Progress) -> Void)?
 
-    init(id: String, tool: String, label: String, colorMatch: ColorMatch.Job? = nil) {
+    init(id: String, tool: String, label: String, colorMatch: ColorMatch.Job? = nil, edit: Edit.Job? = nil) {
       self.id = id
       self.tool = tool
       self.label = label
       self.colorMatch = colorMatch
+      self.edit = edit
     }
+
+    /// Whether answers name it by what it does (`label`) rather than a prompt.
+    var isLabelled: Bool { tool == "match_colors" || tool == "edit_image_look" }
 
     var status: String {
       if result != nil { return "done" }
@@ -86,9 +92,13 @@ final class AgentTools {
   @ObservationIgnored private var jobs: [String: Job] = [:]
   @ObservationIgnored private var jobCount = 0
 
-  init(create: CreateModel, presets: PresetStore) {
+  /// The Edit screen's profile library when the app hands it over (`grainProfiles`).
+  @ObservationIgnored private var injectedGrainProfiles: GrainProfileStore?
+
+  init(create: CreateModel, presets: PresetStore, grainProfiles: GrainProfileStore? = nil) {
     self.create = create
     self.presets = presets
+    injectedGrainProfiles = grainProfiles
   }
 
   // MARK: - Definitions
@@ -426,6 +436,55 @@ final class AgentTools {
       ],
     ],
     [
+      "name": "edit_image_look",
+      "title": "Edit image look",
+      "description":
+        "Gives an image a look on Atelier's Edit screen and saves it as a new history step after its source, like the screen's Save to History: film grain (grain.py's random grain and a profile's real noise), color matching to a reference or the step's original (Reinhard Lab and histogram), a grade (exposure, temperature, tint, contrast, saturation, vibrance), a 3D LUT, halation, lens blur and motion smear, and a vignette. Needs no model. Non-destructive: for a step this tool or the Edit screen made, it goes back to that step's source and starts from the look the step records; for any other step it starts from no change. Over that base go, in order: the profile (`profile` from list_grain_profiles, or `profile_path`), or with `match_reference` the profile Match Reference fits to the reference (grain.py --match: grain, size, colour noise, colour size, colour 0.6, its brightness curve, RGB statistics and real noise); the LUT (`lut`, a built-in, or `lut_path`, at strength 1); the reference (`reference_path` or `reference_history_step`, which sets options.match.target to reference); then `options`, where every key left out stays as the layers below set it. The seed is 7 unless the base or options say otherwise. Runs as a job in Atelier's Queue on this device, after what's queued there: by default it waits and returns the new history_step, source_step, the options used, the profile/reference/LUT names, match_report (with match_reference) and job_id. With background: true it returns a job_id at once for get_job, list_jobs and cancel_job. The same edit already waiting or running isn't queued twice: the call joins that job. The saved size snaps to multiples of 64. Leaves the Edit screen as the user has it. Not for videos.",
+      "inputSchema": [
+        "type": "object",
+        "properties": [
+          "history_step": ["type": "integer", "description": "A history step from list_history or generate. Omit for the canvas image."],
+          "options": [
+            "type": "object",
+            "description": "The look, partial: sections and keys left out are no change from the base. Sections and keys (ranges): match {target: reference|original, tint, saturation, brightness, contrast (0–1, how far each Lab statistic moves to the target's, as match_colors), colour (≥0, grain.py's RGB mean and spread match to the profile's reference; needs a profile)}; histogram {amount 0–1, space: luma|rgb} (CDF match to the target); grade {exposure (stops), temperature −100–100, tint (grain.py's green − / magenta +, about −30–30), contrast, saturation, vibrance (−1–1)}; lut {strength 0–1}; halation {amount 0–1, threshold 0–1 (default 0.8), radius 1–200 px (20), warmth 0–1 (0.6)}; lens {motion px (smears above 1), angle degrees, blur px (grain.py's default 3; none below 0.3)}; vignette {amount −1–1, size 0–1, softness 0–1}; grain {lum (grain.py's default 9), size (1), chroma (3), csize (1), real (needs a profile with real noise), seed (7)}. grain also takes grain.py's other flat names, blur, motion, angle, colour, tint and expo, so a grain.py settings dict can go in as it is. Matching to a target needs a reference (or target original with an original).",
+            "properties": [
+              "match": ["type": "object"], "histogram": ["type": "object"], "grade": ["type": "object"], "lut": ["type": "object"],
+              "halation": ["type": "object"], "lens": ["type": "object"], "vignette": ["type": "object"], "grain": ["type": "object"],
+            ],
+          ],
+          "profile": ["type": "string", "description": "A grain profile from list_grain_profiles: its settings and grain data. Not with match_reference."],
+          "profile_path": ["type": "string", "description": "A .grain.json profile file anywhere (grain.py's or Grain Studio's), instead of profile."],
+          "reference_path": ["type": "string", "description": "An image file to match to (options.match, options.histogram) and, with match_reference, to fit grain to."],
+          "reference_history_step": ["type": "integer", "description": "A history step of the current project to use as the reference, instead of reference_path."],
+          "match_reference": ["type": "boolean", "description": "Measure the reference's grain and use the profile it makes, as grain.py --match does (a second or two). Default false. measure_reference shows the fit without editing."],
+          "lut_path": ["type": "string", "description": "A .cube 3D LUT to apply (options.lut.strength sets how strongly)."],
+          "lut": ["type": "string", "description": "One of Atelier's built-in LUTs, instead of lut_path: \(BuiltInLUTs.names.joined(separator: ", ")). options.lut.strength sets how strongly."],
+          "save_profile_to": ["type": "string", "description": "Also write the look as a .grain.json profile (grain.py's format) to this file, or into this folder under the profile's name."],
+          "background": ["type": "boolean", "description": "Return a job_id at once instead of waiting. Default false."],
+        ],
+      ],
+    ],
+    [
+      "name": "list_grain_profiles",
+      "title": "List grain profiles",
+      "description": "Lists the grain profiles in Atelier's library (the Edit screen's profile menu, Application Support/Atelier/Grain Profiles): name, the reference it was measured from, its grain.py settings with a one-line summary, its reference width, brightness curve, and whether it has reference RGB statistics (for options.match.colour) and real-noise patches (for options.grain.real). Pass a name to edit_image_look's `profile`.",
+      "inputSchema": ["type": "object", "properties": [String: Any]()],
+      "annotations": ["readOnlyHint": true],
+    ],
+    [
+      "name": "measure_reference",
+      "title": "Measure reference grain",
+      "description": "Measures a reference image's grain as the Edit screen's Match Reference and grain.py --match do, without rendering anything: the grain settings that rebuild it (lum, size, chroma, csize, and colour 0.6), the brightness curve, and the statistics behind the fit (the reference's grain shape at 1/2/4 px, colour blotches at 1/2/4/8 px, colour blotch strength, noise per brightness band, RGB mean and spread, beside the fitted grain's), plus grain.py's printed report. Fails for an image with no flat, mid-bright area to measure.",
+      "inputSchema": [
+        "type": "object",
+        "properties": [
+          "path": ["type": "string", "description": "An image file."],
+          "history_step": ["type": "integer", "description": "A history step of the current project, instead of path."],
+        ],
+      ],
+      "annotations": ["readOnlyHint": true],
+    ],
+    [
       "name": "generate",
       "title": "Generate image or video",
       "description": """
@@ -485,7 +544,7 @@ final class AgentTools {
       "name": "get_job",
       "title": "Get job",
       "description": """
-        Checks on a generate, edit_image or match_colors job: waiting (queued behind other runs), running (with step and \
+        Checks on a generate, edit_image, match_colors or edit_image_look job: waiting (queued behind other runs), running (with step and \
         total), done (with everything the job's tool returns: for generate and edit_image text, image and structured result), \
         failed or cancelled. Waits up to wait_seconds for it to finish first, so calling it in a \
         loop checks in periodically without busy polling.
@@ -494,7 +553,7 @@ final class AgentTools {
         "type": "object",
         "required": ["job_id"],
         "properties": [
-          "job_id": ["type": "string", "description": "From generate, edit_image or match_colors with background, or list_jobs."],
+          "job_id": ["type": "string", "description": "From generate, edit_image, match_colors or edit_image_look with background, or list_jobs."],
           "wait_seconds": ["type": "integer", "description": "How long to wait for the job to finish before returning its progress, 0–60. Default 30."],
         ],
       ],
@@ -503,14 +562,14 @@ final class AgentTools {
     [
       "name": "list_jobs",
       "title": "List jobs",
-      "description": "Lists generate, edit_image and match_colors jobs from the last hour, newest first: job_id, tool, status, progress, elapsed time and prompt (label for match_colors). A generate or edit_image call that timed out, was cancelled or lost its connection keeps running and shows here.",
+      "description": "Lists generate, edit_image, match_colors and edit_image_look jobs from the last hour, newest first: job_id, tool, status, progress, elapsed time and prompt (label for match_colors and edit_image_look). A generate or edit_image call that timed out, was cancelled or lost its connection keeps running and shows here.",
       "inputSchema": ["type": "object", "properties": [String: Any]()],
       "annotations": ["readOnlyHint": true],
     ],
     [
       "name": "cancel_job",
       "title": "Cancel job",
-      "description": "Stops a generate, edit_image or match_colors job, like Cancel in Atelier's Queue: a waiting job leaves the queue and a running one stops.",
+      "description": "Stops a generate, edit_image, match_colors or edit_image_look job, like Cancel in Atelier's Queue: a waiting job leaves the queue and a running one stops.",
       "inputSchema": [
         "type": "object",
         "required": ["job_id"],
@@ -544,6 +603,9 @@ final class AgentTools {
     case "list_history": return try Self.textResult(json: listHistory(arguments))
     case "get_image": return try await getImage(arguments)
     case "match_colors": return try await matchColors(arguments, progress: progress)
+    case "edit_image_look": return try await editImageLook(arguments, progress: progress)
+    case "list_grain_profiles": return try Self.textResult(json: listGrainProfiles())
+    case "measure_reference": return try await measureReference(arguments)
     case "generate": return try await startGenerate(arguments, progress: progress)
     case "edit_image": return try await startEditImage(arguments, progress: progress)
     case "get_job": return try await getJob(arguments, progress: progress)
@@ -939,13 +1001,13 @@ final class AgentTools {
   /// Runs `work` as a job (see `startGenerate`): `work` reports progress, and its first report
   /// means its arguments checked out.
   func startJob(
-    tool: String, label: String, colorMatch: ColorMatch.Job? = nil, background: Bool,
+    tool: String, label: String, colorMatch: ColorMatch.Job? = nil, edit: Edit.Job? = nil, background: Bool,
     progress: @escaping (Progress) -> Void,
     work: @escaping (@escaping (Progress) -> Void) async throws -> [String: Any]
   ) async throws -> [String: Any] {
     pruneJobs()
     jobCount += 1
-    let job = Job(id: "job-\(jobCount)", tool: tool, label: label, colorMatch: colorMatch)
+    let job = Job(id: "job-\(jobCount)", tool: tool, label: label, colorMatch: colorMatch, edit: edit)
     jobs[job.id] = job
     if !background { job.onProgress = progress }
     job.task = Task {
@@ -1042,8 +1104,8 @@ final class AgentTools {
     guard var result = job.result else { throw ToolError("\(job.id) hasn't finished.") }
     if var structured = result["structuredContent"] as? [String: Any] {
       structured["job_id"] = job.id
-      // match_colors answers in JSON, which says it too.
-      if job.tool == "match_colors" { result = try textResult(json: structured) }
+      // match_colors and edit_image_look answer in JSON, which says it too.
+      if job.isLabelled { result = try textResult(json: structured) }
       result["structuredContent"] = structured
     }
     return result
@@ -1051,7 +1113,7 @@ final class AgentTools {
 
   private static func summary(_ job: Job) -> [String: Any] {
     var summary: [String: Any] = [
-      "job_id": job.id, "tool": job.tool, job.tool == "match_colors" ? "label" : "prompt": shortened(job.label),
+      "job_id": job.id, "tool": job.tool, job.isLabelled ? "label" : "prompt": shortened(job.label),
       "elapsed_seconds": Int((job.finishedAt ?? Date()).timeIntervalSince(job.startedAt)),
     ]
     if job.finishedAt == nil {
@@ -2106,6 +2168,450 @@ final class AgentTools {
       self.lastResult = "Matched colors of step \(matchedStep) in \(project)"
       var answer = try Self.textResult(json: result)
       answer["structuredContent"] = result
+      return answer
+    }
+  }
+
+  // MARK: - Edit screen looks
+
+  /// The grain profile library, the Edit screen's (`EditModel.profiles`, handed over by the app
+  /// and by checks): in a scripted run its temporary folder, so a check never reads or writes
+  /// the user's library.
+  var grainProfiles: GrainProfileStore {
+    if let store = injectedGrainProfiles { return store }
+    let store = GrainProfileStore()
+    injectedGrainProfiles = store
+    return store
+  }
+
+  /// A history step of the current project by its number, else the canvas's step.
+  private func historyItem(_ value: Any?, name: String = "history_step", canvas: Bool = true) throws -> HistoryItem {
+    if value != nil {
+      guard let step = Self.int(value) else { throw ToolError("`\(name)` is a history step number (see list_history).") }
+      guard let found = create.history.items.first(where: { $0.id.logicalTime == step }) else {
+        throw ToolError("No history step \(step) in “\(create.history.project.name)”. See list_history.")
+      }
+      return found
+    }
+    guard canvas, let onCanvas = create.imageItem else {
+      throw ToolError("The canvas doesn't show a saved image. Pass \(name) (see list_history).")
+    }
+    return onCanvas
+  }
+
+  /// An image to measure as a reference: a file (`path`) or a step of the current project.
+  private func referenceImage(path: Any?, step: Any?, pathName: String, stepName: String) async throws -> (
+    image: CGImage, name: String, tensorId: Int64?
+  )? {
+    if path != nil, step != nil { throw ToolError("Pass `\(pathName)` or `\(stepName)`, not both.") }
+    if let path {
+      guard let path = path as? String, !path.isEmpty else { throw ToolError("`\(pathName)` is an image file's path.") }
+      let image = try Self.loadImage(path)
+      return (image, URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent, nil)
+    }
+    guard step != nil else { return nil }
+    let item = try historyItem(step, name: stepName, canvas: false)
+    guard !item.isVideo, let tensorId = item.imageTensorId,
+          let image = await create.history.project.read({ $0.image(tensorId: tensorId) })
+    else { throw ToolError("History step \(item.id.logicalTime) has no image to measure (a video, or an input entry with an empty canvas).") }
+    return (image, "Step \(item.id.logicalTime)", tensorId)
+  }
+
+  /// A profile by library name or from a file.
+  private func grainProfile(name: Any?, path: Any?) throws -> GrainProfile? {
+    if name != nil, path != nil { throw ToolError("Pass `profile` or `profile_path`, not both.") }
+    if let name {
+      guard let name = name as? String, !name.isEmpty else { throw ToolError("`profile` is a profile name from list_grain_profiles.") }
+      grainProfiles.reload()
+      guard let found = grainProfiles.profile(named: name) else {
+        let names = grainProfiles.profiles.map(\.name)
+        throw ToolError("No grain profile “\(name)” in the library. \(names.isEmpty ? "The library is empty." : "It has: \(names.joined(separator: ", ")).")")
+      }
+      return found
+    }
+    if let path {
+      guard let path = path as? String, !path.isEmpty else { throw ToolError("`profile_path` is a .grain.json file's path.") }
+      let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+      do {
+        return try GrainProfile.load(from: url)
+      } catch {
+        throw ToolError("Couldn't read a grain profile at \(url.path): \(error.localizedDescription)")
+      }
+    }
+    return nil
+  }
+
+  /// The keys each `options` section takes, with how each is checked. grain.py's other flat
+  /// names (`blur`, `motion`, `angle`, `colour`, `tint`, `expo`) are also taken inside `grain`,
+  /// where its settings dict has them, and moved to the section that holds them here.
+  nonisolated enum LookKey {
+    case number(ClosedRange<Double>), integer, choice([String])
+  }
+
+  nonisolated static let lookKeys: [String: [String: LookKey]] = [
+    "match": [
+      "target": .choice(EditOptions.Match.Target.allCases.map(\.rawValue)), "tint": .number(0...1), "saturation": .number(0...1),
+      "brightness": .number(0...1), "contrast": .number(0...1), "colour": .number(EditOptions.nonNegative),
+    ],
+    "histogram": ["amount": .number(0...1), "space": .choice(EditOptions.Histogram.Space.allCases.map(\.rawValue))],
+    "grade": [
+      "exposure": .number(EditOptions.unbounded), "temperature": .number(EditOptions.Grade.temperatureRange),
+      "tint": .number(EditOptions.unbounded), "contrast": .number(-1...1), "saturation": .number(-1...1), "vibrance": .number(-1...1),
+    ],
+    "lut": ["strength": .number(0...1)],
+    "halation": [
+      "amount": .number(0...1), "threshold": .number(0...1), "radius": .number(EditOptions.Halation.radiusRange), "warmth": .number(0...1),
+    ],
+    "lens": ["motion": .number(EditOptions.nonNegative), "angle": .number(EditOptions.unbounded), "blur": .number(EditOptions.nonNegative)],
+    "vignette": ["amount": .number(-1...1), "size": .number(0...1), "softness": .number(0...1)],
+    "grain": [
+      "lum": .number(EditOptions.nonNegative), "size": .number(EditOptions.Grain.smallestSize...Double.infinity),
+      "chroma": .number(EditOptions.nonNegative), "csize": .number(EditOptions.Grain.smallestSize...Double.infinity),
+      "real": .number(EditOptions.nonNegative), "seed": .integer,
+    ],
+  ]
+
+  /// grain.py's flat names that aren't grain settings here, and where they go.
+  nonisolated static let grainPyAliases: [String: (section: String, key: String)] = [
+    "blur": ("lens", "blur"), "motion": ("lens", "motion"), "angle": ("lens", "angle"),
+    "colour": ("match", "colour"), "tint": ("grade", "tint"), "expo": ("grade", "exposure"),
+  ]
+
+  /// `options` checked key by key (a wrong name or value is an error, not ignored as decoding
+  /// would), grain.py's flat names moved to their sections, and laid over `base`.
+  nonisolated static func lookOptions(_ value: Any?, over base: EditOptions) throws -> EditOptions {
+    guard let value else { return base }
+    guard var sections = value as? [String: Any] else { throw ToolError("`options` is an object of sections: \(lookKeys.keys.sorted().joined(separator: ", ")).") }
+    if var grain = sections["grain"] as? [String: Any] {
+      for (alias, target) in grainPyAliases {
+        guard let moved = grain.removeValue(forKey: alias) else { continue }
+        var section = sections[target.section] as? [String: Any] ?? [:]
+        if let given = section[target.key], (given as? NSNumber)?.doubleValue != (moved as? NSNumber)?.doubleValue {
+          throw ToolError("`options.grain.\(alias)` and `options.\(target.section).\(target.key)` are the same setting; pass one.")
+        }
+        section[target.key] = moved
+        sections[target.section] = section
+      }
+      sections["grain"] = grain
+    }
+    for (name, section) in sections {
+      guard let keys = lookKeys[name] else {
+        throw ToolError("`options.\(name)` isn't a section. Sections: \(lookKeys.keys.sorted().joined(separator: ", ")).")
+      }
+      guard let section = section as? [String: Any] else { throw ToolError("`options.\(name)` is an object.") }
+      for (key, value) in section {
+        guard let kind = keys[key] else {
+          let extra = name == "grain" ? ", or grain.py's \(grainPyAliases.keys.sorted().joined(separator: ", "))" : ""
+          if name == "lut", key == "name" || key == "digest" { throw ToolError("Choose a LUT with `lut` or `lut_path`; `options.lut` takes only strength.") }
+          throw ToolError("`options.\(name)` has no `\(key)`. It takes \(keys.keys.sorted().joined(separator: ", "))\(extra).")
+        }
+        switch kind {
+        case .number(let range):
+          guard !isBoolean(value), let number = (value as? NSNumber)?.doubleValue, number.isFinite else {
+            throw ToolError("`options.\(name).\(key)` must be a number.")
+          }
+          guard range.contains(number) else {
+            let low = range.lowerBound.isFinite ? "\(range.lowerBound)" : nil
+            let high = range.upperBound.isFinite ? "\(range.upperBound)" : nil
+            let bounds = [low.map { "at least \($0)" }, high.map { "at most \($0)" }].compactMap(\.self).joined(separator: " and ")
+            throw ToolError("`options.\(name).\(key)` must be \(bounds).")
+          }
+        case .integer:
+          guard !isBoolean(value), let number = (value as? NSNumber)?.doubleValue, number.rounded() == number, abs(number) < 1e15 else {
+            throw ToolError("`options.\(name).\(key)` must be a whole number.")
+          }
+        case .choice(let choices):
+          guard let text = value as? String, choices.contains(text) else {
+            throw ToolError("`options.\(name).\(key)` must be one of \(choices.joined(separator: ", ")).")
+          }
+        }
+      }
+    }
+    let data = try JSONSerialization.data(withJSONObject: sections)
+    return try EditOptions.decoded(from: data, over: base)
+  }
+
+  /// A look's options as JSON, for answers.
+  static func lookJSON(_ options: EditOptions) -> Any {
+    jsonObject(try? JSONEncoder().encode(options))
+  }
+
+  /// A JSON number, or null for one that isn't a number (an unmeasured statistic).
+  nonisolated static func finite(_ values: [Double]) -> [Any] {
+    values.map { $0.isFinite ? (($0 * 10_000).rounded() / 10_000) as Any : NSNull() }
+  }
+
+  /// grain.py `--match`'s printed lines for a Match Reference: what it fitted, then the
+  /// reference's grain shape and colour blotches beside the fitted grain's.
+  nonisolated static func grainPyReport(_ match: Grain.Match) -> String {
+    func list(_ values: [Double]) -> String { "[" + values.map { String(format: "%.2f", $0) }.joined(separator: ", ") + "]" }
+    return """
+    matched: grain \(match.lum), size \(match.size)x, colour noise \(match.chroma), colour size \(match.csize)x, brightness curve \(list(match.curve))
+      grain shape (1/2/4 px)      ref \(list(match.reference.yAC))  ours \(list(match.ours.luma.yAC))
+      colour blotches (1/2/4/8 px) ref \(list(match.reference.cAC))  ours \(list(match.ours.colour.cAC))
+    """
+  }
+
+  /// What Match Reference finds in `image`, measured off the main actor: grain.py's fit and the
+  /// statistics behind it, and the reference's RGB statistics. Nil when it has no flat,
+  /// mid-bright area to measure grain on.
+  @concurrent nonisolated static func grainMatch(of image: CGImage) async -> (match: Grain.Match, stats: GrainProfile.ChannelStats)? {
+    guard let planes = EditPipeline.Planes(image), let match = Grain.matchReference(planes) else { return nil }
+    return (match, Grain.channelStats(planes))
+  }
+
+  /// A Match Reference's answer: the settings it sets (grain.py's names) and the statistics.
+  nonisolated static func matchReportJSON(_ match: Grain.Match, stats: GrainProfile.ChannelStats, width: Int, height: Int) -> [String: Any] {
+    [
+      "settings": ["lum": match.lum, "size": match.size, "chroma": match.chroma, "csize": match.csize, "colour": 0.6],
+      "brightness_curve": finite(match.curve),
+      "reference": [
+        "width": width, "height": height, "grain_shape": finite(match.reference.yAC), "colour_blotches": finite(match.reference.cAC),
+        "colour_blotch_strength": finite([match.reference.cSD])[0], "band_noise": finite(match.reference.curve),
+        "rgb_mean": finite(stats.m), "rgb_std": finite(stats.s),
+      ],
+      "ours": ["grain_shape": finite(match.ours.luma.yAC), "colour_blotches": finite(match.ours.colour.cAC)],
+      "report": grainPyReport(match),
+    ]
+  }
+
+  /// A profile for list_grain_profiles: its name, where it came from, and its settings.
+  static func profileSummary(_ profile: GrainProfile) -> [String: Any] {
+    let s = profile.settings
+    var summary: [String: Any] = [
+      "name": profile.name, "ref_width": profile.refWidth,
+      "settings": [
+        "blur": s.blur, "motion": s.motion, "angle": s.angle, "lum": s.lum, "chroma": s.chroma, "size": s.size, "csize": s.csize,
+        "colour": s.colour, "tint": s.tint, "expo": s.expo, "real": s.real,
+      ],
+      "has_ref_stats": profile.refStats != nil, "real_noise_patches": profile.real?.count ?? 0,
+      "summary": "grain \(s.lum) at size \(s.size)x, colour noise \(s.chroma) at \(s.csize)x, blur \(s.blur)"
+        + (s.motion > 1 ? ", smear \(s.motion) px at \(s.angle)°" : "") + (s.colour > 0 ? ", colour \(s.colour)" : "")
+        + (s.real > 0 ? ", real noise \(s.real)" : "") + (s.expo != 0 ? ", exposure \(s.expo)" : "") + (s.tint != 0 ? ", tint \(s.tint)" : ""),
+    ]
+    if let source = profile.source { summary["source"] = source }
+    if let created = profile.created { summary["created"] = created }
+    if let curve = profile.curve { summary["curve"] = finite(curve) }
+    return summary
+  }
+
+  private func listGrainProfiles() -> [String: Any] {
+    grainProfiles.reload()
+    return ["folder": grainProfiles.directory.path, "profiles": grainProfiles.profiles.map(Self.profileSummary)]
+  }
+
+  /// measure_reference: Match Reference's measuring alone, nothing rendered or queued.
+  private func measureReference(_ arguments: [String: Any]) async throws -> [String: Any] {
+    guard let reference = try await referenceImage(path: arguments["path"], step: arguments["history_step"], pathName: "path", stepName: "history_step")
+    else { throw ToolError("Pass `path` (an image file) or `history_step`.") }
+    guard let measured = await Self.grainMatch(of: reference.image) else {
+      throw ToolError("“\(reference.name)” has no flat, mid-bright area to measure its grain on.")
+    }
+    var result = Self.matchReportJSON(measured.match, stats: measured.stats, width: reference.image.width, height: reference.image.height)
+    result["name"] = reference.name
+    var answer = try Self.textResult(json: result)
+    answer["structuredContent"] = Self.tidy(result)
+    return answer
+  }
+
+  /// edit_image_look: an Edit screen look rendered at full size and saved as a step after its
+  /// source, as Save to History does, through the same job (`CreateModel.queueEdit`). Like the
+  /// screen it's non-destructive: an edited step goes back to its source, starting from the look
+  /// it records. The look's layers go on in the order the screen's controls would put them:
+  /// that base (or no change), the profile (or Match Reference's), the LUT, the reference, then
+  /// `options`. The Edit screen itself is left as it is.
+  private func editImageLook(_ arguments: [String: Any], progress: @escaping (Progress) -> Void) async throws -> [String: Any] {
+    if let background = arguments["background"], !Self.isBoolean(background) { throw ToolError("`background` must be true or false.") }
+    let background = arguments["background"] as? Bool == true
+    if let given = arguments["match_reference"], !Self.isBoolean(given) { throw ToolError("`match_reference` must be true or false.") }
+    let matchesReference = arguments["match_reference"] as? Bool == true
+    let given = try historyItem(arguments["history_step"])
+    guard !given.isVideo, given.hasImage else {
+      throw ToolError("History step \(given.id.logicalTime) is \(given.isVideo ? "a video" : "an input entry with an empty canvas"); edit_image_look takes images.")
+    }
+    let project = create.history.project
+    var notes: [String] = []
+
+    // The base: an edited step's own look, on its source.
+    var source = given
+    var options = EditOptions.identity
+    var context = EditPipeline.Context.empty
+    var profileName: String?
+    var referenceName: String?
+    var referenceTensorId: Int64?
+    /// What the context's Lab statistics and histograms were measured from.
+    var measuredTarget: EditOptions.Match.Target?
+    if let record = given.sidecar.edit {
+      if let found = EditModel.reopening(record, in: create.history.tree) {
+        source = found
+        options = record.options
+        profileName = record.profileName
+        referenceName = record.referenceName
+        referenceTensorId = record.referenceTensorId
+        // Each piece of data on its own: only the setting whose data is gone goes off.
+        let data = await project.read { $0.editData(for: record) }
+        let lost = record.lost(data.missing)
+        context = record.context(with: data.blobs)
+        options = record.options(without: lost)
+        if let note = lost.note("Step \(given.id.logicalTime)'s") { notes.append(note) }
+        // A match to the original whose stored histograms are gone measures the original again.
+        let remeasure = record.options.match.target == .original && data.missing.contains(.referenceHistogram)
+        if !remeasure, context.referenceLab != nil || context.referenceHistogram != nil { measuredTarget = record.options.match.target }
+      } else {
+        notes.append("The image step \(given.id.logicalTime) was edited from is no longer in the project, so the edit itself is the source.")
+      }
+    }
+
+    if matchesReference, arguments["profile"] != nil || arguments["profile_path"] != nil {
+      throw ToolError("Pass `profile`/`profile_path` or `match_reference`, not both: Match Reference makes the profile.")
+    }
+    if let profile = try grainProfile(name: arguments["profile"], path: arguments["profile_path"]) {
+      options = profile.settings.applied(to: options)
+      context = context.using(profile)
+      profileName = profile.name
+    }
+    if arguments["lut"] != nil, arguments["lut_path"] != nil {
+      throw ToolError("Pass `lut` (a built-in) or `lut_path` (a .cube file), not both.")
+    }
+    if let name = arguments["lut"] {
+      guard let name = name as? String, let table = BuiltInLUTs.table(name) else {
+        throw ToolError("`lut` names a built-in LUT: one of \(BuiltInLUTs.names.joined(separator: ", ")).")
+      }
+      context.lut = table
+      options.lut = EditOptions.LUTRef(name: table.name, digest: table.digest, strength: 1)
+    }
+    if let path = arguments["lut_path"] {
+      guard let path = path as? String, !path.isEmpty else { throw ToolError("`lut_path` is a .cube file's path.") }
+      let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+      let table: Edit.LUTTable
+      do {
+        table = try CubeLUT.read(contentsOf: url)
+      } catch {
+        throw ToolError("Couldn't read a .cube LUT at \(url.path): \(error.localizedDescription)")
+      }
+      context.lut = table
+      options.lut = EditOptions.LUTRef(name: table.name, digest: table.digest, strength: 1)
+    }
+    var report: [String: Any]?
+    let reference = try await referenceImage(
+      path: arguments["reference_path"], step: arguments["reference_history_step"], pathName: "reference_path", stepName: "reference_history_step")
+    if let reference {
+      progress(Progress(step: 0, total: nil, message: "Measuring the reference", isQueued: true))
+      guard let measured = try await EditPipeline.measureReference(reference.image, name: reference.name, source: reference.name, profile: matchesReference)
+      else { throw ToolError("The reference couldn't be read.") }
+      context.referenceLab = measured.lab
+      context.referenceHistogram = measured.histogram
+      measuredTarget = .reference
+      options.match.target = .reference
+      referenceName = reference.name
+      referenceTensorId = reference.tensorId
+      if matchesReference {
+        guard let made = measured.profile, let match = measured.match, let stats = made.refStats else {
+          throw ToolError("“\(reference.name)” has no flat, mid-bright area to measure its grain on, so match_reference can't fit grain to it.")
+        }
+        options = made.settings.applied(to: options)
+        context = context.using(made)
+        profileName = made.name
+        report = Self.matchReportJSON(match, stats: stats, width: reference.image.width, height: reference.image.height)
+      }
+    } else if matchesReference {
+      throw ToolError("`match_reference` measures a reference: pass `reference_path` or `reference_history_step`.")
+    }
+    options = try Self.lookOptions(arguments["options"], over: options).snapped
+
+    // The match target's measurements: the original's, measured now, or none.
+    let needsTarget = options.match.matchesLab || !options.histogram.isIdentity
+    if options.match.target != measuredTarget {
+      context.referenceLab = nil
+      context.referenceHistogram = nil
+      if options.match.target == .original, needsTarget {
+        // The step's input only, as the screen's "Step's Input": a step made from no image has none.
+        guard let found = await create.originalImage(for: source, in: project)?.image else {
+          throw ToolError("Step \(source.id.logicalTime) has no input image to match to (it wasn't made from an image). Set options.match.target to reference and pass a reference.")
+        }
+        if let measured = try await EditPipeline.measureReference(found, name: "Step's Input", profile: false) {
+          context.referenceLab = measured.lab
+          context.referenceHistogram = measured.histogram
+        }
+      }
+    }
+    if options.match.target == .original {
+      referenceName = nil
+      referenceTensorId = nil
+    }
+    if needsTarget, context.referenceLab == nil {
+      throw ToolError("options.match tint/saturation/brightness/contrast and options.histogram need a reference to match to: pass reference_path or reference_history_step, or set options.match.target to original.")
+    }
+    if options.match.colour > 0, context.refStats == nil {
+      throw ToolError("options.match.colour matches the profile's reference colors: it needs `profile`, `profile_path` or `match_reference`.")
+    }
+    if options.grain.real > 0, context.realNoise == nil {
+      throw ToolError("options.grain.real adds the profile's real noise: it needs a profile with real noise (`profile`, `profile_path` or `match_reference`).")
+    }
+    if options.lut.name != nil, context.lut == nil {
+      throw ToolError("The look names a LUT whose table isn't loaded; pass `lut` or `lut_path`.")
+    }
+
+    var savedProfile: String?
+    if let path = arguments["save_profile_to"] {
+      guard let path = path as? String, !path.isEmpty else { throw ToolError("`save_profile_to` is a file or folder path.") }
+      var url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+      var isDirectory: ObjCBool = false
+      let isFolder = path.hasSuffix("/") || (FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue)
+      let name = isFolder ? (profileName ?? "Profile") : GrainProfile.baseName(of: url)
+      if isFolder { url = url.appending(path: LayoutStore.fileName(name) + "." + GrainProfile.fileExtension) } else if !url.lastPathComponent.contains(".") {
+        url = url.appendingPathExtension(GrainProfile.fileExtension)
+      }
+      // The look as a profile, as Save Profile… writes it: the grain data with these settings, no seed.
+      var profile = GrainProfile(
+        name: name, refWidth: context.refWidth, settings: GrainProfile.Settings(options), curve: context.curve, refStats: context.refStats,
+        real: context.realNoise)
+      profile.settings.seed = nil
+      profile.created = GrainProfile.day(Date())
+      do {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try profile.write(to: url)
+      } catch {
+        throw ToolError("Couldn't save the profile to \(url.path): \(error.localizedDescription)")
+      }
+      savedProfile = url.path
+    }
+
+    let edit = Edit.Job(
+      project: project.name, sourceTensorId: source.tensorId, options: options, profileName: profileName,
+      referenceTensorId: referenceTensorId, referenceName: referenceName, context: context)
+    // Another call's job for the same edit: this call answers with it.
+    if let existing = jobs.values.first(where: { $0.finishedAt == nil && $0.edit?.isSameEdit(as: edit) == true }) {
+      return try await answer(existing, background: background, progress: progress)
+    }
+    let sourceStep = source.id.logicalTime
+    let editedStep = given.id.logicalTime
+    return try await startJob(
+      tool: "edit_image_look", label: "Edit look of step \(sourceStep)", edit: edit, background: background, progress: progress
+    ) { [weak self] update in
+      guard let self else { throw CancellationError() }
+      update(Progress(step: 0, total: nil, message: "Waiting for the current run to finish", isQueued: true))
+      let saved = try await self.create.edit(forAgent: edit, item: source) { step, message in
+        update(Progress(step: step, total: 1_000, message: message))
+      }
+      var result: [String: Any] = [
+        "project": project.name, "history_step": saved.id.logicalTime, "source_step": sourceStep,
+        "options": Self.lookJSON(saved.sidecar.edit?.options ?? options), "width": saved.sidecar.width, "height": saved.sidecar.height,
+      ]
+      if editedStep != sourceStep { result["edited_step"] = editedStep }
+      if let profileName { result["profile"] = profileName }
+      if let referenceName { result["reference"] = referenceName }
+      if let lut = options.lut.name { result["lut"] = lut }
+      if let report { result["match_report"] = report }
+      if let savedProfile { result["saved_profile"] = savedProfile }
+      var allNotes = notes
+      if project.name != self.create.history.project.name {
+        allNotes.append("Saved into “\(project.name)”, the project the step is in; another project is open now.")
+      }
+      if !allNotes.isEmpty { result["notes"] = allNotes }
+      self.lastResult = "Edited the look of step \(sourceStep) in \(project.name)"
+      var answer = try Self.textResult(json: result)
+      answer["structuredContent"] = Self.tidy(result)
       return answer
     }
   }

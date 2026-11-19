@@ -9,11 +9,12 @@ import Testing
 struct SavedQueueTests {
   func entry(
     _ id: UUID = UUID(), model: String = "m.ckpt", project: String = "P", hasCanvas: Bool = false,
-    weights: [Float] = [], upscale: String? = nil, target: String? = nil, colorMatch: String? = nil
+    weights: [Float] = [], upscale: String? = nil, target: String? = nil, colorMatch: String? = nil, edit: String? = nil
   ) -> String {
     let weightList = weights.map { "\($0)" }.joined(separator: ",")
     let upscaleField = upscale.map { #","upscale":\#($0)"# } ?? ""
     let targetField = (target.map { #","target":\#($0)"# } ?? "") + (colorMatch.map { #","colorMatch":\#($0)"# } ?? "")
+      + (edit.map { #","edit":\#($0)"# } ?? "")
     return """
     {"id":"\(id.uuidString)","model":"\(model)","prompt":"p","negativePrompt":"n","seed":5,\
     "settings":{"steps":{"number":{"_0":4}}},"project":"\(project)","parentTensorId":9,\
@@ -130,6 +131,31 @@ struct SavedQueueTests {
             project: "P", sourceTensorId: 12, options: .init(tint: 0.75, saturation: 0.75, brightness: 0.75, contrast: 0.75),
             record: ColorMatch.Record(options: .init(strength: 0.75, luminance: 1), originalTensorId: 3)))
       #expect(jobs.last?.colorMatch == ColorMatch.Job(project: "P", sourceTensorId: 13, options: .init()))
+    }
+  }
+
+  /// An Edit job names its own project, so it comes back whichever project is open, with the step
+  /// after which it saves and the data it renders with, embedded in the queue file.
+  @Test func anEditComesBackInAnyProjectWithItsData() throws {
+    try withTestFolder { folder in
+      let edit = EditJobTests.job(project: "P")
+      let json = try #require(String(data: JSONEncoder().encode(edit), encoding: .utf8))
+      try write([entry(model: "a.ckpt"), entry(edit: json)], to: folder)
+      let jobs = SavedQueue.load(project: "Other", from: folder)
+      #expect(jobs.count == 2)
+      #expect(jobs.last?.edit == edit && jobs.last?.edit?.context == EditJobTests.context())
+      // Its step follows it to its project; a generation's doesn't.
+      #expect(jobs.last?.parentTensorId == 9 && jobs.first?.parentTensorId == nil)
+    }
+  }
+
+  /// An entry that doesn't read (an edit of a later version's shape, say) is dropped alone, not
+  /// run as a generation, and the rest of the queue comes back.
+  @Test func anUnreadableEditDropsOnlyItsJob() throws {
+    try withTestFolder { folder in
+      try write([entry(model: "a.ckpt"), entry(edit: #"{"project":"P"}"#), entry(model: "b.ckpt")], to: folder)
+      let jobs = SavedQueue.load(project: "P", from: folder)
+      #expect(jobs.map(\.model) == ["a.ckpt", "b.ckpt"] && jobs.allSatisfy { $0.edit == nil })
     }
   }
 }

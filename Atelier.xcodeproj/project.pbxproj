@@ -231,6 +231,29 @@
 		23FB2D3DAD4EA4ADC51AD5FE /* ReCaVSRUpscaler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 485E0CAE10562C2B9DB6066E /* ReCaVSRUpscaler.swift */; };
 		D968BAB8929C6F4108F1F550 /* ReCaVSRQuantizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2472EAE24698CDF096EBCF5 /* ReCaVSRQuantizer.swift */; };
 		E8B17F11A0C4D2E69B3A5C08 /* ReCaVSREightBitFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8B17F11A0C4D2E69B3A5C07 /* ReCaVSREightBitFile.swift */; };
+		ED17ED170000000000000003 /* EditOptions.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000002 /* EditOptions.swift */; };
+		ED17ED170000000000000005 /* EditJob.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000004 /* EditJob.swift */; };
+		ED17ED170000000000000007 /* GrainProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000006 /* GrainProfile.swift */; };
+		ED17ED170000000000000009 /* EditPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000008 /* EditPipeline.swift */; };
+		ED17ED17000000000000000B /* Blur.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000000A /* Blur.swift */; };
+		ED17ED17000000000000000D /* EditModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000000C /* EditModel.swift */; };
+		ED17ED17000000000000000F /* EditScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000000E /* EditScreen.swift */; };
+		ED17ED170000000000000011 /* EditInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000010 /* EditInspector.swift */; };
+		ED17ED170000000000000013 /* CompareView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000012 /* CompareView.swift */; };
+		ED17ED170000000000000015 /* Grain.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000014 /* Grain.swift */; };
+		ED17ED170000000000000017 /* Resample.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000016 /* Resample.swift */; };
+		ED17ED170000000000000019 /* Grade.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000018 /* Grade.swift */; };
+		ED17ED17000000000000001B /* ReferenceMatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000001A /* ReferenceMatch.swift */; };
+		ED17ED17000000000000001D /* HistogramMatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000001C /* HistogramMatch.swift */; };
+		ED17ED17000000000000001F /* CubeLUT.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000001E /* CubeLUT.swift */; };
+		ED17ED17000000000000F001 /* BuiltInLUTs.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000F000 /* BuiltInLUTs.swift */; };
+		ED17ED170000000000000021 /* Halation.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000020 /* Halation.swift */; };
+		ED17ED170000000000000023 /* AutomationEdit.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000022 /* AutomationEdit.swift */; };
+		ED17ED170000000000000025 /* CreateModel+Edit.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000024 /* CreateModel+Edit.swift */; };
+		ED17ED170000000000000027 /* EditJobTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000026 /* EditJobTests.swift */; };
+		ED17ED170000000000000029 /* EditPipelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000028 /* EditPipelineTests.swift */; };
+		ED17ED17000000000000002B /* GrainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000002A /* GrainTests.swift */; };
+		ED17ED17000000000000002D /* LUTTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000002C /* LUTTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -486,6 +509,29 @@
 		485E0CAE10562C2B9DB6066E /* ReCaVSRUpscaler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReCaVSRUpscaler.swift; sourceTree = "<group>"; };
 		E2472EAE24698CDF096EBCF5 /* ReCaVSRQuantizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReCaVSRQuantizer.swift; sourceTree = "<group>"; };
 		E8B17F11A0C4D2E69B3A5C07 /* ReCaVSREightBitFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReCaVSREightBitFile.swift; sourceTree = "<group>"; };
+		ED17ED170000000000000002 /* EditOptions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditOptions.swift; sourceTree = "<group>"; };
+		ED17ED170000000000000004 /* EditJob.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditJob.swift; sourceTree = "<group>"; };
+		ED17ED170000000000000006 /* GrainProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrainProfile.swift; sourceTree = "<group>"; };
+		ED17ED170000000000000008 /* EditPipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditPipeline.swift; sourceTree = "<group>"; };
+		ED17ED17000000000000000A /* Blur.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Blur.swift; sourceTree = "<group>"; };
+		ED17ED17000000000000000C /* EditModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditModel.swift; sourceTree = "<group>"; };
+		ED17ED17000000000000000E /* EditScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditScreen.swift; sourceTree = "<group>"; };
+		ED17ED170000000000000010 /* EditInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditInspector.swift; sourceTree = "<group>"; };
+		ED17ED170000000000000012 /* CompareView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompareView.swift; sourceTree = "<group>"; };
+		ED17ED170000000000000014 /* Grain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Grain.swift; sourceTree = "<group>"; };
+		ED17ED170000000000000016 /* Resample.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Resample.swift; sourceTree = "<group>"; };
+		ED17ED170000000000000018 /* Grade.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Grade.swift; sourceTree = "<group>"; };
+		ED17ED17000000000000001A /* ReferenceMatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceMatch.swift; sourceTree = "<group>"; };
+		ED17ED17000000000000001C /* HistogramMatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistogramMatch.swift; sourceTree = "<group>"; };
+		ED17ED17000000000000001E /* CubeLUT.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CubeLUT.swift; sourceTree = "<group>"; };
+		ED17ED17000000000000F000 /* BuiltInLUTs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuiltInLUTs.swift; sourceTree = "<group>"; };
+		ED17ED170000000000000020 /* Halation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Halation.swift; sourceTree = "<group>"; };
+		ED17ED170000000000000022 /* AutomationEdit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationEdit.swift; sourceTree = "<group>"; };
+		ED17ED170000000000000024 /* CreateModel+Edit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CreateModel+Edit.swift"; sourceTree = "<group>"; };
+		ED17ED170000000000000026 /* EditJobTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditJobTests.swift; sourceTree = "<group>"; };
+		ED17ED170000000000000028 /* EditPipelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditPipelineTests.swift; sourceTree = "<group>"; };
+		ED17ED17000000000000002A /* GrainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrainTests.swift; sourceTree = "<group>"; };
+		ED17ED17000000000000002C /* LUTTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LUTTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -535,6 +581,7 @@
 				882062C245F2B93A25F1D212 /* App */,
 				3E8C58D16B915F2CC9BB95A5 /* Automation */,
 				ADEF5850836026B0FCB26117 /* Create */,
+				ED17ED170000000000000001 /* Edit */,
 				48E3561D3C3C081F0E6EC772 /* Generation */,
 				ACE6BACFAD718A040E0C6ACA /* Remote */,
 				0ADB0E05EADC942C1C1FCD37 /* History */,
@@ -588,6 +635,7 @@
 		3E8C58D16B915F2CC9BB95A5 /* Automation */ = {
 			isa = PBXGroup;
 			children = (
+				ED17ED170000000000000022 /* AutomationEdit.swift */,
 				60B649AE442AE955874615B1 /* AutomationAutoMask.swift */,
 				4E317D0BA709EEB6CB86F5A2 /* AutomationPaint.swift */,
 				5BA894EB2074F4930E321607 /* Automation.swift */,
@@ -619,6 +667,7 @@
 		ADEF5850836026B0FCB26117 /* Create */ = {
 			isa = PBXGroup;
 			children = (
+				ED17ED170000000000000024 /* CreateModel+Edit.swift */,
 				C69737294C27D23A44D22C5A /* AutoMask */,
 				2EA2F5D417DF60CE076D9B6C /* AudioClip.swift */,
 				3A6036FEF93D069A783B09D8 /* CreateModel.swift */,
@@ -852,6 +901,10 @@
 		B7A1F0C2B3D4A59687786107 /* AtelierTests */ = {
 			isa = PBXGroup;
 			children = (
+				ED17ED170000000000000026 /* EditJobTests.swift */,
+				ED17ED170000000000000028 /* EditPipelineTests.swift */,
+				ED17ED17000000000000002A /* GrainTests.swift */,
+				ED17ED17000000000000002C /* LUTTests.swift */,
 				CC3541FFA68BA7C5424778CE /* AutoMaskTests.swift */,
 				C0104A7C11A0000000000006 /* ColorMatchTests.swift */,
 				D1E2F3A4B5C6E527578EEB1D /* MOSSImportTests.swift */,
@@ -920,6 +973,30 @@
 				E8B17F11A0C4D2E69B3A5C07 /* ReCaVSREightBitFile.swift */,
 			);
 			path = ReCaVSR;
+			sourceTree = "<group>";
+		};
+		ED17ED170000000000000001 /* Edit */ = {
+			isa = PBXGroup;
+			children = (
+				ED17ED170000000000000002 /* EditOptions.swift */,
+				ED17ED170000000000000004 /* EditJob.swift */,
+				ED17ED170000000000000006 /* GrainProfile.swift */,
+				ED17ED170000000000000008 /* EditPipeline.swift */,
+				ED17ED17000000000000000A /* Blur.swift */,
+				ED17ED17000000000000000C /* EditModel.swift */,
+				ED17ED17000000000000000E /* EditScreen.swift */,
+				ED17ED170000000000000010 /* EditInspector.swift */,
+				ED17ED170000000000000012 /* CompareView.swift */,
+				ED17ED170000000000000014 /* Grain.swift */,
+				ED17ED170000000000000016 /* Resample.swift */,
+				ED17ED170000000000000018 /* Grade.swift */,
+				ED17ED17000000000000001A /* ReferenceMatch.swift */,
+				ED17ED17000000000000001C /* HistogramMatch.swift */,
+				ED17ED17000000000000F000 /* BuiltInLUTs.swift */,
+				ED17ED17000000000000001E /* CubeLUT.swift */,
+				ED17ED170000000000000020 /* Halation.swift */,
+			);
+			path = Edit;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -1102,6 +1179,25 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				ED17ED170000000000000003 /* EditOptions.swift in Sources */,
+				ED17ED170000000000000005 /* EditJob.swift in Sources */,
+				ED17ED170000000000000007 /* GrainProfile.swift in Sources */,
+				ED17ED170000000000000009 /* EditPipeline.swift in Sources */,
+				ED17ED17000000000000000B /* Blur.swift in Sources */,
+				ED17ED17000000000000000D /* EditModel.swift in Sources */,
+				ED17ED17000000000000000F /* EditScreen.swift in Sources */,
+				ED17ED170000000000000011 /* EditInspector.swift in Sources */,
+				ED17ED170000000000000013 /* CompareView.swift in Sources */,
+				ED17ED170000000000000015 /* Grain.swift in Sources */,
+				ED17ED170000000000000017 /* Resample.swift in Sources */,
+				ED17ED170000000000000019 /* Grade.swift in Sources */,
+				ED17ED17000000000000001B /* ReferenceMatch.swift in Sources */,
+				ED17ED17000000000000001D /* HistogramMatch.swift in Sources */,
+				ED17ED17000000000000001F /* CubeLUT.swift in Sources */,
+				ED17ED17000000000000F001 /* BuiltInLUTs.swift in Sources */,
+				ED17ED170000000000000021 /* Halation.swift in Sources */,
+				ED17ED170000000000000023 /* AutomationEdit.swift in Sources */,
+				ED17ED170000000000000025 /* CreateModel+Edit.swift in Sources */,
 				10171A503FBA24116D0D87F6 /* AppSettings.swift in Sources */,
 				F1F29ECD79C50D354E0EE7E2 /* ClipUpscale.swift in Sources */,
 				E360F3396B8D19F63D2D7763 /* SystemSuperResolution.swift in Sources */,
@@ -1296,6 +1392,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				ED17ED170000000000000027 /* EditJobTests.swift in Sources */,
+				ED17ED170000000000000029 /* EditPipelineTests.swift in Sources */,
+				ED17ED17000000000000002B /* GrainTests.swift in Sources */,
+				ED17ED17000000000000002D /* LUTTests.swift in Sources */,
 				B7A1F0C2B3D4A59687786200 /* ProjectMappingTests.swift in Sources */,
 				B7A1F0C2B3D4A59687786201 /* StyleTests.swift in Sources */,
 				B7A1F0C2B3D4A59687786202 /* HistoryGraphTests.swift in Sources */,

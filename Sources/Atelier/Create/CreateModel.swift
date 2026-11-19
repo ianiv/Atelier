@@ -768,7 +768,8 @@ final class CreateModel {
       parts.append(
         running.export != nil
           ? "an upscaled export is running"
-          : running.request?.colorMatch != nil ? "colors are being matched" : "a generation is running")
+          : running.request?.colorMatch != nil
+          ? "colors are being matched" : running.request?.edit != nil ? "an edit is being saved" : "a generation is running")
     }
     if !queue.isPaused, !queue.waiting.isEmpty {
       parts.append(queue.waiting.count == 1 ? "1 job is queued" : "\(queue.waiting.count) jobs are queued")
@@ -1276,18 +1277,19 @@ final class CreateModel {
   }
 
   /// Saved jobs' requests, their settings put back on their models' defaults. A Match Colors to
-  /// Original job never loads its model, so it stays when the model is gone, on the current
-  /// settings instead.
+  /// Original or Edit job never loads its model, so it stays when the model is gone, on the
+  /// current settings instead.
   func savedRequests(_ saved: [SavedQueue.Job]) async -> [GenerationEngine.Request] {
     var defaults: [String: PipelineConfiguration] = [:]
     var requests: [GenerationEngine.Request] = []
     for job in saved {
       let downloaded = models.contains(where: { $0.file == job.model })
-      guard downloaded || job.colorMatch != nil else { continue }
+      let modelFree = job.colorMatch != nil || job.edit != nil
+      guard downloaded || modelFree else { continue }
       if downloaded, defaults[job.model] == nil, let configuration = try? await engine.loadPipeline(for: job.model) {
         defaults[job.model] = ModelDefaults.recommended(for: job.model, configuration: configuration)
       }
-      guard var configuration = defaults[job.model] ?? (job.colorMatch != nil ? settings : nil) else { continue }
+      guard var configuration = defaults[job.model] ?? (modelFree ? settings : nil) else { continue }
       SettingsRegistry.apply(dump: job.settings, to: &configuration)
       requests.append(job.request(configuration: configuration))
     }
@@ -2060,7 +2062,7 @@ final class CreateModel {
 
   /// Starts what can start: the next job for this device when none is running, and the next for
   /// each server not running one.
-  private func runNext() {
+  func runNext() {
     #if os(iOS)
       // A job can end after the app went to the background: don't bring it back at the next launch.
       defer { if savedForBackground { saveQueue() } }
@@ -2107,6 +2109,8 @@ final class CreateModel {
           "Exporting a video"
         } else if job.request?.colorMatch != nil {
           "Matching colors"
+        } else if job.request?.edit != nil {
+          "Saving an edit"
         } else if job.request?.configuration.videoModel != nil {
           "Generating a video"
         } else {
@@ -2176,7 +2180,7 @@ final class CreateModel {
   /// canvas, and Stop is about it). Either way the detached job keeps its progress under its own
   /// id, as a server's does, for the Queue and for taking the foreground back once that run ends
   /// (`adoptRemoteRun`).
-  private func beginRun(_ job: JobQueue.Job, message: String, totalSteps: Int, startedAt: Date = Date()) {
+  func beginRun(_ job: JobQueue.Job, message: String, totalSteps: Int, startedAt: Date = Date()) {
     let yields = job.detached && foregroundJobID != nil
     if job.target != .local || yields {
       remoteRuns[job.id] = RunProgress(message: message, totalSteps: totalSteps, startedAt: startedAt)
@@ -2204,7 +2208,7 @@ final class CreateModel {
     lastStepAt = nil
   }
 
-  private func setRunMessage(_ message: String, _ job: JobQueue.Job) {
+  func setRunMessage(_ message: String, _ job: JobQueue.Job) {
     // Only a run with progress of its own has an entry (`beginRun`).
     remoteRuns[job.id]?.message = message
     if job.id == foregroundJobID { phase = .running(message) }
@@ -2212,7 +2216,7 @@ final class CreateModel {
 
   /// A task for `job`, which `cancel` reaches. Assigned before the task's body can run: both are on
   /// the main actor.
-  private func track(_ task: Task<Void, Never>, for job: JobQueue.Job) {
+  func track(_ task: Task<Void, Never>, for job: JobQueue.Job) {
     runTasks[job.id] = task
     if job.id == foregroundJobID { generationTask = task }
   }
@@ -2284,7 +2288,7 @@ final class CreateModel {
   /// local run's, and saving reads and writes the project's steps across several awaits.
   private var saving: Task<Void, Never>?
 
-  private func oneSaveAtATime<T: Sendable>(_ work: @escaping @MainActor () async throws -> T) async throws -> T {
+  func oneSaveAtATime<T: Sendable>(_ work: @escaping @MainActor () async throws -> T) async throws -> T {
     let previous = saving
     let task = Task { @MainActor in
       await previous?.value
@@ -2298,6 +2302,7 @@ final class CreateModel {
     if let export = job.export { return run(export, job: job) }
     guard let request = job.request else { return }
     if let match = request.colorMatch { return run(match, request: request, job: job) }
+    if let edit = request.edit { return runEdit(edit, request: request, job: job) }
     let startedAt = Date()
     beginRun(job, message: "Preparing…", totalSteps: request.configuration.steps, startedAt: startedAt)
     let backend = self.backend(for: job.target)
@@ -2501,7 +2506,7 @@ final class CreateModel {
   }
 
   /// Ends the running job and starts the next.
-  private func finish(
+  func finish(
     _ job: JobQueue.Job, status: JobQueue.Job.Status, inputTensorId: Int64? = nil, tipTensorId: Int64? = nil,
     inOpenProject: Bool = true
   ) {
@@ -2923,20 +2928,7 @@ final class CreateModel {
         queue.setColorMatchRecord(record, id: job.id)
         if job.id == foregroundJobID { step = 1_000 }
         if project === history.project {
-          lastSavedTensorId = saved.tensorId
-          if followsRun() {
-            imageStep = (history.project.name, saved.tensorId)
-            canvasBeforePreview = nil
-            previewCoversCanvas = false
-            canvasIsImported = false
-            image = matched
-            canvas.zoomToFit()
-            // A new step, with no mask or paint of its own yet.
-            landedMask = (saved.tensorId, canvasMask)
-            maskPendingTensorId = nil
-            landedPaint = (saved.tensorId, nil)
-            paintPendingTensorId = nil
-          }
+          landSavedImage(matched, tensorId: saved.tensorId, onCanvas: followsRun())
           statusNote = shift.summary
         }
         if let failure = await history.writeToOutputFolder(saved, image: matched, in: project) { errorMessage = failure }
@@ -2953,6 +2945,32 @@ final class CreateModel {
       finish(job, status: status, inputTensorId: inputTensorId, inOpenProject: inOpenProject)
     }
     track(task, for: job)
+  }
+
+  /// A job that made one image from another (Match Colors to Original, Edit) saved it into the
+  /// open project as `tensorId`: it's the last saved step, and with `onCanvas` (the canvas
+  /// follows the run) the canvas shows it, as a generation's result does.
+  func landSavedImage(_ saved: CGImage, tensorId: Int64, onCanvas: Bool) {
+    lastSavedTensorId = tensorId
+    guard onCanvas else { return }
+    imageStep = (history.project.name, tensorId)
+    canvasBeforePreview = nil
+    previewCoversCanvas = false
+    canvasIsImported = false
+    image = saved
+    canvas.zoomToFit()
+    // A new step, with no mask or paint of its own yet.
+    landedMask = (tensorId, canvasMask)
+    maskPendingTensorId = nil
+    landedPaint = (tensorId, nil)
+    paintPendingTensorId = nil
+  }
+
+  /// Sets the foreground run's step (of `totalSteps`), for a job run from another file.
+  func setRunStep(_ value: Int, _ job: JobQueue.Job) {
+    guard job.id == foregroundJobID, phase != .cancelling else { return }
+    step = value
+    syncBackgroundTask()
   }
 
   nonisolated enum ColorMatchError: LocalizedError {
@@ -3340,6 +3358,10 @@ final class CreateModel {
       statusNote = "Colors are already being matched for that image with those settings, so it wasn't queued again."
       return
     }
+    if let edit = queue.recent.first(where: { $0.id == id })?.request?.edit, queue.pendingEdit(edit) != nil {
+      statusNote = "That edit of that image is already queued, so it wasn't queued again."
+      return
+    }
     queue.retry(id)
     runNext()
   }
@@ -3597,8 +3619,13 @@ extension CreateModel {
     ((queue.running.map { [$0] } ?? []) + queue.waiting).filter { $0.request?.colorMatch?.project == name }
   }
 
+  /// The Edit jobs, waiting or running, that read from and save into the project called `name`.
+  func editJobs(in name: String) -> [JobQueue.Job] {
+    ((queue.running.map { [$0] } ?? []) + queue.waiting).filter { $0.request?.edit?.project == name }
+  }
+
   /// Deletes the project called `name` (Delete Project…), switching to another first when it's
-  /// current (`HistoryStore.delete`). Its Match Colors to Original jobs stop: they read from and
+  /// current (`HistoryStore.delete`). Its Match Colors to Original and Edit jobs stop: they read from and
   /// save into that project alone. Every other job saves into whichever project is open, as after
   /// any switch, so it carries on into the one opened in its place. The canvas keeps showing its
   /// image, no longer a step of any project, so a project made later under the same name doesn't
@@ -3606,7 +3633,7 @@ extension CreateModel {
   /// Returns the trashed project file (`HistoryStore.delete`).
   @discardableResult
   func deleteProject(_ name: String) async throws -> URL? {
-    for job in colorMatchJobs(in: name) { cancel(job.id) }
+    for job in colorMatchJobs(in: name) + editJobs(in: name) { cancel(job.id) }
     defer {
       if let step = imageStep, step.project == name, step.project != history.project.name { imageStep = nil }
     }

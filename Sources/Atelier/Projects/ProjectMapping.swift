@@ -47,6 +47,9 @@ nonisolated enum ProjectMapping {
     /// A step made by Match Colors to Original: how, and from which original. Kept in
     /// `profile_data`.
     var colorMatch: ColorMatch.Record?
+    /// A step saved from the Edit screen: its look and everything it was rendered with
+    /// (`Edit.Record`). Kept in `profile_data`.
+    var edit: Edit.Record?
     /// A layered step (a merged refine): how many layers it has (`data_stored`) and the top
     /// layer's position and density, which Draw Things keeps as the node's content offset and
     /// `scale_factor_by_120` (`ImageHistoryManager` reads both back with the step's layers).
@@ -95,6 +98,10 @@ nonisolated enum ProjectMapping {
     var refineOffset: [Double]?
     var refineMask: CanvasMask?
     var colorMatch: ColorMatch.Record?
+    /// A step saved from the Edit screen (`edit`): its look, and what it was rendered with, the
+    /// large data (real noise, histograms, LUT) named by `edit_*` tensors in the store
+    /// (`Edit.Record`), so it renders again exactly once the profile is gone.
+    var edit: Edit.Record?
     var entryKey: Int64?
     var entryMask: CanvasMask?
     /// Marks a step `Project.appendEntry` wrote (`input_entry`), an Imported one too, which has no
@@ -133,7 +140,7 @@ nonisolated enum ProjectMapping {
     init(
       duration: Double, inputTensorId: Int64?, parentTensorId: Int64?, inputAudioId: Int64? = nil,
       timings: [Timing] = [], refine: RefineRecord? = nil, colorMatch: ColorMatch.Record? = nil,
-      entryKey: Int64? = nil, entryMask: CanvasMask? = nil, inputEntry: Bool? = nil
+      edit: Edit.Record? = nil, entryKey: Int64? = nil, entryMask: CanvasMask? = nil, inputEntry: Bool? = nil
     ) {
       self.timings = timings
       self.duration = duration
@@ -142,9 +149,37 @@ nonisolated enum ProjectMapping {
       self.inputAudioId = inputAudioId
       self.refine = refine
       self.colorMatch = colorMatch
+      self.edit = edit
       self.entryKey = entryKey
       self.entryMask = entryMask
       self.inputEntry = inputEntry
+    }
+
+    private enum CodingKeys: String, CodingKey {
+      case timings, duration, inputTensorId, parentTensorId, inputAudioId, refineRect, refineScale, refineOffset
+      case refineMask, colorMatch, edit, entryKey, entryMask, inputEntry
+    }
+
+    /// Lenient past `duration`: a key that doesn't read (written by a later version, say) is left
+    /// out rather than losing the whole profile, and with it the step's parent, input and timings.
+    /// Draw Things always writes `duration`.
+    init(from decoder: Decoder) throws {
+      let c = try decoder.container(keyedBy: CodingKeys.self)
+      func lenient<T: Decodable>(_ type: T.Type, _ key: CodingKeys) -> T? { (try? c.decodeIfPresent(type, forKey: key)) ?? nil }
+      duration = try c.decode(Double.self, forKey: .duration)
+      timings = lenient([Timing].self, .timings) ?? []
+      inputTensorId = lenient(Int64.self, .inputTensorId)
+      parentTensorId = lenient(Int64.self, .parentTensorId)
+      inputAudioId = lenient(Int64.self, .inputAudioId)
+      refineRect = lenient([Double].self, .refineRect)
+      refineScale = lenient(Double.self, .refineScale)
+      refineOffset = lenient([Double].self, .refineOffset)
+      refineMask = lenient(CanvasMask.self, .refineMask)
+      colorMatch = lenient(ColorMatch.Record.self, .colorMatch)
+      edit = lenient(Edit.Record.self, .edit)
+      entryKey = lenient(Int64.self, .entryKey)
+      entryMask = lenient(CanvasMask.self, .entryMask)
+      inputEntry = lenient(Bool.self, .inputEntry)
     }
 
     init?(_ bytes: [UInt8]) {
@@ -230,7 +265,7 @@ nonisolated enum ProjectMapping {
         duration: step.generationTime, inputTensorId: step.inputTensorId,
         parentTensorId: step.parentTensorId ?? 0, inputAudioId: step.inputAudioId,
         timings: step.timings?.profileTimings ?? [], refine: step.refine,
-        colorMatch: step.colorMatch, entryKey: step.entryKey, entryMask: step.entryMask,
+        colorMatch: step.colorMatch, edit: step.edit, entryKey: step.entryKey, entryMask: step.entryMask,
         inputEntry: step.isEntry ? true : nil
       ).bytes,
       teaCacheStart: i32("teaCacheStart", 5), teaCacheEnd: i32("teaCacheEnd", -1),

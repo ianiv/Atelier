@@ -7,6 +7,7 @@ struct HistoryView: View {
   @Environment(HistoryStore.self) private var history
   @Environment(CreateModel.self) private var create
   @Environment(Navigation.self) private var navigation
+  @Environment(EditModel.self) private var edit
   @Environment(FileDialogs.self) private var fileDialogs
   @Environment(TimelineStore.self) private var timelines
   @Environment(\.undoManager) private var undoManager
@@ -619,6 +620,11 @@ struct HistoryView: View {
         .disabled(!item.hasImage)
       ShareItem(exports: shareExports([item]), anchor: ShareAnchor.historyCell(item.tensorId))
       Divider()
+      Button("Open in Edit") {
+        Task { await edit.open(item) }
+        navigation.section = .edit
+      }
+      .disabled(item.isVideo || !item.hasImage)
       MaskMenu(item: item, undoManager: undoManager)
       if item.isVideo {
         Divider()
@@ -1429,13 +1435,14 @@ struct ProjectMenu: View {
     let next = history.projectToOpen(afterDeleting: name)
     parts.append(
       history.projectNames.contains(next) ? "“\(next)” opens in its place." : "A new project, “\(next)”, opens in its place.")
-    // Generations save into whichever project is open; Match Colors jobs only into their own.
+    // Generations save into whichever project is open; Match Colors and Edit jobs only into their own.
     let queue = create.queue
     let jobs = (queue.running.map { [$0] } ?? []) + queue.runningRemote + queue.waiting
-    if jobs.contains(where: { $0.request.map { $0.colorMatch == nil } == true && $0.remoteDevice == nil && $0.styleThumbnail == nil }) {
+    if jobs.contains(where: { $0.request.map { $0.colorMatch == nil && $0.edit == nil } == true && $0.remoteDevice == nil && $0.styleThumbnail == nil }) {
       parts.append("Jobs in the queue save into “\(next)” instead.")
     }
     if !create.colorMatchJobs(in: name).isEmpty { parts.append("Its Match Colors jobs are cancelled.") }
+    if !create.editJobs(in: name).isEmpty { parts.append("Its Edit jobs are cancelled.") }
     return parts.joined(separator: " ")
   }
 

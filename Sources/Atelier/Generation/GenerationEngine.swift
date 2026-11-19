@@ -60,6 +60,11 @@ actor GenerationEngine {
     /// (`CreateModel.run(_:request:job:)`); its `record` is what the saved step keeps. Never sent to
     /// the engine or a server.
     var colorMatch: ColorMatch.Job?
+    /// Saves an Edit screen look (grain and grading, `EditPipeline`) of a saved step as a new
+    /// step after it instead of generating (`CreateModel.runEdit(_:request:job:)`), as
+    /// `colorMatch` does; its `record` is what the saved step keeps. Never sent to the engine or
+    /// a server.
+    var edit: Edit.Job?
   }
 
   /// What a run made: one frame for an image, every frame of a clip and its soundtrack for video.

@@ -68,12 +68,25 @@ nonisolated struct ExportedFile: Transferable {
     DataRepresentation(exportedContentType: .mpeg4Movie) { try await $0.data() }
     DataRepresentation(exportedContentType: .markdownText) { try await $0.data() }
     DataRepresentation(exportedContentType: .html) { try await $0.data() }
+    DataRepresentation(exportedContentType: .cubeLUT) { try await $0.data() }
   }
 }
 
 nonisolated extension UTType {
   /// Markdown, as style files are written (docs/styles.md).
   static let markdownText = UTType("net.daringfireball.markdown") ?? .plainText
+  /// A 3D LUT in Adobe's `.cube` text format (the Edit screen's Load .cube… and Export LUT…),
+  /// which the system declares no type for. Declared as an imported type in both Info.plists
+  /// (UTImportedTypeDeclarations) under the identifier DaVinci Resolve exports for it, so a
+  /// Save panel, the iPad's included, names the file `.cube` (a dynamic type made from the
+  /// extension carries no extension Files will use), and an app that declares it wins.
+  static let cubeLUT = UTType(importedAs: "com.blackmagicdesign.cube", conformingTo: .text)
+
+  /// What Load .cube… lets through: the declared type, whatever other installed apps call a
+  /// `.cube` file (Final Cut Pro declares its own), and plain text.
+  static var cubeLUTFiles: [UTType] {
+    [.cubeLUT] + UTType.types(tag: "cube", tagClass: .filenameExtension, conformingTo: nil).filter { $0 != .cubeLUT } + [.plainText]
+  }
 }
 
 extension View {

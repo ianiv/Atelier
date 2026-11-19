@@ -87,10 +87,11 @@ struct QueueView: View {
         create.history.setCurrent(tensorId: tensorId)
         navigation.section = .history
       }
-      // A colour match saves into its own project, which may not be the one open.
+      // A colour match or edit saves into its own project, which may not be the one open.
       .disabled(
         create.history.item(tensorId: tensorId) == nil
-          || job.request?.colorMatch.map { $0.project != create.history.project.name } == true)
+          || job.request?.colorMatch.map { $0.project != create.history.project.name } == true
+          || job.request?.edit.map { $0.project != create.history.project.name } == true)
       Button("Run Again") { create.retry(job.id) }
       Button("Remove from List") { queue.removeRecent(job.id) }
     case .exported(let url):
@@ -181,6 +182,12 @@ struct QueueRow: View {
           .help("Match Colors to Original")
           .accessibilityLabel("Match Colors to Original")
       }
+      if request.edit != nil {
+        Image(systemName: Edit.symbol)
+          .foregroundStyle(.secondary)
+          .help("Saved from the Edit screen")
+          .accessibilityLabel("Saved from the Edit screen")
+      }
       if request.canvas != nil {
         Image(systemName: "photo")
           .foregroundStyle(.secondary)
@@ -221,6 +228,14 @@ struct QueueRow: View {
         } else {
           Image(systemName: "eyedropper.halffull").foregroundStyle(.secondary).accessibilityHidden(true)
         }
+      } else if let edit = job.request?.edit {
+        // As a colour match: its steps are in its own project.
+        let tensorId = if case .finished(let tensorId) = job.status { tensorId } else { edit.sourceTensorId }
+        if edit.project == create.history.project.name, let item = create.history.item(tensorId: tensorId) {
+          Thumbnail(item: item)
+        } else {
+          Image(systemName: Edit.symbol).foregroundStyle(.secondary).accessibilityHidden(true)
+        }
       } else if case .finished(let tensorId) = job.status, let item = create.history.item(tensorId: tensorId) {
         Thumbnail(item: item)
       } else if job.status == .running, let image = create.runProgress(of: job)?.preview {
@@ -260,6 +275,7 @@ struct QueueRow: View {
 
   private func title(_ request: GenerationEngine.Request) -> String {
     if request.colorMatch != nil { return "Match colors to original" }
+    if let edit = request.edit { return edit.profileName.map { "Edit with “\($0)”" } ?? "Edit" }
     if let upscale = request.imageUpscale {
       return upscale.scale == ImageUpscale.maxScale ? "Upscale to the largest size" : "Upscale \(upscale.scale)×"
     }
@@ -276,6 +292,12 @@ struct QueueRow: View {
       if let unchanged = Self.unchangedText(match) { parts.append(unchanged) }
       // Its project, when it isn't the one open.
       if match.project != create.history.project.name { parts.insert("in “\(match.project)”", at: 1) }
+      return (parts + [took]).compactMap(\.self).joined(separator: " · ")
+    }
+    // An edit, too, uses no model, seed or steps.
+    if let edit = request.edit {
+      var parts: [String?] = [create.runLocationName(of: job), size]
+      if edit.project != create.history.project.name { parts.insert("in “\(edit.project)”", at: 1) }
       return (parts + [took]).compactMap(\.self).joined(separator: " · ")
     }
     return [

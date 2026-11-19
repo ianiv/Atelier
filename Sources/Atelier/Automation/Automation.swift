@@ -67,6 +67,8 @@ enum Automation {
 
   /// The app's Compute server, for the checks that look at its Settings.
   static var remoteServer: RemoteServer?
+  /// The app's Edit screen, for the window snapshots host and the Edit checks.
+  static var editModel: EditModel?
   /// Opens the Settings window, set once a window is up (`openSettings` comes from a view).
   static var openSettingsWindow: (() -> Void)?
 
@@ -83,7 +85,7 @@ enum Automation {
       "--create-delete-check",
       "--history-loras-check",
       "--input-entries-check", "--entries-freeze-check", "--tab-switch-bench", "--delete-project-check",
-      "--paint-check",
+      "--paint-check", "--edit-screen-check", "--grain-reference",
     ]
     // The unit tests run inside the app. Like a scripted run, that leaves the user's data alone: no
     // cleanup at launch, no saving the session or queue.
@@ -245,6 +247,14 @@ enum Automation {
     }
     if args.contains("--color-match-check") {
       colorMatchCheck(model)
+      return
+    }
+    if args.contains("--edit-screen-check") {
+      editScreenCheck(model, navigation: navigation, presets: presets)
+      return
+    }
+    if let index = args.firstIndex(of: "--grain-reference") {
+      grainReference(args.indices.contains(index + 1) && !args[index + 1].hasPrefix("--") ? args[index + 1] : nil)
       return
     }
     if args.contains("--entries-freeze-check") {
@@ -1526,6 +1536,7 @@ enum Automation {
         .environment(model.styles ?? StyleStore(persists: false))
         .environment(library ?? ModelLibrary(create: model))
         .environment(FileDialogs())
+        .environment(editModel ?? EditModel())
         .frame(width: 1280, height: 860)
     }, size: CGSize(width: 1280, height: 860))
   }

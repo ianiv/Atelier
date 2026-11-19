@@ -39,6 +39,20 @@ nonisolated enum SavedQueue {
     /// A Match Colors to Original job: the step and its project, which it reads from and saves
     /// into whichever project is open.
     var colorMatch: ColorMatch.Job?
+    /// An Edit screen job (`Edit.Job`): as `colorMatch`, it names its project. It carries the
+    /// profile's real noise, the reference's histograms and the LUT it renders with in its
+    /// `blobs`, embedded here (base64) rather than beside it: this file is temporary, removed when
+    /// it's read back, and a job's data is bounded (a full profile's patches are about 830 KB, a
+    /// 65³ LUT about 1.6 MB). Once saved, the step keeps them in its project's tensor store.
+    var edit: Edit.Job?
+  }
+
+  /// An entry, or nil for one that doesn't read (written by a later version, say), so one entry
+  /// never loses the rest of the queue. An entry whose Match Colors or Edit job doesn't read is
+  /// dropped rather than run as a generation.
+  private struct LenientEntry: Decodable {
+    var entry: Entry?
+    init(from decoder: Decoder) throws { entry = try? Entry(from: decoder) }
   }
 
   /// A saved job, before its settings are put back on its model's defaults.
@@ -54,13 +68,20 @@ nonisolated enum SavedQueue {
 
     var target: JobTarget { entry.target ?? .local }
     var colorMatch: ColorMatch.Job? { entry.colorMatch }
+    var edit: Edit.Job? { entry.edit }
+
+    /// The step it follows: kept in the same project, and by a job naming its own project (Match
+    /// Colors, Edit) in any.
+    var parentTensorId: Int64? {
+      sameProject || entry.colorMatch != nil || entry.edit != nil ? entry.parentTensorId : nil
+    }
 
     /// The job's request, with `configuration` (the model's defaults with `settings` applied).
     func request(configuration: PipelineConfiguration) -> GenerationEngine.Request {
       var request = GenerationEngine.Request(
         model: entry.model, prompt: entry.prompt, negativePrompt: entry.negativePrompt,
         seed: entry.seed, configuration: configuration)
-      request.parentTensorId = sameProject ? entry.parentTensorId : nil
+      request.parentTensorId = parentTensorId
       request.canvas = canvas
       if canvas != nil {
         request.canvasTensorId = sameProject ? entry.canvasTensorId : nil
@@ -82,9 +103,10 @@ nonisolated enum SavedQueue {
       request.placement = sameProject ? entry.placement : nil
       request.upscale = entry.upscale
       request.imageUpscale = entry.imageUpscale
-      // It names its own project, so its step follows it there whichever project this is.
+      // It names its own project, so its step follows it there whichever project this is
+      // (`parentTensorId`).
       request.colorMatch = entry.colorMatch
-      if entry.colorMatch != nil { request.parentTensorId = entry.parentTensorId }
+      request.edit = entry.edit
       return request
     }
   }
@@ -146,7 +168,7 @@ nonisolated enum SavedQueue {
           moodboardWeights: request.moodboard.map(\.weight), audio: request.audio,
           placement: request.placement, upscale: request.upscale, imageUpscale: request.imageUpscale,
           target: job.target, hasMask: request.mask != nil, merge: mergeRecord,
-          canvasSourceMask: request.canvasSourceMask, colorMatch: request.colorMatch))
+          canvasSourceMask: request.canvasSourceMask, colorMatch: request.colorMatch, edit: request.edit))
     }
     if let data = try? JSONEncoder().encode(entries) {
       Log.attempt(Log.queue, "Saving the queue") {
@@ -158,7 +180,7 @@ nonisolated enum SavedQueue {
   /// The saved jobs, then forgets them. Step ids only carry over in the same project.
   static func load(project: String, from folder: URL = folder) -> [Job] {
     guard let data = try? Data(contentsOf: folder.appending(path: "index.json")),
-          let entries = try? JSONDecoder().decode([Entry].self, from: data)
+          let entries = (try? JSONDecoder().decode([LenientEntry].self, from: data))?.compactMap(\.entry)
     else { return [] }
     let jobs = entries.compactMap { entry -> Job? in
       // An upscale's source clip is a step of its own project. A Match Colors job names its
