@@ -136,15 +136,53 @@ nonisolated enum AgentAuth {
 nonisolated enum AgentPathGuard {
   static let pathMessage = "File paths are only for agents on this Mac; send a data: URL."
   static let saveToMessage = "File paths are only for agents on this Mac; images come back inline."
+  static let fileMessage = "File paths are only for agents on this Mac."
+
+  /// Arguments that are always paths, with what to say instead: a LUT or grain profile can't come
+  /// as a data: URL, but the built-in LUTs and the profile library are there.
+  static let pathArguments: [(key: String, message: String)] = [
+    ("save_to", saveToMessage),
+    ("audio", fileMessage),
+    ("lut_path", "File paths are only for agents on this Mac; use a built-in `lut`."),
+    ("profile_path", "File paths are only for agents on this Mac; use a `profile` from list_grain_profiles."),
+    ("save_profile_to", fileMessage),
+  ]
+
+  /// Result keys that hold a path on this Mac, left out of what another device gets.
+  static let pathResultKeys = ["path", "saved_profile", "folder"]
 
   /// The arguments that are always paths, checked before a call does anything, so a run isn't
   /// made only to fail at the end. Image arguments can be data: URLs and are checked as they're
   /// read (`checkImageSource`).
   static func refusal(for arguments: [String: Any], isRemote: Bool) -> String? {
     guard isRemote else { return nil }
-    if let saveTo = arguments["save_to"] as? String, !saveTo.isEmpty { return saveToMessage }
-    if arguments["audio"] is String { return pathMessage }
+    for (key, message) in pathArguments {
+      if let value = arguments[key] as? String, value.isEmpty { continue }
+      if arguments[key] != nil, !(arguments[key] is NSNull) { return message }
+    }
     return nil
+  }
+
+  /// A job's finished result for another device: the path keys out of its structured content,
+  /// and its text without the paths they held (generate's "Saved to … and /path.").
+  static func strippingPaths(_ result: [String: Any]) -> [String: Any] {
+    guard var structured = result["structuredContent"] as? [String: Any] else { return result }
+    let paths = pathResultKeys.compactMap { structured[$0] as? String }.filter { !$0.isEmpty }
+    for key in pathResultKeys { structured[key] = nil }
+    var result = result
+    result["structuredContent"] = structured
+    if let content = result["content"] as? [[String: Any]] {
+      result["content"] = content.map { item in
+        guard var text = item["text"] as? String else { return item }
+        for path in paths {
+          text = text.replacingOccurrences(of: " and \(path)", with: "").replacingOccurrences(of: path, with: "(a file on the Mac running Atelier)")
+        }
+        var item = item
+        item["text"] = text
+        return item
+      }
+    }
+    return result
   }
 
   /// Whether `source`, an image argument, may be read for this caller.

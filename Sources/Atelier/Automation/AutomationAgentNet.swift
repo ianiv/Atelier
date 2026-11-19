@@ -7,7 +7,8 @@ extension Automation {
   /// settings and Keychain are left alone. It listens on every interface and is called at this
   /// Mac's local network address, which counts as another device: without the token, with a wrong
   /// one, and with it (401, 401, 200 tools/list); from 127.0.0.1 without one (200); a page from
-  /// another site (403); file paths refused (get_image save_to, set_canvas_image with a path);
+  /// another site (403); file paths refused (get_image save_to, set_canvas_image with a path,
+  /// edit_image_look lut_path, measure_reference path) and list_grain_profiles without its folder;
   /// Regenerate (the old token 401, the new 200); Require Token off (200 without one); and This
   /// Mac only (the network address refused). Needs no model and changes nothing in the project.
   ///
@@ -107,6 +108,13 @@ extension Automation {
       check(errorText(saveTo.body) == AgentPathGuard.saveToMessage, "get_image save_to from another device is refused (\(errorText(saveTo.body) ?? "no error"))")
       let path = await post(lan, call("set_canvas_image", ["image": "/nonexistent/atelier-agent-net-check.png"]), token: token)
       check(errorText(path.body) == AgentPathGuard.pathMessage, "set_canvas_image with a path from another device is refused (\(errorText(path.body) ?? "no error"))")
+      let lut = await post(lan, call("edit_image_look", ["lut_path": "/nonexistent/look.cube"]), token: token)
+      check(errorText(lut.body)?.hasPrefix("File paths are only for agents on this Mac;") == true, "edit_image_look lut_path from another device is refused (\(errorText(lut.body) ?? "no error"))")
+      let measure = await post(lan, call("measure_reference", ["path": "/nonexistent/reference.png"]), token: token)
+      check(errorText(measure.body) == AgentPathGuard.pathMessage, "measure_reference path from another device is refused (\(errorText(measure.body) ?? "no error"))")
+      let profiles = await post(lan, call("list_grain_profiles", [:]), token: token)
+      let profilesText = ((profiles.body["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String ?? ""
+      check(profiles.status == 200 && !profilesText.contains("\"folder\""), "list_grain_profiles from another device leaves out the folder")
       let localPath = await post("127.0.0.1", call("set_canvas_image", ["image": "/nonexistent/atelier-agent-net-check.png"]))
       check(
         errorText(localPath.body)?.hasPrefix("Couldn't read an image") == true,

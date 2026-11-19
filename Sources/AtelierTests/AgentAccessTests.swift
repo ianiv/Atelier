@@ -90,7 +90,11 @@ struct AgentAccessTests {
     #expect(AgentPathGuard.refusal(for: ["save_to": "/tmp/x.png"], isRemote: false) == nil)
     #expect(AgentPathGuard.refusal(for: ["save_to": "/tmp/x.png"], isRemote: true) == AgentPathGuard.saveToMessage)
     #expect(AgentPathGuard.refusal(for: ["save_to": ""], isRemote: true) == nil)
-    #expect(AgentPathGuard.refusal(for: ["audio": "~/a.wav"], isRemote: true) == AgentPathGuard.pathMessage)
+    #expect(AgentPathGuard.refusal(for: ["audio": "~/a.wav"], isRemote: true) == AgentPathGuard.fileMessage)
+    for key in ["lut_path", "profile_path", "save_profile_to"] {
+      #expect(AgentPathGuard.refusal(for: [key: "/tmp/x"], isRemote: true)?.hasPrefix("File paths are only for agents on this Mac") == true, "\(key)")
+      #expect(AgentPathGuard.refusal(for: [key: "/tmp/x"], isRemote: false) == nil, "\(key) from this Mac")
+    }
     #expect(AgentPathGuard.refusal(for: ["prompt": "a cat"], isRemote: true) == nil)
     #expect(AgentPathGuard.allowsImageSource("data:image/png;base64,AAAA", isRemote: true))
     #expect(!AgentPathGuard.allowsImageSource("/Users/me/a.png", isRemote: true))
@@ -115,6 +119,19 @@ struct AgentAccessTests {
     } catch {
       #expect(error.localizedDescription.hasPrefix("Couldn't read an image"))
     }
+  }
+
+  @Test func remoteJobResults() {
+    let result: [String: Any] = [
+      "content": [["type": "text", "text": "Saved to Atelier project “P” (step 3) and /Users/me/T/P 3-7.png.\nModel m."], ["type": "image", "data": "AA"]],
+      "structuredContent": ["path": "/Users/me/T/P 3-7.png", "history_step": 3, "saved_profile": "/Users/me/a.grain.json"],
+    ]
+    let stripped = AgentPathGuard.strippingPaths(result)
+    let structured = stripped["structuredContent"] as? [String: Any] ?? [:]
+    #expect(structured["path"] == nil && structured["saved_profile"] == nil && structured["history_step"] as? Int == 3)
+    let text = ((stripped["content"] as? [[String: Any]])?.first?["text"] as? String) ?? ""
+    #expect(text == "Saved to Atelier project “P” (step 3).\nModel m.")
+    #expect((stripped["content"] as? [[String: Any]])?.count == 2)
   }
 
   @Test func endpoints() {

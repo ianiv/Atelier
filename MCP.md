@@ -72,7 +72,7 @@ Set **Access** to **Local network** to let agents on other computers on your loc
   claude mcp add --transport http atelier http://192.168.1.20:7862/mcp --header "Authorization: Bearer <token>"
   ```
 
-- Agents on other devices can't use this Mac's files: paths in `image`, `input_image`, `reference_images`, `mask`, the moodboard and `edit_image`'s references, `audio`, and `save_to` are refused. Send images as `data:` URLs (or name a `history_step`); results come back inline, and `get_image` with `full_size: true` returns the full-resolution PNG. Results don't include a `path`.
+- Agents on other devices can't use this Mac's files: paths in `image`, `input_image`, `reference_images`, `mask`, the moodboard and `edit_image`'s references, `measure_reference`'s `path` and `edit_image_look`'s `reference_path` are refused, and so are `audio`, `save_to`, `lut_path`, `profile_path` and `save_profile_to`. Send images as `data:` URLs (or name a `history_step`), and use a built-in `lut` or a library `profile`; results come back inline, and `get_image` with `full_size: true` returns the full-resolution PNG. Results, including `get_job` and `list_jobs` for jobs started on this Mac, don't include this Mac's file paths (`list_grain_profiles` leaves out its `folder`).
 - Anyone on your network with the token can generate and read or change the Create screen. Traffic is plain HTTP and isn't encrypted; to encrypt it, connect over Tailscale. A request from a web page on another site is refused.
 - If the Mac's firewall is on, macOS may ask whether Atelier can accept incoming connections the first time you turn this on.
 

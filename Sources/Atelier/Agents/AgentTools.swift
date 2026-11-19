@@ -1123,13 +1123,12 @@ final class AgentTools {
     guard var result = job.result else { throw ToolError("\(job.id) hasn't finished.") }
     if var structured = result["structuredContent"] as? [String: Any] {
       structured["job_id"] = job.id
-      // A job a client on this Mac started names its file; another device can't open it.
-      if ToolContext.current.isRemote { structured["path"] = nil }
       // match_colors and edit_image_look answer in JSON, which says it too.
       if job.isLabelled { result = try textResult(json: structured) }
       result["structuredContent"] = structured
     }
-    return result
+    // A job a client on this Mac started names its files; another device can't open them.
+    return ToolContext.current.isRemote ? AgentPathGuard.strippingPaths(result) : result
   }
 
   private static func summary(_ job: Job) -> [String: Any] {
@@ -2427,7 +2426,10 @@ final class AgentTools {
 
   private func listGrainProfiles() -> [String: Any] {
     grainProfiles.reload()
-    return ["folder": grainProfiles.directory.path, "profiles": grainProfiles.profiles.map(Self.profileSummary)]
+    var listing: [String: Any] = ["profiles": grainProfiles.profiles.map(Self.profileSummary)]
+    // Another device can't open the folder.
+    if !ToolContext.current.isRemote { listing["folder"] = grainProfiles.directory.path }
+    return listing
   }
 
   /// measure_reference: Match Reference's measuring alone, nothing rendered or queued.
