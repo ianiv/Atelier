@@ -3,8 +3,9 @@ import Foundation
 import Network
 import Synchronization
 
-/// A minimal HTTP/1.1 server on the loopback interface, for the MCP endpoint. One request per
-/// connection: the response (a plain body, or an event stream) ends with the connection closed.
+/// A minimal HTTP/1.1 server for the MCP endpoint, on the loopback interface or (Settings → Agents →
+/// Access → Local network) every interface with a peer filter. One request per connection: the
+/// response (a plain body, or an event stream) ends with the connection closed.
 final nonisolated class LoopbackHTTPServer: Sendable {
   struct Request {
     var method: String
@@ -12,6 +13,16 @@ final nonisolated class LoopbackHTTPServer: Sendable {
     /// Header names lowercased.
     var headers: [String: String]
     var body: Data
+    /// The client's address; nil only if the connection didn't say.
+    var peer: RemoteIP?
+  }
+
+  /// Where it listens.
+  enum Binding: Sendable {
+    /// 127.0.0.1 and ::1 only.
+    case loopback
+    /// Every interface, both IPv4 and IPv6, answering only peers `filter` allows.
+    case all(RemoteAddressFilter)
   }
 
   /// Reports why listening failed (the port is taken, say); nil once it's listening.
@@ -19,6 +30,7 @@ final nonisolated class LoopbackHTTPServer: Sendable {
   typealias Handler = @Sendable (Request, Responder) -> Void
 
   let port: UInt16
+  let binding: Binding
   private let handler: Handler
   private let queue = DispatchQueue(label: "Atelier.LoopbackHTTPServer")
   private let listeners = Mutex<[NWListener]>([])
@@ -26,16 +38,42 @@ final nonisolated class LoopbackHTTPServer: Sendable {
   /// Bodies past this are refused; images sent inline as base64 fit well under it.
   static let maxBodySize = 64 << 20
 
-  init(port: UInt16, handler: @escaping Handler) {
+  init(port: UInt16, binding: Binding = .loopback, handler: @escaping Handler) {
     self.port = port
+    self.binding = binding
     self.handler = handler
   }
 
-  /// Listens on 127.0.0.1 and ::1 (clients may resolve "localhost" to either).
+  /// Listens on 127.0.0.1 and ::1 (clients may resolve "localhost" to either), or on every
+  /// interface.
   func start(stateHandler: @escaping StateHandler) {
     queue.async { [self] in
       guard let nwPort = NWEndpoint.Port(rawValue: port) else {
         stateHandler("\(port) isn't a valid port.")
+        return
+      }
+      if case .all(let filter) = binding {
+        let parameters = NWParameters.tcp
+        parameters.allowLocalEndpointReuse = true
+        guard let listener = try? NWListener(using: parameters, on: nwPort) else {
+          stateHandler("Couldn't listen on port \(port).")
+          return
+        }
+        listener.stateUpdateHandler = { state in
+          switch state {
+          case .ready: stateHandler(nil)
+          case .failed(let error): stateHandler(Self.describe(error))
+          default: break
+          }
+        }
+        // As Compute's server does (`RemoteServer.start`): the address is checked before the
+        // connection starts, so a peer outside the allowed networks gets nothing at all.
+        listener.newConnectionHandler = { [weak self] connection in
+          guard filter.allows(connection.endpoint) else { return connection.cancel() }
+          self?.accept(connection)
+        }
+        listener.start(queue: queue)
+        listeners.withLock { $0.append(listener) }
         return
       }
       for (index, host) in [NWEndpoint.Host.ipv4(.loopback), .ipv6(.loopback)].enumerated() {
@@ -87,7 +125,8 @@ final nonisolated class LoopbackHTTPServer: Sendable {
       var buffer = buffer
       if let data { buffer.append(data) }
       switch Self.parse(buffer) {
-      case .request(let request):
+      case .request(var request):
+        if case .hostPort(let host, _) = connection.endpoint { request.peer = RemoteIP(host) }
         let responder = Responder(connection: connection)
         watchForClose(connection, responder: responder)
         handler(request, responder)
@@ -222,7 +261,7 @@ final nonisolated class LoopbackHTTPServer: Sendable {
     private static func head(status: Int, headers: [String: String]) -> Data {
       let reason =
         [
-          200: "OK", 202: "Accepted", 400: "Bad Request", 403: "Forbidden", 404: "Not Found",
+          200: "OK", 202: "Accepted", 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden", 404: "Not Found",
           405: "Method Not Allowed", 413: "Payload Too Large", 415: "Unsupported Media Type",
         ][status] ?? "Status"
       var text = "HTTP/1.1 \(status) \(reason)\r\nConnection: close\r\n"

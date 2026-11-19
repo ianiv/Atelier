@@ -75,6 +75,8 @@ Lets paired devices run jobs on this one, and lists the servers this one can use
 
 Lets Claude Code, Codex, Gemini CLI, Cursor, VS Code and other MCP clients on this Mac generate images with your models, and read and change the Create screen's prompt and settings. Pick your agent to see how to connect it. See [Atelier for agents (MCP)](../MCP.md).
 
+**Access** is **This Mac only** (the default) or **Local network**, which lets agents on other computers on your local network or tailnet connect too. With Local network, **Require Token** (on by default) makes them send the token shown below it (**Show**, **Copy**, **Regenerate**); agents on this Mac never need it. Agents on other devices can't read or write files on this Mac: they send images inline and get results inline. Traffic isn't encrypted; use Tailscale to encrypt it. **Address** under Connect an Agent picks which of this Mac's addresses the setup uses. See [From another device](../MCP.md#from-another-device).
+
 ## Where Atelier keeps things
 
 | What | Where |

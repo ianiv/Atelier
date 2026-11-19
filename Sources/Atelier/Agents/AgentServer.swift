@@ -7,6 +7,10 @@ import SwiftUI
 /// interface (`http://127.0.0.1:<port>/mcp`) and generate with the app's own engine, so there's
 /// never a second engine competing for the GPU. Off until turned on in Settings → Agents.
 ///
+/// With Access set to Local network it also answers other devices on the local network or
+/// tailnet (`AgentAccess.networkFilter`), which send a bearer token unless Require Token is off
+/// and can't pass or get file paths (`AgentPathGuard`). Plain HTTP: there's no TLS.
+///
 /// Requests are JSON-RPC over POST. A `tools/call` whose client accepts an event stream gets one,
 /// with progress notifications while it generates; anything else gets a plain JSON response.
 /// There are no sessions and no server-to-client requests, so GET (the optional standalone
@@ -17,21 +21,47 @@ final class AgentServer {
   static let defaultPort = 7862
   private static let enabledKey = "agentServer.enabled"
   private static let portKey = "agentServer.port"
+  private static let accessKey = "agentServer.access"
+  private static let requireTokenKey = "agentServer.requireToken"
 
-  var isEnabled = UserDefaults.standard.bool(forKey: AgentServer.enabledKey) {
+  var isEnabled: Bool {
     didSet {
-      UserDefaults.standard.set(isEnabled, forKey: Self.enabledKey)
+      defaults.set(isEnabled, forKey: Self.enabledKey)
       restart()
     }
   }
 
-  var port = UserDefaults.standard.object(forKey: AgentServer.portKey) as? Int ?? AgentServer.defaultPort {
+  var port: Int {
     didSet {
       guard port != oldValue else { return }
-      UserDefaults.standard.set(port, forKey: Self.portKey)
+      defaults.set(port, forKey: Self.portKey)
       restart()
     }
   }
+
+  /// Settings → Agents → Access. The listener is replaced, as for the port.
+  var access: AgentAccess {
+    didSet {
+      guard access != oldValue else { return }
+      defaults.set(access.rawValue, forKey: Self.accessKey)
+      restart()
+    }
+  }
+
+  /// Whether other devices must send the token. Checked per request, so changing it needs no
+  /// restart.
+  var requireToken: Bool {
+    didSet {
+      defaults.set(requireToken, forKey: Self.requireTokenKey)
+      if requireToken, activeAccess == .localNetwork { ensureToken() }
+    }
+  }
+
+  /// The token other devices send; nil until it's first needed. Compared with each request, so a
+  /// new one takes effect at once.
+  private(set) var token: String?
+  /// The addresses other devices use, refreshed when the listener starts and Settings opens.
+  private(set) var networkEndpoints: [String] = []
 
   /// Why the server isn't listening although it's on.
   private(set) var listenError: String?
@@ -41,13 +71,20 @@ final class AgentServer {
   private let forcedOn: Bool
   /// `--mcp PORT`: that port for this launch.
   private var forcedPort: Int?
+  /// `--mcp-network`: on the local network for this launch.
+  private let forcedNetwork: Bool
+  private let defaults: UserDefaults
+  private let tokens: AgentTokenStore
 
   private var server: LoopbackHTTPServer?
   /// Running tool calls by JSON-RPC id, so `notifications/cancelled` can stop them.
   private var calls: [String: Task<Void, Never>] = [:]
 
   private var activePort: Int { forcedPort ?? port }
-  var endpoint: String { "http://127.0.0.1:\(activePort)/mcp" }
+  var activeAccess: AgentAccess { forcedNetwork ? .localNetwork : access }
+  var endpoint: String { AgentAuth.endpoint(host: "127.0.0.1", port: activePort) }
+  /// Whether a client on another device has to send the token now.
+  var networkNeedsToken: Bool { activeAccess == .localNetwork && requireToken }
 
   private static let protocolVersions = ["2025-11-25", "2025-06-18", "2025-03-26"]
   private static let instructions = """
@@ -76,16 +113,58 @@ final class AgentServer {
     list_grain_profiles and measure_reference. Coordinates are always the image's own pixels from its top left.
     """
 
-  init(create: CreateModel, presets: PresetStore, grainProfiles: GrainProfileStore? = nil) {
+  /// `defaults` and `secrets` are where the settings and token are kept: the user's, or a scratch
+  /// suite and memory for a scripted check's own server (`commandLine` false: no `--mcp` flags,
+  /// and it starts whenever it's on).
+  init(
+    create: CreateModel, presets: PresetStore, grainProfiles: GrainProfileStore? = nil, defaults: UserDefaults = .standard, secrets: (any RemoteSecretStore)? = nil,
+    commandLine: Bool = true
+  ) {
     tools = AgentTools(create: create, presets: presets, grainProfiles: grainProfiles)
-    let args = CommandLine.arguments
-    forcedOn = args.contains("--mcp")
+    self.defaults = defaults
+    // A scripted run never touches the user's Keychain.
+    tokens = AgentTokenStore(
+      secrets: secrets ?? (Automation.isRequested ? MemorySecretStore() : KeychainSecretStore(service: "Atelier Agents")))
+    isEnabled = defaults.bool(forKey: Self.enabledKey)
+    port = defaults.object(forKey: Self.portKey) as? Int ?? Self.defaultPort
+    access = defaults.string(forKey: Self.accessKey).flatMap(AgentAccess.init(rawValue:)) ?? .thisMac
+    requireToken = defaults.object(forKey: Self.requireTokenKey) as? Bool ?? true
+    let args = commandLine ? CommandLine.arguments : []
+    forcedNetwork = args.contains("--mcp-network")
+    forcedOn = args.contains("--mcp") || forcedNetwork
     if let index = args.firstIndex(of: "--mcp"), index + 1 < args.count, let port = Int(args[index + 1]) {
       forcedPort = port
     }
+    // Read from the Keychain only when it's in use; `ensureToken` reads it otherwise.
+    if activeAccess == .localNetwork { token = tokens.load() }
     // Scripted checks leave the user's server (and its port) alone unless asked with `--mcp`.
-    if Automation.isRequested, !forcedOn { return }
+    if commandLine, Automation.isRequested, !forcedOn { return }
     restart()
+  }
+
+  /// The token, made now if there isn't one yet.
+  @discardableResult func ensureToken() -> String {
+    if let token { return token }
+    let made = tokens.ensure()
+    token = made
+    return made
+  }
+
+  /// A new token; clients with the old one get 401 from their next request.
+  func regenerateToken() {
+    token = tokens.regenerate()
+  }
+
+  /// This Mac's addresses as other devices reach it: the local network address, the .local name
+  /// and the Tailscale address.
+  func refreshEndpoints() {
+    let interfaces = RemoteNetworkInfo.interfaces()
+    var hosts = [RemoteNetworkInfo.localNetworkHost]
+    let hostName = ProcessInfo.processInfo.hostName
+    if hostName.hasSuffix(".local") { hosts.append(hostName) }
+    if let tailscale = RemoteNetworkInfo.tailscaleAddress(in: interfaces) { hosts.append(tailscale) }
+    var seen = Set<String>()
+    networkEndpoints = hosts.filter { seen.insert($0).inserted }.map { AgentAuth.endpoint(host: $0, port: activePort) }
   }
 
   private func restart() {
@@ -98,7 +177,13 @@ final class AgentServer {
       listenError = "Pick a port from 1 to 65535."
       return
     }
-    let server = LoopbackHTTPServer(port: port) { [weak self] request, responder in
+    let network = activeAccess == .localNetwork
+    if network {
+      if requireToken { ensureToken() }
+      refreshEndpoints()
+    }
+    let server = LoopbackHTTPServer(port: port, binding: network ? .all(AgentAccess.networkFilter) : .loopback) {
+      [weak self] request, responder in
       Task { @MainActor in self?.handle(request, responder) }
     }
     self.server = server
@@ -123,12 +208,30 @@ final class AgentServer {
     guard path == "/mcp" || path == "/mcp/" else {
       return responder.send(status: 404, body: Data())
     }
-    // Only pages and clients on this Mac: a web page elsewhere could otherwise reach the
-    // loopback port through DNS rebinding.
-    guard Self.isLoopback(host: request.headers["host"]),
-      request.headers["origin"].map({ Self.isLoopback(origin: $0) }) ?? true
+    // On the loopback binding every peer is, and the listener only lets in allowed networks.
+    let isRemote = !AgentAuth.isLoopback(request.peer)
+    if isRemote {
+      // Other devices reach this Mac by whatever name or address, so the Host header says
+      // nothing; a page from another site must still not drive the server from a browser.
+      let own = AgentAuth.ownHosts(
+        addresses: RemoteNetworkInfo.interfaces().map(\.address), hostName: ProcessInfo.processInfo.hostName)
+      guard AgentAuth.allowsRemote(origin: request.headers["origin"], ownHosts: own) else {
+        return responder.send(status: 403, body: Data())
+      }
+    } else {
+      // Only pages and clients on this Mac: a web page elsewhere could otherwise reach the
+      // loopback port through DNS rebinding.
+      guard AgentAuth.isLoopback(host: request.headers["host"]),
+        request.headers["origin"].map({ AgentAuth.isLoopback(origin: $0) }) ?? true
+      else {
+        return responder.send(status: 403, body: Data())
+      }
+    }
+    guard
+      AgentAuth.isAuthorized(
+        peerIsLoopback: !isRemote, requireToken: networkNeedsToken, authorization: request.headers["authorization"], token: token)
     else {
-      return responder.send(status: 403, body: Data())
+      return responder.send(status: 401, headers: ["WWW-Authenticate": "Bearer"], body: Data())
     }
     guard request.method == "POST" else {
       return responder.send(status: 405, headers: ["Allow": "POST"], body: Data())
@@ -164,14 +267,16 @@ final class AgentServer {
     case "tools/list":
       respond(result: ["tools": AgentTools.definitions], id: id, via: responder)
     case "tools/call":
-      callTool(params, id: id, streaming: request.headers["accept"]?.contains("text/event-stream") == true, via: responder)
+      callTool(
+        params, id: id, streaming: request.headers["accept"]?.contains("text/event-stream") == true,
+        context: ToolContext(isRemote: isRemote), via: responder)
     default:
       respond(error: -32601, "Method not found: \(method)", id: id, via: responder)
     }
   }
 
   private func callTool(
-    _ params: [String: Any], id: Any, streaming: Bool, via responder: LoopbackHTTPServer.Responder
+    _ params: [String: Any], id: Any, streaming: Bool, context: ToolContext, via responder: LoopbackHTTPServer.Responder
   ) {
     guard let name = params["name"] as? String else {
       return respond(error: -32602, "tools/call needs a tool name.", id: id, via: responder)
@@ -196,7 +301,7 @@ final class AgentServer {
         // MCP progress must only increase, and the steps restart at 0 between phases.
         var reached = 0
         var total: Int?
-        result = try await tools.call(name, arguments: arguments) { progress in
+        result = try await tools.call(name, arguments: arguments, context: context) { progress in
           guard streaming, let progressToken else { return }
           reached = max(reached, progress.step)
           total = progress.total ?? total
@@ -246,79 +351,50 @@ final class AgentServer {
   }
 
   private static func key(_ id: Any) -> String { "\(id)" }
-
-  private static let loopbackHosts: Set<String> = ["127.0.0.1", "localhost", "[::1]", "::1"]
-
-  /// A Host header naming this Mac (any port).
-  private static func isLoopback(host: String?) -> Bool {
-    guard let host else { return false }
-    let name = host.hasPrefix("[") ? String(host.prefix { $0 != "]" }) + "]" : String(host.prefix { $0 != ":" })
-    return loopbackHosts.contains(name.lowercased())
-  }
-
-  private static func isLoopback(origin: String) -> Bool {
-    guard let host = URLComponents(string: origin)?.host else { return false }
-    return loopbackHosts.contains(host.lowercased())
-  }
 }
 
-/// An MCP client Settings → Agents shows setup for.
-enum AgentClient: String, CaseIterable, Identifiable {
-  case claudeCode, codex, gemini, cursor, vsCode
-
-  var id: String { rawValue }
-
-  var title: String {
-    switch self {
-    case .claudeCode: "Claude Code"
-    case .codex: "Codex"
-    case .gemini: "Gemini CLI"
-    case .cursor: "Cursor"
-    case .vsCode: "VS Code"
-    }
-  }
-
-  /// A Terminal command, or for Cursor the entry for its mcp.json.
-  func setup(_ endpoint: String) -> String {
-    switch self {
-    case .claudeCode: "claude mcp add --transport http atelier \(endpoint)"
-    case .codex: "codex mcp add atelier --url \(endpoint)"
-    case .gemini: "gemini mcp add --transport http atelier \(endpoint)"
-    case .cursor: "{\n  \"mcpServers\": {\n    \"atelier\": { \"url\": \"\(endpoint)\" }\n  }\n}"
-    case .vsCode: "code --add-mcp '{\"name\":\"atelier\",\"type\":\"http\",\"url\":\"\(endpoint)\"}'"
-    }
-  }
-
-  var instructions: String {
-    switch self {
-    case .claudeCode:
-      "Run this in Terminal once. Add --scope user to use it in every folder, not just the current one."
-    case .codex:
-      "Run this in Terminal once. It's added to ~/.codex/config.toml, for the Codex CLI and app."
-    case .gemini:
-      "Run this in Terminal once, in your project's folder. Add -s user to use it in every folder."
-    case .cursor:
-      "Add this to ~/.cursor/mcp.json (or .cursor/mcp.json in a project), merging it with any servers already there."
-    case .vsCode:
-      "Run this in Terminal once. Copilot's agent mode can then use Atelier's tools."
-    }
-  }
-}
-
-/// Settings → Agents: turn the MCP server on, and how to connect an agent to it.
+/// Settings → Agents: turn the MCP server on, who can reach it, and how to connect an agent to it.
 struct AgentSettingsView: View {
   @Environment(AgentServer.self) private var server
   @State private var portText = ""
+  @State private var showsToken = false
   @AppStorage("agentClient") private var client = AgentClient.claudeCode
+  /// The address the setup below uses: this Mac's, or one of its network addresses.
+  @State private var address = ""
 
   var body: some View {
     @Bindable var server = server
+    let network = server.access == .localNetwork
     Form {
       Section {
         Toggle(isOn: $server.isEnabled) {
           Text("Let agents generate images")
-          Text("Runs an MCP server that apps on this Mac, such as Claude Code, can use to list models and presets, read and change the Create screen, and generate images. Images are saved to the current project.")
+          Text("Runs an MCP server that agents such as Claude Code can use to list models and presets, read and change the Create screen, and generate images. Images are saved to the current project.")
         }
+        Picker(selection: $server.access) {
+          ForEach(AgentAccess.allCases) { Text($0.title).tag($0) }
+        } label: {
+          Text("Access")
+          Text(accessNote)
+        }
+        Toggle(isOn: $server.requireToken) {
+          Text("Require Token")
+          Text("Agents on other devices send this token. Agents on this Mac never need it.")
+        }
+        .disabled(!network)
+        LabeledContent("Token") {
+          HStack {
+            Text(tokenText)
+              .font(.system(.body, design: .monospaced))
+              .textSelection(.enabled)
+              .lineLimit(1)
+              .truncationMode(.middle)
+            Button(showsToken ? "Hide" : "Show") { showsToken.toggle() }
+            Button("Copy") { Clipboard.copy(server.ensureToken()) }
+            Button("Regenerate") { server.regenerateToken() }
+          }
+        }
+        .disabled(!network || !server.requireToken)
         LabeledContent("Port") {
           TextField("Port", text: $portText)
             .labelsHidden()
@@ -348,29 +424,75 @@ struct AgentSettingsView: View {
         Picker("Agent", selection: $client) {
           ForEach(AgentClient.allCases) { Text($0.title).tag($0) }
         }
-        Text(client.instructions)
+        Picker("Address", selection: $address) {
+          ForEach(addresses, id: \.self) { Text($0).tag($0) }
+        }
+        Text(client.instructions(withToken: setupToken != nil))
           .foregroundStyle(.secondary)
-        Text(client.setup(server.endpoint))
+        Text(client.setup(chosenAddress, token: setupToken.map { showsToken ? $0 : Self.masked }))
           .font(.system(.body, design: .monospaced))
           .textSelection(.enabled)
           .frame(maxWidth: .infinity, alignment: .leading)
         HStack {
           Spacer()
           Button("Copy") {
-            Clipboard.copy(client.setup(server.endpoint))
+            Clipboard.copy(client.setup(chosenAddress, token: setupToken))
           }
         }
       } header: {
         Text("Connect an Agent")
       } footer: {
-        Text("Atelier must be open with the server on while the agent works. Other MCP clients that speak Streamable HTTP can use the same address.")
+        Text("Atelier must be open with the server on while the agent works. Other MCP clients that speak Streamable HTTP can use the same address. For an agent on another device, pick one of this Mac's network addresses.")
           .foregroundStyle(.secondary)
       }
     }
     .formStyle(.grouped)
     .frame(width: 600)
     .fixedSize(horizontal: false, vertical: true)
-    .onAppear { portText = String(server.port) }
+    .onAppear {
+      portText = String(server.port)
+      server.refreshEndpoints()
+      if server.access == .localNetwork, server.requireToken { server.ensureToken() }
+      if address.isEmpty { address = server.endpoint }
+    }
+    .onChange(of: server.access) {
+      if server.access == .localNetwork, server.requireToken { server.ensureToken() }
+      server.refreshEndpoints()
+    }
+    .onChange(of: server.requireToken) {
+      if server.requireToken, server.access == .localNetwork { server.ensureToken() }
+    }
+  }
+
+  private static let masked = String(repeating: "•", count: 12)
+
+  private var accessNote: String {
+    guard server.access == .localNetwork else { return "Only apps on this Mac can connect." }
+    let shared =
+      server.requireToken
+      ? "Anyone on your network with the token can generate and read or change the Create screen."
+      : "Anyone on your network can generate and read or change the Create screen: no token is asked for."
+    return shared + " Traffic isn't encrypted; use Tailscale to encrypt it."
+  }
+
+  private var tokenText: String {
+    guard let token = server.token else { return Self.masked }
+    return showsToken ? token : Self.masked
+  }
+
+  /// This Mac's endpoint, then the network ones when other devices can connect.
+  private var addresses: [String] {
+    [server.endpoint] + (server.access == .localNetwork ? server.networkEndpoints : [])
+  }
+
+  private var chosenAddress: String {
+    addresses.contains(address) ? address : server.endpoint
+  }
+
+  /// The token the setup carries: for a network address when one is required.
+  private var setupToken: String? {
+    guard chosenAddress != server.endpoint, server.networkNeedsToken else { return nil }
+    return server.token
   }
 
   private func applyPort() {

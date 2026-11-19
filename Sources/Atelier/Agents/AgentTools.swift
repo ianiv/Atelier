@@ -405,6 +405,7 @@ final class AgentTools {
           "history_step": ["type": "integer", "description": "A history step from list_history or generate. Omit for the canvas."],
           "latest": ["type": "boolean", "description": "The project's newest image instead of the canvas."],
           "max_size": ["type": "integer", "description": "Long side of the returned image in pixels, 256–2048. Default 1024."],
+          "full_size": ["type": "boolean", "description": "Return the image at full resolution as a PNG (settings embedded) instead of a JPEG preview; max_size is ignored. For agents on another device, which can't use save_to."],
           "save_to": ["type": "string", "description": "Also write the full-size PNG (settings embedded) to this file or folder."],
           "full_detail": ["type": "boolean", "description": "For a saved image refined zoomed in (or a Draw Things upscale): the image at the detail its finer layers keep, larger than the image's own size, which is the default (and what masks, regions and canvas_size are in)."],
         ],
@@ -580,7 +581,19 @@ final class AgentTools {
 
   // MARK: - Calls
 
+  /// Runs a tool for a client; `context` says whether it's on another device, and holds for
+  /// everything the call does, the job it may start included (`ToolContext.current`).
   func call(
+    _ name: String, arguments: [String: Any], context: ToolContext = ToolContext(),
+    progress: @escaping (Progress) -> Void
+  ) async throws -> [String: Any] {
+    if let refusal = AgentPathGuard.refusal(for: arguments, isRemote: context.isRemote) { throw ToolError(refusal) }
+    return try await ToolContext.$current.withValue(context) {
+      try await dispatch(name, arguments: arguments, progress: progress)
+    }
+  }
+
+  private func dispatch(
     _ name: String, arguments: [String: Any], progress: @escaping (Progress) -> Void
   ) async throws -> [String: Any] {
     switch name {
@@ -833,20 +846,25 @@ final class AgentTools {
   ) async throws -> [String: Any] {
     let saved = saved ?? create.history.project
     let png = try await create.history.pngData(item, in: saved)
-    let url = try Self.outputURL(
-      arguments["save_to"] as? String, name: "\(saved.name) \(item.id.logicalTime)-\(item.sidecar.seed)",
-      extension: item.isVideo ? "mp4" : "png")
-    if item.isVideo {
-      try await create.history.exportVideo(item, to: url)
-    } else {
-      try png.write(to: url)
+    // A client on another device can't open a file here: it gets the image inline only.
+    var url: URL?
+    if !ToolContext.current.isRemote {
+      let file = try Self.outputURL(
+        arguments["save_to"] as? String, name: "\(saved.name) \(item.id.logicalTime)-\(item.sidecar.seed)",
+        extension: item.isVideo ? "mp4" : "png")
+      if item.isVideo {
+        try await create.history.exportVideo(item, to: file)
+      } else {
+        try png.write(to: file)
+      }
+      url = file
     }
 
     let project = saved.name
     let seconds = item.sidecar.durationSeconds
     lastResult = "“\(summary)” saved to \(project) in \(GenerationTime.text(seconds))"
     var text =
-      "Saved to Atelier project “\(project)” (step \(item.id.logicalTime)) and \(url.path).\n"
+      "Saved to Atelier project “\(project)” (step \(item.id.logicalTime))\(url.map { " and \($0.path)" } ?? "").\n"
       + "Model \(model), \(configuration.width)×\(configuration.height), \(configuration.steps) steps, "
       + "guidance \(configuration.guidanceScale), seed \(seed), \(GenerationTime.text(seconds))."
     if let clip = item.clip {
@@ -861,10 +879,11 @@ final class AgentTools {
       content.append(["type": "image", "data": preview.base64EncodedString(), "mimeType": "image/jpeg"])
     }
     var structured: [String: Any] = [
-      "path": url.path, "project": project, "history_step": item.id.logicalTime, "model": model,
+      "project": project, "history_step": item.id.logicalTime, "model": model,
       "seed": Int(seed), "width": configuration.width, "height": configuration.height,
       "steps": configuration.steps, "duration_seconds": seconds,
     ]
+    if let url { structured["path"] = url.path }
     if let timings = item.sidecar.timings { structured["timings"] = timings.json }
     if let clip = item.clip {
       structured["frames"] = clip.frames.count
@@ -1104,6 +1123,8 @@ final class AgentTools {
     guard var result = job.result else { throw ToolError("\(job.id) hasn't finished.") }
     if var structured = result["structuredContent"] as? [String: Any] {
       structured["job_id"] = job.id
+      // A job a client on this Mac started names its file; another device can't open it.
+      if ToolContext.current.isRemote { structured["path"] = nil }
       // match_colors and edit_image_look answer in JSON, which says it too.
       if job.isLabelled { result = try textResult(json: structured) }
       result["structuredContent"] = structured
@@ -1124,7 +1145,7 @@ final class AgentTools {
     if let error = job.error { summary["error"] = error }
     if let structured = job.result?["structuredContent"] as? [String: Any] {
       summary["history_step"] = structured["history_step"]
-      summary["path"] = structured["path"]
+      if !ToolContext.current.isRemote { summary["path"] = structured["path"] }
       summary["timings"] = structured["timings"]
     }
     return summary
@@ -1980,6 +2001,7 @@ final class AgentTools {
 
   private func getImage(_ arguments: [String: Any]) async throws -> [String: Any] {
     if let fullDetail = arguments["full_detail"], !Self.isBoolean(fullDetail) { throw ToolError("`full_detail` must be true or false.") }
+    if let fullSize = arguments["full_size"], !Self.isBoolean(fullSize) { throw ToolError("`full_size` must be true or false.") }
     let item: HistoryItem?
     var image: CGImage
     if let step = Self.int(arguments["history_step"]) {
@@ -2039,8 +2061,16 @@ final class AgentTools {
       try png.write(to: url)
       text += "\nSaved to \(url.path)."
     }
-    let maxSide = min(max(Self.int(arguments["max_size"]) ?? 1024, 256), 2048)
     var content: [[String: Any]] = [["type": "text", "text": text]]
+    if arguments["full_size"] as? Bool == true {
+      // The whole image as a PNG, settings embedded for a saved one: what save_to writes, for a
+      // client that can't read files here.
+      let png = try item.map { try HistoryStore.pngData(image, sidecar: $0.sidecar) } ?? ImageTensor.png(image)
+      guard let png else { throw ToolError("Couldn't encode the image.") }
+      content.append(["type": "image", "data": png.base64EncodedString(), "mimeType": "image/png"])
+      return ["content": content]
+    }
+    let maxSide = min(max(Self.int(arguments["max_size"]) ?? 1024, 256), 2048)
     if let preview = Self.jpeg(ImageLoader.fitted(image, maxSide: maxSide)) {
       content.append(["type": "image", "data": preview.base64EncodedString(), "mimeType": "image/jpeg"])
     }
@@ -2741,6 +2771,9 @@ final class AgentTools {
       else { throw ToolError("Couldn't decode the data: URL image.") }
       return image
     }
+    guard AgentPathGuard.allowsImageSource(source, isRemote: ToolContext.current.isRemote) else {
+      throw ToolError(AgentPathGuard.pathMessage)
+    }
     let url = URL(fileURLWithPath: (source as NSString).expandingTildeInPath)
     guard let image = ImageLoader.image(at: url) else {
       throw ToolError("Couldn't read an image at \(url.path).")
@@ -2752,6 +2785,8 @@ final class AgentTools {
     let fileManager = FileManager.default
     var folder = TemporaryFiles.folder(.agent)
     if let saveTo, !saveTo.isEmpty {
+      // `call` refuses it first; this keeps any other way in shut too.
+      guard !ToolContext.current.isRemote else { throw ToolError(AgentPathGuard.saveToMessage) }
       let url = URL(fileURLWithPath: (saveTo as NSString).expandingTildeInPath)
       var isDirectory: ObjCBool = false
       let exists = fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory)

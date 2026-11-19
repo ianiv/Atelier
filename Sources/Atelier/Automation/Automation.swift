@@ -76,7 +76,7 @@ enum Automation {
   nonisolated static var isRequested: Bool {
     let flags = [
       "--show", "--resize-bench", "--inspector-check", "--library-check", "--project-check",
-      "--reuse", "--generate", "--ux-check", "--edit-input-check", "--refine-check", "--agent-canvas-check",
+      "--reuse", "--generate", "--ux-check", "--edit-input-check", "--refine-check", "--agent-canvas-check", "--agent-net-check",
       "--automask-check", "--queue-check",
       "--timeline-check", "--upscale-check", "--timeline-export-check", "--flashvsr-check", "--recavsr-check",
       "--model-folders-check", "--styles-check", "--cleanup-check", "--engine-check", "--playback-check",
@@ -139,6 +139,10 @@ enum Automation {
     }
     if args.contains("--agent-canvas-check") {
       agentCanvasCheck(model, presets: presets)
+      return
+    }
+    if args.contains("--agent-net-check") {
+      agentNetCheck(model, presets: presets)
       return
     }
     if args.contains("--automask-check") {
