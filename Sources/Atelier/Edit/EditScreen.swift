@@ -166,6 +166,7 @@ private struct EditCompareControl: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { mode = option }
+        .help(option == .sideBySide ? "Show the original and the edit next to each other" : "Show one picture with a divider you drag across it to compare")
     }
   }
 
