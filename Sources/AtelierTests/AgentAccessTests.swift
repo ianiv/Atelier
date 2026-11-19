@@ -176,6 +176,68 @@ struct AgentAccessTests {
   @Test func endpoints() {
     #expect(AgentAuth.endpoint(host: "192.168.1.5", port: 7862) == "http://192.168.1.5:7862/mcp")
     #expect(AgentAuth.endpoint(host: "fd7a:115c:a1e0::1", port: 7862) == "http://[fd7a:115c:a1e0::1]:7862/mcp")
+    #expect(AgentAuth.endpoint(scheme: "https", host: "192.168.1.5", port: 7863) == "https://192.168.1.5:7863/mcp")
+    #expect(AgentAuth.endpoint(scheme: "https", host: "studio-atelier.tail1234.ts.net", port: 443) == "https://studio-atelier.tail1234.ts.net/mcp", "443 is https's default")
+    #expect(AgentAuth.endpoint(scheme: "https", host: "fd7a::1", port: 443) == "https://[fd7a::1]/mcp")
+    #expect(AgentAuth.endpoint(host: "studio.local", port: 80) == "http://studio.local/mcp")
+  }
+
+  @Test func httpsPorts() {
+    #expect(AgentAuth.httpsPort(for: 7862) == 7863)
+    #expect(AgentAuth.httpsPort(for: 1) == 2)
+    #expect(AgentAuth.httpsPort(for: 65534) == 65535)
+    #expect(AgentAuth.httpsPort(for: 65535) == nil, "no port after the last")
+    #expect(AgentAuth.httpsPort(for: 0) == nil)
+    #expect(AgentAuth.tailnetHTTPSPort == 443)
+  }
+
+  @Test func tailnetOrigins() {
+    let own = AgentAuth.ownHosts(addresses: ["100.64.1.2"], hostName: "studio.home", tailnetName: "Studio-Atelier.tail1234.ts.net")
+    #expect(AgentAuth.allowsRemote(origin: "https://studio-atelier.tail1234.ts.net", ownHosts: own, port: 443))
+    #expect(!AgentAuth.allowsRemote(origin: "https://studio-atelier.tail1234.ts.net", ownHosts: own, port: 7863), "the page must be on the port it came in on")
+    #expect(!AgentAuth.allowsRemote(origin: "https://other.tail1234.ts.net", ownHosts: own, port: 443))
+    #expect(!AgentAuth.ownHosts(addresses: [], hostName: "x", tailnetName: "").contains(""))
+  }
+
+  @Test func fingerprints() {
+    // SHA-256 of nothing, in the colon-separated form browsers show.
+    let empty = AgentTLSIdentity.fingerprint(of: Data())
+    #expect(empty.hasPrefix("E3:B0:C4:42:98:FC:1C:14") && empty.hasSuffix(":78:52:B8:55"))
+    #expect(empty.count == 32 * 3 - 1)
+  }
+
+  @Test func pemPairs() throws {
+    let made = try AutomationTestCertificate(hosts: ["studio-atelier.tail1234.ts.net"])
+    // Tailscale's type=pair: the key, then the certificate.
+    let parsed = try AgentTLSIdentity(pem: made.pemPair)
+    #expect(parsed.fingerprint == made.identity.fingerprint)
+    #expect(parsed.name == "studio-atelier.tail1234.ts.net")
+    #expect(parsed.chain.count == 1 && parsed.secIdentity != nil)
+    let expires = try #require(parsed.expires)
+    #expect(expires > Date() && expires < Date().addingTimeInterval(2 * 3600))
+    // Either order, with text around the blocks.
+    let blocks = AgentTLSIdentity.pemBlocks(made.pemPair)
+    #expect(blocks.map(\.label) == ["PRIVATE KEY", "CERTIFICATE"] || blocks.map(\.label) == ["EC PRIVATE KEY", "CERTIFICATE"])
+    let certificatePEM = made.pemPair[try #require(made.pemPair.range(of: "-----BEGIN CERTIFICATE-----")?.lowerBound...)]
+    let keyPEM = made.pemPair[..<(try #require(made.pemPair.range(of: "-----BEGIN CERTIFICATE-----")?.lowerBound))]
+    let reordered = try AgentTLSIdentity(pem: "intro\n" + certificatePEM + "\n" + keyPEM)
+    #expect(reordered.fingerprint == made.identity.fingerprint)
+    #expect(throws: AgentTLSIdentity.Failure.self) { try AgentTLSIdentity(pem: String(certificatePEM)) }
+    #expect(throws: AgentTLSIdentity.Failure.self) { try AgentTLSIdentity(pem: String(keyPEM)) }
+    #expect(throws: AgentTLSIdentity.Failure.self) { try AgentTLSIdentity(pem: "not a certificate") }
+    // A key that isn't the certificate's.
+    let other = try AutomationTestCertificate(hosts: ["other"])
+    let otherKey = other.pemPair.components(separatedBy: "-----BEGIN CERTIFICATE-----")[0]
+    #expect(throws: AgentTLSIdentity.Failure.keyMismatch) { try AgentTLSIdentity(pem: certificatePEM + "\n" + otherKey) }
+  }
+
+  @Test func certificateStore() {
+    let store = AgentCertificateStore(secrets: MemorySecretStore())
+    #expect(store.load() == nil)
+    #expect(throws: (any Error).self) { try store.save(pkcs12: Data("not a p12".utf8), password: "pw") }
+    #expect(store.load() == nil, "a file that doesn't open isn't kept")
+    store.remove()
+    #expect(store.load() == nil)
   }
 
   @Test func clientSnippets() {

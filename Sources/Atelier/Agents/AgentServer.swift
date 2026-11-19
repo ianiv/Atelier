@@ -2,6 +2,7 @@
 import Foundation
 import Observation
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Atelier's MCP server: agents such as Claude Code connect over Streamable HTTP on the loopback
 /// interface (`http://127.0.0.1:<port>/mcp`) and generate with the app's own engine, so there's
@@ -9,7 +10,10 @@ import SwiftUI
 ///
 /// With Access set to Local network it also answers other devices on the local network or
 /// tailnet (`AgentAccess.networkFilter`), which send a bearer token unless Require Token is off
-/// and can't pass or get file paths (`AgentPathGuard`). Plain HTTP: there's no TLS.
+/// and can't pass or get file paths (`AgentPathGuard`). In plain HTTP, unless Encryption picks a
+/// certificate: then the port answers this Mac only and other devices use HTTPS, on the next port
+/// with an imported certificate, or at the embedded Tailscale node's name with Tailscale's
+/// (`AgentEncryption`).
 ///
 /// Requests are JSON-RPC over POST. A `tools/call` whose client accepts an event stream gets one,
 /// with progress notifications while it generates; anything else gets a plain JSON response.
@@ -23,6 +27,7 @@ final class AgentServer {
   private static let portKey = "agentServer.port"
   private static let accessKey = "agentServer.access"
   private static let requireTokenKey = "agentServer.requireToken"
+  private static let encryptionKey = "agentServer.encryption"
 
   var isEnabled: Bool {
     didSet {
@@ -48,6 +53,15 @@ final class AgentServer {
     }
   }
 
+  /// Settings → Agents → Encryption. Changes which listeners there are, so they're replaced.
+  var encryption: AgentEncryption {
+    didSet {
+      guard encryption != oldValue else { return }
+      defaults.set(encryption.rawValue, forKey: Self.encryptionKey)
+      restart()
+    }
+  }
+
   /// Whether other devices must send the token. Checked per request, so changing it needs no
   /// restart.
   var requireToken: Bool {
@@ -69,6 +83,20 @@ final class AgentServer {
   /// Why the server isn't listening although it's on.
   private(set) var listenError: String?
   private(set) var isListening = false
+
+  /// The imported certificate, read from the Keychain the first time it's needed.
+  private(set) var certificate: AgentTLSIdentity?
+  /// The certificate Tailscale issued, and the name it's for.
+  private(set) var tailscaleCertificate: AgentTLSIdentity?
+  private var tailscaleCertificateName: String?
+  /// The embedded Tailscale node's name, while it's signed in.
+  private(set) var tailnetName: String?
+  /// Where other devices reach HTTPS, once it's listening.
+  private(set) var httpsEndpoint: String?
+  /// Why HTTPS isn't listening although Encryption asks for it.
+  private(set) var httpsError: String?
+  /// Fetching Tailscale's certificate, which the first time can take a minute.
+  private(set) var isFetchingCertificate = false
   let tools: AgentTools
   /// `--mcp` on the command line: on for this launch without changing the setting.
   private let forcedOn: Bool
@@ -78,8 +106,23 @@ final class AgentServer {
   private let forcedNetwork: Bool
   private let defaults: UserDefaults
   private let tokens: AgentTokenStore
+  private let certificates: AgentCertificateStore
+  private var certificateLoaded = false
+  /// A scripted check's own certificate, in place of the imported one.
+  private let certificateOverride: AgentTLSIdentity?
+  private weak var tailnet: RemoteTailnet?
+  /// The node's state last seen, to notice it signing in or out.
+  private var tailnetWasRunning = false
 
   private var server: LoopbackHTTPServer?
+  /// The HTTPS listener: on every interface (imported certificate), or the tailnet's bridge.
+  private var secureServer: LoopbackHTTPServer?
+  /// Whether the tailnet's 443 is being passed to `secureServer`.
+  private var servesTailnet = false
+  /// Bumped by every HTTPS restart, so a certificate fetch that finishes late changes nothing.
+  private var httpsGeneration = 0
+  /// Fetches Tailscale's certificate again once a day: Tailscale renews it when it's due.
+  private var certificateRefresh: Task<Void, Never>?
   /// What the listener checks before reading a request's body.
   @ObservationIgnored private let gate = AgentGateBox()
   /// Running tool calls by JSON-RPC id, so `notifications/cancelled` can stop them.
@@ -90,6 +133,16 @@ final class AgentServer {
   var endpoint: String { AgentAuth.endpoint(host: "127.0.0.1", port: activePort) }
   /// Whether a client on another device has to send the token now.
   var networkNeedsToken: Bool { activeAccess == .localNetwork && requireToken }
+  /// Whether other devices get HTTPS (and the server's own port answers this Mac only).
+  var usesHTTPS: Bool { activeAccess == .localNetwork && encryption != .none }
+  /// The certificate Encryption picks.
+  var activeCertificate: AgentTLSIdentity? {
+    switch encryption {
+    case .none: nil
+    case .tailscale: tailscaleCertificate
+    case .certificate: certificateOverride ?? certificate
+    }
+  }
 
   private static let protocolVersions = ["2025-11-25", "2025-06-18", "2025-03-26"]
   private static let instructions = """
@@ -118,18 +171,22 @@ final class AgentServer {
     list_grain_profiles and measure_reference. Coordinates are always the image's own pixels from its top left.
     """
 
-  /// `defaults` and `secrets` are where the settings and token are kept: the user's, or a scratch
-  /// suite and memory for a scripted check's own server (`commandLine` false: no `--mcp` flags,
-  /// and it starts whenever it's on).
+  /// `defaults` and `secrets` are where the settings, token and certificate are kept: the user's,
+  /// or a scratch suite and memory for a scripted check's own server (`commandLine` false: no
+  /// `--mcp` flags, and it starts whenever it's on), which can bring its own `certificate`.
   init(
     create: CreateModel, presets: PresetStore, grainProfiles: GrainProfileStore? = nil, defaults: UserDefaults = .standard, secrets: (any RemoteSecretStore)? = nil,
-    commandLine: Bool = true
+    certificate: AgentTLSIdentity? = nil, commandLine: Bool = true
   ) {
     tools = AgentTools(create: create, presets: presets, grainProfiles: grainProfiles)
     self.defaults = defaults
     // A scripted run never touches the user's Keychain.
-    tokens = AgentTokenStore(
-      secrets: secrets ?? (Automation.isRequested ? MemorySecretStore() : KeychainSecretStore(service: "Atelier Agents")))
+    let secrets = secrets ?? (Automation.isRequested ? MemorySecretStore() : KeychainSecretStore(service: "Atelier Agents"))
+    tokens = AgentTokenStore(secrets: secrets)
+    certificates = AgentCertificateStore(secrets: secrets)
+    certificateOverride = certificate
+    tailnet = create.tailnet
+    encryption = defaults.string(forKey: Self.encryptionKey).flatMap(AgentEncryption.init(rawValue:)) ?? .none
     isEnabled = defaults.bool(forKey: Self.enabledKey)
     port = defaults.object(forKey: Self.portKey) as? Int ?? Self.defaultPort
     access = defaults.string(forKey: Self.accessKey).flatMap(AgentAccess.init(rawValue:)) ?? .thisMac
@@ -144,6 +201,8 @@ final class AgentServer {
     if activeAccess == .localNetwork { token = tokens.load() }
     // Scripted checks leave the user's server (and its port) alone unless asked with `--mcp`.
     if commandLine, Automation.isRequested, !forcedOn { return }
+    tailnetWasRunning = tailnet?.isSignedIn ?? false
+    tailnet?.observe { [weak self] in self?.tailnetChanged() }
     restart()
   }
 
@@ -166,22 +225,72 @@ final class AgentServer {
   }
 
   /// This Mac's addresses as other devices reach it: the local network address, the .local name
-  /// and the Tailscale address.
+  /// and the Tailscale address; in HTTPS, those on the HTTPS port, or the Tailscale node's name.
   func refreshEndpoints() {
+    tailnetName = tailnet?.isSignedIn == true ? tailnet?.status.dnsName : nil
+    if usesHTTPS, encryption == .tailscale {
+      networkEndpoints = tailnetName.map { [AgentAuth.endpoint(scheme: "https", host: $0, port: AgentAuth.tailnetHTTPSPort)] } ?? []
+      return
+    }
     let interfaces = RemoteNetworkInfo.interfaces()
     var hosts = [RemoteNetworkInfo.localNetworkHost]
     let hostName = ProcessInfo.processInfo.hostName
     if hostName.hasSuffix(".local") { hosts.append(hostName) }
     if let tailscale = RemoteNetworkInfo.tailscaleAddress(in: interfaces) { hosts.append(tailscale) }
     var seen = Set<String>()
-    networkEndpoints = hosts.filter { seen.insert($0).inserted }.map { AgentAuth.endpoint(host: $0, port: activePort) }
+    hosts = hosts.filter { seen.insert($0).inserted }
+    if usesHTTPS {
+      guard let port = AgentAuth.httpsPort(for: activePort) else { return networkEndpoints = [] }
+      networkEndpoints = hosts.map { AgentAuth.endpoint(scheme: "https", host: $0, port: port) }
+    } else {
+      networkEndpoints = hosts.map { AgentAuth.endpoint(host: $0, port: activePort) }
+    }
   }
+
+  // MARK: - Certificates
+
+  /// The imported certificate, read from the Keychain the first time.
+  func loadCertificateIfNeeded() {
+    guard !certificateLoaded else { return }
+    certificateLoaded = true
+    certificate = certificates.load()
+  }
+
+  /// Keeps a .p12 (checked first with its password) and serves HTTPS with it if that's picked.
+  func importCertificate(_ data: Data, password: String) throws {
+    certificate = try certificates.save(pkcs12: data, password: password)
+    certificateLoaded = true
+    if encryption == .certificate { restartHTTPS() }
+  }
+
+  func removeCertificate() {
+    certificates.remove()
+    certificate = nil
+    certificateLoaded = true
+    if encryption == .certificate { restartHTTPS() }
+  }
+
+  /// Fetches Tailscale's certificate again now (Settings' Renew), as the daily refresh does.
+  func refreshTailscaleCertificate() {
+    restartHTTPS(refetch: true)
+  }
+
+  /// The node signed in or out: HTTPS on the tailnet follows it.
+  private func tailnetChanged() {
+    let running = tailnet?.isSignedIn ?? false
+    guard running != tailnetWasRunning else { return }
+    tailnetWasRunning = running
+    if usesHTTPS, encryption == .tailscale, isEnabled || forcedOn { restartHTTPS() }
+  }
+
+  // MARK: - Listening
 
   private func restart() {
     server?.stop()
     server = nil
     isListening = false
     listenError = nil
+    stopHTTPS()
     syncGate()
     guard isEnabled || forcedOn else { return }
     guard let port = UInt16(exactly: activePort), port > 0 else {
@@ -193,15 +302,10 @@ final class AgentServer {
       if requireToken { ensureToken() }
       refreshEndpoints()
     }
-    let gate = gate
-    let server = LoopbackHTTPServer(
-      port: port, binding: network ? .all(AgentAccess.networkFilter) : .loopback,
-      headCheck: { peer, headers in
-        AgentAuth.earlyRefusal(peer: peer, authorization: headers["authorization"], gate: gate.state.withLock { $0 })
-      }
-    ) { [weak self] request, responder in
-      Task { @MainActor in self?.handle(request, responder) }
-    }
+    // With HTTPS, other devices never get plain HTTP: the port answers this Mac only.
+    let server = makeServer(
+      port: port, binding: network && !usesHTTPS ? .all(AgentAccess.networkFilter) : .loopback, tls: nil,
+      originPort: activePort)
     self.server = server
     server.start { [weak self] error in
       Task { @MainActor in
@@ -215,11 +319,148 @@ final class AgentServer {
         }
       }
     }
+    if usesHTTPS { restartHTTPS() }
+  }
+
+  /// A listener for this server's requests. `originPort` is the port clients name, which a page's
+  /// Origin must match: the listener's own, or the tailnet's 443 for the bridge.
+  private func makeServer(
+    port: UInt16, binding: LoopbackHTTPServer.Binding, tls: AgentTLSIdentity?, originPort: Int
+  ) -> LoopbackHTTPServer {
+    let gate = gate
+    return LoopbackHTTPServer(
+      port: port, binding: binding, tls: tls,
+      headCheck: { peer, headers in
+        AgentAuth.earlyRefusal(peer: peer, authorization: headers["authorization"], gate: gate.state.withLock { $0 })
+      }
+    ) { [weak self] request, responder in
+      Task { @MainActor in self?.handle(request, responder, originPort: originPort) }
+    }
+  }
+
+  private func stopHTTPS() {
+    httpsGeneration += 1
+    secureServer?.stop()
+    secureServer = nil
+    if servesTailnet {
+      tailnet?.stopListening(port: UInt16(AgentAuth.tailnetHTTPSPort))
+      servesTailnet = false
+    }
+    certificateRefresh?.cancel()
+    certificateRefresh = nil
+    httpsEndpoint = nil
+    httpsError = nil
+    isFetchingCertificate = false
+  }
+
+  /// Replaces the HTTPS listener (its certificate is fixed when it starts), leaving this Mac's
+  /// plain port alone. `refetch` asks Tailscale for its certificate even if there's one already.
+  private func restartHTTPS(refetch: Bool = false) {
+    stopHTTPS()
+    guard isEnabled || forcedOn, usesHTTPS else { return }
+    refreshEndpoints()
+    switch encryption {
+    case .none:
+      return
+    case .certificate:
+      if certificateOverride == nil { loadCertificateIfNeeded() }
+      guard let identity = activeCertificate else {
+        httpsError = "Import a certificate to use HTTPS."
+        return
+      }
+      guard let port = AgentAuth.httpsPort(for: activePort) else {
+        httpsError = "HTTPS takes the port after the server's; pick a lower port."
+        return
+      }
+      let secure = makeServer(port: UInt16(port), binding: .all(AgentAccess.networkFilter), tls: identity, originPort: port)
+      startSecure(secure, endpoint: AgentAuth.endpoint(scheme: "https", host: RemoteNetworkInfo.localNetworkHost, port: port))
+    case .tailscale:
+      guard let tailnet else { return }
+      if case .unavailable = tailnet.state {
+        httpsError = RemoteTailnet.CertificateError.unavailable.localizedDescription
+        return
+      }
+      guard tailnet.isSignedIn, let name = tailnet.status.dnsName else {
+        httpsError = RemoteTailnet.CertificateError.notRunning.localizedDescription
+        return
+      }
+      let generation = httpsGeneration
+      if !refetch, let identity = tailscaleCertificate, tailscaleCertificateName == name {
+        serveTailnet(identity, name: name)
+      } else {
+        isFetchingCertificate = true
+        Task { [weak self] in await self?.fetchTailscaleCertificate(generation: generation) }
+      }
+      certificateRefresh = Task { [weak self] in
+        while !Task.isCancelled {
+          try? await Task.sleep(for: .seconds(24 * 3600))
+          guard !Task.isCancelled, let self else { return }
+          await self.fetchTailscaleCertificate(generation: self.httpsGeneration, renewing: true)
+        }
+      }
+    }
+  }
+
+  /// Asks Tailscale for the node's certificate, then serves it. On a daily renewal (`renewing`),
+  /// the listener is only replaced if the certificate changed.
+  private func fetchTailscaleCertificate(generation: Int, renewing: Bool = false) async {
+    guard let tailnet else { return }
+    do {
+      let (name, pem) = try await tailnet.certificatePair()
+      let identity = try AgentTLSIdentity(pem: pem)
+      guard generation == httpsGeneration else { return }
+      isFetchingCertificate = false
+      let changed = tailscaleCertificate?.fingerprint != identity.fingerprint
+      tailscaleCertificate = identity
+      tailscaleCertificateName = name
+      if renewing {
+        if changed { restartHTTPS() }
+      } else {
+        serveTailnet(identity, name: name)
+      }
+    } catch {
+      guard generation == httpsGeneration else { return }
+      isFetchingCertificate = false
+      Log.agents.error("Tailscale certificate: \(error.localizedDescription, privacy: .public)")
+      // A renewal that fails leaves the current certificate serving until it's due.
+      if !renewing { httpsError = error.localizedDescription }
+    }
+  }
+
+  /// HTTPS on the tailnet: Tailscale's 443 handed to a loopback TLS listener.
+  private func serveTailnet(_ identity: AgentTLSIdentity, name: String) {
+    let secure = makeServer(port: 0, binding: .tailnetBridge, tls: identity, originPort: AgentAuth.tailnetHTTPSPort)
+    startSecure(secure, endpoint: AgentAuth.endpoint(scheme: "https", host: name, port: AgentAuth.tailnetHTTPSPort)) { [weak self] in
+      guard let self, let tailnet = self.tailnet else { return }
+      guard tailnet.startListening(port: UInt16(AgentAuth.tailnetHTTPSPort), bridgePort: { [weak secure] in secure?.boundPort }) else {
+        self.httpsError = "Couldn't listen on the tailnet's port 443."
+        self.httpsEndpoint = nil
+        return
+      }
+      self.servesTailnet = true
+    }
+  }
+
+  private func startSecure(_ secure: LoopbackHTTPServer, endpoint: String, onReady: (@MainActor @Sendable () -> Void)? = nil) {
+    secureServer = secure
+    secure.start { [weak self] error in
+      Task { @MainActor in
+        guard let self, self.secureServer === secure else { return }
+        self.httpsError = error
+        self.httpsEndpoint = error == nil ? endpoint : nil
+        if let error {
+          Log.agents.error("MCP HTTPS failed: \(error, privacy: .public)")
+        } else {
+          onReady?()
+          Log.agents.info("MCP server HTTPS at \(endpoint, privacy: .public)")
+        }
+      }
+    }
   }
 
   // MARK: - HTTP
 
-  private func handle(_ request: LoopbackHTTPServer.Request, _ responder: LoopbackHTTPServer.Responder) {
+  private func handle(_ request: LoopbackHTTPServer.Request, _ responder: LoopbackHTTPServer.Responder, originPort: Int) {
     let path = request.path.split(separator: "?", maxSplits: 1).first.map(String.init) ?? ""
     guard path == "/mcp" || path == "/mcp/" else {
       return responder.send(status: 404, body: Data())
@@ -234,8 +475,9 @@ final class AgentServer {
       // Other devices reach this Mac by whatever name or address, so the Host header says
       // nothing; a page from another site must still not drive the server from a browser.
       let own = AgentAuth.ownHosts(
-        addresses: RemoteNetworkInfo.interfaces().map(\.address), hostName: ProcessInfo.processInfo.hostName)
-      guard AgentAuth.allowsRemote(origin: request.headers["origin"], ownHosts: own, port: activePort) else {
+        addresses: RemoteNetworkInfo.interfaces().map(\.address), hostName: ProcessInfo.processInfo.hostName,
+        tailnetName: tailnetName)
+      guard AgentAuth.allowsRemote(origin: request.headers["origin"], ownHosts: own, port: originPort) else {
         return responder.send(status: 403, body: Data())
       }
     } else {
@@ -383,6 +625,11 @@ struct AgentSettingsView: View {
   @AppStorage("agentClient") private var client = AgentClient.claudeCode
   /// The address the setup below uses: this Mac's, or one of its network addresses.
   @State private var address = ""
+  @State private var importingCertificate = false
+  /// The .p12 picked, waiting for its password.
+  @State private var certificateFile: Data?
+  @State private var certificatePassword = ""
+  @State private var certificateError: String?
 
   var body: some View {
     @Bindable var server = server
@@ -442,6 +689,7 @@ struct AgentSettingsView: View {
       } header: {
         Text("MCP Server")
       }
+      encryptionSection(network: network)
       Section {
         Picker("Agent", selection: $client) {
           ForEach(AgentClient.allCases) { Text($0.title).tag($0) }
@@ -476,10 +724,53 @@ struct AgentSettingsView: View {
       server.refreshEndpoints()
       if server.activeAccess == .localNetwork, server.requireToken { server.ensureToken() }
       if address.isEmpty { address = server.endpoint }
+      if server.encryption == .certificate { server.loadCertificateIfNeeded() }
     }
     .onChange(of: server.access) {
       if server.activeAccess == .localNetwork, server.requireToken { server.ensureToken() }
       server.refreshEndpoints()
+    }
+    .onChange(of: server.encryption) {
+      if server.encryption == .certificate { server.loadCertificateIfNeeded() }
+    }
+    .fileImporter(isPresented: $importingCertificate, allowedContentTypes: [.pkcs12]) { result in
+      guard case .success(let url) = result else { return }
+      let access = url.startAccessingSecurityScopedResource()
+      defer { if access { url.stopAccessingSecurityScopedResource() } }
+      do {
+        certificateFile = try Data(contentsOf: url)
+        certificatePassword = ""
+      } catch {
+        certificateError = error.localizedDescription
+      }
+    }
+    .alert(
+      "Certificate Password", isPresented: Binding(get: { certificateFile != nil }, set: { if !$0 { certificateFile = nil } })
+    ) {
+      SecureField("Password", text: $certificatePassword)
+      Button("Import") {
+        guard let data = certificateFile else { return }
+        do {
+          try server.importCertificate(data, password: certificatePassword)
+        } catch {
+          certificateError = error.localizedDescription
+        }
+        certificateFile = nil
+        certificatePassword = ""
+      }
+      Button("Cancel", role: .cancel) {
+        certificateFile = nil
+        certificatePassword = ""
+      }
+    } message: {
+      Text("The password the .p12 file was exported with.")
+    }
+    .alert(
+      "Couldn't Import the Certificate", isPresented: Binding(get: { certificateError != nil }, set: { if !$0 { certificateError = nil } })
+    ) {
+      Button("OK") { certificateError = nil }
+    } message: {
+      Text(certificateError ?? "")
     }
     .onChange(of: server.requireToken) {
       if server.requireToken, server.activeAccess == .localNetwork { server.ensureToken() }
@@ -488,13 +779,85 @@ struct AgentSettingsView: View {
 
   private static let masked = String(repeating: "•", count: 12)
 
+  /// Where the tailnet's DNS settings are, with MagicDNS and HTTPS Certificates.
+  private static let tailnetDNSSettings = URL(string: "https://login.tailscale.com/admin/dns")!
+
+  /// Settings → Agents → Encryption: HTTPS for other devices, and its certificate.
+  @ViewBuilder private func encryptionSection(network: Bool) -> some View {
+    @Bindable var server = server
+    let certificate = server.activeCertificate
+    Section {
+      Picker(selection: $server.encryption) {
+        ForEach(AgentEncryption.allCases) { Text($0.title).tag($0) }
+      } label: {
+        Text("HTTPS")
+        Text(encryptionNote)
+      }
+      LabeledContent("Certificate") {
+        HStack {
+          Text(certificate.map(Self.summary) ?? "None")
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
+            .lineLimit(2)
+          Button("Import…") { importingCertificate = true }
+            .disabled(server.encryption != .certificate)
+          Button("Remove") { server.removeCertificate() }
+            .disabled(server.encryption != .certificate || server.certificate == nil)
+          Button("Renew") { server.refreshTailscaleCertificate() }
+            .disabled(server.encryption != .tailscale || !server.isListening || server.isFetchingCertificate)
+        }
+      }
+      LabeledContent("SHA-256") {
+        Text(certificate?.fingerprint ?? "—")
+          .font(.system(.caption, design: .monospaced))
+          .textSelection(.enabled)
+          .lineLimit(2)
+          .truncationMode(.middle)
+      }
+      LabeledContent("Status") {
+        if !server.usesHTTPS || (!server.isEnabled && !server.isListening) {
+          Text("Off").foregroundStyle(.secondary)
+        } else if let error = server.httpsError {
+          Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
+        } else if server.isFetchingCertificate {
+          Text("Getting the certificate from Tailscale…").foregroundStyle(.secondary)
+        } else if let endpoint = server.httpsEndpoint {
+          Text("Listening at \(endpoint)").foregroundStyle(.secondary).textSelection(.enabled)
+        } else {
+          Text("Starting…").foregroundStyle(.secondary)
+        }
+      }
+      Link("Turn On HTTPS Certificates for Your Tailnet", destination: Self.tailnetDNSSettings)
+        .disabled(server.encryption != .tailscale)
+    } header: {
+      Text("Encryption")
+    } footer: {
+      Text("With HTTPS, other devices can't use plain HTTP: port \(String(server.port)) answers this Mac only. An imported certificate serves the local network on the next port. Tailscale's certificate is for Atelier's own tailnet name and needs MagicDNS and HTTPS Certificates turned on for your tailnet; it comes from Let's Encrypt, which lists every certificate's name in public Certificate Transparency logs, so the name becomes public.")
+        .foregroundStyle(.secondary)
+    }
+    .disabled(!network)
+  }
+
+  private static func summary(_ certificate: AgentTLSIdentity) -> String {
+    guard let expires = certificate.expires else { return certificate.name }
+    return "\(certificate.name), expires \(expires.formatted(date: .abbreviated, time: .omitted))"
+  }
+
+  private var encryptionNote: String {
+    switch server.encryption {
+    case .none: "Other devices connect in plain HTTP."
+    case .tailscale: "Other devices on your tailnet connect to Atelier's Tailscale name over HTTPS."
+    case .certificate: "Other devices connect over HTTPS with a certificate you import (.p12)."
+    }
+  }
+
   private var accessNote: String {
     guard server.activeAccess == .localNetwork else { return "Only apps on this Mac can connect." }
     let shared =
       server.requireToken
       ? "Anyone on your network with the token can generate and read or change the Create screen."
       : "Anyone on your network can generate and read or change the Create screen: no token is asked for."
-    return shared + " Traffic isn't encrypted; use Tailscale to encrypt it."
+    return shared + (server.usesHTTPS ? " Traffic from other devices is encrypted (HTTPS)." : " Traffic isn't encrypted: turn on HTTPS below, or use Tailscale.")
   }
 
   private var tokenText: String {

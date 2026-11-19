@@ -198,14 +198,18 @@ final class RemoteTailnet {
 
   private(set) var state: State
   private(set) var status = RemoteTailnetStatus()
-  /// Told when `state` changes.
-  @ObservationIgnored var onChange: (() -> Void)?
+  /// Told when `state` or `serves` changes: Compute's server and the MCP server each add one.
+  @ObservationIgnored private var observers: [() -> Void] = []
+
+  func observe(_ handler: @escaping () -> Void) { observers.append(handler) }
+
+  private func changed() { observers.forEach { $0() } }
 
   /// Serve over Tailscale.
   var serves: Bool {
     didSet {
       if options.persists { UserDefaults.standard.set(serves, forKey: Self.servesKey) }
-      onChange?()
+      changed()
     }
   }
 
@@ -242,9 +246,10 @@ final class RemoteTailnet {
     var handle: Int32 = 0
     var status = RemoteTailnetStatus()
     var limitsToAccount = true
-    var listener: Int32 = 0
-    /// Bumped to end the accept loop of an earlier listener.
-    var listening = 0
+    /// The listening socket for each port served (Compute's, the MCP server's 443).
+    var listeners: [UInt16: Int32] = [:]
+    /// Bumped to end the accept loop of an earlier listener on the port.
+    var listening: [UInt16: Int] = [:]
   }
 
   /// What the threads carrying connections read.
@@ -291,7 +296,7 @@ final class RemoteTailnet {
   private func set(_ new: State) {
     guard state != new else { return }
     state = new
-    onChange?()
+    changed()
   }
 
   // MARK: - Signing in
@@ -369,17 +374,59 @@ final class RemoteTailnet {
     }
 
     /// A LocalAPI call, for what `LocalAPIClient` doesn't offer.
-    private func localAPI(_ path: String, node: TailscaleNode) async throws {
+    @discardableResult
+    private func localAPI(
+      _ path: String, method: String = "POST", timeout: TimeInterval = 60, node: TailscaleNode
+    ) async throws -> (Data, Int) {
       let loopback = try await node.loopback()
-      guard let url = URL(string: "http://\(loopback.address)/localapi/v0/\(path)") else { return }
+      guard let url = URL(string: "http://\(loopback.address)/localapi/v0/\(path)") else { return (Data(), 0) }
       var request = URLRequest(url: url)
-      request.httpMethod = "POST"
+      request.httpMethod = method
+      request.timeoutInterval = timeout
       request.setValue("localapi", forHTTPHeaderField: "Sec-Tailscale")
       let credential = Data(":\(loopback.localAPIKey)".utf8).base64EncodedString()
       request.setValue("Basic \(credential)", forHTTPHeaderField: "Authorization")
-      _ = try await URLSession.shared.data(for: request)
+      let (data, response) = try await URLSession.shared.data(for: request)
+      return (data, (response as? HTTPURLResponse)?.statusCode ?? 0)
     }
   #endif
+
+  enum CertificateError: LocalizedError {
+    case unavailable, notRunning, noName
+    /// What Tailscale said, most often that HTTPS certificates aren't turned on for the tailnet.
+    case refused(String)
+
+    var errorDescription: String? {
+      switch self {
+      case .unavailable: "This build doesn't include Tailscale."
+      case .notRunning: "Sign in to Tailscale in Settings ▸ Compute."
+      case .noName: "This device has no tailnet name yet. Turn on MagicDNS for your tailnet."
+      case .refused(let message): message
+      }
+    }
+  }
+
+  /// This node's HTTPS certificate for its tailnet name, from Tailscale's LocalAPI
+  /// (`GET /localapi/v0/cert/<name>?type=pair`, which tsnet permits over its loopback LocalAPI):
+  /// the private key's PEM, then the certificate chain's. Tailscale gets it from Let's Encrypt the
+  /// first time (which can take a minute) and keeps it in the node's folder, renewing it when it
+  /// has less than `minValidity` left. Needs MagicDNS and HTTPS certificates on in the tailnet.
+  func certificatePair(minValidity: Duration = .seconds(14 * 24 * 3600)) async throws -> (name: String, pem: String) {
+    #if canImport(TailscaleKit)
+      guard let node, state == .running else { throw CertificateError.notRunning }
+      guard let name = status.dnsName else { throw CertificateError.noName }
+      let hours = minValidity.components.seconds / 3600
+      let (data, statusCode) = try await localAPI(
+        "cert/\(name)?type=pair&min_validity=\(hours)h", method: "GET", timeout: 180, node: node)
+      let text = String(decoding: data, as: UTF8.self)
+      guard statusCode == 200 else {
+        throw CertificateError.refused(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Tailscale answered \(statusCode)." : text.trimmingCharacters(in: .whitespacesAndNewlines))
+      }
+      return (name, text)
+    #else
+      throw CertificateError.unavailable
+    #endif
+  }
 
   /// Signs out, and forgets this device's node so the next sign-in starts afresh.
   func signOut() async {
@@ -393,7 +440,7 @@ final class RemoteTailnet {
       }
       if let node {
         // Takes it off the tailnet if it can; it stops being used either way.
-        try? await localAPI("logout", node: node)
+        _ = try? await localAPI("logout", node: node)
         try? await node.close()
       }
       node = nil
@@ -421,50 +468,57 @@ final class RemoteTailnet {
 
   /// Accepts tailnet connections on `port` and passes each to this device's bridge listener. The
   /// caller is checked here, where its tailnet address is still known; past the bridge it's a
-  /// loopback connection like any other.
-  func startListening(port: UInt16, bridgePort: @escaping @Sendable () -> UInt16?) {
+  /// loopback connection like any other. Each port is its own listener: Compute's and the MCP
+  /// server's run side by side. Returns false if the node couldn't listen.
+  @discardableResult func startListening(port: UInt16, bridgePort: @escaping @Sendable () -> UInt16?) -> Bool {
     #if canImport(TailscaleKit)
-      stopListening()
+      stopListening(port: port)
       let handle = shared.withLock(\.handle)
-      guard handle != 0 else { return }
+      guard handle != 0 else { return false }
       var listener: Int32 = 0
       guard tailscale_listen(handle, "tcp", ":\(port)", &listener) == 0 else {
-        Log.remote.error("Couldn't listen on the tailnet")
-        return
+        Log.remote.error("Couldn't listen on the tailnet at port \(port, privacy: .public)")
+        return false
       }
       let generation = shared.withLock { state -> Int in
-        state.listener = listener
-        state.listening += 1
-        return state.listening
+        state.listeners[port] = listener
+        state.listening[port, default: 0] += 1
+        return state.listening[port, default: 0]
       }
       Thread.detachNewThread { [self] in
-        Self.accept(listener: listener, generation: generation, state: self, bridgePort: bridgePort)
+        Self.accept(listener: listener, port: port, generation: generation, state: self, bridgePort: bridgePort)
       }
+      return true
+    #else
+      return false
     #endif
   }
 
-  func stopListening() {
+  /// Stops serving `port`, or every port.
+  func stopListening(port: UInt16? = nil) {
     #if canImport(TailscaleKit)
-      let listener = shared.withLock { state -> Int32 in
-        defer {
-          state.listener = 0
-          state.listening += 1
+      let closing = shared.withLock { state -> [Int32] in
+        let ports = port.map { [$0] } ?? Array(state.listeners.keys)
+        var closing: [Int32] = []
+        for port in ports {
+          if let listener = state.listeners.removeValue(forKey: port) { closing.append(listener) }
+          state.listening[port, default: 0] += 1
         }
-        return state.listener
+        return closing
       }
-      if listener != 0 { close(listener) }
+      closing.forEach { close($0) }
     #endif
   }
 
   #if canImport(TailscaleKit)
     private nonisolated static func accept(
-      listener: Int32, generation: Int, state: RemoteTailnet, bridgePort: @escaping @Sendable () -> UInt16?
+      listener: Int32, port: UInt16, generation: Int, state: RemoteTailnet, bridgePort: @escaping @Sendable () -> UInt16?
     ) {
-      while state.shared.withLock({ $0.listening == generation }) {
+      while state.shared.withLock({ $0.listening[port] == generation }) {
         var waiting = pollfd(fd: listener, events: Int16(POLLIN), revents: 0)
         let ready = poll(&waiting, 1, 500)
         if ready == 0 { continue }
-        guard ready > 0, state.shared.withLock({ $0.listening == generation }) else { break }
+        guard ready > 0, state.shared.withLock({ $0.listening[port] == generation }) else { break }
         var connection: Int32 = 0
         guard tailscale_accept(listener, &connection) == 0 else { break }
         var buffer = [CChar](repeating: 0, count: 128)

@@ -52,6 +52,9 @@
 		1BFC5D1B722914415819FDC0 /* AgentToolsCanvasEdit.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF78568751059397B92BD819 /* AgentToolsCanvasEdit.swift */; };
 		2D94FAD45270F10383644DDE /* LoopbackHTTPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3BEC1F1293FFB633DE61829 /* LoopbackHTTPServer.swift */; };
 		F302FB03E2CEF2E797A6F230 /* AgentAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1973DCBE187AD46FDCB645FE /* AgentAccess.swift */; };
+		7E1C0A0100000000000A0001 /* AgentTLS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E1C0A0100000000000A0002 /* AgentTLS.swift */; };
+		7E1C0A0100000000000A0003 /* AutomationTestCertificate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E1C0A0100000000000A0004 /* AutomationTestCertificate.swift */; };
+		7E1C0A0100000000000A0007 /* X509 in Frameworks */ = {isa = PBXBuildFile; platformFilters = (macos, ); productRef = 7E1C0A0100000000000A0006 /* X509 */; };
 		0113D79A95442376FD07EB82 /* clip_query_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FEF4CE7AD32E77D359D8F85 /* clip_query_generated.swift */; };
 		019DECB5A1E70541745FDF70 /* ModelLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 248FF150659188D7C4B12A12 /* ModelLibrary.swift */; };
 		A7C3E91F4D2B6A8E0F1C5D93 /* MOSSImporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8D4FA204E3C7B9F102D6EA4 /* MOSSImporter.swift */; };
@@ -337,6 +340,8 @@
 		AF78568751059397B92BD819 /* AgentToolsCanvasEdit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentToolsCanvasEdit.swift; sourceTree = "<group>"; };
 		C3BEC1F1293FFB633DE61829 /* LoopbackHTTPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopbackHTTPServer.swift; sourceTree = "<group>"; };
 		1973DCBE187AD46FDCB645FE /* AgentAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentAccess.swift; sourceTree = "<group>"; };
+		7E1C0A0100000000000A0002 /* AgentTLS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTLS.swift; sourceTree = "<group>"; };
+		7E1C0A0100000000000A0004 /* AutomationTestCertificate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationTestCertificate.swift; sourceTree = "<group>"; };
 		0141CE30714817680C910054 /* tensor_data_data_model_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = tensor_data_data_model_generated.swift; sourceTree = "<group>"; };
 		020B954C3465D02C24F95C3C /* ProjectMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectMapping.swift; sourceTree = "<group>"; };
 		0963659342F5DFDDA1ED7457 /* tensor_data_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = tensor_data_generated.swift; sourceTree = "<group>"; };
@@ -558,6 +563,7 @@
 				E6F1C502227D967EC9445327 /* ProjectFormat.framework in Frameworks */,
 				56D40AB5DFADFA9BA16C4C5D /* _MediaGenerationKit in Frameworks */,
 				5A9C1E0B2D7F4A6E8B3C1D04 /* Sparkle in Frameworks */,
+				7E1C0A0100000000000A0007 /* X509 in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -611,6 +617,7 @@
 				AF78568751059397B92BD819 /* AgentToolsCanvasEdit.swift */,
 				C3BEC1F1293FFB633DE61829 /* LoopbackHTTPServer.swift */,
 				1973DCBE187AD46FDCB645FE /* AgentAccess.swift */,
+				7E1C0A0100000000000A0002 /* AgentTLS.swift */,
 			);
 			path = Agents;
 			sourceTree = "<group>";
@@ -652,6 +659,7 @@
 				C65576F212CC11B301A189AF /* AutomationQueue.swift */,
 				C89F3EE68C4E038C05EEB3D9 /* AutomationRemote.swift */,
 				A3CB3B8A23FC6C8E35BB82D5 /* AutomationAgentNet.swift */,
+				7E1C0A0100000000000A0004 /* AutomationTestCertificate.swift */,
 				B2281AF0711BE0FA0D08E56A /* AutomationStyles.swift */,
 				A7E1F0C2B3D4A5968778697A /* AutomationPlayback.swift */,
 				C1C1C1C1C1C1C1C1C1C1C1CA /* AutomationCanvasClip.swift */,
@@ -1053,6 +1061,7 @@
 			packageProductDependencies = (
 				034DEC7D58B54CB1B2C5C802 /* _MediaGenerationKit */,
 				5A9C1E0B2D7F4A6E8B3C1D03 /* Sparkle */,
+				7E1C0A0100000000000A0006 /* X509 */,
 			);
 			productName = Atelier;
 			productReference = 4E09EC66614C0E61CF184F05 /* Atelier.app */;
@@ -1098,6 +1107,7 @@
 				A4CE7021663F6A67DB66A52E /* XCRemoteSwiftPackageReference "draw-things-community" */,
 				FA3B96D181CC9804C2FF9474 /* XCRemoteSwiftPackageReference "flatbuffers" */,
 				5A9C1E0B2D7F4A6E8B3C1D02 /* XCRemoteSwiftPackageReference "Sparkle" */,
+				7E1C0A0100000000000A0005 /* XCRemoteSwiftPackageReference "swift-certificates" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = FF2013606A3171C89933E231 /* Products */;
@@ -1237,6 +1247,7 @@
 				1BFC5D1B722914415819FDC0 /* AgentToolsCanvasEdit.swift in Sources */,
 				2D94FAD45270F10383644DDE /* LoopbackHTTPServer.swift in Sources */,
 				F302FB03E2CEF2E797A6F230 /* AgentAccess.swift in Sources */,
+				7E1C0A0100000000000A0001 /* AgentTLS.swift in Sources */,
 				4549FF9554EB66628271351A /* AutomationProject.swift in Sources */,
 				630B47EDE111FFF08AD8B4DC /* AutomationAgentCanvas.swift in Sources */,
 				0100B94210878D302687CB6E /* AutomationRefine.swift in Sources */,
@@ -1245,6 +1256,7 @@
 				E03AA58CB9A74D68677591AB /* AutomationQueue.swift in Sources */,
 				0548D687CD3EBC13AB0CF7FB /* AutomationRemote.swift in Sources */,
 				F7D1028BBB8805280B75082E /* AutomationAgentNet.swift in Sources */,
+				7E1C0A0100000000000A0003 /* AutomationTestCertificate.swift in Sources */,
 				735C1F1480A124F947F8E040 /* AutomationStyles.swift in Sources */,
 				A7E1F0C2B3D4A5968778697B /* AutomationPlayback.swift in Sources */,
 				C1C1C1C1C1C1C1C1C1C1C1CB /* AutomationCanvasClip.swift in Sources */,
@@ -1871,6 +1883,14 @@
 				version = 2.10.1;
 			};
 		};
+		7E1C0A0100000000000A0005 /* XCRemoteSwiftPackageReference "swift-certificates" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/swift-certificates.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.21.1;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -1898,6 +1918,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 5A9C1E0B2D7F4A6E8B3C1D02 /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
+		};
+		7E1C0A0100000000000A0006 /* X509 */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7E1C0A0100000000000A0005 /* XCRemoteSwiftPackageReference "swift-certificates" */;
+			productName = X509;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

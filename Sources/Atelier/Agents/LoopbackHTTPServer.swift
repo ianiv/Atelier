@@ -4,8 +4,9 @@ import Network
 import Synchronization
 
 /// A minimal HTTP/1.1 server for the MCP endpoint, on the loopback interface or (Settings → Agents →
-/// Access → Local network) every interface with a peer filter. One request per connection: the
-/// response (a plain body, or an event stream) ends with the connection closed.
+/// Access → Local network) every interface with a peer filter, in plain HTTP or, with an identity,
+/// HTTPS. One request per connection: the response (a plain body, or an event stream) ends with
+/// the connection closed.
 final nonisolated class LoopbackHTTPServer: Sendable {
   struct Request {
     var method: String
@@ -13,7 +14,8 @@ final nonisolated class LoopbackHTTPServer: Sendable {
     /// Header names lowercased.
     var headers: [String: String]
     var body: Data
-    /// The client's address; nil only if the connection didn't say.
+    /// The client's address; nil if the connection didn't say or came through the tailnet bridge,
+    /// where every peer looks like this Mac. Nil never counts as this Mac.
     var peer: RemoteIP?
   }
 
@@ -23,6 +25,11 @@ final nonisolated class LoopbackHTTPServer: Sendable {
     case loopback
     /// Every interface, both IPv4 and IPv6, answering only peers `filter` allows.
     case all(RemoteAddressFilter)
+    /// 127.0.0.1 on a free port (port 0), where `RemoteTailnet` hands over the tailnet's
+    /// connections. Their peer is always 127.0.0.1 here, so none of them counts as this Mac's:
+    /// each is treated as another device's (token and path rules), as is anything else on this
+    /// Mac that finds the port.
+    case tailnetBridge
   }
 
   /// Reports why listening failed (the port is taken, say); nil once it's listening.
@@ -34,6 +41,9 @@ final nonisolated class LoopbackHTTPServer: Sendable {
 
   let port: UInt16
   let binding: Binding
+  /// The certificate HTTPS is served with; nil for plain HTTP. Fixed for the listener's life, so a
+  /// new certificate means a new server.
+  private let tls: AgentTLSIdentity?
   private let handler: Handler
   private let headCheck: HeadCheck?
   /// Open connections from other devices, closed when the server stops: what an old listener let
@@ -42,13 +52,21 @@ final nonisolated class LoopbackHTTPServer: Sendable {
   private let queue = DispatchQueue(label: "Atelier.LoopbackHTTPServer")
   private let listeners = Mutex<[NWListener]>([])
   private let isStopped = Mutex(false)
+  private let bound = Mutex<UInt16?>(nil)
+
+  /// The port listened on once it's ready: `port`, or the one picked for port 0.
+  var boundPort: UInt16? { bound.withLock { $0 } }
 
   /// Bodies past this are refused; images sent inline as base64 fit well under it.
   static let maxBodySize = 64 << 20
 
-  init(port: UInt16, binding: Binding = .loopback, headCheck: HeadCheck? = nil, handler: @escaping Handler) {
+  init(
+    port: UInt16, binding: Binding = .loopback, tls: AgentTLSIdentity? = nil, headCheck: HeadCheck? = nil,
+    handler: @escaping Handler
+  ) {
     self.port = port
     self.binding = binding
+    self.tls = tls
     self.headCheck = headCheck
     self.handler = handler
   }
@@ -57,34 +75,78 @@ final nonisolated class LoopbackHTTPServer: Sendable {
   /// interface.
   func start(stateHandler: @escaping StateHandler) {
     queue.async { [self] in
-      guard let nwPort = NWEndpoint.Port(rawValue: port) else {
+      guard let nwPort = NWEndpoint.Port(rawValue: port), port != 0 || isBridge else {
         stateHandler("\(port) isn't a valid port.")
+        return
+      }
+      guard tls == nil || tls?.secIdentity != nil else {
+        stateHandler("The certificate can't be used for HTTPS.")
         return
       }
       if case .all(let filter) = binding {
         startAll(port: nwPort, filter: filter, retries: 1, stateHandler: stateHandler)
         return
       }
-      for (index, host) in [NWEndpoint.Host.ipv4(.loopback), .ipv6(.loopback)].enumerated() {
-        let parameters = NWParameters.tcp
-        parameters.requiredLocalEndpoint = .hostPort(host: host, port: nwPort)
-        parameters.allowLocalEndpointReuse = true
-        guard let listener = try? NWListener(using: parameters) else { continue }
-        // Only the IPv4 listener's state is reported: IPv6 loopback can be missing.
-        let isPrimary = index == 0
-        listener.stateUpdateHandler = { state in
-          guard isPrimary else { return }
-          switch state {
-          case .ready: stateHandler(nil)
-          case .failed(let error): stateHandler(Self.describe(error))
-          default: break
-          }
-        }
-        listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
-        listener.start(queue: queue)
-        listeners.withLock { $0.append(listener) }
-      }
+      startLoopback(port: nwPort, retries: 1, stateHandler: stateHandler)
     }
+  }
+
+  /// 127.0.0.1 and ::1, or 127.0.0.1 alone for the bridge (`RemoteSocketBridge.connectLoopback`
+  /// reaches it there). Switching from every interface back to this Mac (Access, or Encryption
+  /// turning HTTPS on) can find the old wildcard listener still closing, so a busy port is tried
+  /// again once, as `startAll` does.
+  private func startLoopback(port nwPort: NWEndpoint.Port, retries: Int, stateHandler: @escaping StateHandler) {
+    let hosts: [NWEndpoint.Host] = isBridge ? [.ipv4(.loopback)] : [.ipv4(.loopback), .ipv6(.loopback)]
+    // Only the IPv4 listener's state is reported: IPv6 loopback can be missing.
+    let started: [(listener: NWListener, isPrimary: Bool)] = hosts.enumerated().compactMap { index, host in
+      let parameters = makeParameters()
+      parameters.requiredLocalEndpoint = .hostPort(host: host, port: nwPort)
+      parameters.allowLocalEndpointReuse = true
+      return (try? NWListener(using: parameters)).map { ($0, index == 0) }
+    }
+    let group = started.map(\.listener)
+    for (listener, isPrimary) in started {
+      listener.stateUpdateHandler = { [weak self] state in
+        guard isPrimary else { return }
+        switch state {
+        case .ready:
+          self?.bound.withLock { $0 = listener.port?.rawValue }
+          stateHandler(nil)
+        case .failed(let error):
+          if retries > 0, case .posix(let code) = error, code == .EADDRINUSE, let self {
+            group.forEach { $0.cancel() }
+            self.listeners.withLock { $0.removeAll { listener in group.contains { $0 === listener } } }
+            self.queue.asyncAfter(deadline: .now() + 1) { [weak self] in
+              guard let self, !self.isStopped.withLock({ $0 }) else { return }
+              self.startLoopback(port: nwPort, retries: retries - 1, stateHandler: stateHandler)
+            }
+          } else {
+            stateHandler(Self.describe(error))
+          }
+        default: break
+        }
+      }
+      listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
+    }
+    listeners.withLock { $0.append(contentsOf: group) }
+    group.forEach { $0.start(queue: queue) }
+  }
+
+  private var isBridge: Bool {
+    if case .tailnetBridge = binding { return true }
+    return false
+  }
+
+  /// TCP, or TLS over it with this server's certificate: TLS 1.2 at least, and HTTP/1.1 offered
+  /// by ALPN, since that's all this server speaks.
+  private func makeParameters() -> NWParameters {
+    guard let identity = tls?.secIdentity else { return .tcp }
+    let options = NWProtocolTLS.Options()
+    let security = options.securityProtocolOptions
+    sec_protocol_options_set_local_identity(security, identity)
+    sec_protocol_options_set_min_tls_protocol_version(security, .TLSv12)
+    sec_protocol_options_add_tls_application_protocol(security, "http/1.1")
+    return NWParameters(tls: options, tcp: NWProtocolTCP.Options())
   }
 
   /// One dual-stack listener on every interface. Without endpoint reuse, which would let the
@@ -94,13 +156,15 @@ final nonisolated class LoopbackHTTPServer: Sendable {
   private func startAll(
     port nwPort: NWEndpoint.Port, filter: RemoteAddressFilter, retries: Int, stateHandler: @escaping StateHandler
   ) {
-    guard let listener = try? NWListener(using: .tcp, on: nwPort) else {
+    guard let listener = try? NWListener(using: makeParameters(), on: nwPort) else {
       stateHandler("Couldn't listen on port \(port).")
       return
     }
     listener.stateUpdateHandler = { [weak self] state in
       switch state {
-      case .ready: stateHandler(nil)
+      case .ready:
+        self?.bound.withLock { $0 = listener.port?.rawValue }
+        stateHandler(nil)
       case .failed(let error):
         listener.cancel()
         if retries > 0, case .posix(let code) = error, code == .EADDRINUSE, let self {
@@ -148,7 +212,7 @@ final nonisolated class LoopbackHTTPServer: Sendable {
   }
 
   private func accept(_ connection: NWConnection) {
-    let peer = Self.peer(of: connection)
+    let peer = isBridge ? nil : Self.peer(of: connection)
     if !AgentAuth.isLoopback(peer) {
       let key = ObjectIdentifier(connection)
       remoteConnections.withLock { $0[key] = connection }

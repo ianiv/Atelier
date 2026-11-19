@@ -73,8 +73,17 @@ Set **Access** to **Local network** to let agents on other computers on your loc
   ```
 
 - Agents on other devices can't use this Mac's files: paths in `image`, `input_image`, `reference_images`, `mask`, the moodboard and `edit_image`'s references, `measure_reference`'s `path` and `edit_image_look`'s `reference_path` are refused, and so are `audio`, `save_to`, `lut_path`, `profile_path` and `save_profile_to`. Send images as `data:` URLs (or name a `history_step`), and use a built-in `lut` or a library `profile`; results come back inline, and `get_image` with `full_size: true` returns the full-resolution PNG. Results, including `get_job` and `list_jobs` for jobs started on this Mac, don't include this Mac's file paths (`list_grain_profiles` leaves out its `folder`).
-- Anyone on your network with the token can generate and read or change the Create screen. Traffic is plain HTTP and isn't encrypted; to encrypt it, connect over Tailscale. A request from a web page on another site is refused.
+- Anyone on your network with the token can generate and read or change the Create screen. Without HTTPS (below), traffic is plain HTTP and isn't encrypted. A request from a web page on another site is refused.
 - If the Mac's firewall is on, macOS may ask whether Atelier can accept incoming connections the first time you turn this on.
+
+#### HTTPS
+
+**Encryption ▸ HTTPS** (with Access on Local network) encrypts what other devices send and get. With either certificate, other devices can't use plain HTTP at all: the server's own port (7862) then answers this Mac only, so agents here keep their `http://127.0.0.1:7862/mcp` setup.
+
+- **Tailscale certificate**: Atelier's own Tailscale node (Settings ▸ Compute ▸ Tailscale, signed in) gets a certificate for its tailnet name and serves HTTPS on port 443 of your tailnet, at `https://<name>.<tailnet>.ts.net/mcp`. Your tailnet needs **MagicDNS** and **HTTPS Certificates** turned on, in the [DNS page of the Tailscale admin console](https://login.tailscale.com/admin/dns); Settings links there. The first certificate can take a minute; Atelier asks for it again each day and Tailscale renews it before it runs out (**Renew** asks now). The certificate comes from Let's Encrypt, which publishes every certificate's name in public Certificate Transparency logs, so your tailnet's name (`<tailnet>.ts.net`) and this device's name on it become public. **Limit access to your Tailscale account** (Settings ▸ Compute) applies here too. Only devices on your tailnet can reach this address; a Tailscale app on the client is enough.
+- **Imported certificate**: **Import…** a `.p12` file (a certificate with its private key, and any intermediates) and type its password. HTTPS is then on the next port (7863) on every interface, for the same networks as plain HTTP: `https://<host>:7863/mcp`. The certificate must name the host clients use; Settings shows its name, expiry and SHA-256 fingerprint. The file and its password are kept in your Keychain. **Remove** forgets them.
+
+Settings ▸ Agents ▸ Encryption ▸ Status says where HTTPS is listening, or why it isn't. **Connect an Agent** then offers the `https://` addresses. The token rules don't change.
 
 Then ask for an image, for example: "Use Atelier to make a 1024×1024 watercolor of a lighthouse at dusk with FLUX.2 klein, then save it to ~/Desktop."
 
@@ -288,4 +297,4 @@ Jobs are kept for an hour (the newest 20 finished ones) and are forgotten when A
 
 ## Scripted testing
 
-`Atelier --show create --mcp 7899` starts the server on port 7899 for that launch only, without touching the setting or your saved session. `--mcp-network` (with or without `--mcp`) also puts it on the local network for that launch. `--agent-net-check --project NAME --quit` checks the network access (token, paths, origins) on a server of its own, leaving your settings and Keychain alone.
+`Atelier --show create --mcp 7899` starts the server on port 7899 for that launch only, without touching the setting or your saved session. `--mcp-network` (with or without `--mcp`) also puts it on the local network for that launch. `--agent-net-check --project NAME --quit` checks the network access (token, paths, origins, and HTTPS with a throwaway certificate) on a server of its own, leaving your settings and Keychain alone.
