@@ -32,12 +32,12 @@ Scripts/test-map.txt         | smoke |
 Sources/AtelierTests/Tags.swift | smoke |
 
 # Sources, one line per folder.
-Sources/Atelier/Agents/      | HostTests,CanvasEditArgumentsTests | --agent-canvas-check
+Sources/Atelier/Agents/      | HostTests,CanvasEditArgumentsTests | --agent-canvas-check,--edit-screen-check
 Sources/Atelier/App/         | HostTests,TemporaryFilesTests,ClipCacheTests,OrphanTests,ModelFolderTests,WaitUntilTests,ShareTests,SharePickerTests | --cleanup-check,--ux-check,--resize-bench,--tab-switch-bench,--model-folders-check
 Sources/Atelier/Automation/  | HostTests,AutomationSamplerTests | --generate
 Sources/Atelier/Create/      | CanvasDropTests,CanvasPaintTests,CanvasRefineTests,ColorMatchTests,MaskMemoryTests,CanvasUndoTests,MoodboardWriterTests,MoodboardTests,SizePresetTests,MaskMorphologyTests,FrameSelectionTests,FaceFinderTests,CanvasEditTests | --edit-input-check,--refine-check,--paint-check,--color-match-check,--create-delete-check,--canvas-clip-check
 Sources/Atelier/Create/AutoMask/ | AutoMaskTests,MaskMemoryTests,SAMFolderTests,FaceFinderTests | --automask-check
-Sources/Atelier/Edit/        | GrainTests,EditPipelineTests,LUTTests,EditJobTests,EditProjectDataTests,EditModelTests | --edit-screen-check
+Sources/Atelier/Edit/        | GrainTests,EditPipelineTests,LUTTests,EditJobTests,EditProjectDataTests,EditModelTests | --edit-screen-check,--grain-reference
 Sources/AtelierTests/Fixtures/grain-parity/ | GrainTests |
 Sources/Atelier/Generation/  | StrengthStepsTests,ModelsLookupOrderTests,RefinerKickInTests,RefinerModelSwitchTests,PreviewDecoderTests,AutomationSamplerTests | --engine-check,--generate,--reuse
 Sources/Atelier/History/     | HistoryGraphTests,InputEntryTests,EntryTreeFuzzTests,PNGTextTests,JSONValueTests,ClipTests | --input-entries-check,--entries-freeze-check,--history-loras-check,--canvas-clip-check

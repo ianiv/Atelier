@@ -68,7 +68,7 @@ struct AtelierApp: App {
       AppLifecycle.onWillTerminate { TemporaryFiles.cleanAtQuit() }
     }
     #if os(macOS)
-      _agents = State(initialValue: AgentServer(create: create, presets: presets))
+      _agents = State(initialValue: AgentServer(create: create, presets: presets, grainProfiles: edit.profiles))
       AppLifecycle.workUnderway = { create.workUnderway }
       Automation.remoteServer = remoteServer
       Automation.editModel = edit

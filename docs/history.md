@@ -30,6 +30,7 @@ Ratings are saved in the project, so they stay with the image when you branch fr
 - **Use Settings** loads the same model, prompt, seed, settings and moodboard, but leaves the canvas as it is: it doesn't put the input back.
 - **Rerun with New Seed** does the same with a fresh seed, for a variation.
 - If the model that made an image isn't downloaded anymore, History says so and Use Settings is unavailable.
+- **Open in Edit** (right-click an image) opens it on the [Edit screen](editing.md) for grain, color matching, a grade or a LUT. An image saved from Edit comes after the image it was made from and records its look: opening it in Edit again goes back to the image it was made from with that look, so its settings can be changed rather than adding grain over grain. Double-click and Use Settings load its settings like any image's: those are the settings of the image it was made from.
 
 - **Mask ▸ Replace Canvas Mask** and **Mask ▸ Add to Canvas Mask** put the mask an image remembers on the image on the canvas, stretched to fill it ([Refining part of an image](creating-images.md#refining-part-of-an-image)). They're available when the image has a mask and the canvas can be painted.
 

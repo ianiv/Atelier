@@ -85,7 +85,7 @@ enum Automation {
       "--create-delete-check",
       "--history-loras-check",
       "--input-entries-check", "--entries-freeze-check", "--tab-switch-bench", "--delete-project-check",
-      "--paint-check", "--edit-screen-check",
+      "--paint-check", "--edit-screen-check", "--grain-reference",
     ]
     // The unit tests run inside the app. Like a scripted run, that leaves the user's data alone: no
     // cleanup at launch, no saving the session or queue.
@@ -250,7 +250,11 @@ enum Automation {
       return
     }
     if args.contains("--edit-screen-check") {
-      editScreenCheck(model)
+      editScreenCheck(model, navigation: navigation, presets: presets)
+      return
+    }
+    if let index = args.firstIndex(of: "--grain-reference") {
+      grainReference(args.indices.contains(index + 1) && !args[index + 1].hasPrefix("--") ? args[index + 1] : nil)
       return
     }
     if args.contains("--entries-freeze-check") {
