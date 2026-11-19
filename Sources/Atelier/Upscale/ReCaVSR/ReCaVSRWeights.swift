@@ -37,7 +37,7 @@ nonisolated struct ReCaVSRFiles {
       case .missingEightBit:
         "ReCaVSR's 8-bit copy isn't there yet. Click Make 8-bit Copy or Import 8-bit Copy… in the Upscale sheet."
       case .missingCompanions:
-        "ReCaVSR's other files (\(ByteCountFormatter.string(fromByteCount: ReCaVSRFiles.companionBytes, countStyle: .file))) aren't downloaded. Click Download ReCaVSR in the Upscale sheet."
+        "ReCaVSR's 8-bit copy needs two small files (\(ByteCountFormatter.string(fromByteCount: ReCaVSRFiles.companionBytes, countStyle: .file))). Click Download ReCaVSR in the Upscale sheet: they download first, and 8-bit works once they're there."
       case .notOnThisDevice: "ReCaVSR doesn't run on iPad. Choose a paired Mac that has it in Run on."
       }
     }
@@ -96,6 +96,12 @@ nonisolated struct ReCaVSRFiles {
 
   /// The published files every run reads, whichever weights: the prompt and the decoder.
   static var companions: [(path: String, bytes: Int64)] { required.filter { $0.path != transformerName } }
+
+  /// The published files in the order they're downloaded: the companions first, so a folder
+  /// that already has an 8-bit copy can run 8-bit before the transformer has arrived.
+  static var downloadOrder: [(path: String, bytes: Int64)] {
+    companions + required.filter { $0.path == transformerName }
+  }
 
   /// The companions' size together, for messages.
   static var companionBytes: Int64 { companions.reduce(0) { $0 + $1.bytes } }

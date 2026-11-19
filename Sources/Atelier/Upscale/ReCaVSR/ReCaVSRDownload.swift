@@ -19,10 +19,14 @@ final class ReCaVSRDownload {
 
   /// Looks at the models folder again (it may have changed, or files been placed by hand).
   func refresh() {
+    // What an import that a quit cut off left behind.
+    if importing == nil { ReCaVSREightBitFile.removeStaging(in: ReCaVSRFiles.folder) }
     isDownloaded = ReCaVSRFiles.downloaded
     hasEightBitCopy = ReCaVSRFiles.hasEightBitCopy(in: ReCaVSRFiles.folder)
   }
   private(set) var fraction: Double = 0
+  /// Why the last of the three actions (Download, Make 8-bit Copy, Import 8-bit Copy…) didn't
+  /// finish, until another starts: one line in the sheet, for whichever was tried last.
   private(set) var failure: String?
   private var task: Task<Void, Never>?
 
@@ -43,7 +47,9 @@ final class ReCaVSRDownload {
     failure = nil
     task = Task {
       do {
-        let files = ReCaVSRFiles.required
+        // The prompt and the decoder first: with an 8-bit copy that's already there, 8-bit runs
+        // as soon as they are, and the rest can be cancelled.
+        let files = ReCaVSRFiles.downloadOrder
         let total = Double(files.reduce(0) { $0 + $1.bytes })
         var done: Int64 = 0
         for file in files {
@@ -78,7 +84,6 @@ final class ReCaVSRDownload {
 
   /// The 8-bit copy's progress, 0…1; nil when it isn't being written.
   private(set) var copying: Double?
-  private(set) var copyFailure: String?
   private let stopCopy = StopFlag()
 
   private final nonisolated class StopFlag: Sendable {
@@ -93,7 +98,7 @@ final class ReCaVSRDownload {
   func makeEightBitCopy() {
     guard copying == nil, importing == nil, let files = ReCaVSRFiles.installed(.full) else { return }
     copying = 0
-    copyFailure = nil
+    failure = nil
     stopCopy.value.withLock { $0 = false }
     let progress: @Sendable (Double) -> Void = { value in
       Task { @MainActor in
@@ -106,7 +111,7 @@ final class ReCaVSRDownload {
         let done = try await Self.quantize(files, progress: progress) { [stopCopy] in !stopCopy.value.withLock { $0 } }
         if done { refresh() }
       } catch {
-        copyFailure = "Couldn't make ReCaVSR's 8-bit copy: \(error.localizedDescription)"
+        failure = "Couldn't make ReCaVSR's 8-bit copy: \(error.localizedDescription)"
       }
       copying = nil
     }
@@ -128,7 +133,6 @@ final class ReCaVSRDownload {
 
   /// An import's progress, 0…1; nil when nothing is being imported.
   private(set) var importing: Double?
-  private(set) var importFailure: String?
   private var importTask: Task<Void, Never>?
 
   /// Brings in an 8-bit copy that's already somewhere else (`ReCaVSREightBitFile.importCopy`):
@@ -138,7 +142,7 @@ final class ReCaVSRDownload {
   func importEightBit(_ url: URL) {
     guard importing == nil, copying == nil, !downloading else { return }
     importing = 0
-    importFailure = nil
+    failure = nil
     let folder = ReCaVSRFiles.folder
     let progress: @Sendable (Double) -> Void = { value in
       Task { @MainActor in
@@ -151,10 +155,10 @@ final class ReCaVSRDownload {
         try await ReCaVSREightBitFile.importCopy(of: url, into: folder, progress: progress)
       } catch let problem as ReCaVSREightBitFile.Problem {
         // These say what's wrong with the file by themselves.
-        importFailure = problem.localizedDescription
+        failure = problem.localizedDescription
       } catch {
         if !(error is CancellationError), (error as? URLError)?.code != .cancelled {
-          importFailure = "Couldn't import ReCaVSR's 8-bit copy: \(error.localizedDescription)"
+          failure = "Couldn't import ReCaVSR's 8-bit copy: \(error.localizedDescription)"
         }
       }
       importing = nil

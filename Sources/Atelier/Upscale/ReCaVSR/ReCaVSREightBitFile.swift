@@ -72,10 +72,12 @@ nonisolated enum ReCaVSREightBitFile {
     return names + outerTensors
   }
 
-  /// The shape of the 8-bit matrix `name` (rows, columns); nil for the other tensors.
-  static func eightBitShape(_ name: String) -> [Int]? {
+  /// The shape of the 8-bit matrix `name` (rows, columns) in a DiT `hidden` wide with a
+  /// feed-forward `wide` wide; nil for the other tensors.
+  static func eightBitShape(
+    _ name: String, hidden: Int = ReCaVSRConfig.hidden, wide: Int = ReCaVSRConfig.feedForward
+  ) -> [Int]? {
     guard ReCaVSRQuantizer.isEightBit(name) else { return nil }
-    let hidden = ReCaVSRConfig.hidden, wide = ReCaVSRConfig.feedForward
     if name.hasSuffix(".ffn.net.0.proj.weight") { return [wide, hidden] }
     if name.hasSuffix(".ffn.net.2.weight") { return [hidden, wide] }
     return [hidden, hidden]
@@ -106,7 +108,10 @@ nonisolated enum ReCaVSREightBitFile {
   /// there, the layers' matrices row-wise 8-bit and ReCaVSR's sizes. Reads the file's header and
   /// the store's names, codecs and shapes, never the weights, so it takes a moment even for a
   /// file on a slow drive; the file is only opened for reading, and nothing is written beside it.
-  static func validate(_ url: URL) throws {
+  /// The sizes are ReCaVSR's; tests pass small ones to check small files.
+  static func validate(
+    _ url: URL, hidden: Int = ReCaVSRConfig.hidden, wide: Int = ReCaVSRConfig.feedForward
+  ) throws {
     let path = url.path
     guard let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int64) ?? nil,
           let handle = try? FileHandle(forReadingFrom: url)
@@ -133,7 +138,7 @@ nonisolated enum ReCaVSREightBitFile {
           problem = .missing(name)
           return
         }
-        guard let shape = eightBitShape(name) else { continue }
+        guard let shape = eightBitShape(name, hidden: hidden, wide: wide) else { continue }
         guard store.codec(for: name)?.contains(.i8x) == true else {
           problem = .notEightBit(name)
           return
@@ -152,6 +157,18 @@ nonisolated enum ReCaVSREightBitFile {
   /// quantizer's own, resumable file.
   static let stagingSuffix = ".import"
 
+  /// Removes what an import that never finished (the app quit, or crashed) left in `folder`:
+  /// the staged copies under their `.import` names. Not the quantizer's `.part`, which resumes.
+  static func removeStaging(in folder: URL) {
+    for name in ReCaVSRFiles.companions.map(\.path) + [ReCaVSRFiles.eightBitName] {
+      try? FileManager.default.removeItem(at: folder.appending(path: name + stagingSuffix))
+    }
+  }
+
+  /// Downloads a published file to where it goes, reporting bytes written.
+  typealias Fetch = @Sendable (_ from: URL, _ to: URL, _ progress: @escaping @MainActor (Int64) -> Void) async throws
+    -> Void
+
   /// Copies the 8-bit copy at `source` into `folder` (the ReCaVSR folder), leaving the original
   /// as it is, and with it the prompt and the decoder when `folder` lacks them: the ones beside
   /// `source` if they're there at full size, else downloaded. Those come first, so a download
@@ -160,9 +177,13 @@ nonisolated enum ReCaVSREightBitFile {
   /// and read back (`ModelLibrary.copyVerified`). It arrives under another name, is checked again
   /// and only then renamed, so a copy that was stopped is never taken for a finished one.
   /// `progress` gets the fraction done. Cancelling the task stops it and removes what it wrote
-  /// of the copy.
+  /// of the copy. The check, the downloader and whether it may clone are the real ones unless a
+  /// test passes its own.
   @concurrent static func importCopy(
-    of source: URL, into folder: URL, progress: @escaping @Sendable (Double) -> Void
+    of source: URL, into folder: URL, allowsCloning: Bool = true,
+    validate: @Sendable (URL) throws -> Void = { try ReCaVSREightBitFile.validate($0) },
+    fetch: Fetch = { try await FlashVSRDownload.download($0, to: $1, progress: $2) },
+    progress: @escaping @Sendable (Double) -> Void
   ) async throws {
     let access = ScopedAccess(source)
     defer { withExtendedLifetime(access) {} }
@@ -174,11 +195,12 @@ nonisolated enum ReCaVSREightBitFile {
     if resolved(source) == resolved(destination) { return }
     guard !fileManager.fileExists(atPath: destination.path) else { throw ImportFailure.alreadyThere }
     try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+    removeStaging(in: folder)
 
     let bytes = { (url: URL) in (try? fileManager.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? nil }
     let sourceBytes = bytes(source) ?? 0
     let clones =
-      ModelLibrary.sameVolume(source, folder)
+      allowsCloning && ModelLibrary.sameVolume(source, folder)
         && (try? folder.resourceValues(forKeys: [.volumeSupportsFileCloningKey]).volumeSupportsFileCloning) == true
     let companions = ReCaVSRFiles.companions.filter { !ReCaVSRFiles.present($0, in: folder) }
     let companionBytes = companions.reduce(0) { $0 + $1.bytes }
@@ -232,7 +254,7 @@ nonisolated enum ReCaVSREightBitFile {
         }
         if !copied {
           let before = done
-          try await FlashVSRDownload.download(ReCaVSRFiles.source(file.path), to: target) { written in
+          try await fetch(ReCaVSRFiles.source(file.path), target) { written in
             progress((before + Double(written)) / total)
           }
         }
@@ -242,6 +264,8 @@ nonisolated enum ReCaVSREightBitFile {
       try Task.checkCancellation()
       try copy(source, to: destination)
       try validate(staged(destination))
+      // Cancel while it was being checked still stops it.
+      try Task.checkCancellation()
       // Made here meanwhile: that one stays.
       guard !fileManager.fileExists(atPath: destination.path) else { throw ImportFailure.alreadyThere }
       try fileManager.moveItem(at: staged(destination), to: destination)

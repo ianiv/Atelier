@@ -1,6 +1,7 @@
 @testable import Atelier
 import Foundation
 @preconcurrency import NNC
+import Synchronization
 import Testing
 
 /// ReCaVSR's streaming bookkeeping (`ReCaVSRRouter`) against sequences worked out from the
@@ -274,6 +275,215 @@ struct ReCaVSRTests {
     // Checking wrote nothing beside the files.
     let left = try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted()
     #expect(left == ["cut.ckpt", "other.ckpt", "plain.ckpt", "plain.ckpt-wal", "text.ckpt"])
+  }
+
+  /// Small sizes for a copy a test can write: a DiT 64 wide, feed-forward 128.
+  private static let smallHidden = 64
+  private static let smallWide = 128
+
+  /// A copy laid out as the quantizer writes one, at the small sizes: every name, the layers'
+  /// matrices row-wise 8-bit.
+  private func writeSmallCopy(_ url: URL) {
+    DynamicGraph().openStore(url.path) { store in
+      for name in ReCaVSREightBitFile.expectedNames() {
+        if let shape = ReCaVSREightBitFile.eightBitShape(name, hidden: Self.smallHidden, wide: Self.smallWide) {
+          var matrix = Tensor<Float16>(.CPU, .NC(shape[0], shape[1]))
+          for row in 0..<shape[0] {
+            for column in 0..<shape[1] { matrix[row, column] = Float16(sin(Double(row * 31 + column * 7))) }
+          }
+          store.write(name, tensor: matrix, codec: [.i8x, .ezm7])
+        } else {
+          store.write(name, tensor: Tensor<Float>([1, 2, 3, 4], .CPU, .C(4)))
+        }
+      }
+    }
+  }
+
+  private static let checkSmall: @Sendable (URL) throws -> Void = {
+    try ReCaVSREightBitFile.validate($0, hidden: smallHidden, wide: smallWide)
+  }
+
+  @Test func eightBitCopySizes() throws {
+    let folder = try scratchFolder()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let copy = folder.appending(path: "renamed copy.bin")
+    writeSmallCopy(copy)
+    // Right in every way at its own sizes; not ReCaVSR's at the real ones.
+    try ReCaVSREightBitFile.validate(copy, hidden: Self.smallHidden, wide: Self.smallWide)
+    #expect(problem(copy) == .wrongShape("blocks.0.attn1.to_q.weight"))
+    #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == ["renamed copy.bin"])
+  }
+
+  /// What an import test starts from: a small copy in its own folder, optionally with the
+  /// prompt and the decoder beside it, and an empty ReCaVSR folder to import into.
+  private func importSetup(siblings: Bool) throws -> (root: URL, source: URL, folder: URL) {
+    let root = try scratchFolder()
+    let from = root.appending(path: "elsewhere")
+    try FileManager.default.createDirectory(at: from, withIntermediateDirectories: true)
+    let source = from.appending(path: "my 8-bit copy.ckpt")
+    writeSmallCopy(source)
+    if siblings {
+      for file in ReCaVSRFiles.companions { try place(file.path, bytes: file.bytes, in: from) }
+    }
+    return (root, source, root.appending(path: "ReCaVSR"))
+  }
+
+  /// Stands in for the downloader: records what was asked for and writes a file of the right size.
+  private final class Fetched: Sendable {
+    let names = Mutex<[String]>([])
+
+    var fetch: ReCaVSREightBitFile.Fetch {
+      { [self] from, to, _ in
+        names.withLock { $0.append(from.lastPathComponent) }
+        let bytes = ReCaVSRFiles.companions.first { $0.path == to.lastPathComponent }?.bytes ?? 0
+        _ = FileManager.default.createFile(atPath: to.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: to)
+        try handle.truncate(atOffset: UInt64(bytes))
+        try handle.close()
+      }
+    }
+  }
+
+  private func listing(_ folder: URL) -> [String] {
+    ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []).sorted()
+  }
+
+  private static let imported = ["flashdecoder.safetensors", "prompt.safetensors", "transformer_i8x.ckpt"]
+
+  @Test func importClonesWithItsSiblings() async throws {
+    let (root, source, folder) = try importSetup(siblings: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let original = try Data(contentsOf: source)
+    let fetched = Fetched()
+    try await ReCaVSREightBitFile.importCopy(
+      of: source, into: folder, validate: Self.checkSmall, fetch: fetched.fetch, progress: { _ in })
+    #expect(listing(folder) == Self.imported)
+    #expect(fetched.names.withLock { $0 }.isEmpty)
+    #expect(try Data(contentsOf: folder.appending(path: ReCaVSRFiles.eightBitName)) == original)
+    #expect(ReCaVSRFiles.installed(.eightBit, in: folder) != nil)
+    #expect(ReCaVSRFiles.installed(.full, in: folder) == nil)
+    // The original and what was beside it stay as they were.
+    #expect(try Data(contentsOf: source) == original)
+    #expect(listing(source.deletingLastPathComponent()) == ["flashdecoder.safetensors", "my 8-bit copy.ckpt", "prompt.safetensors"])
+  }
+
+  @Test func importDownloadsMissingSiblings() async throws {
+    let (root, source, folder) = try importSetup(siblings: false)
+    defer { try? FileManager.default.removeItem(at: root) }
+    // One is beside the copy at the wrong size, which doesn't count.
+    try place("prompt.safetensors", bytes: 1000, in: source.deletingLastPathComponent())
+    let fetched = Fetched()
+    try await ReCaVSREightBitFile.importCopy(
+      of: source, into: folder, validate: Self.checkSmall, fetch: fetched.fetch, progress: { _ in })
+    #expect(fetched.names.withLock { $0 } == ["prompt.safetensors", "flashdecoder.safetensors"])
+    #expect(listing(folder) == Self.imported)
+    #expect(ReCaVSRFiles.installed(.eightBit, in: folder) != nil)
+  }
+
+  @Test func importCopiesAndChecksWithoutCloning() async throws {
+    let (root, source, folder) = try importSetup(siblings: false)
+    defer { try? FileManager.default.removeItem(at: root) }
+    // The folder has the small files already; a stale staged copy from a run that quit, too.
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    for file in ReCaVSRFiles.companions { try place(file.path, bytes: file.bytes, in: folder) }
+    try place(ReCaVSRFiles.eightBitName + ReCaVSREightBitFile.stagingSuffix, bytes: 5000, in: folder)
+    try place(ReCaVSRFiles.eightBitName + ".part", bytes: 5000, in: folder)
+    let fetched = Fetched()
+    let last = Mutex(0.0)
+    try await ReCaVSREightBitFile.importCopy(
+      of: source, into: folder, allowsCloning: false, validate: Self.checkSmall, fetch: fetched.fetch,
+      progress: { value in last.withLock { $0 = value } })
+    #expect(fetched.names.withLock { $0 }.isEmpty)
+    // The quantizer's own unfinished copy is left for it.
+    #expect(listing(folder) == Self.imported + ["transformer_i8x.ckpt.part"])
+    #expect(try Data(contentsOf: folder.appending(path: ReCaVSRFiles.eightBitName)) == Data(contentsOf: source))
+    #expect(last.withLock { $0 } == 1)
+  }
+
+  @Test func importLeavesAnExistingCopy() async throws {
+    let (root, source, folder) = try importSetup(siblings: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    try place(ReCaVSRFiles.eightBitName, bytes: 4096, in: folder)
+    await #expect(throws: ReCaVSREightBitFile.ImportFailure.self) {
+      try await ReCaVSREightBitFile.importCopy(
+        of: source, into: folder, validate: Self.checkSmall, fetch: Fetched().fetch, progress: { _ in })
+    }
+    // Nothing replaced, nothing brought.
+    #expect(listing(folder) == [ReCaVSRFiles.eightBitName])
+    #expect(try FileManager.default.attributesOfItem(
+      atPath: folder.appending(path: ReCaVSRFiles.eightBitName).path)[.size] as? Int64 == 4096)
+  }
+
+  @Test func importOfTheCopyInPlaceDoesNothing() async throws {
+    let root = try scratchFolder()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let copy = root.appending(path: ReCaVSRFiles.eightBitName)
+    writeSmallCopy(copy)
+    let original = try Data(contentsOf: copy)
+    let fetched = Fetched()
+    try await ReCaVSREightBitFile.importCopy(
+      of: copy, into: root, validate: Self.checkSmall, fetch: fetched.fetch, progress: { _ in })
+    #expect(listing(root) == [ReCaVSRFiles.eightBitName])
+    #expect(try Data(contentsOf: copy) == original)
+    #expect(fetched.names.withLock { $0 }.isEmpty)
+  }
+
+  @Test func importRejectsWhatIsNotACopy() async throws {
+    let (root, source, folder) = try importSetup(siblings: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    // The real check, at ReCaVSR's sizes: this small file isn't one.
+    await #expect(throws: ReCaVSREightBitFile.Problem.wrongShape("blocks.0.attn1.to_q.weight")) {
+      try await ReCaVSREightBitFile.importCopy(of: source, into: folder, fetch: Fetched().fetch, progress: { _ in })
+    }
+    #expect(!FileManager.default.fileExists(atPath: folder.path))
+  }
+
+  @Test(arguments: [true, false]) func importThatFailsOrIsCancelledLeavesNoCopy(cancelled: Bool) async throws {
+    let (root, source, folder) = try importSetup(siblings: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let original = try Data(contentsOf: source)
+    // The second check is of the staged copy: it fails there, or Cancel arrives during it.
+    let checks = Mutex(0)
+    let check: @Sendable (URL) throws -> Void = { url in
+      try Self.checkSmall(url)
+      guard checks.withLock({ $0 += 1; return $0 }) == 2 else { return }
+      #expect(url.lastPathComponent == ReCaVSRFiles.eightBitName + ReCaVSREightBitFile.stagingSuffix)
+      if cancelled {
+        withUnsafeCurrentTask { $0?.cancel() }
+      } else {
+        throw ReCaVSREightBitFile.Problem.truncated
+      }
+    }
+    let task = Task {
+      try await ReCaVSREightBitFile.importCopy(
+        of: source, into: folder, allowsCloning: cancelled, validate: check, fetch: Fetched().fetch, progress: { _ in })
+    }
+    let result = await task.result
+    switch result {
+    case .success: Issue.record("the import finished")
+    case .failure(let error):
+      #expect(cancelled ? error is CancellationError : error as? ReCaVSREightBitFile.Problem == .truncated)
+    }
+    #expect(checks.withLock { $0 } == 2)
+    // The small files stay (they're whole); the copy and its staged file don't.
+    #expect(listing(folder) == ["flashdecoder.safetensors", "prompt.safetensors"])
+    #expect(try Data(contentsOf: source) == original)
+  }
+
+  @Test func staleStagingIsRemoved() throws {
+    let folder = try scratchFolder()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    for name in ["transformer_i8x.ckpt.import", "prompt.safetensors.import", "transformer_i8x.ckpt.part", "transformer_i8x.ckpt"] {
+      try place(name, bytes: 100, in: folder)
+    }
+    ReCaVSREightBitFile.removeStaging(in: folder)
+    #expect(listing(folder) == ["transformer_i8x.ckpt", "transformer_i8x.ckpt.part"])
+  }
+
+  @Test func smallFilesDownloadFirst() {
+    #expect(ReCaVSRFiles.downloadOrder.map(\.path) == ["prompt.safetensors", "flashdecoder.safetensors", "transformer.safetensors"])
+    #expect(ReCaVSRFiles.downloadOrder.count == ReCaVSRFiles.required.count)
   }
 
   /// A file of `bytes` bytes with nothing in them (sparse, so it takes no room).

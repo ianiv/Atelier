@@ -244,7 +244,7 @@ nonisolated struct ClipUpscale: Codable, Sendable, Hashable {
       case .missingEightBit: return "Make or import ReCaVSR's 8-bit copy to use 8-bit."
       case .missingCompanions:
         let size = ByteCountFormatter.string(fromByteCount: ReCaVSRFiles.companionBytes, countStyle: .file)
-        return "Download ReCaVSR's other files (\(size)) to use it."
+        return "8-bit needs ReCaVSR's two small files (\(size)). Click Download ReCaVSR: they download first, and you can cancel the rest."
       case .notOnThisDevice, nil: break
       }
       let size = outputSize(width: width, height: height, scale: scale, method: method)

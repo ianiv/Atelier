@@ -264,8 +264,8 @@ struct DroppedVideo: Identifiable {
 
 /// Method, FlashVSR+ variant, ReCaVSR weights and scale for upscaling a `width`×`height` video,
 /// with the size it makes, a Download button for the chosen model when it isn't there yet,
-/// ReCaVSR's Make 8-bit Copy and Import 8-bit Copy…, and why it can't, if it can't. Every control stays; ones that
-/// don't apply are disabled.
+/// ReCaVSR's Make 8-bit Copy and Import 8-bit Copy…, and why it can't, if it can't. Every
+/// control stays; ones that don't apply are disabled.
 struct UpscaleControls: View {
   let width: Int
   let height: Int
@@ -420,16 +420,15 @@ struct UpscaleControls: View {
             .disabled(
               method != .recaVSR || hasEightBit || recaVSR.downloading || server != nil || !ReCaVSRFiles.runsHere)
             .help("Copies an 8-bit copy you already have into the models folder, and downloads the two small files it needs if they're missing")
-            .fileImporter(
-              isPresented: $choosingEightBit, allowedContentTypes: [UTType(filenameExtension: "ckpt") ?? .data]
-            ) { result in
+            // Any file: a copy may have been renamed, and the import checks what it is.
+            .fileImporter(isPresented: $choosingEightBit, allowedContentTypes: [.data]) { result in
               guard case .success(let url) = result else { return }
               recaVSR.importEightBit(url)
             }
             .fileDialogDefaultDirectory(FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first)
         }
       }
-      if let failure = recaVSR.failure ?? recaVSR.copyFailure ?? recaVSR.importFailure, method == .recaVSR {
+      if let failure = recaVSR.failure, method == .recaVSR {
         Text(failure).font(.caption).foregroundStyle(.red)
       }
       if let failure = download.failure {

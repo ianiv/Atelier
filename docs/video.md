@@ -117,7 +117,7 @@ FlashVSR+ is by OpenImagingLab, and Atelier's version follows T-Go LLC's vpipe p
 
 ### Getting ReCaVSR
 
-Atelier looks for ReCaVSR in a **ReCaVSR** folder inside your models folder. **Full** is available once its three files are there at full size; **8-bit** needs only the 8-bit copy and the two small files (`prompt.safetensors` and `flashdecoder.safetensors`, 233 MB together), not the 10.6 GB transformer. **Download ReCaVSR** in the Upscale or Export Video sheet fetches whatever is missing, skipping files already there. To download them yourself, get these from [kopper/ReCaVSR](https://huggingface.co/kopper/ReCaVSR) (the VAE it also lists isn't needed):
+Atelier looks for ReCaVSR in a **ReCaVSR** folder inside your models folder. **Full** is available once its three files are there at full size; **8-bit** needs only the 8-bit copy and the two small files (`prompt.safetensors` and `flashdecoder.safetensors`, 233 MB together), not the 10.6 GB transformer. **Download ReCaVSR** in the Upscale or Export Video sheet fetches whatever is missing, skipping files already there, the two small files first. To download them yourself, get these from [kopper/ReCaVSR](https://huggingface.co/kopper/ReCaVSR) (the VAE it also lists isn't needed):
 
 ```
 Models/
@@ -128,7 +128,9 @@ Models/
     transformer_i8x.ckpt      (5.7 GB, written by Make 8-bit Copy or imported)
 ```
 
-If you already have an 8-bit copy that Atelier made (on another Mac, say), click **Import 8-bit Copy…** in the same sheets and pick it, whatever it's named. Atelier checks that it's one of its own 8-bit copies and complete, then copies it into the ReCaVSR folder; your file stays where it is. It also brings the two small files: the ones beside the file you picked if they're there, otherwise it downloads them (233 MB). After that 8-bit works without downloading the full transformer, and Full still needs **Download ReCaVSR**. The button is off once the folder has an 8-bit copy. Other 8-bit formats of ReCaVSR aren't converted.
+If you already have an 8-bit copy that Atelier made (on another Mac, say), click **Import 8-bit Copy…** in the same sheets and pick it, whatever it's named. Atelier checks that it's one of its own 8-bit copies and complete, then copies it into the ReCaVSR folder; your file stays where it is. It also brings the two small files: the ones beside the file you picked if they're there, otherwise it downloads them (233 MB). After that, choose **8-bit** under **Weights**: it works without downloading the full transformer, and Full still needs **Download ReCaVSR**. The button is off once the folder has an 8-bit copy. Other 8-bit formats of ReCaVSR aren't converted.
+
+If you put `transformer_i8x.ckpt` in the folder yourself and the two small files aren't there, click **Download ReCaVSR**: it gets them first, 8-bit works as soon as they've arrived, and you can cancel the rest of the download if you only want 8-bit.
 
 ReCaVSR is by Xijun Wang and others at the University of Science and Technology of China, Apache-2.0 (see **Settings ▸ About**).
 
