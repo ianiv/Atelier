@@ -16,18 +16,29 @@ struct EditJobTests {
     vignette: .init(amount: 0.4, size: 0.6, softness: 0.3),
     grain: .init(lum: 11, size: 1.3, chroma: 3.5, csize: 2.4, real: 1.4, seed: 42))
 
-  /// A record with every field set: real-noise bytes, a LUT, reference measurements.
-  private static func record() -> Edit.Record {
+  /// A context with everything loaded: real-noise bytes, a LUT, reference measurements.
+  static func context(noiseByte: UInt8 = 0, lutValue: Float? = nil) -> EditPipeline.Context {
     let patch = 4
-    let bytes = Data((0..<2 * patch * patch * 3).map { UInt8($0 % 256) })
-    return Edit.Record(
-      options: look, sourceTensorId: 12, profileName: "night", referenceTensorId: 9, referenceName: "ref.jpg", refWidth: 1080,
-      curve: [0.8, 1, 0.9, 0.7], refStats: .init(m: [100, 90, 80], s: [40, 41, 42]),
+    var bytes = Data((0..<2 * patch * patch * 3).map { UInt8($0 % 256) })
+    bytes[0] = noiseByte
+    return EditPipeline.Context(
+      refWidth: 1080, curve: [0.8, 1, 0.9, 0.7], refStats: .init(m: [100, 90, 80], s: [40, 41, 42]),
       realNoise: .init(patch: patch, count: 2, curve: [2, 3, 3, 2], data: bytes),
       referenceLab: .init(mean: [50, 1, 2], std: [20, 5, 6]),
       referenceHistogram: .init(luma: [0.5, 1], red: [0.25, 1], green: [0.75, 1], blue: [1, 1]),
-      lut: .init(name: "Film.cube", size: 2, values: (0..<24).map { Float($0) / 24 }))
+      lut: .init(name: "Film.cube", size: 2, values: lutValue.map { [Float](repeating: $0, count: 24) } ?? (0..<24).map { Float($0) / 24 }))
   }
+
+  static func job(project: String = "Scratch", source: Int64 = 12, options: EditOptions = look, context: EditPipeline.Context = context())
+    -> Edit.Job
+  {
+    Edit.Job(
+      project: project, sourceTensorId: source, options: options, profileName: "night", referenceTensorId: 9,
+      referenceName: "ref.jpg", context: context)
+  }
+
+  /// A record with every field set.
+  private static func record() -> Edit.Record { job().record }
 
   @Test func defaultsAreGrainPyAndIdentityIsANoOp() {
     let defaults = EditOptions()
@@ -46,77 +57,158 @@ struct EditJobTests {
     #expect(!Self.look.isIdentity)
   }
 
-  @Test func optionsRoundTripAndReadMissingKeysAsDefaults() throws {
+  @Test func optionsRoundTripAndReadMissingKeysAsNoChange() throws {
     let data = try JSONEncoder().encode(Self.look)
     #expect(try JSONDecoder().decode(EditOptions.self, from: data) == Self.look)
-    // Saved before a section (or a setting) existed.
+    #expect(EditOptions.grainDefaults == EditOptions())
+    // Saved before a section (or a setting) existed, or an agent's partial look: what isn't
+    // named does nothing, not grain.py's blur and grain.
     let partial = #"{"grain": {"lum": 5}, "histogram": {}}"#
     let read = try JSONDecoder().decode(EditOptions.self, from: Data(partial.utf8))
-    var expected = EditOptions()
+    var expected = EditOptions.identity
     expected.grain.lum = 5
     #expect(read == expected)
+    #expect(try JSONDecoder().decode(EditOptions.self, from: Data("{}".utf8)) == .identity)
+    // Laid over another look, the rest stays that look's.
+    var over = Self.look
+    over.grain.lum = 5
+    #expect(try EditOptions.decoded(from: Data(partial.utf8), over: Self.look) == over)
+    // A LUT key replaces the name and digest together.
+    let lut = try EditOptions.decoded(from: Data(#"{"lut": {"name": "Other.cube"}}"#.utf8), over: Self.look)
+    #expect(lut.lut.name == "Other.cube" && lut.lut.digest == nil && lut.lut.strength == Self.look.lut.strength)
+    // A bad value or an unknown case is no change, not a failure.
+    let odd = #"{"match": {"target": "somewhere", "tint": 0.5}, "histogram": {"space": "lab", "amount": "lots"}, "grain": 3}"#
+    let lenient = try JSONDecoder().decode(EditOptions.self, from: Data(odd.utf8))
+    #expect(lenient.match.target == .reference && lenient.match.tint == 0.5)
+    #expect(lenient.histogram == EditOptions.Histogram() && lenient.grain == EditOptions.Grain.identity)
   }
 
-  @Test func snappedRoundsAndClamps() {
+  /// Blends keep to 0–1; grain.py's own settings are only rounded (and kept from going
+  /// below zero where that means nothing), as grain.py doesn't cap them.
+  @Test func snappedRoundsAndClampsOnlyBlends() {
     var options = EditOptions()
     options.match.tint = 0.3 + 1e-9
+    options.match.saturation = 3
     options.grade.exposure = 9
+    options.grade.tint = -45.04
     options.lens.motion = 1_000
-    options.lens.angle = 10.04
-    options.grain.lum = -2
+    options.lens.angle = 270.04
+    options.grain.lum = 75
+    options.grain.chroma = -2
+    options.grain.size = 0
     let snapped = options.snapped
-    #expect(snapped.match.tint == 0.3)
-    #expect(snapped.grade.exposure == EditOptions.Grade.exposureRange.upperBound)
-    #expect(snapped.lens.motion == EditOptions.Lens.motionRange.upperBound)
-    #expect(snapped.lens.angle == 10)
-    #expect(snapped.grain.lum == 0)
+    #expect(snapped.match.tint == 0.3 && snapped.match.saturation == 1)
+    #expect(snapped.grade.exposure == 9 && snapped.grade.tint == -45)
+    #expect(snapped.lens.motion == 1_000 && snapped.lens.angle == 270)
+    #expect(snapped.grain.lum == 75 && snapped.grain.chroma == 0 && snapped.grain.size == EditOptions.Grain.smallestSize)
     #expect(snapped.snapped == snapped)
+    options.grade.exposure = .nan
+    #expect(options.snapped.grade.exposure == 0)
   }
 
+  /// The queued job carries the data itself (the queue file keeps it), the record only digests.
   @Test func jobAndRecordRoundTrip() throws {
-    let job = Edit.Job(project: "Scratch", sourceTensorId: 12, options: Self.look, profileName: "night", referenceTensorId: 9, record: Self.record())
+    let job = Self.job()
     let decoded = try JSONDecoder().decode(Edit.Job.self, from: JSONEncoder().encode(job))
     #expect(decoded == job)
-    #expect(decoded.record.realNoise?.data == Self.record().realNoise?.data)
-    #expect(decoded.record.lut?.values == Self.record().lut?.values)
-    // A job made without a record starts one from its own fields.
-    let plain = Edit.Job(project: "Scratch", sourceTensorId: 3, options: Self.look, profileName: "night")
-    #expect(plain.record.sourceTensorId == 3 && plain.record.options == Self.look && plain.record.profileName == "night")
+    #expect(decoded.blobs.realNoise?.data == Self.context().realNoise?.data)
+    #expect(decoded.blobs.lut?.values == Self.context().lut?.values)
+    #expect(decoded.context == Self.context())
+    // The job's fields are the record's.
+    #expect(job.sourceTensorId == 12 && job.record.options == Self.look && job.profileName == "night" && job.referenceTensorId == 9)
+    var moved = job
+    moved.sourceTensorId = 4
+    #expect(moved.record.sourceTensorId == 4)
+    #expect(job.record.realNoise?.digest == Self.context().realNoise?.digest && job.record.realNoise?.id == nil)
+    #expect(job.record.lut?.name == "Film.cube" && job.record.lut?.size == 2)
+    // Data that isn't what the record names is left out of the context.
+    #expect(job.record.context(with: Edit.Blobs(Self.context(noiseByte: 9))).realNoise == nil)
   }
 
-  /// The record as a step's `profile_data` keeps it: snake-case keys, the real noise's and LUT's
-  /// bytes back exactly.
-  @Test func recordRoundTripsThroughProfileData() throws {
+  /// The record as a step's `profile_data` keeps it: snake-case keys, small, with the data's
+  /// digests and none of the data.
+  @Test func recordRoundTripsThroughProfileDataWithoutItsData() throws {
+    var record = Self.record()
+    record.realNoise?.id = 3_000_000_001
+    record.lut?.id = 3_000_000_002
+    record.referenceHistogram?.id = 3_000_000_003
     var profile = ProjectMapping.Profile(duration: 1, inputTensorId: 12, parentTensorId: 12)
-    profile.edit = Self.record()
+    profile.edit = record
     let read = try #require(ProjectMapping.Profile(profile.bytes))
-    #expect(read.edit == Self.record())
+    #expect(read.edit == record)
     let text = String(decoding: profile.bytes, as: UTF8.self)
-    #expect(text.contains(#""edit":"#) && text.contains(#""real_noise":"#))
+    #expect(text.contains(#""edit":"#) && text.contains(#""real_noise":"#) && text.contains(#""version":1"#))
+    #expect(!text.contains(#""data":"#) && profile.bytes.count < 4_000)
+    #expect(record.tensorNames == ["edit_noise_3000000001", "edit_histogram_3000000003", "edit_lut_3000000002"])
     // A step without one reads as none.
     let plain = try #require(ProjectMapping.Profile(ProjectMapping.Profile(duration: 1, inputTensorId: nil, parentTensorId: 0).bytes))
     #expect(plain.edit == nil)
   }
 
+  /// A record written by a later version, with a setting this one doesn't know, reads as well
+  /// as it can, and never costs the step its parent or input.
+  @Test func anUnreadableEditKeepsTheRestOfTheProfile() throws {
+    var profile = ProjectMapping.Profile(duration: 2, inputTensorId: 12, parentTensorId: 7)
+    profile.edit = Self.record()
+    var object = try #require(try JSONSerialization.jsonObject(with: Data(profile.bytes)) as? [String: Any])
+    var edit = try #require(object["edit"] as? [String: Any])
+    var options = try #require(edit["options"] as? [String: Any])
+    var histogram = try #require(options["histogram"] as? [String: Any])
+    histogram["space"] = "oklab"
+    options["histogram"] = histogram
+    edit["options"] = options
+    edit["version"] = 9
+    edit["future"] = ["anything": true]
+    object["edit"] = edit
+    let read = try #require(ProjectMapping.Profile([UInt8](JSONSerialization.data(withJSONObject: object))))
+    #expect(read.parentTensorId == 7 && read.inputTensorId == 12)
+    #expect(read.edit?.options.histogram.space == .luma && read.edit?.options.histogram.amount == Self.look.histogram.amount)
+    #expect(read.edit?.options.grain == Self.look.grain && read.edit?.version == 9)
+    // An edit that can't be read at all (no source step) is left out; the profile stays.
+    object["edit"] = ["options": [:] as [String: Any]]
+    let noSource = try #require(ProjectMapping.Profile([UInt8](JSONSerialization.data(withJSONObject: object))))
+    #expect(noSource.edit == nil && noSource.parentTensorId == 7)
+    // So does a colour match of the wrong shape.
+    object["color_match"] = "nonsense"
+    let badMatch = try #require(ProjectMapping.Profile([UInt8](JSONSerialization.data(withJSONObject: object))))
+    #expect(badMatch.colorMatch == nil && badMatch.parentTensorId == 7)
+    // A record without options does nothing.
+    let bare = try JSONDecoder().decode(Edit.Record.self, from: Data(#"{"sourceTensorId": 3}"#.utf8))
+    #expect(bare.options == .identity && bare.version == Edit.Record.currentVersion)
+  }
+
+  /// What exported PNGs, shares and `get_image` carry: the slim record, none of the data.
+  @Test func theSidecarLeavesOutTheData() throws {
+    var item = makeItem(5)
+    item.sidecar.edit = Self.record()
+    let json = try JSONEncoder().encode(item.sidecar)
+    let text = String(decoding: json, as: UTF8.self)
+    let noise = try #require(Self.context().realNoise?.data.base64EncodedString())
+    let lut = try #require(Self.context().lut?.data.base64EncodedString())
+    #expect(text.contains(#""edit":"#) && !text.contains(noise) && !text.contains(lut) && !text.contains(#""data":"#))
+    #expect(json.count < 4_000)
+    let read = try JSONDecoder().decode(HistoryStore.Sidecar.self, from: json)
+    #expect(read.edit == Self.record())
+  }
+
   @Test func sameEditComparesWhatMakesTheImage() {
-    let job = Edit.Job(project: "P", sourceTensorId: 1, options: Self.look, profileName: "night", record: Self.record())
+    let job = Self.job(project: "P", source: 1)
     // Numbers that snap to the same look are the same edit.
     var nudged = Self.look
     nudged.match.tint += 1e-6
-    let same = Edit.Job(project: "P", sourceTensorId: 1, options: nudged, profileName: "night", record: Self.record())
-    #expect(job.isSameEdit(as: same))
+    #expect(job.isSameEdit(as: Self.job(project: "P", source: 1, options: nudged)))
+    // Saved data (an id) doesn't change the image.
+    var saved = Self.job(project: "P", source: 1)
+    saved.record.realNoise?.id = 3_000_000_000
+    #expect(job.isSameEdit(as: saved))
     var other = Self.look
     other.grain.seed = 8
-    #expect(!job.isSameEdit(as: Edit.Job(project: "P", sourceTensorId: 1, options: other, profileName: "night", record: Self.record())))
-    #expect(!job.isSameEdit(as: Edit.Job(project: "Q", sourceTensorId: 1, options: Self.look, profileName: "night", record: Self.record())))
-    #expect(!job.isSameEdit(as: Edit.Job(project: "P", sourceTensorId: 2, options: Self.look, profileName: "night", record: Self.record())))
+    #expect(!job.isSameEdit(as: Self.job(project: "P", source: 1, options: other)))
+    #expect(!job.isSameEdit(as: Self.job(project: "Q", source: 1)))
+    #expect(!job.isSameEdit(as: Self.job(project: "P", source: 2)))
     // Another LUT table or other real noise under the same names makes another image.
-    var otherLUT = Self.record()
-    otherLUT.lut = Edit.LUTTable(name: "Film.cube", size: 2, values: [Float](repeating: 0.5, count: 24))
-    #expect(!job.isSameEdit(as: Edit.Job(project: "P", sourceTensorId: 1, options: Self.look, profileName: "night", record: otherLUT)))
-    var otherNoise = Self.record()
-    otherNoise.realNoise?.data[0] = 200
-    #expect(!job.isSameEdit(as: Edit.Job(project: "P", sourceTensorId: 1, options: Self.look, profileName: "night", record: otherNoise)))
+    #expect(!job.isSameEdit(as: Self.job(project: "P", source: 1, context: Self.context(lutValue: 0.5))))
+    #expect(!job.isSameEdit(as: Self.job(project: "P", source: 1, context: Self.context(noiseByte: 200))))
   }
 
   /// grain.py's `box_sizes`, worked by hand: sigma 3 has ideal width √37 ≈ 6.08, so 5 and 7, with
@@ -154,5 +246,96 @@ struct EditJobTests {
     #expect(abs(blurred.reduce(0, +) - 1) < 1e-4)
     #expect(abs(blurred[20 * side + 17] - blurred[20 * side + 23]) < 1e-7)
     #expect(abs(blurred[17 * side + 20] - blurred[20 * side + 17]) < 1e-7)
+  }
+}
+
+/// An Edit step's real noise, histograms and LUT in the project's tensor store: written once per
+/// project for the same data, read back exactly, and gone with the last step naming them.
+struct EditProjectDataTests {
+  private static func folder() throws -> URL {
+    let folder = FileManager.default.temporaryDirectory.appending(path: "EditProjectDataTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    return folder
+  }
+
+  private static func append(_ project: Project, after parent: Int64?, _ job: Edit.Job? = nil) async throws -> HistoryItem {
+    let tensor = try #require(ImageTensor.tensor(from: CanvasRefineTests.pattern(width: 8, height: 8)))
+    return try await project.append(
+      tensor: tensor, model: "m", prompt: "p", negativePrompt: "", seed: 1, settings: [:], createdAt: Date(), duration: 0,
+      after: parent, edit: job?.record, editBlobs: job?.blobs ?? Edit.Blobs())
+  }
+
+  private static func editData(_ project: Project) -> [String] {
+    project.contents().tensorNames.filter { $0.hasPrefix("edit_") }
+  }
+
+  /// Three edits of one image: the first two with the same profile, reference and LUT, the third
+  /// with another LUT. Returns the project and the three steps' images.
+  private static func build(_ folder: URL) async throws -> (Project, [Int64]) {
+    let project = Project(url: folder.appending(path: "Edits.sqlite3"))
+    let source = try await append(project, after: nil)
+    let shared = EditJobTests.context()
+    let e1 = try await append(project, after: source.tensorId, EditJobTests.job(source: source.tensorId, context: shared))
+    let e2 = try await append(project, after: e1.tensorId, EditJobTests.job(source: source.tensorId, context: shared))
+    let e3 = try await append(project, after: e2.tensorId, EditJobTests.job(source: source.tensorId, context: EditJobTests.context(lutValue: 0.25)))
+    return (project, [e1.tensorId, e2.tensorId, e3.tensorId])
+  }
+
+  @Test func theSameDataIsStoredOnceAndReadBackExactly() async throws {
+    let folder = try Self.folder()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let (project, edits) = try await Self.build(folder)
+    // One noise, one histogram, two LUTs.
+    let names = Self.editData(project)
+    #expect(names.count { $0.hasPrefix(Edit.StoredNoise.prefix) } == 1)
+    #expect(names.count { $0.hasPrefix(Edit.StoredHistogram.prefix) } == 1)
+    #expect(names.count { $0.hasPrefix(Edit.StoredLUT.prefix) } == 2)
+    let items = await project.read { $0.items() }
+    let records = edits.compactMap { id in items.first { $0.tensorId == id }?.sidecar.edit }
+    #expect(records.count == 3)
+    #expect(records[0].realNoise?.id != nil && records[0].realNoise?.id == records[2].realNoise?.id)
+    #expect(records[0].lut?.id == records[1].lut?.id && records[0].lut?.id != records[2].lut?.id)
+    // Each renders with exactly what it was queued with.
+    #expect(try project.editContext(for: records[0]) == EditJobTests.context())
+    #expect(try project.editContext(for: records[2]) == EditJobTests.context(lutValue: 0.25))
+    // A record whose data isn't there (or isn't what it names) says so.
+    var wrong = records[0]
+    wrong.lut?.digest = "00"
+    #expect(throws: ProjectError.self) { try project.editContext(for: wrong) }
+    var unsaved = records[0]
+    unsaved.realNoise?.id = nil
+    #expect(throws: ProjectError.self) { try project.editContext(for: unsaved) }
+    // A step without any data needs nothing from the store.
+    let plain = Edit.Record(options: .identity, sourceTensorId: 1)
+    #expect(try project.editContext(for: plain) == EditPipeline.Context())
+    await project.close()
+  }
+
+  @Test func dataGoesWithTheLastStepNamingIt() async throws {
+    let folder = try Self.folder()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let (project, edits) = try await Self.build(folder)
+    let all = Self.editData(project)
+    _ = try await project.delete(tensorId: edits[0])
+    #expect(Self.editData(project) == all)
+    _ = try await project.delete(tensorId: edits[1])
+    let afterSecond = Self.editData(project)
+    #expect(afterSecond.count == 3 && afterSecond.count { $0.hasPrefix(Edit.StoredLUT.prefix) } == 1)
+    _ = try await project.delete(tensorId: edits[2])
+    #expect(Self.editData(project).isEmpty)
+    await project.close()
+  }
+
+  /// A run of steps deleted at once (`deleteRun`, as a clip's frames) counts the same way.
+  @Test func aDeletedRunCountsTheSteps() async throws {
+    let folder = try Self.folder()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let (project, edits) = try await Self.build(folder)
+    let items = await project.read { $0.items() }
+    let firstLUT = try #require(items.first { $0.tensorId == edits[0] }?.sidecar.edit?.lut?.tensorName)
+    #expect(try await project.deleteRun(tensorIds: [edits[1], edits[2]]) != nil)
+    let left = Self.editData(project)
+    #expect(left.count == 3 && left.contains(firstLUT))
+    await project.close()
   }
 }

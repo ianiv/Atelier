@@ -167,9 +167,14 @@ final class JobQueue {
     _ requests: [GenerationEngine.Request], currentTensorId: Int64?, target: JobTarget = .local,
     fromAgent: Bool = false, styleThumbnail: String? = nil, detached: Bool = false, project: String? = nil
   ) -> [UUID] {
+    // Match Colors to Original and Edit jobs read and save their own project's steps, which only
+    // this device has: they always run here.
+    func runsOn(_ request: GenerationEngine.Request) -> JobTarget {
+      request.colorMatch != nil || request.edit != nil ? .local : target
+    }
     if detached {
       for request in requests {
-        var job = Job(request: request, target: target, fromAgent: fromAgent)
+        var job = Job(request: request, target: runsOn(request), fromAgent: fromAgent)
         job.detached = true
         job.project = project
         waiting.append(job)
@@ -186,7 +191,7 @@ final class JobQueue {
     }
     expectedCurrent = currentTensorId
     for request in requests {
-      var job = Job(request: request, target: target, fromAgent: fromAgent)
+      var job = Job(request: request, target: runsOn(request), fromAgent: fromAgent)
       job.styleThumbnail = styleThumbnail
       if request.parentTensorId == nil { job.line = line }
       waiting.append(job)

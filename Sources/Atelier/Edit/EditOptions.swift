@@ -8,12 +8,17 @@ import Foundation
 ///
 /// The grain and lens settings take grain.py's names and defaults (Lira's `grain.py`, the script
 /// and Grain Studio this screen ports), so its `.grain.json` profiles map onto them one for one
-/// (`GrainProfile.Settings`). That makes `EditOptions()` grain.py's default look (blur 3, grain 9,
-/// colour noise 3, seed 7), not a no-op; `identity` is the look that leaves an image alone. Every
-/// other section defaults to doing nothing.
+/// (`GrainProfile.Settings`). That makes `EditOptions()` (also `grainDefaults`) grain.py's default
+/// look (blur 3, grain 9, colour noise 3, seed 7), not a no-op: it's what the Edit screen starts
+/// from. `identity` is the look that leaves an image alone. Every other section's defaults do
+/// nothing.
 ///
-/// Each section decodes missing keys as its defaults, so records and remembered settings saved
-/// before a setting existed still read.
+/// Decoding is not `init()`: a key that's missing (or of the wrong type, or an unknown case)
+/// means *no change*. Plain decoding starts from `identity`, so a record or remembered settings
+/// saved before a setting existed, or an agent's partial JSON, leave out what they don't name
+/// rather than adding grain.py's blur and grain. To lay a partial look over another, decode with
+/// `decoded(from:over:)`: the keys it names replace the base's, the rest stay the base's. Nothing
+/// here throws on a bad value, so one setting never loses the rest.
 nonisolated struct EditOptions: Codable, Hashable, Sendable {
   var match = Match()
   var histogram = Histogram()
@@ -38,8 +43,29 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
     self.grain = grain
   }
 
+  /// grain.py's default look, `EditOptions()`: its blur and grain on, everything else off.
+  static let grainDefaults = EditOptions()
+
   /// The look that leaves an image as it is: grain.py's defaults with the blur and grain off.
-  static let identity = EditOptions(lens: Lens(blur: 0), grain: Grain(lum: 0, chroma: 0))
+  /// What decoding starts from.
+  static let identity = EditOptions(lens: .identity, grain: .identity)
+
+  /// The `userInfo` key `decoded(from:over:)` passes its base under; every section reads its own
+  /// part of it.
+  static let decodingBase = CodingUserInfoKey(rawValue: "EditOptions.decodingBase")!
+
+  /// Options decoded from JSON laid over `base`: what the JSON names replaces the base's, and
+  /// what it leaves out stays as the base has it (with the default base, `identity`, as no change).
+  static func decoded(from data: Data, over base: EditOptions = .identity) throws -> EditOptions {
+    let decoder = JSONDecoder()
+    decoder.userInfo[decodingBase] = base
+    return try decoder.decode(EditOptions.self, from: data)
+  }
+
+  /// The base a decoder lays keys over (`decoded(from:over:)`), else `identity`.
+  fileprivate static func base(_ decoder: Decoder) -> EditOptions {
+    decoder.userInfo[decodingBase] as? EditOptions ?? .identity
+  }
 
   /// Whether rendering with these options gives back the source unchanged (`EditPipeline.render`
   /// skips every step then).
@@ -48,9 +74,13 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
       && lens.isIdentity && vignette.isIdentity && grain.isIdentity
   }
 
-  /// Every amount kept to its range and rounded to the inspector's steps, so two looks with the
-  /// same settings compare equal (`Edit.Job.isSameEdit`) and key the same cache entry however
-  /// their numbers were arrived at (a slider drag, an agent's JSON, a profile).
+  /// Every amount rounded to the inspector's steps, so two looks with the same settings compare
+  /// equal (`Edit.Job.isSameEdit`) and key the same cache entry however their numbers were
+  /// arrived at (a slider drag, an agent's JSON, a profile). Amounts with a natural range (0 to 1
+  /// blends) are kept to it; the ones a grain.py profile sets (`GrainProfile.Settings`: blur,
+  /// smear, exposure, tint, grain strengths and sizes, real noise, colour) aren't capped, as
+  /// grain.py doesn't cap them, only kept from going below zero where that means nothing. The
+  /// inspector's slider ranges (`exposureRange`, `strengthRange`…) are the sliders' alone.
   var snapped: EditOptions {
     EditOptions(
       match: match.snapped, histogram: histogram.snapped, grade: grade.snapped, lut: lut.snapped,
@@ -60,20 +90,27 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
   private enum CodingKeys: String, CodingKey { case match, histogram, grade, lut, halation, lens, vignette, grain }
 
   init(from decoder: Decoder) throws {
+    let base = Self.base(decoder)
     let c = try decoder.container(keyedBy: CodingKeys.self)
-    match = try c.decodeIfPresent(Match.self, forKey: .match) ?? Match()
-    histogram = try c.decodeIfPresent(Histogram.self, forKey: .histogram) ?? Histogram()
-    grade = try c.decodeIfPresent(Grade.self, forKey: .grade) ?? Grade()
-    lut = try c.decodeIfPresent(LUTRef.self, forKey: .lut) ?? LUTRef()
-    halation = try c.decodeIfPresent(Halation.self, forKey: .halation) ?? Halation()
-    lens = try c.decodeIfPresent(Lens.self, forKey: .lens) ?? Lens()
-    vignette = try c.decodeIfPresent(Vignette.self, forKey: .vignette) ?? Vignette()
-    grain = try c.decodeIfPresent(Grain.self, forKey: .grain) ?? Grain()
+    match = lenient(c, Match.self, .match) ?? base.match
+    histogram = lenient(c, Histogram.self, .histogram) ?? base.histogram
+    grade = lenient(c, Grade.self, .grade) ?? base.grade
+    lut = lenient(c, LUTRef.self, .lut) ?? base.lut
+    halation = lenient(c, Halation.self, .halation) ?? base.halation
+    lens = lenient(c, Lens.self, .lens) ?? base.lens
+    vignette = lenient(c, Vignette.self, .vignette) ?? base.vignette
+    grain = lenient(c, Grain.self, .grain) ?? base.grain
   }
 
-  /// `value` kept to `range` and rounded to a multiple of `step`.
-  static func snap(_ value: Double, _ range: ClosedRange<Double>, step: Double = 0.01) -> Double {
-    guard value.isFinite else { return range.lowerBound }
+  /// No bound: grain.py's own settings aren't capped.
+  static let unbounded = -Double.infinity...Double.infinity
+  /// Zero and up.
+  static let nonNegative = 0...Double.infinity
+
+  /// `value` kept to `range` and rounded to a multiple of `step`; a value that isn't a number is
+  /// 0 (kept to `range`).
+  static func snap(_ value: Double, _ range: ClosedRange<Double> = unbounded, step: Double = 0.01) -> Double {
+    guard value.isFinite else { return min(max(0, range.lowerBound), range.upperBound) }
     return ((min(max(value, range.lowerBound), range.upperBound) / step).rounded() * step * 1e6).rounded() / 1e6
   }
 
@@ -94,6 +131,8 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
 
     var target: Target = .reference
     /// As `ColorMatch.Options`: the means of a and b, their spreads, the mean of L, its spread.
+    /// This `tint` is how far the Lab a/b means move to the target's, 0 to 1: not
+    /// `Grade.tint`, grain.py's green–magenta shift.
     var tint: Double = 0
     var saturation: Double = 0
     var brightness: Double = 0
@@ -125,19 +164,20 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
       Match(
         target: target, tint: EditOptions.snap(tint, 0...1), saturation: EditOptions.snap(saturation, 0...1),
         brightness: EditOptions.snap(brightness, 0...1), contrast: EditOptions.snap(contrast, 0...1),
-        colour: EditOptions.snap(colour, 0...1))
+        colour: EditOptions.snap(colour, EditOptions.nonNegative))
     }
 
     private enum CodingKeys: String, CodingKey { case target, tint, saturation, brightness, contrast, colour }
 
     init(from decoder: Decoder) throws {
+      let base = EditOptions.base(decoder).match
       let c = try decoder.container(keyedBy: CodingKeys.self)
-      target = try c.decodeIfPresent(Target.self, forKey: .target) ?? .reference
-      tint = try c.decodeIfPresent(Double.self, forKey: .tint) ?? 0
-      saturation = try c.decodeIfPresent(Double.self, forKey: .saturation) ?? 0
-      brightness = try c.decodeIfPresent(Double.self, forKey: .brightness) ?? 0
-      contrast = try c.decodeIfPresent(Double.self, forKey: .contrast) ?? 0
-      colour = try c.decodeIfPresent(Double.self, forKey: .colour) ?? 0
+      target = lenient(c, Target.self, .target) ?? base.target
+      tint = lenient(c, Double.self, .tint) ?? base.tint
+      saturation = lenient(c, Double.self, .saturation) ?? base.saturation
+      brightness = lenient(c, Double.self, .brightness) ?? base.brightness
+      contrast = lenient(c, Double.self, .contrast) ?? base.contrast
+      colour = lenient(c, Double.self, .colour) ?? base.colour
     }
   }
 
@@ -169,9 +209,10 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
     private enum CodingKeys: String, CodingKey { case amount, space }
 
     init(from decoder: Decoder) throws {
+      let base = EditOptions.base(decoder).histogram
       let c = try decoder.container(keyedBy: CodingKeys.self)
-      amount = try c.decodeIfPresent(Double.self, forKey: .amount) ?? 0
-      space = try c.decodeIfPresent(Space.self, forKey: .space) ?? .luma
+      amount = lenient(c, Double.self, .amount) ?? base.amount
+      space = lenient(c, Space.self, .space) ?? base.space
     }
   }
 
@@ -184,8 +225,9 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
     var exposure: Double = 0
     /// Cooler (−) to warmer (+), −100 to 100.
     var temperature: Double = 0
-    /// grain.py's `tint`, green (−) to magenta (+), −30 to 30, by its formula: green less
-    /// tint/2, red and blue more tint/4 each, in 0–255 units.
+    /// grain.py's `tint`, green (−) to magenta (+), −30 to 30 on the slider, by its formula: green
+    /// less tint/2, red and blue more tint/4 each, in 0–255 units. Not `Match.tint`, which is how
+    /// far a colour match moves the Lab a/b means.
     var tint: Double = 0
     /// −1 to 1 around mid grey.
     var contrast: Double = 0
@@ -212,21 +254,22 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
 
     var snapped: Grade {
       Grade(
-        exposure: EditOptions.snap(exposure, Self.exposureRange), temperature: EditOptions.snap(temperature, Self.temperatureRange, step: 0.1),
-        tint: EditOptions.snap(tint, Self.tintRange, step: 0.1), contrast: EditOptions.snap(contrast, Self.unitRange),
+        exposure: EditOptions.snap(exposure), temperature: EditOptions.snap(temperature, Self.temperatureRange, step: 0.1),
+        tint: EditOptions.snap(tint, step: 0.1), contrast: EditOptions.snap(contrast, Self.unitRange),
         saturation: EditOptions.snap(saturation, Self.unitRange), vibrance: EditOptions.snap(vibrance, Self.unitRange))
     }
 
     private enum CodingKeys: String, CodingKey { case exposure, temperature, tint, contrast, saturation, vibrance }
 
     init(from decoder: Decoder) throws {
+      let base = EditOptions.base(decoder).grade
       let c = try decoder.container(keyedBy: CodingKeys.self)
-      exposure = try c.decodeIfPresent(Double.self, forKey: .exposure) ?? 0
-      temperature = try c.decodeIfPresent(Double.self, forKey: .temperature) ?? 0
-      tint = try c.decodeIfPresent(Double.self, forKey: .tint) ?? 0
-      contrast = try c.decodeIfPresent(Double.self, forKey: .contrast) ?? 0
-      saturation = try c.decodeIfPresent(Double.self, forKey: .saturation) ?? 0
-      vibrance = try c.decodeIfPresent(Double.self, forKey: .vibrance) ?? 0
+      exposure = lenient(c, Double.self, .exposure) ?? base.exposure
+      temperature = lenient(c, Double.self, .temperature) ?? base.temperature
+      tint = lenient(c, Double.self, .tint) ?? base.tint
+      contrast = lenient(c, Double.self, .contrast) ?? base.contrast
+      saturation = lenient(c, Double.self, .saturation) ?? base.saturation
+      vibrance = lenient(c, Double.self, .vibrance) ?? base.vibrance
     }
   }
 
@@ -254,11 +297,18 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
 
     private enum CodingKeys: String, CodingKey { case name, digest, strength }
 
+    /// The name and digest go together: a key naming one replaces both.
     init(from decoder: Decoder) throws {
+      let base = EditOptions.base(decoder).lut
       let c = try decoder.container(keyedBy: CodingKeys.self)
-      name = try c.decodeIfPresent(String.self, forKey: .name)
-      digest = try c.decodeIfPresent(String.self, forKey: .digest)
-      strength = try c.decodeIfPresent(Double.self, forKey: .strength) ?? 1
+      if c.contains(.name) || c.contains(.digest) {
+        name = lenient(c, String.self, .name)
+        digest = lenient(c, String.self, .digest)
+      } else {
+        name = base.name
+        digest = base.digest
+      }
+      strength = lenient(c, Double.self, .strength) ?? base.strength
     }
   }
 
@@ -295,11 +345,12 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
     private enum CodingKeys: String, CodingKey { case amount, threshold, radius, warmth }
 
     init(from decoder: Decoder) throws {
+      let base = EditOptions.base(decoder).halation
       let c = try decoder.container(keyedBy: CodingKeys.self)
-      amount = try c.decodeIfPresent(Double.self, forKey: .amount) ?? 0
-      threshold = try c.decodeIfPresent(Double.self, forKey: .threshold) ?? 0.8
-      radius = try c.decodeIfPresent(Double.self, forKey: .radius) ?? 20
-      warmth = try c.decodeIfPresent(Double.self, forKey: .warmth) ?? 0.6
+      amount = lenient(c, Double.self, .amount) ?? base.amount
+      threshold = lenient(c, Double.self, .threshold) ?? base.threshold
+      radius = lenient(c, Double.self, .radius) ?? base.radius
+      warmth = lenient(c, Double.self, .warmth) ?? base.warmth
     }
   }
 
@@ -329,6 +380,9 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
       self.blur = blur
     }
 
+    /// No smear and no blur, what a missing key decodes to.
+    static let identity = Lens(blur: 0)
+
     /// grain.py's thresholds: `motion > 1` smears, `gauss` returns the image for sigma < 0.3.
     var smears: Bool { motion > 1 }
     var blurs: Bool { blur >= 0.3 }
@@ -336,17 +390,18 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
 
     var snapped: Lens {
       Lens(
-        motion: EditOptions.snap(motion, Self.motionRange, step: 0.1), angle: EditOptions.snap(angle, Self.angleRange, step: 0.1),
-        blur: EditOptions.snap(blur, Self.blurRange))
+        motion: EditOptions.snap(motion, EditOptions.nonNegative, step: 0.1), angle: EditOptions.snap(angle, step: 0.1),
+        blur: EditOptions.snap(blur, EditOptions.nonNegative))
     }
 
     private enum CodingKeys: String, CodingKey { case motion, angle, blur }
 
     init(from decoder: Decoder) throws {
+      let base = EditOptions.base(decoder).lens
       let c = try decoder.container(keyedBy: CodingKeys.self)
-      motion = try c.decodeIfPresent(Double.self, forKey: .motion) ?? 0
-      angle = try c.decodeIfPresent(Double.self, forKey: .angle) ?? 0
-      blur = try c.decodeIfPresent(Double.self, forKey: .blur) ?? 3
+      motion = lenient(c, Double.self, .motion) ?? base.motion
+      angle = lenient(c, Double.self, .angle) ?? base.angle
+      blur = lenient(c, Double.self, .blur) ?? base.blur
     }
   }
 
@@ -376,10 +431,11 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
     private enum CodingKeys: String, CodingKey { case amount, size, softness }
 
     init(from decoder: Decoder) throws {
+      let base = EditOptions.base(decoder).vignette
       let c = try decoder.container(keyedBy: CodingKeys.self)
-      amount = try c.decodeIfPresent(Double.self, forKey: .amount) ?? 0
-      size = try c.decodeIfPresent(Double.self, forKey: .size) ?? 0.5
-      softness = try c.decodeIfPresent(Double.self, forKey: .softness) ?? 0.5
+      amount = lenient(c, Double.self, .amount) ?? base.amount
+      size = lenient(c, Double.self, .size) ?? base.size
+      softness = lenient(c, Double.self, .softness) ?? base.softness
     }
   }
 
@@ -419,25 +475,39 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
       self.seed = seed
     }
 
+    /// No grain (sizes and seed as grain.py's defaults), what a missing key decodes to.
+    static let identity = Grain(lum: 0, chroma: 0)
+
+    /// The smallest grain size kept: grain.py divides by it.
+    static let smallestSize = 0.01
+
     var isIdentity: Bool { lum == 0 && chroma == 0 && real <= 0 }
 
     var snapped: Grain {
       Grain(
-        lum: EditOptions.snap(lum, Self.strengthRange, step: 0.1), size: EditOptions.snap(size, Self.sizeRange),
-        chroma: EditOptions.snap(chroma, Self.strengthRange, step: 0.1), csize: EditOptions.snap(csize, Self.sizeRange),
-        real: EditOptions.snap(real, Self.realRange), seed: seed)
+        lum: EditOptions.snap(lum, EditOptions.nonNegative, step: 0.1),
+        size: EditOptions.snap(size, Self.smallestSize...Double.infinity),
+        chroma: EditOptions.snap(chroma, EditOptions.nonNegative, step: 0.1),
+        csize: EditOptions.snap(csize, Self.smallestSize...Double.infinity),
+        real: EditOptions.snap(real, EditOptions.nonNegative), seed: seed)
     }
 
     private enum CodingKeys: String, CodingKey { case lum, size, chroma, csize, real, seed }
 
     init(from decoder: Decoder) throws {
+      let base = EditOptions.base(decoder).grain
       let c = try decoder.container(keyedBy: CodingKeys.self)
-      lum = try c.decodeIfPresent(Double.self, forKey: .lum) ?? 9
-      size = try c.decodeIfPresent(Double.self, forKey: .size) ?? 1
-      chroma = try c.decodeIfPresent(Double.self, forKey: .chroma) ?? 3
-      csize = try c.decodeIfPresent(Double.self, forKey: .csize) ?? 1
-      real = try c.decodeIfPresent(Double.self, forKey: .real) ?? 0
-      seed = try c.decodeIfPresent(Int.self, forKey: .seed) ?? 7
+      lum = lenient(c, Double.self, .lum) ?? base.lum
+      size = lenient(c, Double.self, .size) ?? base.size
+      chroma = lenient(c, Double.self, .chroma) ?? base.chroma
+      csize = lenient(c, Double.self, .csize) ?? base.csize
+      real = lenient(c, Double.self, .real) ?? base.real
+      seed = lenient(c, Int.self, .seed) ?? base.seed
     }
   }
+}
+
+/// The key's value, nil when it's missing, null, of the wrong type or an unknown case.
+private nonisolated func lenient<T: Decodable, Key: CodingKey>(_ c: KeyedDecodingContainer<Key>, _ type: T.Type, _ key: Key) -> T? {
+  (try? c.decodeIfPresent(type, forKey: key)) ?? nil
 }

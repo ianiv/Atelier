@@ -37,12 +37,12 @@ Sources/Atelier/App/         | HostTests,TemporaryFilesTests,ClipCacheTests,Orph
 Sources/Atelier/Automation/  | HostTests,AutomationSamplerTests | --generate
 Sources/Atelier/Create/      | CanvasDropTests,CanvasPaintTests,CanvasRefineTests,ColorMatchTests,MaskMemoryTests,CanvasUndoTests,MoodboardWriterTests,MoodboardTests,SizePresetTests,MaskMorphologyTests,FrameSelectionTests,FaceFinderTests,CanvasEditTests | --edit-input-check,--refine-check,--paint-check,--color-match-check,--create-delete-check,--canvas-clip-check
 Sources/Atelier/Create/AutoMask/ | AutoMaskTests,MaskMemoryTests,SAMFolderTests,FaceFinderTests | --automask-check
-Sources/Atelier/Edit/        | GrainTests,EditPipelineTests,LUTTests,EditJobTests | --edit-screen-check
+Sources/Atelier/Edit/        | GrainTests,EditPipelineTests,LUTTests,EditJobTests,EditProjectDataTests | --edit-screen-check
 Sources/Atelier/Generation/  | StrengthStepsTests,ModelsLookupOrderTests,RefinerKickInTests,RefinerModelSwitchTests,PreviewDecoderTests,AutomationSamplerTests | --engine-check,--generate,--reuse
 Sources/Atelier/History/     | HistoryGraphTests,InputEntryTests,EntryTreeFuzzTests,PNGTextTests,JSONValueTests,ClipTests | --input-entries-check,--entries-freeze-check,--history-loras-check,--canvas-clip-check
 Sources/Atelier/Inspector/   | SizePresetTests,PresetImportTests | --inspector-check
 Sources/Atelier/Library/     | DrawThingsImportTests,LoRACopiesTests,MOSSImportTests,ModelMoveTests,ModelFolderTests,OrphanTests | --library-check,--model-folders-check,--model-move-check,--add-folder-check,--catalog-retry-check
-Sources/Atelier/Projects/    | ProjectMappingTests,ClipDeleteTests,InputEntryTests,EntryTreeFuzzTests,MaskMemoryTests,HistoryGraphTests | --project-check,--delete-project-check,--input-entries-check
+Sources/Atelier/Projects/    | ProjectMappingTests,EditProjectDataTests,ClipDeleteTests,InputEntryTests,EntryTreeFuzzTests,MaskMemoryTests,HistoryGraphTests | --project-check,--delete-project-check,--input-entries-check
 Sources/Atelier/Queue/       | SavedQueueTests | --queue-check
 Sources/Atelier/Remote/      | RemoteFramingTests,RemotePairingTests,RemoteFilterTests,RemoteStoreTests,RemoteClientJobsTests,RemoteTraitsTests,RemoteClipTests,RemoteTailnetTests,RemoteStyleLibraryTests | --remote-check,--remote-net-check,--remote-url-check,--remote-tailnet-check,--remote-shots
 Sources/Atelier/Styles/      | StyleTests,StyleLibraryStoreTests,RemoteStyleLibraryTests | --styles-check

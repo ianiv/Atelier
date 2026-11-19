@@ -784,13 +784,13 @@ final nonisolated class Project: Sendable {
     reason: ProjectFormat.Reason = .generate, generated: Bool = true,
     moodboard: [MoodboardTensor] = [], inputTensorId: Int64? = nil,
     after parentTensorId: Int64? = nil, refined: RefinedStep? = nil,
-    colorMatch: ColorMatch.Record? = nil, edit: Edit.Record? = nil
+    colorMatch: ColorMatch.Record? = nil, edit: Edit.Record? = nil, editBlobs: Edit.Blobs = Edit.Blobs()
   ) async throws -> HistoryItem {
     try await append(
       frames: [tensor], clip: nil, model: model, prompt: prompt, negativePrompt: negativePrompt,
       seed: seed, settings: settings, createdAt: createdAt, duration: duration, timings: timings,
       reason: reason, generated: generated, moodboard: moodboard, inputTensorId: inputTensorId,
-      after: parentTensorId, refined: refined, colorMatch: colorMatch, edit: edit)
+      after: parentTensorId, refined: refined, colorMatch: colorMatch, edit: edit.map { ($0, editBlobs) })
   }
 
   /// A moodboard image going into a step.
@@ -1049,7 +1049,7 @@ final nonisolated class Project: Sendable {
     duration: Double, timings: GenerationTimings?, reason: ProjectFormat.Reason, generated: Bool,
     moodboard: [MoodboardTensor], inputTensorId: Int64?,
     after parentTensorId: Int64?, refined: RefinedStep?, colorMatch: ColorMatch.Record?,
-    edit: Edit.Record?
+    edit editToSave: (record: Edit.Record, blobs: Edit.Blobs)?
   ) async throws -> HistoryItem {
     // Each frame's thumbnails, a few frames at a time across the cores (a clip's frames
     // together are large, so each image is dropped once its thumbnails are made).
@@ -1086,6 +1086,8 @@ final nonisolated class Project: Sendable {
     let audioId = clip?.audio.map { _ in Int64.random(in: 1_800_000_000...2_199_999_999) }
     let inputAudioId = clip?.audioInput.map { _ in Int64.random(in: 1_800_000_000...2_199_999_999) }
     let layered = refined?.layers.flatMap { layeredRefine($0, frameTensorId: tensorIds[0]) }
+    // The record as saved, naming its data's tensors.
+    var edit: Edit.Record?
     var written: [String] = []
     do {
       try writeTensors(
@@ -1109,6 +1111,9 @@ final nonisolated class Project: Sendable {
       if let inputAudioId, let audio = clip?.audioInput {
         try writeTensor(audio, name: "audio_\(inputAudioId)")
         written.append("audio_\(inputAudioId)")
+      }
+      if let editToSave {
+        edit = try storeEditBlobs(editToSave.record, editToSave.blobs, written: &written)
       }
     } catch {
       removeTensors(written)
@@ -1225,6 +1230,9 @@ final nonisolated class Project: Sendable {
       removeTensors(written)
       throw ProjectError.writeFailed
     }
+    // A delete of the last other step using the same data can decide to remove it between the
+    // check above and this step's commit: put back what's gone.
+    if let edit, let editToSave { _ = try? storeEditBlobs(edit, editToSave.blobs, written: &written) }
     // As pushHistory: the new step is the newest, which is where an open starts by default.
     setCurrentStep(nil)
     return HistoryItem(
@@ -1512,6 +1520,11 @@ final nonisolated class Project: Sendable {
           let otherInputAudio = Set(others.compactMap { ProjectMapping.Profile($0.profileData)?.inputAudioId })
           names += inputAudio.subtracting(otherInputAudio).map { "audio_\($0)" }
         }
+        // An edit's data goes with the last step naming it, as an input's audio does.
+        let editData = Set(nodes.flatMap { ProjectMapping.Profile($0.profileData)?.edit?.tensorNames ?? [] })
+        if !editData.isEmpty {
+          names += editData.subtracting(others.flatMap { ProjectMapping.Profile($0.profileData)?.edit?.tensorNames ?? [] })
+        }
         outcome = (Array(Set(names).subtracting(used)), parentTensorId)
       } completionHandler: { continuation.resume(returning: $0) }
     }
@@ -1715,10 +1728,16 @@ final nonisolated class Project: Sendable {
             names.append("audio_\(clip.audioId)")
           }
         }
-        if let inputAudioId = ProjectMapping.Profile(node.profileData)?.inputAudioId,
+        let profile = ProjectMapping.Profile(node.profileData)
+        if let inputAudioId = profile?.inputAudioId,
            !others.contains(where: { ProjectMapping.Profile($0.profileData)?.inputAudioId == inputAudioId })
         {
           names.append("audio_\(inputAudioId)")
+        }
+        // An edit's data goes with the last step naming it, as an input's audio does.
+        if let editData = profile?.edit?.tensorNames, !editData.isEmpty {
+          let otherData = Set(others.flatMap { ProjectMapping.Profile($0.profileData)?.edit?.tensorNames ?? [] })
+          names += editData.filter { !otherData.contains($0) }
         }
         outcome = (names.filter { !used.contains($0) }, parentTensorId)
       } completionHandler: { continuation.resume(returning: $0) }
@@ -2026,6 +2045,172 @@ final nonisolated class Project: Sendable {
       ("depth_map", layer.depthMapId), ("scribble", layer.scribbleId), ("pose", layer.poseId),
       ("color_palette", layer.colorPaletteId), ("custom", layer.customId),
     ].compactMap { $0.1 > 0 ? "\($0.0)_\($0.1)" : nil }
+  }
+
+  // MARK: - Edit data
+
+  /// Writes an Edit step's large data (`Edit.Blobs`) into the store as the record names it, and
+  /// returns the record with each one's tensor id; names it newly wrote are added to `written`.
+  /// Data already in the store under its digest is shared rather than written again: an id
+  /// starts from the digest (`Edit.blobId(forDigest:)`) and moves up past a tensor holding other
+  /// data. A record that already has its ids keeps them, its data written back where it's gone.
+  /// Throws when the data isn't what the record's digests say.
+  private func storeEditBlobs(_ record: Edit.Record, _ blobs: Edit.Blobs, written: inout [String]) throws -> Edit.Record {
+    var record = record
+    var noiseTensor: Tensor<UInt8>?
+    var histogramTensor: Tensor<Float64>?
+    var lutTensor: Tensor<Float16>?
+    if let ref = record.realNoise {
+      guard let noise = blobs.realNoise, noise.digest == ref.digest, let tensor = Self.noiseTensor(noise) else {
+        throw ProjectError.missingEditData
+      }
+      noiseTensor = tensor
+    }
+    if let ref = record.referenceHistogram {
+      guard let table = blobs.referenceHistogram, table.digest == ref.digest, let tensor = Self.histogramTensor(table) else {
+        throw ProjectError.missingEditData
+      }
+      histogramTensor = tensor
+    }
+    if let ref = record.lut {
+      guard let table = blobs.lut, table.digest == ref.digest, let tensor = Self.lutTensor(table) else {
+        throw ProjectError.missingEditData
+      }
+      lutTensor = tensor
+    }
+    let (placed, added, failed): (Edit.Record, [String], Bool) = storeAccess.withLock { _ in
+      var placed = record
+      var added: [String] = []
+      // Default flags would truncate the file on close; Draw Things opens it with none.
+      let result = graph.openStore(url.path, flags: []) { store in
+        /// The id for data of `digest`: the recorded one, or the first in the band from the
+        /// digest whose tensor is missing or holds the same data; written when missing.
+        func place(_ prefix: String, _ digest: String, _ recorded: Int64?, _ stored: (AnyTensor) -> String?, _ write: (String) -> Void)
+          -> Int64
+        {
+          var id = recorded ?? Edit.blobId(forDigest: digest)
+          while true {
+            let name = "\(prefix)\(id)"
+            guard let existing = store.read(name, codec: [.fpzip, .zip]) else {
+              write(name)
+              added.append(name)
+              return id
+            }
+            if recorded != nil || stored(existing) == digest { return id }
+            id = id == Edit.blobIds.upperBound ? Edit.blobIds.lowerBound : id + 1
+          }
+        }
+        if let ref = record.realNoise, let tensor = noiseTensor {
+          placed.realNoise?.id = place(
+            Edit.StoredNoise.prefix, ref.digest, ref.id, { Self.realNoise(from: $0, ref)?.digest },
+            { store.write($0, tensor: tensor, codec: [.fpzip, .zip]) })
+        }
+        if let ref = record.referenceHistogram, let tensor = histogramTensor {
+          placed.referenceHistogram?.id = place(
+            Edit.StoredHistogram.prefix, ref.digest, ref.id, { Self.histogram(from: $0)?.digest },
+            { store.write($0, tensor: tensor, codec: [.fpzip, .zip]) })
+        }
+        if let ref = record.lut, let tensor = lutTensor {
+          placed.lut?.id = place(
+            Edit.StoredLUT.prefix, ref.digest, ref.id, { Self.lut(from: $0, ref)?.digest },
+            { store.write($0, tensor: tensor, codec: [.fpzip, .zip]) })
+        }
+      }
+      if case .failure = result { return (record, added, true) }
+      return (placed, added, false)
+    }
+    written += added
+    if failed { throw ProjectError.writeFailed }
+    record = placed
+    return record
+  }
+
+  /// What an Edit step renders with: its record's measurements and the data it names, read from
+  /// the store and checked against the record's digests. Throws `ProjectError.missingEditData`
+  /// when any of it is gone or different.
+  func editContext(for record: Edit.Record) throws -> EditPipeline.Context {
+    let blobs: Edit.Blobs? = storeAccess.withLock { _ in
+      var blobs: Edit.Blobs?
+      graph.openStore(url.path, flags: [.readOnly]) { store in
+        func read(_ name: String?) -> AnyTensor? { name.flatMap { store.read($0, codec: [.fpzip, .zip]) } }
+        var loaded = Edit.Blobs()
+        if let ref = record.realNoise {
+          guard let noise = read(ref.tensorName).flatMap({ Self.realNoise(from: $0, ref) }), noise.digest == ref.digest else { return }
+          loaded.realNoise = noise
+        }
+        if let ref = record.referenceHistogram {
+          guard let table = read(ref.tensorName).flatMap(Self.histogram(from:)), table.digest == ref.digest else { return }
+          loaded.referenceHistogram = table
+        }
+        if let ref = record.lut {
+          guard let table = read(ref.tensorName).flatMap({ Self.lut(from: $0, ref) }), table.digest == ref.digest else { return }
+          loaded.lut = table
+        }
+        blobs = loaded
+      }
+      return blobs
+    }
+    guard let blobs else { throw ProjectError.missingEditData }
+    return record.context(with: blobs)
+  }
+
+  /// grain.py's patch bytes as a `[count, patch, patch, 3]` tensor.
+  private static func noiseTensor(_ noise: GrainProfile.RealNoise) -> Tensor<UInt8>? {
+    let length = noise.count * noise.patch * noise.patch * 3
+    guard noise.count > 0, noise.patch > 0, noise.data.count == length else { return nil }
+    var tensor = Tensor<UInt8>(.CPU, .NHWC(noise.count, noise.patch, noise.patch, 3))
+    tensor.withUnsafeMutableBytes { target in noise.data.withUnsafeBytes { target.copyMemory(from: $0) } }
+    return tensor
+  }
+
+  private static func realNoise(from stored: AnyTensor, _ ref: Edit.StoredNoise) -> GrainProfile.RealNoise? {
+    let tensor = Tensor<UInt8>(stored)
+    guard tensor.shape.count == 4, tensor.shape[0] == ref.count, tensor.shape[1] == ref.patch else { return nil }
+    let length = ref.count * ref.patch * ref.patch * 3
+    let data = tensor.withUnsafeBytes { Data($0.prefix(length)) }
+    guard data.count == length else { return nil }
+    return GrainProfile.RealNoise(patch: ref.patch, count: ref.count, enc: ref.enc, curve: ref.curve, data: data)
+  }
+
+  /// Luma, red, green and blue as a `[4, levels]` tensor.
+  private static func histogramTensor(_ table: Edit.HistogramTable) -> Tensor<Float64>? {
+    let rows = [table.luma, table.red, table.green, table.blue]
+    let levels = table.luma.count
+    guard levels > 0, rows.allSatisfy({ $0.count == levels }) else { return nil }
+    var tensor = Tensor<Float64>(.CPU, .NC(4, levels))
+    for (row, values) in rows.enumerated() {
+      for (level, value) in values.enumerated() { tensor[row, level] = value }
+    }
+    return tensor
+  }
+
+  private static func histogram(from stored: AnyTensor) -> Edit.HistogramTable? {
+    let tensor = Tensor<Float64>(stored)
+    guard tensor.shape.count == 2, tensor.shape[0] == 4 else { return nil }
+    let levels = tensor.shape[1]
+    let rows = (0..<4).map { row in (0..<levels).map { tensor[row, $0] } }
+    return Edit.HistogramTable(luma: rows[0], red: rows[1], green: rows[2], blue: rows[3])
+  }
+
+  /// A LUT's Float16 entries as a `[size, size, size, 3]` tensor, in `LUTTable.data`'s order.
+  private static func lutTensor(_ table: Edit.LUTTable) -> Tensor<Float16>? {
+    let size = table.size
+    guard size > 0, table.data.count == size * size * size * 3 * 2 else { return nil }
+    var tensor = Tensor<Float16>(.CPU, .NHWC(size, size, size, 3))
+    tensor.withUnsafeMutableBytes { target in table.data.withUnsafeBytes { target.copyMemory(from: $0) } }
+    return tensor
+  }
+
+  private static func lut(from stored: AnyTensor, _ ref: Edit.StoredLUT) -> Edit.LUTTable? {
+    let tensor = Tensor<Float16>(stored)
+    let size = ref.size
+    guard tensor.shape.count == 4, tensor.shape[0] == size, tensor.shape[3] == 3 else { return nil }
+    let length = size * size * size * 3 * 2
+    let data = tensor.withUnsafeBytes { Data($0.prefix(length)) }
+    guard data.count == length else { return nil }
+    var table = Edit.LUTTable(name: ref.name, size: size, values: [], domainMin: ref.domainMin, domainMax: ref.domainMax)
+    table.data = data
+    return table
   }
 
   private func writeTensor<Element: TensorNumeric>(_ tensor: Tensor<Element>, name: String) throws {
@@ -2370,11 +2555,15 @@ nonisolated struct ClipInfo: Hashable, Sendable {
 nonisolated enum ProjectError: LocalizedError {
   case badImage
   case writeFailed
+  /// An edited step's real noise, histograms or LUT aren't in the project, or aren't what it
+  /// recorded (`Project.editContext(for:)`).
+  case missingEditData
 
   var errorDescription: String? {
     switch self {
     case .badImage: "The image couldn't be converted."
     case .writeFailed: "The project file couldn't be written."
+    case .missingEditData: "The edit's grain, reference or LUT data is missing from the project."
     }
   }
 }

@@ -9,52 +9,114 @@ nonisolated enum Edit {
 
   /// A queued Save to History from the Edit screen (`GenerationEngine.Request.edit`), as
   /// `ColorMatch.Job` is for Match Colors…: which step, in which project, with which look. It
-  /// names its project because it saves there whichever project is open when it runs. Unlike a
-  /// colour match it carries its `record` from the moment it's queued: the profile, reference
-  /// and LUT it renders with may be files that are gone by the time it runs (after a quit, say),
-  /// so the job keeps what it needs of them (`SavedQueue` writes it as JSON beside the rest).
+  /// names its project because it saves there whichever project is open when it runs.
+  ///
+  /// The `record` is the single source of truth for the step, the look and what it's rendered
+  /// with; `sourceTensorId`, `options`, `profileName` and `referenceTensorId` read and write it.
+  /// Unlike a colour match the job carries the real data it renders with from the moment it's
+  /// queued (`blobs`: the profile's real-noise patches, the reference's histograms, the LUT's
+  /// table), because the profile, reference and LUT files may be gone by the time it runs, after
+  /// a quit say. `SavedQueue` writes them into the queue's JSON with the rest: the queue file is
+  /// temporary (it's removed when it's read back) and holds at most a full profile's 830 KB of
+  /// patches and a LUT per job. Saving the step moves them into the project's tensor store
+  /// (`Project.append(… edit:editBlobs:)`), and the step's record keeps only their ids and digests.
   struct Job: Codable, Hashable, Sendable {
     var project: String
-    /// The source step's image tensor, which stays the same when steps are renumbered.
-    var sourceTensorId: Int64
-    var options: EditOptions
-    /// The grain profile the look came from, for the Queue row and the record; nil for none.
-    var profileName: String?
-    /// The reference image, when it's a step of `project` (matched to with `Match.target`
-    /// `.reference`); nil for none, or one from a file (its measurements are in `record`).
-    var referenceTensorId: Int64?
     /// Everything it's rendered with, and what the saved step keeps.
     var record: Record
+    /// The data the record names by digest, until the step is saved.
+    var blobs: Blobs
 
-    init(
-      project: String, sourceTensorId: Int64, options: EditOptions, profileName: String? = nil,
-      referenceTensorId: Int64? = nil, record: Record? = nil
-    ) {
+    init(project: String, record: Record, blobs: Blobs) {
       self.project = project
-      self.sourceTensorId = sourceTensorId
-      self.options = options
-      self.profileName = profileName
-      self.referenceTensorId = referenceTensorId
-      self.record =
-        record
-          ?? Record(options: options, sourceTensorId: sourceTensorId, profileName: profileName, referenceTensorId: referenceTensorId)
+      self.record = record
+      self.blobs = blobs
     }
 
+    /// A job for `options` rendered with `context`: the record takes the context's small
+    /// measurements and the digests of its large data, the job the data itself.
+    init(
+      project: String, sourceTensorId: Int64, options: EditOptions, profileName: String? = nil,
+      referenceTensorId: Int64? = nil, referenceName: String? = nil, context: EditPipeline.Context = .empty
+    ) {
+      self.init(
+        project: project,
+        record: Record(
+          options: options, sourceTensorId: sourceTensorId, profileName: profileName, referenceTensorId: referenceTensorId,
+          referenceName: referenceName, context: context),
+        blobs: Blobs(context))
+    }
+
+    /// The source step's image tensor, which stays the same when steps are renumbered.
+    var sourceTensorId: Int64 {
+      get { record.sourceTensorId }
+      set { record.sourceTensorId = newValue }
+    }
+
+    var options: EditOptions {
+      get { record.options }
+      set { record.options = newValue }
+    }
+
+    /// The grain profile the look came from, for the Queue row and the record; nil for none.
+    var profileName: String? {
+      get { record.profileName }
+      set { record.profileName = newValue }
+    }
+
+    /// The reference image, when it's a step of `project` (matched to with `Match.target`
+    /// `.reference`); nil for none, or one from a file (its measurements are in `record`).
+    var referenceTensorId: Int64? {
+      get { record.referenceTensorId }
+      set { record.referenceTensorId = newValue }
+    }
+
+    /// What it renders with.
+    var context: EditPipeline.Context { record.context(with: blobs) }
+
     /// The same edit: the same step, with the same look rendered with the same profile data,
-    /// reference and LUT, whose result would be the same image, so it's never queued twice.
+    /// reference and LUT, whose result would be the same image, so it's never queued twice. The
+    /// record's digests stand for the data.
     func isSameEdit(as other: Job) -> Bool {
-      project == other.project && sourceTensorId == other.sourceTensorId && options.snapped == other.options.snapped
-        && profileName == other.profileName && referenceTensorId == other.referenceTensorId
-        && record.renderInputs == other.record.renderInputs
+      project == other.project && record.renderKey == other.record.renderKey
     }
   }
 
-  /// What a step saved from the Edit screen records (`profile_data` `edit`): its look, and
-  /// everything it was rendered with, so opening it in Edit goes back to its source with the
-  /// same settings, and it renders again exactly even once the profile or LUT file is gone. The
-  /// real-noise patches are copied in by the user's choice for that reason (about 830 KB of
-  /// bytes for a full profile's 120, base64 in the JSON); the LUT's table goes in as Float16.
+  /// The large data an edit renders with, which a saved step keeps in the project's tensor store
+  /// rather than in its `profile_data` (`Record.realNoise`, `referenceHistogram`, `lut`).
+  struct Blobs: Codable, Hashable, Sendable {
+    var realNoise: GrainProfile.RealNoise?
+    var referenceHistogram: HistogramTable?
+    var lut: LUTTable?
+
+    init(realNoise: GrainProfile.RealNoise? = nil, referenceHistogram: HistogramTable? = nil, lut: LUTTable? = nil) {
+      self.realNoise = realNoise
+      self.referenceHistogram = referenceHistogram
+      self.lut = lut
+    }
+
+    init(_ context: EditPipeline.Context) {
+      self.init(realNoise: context.realNoise, referenceHistogram: context.referenceHistogram, lut: context.lut)
+    }
+  }
+
+  /// What a step saved from the Edit screen records (`profile_data` `edit`): its look, and what it
+  /// was rendered with, so opening it in Edit goes back to its source with the same settings, and
+  /// it renders again exactly even once the profile or LUT file is gone. By the user's choice each
+  /// step keeps its own copy of the profile's real noise, the reference's histograms and the LUT,
+  /// but not here: they're tensors in the project's store (`StoredNoise`, `StoredHistogram`,
+  /// `StoredLUT`), shared by every step with the same data (named by digest), so the record stays a
+  /// few KB however many steps there are, and History, exported PNGs and Draw Things don't read
+  /// the data on every load. `Project.editContext(for:)` loads them back.
+  ///
+  /// Decoding is lenient: a key that's missing, of the wrong type or holds an unknown case reads as
+  /// its default (the options as no change, `EditOptions.identity`), so a record written by a
+  /// later version still reads; only a record without its source step fails.
   struct Record: Codable, Hashable, Sendable {
+    /// The layout this version writes. A record of a later version reads as well as it can.
+    static let currentVersion = 1
+
+    var version = Record.currentVersion
     var options: EditOptions
     /// The step it was made from, which Edit opens instead of this one.
     var sourceTensorId: Int64
@@ -69,65 +131,164 @@ nonisolated enum Edit {
     var curve: [Double]?
     /// The profile's reference RGB mean and spread (grain.py `refStats`), for `Match.colour`.
     var refStats: GrainProfile.ChannelStats?
-    /// The profile's real-noise patches (grain.py's `real`), for `Grain.real`.
-    var realNoise: GrainProfile.RealNoise?
     /// The Reinhard match target's Lab statistics (the reference's, or the original's).
     var referenceLab: LabStats?
+    /// The profile's real-noise patches (grain.py's `real`), for `Grain.real`.
+    var realNoise: StoredNoise?
     /// The match target's cumulative histograms, for `Histogram`.
-    var referenceHistogram: HistogramTable?
+    var referenceHistogram: StoredHistogram?
     /// The LUT's table, for `EditOptions.lut`.
-    var lut: LUTTable?
+    var lut: StoredLUT?
 
     init(
       options: EditOptions, sourceTensorId: Int64, profileName: String? = nil, referenceTensorId: Int64? = nil,
-      referenceName: String? = nil, refWidth: Int = 1440, curve: [Double]? = nil, refStats: GrainProfile.ChannelStats? = nil,
-      realNoise: GrainProfile.RealNoise? = nil, referenceLab: LabStats? = nil, referenceHistogram: HistogramTable? = nil,
-      lut: LUTTable? = nil
+      referenceName: String? = nil, context: EditPipeline.Context = .empty
     ) {
       self.options = options
       self.sourceTensorId = sourceTensorId
       self.profileName = profileName
       self.referenceTensorId = referenceTensorId
       self.referenceName = referenceName
-      self.refWidth = refWidth
-      self.curve = curve
-      self.refStats = refStats
-      self.realNoise = realNoise
-      self.referenceLab = referenceLab
-      self.referenceHistogram = referenceHistogram
-      self.lut = lut
+      refWidth = context.refWidth
+      curve = context.curve
+      refStats = context.refStats
+      referenceLab = context.referenceLab
+      realNoise = context.realNoise.map(StoredNoise.init)
+      referenceHistogram = context.referenceHistogram.map(StoredHistogram.init)
+      lut = context.lut.map(StoredLUT.init)
     }
 
-    /// What it renders with besides its options (`EditPipeline.Context`).
-    var context: EditPipeline.Context {
+    /// The context, with the data the record names: from the queued job, or loaded from the
+    /// project (`Project.editContext(for:)`). Data whose digest isn't the record's is left out.
+    func context(with blobs: Blobs) -> EditPipeline.Context {
       EditPipeline.Context(
-        refWidth: refWidth, curve: curve, refStats: refStats, realNoise: realNoise, referenceLab: referenceLab,
-        referenceHistogram: referenceHistogram, lut: lut)
+        refWidth: refWidth, curve: curve, refStats: refStats,
+        realNoise: blobs.realNoise.flatMap { realNoise?.digest == $0.digest ? $0 : nil },
+        referenceLab: referenceLab,
+        referenceHistogram: blobs.referenceHistogram.flatMap { referenceHistogram?.digest == $0.digest ? $0 : nil },
+        lut: blobs.lut.flatMap { lut?.digest == $0.digest ? $0 : nil })
     }
 
-    /// The context, for comparing two records' inputs.
-    fileprivate var renderInputs: EditPipeline.Context { context }
+    /// What makes the image: everything but the names and where the data is stored, the options
+    /// snapped (`EditOptions.snapped`).
+    var renderKey: Record {
+      var key = self
+      key.version = 0
+      key.options = options.snapped
+      key.profileName = nil
+      key.referenceName = nil
+      key.realNoise?.id = nil
+      key.referenceHistogram?.id = nil
+      key.lut?.id = nil
+      return key
+    }
+
+    /// The tensors it names in the project's store.
+    var tensorNames: [String] {
+      [realNoise.flatMap(\.tensorName), referenceHistogram.flatMap(\.tensorName), lut.flatMap(\.tensorName)].compactMap(\.self)
+    }
 
     private enum CodingKeys: String, CodingKey {
-      case options, sourceTensorId, profileName, referenceTensorId, referenceName, refWidth, curve, refStats, realNoise
-      case referenceLab, referenceHistogram, lut
+      case version, options, sourceTensorId, profileName, referenceTensorId, referenceName, refWidth, curve, refStats
+      case referenceLab, realNoise, referenceHistogram, lut
     }
 
     init(from decoder: Decoder) throws {
       let c = try decoder.container(keyedBy: CodingKeys.self)
-      options = try c.decodeIfPresent(EditOptions.self, forKey: .options) ?? EditOptions()
+      func lenient<T: Decodable>(_ type: T.Type, _ key: CodingKeys) -> T? { (try? c.decodeIfPresent(type, forKey: key)) ?? nil }
       sourceTensorId = try c.decode(Int64.self, forKey: .sourceTensorId)
-      profileName = try c.decodeIfPresent(String.self, forKey: .profileName)
-      referenceTensorId = try c.decodeIfPresent(Int64.self, forKey: .referenceTensorId)
-      referenceName = try c.decodeIfPresent(String.self, forKey: .referenceName)
-      refWidth = try c.decodeIfPresent(Int.self, forKey: .refWidth) ?? 1440
-      curve = try c.decodeIfPresent([Double].self, forKey: .curve)
-      refStats = try c.decodeIfPresent(GrainProfile.ChannelStats.self, forKey: .refStats)
-      realNoise = try c.decodeIfPresent(GrainProfile.RealNoise.self, forKey: .realNoise)
-      referenceLab = try c.decodeIfPresent(LabStats.self, forKey: .referenceLab)
-      referenceHistogram = try c.decodeIfPresent(HistogramTable.self, forKey: .referenceHistogram)
-      lut = try c.decodeIfPresent(LUTTable.self, forKey: .lut)
+      version = lenient(Int.self, .version) ?? Record.currentVersion
+      options = lenient(EditOptions.self, .options) ?? .identity
+      profileName = lenient(String.self, .profileName)
+      referenceTensorId = lenient(Int64.self, .referenceTensorId)
+      referenceName = lenient(String.self, .referenceName)
+      refWidth = lenient(Int.self, .refWidth) ?? 1440
+      curve = lenient([Double].self, .curve)
+      refStats = lenient(GrainProfile.ChannelStats.self, .refStats)
+      referenceLab = lenient(LabStats.self, .referenceLab)
+      realNoise = lenient(StoredNoise.self, .realNoise)
+      referenceHistogram = lenient(StoredHistogram.self, .referenceHistogram)
+      lut = lenient(StoredLUT.self, .lut)
     }
+  }
+
+  /// The band the stored data's ids come from, above the entry keys
+  /// (`ProjectMapping.Profile.entryKeys`). An id starts from the data's digest, so the same data
+  /// gets the same tensor (`Project.append`).
+  static let blobIds: ClosedRange<Int64> = 3_000_000_000...3_999_999_999
+
+  /// A record's real noise: where the patches are (`edit_noise_<id>`, a `[count, patch, patch, 3]`
+  /// UInt8 tensor of grain.py's bytes) and what goes with them.
+  struct StoredNoise: Codable, Hashable, Sendable {
+    /// Nil until the step is saved.
+    var id: Int64?
+    /// `GrainProfile.RealNoise.digest`.
+    var digest: String
+    var patch: Int
+    var count: Int
+    var enc: Double
+    var curve: [Double]
+
+    init(_ noise: GrainProfile.RealNoise) {
+      digest = noise.digest
+      patch = noise.patch
+      count = noise.count
+      enc = noise.enc
+      curve = noise.curve
+    }
+
+    static let prefix = "edit_noise_"
+    var tensorName: String? { id.map { "\(Self.prefix)\($0)" } }
+  }
+
+  /// A record's match target histograms (`edit_histogram_<id>`, a `[4, levels]` Float64 tensor:
+  /// luma, red, green, blue).
+  struct StoredHistogram: Codable, Hashable, Sendable {
+    var id: Int64?
+    /// `HistogramTable.digest`.
+    var digest: String
+
+    init(_ table: HistogramTable) { digest = table.digest }
+
+    static let prefix = "edit_histogram_"
+    var tensorName: String? { id.map { "\(Self.prefix)\($0)" } }
+  }
+
+  /// A record's LUT (`edit_lut_<id>`, a `[size, size, size, 3]` Float16 tensor, red fastest as in
+  /// `LUTTable.data`), with its name and domain.
+  struct StoredLUT: Codable, Hashable, Sendable {
+    var id: Int64?
+    /// `LUTTable.digest`.
+    var digest: String
+    var name: String
+    var size: Int
+    var domainMin: [Double]
+    var domainMax: [Double]
+
+    init(_ table: LUTTable) {
+      digest = table.digest
+      name = table.name
+      size = table.size
+      domainMin = table.domainMin
+      domainMax = table.domainMax
+    }
+
+    static let prefix = "edit_lut_"
+    var tensorName: String? { id.map { "\(Self.prefix)\($0)" } }
+  }
+
+  /// SHA-256 of `parts` then `data`, as hex.
+  static func digest(_ parts: String, _ data: Data) -> String {
+    var hasher = SHA256()
+    hasher.update(data: Data(parts.utf8))
+    hasher.update(data: data)
+    return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+  }
+
+  /// Where a digest's data is first looked for in `blobIds`.
+  static func blobId(forDigest digest: String) -> Int64 {
+    let value = UInt64(digest.prefix(16), radix: 16) ?? 0
+    return blobIds.lowerBound + Int64(value % UInt64(blobIds.count))
   }
 
   /// Lab means and spreads (L, a, b), as `ColorMatch.Stats` holds them, in a form a record keeps.
@@ -159,6 +320,16 @@ nonisolated enum Edit {
     var red: [Double]
     var green: [Double]
     var blue: [Double]
+
+    /// The tables' contents, for `StoredHistogram.digest`: SHA-256 of their lengths and values'
+    /// bits, as hex.
+    var digest: String {
+      var bytes = Data()
+      for value in luma + red + green + blue {
+        withUnsafeBytes(of: value.bitPattern.littleEndian) { bytes.append(contentsOf: $0) }
+      }
+      return Edit.digest("\(luma.count) \(red.count) \(green.count) \(blue.count)", bytes)
+    }
   }
 
   /// A 3D LUT's table as a record keeps it: `size`³ RGB entries, red changing fastest as in a
@@ -197,11 +368,12 @@ nonisolated enum Edit {
 
     /// The table's contents, for `EditOptions.LUTRef.digest`: SHA-256 of its size, domain and
     /// entries, as hex.
-    var digest: String {
-      var hasher = SHA256()
-      hasher.update(data: Data("\(size) \(domainMin) \(domainMax)".utf8))
-      hasher.update(data: data)
-      return hasher.finalize().map { String(format: "%02x", $0) }.joined()
-    }
+    var digest: String { Edit.digest("\(size) \(domainMin) \(domainMax)", data) }
   }
+}
+
+extension GrainProfile.RealNoise {
+  /// The patches' contents, for `Edit.StoredNoise.digest`: SHA-256 of their layout, encoding and
+  /// curve, then the bytes, as hex.
+  nonisolated var digest: String { Edit.digest("\(patch) \(count) \(enc) \(curve)", data) }
 }

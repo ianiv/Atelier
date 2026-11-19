@@ -98,8 +98,9 @@ nonisolated enum ProjectMapping {
     var refineOffset: [Double]?
     var refineMask: CanvasMask?
     var colorMatch: ColorMatch.Record?
-    /// A step saved from the Edit screen (`edit`): its look, and the profile's curve, real noise
-    /// and LUT it was rendered with, so it renders again exactly once the profile is gone.
+    /// A step saved from the Edit screen (`edit`): its look, and what it was rendered with, the
+    /// large data (real noise, histograms, LUT) named by `edit_*` tensors in the store
+    /// (`Edit.Record`), so it renders again exactly once the profile is gone.
     var edit: Edit.Record?
     var entryKey: Int64?
     var entryMask: CanvasMask?
@@ -152,6 +153,33 @@ nonisolated enum ProjectMapping {
       self.entryKey = entryKey
       self.entryMask = entryMask
       self.inputEntry = inputEntry
+    }
+
+    private enum CodingKeys: String, CodingKey {
+      case timings, duration, inputTensorId, parentTensorId, inputAudioId, refineRect, refineScale, refineOffset
+      case refineMask, colorMatch, edit, entryKey, entryMask, inputEntry
+    }
+
+    /// Lenient past `duration`: a key that doesn't read (written by a later version, say) is left
+    /// out rather than losing the whole profile, and with it the step's parent, input and timings.
+    /// Draw Things always writes `duration`.
+    init(from decoder: Decoder) throws {
+      let c = try decoder.container(keyedBy: CodingKeys.self)
+      func lenient<T: Decodable>(_ type: T.Type, _ key: CodingKeys) -> T? { (try? c.decodeIfPresent(type, forKey: key)) ?? nil }
+      duration = try c.decode(Double.self, forKey: .duration)
+      timings = lenient([Timing].self, .timings) ?? []
+      inputTensorId = lenient(Int64.self, .inputTensorId)
+      parentTensorId = lenient(Int64.self, .parentTensorId)
+      inputAudioId = lenient(Int64.self, .inputAudioId)
+      refineRect = lenient([Double].self, .refineRect)
+      refineScale = lenient(Double.self, .refineScale)
+      refineOffset = lenient([Double].self, .refineOffset)
+      refineMask = lenient(CanvasMask.self, .refineMask)
+      colorMatch = lenient(ColorMatch.Record.self, .colorMatch)
+      edit = lenient(Edit.Record.self, .edit)
+      entryKey = lenient(Int64.self, .entryKey)
+      entryMask = lenient(CanvasMask.self, .entryMask)
+      inputEntry = lenient(Bool.self, .inputEntry)
     }
 
     init?(_ bytes: [UInt8]) {

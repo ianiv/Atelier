@@ -10,7 +10,8 @@ import Foundation
 nonisolated enum EditPipeline {
   /// What a look is rendered with besides its options: the profile's grain data and a reference's
   /// measurements, taken once when they're loaded rather than on every render. A saved step's
-  /// come from its record (`Edit.Record.context`).
+  /// come from its record and the data it names in the project (`Project.editContext(for:)`), a
+  /// queued job's from the job (`Edit.Job.context`).
   struct Context: Hashable, Sendable {
     /// The profile's reference width, which scales the grain (grain.py's `ref_w`).
     var refWidth: Int = 1440

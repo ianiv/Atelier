@@ -141,7 +141,9 @@ final class HistoryStore {
     var refine: RefineRecord?
     /// For a step made by Match Colors to Original: how, and from which original.
     var colorMatch: ColorMatch.Record?
-    /// For a step saved from the Edit screen: its look and what it was rendered with.
+    /// For a step saved from the Edit screen: its look and what it was rendered with. Only the
+    /// record, a few KB: its real noise, histograms and LUT stay in the project's tensor store
+    /// (`Edit.Record`), so exported PNGs, shares and agents' `get_image` don't carry them.
     var edit: Edit.Record?
   }
 
@@ -505,7 +507,7 @@ final class HistoryStore {
         settings: dump, createdAt: finishedAt,
         duration: finishedAt.timeIntervalSince(startedAt), timings: timings, moodboard: moodboard,
         inputTensorId: inputTensorId, after: parentTensorId, refined: refined, colorMatch: request.colorMatch?.record,
-        edit: request.edit?.record)
+        edit: request.edit?.record, editBlobs: request.edit?.blobs ?? Edit.Blobs())
     }
     // An image from outside the project, saved now as a merge's input (the image itself),
     // remembers the mask it was queued with. One already in the project remembered it when the job
