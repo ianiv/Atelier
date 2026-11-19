@@ -413,6 +413,99 @@ struct EditPipelineTests {
     }
   }
 
+  /// Steps 1–9 of a window, read with exactly the margins `Geometry.withReach` gives, are that
+  /// part of the full image's steps 1–9 as floats (not just within a level once truncated to
+  /// bytes), for smears along, across and diagonal to the rows; with one pixel less of either
+  /// margin they aren't, so a margin that came up short would show.
+  @Test func windowPreGrainIsACropOfTheFullPreGrain() async throws {
+    var (options, context) = everything()
+    let width = 240
+    let height = 180
+    let planes = GrainTests.picture(width: width, height: height)
+    let source = try image(planes)
+    let renderer = EditRenderer()
+    // Inside, so neither margin is cut short by the image's edges.
+    let window = EditPipeline.Window(x: 90, y: 70, width: 60, height: 40)
+    func difference(_ a: EditPipeline.Planes, _ b: EditPipeline.Planes) -> Float {
+      guard a.width == b.width, a.height == b.height else { return .infinity }
+      return zip([a.r, a.g, a.b], [b.r, b.g, b.b]).reduce(0) { worst, pair in
+        zip(pair.0, pair.1).reduce(worst) { max($0, abs($1.0 - $1.1)) }
+      }
+    }
+    for angle in [20.0, 90, 135] {
+      options.lens.angle = angle
+      let stats = try await renderer.sourceStats(source: source, options: options, context: context)
+      func preGrain(_ geometry: EditRenderer.Geometry) throws -> EditPipeline.Planes {
+        let read = geometry.read
+        return try EditRenderer.preGrain(
+          base: planes.cropped(x: read.x, y: read.y, width: read.width, height: read.height), geometry: geometry, options: options,
+          context: context, stats: stats)
+      }
+      let whole = try preGrain(EditRenderer.Geometry(width: width, height: height, window: nil).withReach(options))
+      let geometry = EditRenderer.Geometry(width: width, height: height, window: window).withReach(options)
+      let expected = whole.cropped(x: window.x, y: window.y, width: window.width, height: window.height)
+      #expect(difference(try preGrain(geometry), expected) <= 1e-3, "angle \(angle)")
+
+      // The margins the steps truly read: the smear's longest shift (as `Grain.motionSmear` lays
+      // its copies) plus the blur's box radii, and halation's box radii. `withReach` gives each
+      // a pixel or more to spare, so its margins less one still match; these exact ones match,
+      // and one pixel short of either doesn't, so the comparison would catch a margin that came
+      // up short.
+      let n = max(2, Grain.round(options.lens.motion))
+      let t = angle * Double.pi / 180
+      let smear = (0..<n).map { i -> Int in
+        let d = Double(i) - Double(n - 1) / 2
+        return max(abs(Grain.round(d * sin(t))), abs(Grain.round(d * cos(t))))
+      }.max() ?? 0
+      func radii(_ sigma: Double) -> Int { Blur.boxSizes(sigma: sigma).reduce(0) { $0 + ($1 - 1) / 2 } }
+      let lensNeed = smear + radii(options.lens.blur)
+      let haloNeed = radii(options.halation.radius)
+      #expect(EditPipeline.lensReach(options.lens, scale: 1) >= lensNeed && EditPipeline.halationReach(options.halation, scale: 1) >= haloNeed)
+      func margins(lens: Int, halo: Int) -> EditRenderer.Geometry {
+        var geometry = EditRenderer.Geometry(width: width, height: height, window: window)
+        geometry.glow = geometry.grown(geometry.region, by: halo)
+        geometry.read = geometry.grown(geometry.glow, by: lens)
+        return geometry
+      }
+      #expect(difference(try preGrain(margins(lens: lensNeed, halo: haloNeed)), expected) <= 1e-3, "angle \(angle): exact margins")
+      #expect(difference(try preGrain(margins(lens: lensNeed, halo: haloNeed - 1)), expected) > 1e-3, "angle \(angle): halation margin one short")
+      // Halation's glow spreads a short lens margin's error thinner than the tolerance, so the
+      // lens margin's control runs without it, where the output's edge is the lens's own.
+      let lit = options
+      options.halation.amount = 0
+      defer { options = lit }
+      let unlit = try preGrain(EditRenderer.Geometry(width: width, height: height, window: nil).withReach(options))
+        .cropped(x: window.x, y: window.y, width: window.width, height: window.height)
+      #expect(difference(try preGrain(margins(lens: lensNeed, halo: 0)), unlit) <= 1e-3, "angle \(angle): exact lens margin")
+      #expect(difference(try preGrain(margins(lens: lensNeed - 1, halo: 0)), unlit) > 1e-3, "angle \(angle): lens margin one short")
+    }
+  }
+
+  /// The context's digests are its data's, however it was made or changed, and a record's
+  /// context keeps the record's.
+  @Test func contextDigestsFollowTheData() {
+    var (_, context) = everything()
+    func check(_ context: EditPipeline.Context) {
+      #expect(context.digests.realNoise == context.realNoise?.digest)
+      #expect(context.digests.referenceHistogram == context.referenceHistogram?.digest)
+      #expect(context.digests.lut == context.lut?.digest)
+    }
+    check(context)
+    #expect(context.digests.lut != nil && context.digests.realNoise != nil && context.digests.referenceHistogram != nil)
+    let record = Edit.Record(options: .identity, sourceTensorId: 1, context: context)
+    let restored = record.context(with: Edit.Blobs(context))
+    #expect(restored == context)
+    check(restored)
+    // Data that doesn't match the record's digest is left out, and so is its digest.
+    let partial = record.context(with: Edit.Blobs(realNoise: context.realNoise, referenceHistogram: nil, lut: nil))
+    #expect(partial.realNoise != nil && partial.lut == nil && partial.referenceHistogram == nil)
+    check(partial)
+    context.lut = nil
+    context.referenceHistogram = HistogramMatch.table(of: GrainTests.picture(width: 20, height: 20))
+    check(context)
+    check(EditPipeline.Context.empty)
+  }
+
   /// Changing only the grain reruns steps 10–12 from the kept pre-grain image; changing the seed
   /// makes new fields; changing an earlier step renders again.
   @Test func grainChangesReuseThePreGrainImage() async throws {
@@ -564,16 +657,43 @@ struct EditPipelineTests {
     #expect(out == [Float](repeating: 0, count: 12))
   }
 
-  /// Fields made a row at a time for a region are the whole field's, enlarged and cut.
+  /// Fields made a row at a time for a region are the whole field's, resized whole and then cut:
+  /// enlarged, shrunk (every row read, the region off centre), and with the region's cells starting
+  /// past the first noise chunks of a row, so a chunk made on its own matches the whole row's.
   @Test func streamedFieldsAreTheWholeFields() {
+    func crop(_ plane: [Float], width: Int, _ region: Resample.Region) -> [Float] {
+      var out: [Float] = []
+      for y in region.y..<region.y + region.height {
+        out += plane[y * width + region.x..<y * width + region.x + region.width]
+      }
+      return out
+    }
+    for (cells, output, region) in [
+      ((width: 97, height: 68), (width: 300, height: 200), Resample.Region(x: 40, y: 30, width: 120, height: 90)),
+      ((width: 400, height: 300), (width: 120, height: 90), Resample.Region(x: 71, y: 9, width: 37, height: 52)),
+      ((width: 700, height: 60), (width: 1400, height: 120), Resample.Region(x: 1100, y: 20, width: 260, height: 40)),
+    ] {
+      let layout = Grain.Layout(width: output.width, height: output.height, aspect: 0.7, region: region)
+      let whole = Resample.resize(
+        Grain.noiseField(width: cells.width, height: cells.height, seed: 5), width: cells.width, height: cells.height,
+        toWidth: output.width, height: output.height)
+      #expect(Grain.field(cells: cells, seed: 5, layout: layout) == crop(whole, width: output.width, region), "\(cells) → \(output)")
+    }
+    // A part of a row is the same cells as the whole row, at a chunk's edge and inside one.
+    let base = Grain.Random.mix(5)
+    var row = [Float](repeating: 0, count: 700)
+    Grain.noiseRow(3, base: base, columns: 0..<700, into: &row)
+    for columns in [255..<258, 256..<512, 300..<301, 511..<700] {
+      var part = [Float](repeating: 0, count: columns.count)
+      Grain.noiseRow(3, base: base, columns: columns, into: &part)
+      #expect(part == Array(row[columns]), "\(columns)")
+    }
+
     let layout = Grain.Layout(width: 300, height: 200, aspect: 0.7, region: Resample.Region(x: 40, y: 30, width: 120, height: 90))
-    let cells = (width: 97, height: 68)
-    let whole = Resample.resize(Grain.noiseField(width: cells.width, height: cells.height, seed: 5), width: cells.width, height: cells.height, toWidth: 300, height: 200, region: layout.region)
-    #expect(Grain.field(cells: cells, seed: 5, layout: layout) == whole)
     let real = realNoise()
     let texture = Grain.realNoiseTexture(real, refWidth: 50, aspect: 0.7, seed: 5)
     let expected = texture.planes.map {
-      Resample.resize($0, width: texture.width, height: texture.height, toWidth: 300, height: 200, region: layout.region)
+      crop(Resample.resize($0, width: texture.width, height: texture.height, toWidth: 300, height: 200), width: 300, layout.region)
     }
     #expect(Grain.realNoiseField(real, refWidth: 50, seed: 5, layout: layout) == expected)
   }
