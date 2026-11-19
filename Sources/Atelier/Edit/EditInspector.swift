@@ -170,7 +170,7 @@ struct EditInspector: View {
       Text("Match")
     } content: {
       InspectorRow {
-        Text("Match to")
+        Text("Match to").lineLimit(1).fixedSize()
       } control: {
         MatchTargetControl(
           target: Binding(get: { edit.options.match.target }, set: { edit.setMatchTarget($0) }),
@@ -311,42 +311,55 @@ struct EditInspector: View {
   /// A slider with its value beside it, typed into for values past the slider's ends. No
   /// `step:` on the slider (macOS draws a tick for each); the model snaps.
   static func slider(_ title: String, _ value: Binding<Double>, _ range: ClosedRange<Double>, step: Double, digits: Int) -> some View {
-    InspectorRow {
-      Text(title)
-    } control: {
-      HStack(spacing: 6) {
-        Slider(
-          value: Binding(get: { min(max(value.wrappedValue, range.lowerBound), range.upperBound) }, set: { value.wrappedValue = EditOptions.snap($0, step: step) }),
-          in: range
-        ) { Text(title) }
-          .labelsHidden()
-          .controlSize(.small)
-          .frame(minWidth: 80, maxWidth: 150)
-        TextField("", value: value, format: .number.precision(.fractionLength(0...digits)))
-          .labelsHidden()
-          .multilineTextAlignment(.trailing)
-          .frame(width: 52)
-          .accessibilityLabel(title)
-      }
+    sliderRow(title) {
+      Slider(
+        value: Binding(get: { min(max(value.wrappedValue, range.lowerBound), range.upperBound) }, set: { value.wrappedValue = EditOptions.snap($0, step: step) }),
+        in: range
+      ) { Text(title) }
+    } value: {
+      TextField("", value: value, format: .number.precision(.fractionLength(0...digits)))
+        .labelsHidden()
+        .multilineTextAlignment(.trailing)
+        .accessibilityLabel(title)
     }
   }
 
   /// An amount from 0 to 1, shown in whole percents.
   static func percentSlider(_ title: String, _ value: Binding<Double>) -> some View {
-    InspectorRow {
-      Text(title)
-    } control: {
-      HStack(spacing: 6) {
-        Slider(value: Binding(get: { value.wrappedValue }, set: { value.wrappedValue = EditOptions.snap($0, 0...1) }), in: 0...1) { Text(title) }
-          .labelsHidden()
-          .controlSize(.small)
-          .frame(minWidth: 80, maxWidth: 150)
-        Text("\(Int((value.wrappedValue * 100).rounded()))%")
-          .monospacedDigit()
-          .frame(width: 52, alignment: .trailing)
-      }
+    sliderRow(title) {
+      Slider(value: Binding(get: { value.wrappedValue }, set: { value.wrappedValue = EditOptions.snap($0, 0...1) }), in: 0...1) { Text(title) }
+    } value: {
+      Text("\(Int((value.wrappedValue * 100).rounded()))%")
+        .monospacedDigit()
+        .frame(maxWidth: .infinity, alignment: .trailing)
     }
   }
+
+  /// A slider row with its label in a fixed column, so every slider on the screen starts at the
+  /// same place and has the same width whatever its label's length; `InspectorRow` sizes the
+  /// control from what the label leaves, which made a long label's slider shorter.
+  private static func sliderRow(_ title: String, @ViewBuilder slider: () -> some View, @ViewBuilder value: () -> some View) -> some View {
+    HStack(spacing: 6) {
+      Text(title)
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+        .frame(width: sliderLabelWidth, alignment: .leading)
+      slider()
+        .labelsHidden()
+        .controlSize(.small)
+        .frame(minWidth: 60, maxWidth: .infinity)
+      value()
+        .frame(width: 52)
+    }
+    .frame(minHeight: 28)
+    .padding(.vertical, 2)
+  }
+
+  #if os(macOS)
+  private static let sliderLabelWidth: CGFloat = 92
+  #else
+  private static let sliderLabelWidth: CGFloat = 112
+  #endif
 
   // MARK: Files
 
