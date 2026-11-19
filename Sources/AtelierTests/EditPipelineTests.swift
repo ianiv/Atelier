@@ -529,4 +529,52 @@ struct EditPipelineTests {
     let context = measured.applied(to: .empty)
     #expect(context.referenceLab == measured.lab && context.referenceHistogram == measured.histogram && context.refStats == nil)
   }
+
+  // MARK: - Review fixes
+
+  /// Histogram matching keeps headroom: values past white stay past it, by as much.
+  @Test func histogramMatchKeepsHeadroom() {
+    let curve = (0..<256).map { Float($0) * 0.9 }
+    #expect(HistogramMatch.mapped(300, curve) == curve[255] + 45)
+    #expect(HistogramMatch.mapped(-10, curve) == curve[0] - 10)
+    #expect(HistogramMatch.mapped(.nan, curve) == 0)
+  }
+
+  /// An exposure that overflows doesn't spread NaN through halation and grain: the render is
+  /// white where the image had light and finite everywhere.
+  @Test func overflowingGradeIsSanitized() async throws {
+    var options = EditOptions.identity
+    options.grade.exposure = 200
+    options.halation = .init(amount: 0.5, threshold: 0.5, radius: 4, warmth: 0.5)
+    options.grain = .init(lum: 9, chroma: 3)
+    let source = GrainTests.picture(width: 64, height: 48)
+    var planes = source
+    EditPipeline.color(&planes, options: options, context: .empty, stats: .init())
+    #expect(planes.r.allSatisfy(\.isFinite) && planes.g.allSatisfy(\.isFinite) && planes.b.allSatisfy(\.isFinite))
+    let rendered = try await EditPipeline.render(source: image(source), options: options)
+    let pixels = try #require(ColorMatch.rgba(rendered))
+    // The brightest corner is white, not NaN's black.
+    #expect(pixels[(47 * 64 + 63) * 4] == 255)
+  }
+
+  /// A resize region outside the output gives zeros instead of reading past the plane.
+  @Test func resizeRegionOutsideIsZeros() {
+    let plane = [Float](repeating: 1, count: 4 * 3)
+    let out = Resample.resize(plane, width: 4, height: 3, toWidth: 4, height: 3, region: Resample.Region(x: 2, y: 0, width: 4, height: 3))
+    #expect(out == [Float](repeating: 0, count: 12))
+  }
+
+  /// Fields made a row at a time for a region are the whole field's, enlarged and cut.
+  @Test func streamedFieldsAreTheWholeFields() {
+    let layout = Grain.Layout(width: 300, height: 200, aspect: 0.7, region: Resample.Region(x: 40, y: 30, width: 120, height: 90))
+    let cells = (width: 97, height: 68)
+    let whole = Resample.resize(Grain.noiseField(width: cells.width, height: cells.height, seed: 5), width: cells.width, height: cells.height, toWidth: 300, height: 200, region: layout.region)
+    #expect(Grain.field(cells: cells, seed: 5, layout: layout) == whole)
+    let real = realNoise()
+    let texture = Grain.realNoiseTexture(real, refWidth: 50, aspect: 0.7, seed: 5)
+    let expected = texture.planes.map {
+      Resample.resize($0, width: texture.width, height: texture.height, toWidth: 300, height: 200, region: layout.region)
+    }
+    #expect(Grain.realNoiseField(real, refWidth: 50, seed: 5, layout: layout) == expected)
+  }
 }

@@ -171,10 +171,14 @@ nonisolated enum HistogramMatch {
     }
   }
 
-  /// `value` through `curve`, interpolated between levels and clamped to 0–255.
+  /// `value` through `curve`, interpolated between levels; beyond 0–255 (headroom from a
+  /// brighter exposure, say) it carries on from the end level at slope 1, so values past white
+  /// keep their distance from it. Not a number is 0.
   @inline(__always) static func mapped(_ value: Float, _ curve: [Float]) -> Float {
     guard value.isFinite else { return 0 }
-    let v = min(max(value, 0), 255)
+    if value > 255 { return curve[levels - 1] + (value - 255) }
+    if value < 0 { return curve[0] + value }
+    let v = value
     let low = min(Int(v), levels - 2)
     let t = v - Float(low)
     return curve[low] + t * (curve[low + 1] - curve[low])

@@ -313,7 +313,8 @@ nonisolated enum EditPipeline {
   }
 
   /// Steps 3 to 7, each pixel on its own: the Reinhard Lab match, the histogram match, grain.py's
-  /// colour match, the grade (which owns exposure and tint, grain.py's included) and the LUT.
+  /// colour match, the grade (which owns exposure and tint, grain.py's included) and the LUT,
+  /// then `sanitize`.
   /// `stats` is the whole image's (`SourceStats`); a step without its data is skipped.
   static func color(_ planes: inout Planes, options: EditOptions, context: Context, stats: SourceStats) {
     if matchesLab(options, context), let reference = context.referenceLab?.stats, let target = stats.labTarget?.stats {
@@ -328,6 +329,25 @@ nonisolated enum EditPipeline {
     Grade.apply(options.grade, to: &planes)
     if !options.lut.isIdentity, let table = context.lut {
       CubeLUT.apply(table, to: &planes, strength: options.lut.strength)
+    }
+    sanitize(&planes)
+  }
+
+  /// The largest level kept between steps, either way: far past anything visible, small enough
+  /// that a blur's sums stay finite.
+  static let levelLimit: Float = 1e6
+
+  /// Values that aren't numbers set to 0 and the rest kept to ±`levelLimit`, after the color
+  /// steps: an unbounded grade (an agent's 200-stop exposure is infinity, times a black pixel
+  /// NaN) would otherwise turn halation's and grain's sums, hence whole rows, into NaN.
+  static func sanitize(_ planes: inout Planes) {
+    let limit = levelLimit
+    planes.withPixelBands { range, r, g, b in
+      for i in range {
+        if !(abs(r[i]) <= limit) { r[i] = r[i].isNaN ? 0 : (r[i] > 0 ? limit : -limit) }
+        if !(abs(g[i]) <= limit) { g[i] = g[i].isNaN ? 0 : (g[i] > 0 ? limit : -limit) }
+        if !(abs(b[i]) <= limit) { b[i] = b[i].isNaN ? 0 : (b[i] > 0 ? limit : -limit) }
+      }
     }
   }
 

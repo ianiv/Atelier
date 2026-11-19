@@ -5,7 +5,8 @@ import Foundation
 /// (Export LUT… bakes steps 3–7).
 ///
 /// The format, as the Adobe Cube LUT Specification 1.0 has it: `#` comments, `TITLE "…"`,
-/// `LUT_3D_SIZE n` (2–256), optional `DOMAIN_MIN r g b` / `DOMAIN_MAX r g b` (Resolve's
+/// `LUT_3D_SIZE n` (2–256 in the spec; up to 129 read here, as a 256³ table is 200 MB of
+/// floats and no grade needs it), optional `DOMAIN_MIN r g b` / `DOMAIN_MAX r g b` (Resolve's
 /// `LUT_3D_INPUT_RANGE min max` too), then n³ lines of `r g b` output values with red changing
 /// fastest, then green, then blue. 1D LUTs (`LUT_1D_SIZE`) are refused: the Edit screen's
 /// looks are 3D. Unknown keywords are skipped, as most readers skip them.
@@ -26,7 +27,7 @@ nonisolated enum CubeLUT {
       switch self {
       case .oneDimensional: "This is a 1D LUT. Only 3D LUTs (LUT_3D_SIZE) can be used."
       case .missingSize: "The file has no LUT_3D_SIZE line, so it isn't a 3D .cube LUT."
-      case .badSize(let size): "The LUT size \(size) isn't one a .cube file can have (2 to 256)."
+      case .badSize(let size): "The LUT size \(size) isn't one Atelier can use (2 to \(CubeLUT.sizeRange.upperBound))."
       case .badLine(let line, let text): "Line \(line) of the LUT can't be read: \(text)"
       case .wrongCount(let expected, let found): "The LUT should have \(expected) entries but has \(found)."
       case .badDomain: "The LUT's DOMAIN_MIN isn't below its DOMAIN_MAX."
@@ -34,7 +35,8 @@ nonisolated enum CubeLUT {
     }
   }
 
-  static let sizeRange = 2...256
+  /// The sizes read: the spec allows up to 256, but common LUTs are 17, 33 or 65.
+  static let sizeRange = 2...129
 
   // MARK: Reading
 
@@ -58,19 +60,22 @@ nonisolated enum CubeLUT {
       }
       return parsed
     }
+    // A UTF-8 byte order mark reads as U+FEFF at the start.
+    let text = text.hasPrefix("\u{FEFF}") ? String(text.dropFirst()) : text
     for (offset, raw) in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).enumerated() {
       let lineNumber = offset + 1
-      var line = raw
+      var line = raw.drop(while: \.isWhitespace)
+      // TITLE first: its quoted text may hold a "#".
+      if line.prefix(5).uppercased() == "TITLE", line.dropFirst(5).first.map({ $0.isWhitespace || $0 == "\"" }) ?? false {
+        title = Self.title(line.dropFirst(5))
+        continue
+      }
       if let hash = line.firstIndex(of: "#") { line = line[..<hash] }
-      line = line.drop(while: \.isWhitespace)
       guard let first = line.first else { continue }
       let fields = line.split(whereSeparator: \.isWhitespace)
       if first.isLetter {
         let keyword = fields[0].uppercased()
         switch keyword {
-        case "TITLE":
-          let rest = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
-          title = rest.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
         case "LUT_1D_SIZE", "LUT_1D_INPUT_RANGE":
           throw ParseError.oneDimensional
         case "LUT_3D_SIZE":
@@ -78,7 +83,6 @@ nonisolated enum CubeLUT {
           guard value == value.rounded(), let n = Int(exactly: value) else { throw ParseError.badLine(lineNumber, String(line)) }
           guard sizeRange.contains(n) else { throw ParseError.badSize(n) }
           size = n
-          values.reserveCapacity(n * n * n * 3)
         case "DOMAIN_MIN":
           domainMin = try numbers(fields.dropFirst(), count: 3, line: lineNumber, text: line)
         case "DOMAIN_MAX":
@@ -102,6 +106,18 @@ nonisolated enum CubeLUT {
     guard zip(domainMin, domainMax).allSatisfy({ $0 < $1 }) else { throw ParseError.badDomain }
     let named = title.flatMap { $0.isEmpty ? nil : $0 } ?? name
     return Edit.LUTTable(name: named, size: size, values: values, domainMin: domainMin, domainMax: domainMax)
+  }
+
+  /// A TITLE line's text after the keyword: what's between its quotes, or without quotes, up to
+  /// a comment.
+  private static func title(_ rest: Substring) -> String {
+    let rest = rest.drop(while: \.isWhitespace)
+    if rest.first == "\"" {
+      let inside = rest.dropFirst()
+      return String(inside[..<(inside.firstIndex(of: "\"") ?? inside.endIndex)])
+    }
+    let text = rest[..<(rest.firstIndex(of: "#") ?? rest.endIndex)]
+    return text.trimmingCharacters(in: .whitespaces)
   }
 
   // MARK: Writing
@@ -189,7 +205,9 @@ nonisolated enum CubeLUT {
     let strength = Float(min(max(strength, 0), 1))
     let n = table.size
     let values = table.values
-    guard strength > 0, n >= 2, values.count == n * n * n * 3, table.domainMin.count == 3, table.domainMax.count == 3 else { return }
+    guard strength > 0, n >= 2, values.count == n * n * n * 3, table.domainMin.count == 3, table.domainMax.count == 3,
+          (0..<3).allSatisfy({ table.domainMin[$0].isFinite && table.domainMax[$0].isFinite && table.domainMax[$0] > table.domainMin[$0] })
+    else { return }
     let top = Float(n - 1)
     // Input level → grid coordinate: (v/255 − min) / (max − min) × (n − 1).
     let scale = (0..<3).map { top / 255 / Float(table.domainMax[$0] - table.domainMin[$0]) }
@@ -202,9 +220,10 @@ nonisolated enum CubeLUT {
       let lut = lut.baseAddress!
       planes.withPixelBands { range, r, g, b in
         for i in range {
-          let x = min(max(r[i] * sr + or, 0), top)
-          let y = min(max(g[i] * sg + og, 0), top)
-          let z = min(max(b[i] * sb + ob, 0), top)
+          // A value that isn't a number (an overflowed grade) reads as black.
+          let x = Self.grid(r[i] * sr + or, top)
+          let y = Self.grid(g[i] * sg + og, top)
+          let z = Self.grid(b[i] * sb + ob, top)
           let x0 = min(Int(x), n - 2)
           let y0 = min(Int(y), n - 2)
           let z0 = min(Int(z), n - 2)
@@ -229,5 +248,10 @@ nonisolated enum CubeLUT {
         }
       }
     }
+  }
+
+  /// A grid coordinate kept to 0…top, NaN as 0.
+  @inline(__always) private static func grid(_ value: Float, _ top: Float) -> Float {
+    value.isNaN ? 0 : min(max(value, 0), top)
   }
 }

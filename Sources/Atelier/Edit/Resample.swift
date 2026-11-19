@@ -94,13 +94,34 @@ nonisolated enum Resample {
 
   /// A Float32 plane (`width` × `height`, row-major) resized to `newWidth` × `newHeight`, as
   /// `Image.fromarray(a, mode="F").resize((newWidth, newHeight), Image.BICUBIC)` (grain.py's
-  /// `resize_float`), or only the `region` of that output. The result is `region`'s size.
+  /// `resize_float`), or only the `region` of that output. The result is `region`'s size; a
+  /// region not inside the output gives zeros.
   static func resize(
     _ plane: [Float], width: Int, height: Int, toWidth newWidth: Int, height newHeight: Int, region: Region? = nil
   ) -> [Float] {
     let region = region ?? .whole(width: newWidth, height: newHeight)
-    guard width > 0, height > 0, newWidth > 0, newHeight > 0, region.width > 0, region.height > 0, plane.count == width * height
-    else { return [Float](repeating: 0, count: max(region.width, 0) * max(region.height, 0)) }
+    guard plane.count == width * height else { return [Float](repeating: 0, count: max(region.width, 0) * max(region.height, 0)) }
+    return plane.withUnsafeBufferPointer { input in
+      let input = input
+      return resize(width: width, height: height, toWidth: newWidth, height: newHeight, region: region) { y, columns, out in
+        for x in columns { out[x - columns.lowerBound] = input[y * width + x] }
+      }
+    }
+  }
+
+  /// `resize` of a plane made a row at a time: `row(y, columns, out)` writes the input's row
+  /// `y`, columns `columns`, to `out[0 ..< columns.count]`. Only the rows and columns the region
+  /// reads are asked for (each once, from any thread), so a big plane that's cheap to make row by
+  /// row, a noise field, is never held whole. The same numbers as `resize` of the whole plane.
+  static func resize(
+    width: Int, height: Int, toWidth newWidth: Int, height newHeight: Int, region: Region? = nil,
+    row: (_ y: Int, _ columns: Range<Int>, _ out: UnsafeMutablePointer<Float>) -> Void
+  ) -> [Float] {
+    let region = region ?? .whole(width: newWidth, height: newHeight)
+    let zeros = [Float](repeating: 0, count: max(region.width, 0) * max(region.height, 0))
+    guard width > 0, height > 0, newWidth > 0, newHeight > 0, region.width > 0, region.height > 0, region.x >= 0, region.y >= 0,
+          region.x + region.width <= newWidth, region.y + region.height <= newHeight
+    else { return zeros }
     let columns = region.x..<region.x + region.width
     let rows = region.y..<region.y + region.height
     let horizontal = newWidth != width ? Coefficients(inSize: width, outSize: newWidth, outputs: columns) : nil
@@ -110,28 +131,35 @@ nonisolated enum Resample {
     let lastRow = vertical.map { $0.first[rows.count - 1] + $0.count[rows.count - 1] } ?? rows.upperBound
     let tempRows = lastRow - firstRow
     let outWidth = region.width
+    // The input columns the horizontal pass reads.
+    let inColumns: Range<Int> = horizontal.map { h in
+      let low = h.first.min() ?? 0
+      let high = zip(h.first, h.count).map { $0 + $1 }.max() ?? low
+      return low..<max(high, low)
+    } ?? columns
+    guard tempRows > 0 else { return zeros }
 
     // Horizontal pass: input rows firstRow..<lastRow, output columns `columns`.
     var temp = [Float](repeating: 0, count: tempRows * outWidth)
-    plane.withUnsafeBufferPointer { input in
-      temp.withUnsafeMutableBufferPointer { output in
-        let input = input
-        let output = output
-        DispatchQueue.concurrentPerform(iterations: tempRows) { row in
-          let source = (row + firstRow) * width
-          let target = row * outWidth
+    temp.withUnsafeMutableBufferPointer { output in
+      let output = output
+      DispatchQueue.concurrentPerform(iterations: tempRows) { index in
+        withUnsafeTemporaryAllocation(of: Float.self, capacity: max(inColumns.count, 1)) { line in
+          let line = line.baseAddress!
+          row(index + firstRow, inColumns, line)
+          let target = index * outWidth
           if let h = horizontal {
             h.weights.withUnsafeBufferPointer { k in
               for i in 0..<outWidth {
-                let start = source + h.first[i]
+                let start = h.first[i] - inColumns.lowerBound
                 let base = i * h.size
                 var ss = 0.0
-                for x in 0..<h.count[i] { ss += Double(input[start + x]) * k[base + x] }
+                for x in 0..<h.count[i] { ss += Double(line[start + x]) * k[base + x] }
                 output[target + i] = Float(ss)
               }
             }
           } else {
-            for i in 0..<outWidth { output[target + i] = input[source + columns.lowerBound + i] }
+            for i in 0..<outWidth { output[target + i] = line[i] }
           }
         }
       }

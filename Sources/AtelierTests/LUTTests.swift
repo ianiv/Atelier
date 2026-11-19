@@ -128,4 +128,43 @@ struct LUTTests {
     #expect(throws: CubeLUT.ParseError.badDomain) { try CubeLUT.parse("LUT_3D_SIZE 2\nDOMAIN_MIN 1 0 0\nDOMAIN_MAX 1 1 1\n" + points, name: "x") }
     #expect(throws: (any Error).self) { try CubeLUT.parse("", name: "x") }
   }
+
+  /// A file as other tools write them: a byte order mark, CRLF line ends, a comment, a title
+  /// with a "#" in its quotes, tabs between numbers, scientific notation, size 65.
+  @Test func readsOtherToolsFiles() throws {
+    let size = 65
+    var lines = ["\u{FEFF}# Made by another tool", "TITLE \"Film #3\"  # the third", "LUT_3D_SIZE\t65", "DOMAIN_MIN 0 0 0", ""]
+    for index in 0..<size * size * size {
+      let r = Double(index % size) / Double(size - 1)
+      let g = Double(index / size % size) / Double(size - 1)
+      let b = Double(index / (size * size)) / Double(size - 1)
+      lines.append(String(format: "%.6e\t%.6e \t%.6e", r, g, b))
+    }
+    let text = lines.joined(separator: "\r\n") + "\r\n"
+    let table = try CubeLUT.parse(text, name: "file")
+    #expect(table.name == "Film #3" && table.size == size)
+    var planes = EditPipeline.Planes(
+      width: 4, height: 1, r: [0, 64, 200, 255], g: [10, 128, 30, 255], b: [255, 3, 90, 0], alpha: [255, 255, 255, 255])
+    let before = planes
+    CubeLUT.apply(table, to: &planes)
+    for i in 0..<4 {
+      #expect(abs(planes.r[i] - before.r[i]) < 0.6 && abs(planes.g[i] - before.g[i]) < 0.6 && abs(planes.b[i] - before.b[i]) < 0.6)
+    }
+    // Unquoted titles stop at a comment; sizes past 129 are refused.
+    #expect(try CubeLUT.parse("TITLE Plain # note\nLUT_3D_SIZE 2\n" + String(repeating: "0 0 0\n", count: 8), name: "x").name == "Plain")
+    #expect(throws: CubeLUT.ParseError.badSize(256)) { try CubeLUT.parse("LUT_3D_SIZE 256\n", name: "x") }
+  }
+
+  /// Values that aren't numbers, and a stored table whose domain is empty, don't trap.
+  @Test func applyingSurvivesBadInput() {
+    var planes = EditPipeline.Planes(
+      width: 3, height: 1, r: [.nan, .infinity, -.infinity], g: [.nan, 5, 7], b: [1, .nan, 3], alpha: [255, 255, 255])
+    CubeLUT.apply(CubeLUT.identity(size: 5), to: &planes)
+    // No trap; finite channels of those pixels come out finite.
+    #expect(planes.g[1].isFinite && planes.g[2].isFinite && planes.b[2].isFinite)
+    let flat = Edit.LUTTable(name: "flat", size: 2, values: [Float](repeating: 0.5, count: 24), domainMin: [0.5, 0, 0], domainMax: [0.5, 1, 1])
+    var same = EditPipeline.Planes(width: 1, height: 1, r: [10], g: [20], b: [30], alpha: [255])
+    CubeLUT.apply(flat, to: &same)
+    #expect(same.r == [10] && same.g == [20] && same.b == [30])
+  }
 }

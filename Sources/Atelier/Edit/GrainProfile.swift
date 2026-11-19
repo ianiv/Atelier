@@ -40,8 +40,9 @@ nonisolated struct GrainProfile: Codable, Hashable, Sendable {
   /// The file extension, after the profile's name.
   static let fileExtension = "grain.json"
 
-  /// grain.py's `PROFILE_KEYS` and `DEFAULTS`, as numbers. `seed` isn't one of grain.py's keys;
-  /// a profile without it reads as grain.py's default, 7.
+  /// grain.py's `PROFILE_KEYS` and `DEFAULTS`, as numbers. `seed` isn't one of grain.py's keys:
+  /// it's read when a file has one, but never written (a profile is a look, the seed the
+  /// screen's), so a profile reads as grain.py's default seed, 7.
   struct Settings: Codable, Hashable, Sendable {
     var blur = 3.0
     var motion = 0.0
@@ -110,6 +111,22 @@ nonisolated struct GrainProfile: Codable, Hashable, Sendable {
       real = try number(.real, 0)
       // grain.py writes every setting as a float, a seed among them if a tool ever adds one.
       seed = try c.decodeIfPresent(Double.self, forKey: .seed).map { Int($0) }
+    }
+
+    /// grain.py's keys only: no seed.
+    func encode(to encoder: Encoder) throws {
+      var c = encoder.container(keyedBy: CodingKeys.self)
+      try c.encode(blur, forKey: .blur)
+      try c.encode(motion, forKey: .motion)
+      try c.encode(angle, forKey: .angle)
+      try c.encode(lum, forKey: .lum)
+      try c.encode(chroma, forKey: .chroma)
+      try c.encode(size, forKey: .size)
+      try c.encode(csize, forKey: .csize)
+      try c.encode(colour, forKey: .colour)
+      try c.encode(tint, forKey: .tint)
+      try c.encode(expo, forKey: .expo)
+      try c.encode(real, forKey: .real)
     }
   }
 
@@ -212,13 +229,12 @@ nonisolated struct GrainProfile: Codable, Hashable, Sendable {
   /// The profile as grain.py's `save_profile` builds its dict.
   private var jsonValue: PythonJSON.Value {
     func numbers(_ values: [Double]) -> PythonJSON.Value { .array(values.map { .double($0) }) }
-    var settingsValue: [(String, PythonJSON.Value)] = [
+    let settingsValue: [(String, PythonJSON.Value)] = [
       ("blur", .double(settings.blur)), ("motion", .double(settings.motion)), ("angle", .double(settings.angle)),
       ("lum", .double(settings.lum)), ("chroma", .double(settings.chroma)), ("size", .double(settings.size)),
       ("csize", .double(settings.csize)), ("colour", .double(settings.colour)), ("tint", .double(settings.tint)),
       ("expo", .double(settings.expo)), ("real", .double(settings.real)),
     ]
-    if let seed = settings.seed { settingsValue.append(("seed", .int(seed))) }
     let realValue: PythonJSON.Value = real.map { real in
       .object([
         ("patch", .int(real.patch)), ("count", .int(real.count)),
@@ -293,16 +309,24 @@ nonisolated struct GrainProfile: Codable, Hashable, Sendable {
 }
 
 /// The noise profile library: `.grain.json` files in Application Support/Atelier/Grain Profiles
-/// (beside the presets, `PresetStore.defaultDirectory`), the Edit screen's profile menu. Each
-/// profile's file is named after it; saving a profile of the same name replaces it. Profiles
-/// opened from elsewhere are added as copies (`add(contentsOf:)`).
+/// (beside the presets, `PresetStore.defaultDirectory`), the Edit screen's profile menu.
+///
+/// A profile's file is named after it (`LayoutStore.fileName`), but the store remembers each
+/// profile's own file rather than working it out from the name again: names that make the same
+/// file name ("Day/Night" and "Day-Night", or "night" and "Night" on a case-insensitive volume)
+/// get numbered files, and a file whose profile has a name already listed (a Finder copy of
+/// "Night") is listed with a number ("Night 2"), so saving or deleting one never touches the
+/// other's file. Saving a profile of a listed name replaces that file. Profiles opened from
+/// elsewhere are added as copies (`add(contentsOf:)`).
 @MainActor
 @Observable
 final class GrainProfileStore {
-  /// The library's profiles, by name.
+  /// The library's profiles, by name; every name is listed once.
   private(set) var profiles: [GrainProfile] = []
   /// Where the profile files are.
   let directory: URL
+  /// Each listed profile's file, by its listed name.
+  private var files: [String: URL] = [:]
 
   static var defaultDirectory: URL {
     FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -315,27 +339,44 @@ final class GrainProfileStore {
     reload()
   }
 
-  /// Reads the folder again (files that aren't profiles are skipped).
+  /// Reads the folder again (files that aren't profiles are skipped). Of files with the same
+  /// profile name, the one named after it keeps the name, then the first by file name.
   func reload() {
-    let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? []
-    profiles = files.filter { $0.lastPathComponent.hasSuffix("." + GrainProfile.fileExtension) }
-      .compactMap { try? GrainProfile.load(from: $0) }
-      .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    let urls = ((try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? [])
+      .filter { $0.lastPathComponent.hasSuffix("." + GrainProfile.fileExtension) }
+      .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+    files = [:]
+    var loaded: [GrainProfile] = []
+    // A file named after its profile keeps the name over a copy of it.
+    let read = urls.compactMap { url in (try? GrainProfile.load(from: url)).map { (url, $0) } }
+    let owners = read.filter { url, profile in
+      url.lastPathComponent == LayoutStore.fileName(profile.name) + "." + GrainProfile.fileExtension
+    }
+    let others = read.filter { url, profile in
+      url.lastPathComponent != LayoutStore.fileName(profile.name) + "." + GrainProfile.fileExtension
+    }
+    for (url, profile) in owners + others {
+      var profile = profile
+      profile.name = unusedName(profile.name)
+      files[profile.name] = url
+      loaded.append(profile)
+    }
+    profiles = loaded.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
   }
 
   func profile(named name: String) -> GrainProfile? { profiles.first { $0.name == name } }
 
-  /// The library file of the profile named `name`.
-  func url(for name: String) -> URL {
-    directory.appendingPathComponent(LayoutStore.fileName(name) + "." + GrainProfile.fileExtension)
-  }
+  /// The library file of the profile named `name`: its own when it's listed, else the one saving
+  /// it would make.
+  func url(for name: String) -> URL { files[name] ?? newFileURL(for: name) }
 
-  /// Saves `profile` into the library, replacing one of the same name.
+  /// Saves `profile` into the library, replacing the listed one of the same name (in its file).
   @discardableResult
   func save(_ profile: GrainProfile) throws -> URL {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    let url = url(for: profile.name)
+    let url = files[profile.name] ?? newFileURL(for: profile.name)
     try profile.write(to: url)
+    files[profile.name] = url
     profiles.removeAll { $0.name == profile.name }
     profiles.append(profile)
     profiles.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
@@ -346,14 +387,7 @@ final class GrainProfileStore {
   @discardableResult
   func add(_ profile: GrainProfile) throws -> GrainProfile {
     var profile = profile
-    let base = profile.name.isEmpty ? "Profile" : profile.name
-    var name = base
-    var n = 2
-    while self.profile(named: name) != nil || FileManager.default.fileExists(atPath: url(for: name).path) {
-      name = "\(base) \(n)"
-      n += 1
-    }
-    profile.name = name
+    profile.name = unusedName(profile.name.isEmpty ? "Profile" : profile.name)
     try save(profile)
     return profile
   }
@@ -364,13 +398,39 @@ final class GrainProfileStore {
     try add(GrainProfile.load(from: url))
   }
 
-  /// Moves the profile's file to the Trash.
+  /// Moves the profile's file to the Trash, or deletes it where there's no Trash (iPad).
   func delete(_ profile: GrainProfile) throws {
-    let url = url(for: profile.name)
-    if FileManager.default.fileExists(atPath: url.path) {
-      try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+    if let url = files[profile.name], FileManager.default.fileExists(atPath: url.path), (try? FileManager.default.trashItem(at: url, resultingItemURL: nil)) == nil {
+      try FileManager.default.removeItem(at: url)
     }
+    files[profile.name] = nil
     profiles.removeAll { $0.name == profile.name }
+  }
+
+  /// `name`, or "name 2", "name 3"… when it's listed.
+  private func unusedName(_ name: String) -> String {
+    var candidate = name
+    var n = 2
+    while files[candidate] != nil {
+      candidate = "\(name) \(n)"
+      n += 1
+    }
+    return candidate
+  }
+
+  /// A file for a profile named `name` that no file is at yet (numbered when its name's file is
+  /// another profile's).
+  private func newFileURL(for name: String) -> URL {
+    let base = LayoutStore.fileName(name.isEmpty ? "Profile" : name)
+    var stem = base
+    var n = 2
+    func url(_ stem: String) -> URL { directory.appendingPathComponent(stem + "." + GrainProfile.fileExtension) }
+    let taken = Set(files.values.map { $0.lastPathComponent.lowercased() })
+    while FileManager.default.fileExists(atPath: url(stem).path) || taken.contains(url(stem).lastPathComponent.lowercased()) {
+      stem = "\(base) \(n)"
+      n += 1
+    }
+    return url(stem)
   }
 }
 

@@ -1,11 +1,15 @@
 @testable import Atelier
+import CryptoKit
 import Foundation
+import ImageIO
 import Testing
 
 /// grain.py's port (`Grain`, `Resample`, `GrainProfile`). Fixtures are small and made here; the
 /// expected numbers were computed with grain.py, numpy 2.5 and Pillow 13.
 ///
-/// `grainPyParity` compares against grain.py itself on real reference photos. It runs only when
+/// `grainPyFixture` checks Match Reference against grain.py's own numbers on a committed
+/// reference (`Fixtures/grain-parity`, read from the source tree: tests run on the Mac that built
+/// them). `grainPyParity` compares against grain.py itself on real reference photos. It runs only when
 /// `GRAIN_PARITY_DIR` names a folder of inputs (pass it as `TEST_RUNNER_GRAIN_PARITY_DIR` to
 /// xcodebuild): a `manifest.json` with raw RGB references, a test picture and profile cases. It
 /// writes Swift's measurements, profiles and renders there for a script to compare.
@@ -118,6 +122,29 @@ struct GrainTests {
     #expect(store.profiles.map(\.name) == ["Night"])
     store.reload()
     #expect(store.profiles.map(\.name) == ["Night"])
+  }
+
+  /// Names that make the same file name get their own files, a Finder copy of a profile is
+  /// listed numbered, and deleting either removes only its own file.
+  @MainActor
+  @Test func profileLibraryNameCollisions() throws {
+    let folder = FileManager.default.temporaryDirectory.appending(path: "GrainTests-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let store = GrainProfileStore(directory: folder)
+    let slash = try store.save(GrainProfile(name: "Day/Night", created: "2026-11-19"))
+    let dash = try store.save(GrainProfile(name: "Day-Night", created: "2026-11-19"))
+    #expect(slash != dash)
+    #expect(try GrainProfile.load(from: slash).name == "Day/Night" && GrainProfile.load(from: dash).name == "Day-Night")
+    let night = try store.save(GrainProfile(name: "Night", created: "2026-11-19"))
+    try FileManager.default.copyItem(at: night, to: folder.appending(path: "Night copy.grain.json"))
+    store.reload()
+    #expect(Set(store.profiles.map(\.name)) == ["Day-Night", "Day/Night", "Night", "Night 2"])
+    try store.delete(try #require(store.profile(named: "Night 2")))
+    #expect(FileManager.default.fileExists(atPath: night.path))
+    #expect(!FileManager.default.fileExists(atPath: folder.appending(path: "Night copy.grain.json").path))
+    try store.delete(try #require(store.profile(named: "Day/Night")))
+    #expect(FileManager.default.fileExists(atPath: dash.path) && !FileManager.default.fileExists(atPath: slash.path))
+    #expect(Set(GrainProfileStore(directory: folder).profiles.map(\.name)) == ["Day-Night", "Night"])
   }
 
   /// Pillow's mode "F" bicubic, enlarging and shrinking, matches bit for bit; a region is exactly
@@ -270,6 +297,75 @@ struct GrainTests {
     var chroma: Double
     var matched_curve: [Double]
     var seconds: Double
+  }
+
+  /// What grain.py measured on `Fixtures/grain-parity/reference.png` (a synthetic grainy
+  /// picture, 256 × 192), written by the fixture script with grain.py, numpy and Pillow.
+  private struct Fixture: Decodable {
+    struct Real: Decodable {
+      var patch: Int
+      var count: Int
+      var enc: Double
+      var curve: [Double]
+      var sha256: String
+      var bytes: Int
+    }
+
+    var width: Int
+    var height: Int
+    var refStats: GrainProfile.ChannelStats
+    var yAC: [Double]
+    var cAC: [Double]
+    var cSD: Double
+    var curve: [Double]
+    var patches: Int
+    var sds: [Double]
+    var size: Double
+    var csize: Double
+    var lum: Double
+    var chroma: Double
+    var settings: [String: Double]
+    var refWidth: Int
+    var real: Real
+  }
+
+  /// Match Reference on a committed reference measures what grain.py measured: the RGB
+  /// statistics, the flat patches and their spreads, grain shape, colour blotches and curve, and
+  /// the same real-noise bytes (by SHA-256). The fitted sizes compare against Atelier's own random
+  /// grain, so they may land one `SIZES` step from grain.py's.
+  @Test func grainPyFixture() throws {
+    let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appending(path: "Fixtures/grain-parity")
+    let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: folder.appending(path: "grain-py.json")))
+    let source = try #require(CGImageSourceCreateWithURL(folder.appending(path: "reference.png") as CFURL, nil))
+    let image = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
+    let ref = try #require(EditPipeline.Planes(image))
+    #expect(ref.width == fixture.width && ref.height == fixture.height)
+    func close(_ a: [Double], _ b: [Double], _ tolerance: Double = 1e-6) -> Bool {
+      a.count == b.count && zip(a, b).allSatisfy { abs($0 - $1) <= tolerance * max(1, abs($1)) }
+    }
+    let stats = Grain.channelStats(ref)
+    #expect(stats == fixture.refStats)
+    let extraction = try #require(Grain.extractRealNoise(ref))
+    #expect(extraction.patches.count == fixture.patches)
+    #expect(close(extraction.patches.map(\.sd), fixture.sds))
+    let match = try #require(Grain.matchReference(ref))
+    #expect(close(match.reference.yAC, fixture.yAC) && close(match.reference.cAC, fixture.cAC))
+    #expect(close([match.reference.cSD], [fixture.cSD]) && close(match.reference.curve, fixture.curve))
+    let sizes = EditOptions.Grain.sizes
+    func steps(_ a: Double, _ b: Double) -> Int { abs((sizes.firstIndex(of: a) ?? -9) - (sizes.firstIndex(of: b) ?? 99)) }
+    #expect(steps(match.size, fixture.size) <= 1 && steps(match.csize, fixture.csize) <= 1)
+    let profile = try #require(GrainProfile(measuring: ref, name: "Fixture"))
+    let real = try #require(profile.real)
+    #expect(real.patch == fixture.real.patch && real.count == fixture.real.count && real.enc == fixture.real.enc)
+    #expect(close(real.curve, fixture.real.curve))
+    #expect(real.data.count == fixture.real.bytes)
+    #expect(SHA256.hash(data: real.data).map { String(format: "%02x", $0) }.joined() == fixture.real.sha256)
+    #expect(profile.refWidth == fixture.refWidth && profile.refStats == fixture.refStats)
+    #expect(profile.settings.colour == fixture.settings["colour"] && profile.settings.blur == fixture.settings["blur"])
+    // grain.py's profile has no seed.
+    #expect(fixture.settings["seed"] == nil)
+    let written = try JSONSerialization.jsonObject(with: profile.encoded()) as? [String: Any]
+    #expect((written?["settings"] as? [String: Any])?["seed"] == nil)
   }
 
   @Test func grainPyParity() throws {

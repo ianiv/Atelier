@@ -11,10 +11,13 @@ import Foundation
 /// its row-by-row sums along axis 0, round-half-even for Python's `round`. So Match Reference
 /// measures a reference exactly as grain.py does (the same patches, the same statistics).
 ///
-/// Two differences, both by the user's choice: the random fields use Atelier's own generator
-/// (`Random`, PCG with Box–Muller), not numpy's, so the grain is grain.py's statistically rather
-/// than pixel for pixel (and the fitted size can land a step from grain.py's, whose fit compares
-/// against its own random fields); and the motion smear clamps at the edges instead of wrapping.
+/// Three differences, the first two by the user's choice: the random fields use Atelier's own
+/// generator (`Random`, PCG with Box–Muller), not numpy's, so the grain is grain.py's
+/// statistically rather than pixel for pixel (and the fitted size can land a step from
+/// grain.py's, whose fit compares against its own random fields); the motion smear clamps at the
+/// edges instead of wrapping; and real noise is always tiled from the profile's stored patches
+/// (at most 120, quantized to bytes), as grain.py does with a loaded profile, never from the
+/// unquantized patches `extractRealNoise` finds.
 nonisolated enum Grain {
   /// grain.py's `BAND_CENTRES`: the brightness band centres (0–1) of the grain curve.
   static let bandCentres: [Double] = [24, 65, 125, 197].map { $0 / 255 }
@@ -239,7 +242,8 @@ nonisolated enum Grain {
   }
 
   /// grain.py's `noise_field(cells_w, cells_h, seed)`: unit Gaussian cells clipped at ±4σ, row-major.
-  /// Each row has its own generator (seeded from the seed and the row), so rows fill in parallel.
+  /// Each row has its own generator (seeded from the seed and the row), so rows fill in parallel,
+  /// and any row can be made on its own (`noiseRow`).
   static func noiseField(width: Int, height: Int, seed: Int) -> [Float] {
     guard width > 0, height > 0 else { return [] }
     var out = [Float](repeating: 0, count: width * height)
@@ -247,17 +251,24 @@ nonisolated enum Grain {
     out.withUnsafeMutableBufferPointer { buffer in
       let buffer = buffer
       DispatchQueue.concurrentPerform(iterations: height) { row in
-        var random = Random(seed: Random.mix(base ^ UInt64(row)))
-        var x = 0
-        while x < width {
-          let (a, b) = random.gaussians()
-          buffer[row * width + x] = Float(min(max(a, -4), 4))
-          if x + 1 < width { buffer[row * width + x + 1] = Float(min(max(b, -4), 4)) }
-          x += 2
-        }
+        noiseRow(row, base: base, columns: 0..<width, into: buffer.baseAddress! + row * width)
       }
     }
     return out
+  }
+
+  /// Row `row` of a noise field, its `columns` written to `out` (`base` is the field's seed
+  /// mixed, `Random.mix(seed)`). The row's generator runs from column 0, so the values are the
+  /// whole field's.
+  static func noiseRow(_ row: Int, base: UInt64, columns: Range<Int>, into out: UnsafeMutablePointer<Float>) {
+    var random = Random(seed: Random.mix(base ^ UInt64(row)))
+    var x = 0
+    while x < columns.upperBound {
+      let (a, b) = random.gaussians()
+      if columns.contains(x) { out[x - columns.lowerBound] = Float(min(max(a, -4), 4)) }
+      if columns.contains(x + 1) { out[x + 1 - columns.lowerBound] = Float(min(max(b, -4), 4)) }
+      x += 2
+    }
   }
 
   /// Where a render's planes sit in the picture the grain is laid over.
@@ -294,10 +305,15 @@ nonisolated enum Grain {
   }
 
   /// A noise field of `cells`, enlarged with Pillow's bicubic to the layout's output and cut to its
-  /// region (grain.py's `resize_float(noise_field(...), W, H)`).
+  /// region (grain.py's `resize_float(noise_field(...), W, H)`). Only the cells the region reads
+  /// are made, a row at a time, so a fine grain on a wide reference (thousands of cells each way)
+  /// never holds the whole field; the values are the whole field's.
   static func field(cells: (width: Int, height: Int), seed: Int, layout: Layout) -> [Float] {
-    let raw = noiseField(width: cells.width, height: cells.height, seed: seed)
-    return Resample.resize(raw, width: cells.width, height: cells.height, toWidth: layout.width, height: layout.height, region: layout.region)
+    guard cells.width > 0, cells.height > 0 else { return [Float](repeating: 0, count: layout.region.width * layout.region.height) }
+    let base = Random.mix(UInt64(bitPattern: Int64(seed)))
+    return Resample.resize(width: cells.width, height: cells.height, toWidth: layout.width, height: layout.height, region: layout.region) { y, columns, out in
+      noiseRow(y, base: base, columns: columns, into: out)
+    }
   }
 
   // MARK: - The pipeline's stages
@@ -559,33 +575,78 @@ nonisolated enum Grain {
     }
   }
 
-  /// grain.py's `real_noise_texture`: random reference patches, each flipped across and/or down
-  /// at random, tiled over `refWidth` × `round(refWidth × aspect)`; seeded with `seed + 1`. Three
-  /// planes (R, G, B).
-  static func realNoiseTexture(_ real: GrainProfile.RealNoise, refWidth: Int, aspect: Double, seed: Int) -> (width: Int, height: Int, planes: [[Float]]) {
-    let p = real.patch
-    let tw = refWidth, th = round(Double(refWidth) * aspect)
-    var planes = [[Float]](repeating: [Float](repeating: 0, count: max(tw * th, 0)), count: 3)
-    guard p > 0, real.count > 0, tw > 0, th > 0 else { return (tw, th, planes) }
-    let patches = (0..<real.count).map { real.values(ofPatch: $0) }
-    var random = Random(seed: seed + 1)
-    for ty in stride(from: 0, to: th, by: p) {
-      for tx in stride(from: 0, to: tw, by: p) {
-        let values = patches[random.integer(below: patches.count)]
-        let across = random.uniform() < 0.5
-        let down = random.uniform() < 0.5
-        guard values.count == p * p * 3 else { continue }
-        for y in 0..<min(p, th - ty) {
-          let sy = down ? p - 1 - y : y
-          for x in 0..<min(p, tw - tx) {
-            let sx = across ? p - 1 - x : x
-            let source = (sy * p + sx) * 3
-            let target = (ty + y) * tw + tx + x
-            planes[0][target] = values[source]
-            planes[1][target] = values[source + 1]
-            planes[2][target] = values[source + 2]
-          }
+  /// grain.py's `real_noise_texture` as tiles: the texture is `refWidth` × `round(refWidth ×
+  /// aspect)`, tiled with `patch` px tiles in raster order, each a random patch flipped across
+  /// and/or down at random (seeded with `seed + 1`). Only the choices are kept; `row` reads the
+  /// texture's pixels from them, so the texture never needs to exist whole.
+  struct RealNoiseTiles: Sendable {
+    struct Choice: Sendable {
+      /// The patch, -1 for one of the wrong size (grain.py's texture leaves it at zero).
+      var patch: Int
+      var across: Bool
+      var down: Bool
+    }
+
+    var width: Int
+    var height: Int
+    var patch: Int
+    /// Tiles across.
+    var across: Int
+    var choices: [Choice]
+    var patches: [[Float]]
+
+    init(_ real: GrainProfile.RealNoise, refWidth: Int, aspect: Double, seed: Int) {
+      patch = real.patch
+      width = refWidth
+      height = Grain.round(Double(refWidth) * aspect)
+      across = patch > 0 ? (width + patch - 1) / patch : 0
+      let down = patch > 0 ? (height + patch - 1) / patch : 0
+      choices = []
+      patches = []
+      guard patch > 0, real.count > 0, width > 0, height > 0 else { return }
+      patches = (0..<real.count).map { real.values(ofPatch: $0) }
+      var random = Random(seed: seed + 1)
+      choices.reserveCapacity(across * down)
+      for _ in 0..<across * down {
+        let index = random.integer(below: patches.count)
+        let flipAcross = random.uniform() < 0.5
+        let flipDown = random.uniform() < 0.5
+        choices.append(Choice(patch: patches[index].count == patch * patch * 3 ? index : -1, across: flipAcross, down: flipDown))
+      }
+    }
+
+    /// Channel `channel` (0 R, 1 G, 2 B) of row `y`, columns `columns`, into `out`.
+    func row(_ y: Int, channel: Int, columns: Range<Int>, into out: UnsafeMutablePointer<Float>) {
+      guard !choices.isEmpty else {
+        for x in columns { out[x - columns.lowerBound] = 0 }
+        return
+      }
+      let p = patch
+      let tileRow = y / p
+      let inTile = y % p
+      for x in columns {
+        let choice = choices[tileRow * across + x / p]
+        guard choice.patch >= 0 else {
+          out[x - columns.lowerBound] = 0
+          continue
         }
+        let sy = choice.down ? p - 1 - inTile : inTile
+        let sx = choice.across ? p - 1 - x % p : x % p
+        out[x - columns.lowerBound] = patches[choice.patch][(sy * p + sx) * 3 + channel]
+      }
+    }
+  }
+
+  /// grain.py's `real_noise_texture`, whole: three planes (R, G, B). `RealNoiseTiles` makes the
+  /// same pixels without holding them.
+  static func realNoiseTexture(_ real: GrainProfile.RealNoise, refWidth: Int, aspect: Double, seed: Int) -> (width: Int, height: Int, planes: [[Float]]) {
+    let tiles = RealNoiseTiles(real, refWidth: refWidth, aspect: aspect, seed: seed)
+    let tw = tiles.width, th = tiles.height
+    var planes = [[Float]](repeating: [Float](repeating: 0, count: max(tw * th, 0)), count: 3)
+    guard tw > 0, th > 0 else { return (tw, th, planes) }
+    for c in 0..<3 {
+      planes[c].withUnsafeMutableBufferPointer { plane in
+        for y in 0..<th { tiles.row(y, channel: c, columns: 0..<tw, into: plane.baseAddress! + y * tw) }
       }
     }
     return (tw, th, planes)
@@ -593,10 +654,16 @@ nonisolated enum Grain {
 
   /// The real-noise texture (`realNoiseTexture`) enlarged to the layout's region, three planes:
   /// what `addRealNoise` adds before its weight. Picture-independent, so `EditRenderer` keeps it.
+  /// Made a row at a time from the tiles, only the rows and columns the region reads.
   static func realNoiseField(_ real: GrainProfile.RealNoise, refWidth: Int, seed: Int, layout: Layout) -> [[Float]] {
-    let texture = realNoiseTexture(real, refWidth: refWidth, aspect: layout.aspect, seed: seed)
-    return texture.planes.map {
-      Resample.resize($0, width: texture.width, height: texture.height, toWidth: layout.width, height: layout.height, region: layout.region)
+    let tiles = RealNoiseTiles(real, refWidth: refWidth, aspect: layout.aspect, seed: seed)
+    guard tiles.width > 0, tiles.height > 0 else {
+      return [[Float]](repeating: [Float](repeating: 0, count: layout.region.width * layout.region.height), count: 3)
+    }
+    return (0..<3).map { channel in
+      Resample.resize(width: tiles.width, height: tiles.height, toWidth: layout.width, height: layout.height, region: layout.region) { y, columns, out in
+        tiles.row(y, channel: channel, columns: columns, into: out)
+      }
     }
   }
 
@@ -674,7 +741,8 @@ nonisolated enum Grain {
 
   /// grain.py's `extract_real_noise(ref, patch)`: blocks of `patch` px every `patch / 2`, those of
   /// brightness 8–235 sorted by flatness (the 6 px blur's gradient), the flattest fifth (at least
-  /// 12) kept. Nil when the reference has no such block.
+  /// 12) kept. Nil when the reference has no such block (smaller than a patch, or all of it
+  /// darker than 8 or brighter than 235), where grain.py fails with an error instead.
   static func extractRealNoise(_ ref: EditPipeline.Planes, patch: Int = 48) -> RealExtraction? {
     let w = ref.width, h = ref.height
     guard w >= patch, h >= patch, patch >= 4 else { return nil }

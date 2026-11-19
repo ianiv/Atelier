@@ -13,7 +13,7 @@ import Foundation
 /// 4. Added back by screen: 255 − (255 − v)(255 − amount · glow)/255, which brightens toward
 ///    white without passing it (values already above white are left as they are).
 nonisolated enum Halation {
-  /// Film's halation color, red-orange, as RGB gains (luma 0.53).
+  /// Film's halation color, red-orange, as RGB gains (Rec. 601 luma 0.551).
   static let warm = SIMD3<Float>(1, 0.4, 0.15)
   /// The knee's width, in luma.
   static let knee: Float = 0.15
