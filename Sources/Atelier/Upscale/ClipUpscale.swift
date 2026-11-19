@@ -239,8 +239,14 @@ nonisolated struct ClipUpscale: Codable, Sendable, Hashable {
       }
     case .recaVSR:
       guard ReCaVSRFiles.runsHere else { return "ReCaVSR runs on a paired Mac: choose one that has it in Run on." }
-      guard ReCaVSRFiles.downloaded else { return "Download ReCaVSR to use it." }
-      guard ReCaVSRFiles.installed(weights) != nil else { return "Make ReCaVSR's 8-bit copy to use 8-bit." }
+      switch ReCaVSRFiles.missing(weights, in: ReCaVSRFiles.folder) {
+      case .missing: return "Download ReCaVSR to use it."
+      case .missingEightBit: return "Make or import ReCaVSR's 8-bit copy to use 8-bit."
+      case .missingCompanions:
+        let size = ByteCountFormatter.string(fromByteCount: ReCaVSRFiles.companionBytes, countStyle: .file)
+        return "Download ReCaVSR's other files (\(size)) to use it."
+      case .notOnThisDevice, nil: break
+      }
       let size = outputSize(width: width, height: height, scale: scale, method: method)
       guard size.width * size.height <= recaVSRPixelLimit else {
         return offeredScales(width: width, height: height, method: method).isEmpty

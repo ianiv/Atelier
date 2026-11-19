@@ -5,8 +5,10 @@ import Foundation
 /// them, in a "ReCaVSR" folder of the models directory: the DiT `transformer.safetensors`
 /// (Wan2.2-TI2V-5B fine-tuned, BF16, with its source and recycle projections), the fixed prompt
 /// `prompt.safetensors` and the FlashDecoder-S `flashdecoder.safetensors`. Read in place; the
-/// optional 8-bit copy of the DiT is written beside them. The Wan VAE the page also lists isn't
-/// needed: FlashDecoder replaces its decoder.
+/// optional 8-bit copy of the DiT is written beside them, or imported there
+/// (`ReCaVSREightBitFile`), and with the prompt and the decoder it's enough for 8-bit runs: the
+/// published transformer is only read by Full runs and to make the copy. The Wan VAE the page
+/// also lists isn't needed: FlashDecoder replaces its decoder.
 ///
 /// The network follows the reference inference code (github.com/kopperx/ReCaVSR,
 /// `recavsr_infer/`).
@@ -27,12 +29,15 @@ nonisolated struct ReCaVSRFiles {
   }
 
   enum Failure: LocalizedError {
-    case missing, missingEightBit, notOnThisDevice
+    case missing, missingEightBit, missingCompanions, notOnThisDevice
 
     var errorDescription: String? {
       switch self {
       case .missing: "ReCaVSR isn't downloaded."
-      case .missingEightBit: "ReCaVSR's 8-bit copy isn't made yet. Click Make 8-bit Copy in the Upscale sheet."
+      case .missingEightBit:
+        "ReCaVSR's 8-bit copy isn't there yet. Click Make 8-bit Copy or Import 8-bit Copy… in the Upscale sheet."
+      case .missingCompanions:
+        "ReCaVSR's other files (\(ByteCountFormatter.string(fromByteCount: ReCaVSRFiles.companionBytes, countStyle: .file))) aren't downloaded. Click Download ReCaVSR in the Upscale sheet."
       case .notOnThisDevice: "ReCaVSR doesn't run on iPad. Choose a paired Mac that has it in Run on."
       }
     }
@@ -51,9 +56,9 @@ nonisolated struct ReCaVSRFiles {
   /// The files a job with `weights` reads, or why it can't run here.
   static func forJob(_ weights: Weights) throws -> ReCaVSRFiles {
     guard runsHere else { throw Failure.notOnThisDevice }
-    guard downloaded else { throw Failure.missing }
-    guard let files = installed(weights) else { throw Failure.missingEightBit }
-    return files
+    let root = folder
+    if let failure = missing(weights, in: root) { throw failure }
+    return ReCaVSRFiles(root: root, weights: weights)
   }
 
   static let folderName = "ReCaVSR"
@@ -63,17 +68,20 @@ nonisolated struct ReCaVSRFiles {
   let root: URL
   let weights: Weights
 
-  var transformer: URL { root.appending(path: "transformer.safetensors") }
+  var transformer: URL { root.appending(path: Self.transformerName) }
   var eightBitTransformer: URL { root.appending(path: Self.eightBitName) }
   var prompt: URL { root.appending(path: "prompt.safetensors") }
   var decoder: URL { root.appending(path: "flashdecoder.safetensors") }
 
-  /// The 8-bit copy of the DiT, written by `ReCaVSRQuantizer`.
+  /// The published DiT.
+  static let transformerName = "transformer.safetensors"
+  /// The 8-bit copy of the DiT, written by `ReCaVSRQuantizer` or imported
+  /// (`ReCaVSREightBitFile`).
   static let eightBitName = "transformer_i8x.ckpt"
 
   /// The published files, relative to the folder, with their sizes in bytes.
   static let required: [(path: String, bytes: Int64)] = [
-    ("transformer.safetensors", 10_603_673_624),
+    (transformerName, 10_603_673_624),
     ("prompt.safetensors", 4_194_392),
     ("flashdecoder.safetensors", 228_723_776),
   ]
@@ -86,25 +94,62 @@ nonisolated struct ReCaVSRFiles {
     URL(string: "https://huggingface.co/\(repository)/resolve/main/\(path)")!
   }
 
+  /// The published files every run reads, whichever weights: the prompt and the decoder.
+  static var companions: [(path: String, bytes: Int64)] { required.filter { $0.path != transformerName } }
+
+  /// The companions' size together, for messages.
+  static var companionBytes: Int64 { companions.reduce(0) { $0 + $1.bytes } }
+
+  /// Whether `file` is in `root` at its full size.
+  static func present(_ file: (path: String, bytes: Int64), in root: URL) -> Bool {
+    let size = (try? FileManager.default.attributesOfItem(
+      atPath: root.appending(path: file.path).path)[.size] as? Int64) ?? nil
+    return size == file.bytes
+  }
+
+  /// Whether the prompt and the decoder are in `root` at their full sizes.
+  static func companionsDownloaded(in root: URL) -> Bool {
+    companions.allSatisfy { present($0, in: root) }
+  }
+
+  /// Whether the published transformer is in `root` at its full size.
+  static func fullDownloaded(in root: URL) -> Bool {
+    required.filter { $0.path == transformerName }.allSatisfy { present($0, in: root) }
+  }
+
+  /// Whether `root` has an 8-bit copy. A copy being made or imported has another name until
+  /// it's finished, so the file being there is enough.
+  static func hasEightBitCopy(in root: URL) -> Bool {
+    FileManager.default.fileExists(atPath: root.appending(path: eightBitName).path)
+  }
+
   /// Whether every published file is there at its full size.
   static var downloaded: Bool {
     let root = folder
-    return required.allSatisfy { file in
-      let size = (try? FileManager.default.attributesOfItem(
-        atPath: root.appending(path: file.path).path)[.size] as? Int64) ?? nil
-      return size == file.bytes
+    return companionsDownloaded(in: root) && fullDownloaded(in: root)
+  }
+
+  /// What a job with `weights` would still need in `root`; nil when the files it reads are
+  /// there. Full reads the three published files; 8-bit reads the prompt, the decoder and the
+  /// 8-bit copy, and not the published transformer, so an imported copy works without it.
+  static func missing(_ weights: Weights, in root: URL) -> Failure? {
+    switch weights {
+    case .full:
+      return companionsDownloaded(in: root) && fullDownloaded(in: root) ? nil : .missing
+    case .eightBit:
+      guard hasEightBitCopy(in: root) else { return .missingEightBit }
+      return companionsDownloaded(in: root) ? nil : .missingCompanions
     }
   }
 
-  /// In the models directory, when the files `weights` reads are there: the published ones, and
-  /// for `.eightBit` the finished 8-bit copy too.
+  /// The files `weights` reads in `root`, when they're all there (`missing`).
+  static func installed(_ weights: Weights, in root: URL) -> ReCaVSRFiles? {
+    missing(weights, in: root) == nil ? ReCaVSRFiles(root: root, weights: weights) : nil
+  }
+
+  /// In the models directory, when the files `weights` reads are there.
   static func installed(_ weights: Weights) -> ReCaVSRFiles? {
-    guard downloaded else { return nil }
-    let files = ReCaVSRFiles(root: folder, weights: weights)
-    if weights == .eightBit, !FileManager.default.fileExists(atPath: files.eightBitTransformer.path) {
-      return nil
-    }
-    return files
+    installed(weights, in: folder)
   }
 }
 

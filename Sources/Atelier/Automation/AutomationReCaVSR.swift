@@ -3,6 +3,7 @@ import AVFoundation
 @preconcurrency import Diffusion
 import Foundation
 @preconcurrency import NNC
+import Synchronization
 import VideoToolbox
 
 extension Automation {
@@ -16,7 +17,15 @@ extension Automation {
   ///           [--verbose] [--quit]
   ///
   /// With `--weights eightBit` it decodes its own latents and needs the pictures above 32 dB.
-  /// `Atelier --recavsr-check --make-8bit [--quit]` writes the 8-bit copy.
+  /// `Atelier --recavsr-check --make-8bit [--quit]` writes the 8-bit copy (it needs the published
+  /// transformer; the other runs need only the files their weights read).
+  ///
+  /// `Atelier --recavsr-check --validate-8bit FILE [--quit]` says whether FILE is an 8-bit copy
+  /// Import 8-bit Copy… would take, and how long looking took; it writes nothing.
+  /// `Atelier --recavsr-check --import-8bit FILE [--into DIR] [--quit]` imports it as the sheet's
+  /// button does (`ReCaVSREightBitFile.importCopy`: the copy, then the prompt and the decoder
+  /// from beside FILE or downloaded), into DIR instead of the models folder's ReCaVSR when
+  /// given, and passes when 8-bit is then installed there.
   ///
   /// Or upscales the first frames of a real clip, printing seconds per frame and peak memory,
   /// and with `--export DIR` writes the result there as an MP4:
@@ -39,11 +48,50 @@ extension Automation {
     let finish: @Sendable () -> Void = {
       if args.contains("--quit") { Task { @MainActor in AppLifecycle.quit() } }
     }
-    guard let fullFiles = ReCaVSRFiles.installed(.full) else {
-      log("FAIL ReCaVSR isn't in \(AppSettings.modelsDirectory)/\(ReCaVSRFiles.folderName)")
-      return finish()
+    if let file = value("--validate-8bit") {
+      DispatchQueue.global(qos: .userInitiated).async {
+        let started = Date()
+        do {
+          try ReCaVSREightBitFile.validate(URL(fileURLWithPath: file))
+          log(String(format: "PASS an 8-bit copy, checked in %.3fs", Date().timeIntervalSince(started)))
+        } catch {
+          log(String(format: "FAIL %@ (checked in %.3fs)", error.localizedDescription, Date().timeIntervalSince(started)))
+        }
+        finish()
+      }
+      return
+    }
+    if let file = value("--import-8bit") {
+      let folder = value("--into").map { URL(fileURLWithPath: $0) } ?? ReCaVSRFiles.folder
+      Task {
+        let started = Date()
+        let last = Mutex(-1)
+        do {
+          try await ReCaVSREightBitFile.importCopy(of: URL(fileURLWithPath: file), into: folder) { fraction in
+            let percent = Int(fraction * 100)
+            let crossed = last.withLock { last in
+              defer { last = max(last, percent) }
+              return percent / 10 > last / 10
+            }
+            if crossed { log("import \(percent)%") }
+          }
+          let installed = ReCaVSRFiles.Weights.allCases.filter { ReCaVSRFiles.installed($0, in: folder) != nil }
+          log(String(
+            format: "%@ imported into %@ in %.1fs; installed there: %@",
+            installed.contains(.eightBit) ? "PASS" : "FAIL", folder.path, Date().timeIntervalSince(started),
+            installed.map(\.title).joined(separator: ", ")))
+        } catch {
+          log("FAIL \(error.localizedDescription)")
+        }
+        finish()
+      }
+      return
     }
     if args.contains("--make-8bit") {
+      guard let fullFiles = ReCaVSRFiles.installed(.full) else {
+        log("FAIL ReCaVSR isn't in \(AppSettings.modelsDirectory)/\(ReCaVSRFiles.folderName)")
+        return finish()
+      }
       DispatchQueue.global(qos: .userInitiated).async {
         do {
           let started = Date()
@@ -66,7 +114,7 @@ extension Automation {
     }
     let weights = value("--weights").flatMap(ReCaVSRFiles.Weights.init(rawValue:)) ?? .full
     guard let files = ReCaVSRFiles.installed(weights) else {
-      log("FAIL ReCaVSR \(weights.title) isn't installed; for 8-bit, run --make-8bit first")
+      log("FAIL ReCaVSR \(weights.title) isn't installed in \(AppSettings.modelsDirectory)/\(ReCaVSRFiles.folderName); for 8-bit, run --make-8bit or --import-8bit first")
       return finish()
     }
     if let input = value("--input") {

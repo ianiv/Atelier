@@ -1,5 +1,6 @@
 @testable import Atelier
 import Foundation
+@preconcurrency import NNC
 import Testing
 
 /// ReCaVSR's streaming bookkeeping (`ReCaVSRRouter`) against sequences worked out from the
@@ -160,5 +161,182 @@ struct ReCaVSRTests {
     // 4× of 448×320 is past 1920×1088.
     #expect(ClipUpscale.offeredScales(width: 448, height: 320, method: .recaVSR) == [2])
     #expect(ClipUpscale.offeredScales(width: 480, height: 272, method: .recaVSR) == [2, 4])
+  }
+
+  // MARK: - Importing an 8-bit copy (`ReCaVSREightBitFile`, `ReCaVSRFiles`' install state)
+
+  @Test func eightBitCopyNames() {
+    let names = ReCaVSREightBitFile.expectedNames()
+    // 27 tensors a layer and 25 outside them: what the published checkpoint has.
+    #expect(names.count == 30 * 27 + 25)
+    #expect(Set(names).count == names.count)
+    for name in [
+      "blocks.0.attn1.to_q.weight", "blocks.0.attn1.to_q.bias", "blocks.29.ffn.net.2.weight",
+      "blocks.14.attn2.to_k.bias", "blocks.7.attn2.norm_k.weight", "blocks.7.norm2.bias",
+      "blocks.29.scale_shift_table", "scale_shift_table", "patch_embedding.weight", "sr_proj.bias",
+      "proj_out.weight", "condition_embedder.time_proj.bias", "condition_embedder.text_embedder.linear_2.weight",
+      "lq_proj.conv2.weight", "lq_proj.norm1.weight", "lq_proj.out_proj.bias",
+    ] {
+      #expect(names.contains(name), "\(name)")
+    }
+    // The quantizer's resume marker isn't part of a copy.
+    #expect(!names.contains(ReCaVSRQuantizer.sourceKey))
+  }
+
+  @Test func eightBitCopyMatrices() {
+    let names = ReCaVSREightBitFile.expectedNames()
+    let eightBit = names.filter(ReCaVSRQuantizer.isEightBit)
+    // Ten matrices a layer: the eight the pieces multiply by and the cross-attention's keys and values.
+    #expect(eightBit.count == 30 * 10)
+    #expect(eightBit.allSatisfy { $0.hasPrefix("blocks.") && $0.hasSuffix(".weight") && !$0.contains("norm") })
+    #expect(names.allSatisfy { (ReCaVSREightBitFile.eightBitShape($0) != nil) == ReCaVSRQuantizer.isEightBit($0) })
+    #expect(ReCaVSREightBitFile.eightBitShape("blocks.3.attn1.to_q.weight") == [3072, 3072])
+    #expect(ReCaVSREightBitFile.eightBitShape("blocks.3.attn2.to_v.weight") == [3072, 3072])
+    #expect(ReCaVSREightBitFile.eightBitShape("blocks.3.ffn.net.0.proj.weight") == [14336, 3072])
+    #expect(ReCaVSREightBitFile.eightBitShape("blocks.3.ffn.net.2.weight") == [3072, 14336])
+    #expect(ReCaVSREightBitFile.eightBitShape("blocks.3.ffn.net.2.bias") == nil)
+    #expect(ReCaVSREightBitFile.eightBitShape("sr_proj.weight") == nil)
+  }
+
+  /// An SQLite header saying `pages` pages of 4096 bytes.
+  private func storeHeader(pages: UInt32, journal: UInt8 = 1) -> Data {
+    var header = Data("SQLite format 3\0".utf8) + Data(count: 84)
+    header[16] = 0x10
+    header[18] = journal
+    header[19] = journal
+    for index in 0..<4 { header[28 + index] = UInt8(truncatingIfNeeded: pages >> (8 * UInt32(3 - index))) }
+    return header
+  }
+
+  @Test func eightBitCopyHeader() {
+    typealias File = ReCaVSREightBitFile
+    #expect(File.headerProblem(storeHeader(pages: 1000), fileBytes: 4_096_000) == nil)
+    // Longer than its pages is fine; shorter was cut off.
+    #expect(File.headerProblem(storeHeader(pages: 1000), fileBytes: 4_100_000) == nil)
+    #expect(File.headerProblem(storeHeader(pages: 1000), fileBytes: 4_095_999) == .truncated)
+    #expect(File.headerProblem(storeHeader(pages: 1_394_852), fileBytes: 5_713_313_792) == nil)
+    #expect(File.headerProblem(storeHeader(pages: 1_394_852), fileBytes: 3_000_000_000) == .truncated)
+    // Write-ahead mode: copied while it was open.
+    #expect(File.headerProblem(storeHeader(pages: 1000, journal: 2), fileBytes: 4_096_000) == .notClosed)
+    #expect(File.headerProblem(Data("not a store, just some text that goes on".utf8), fileBytes: 40) == .notStore)
+    #expect(File.headerProblem(Data(), fileBytes: 0) == .notStore)
+    #expect(File.headerProblem(storeHeader(pages: 1000).prefix(50), fileBytes: 50) == .notStore)
+    // A safetensors file: its JSON header's length, then the JSON.
+    var safetensors = Data([0x40, 0x9c, 0, 0, 0, 0, 0, 0]) + Data("{\"blocks.0.attn1.to_q.weight\":{".utf8)
+    safetensors += Data(count: 100)
+    #expect(File.headerProblem(safetensors, fileBytes: 10_603_673_624) == .fullPrecision)
+  }
+
+  private func scratchFolder() throws -> URL {
+    let folder = FileManager.default.temporaryDirectory.appending(path: "ReCaVSRTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    return folder
+  }
+
+  private func problem(_ url: URL) -> ReCaVSREightBitFile.Problem? {
+    do {
+      try ReCaVSREightBitFile.validate(url)
+      return nil
+    } catch {
+      return error as? ReCaVSREightBitFile.Problem ?? .unreadable
+    }
+  }
+
+  @Test func eightBitCopyValidation() throws {
+    let folder = try scratchFolder()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    #expect(problem(folder.appending(path: "nothing.ckpt")) == .unreadable)
+    let text = folder.appending(path: "text.ckpt")
+    try Data(String(repeating: "This is not a model. ", count: 20).utf8).write(to: text)
+    #expect(problem(text) == .notStore)
+    // A real store, without ReCaVSR's tensors.
+    let other = folder.appending(path: "other.ckpt")
+    DynamicGraph().openStore(other.path) { store in
+      store.write("some.weight", tensor: Tensor<Float>([1, 2, 3, 4], .CPU, .C(4)))
+    }
+    #expect(problem(other) == .missing("blocks.0.attn1.to_q.weight"))
+    // The right name, not stored 8-bit.
+    let plain = folder.appending(path: "plain.ckpt")
+    DynamicGraph().openStore(plain.path) { store in
+      for name in ReCaVSREightBitFile.expectedNames() {
+        store.write(name, tensor: Tensor<Float>([1, 2, 3, 4], .CPU, .C(4)))
+      }
+    }
+    #expect(problem(plain) == .notEightBit("blocks.0.attn1.to_q.weight"))
+    // Cut short.
+    let whole = try Data(contentsOf: plain)
+    let cut = folder.appending(path: "cut.ckpt")
+    try whole.prefix(whole.count / 2).write(to: cut)
+    #expect(problem(cut) == .truncated)
+    // A journal beside it.
+    try Data([1, 2, 3]).write(to: URL(fileURLWithPath: plain.path + "-wal"))
+    #expect(problem(plain) == .notClosed)
+    // Checking wrote nothing beside the files.
+    let left = try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted()
+    #expect(left == ["cut.ckpt", "other.ckpt", "plain.ckpt", "plain.ckpt-wal", "text.ckpt"])
+  }
+
+  /// A file of `bytes` bytes with nothing in them (sparse, so it takes no room).
+  private func place(_ name: String, bytes: Int64, in folder: URL) throws {
+    let url = folder.appending(path: name)
+    try? FileManager.default.removeItem(at: url)
+    #expect(FileManager.default.createFile(atPath: url.path, contents: nil))
+    let handle = try FileHandle(forWritingTo: url)
+    try handle.truncate(atOffset: UInt64(bytes))
+    try handle.close()
+  }
+
+  @Test func installStates() throws {
+    typealias Files = ReCaVSRFiles
+    let folder = try scratchFolder()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let installed = { Files.Weights.allCases.filter { Files.installed($0, in: folder) != nil } }
+    #expect(Files.companions.map(\.path) == ["prompt.safetensors", "flashdecoder.safetensors"])
+    #expect(Files.companionBytes == 232_918_168)
+
+    // Nothing there.
+    #expect(installed().isEmpty)
+    #expect(Files.missing(.full, in: folder) == .missing)
+    #expect(Files.missing(.eightBit, in: folder) == .missingEightBit)
+
+    // An imported 8-bit copy alone: its other files are still needed.
+    try place(Files.eightBitName, bytes: 4096, in: folder)
+    #expect(Files.hasEightBitCopy(in: folder))
+    #expect(installed().isEmpty)
+    #expect(Files.missing(.eightBit, in: folder) == .missingCompanions)
+
+    // A companion at the wrong size doesn't count.
+    try place("prompt.safetensors", bytes: 4_194_392, in: folder)
+    try place("flashdecoder.safetensors", bytes: 1000, in: folder)
+    #expect(!Files.companionsDownloaded(in: folder))
+    #expect(installed().isEmpty)
+
+    // The 8-bit copy with the prompt and the decoder: 8-bit runs, Full doesn't.
+    try place("flashdecoder.safetensors", bytes: 228_723_776, in: folder)
+    #expect(Files.companionsDownloaded(in: folder))
+    #expect(!Files.fullDownloaded(in: folder))
+    #expect(installed() == [.eightBit])
+    #expect(Files.missing(.full, in: folder) == .missing)
+    #expect(Files.installed(.eightBit, in: folder)?.eightBitTransformer.lastPathComponent == Files.eightBitName)
+
+    // A copy still on its way in isn't one yet.
+    try FileManager.default.moveItem(
+      at: folder.appending(path: Files.eightBitName),
+      to: folder.appending(path: Files.eightBitName + ReCaVSREightBitFile.stagingSuffix))
+    #expect(!Files.hasEightBitCopy(in: folder))
+    #expect(installed().isEmpty)
+
+    // The published files without a copy: Full only.
+    try place(Files.transformerName, bytes: 10_603_673_624, in: folder)
+    #expect(installed() == [.full])
+    #expect(Files.missing(.eightBit, in: folder) == .missingEightBit)
+
+    // Everything.
+    try place(Files.eightBitName, bytes: 4096, in: folder)
+    #expect(installed() == [.full, .eightBit])
+
+    // A transformer that's partly downloaded: 8-bit still runs.
+    try place(Files.transformerName, bytes: 1_000_000, in: folder)
+    #expect(installed() == [.eightBit])
   }
 }

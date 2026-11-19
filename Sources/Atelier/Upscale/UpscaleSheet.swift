@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Upscale… on a clip in History: pick FlashVSR+ (Quality), ReCaVSR or Apple Super Resolution
 /// (Fast) and a scale, then queue it. The result is a new clip after the source.
@@ -263,7 +264,7 @@ struct DroppedVideo: Identifiable {
 
 /// Method, FlashVSR+ variant, ReCaVSR weights and scale for upscaling a `width`×`height` video,
 /// with the size it makes, a Download button for the chosen model when it isn't there yet,
-/// ReCaVSR's Make 8-bit Copy, and why it can't, if it can't. Every control stays; ones that
+/// ReCaVSR's Make 8-bit Copy and Import 8-bit Copy…, and why it can't, if it can't. Every control stays; ones that
 /// don't apply are disabled.
 struct UpscaleControls: View {
   let width: Int
@@ -279,6 +280,8 @@ struct UpscaleControls: View {
   let server: (name: String, upscalers: RemoteUpscalers)?
   private var download = FlashVSRDownload.shared
   private var recaVSR = ReCaVSRDownload.shared
+  /// The file picker for Import 8-bit Copy….
+  @State private var choosingEightBit = false
 
   init(
     width: Int, height: Int, method: Binding<ClipUpscale.Method?>, scale: Binding<Int>,
@@ -383,7 +386,7 @@ struct UpscaleControls: View {
             Button("Cancel") { recaVSR.cancel() }
           } else {
             Button("Download ReCaVSR (\(Self.bytes(ReCaVSRDownload.remainingBytes)))") { recaVSR.start() }
-              .disabled(recaVSRDownloaded || server != nil || !ReCaVSRFiles.runsHere)
+              .disabled(recaVSRDownloaded || recaVSR.importing != nil || server != nil || !ReCaVSRFiles.runsHere)
               .help("Downloads it into \(ReCaVSRFiles.folderName) in the models folder, from Hugging Face")
           }
         } else if let downloading, downloading == variant {
@@ -405,14 +408,28 @@ struct UpscaleControls: View {
         if let copying = recaVSR.copying {
           ProgressView(value: copying) { Text("Making ReCaVSR's 8-bit copy…").font(.caption) }
           Button("Stop") { recaVSR.cancelEightBitCopy() }
+        } else if let importing = recaVSR.importing {
+          ProgressView(value: importing) { Text("Importing ReCaVSR's 8-bit copy…").font(.caption) }
+          Button("Cancel") { recaVSR.cancelImport() }
         } else {
           Button("Make 8-bit Copy (\(Self.bytes(ReCaVSRDownload.eightBitBytes)))") { recaVSR.makeEightBitCopy() }
             .disabled(
               method != .recaVSR || !recaVSRDownloaded || hasEightBit || server != nil || !ReCaVSRFiles.runsHere)
             .help("Writes an 8-bit copy of ReCaVSR beside it in the models folder, for the 8-bit weights")
+          Button("Import 8-bit Copy…") { choosingEightBit = true }
+            .disabled(
+              method != .recaVSR || hasEightBit || recaVSR.downloading || server != nil || !ReCaVSRFiles.runsHere)
+            .help("Copies an 8-bit copy you already have into the models folder, and downloads the two small files it needs if they're missing")
+            .fileImporter(
+              isPresented: $choosingEightBit, allowedContentTypes: [UTType(filenameExtension: "ckpt") ?? .data]
+            ) { result in
+              guard case .success(let url) = result else { return }
+              recaVSR.importEightBit(url)
+            }
+            .fileDialogDefaultDirectory(FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first)
         }
       }
-      if let failure = recaVSR.failure ?? recaVSR.copyFailure, method == .recaVSR {
+      if let failure = recaVSR.failure ?? recaVSR.copyFailure ?? recaVSR.importFailure, method == .recaVSR {
         Text(failure).font(.caption).foregroundStyle(.red)
       }
       if let failure = download.failure {

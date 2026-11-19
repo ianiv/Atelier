@@ -91,7 +91,7 @@ Videos are stored in the project the way Draw Things stores them: one step per f
 To make a larger, sharper copy of a video, right-click it in History and choose **Upscale…**, or click **Upscale…** in its detail panel. Pick a method and a scale; the sheet shows the size it will make.
 
 - **Quality** uses FlashVSR+, which restores the whole video as one stream, each part with the parts before it in view, so detail stays steady from frame to frame instead of shimmering. Pick **Turbo** (faster) or **Base** (slower, a little more detail). The first time, click **Download FlashVSR+** in the sheet: it downloads about 7 GB per version from Hugging Face into a **FlashVSR+** folder in the models folder. It makes videos up to 1920×1152 and takes a few seconds a frame.
-- **ReCaVSR** restores the video with a large model (built on Wan2.2) a few frames at a time, reusing what it made for the frames before, so it stays steady too. Pick **Full** or **8-bit** weights: 8-bit uses about 3–4 GB less memory and looks nearly the same. The first time, click **Download ReCaVSR** (about 10.8 GB from Hugging Face, into a **ReCaVSR** folder in the models folder); for 8-bit, then click **Make 8-bit Copy**, which writes a 5.7 GB copy beside it in about a minute (stopping it keeps what's written, and the next copy carries on). It makes videos up to 1920×1088, about 0.6 s a frame at 1280×720 and 1.3 s at 1920×1080 on an M5 Max, and uses a lot of memory: about 23 GB at 720p and 30 GB at 1080p with 8-bit (27 and 33 GB full). It runs on a Mac: on an iPad, choose a paired Mac that has it in **Run on** (see [On another device](#on-another-device)); with the iPad itself as the target, ReCaVSR is shown but can't be picked. It upscales videos, not images.
+- **ReCaVSR** restores the video with a large model (built on Wan2.2) a few frames at a time, reusing what it made for the frames before, so it stays steady too. Pick **Full** or **8-bit** weights: 8-bit uses about 3–4 GB less memory and looks nearly the same. The first time, click **Download ReCaVSR** (about 10.8 GB from Hugging Face, into a **ReCaVSR** folder in the models folder); for 8-bit, then click **Make 8-bit Copy**, which writes a 5.7 GB copy beside it in about a minute (stopping it keeps what's written, and the next copy carries on). If you already have an 8-bit copy, **Import 8-bit Copy…** brings it in without the big download (see [Getting ReCaVSR](#getting-recavsr)). It makes videos up to 1920×1088, about 0.6 s a frame at 1280×720 and 1.3 s at 1920×1080 on an M5 Max, and uses a lot of memory: about 23 GB at 720p and 30 GB at 1080p with 8-bit (27 and 33 GB full). It runs on a Mac: on an iPad, choose a paired Mac that has it in **Run on** (see [On another device](#on-another-device)); with the iPad itself as the target, ReCaVSR is shown but can't be picked. It upscales videos, not images.
 - **Fast** uses Apple Super Resolution on the Neural Engine and takes seconds. macOS downloads its model the first time you use it. It offers only the scales your device supports (on some Macs, only 4×), for videos up to 1920×1080.
 
 ### Getting FlashVSR+
@@ -117,7 +117,7 @@ FlashVSR+ is by OpenImagingLab, and Atelier's version follows T-Go LLC's vpipe p
 
 ### Getting ReCaVSR
 
-Atelier looks for ReCaVSR in a **ReCaVSR** folder inside your models folder, and it's available once its three files are there at full size. **Download ReCaVSR** in the Upscale or Export Video sheet fetches whatever is missing, skipping files already there. To download them yourself, get these from [kopper/ReCaVSR](https://huggingface.co/kopper/ReCaVSR) (the VAE it also lists isn't needed):
+Atelier looks for ReCaVSR in a **ReCaVSR** folder inside your models folder. **Full** is available once its three files are there at full size; **8-bit** needs only the 8-bit copy and the two small files (`prompt.safetensors` and `flashdecoder.safetensors`, 233 MB together), not the 10.6 GB transformer. **Download ReCaVSR** in the Upscale or Export Video sheet fetches whatever is missing, skipping files already there. To download them yourself, get these from [kopper/ReCaVSR](https://huggingface.co/kopper/ReCaVSR) (the VAE it also lists isn't needed):
 
 ```
 Models/
@@ -125,8 +125,10 @@ Models/
     transformer.safetensors   (10.6 GB)
     prompt.safetensors        (4 MB)
     flashdecoder.safetensors  (229 MB)
-    transformer_i8x.ckpt      (5.7 GB, written by Make 8-bit Copy)
+    transformer_i8x.ckpt      (5.7 GB, written by Make 8-bit Copy or imported)
 ```
+
+If you already have an 8-bit copy that Atelier made (on another Mac, say), click **Import 8-bit Copy…** in the same sheets and pick it, whatever it's named. Atelier checks that it's one of its own 8-bit copies and complete, then copies it into the ReCaVSR folder; your file stays where it is. It also brings the two small files: the ones beside the file you picked if they're there, otherwise it downloads them (233 MB). After that 8-bit works without downloading the full transformer, and Full still needs **Download ReCaVSR**. The button is off once the folder has an 8-bit copy. Other 8-bit formats of ReCaVSR aren't converted.
 
 ReCaVSR is by Xijun Wang and others at the University of Science and Technology of China, Apache-2.0 (see **Settings ▸ About**).
 
