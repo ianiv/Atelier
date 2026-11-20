@@ -961,7 +961,7 @@ struct EditRenderCancelTests {
   }
 
   /// Each step with a cancel that's never set gives exactly what it gives with `.never`, and
-  /// once set, stops (a cancelled blur leaves most of a big plane unwritten).
+  /// once set, stops (a cancelled blur gives its plane back unblurred).
   @Test func stepsHonourTheCancel() {
     let planes = GrainTests.picture(width: 160, height: 120)
     let live = EditPipeline.Cancel()
@@ -987,7 +987,10 @@ struct EditRenderCancelTests {
     let plane = [Float](repeating: 1, count: 512 * 512)
     let blurred = Blur.gauss(plane, width: 512, height: 512, sigma: 4, cancel: stopped)
     #expect(blurred == plane)
-    #expect(Blur.boxBlur(plane, width: 512, height: 512, radius: 3, horizontal: true, cancel: stopped).allSatisfy { $0 == 0 })
+    let ramp = (0..<512 * 512).map { Float($0 % 7) }
+    for horizontal in [true, false] {
+      #expect(Blur.boxBlur(ramp, width: 512, height: 512, radius: 3, horizontal: horizontal, cancel: stopped) == ramp)
+    }
   }
 }
 

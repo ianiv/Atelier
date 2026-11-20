@@ -28,21 +28,43 @@ nonisolated enum Blur {
   /// Each line's sums are the scalar ones, added in the same order; only the lines are taken
   /// side by side so the additions of different lines overlap: eight rows at a time, a row per
   /// SIMD lane, along x, and down the rows `columnsPerTask` columns at a time along y (reading
-  /// rows, not columns with a stride). Lines a cancel skips are zeros.
+  /// rows, not columns with a stride). Once `cancel` is set the lines not yet started are
+  /// skipped and the plane comes back as it was.
   static func boxBlur(
     _ plane: [Float], width: Int, height: Int, radius r: Int, horizontal: Bool, cancel: EditPipeline.Cancel = .never
   ) -> [Float] {
     guard r >= 1, width > 0, height > 0, plane.count == width * height else { return plane }
-    let count = plane.count
-    return [Float](unsafeUninitializedCapacity: count) { output, initialized in
-      plane.withUnsafeBufferPointer { input in
-        let input = input.baseAddress!
-        let output = output.baseAddress!
+    var out = zeros(plane.count)
+    blur(plane, into: &out, width: width, height: height, radius: r, horizontal: horizontal, cancel: cancel)
+    return cancel.isCancelled ? plane : out
+  }
+
+  /// `boxBlur` of `input` into `output`, both `width` × `height`, `r` at least 1.
+  private static func blur(
+    _ input: [Float], into output: inout [Float], width: Int, height: Int, radius r: Int, horizontal: Bool, cancel: EditPipeline.Cancel
+  ) {
+    input.withUnsafeBufferPointer { input in
+      output.withUnsafeMutableBufferPointer { output in
         if horizontal {
-          rowsAlong(input, output, width: width, height: height, radius: r, cancel: cancel)
+          rowsAlong(input.baseAddress!, output.baseAddress!, width: width, height: height, radius: r, cancel: cancel)
         } else {
-          rowsDown(input, output, width: width, height: height, radius: r, cancel: cancel)
+          rowsDown(input.baseAddress!, output.baseAddress!, width: width, height: height, radius: r, cancel: cancel)
         }
+      }
+    }
+  }
+
+  /// A plane of zeros, cleared in parts across the cores. That's the memory's first touch,
+  /// spread out: the vertical pass writes a few columns of every row at once, and on fresh
+  /// memory its tasks all faulted the same pages in, at times ten times slower than the pass.
+  static func zeros(_ count: Int) -> [Float] {
+    [Float](unsafeUninitializedCapacity: count) { out, initialized in
+      let base = out.baseAddress!
+      let parts = max(1, min(count / 65536, ProcessInfo.processInfo.activeProcessorCount * 4))
+      let size = (count + parts - 1) / parts
+      DispatchQueue.concurrentPerform(iterations: parts) { part in
+        let start = part * size
+        if start < count { (base + start).initialize(repeating: 0, count: min(size, count - start)) }
       }
       initialized = count
     }
@@ -64,11 +86,7 @@ nonisolated enum Blur {
     let tasks = (groups + groupsPerTask - 1) / groupsPerTask
     DispatchQueue.concurrentPerform(iterations: tasks) { task in
       let groups = task * groupsPerTask..<min((task + 1) * groupsPerTask, groups)
-      guard !cancel.isCancelled else {
-        let rows = groups.lowerBound * 8..<min(groups.upperBound * 8, height)
-        (output + rows.lowerBound * width).update(repeating: 0, count: rows.count * width)
-        return
-      }
+      guard !cancel.isCancelled else { return }
       withUnsafeTemporaryAllocation(of: Lanes.self, capacity: padded) { sums in
         let sums = sums.baseAddress!
         for group in groups {
@@ -124,10 +142,7 @@ nonisolated enum Blur {
     DispatchQueue.concurrentPerform(iterations: tasks) { task in
       let x0 = task * columns
       let n = min(columns, width - x0)
-      guard !cancel.isCancelled else {
-        for y in 0..<height { (output + y * width + x0).update(repeating: 0, count: n) }
-        return
-      }
+      guard !cancel.isCancelled else { return }
       withUnsafeTemporaryAllocation(of: Double.self, capacity: (kept + 1) * columns) { buffer in
         let ring = buffer.baseAddress!
         let total = ring + kept * columns
@@ -150,18 +165,28 @@ nonisolated enum Blur {
   }
 
   /// grain.py's `gauss(a, sigma)` for one plane: for each of `boxSizes(sigma)`, a box blur of
-  /// radius `(size − 1) / 2` along x, then y. Below sigma 0.3 the plane is returned as it is.
+  /// radius `(size − 1) / 2` along x, then y. Below sigma 0.3, or once `cancel` is set, the
+  /// plane is returned as it is.
   static func gauss(_ plane: [Float], width: Int, height: Int, sigma: Double, cancel: EditPipeline.Cancel = .never) -> [Float] {
-    guard sigma >= 0.3 else { return plane }
-    var out = plane
+    guard sigma >= 0.3, width > 0, height > 0, plane.count == width * height else { return plane }
+    // Two planes for all the passes, x into `across`, then y into `down`.
+    var across: [Float] = [], down: [Float] = []
+    var blurred = false
     for size in boxSizes(sigma: sigma) {
-      // Each pass makes a whole new plane: none once cancelled.
-      guard !cancel.isCancelled else { return out }
+      guard !cancel.isCancelled else { return plane }
       let r = (size - 1) / 2
-      out = boxBlur(out, width: width, height: height, radius: r, horizontal: true, cancel: cancel)
-      out = boxBlur(out, width: width, height: height, radius: r, horizontal: false, cancel: cancel)
+      // A box of 1 leaves the plane as it is.
+      guard r >= 1 else { continue }
+      if !blurred {
+        across = zeros(plane.count)
+        down = zeros(plane.count)
+      }
+      blur(blurred ? down : plane, into: &across, width: width, height: height, radius: r, horizontal: true, cancel: cancel)
+      blur(across, into: &down, width: width, height: height, radius: r, horizontal: false, cancel: cancel)
+      blurred = true
     }
-    return out
+    // Once cancelled, a pass may have stopped partway.
+    return blurred && !cancel.isCancelled ? down : plane
   }
 
   /// `gauss` for each plane of an image (grain.py's HxWxC case, which blurs channels apart).
