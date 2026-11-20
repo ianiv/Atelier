@@ -10,8 +10,9 @@ Open the server to other computers only on a network you trust: your own home ne
 
 Anyone who can reach the server can do what an agent does: generate images and videos with your models and your GPU, read and change the Create screen, and see images in the current project. They can't read or write files on this Mac: file paths from other devices are refused.
 
-- **The token** is what keeps other people on the network out. Without it, anyone on the network can use the server. Keep **Require Token** on.
-- **HTTPS** keeps the token secret. Without it, the token and every image cross the network in plain text, and anyone on the same Wi-Fi can read them, then use the token themselves.
+> [!WARNING]
+> - **The token** is what keeps other people on the network out. Without it, anyone on the network can use the server. Keep **Require Token** on.
+> - **HTTPS** keeps the token secret. Without it, the token and every image cross the network in plain text, and anyone on the same Wi-Fi can read them, then use the token themselves.
 
 So:
 
@@ -268,7 +269,9 @@ Add `-CAfile ca.crt` to have it check them: the last lines should say `Verify re
 
 ## Keeping it safe
 
-- **Keep the CA key private.** `ca.key` (or mkcert's `rootCA-key.pem`) can make certificates for any name, including websites, that your devices will trust. Keep it in a folder only you can read (`chmod 700` the folder, `chmod 600` the key), never copy it to other computers, and back it up somewhere private if you want to reuse the CA.
+> [!WARNING]
+> **Keep the CA key private.** `ca.key` (or mkcert's `rootCA-key.pem`) can make certificates for any name, including websites, that your devices will trust. Keep it in a folder only you can read (`chmod 700` the folder, `chmod 600` the key), never copy it to other computers, and back it up somewhere private if you want to reuse the CA.
+
 - **Use a real password for the `.p12`**, not an empty one, and don't keep the `.p12` and its password together.
 - **If a key may have leaked**, make a new certificate and import it; if it was the CA key, make a new CA, remove the old one from every client (Keychain Access, or the store you added it to) and trust the new one.
 - **The token is still needed.** HTTPS hides the token and the traffic; the token is what keeps others out. Keep Require Token on, and **Regenerate** it if it may have leaked.

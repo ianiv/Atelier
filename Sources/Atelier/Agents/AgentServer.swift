@@ -805,7 +805,13 @@ struct AgentSettingsView: View {
           Text("Access")
           Text(accessNote)
         }
-        Link("Before You Open the Server to Your Network", destination: Self.networkSafetyGuide)
+        Link(destination: Self.networkSafetyGuide) {
+          Label {
+            Text("Before You Open the Server to Your Network")
+          } icon: {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+          }
+        }
         Toggle(isOn: $server.requireToken) {
           Text("Require Token")
           Text("Agents on other devices send this token. Agents on this Mac never need it.")
