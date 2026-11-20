@@ -290,6 +290,80 @@ struct EditPipelineTests {
     #expect(lit.r.allSatisfy { $0 <= 255 })
   }
 
+  /// A bright half (sRGB 0.9) beside a dark one: the glow shows on the dark side, strongest at
+  /// the edge and fading with distance, while the bright area itself barely changes.
+  @Test func halationGlowsIntoDarkerSurroundings() {
+    let width = 160
+    let height = 16
+    var pixels = [SIMD3<Float>](repeating: [40, 40, 40], count: width * height)
+    for y in 0..<height {
+      for x in 0..<80 { pixels[y * width + x] = [230, 230, 230] }
+    }
+    let source = planes(pixels, width: width)
+    var lit = source
+    Halation.apply(.init(amount: 1, threshold: 0.8, radius: 8, warmth: 0.6), to: &lit)
+    let row = 8 * width
+    func change(_ x: Int) -> Float { lit.r[row + x] - source.r[row + x] }
+    // The bright interior moves little; just outside the edge it moves most.
+    #expect(abs(change(40)) < 3)
+    #expect(change(80) > 20)
+    #expect(change(80) > change(79) + 10)
+    // Then it falls off with distance, to nothing far away.
+    #expect(change(80) > change(88) && change(88) > change(96) && change(96) > change(110))
+    #expect(change(159) == 0)
+  }
+
+  /// A uniform midtone is below any reasonable threshold and stays exactly as it was.
+  @Test func halationLeavesMidtonesAlone() {
+    let pixels = [SIMD3<Float>](repeating: [127.5, 127.5, 127.5], count: 32 * 32)
+    let source = planes(pixels, width: 32)
+    var lit = source
+    Halation.apply(.init(amount: 1, threshold: 0.8, radius: 6, warmth: 0.6), to: &lit)
+    #expect(lit.r == source.r && lit.g == source.g && lit.b == source.b)
+  }
+
+  /// The glow starts from nothing just over the threshold and grows with the highlight's
+  /// brightness: no step where light crosses the threshold.
+  @Test func halationGrowsContinuouslyWithBrightness() {
+    let width = 40
+    func glow(_ value: Float) -> Float {
+      var pixels = [SIMD3<Float>](repeating: [40, 40, 40], count: width * width)
+      for y in 16..<24 {
+        for x in 16..<24 { pixels[y * width + x] = [value, value, value] }
+      }
+      var lit = planes(pixels, width: width)
+      Halation.apply(.init(amount: 1, threshold: 0.8, radius: 4, warmth: 0.6), to: &lit)
+      return lit.r[20 * width + 26] - 40
+    }
+    let values: [Float] = [205, 210, 220, 235, 255]
+    let glows = values.map(glow)
+    // 205 is just over 0.8 (204): a trace, under a level.
+    #expect(glows[0] >= 0 && glows[0] < 1)
+    #expect(zip(glows, glows.dropFirst()).allSatisfy { $0 < $1 })
+    #expect(glows[4] > 10)
+  }
+
+  /// At the default threshold, radius and warmth, a white spot on a mid-dark background glows
+  /// without clipping any channel around it, even at full amount.
+  @Test func halationDoesNotClipAroundASpot() {
+    let width = 120
+    var pixels = [SIMD3<Float>](repeating: [70, 70, 70], count: width * width)
+    for y in 50..<70 {
+      for x in 50..<70 { pixels[y * width + x] = [255, 255, 255] }
+    }
+    for amount in [0.5, 1.0] {
+      var lit = planes(pixels, width: width)
+      Halation.apply(.init(amount: amount), to: &lit)
+      var brightest: Float = 0
+      for y in 0..<width {
+        for x in 0..<width where !(50..<70).contains(x) || !(50..<70).contains(y) {
+          brightest = max(brightest, lit.r[y * width + x], lit.g[y * width + x], lit.b[y * width + x])
+        }
+      }
+      #expect(brightest > 75 && brightest < 250, "amount \(amount): brightest surrounding channel \(brightest)")
+    }
+  }
+
   // MARK: - Pipeline assembly (Slice F)
 
   /// A look with every step on, and a context holding everything those steps use.

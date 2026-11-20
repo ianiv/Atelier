@@ -56,7 +56,7 @@ A step saved with a built-in keeps its table, so it renders the same even if a l
 
 ### Halation
 
-A warm glow around highlights, as film gives. **Amount** sets how strong it is, **Threshold** how bright light must be to glow, **Radius** how far it spreads, and **Warmth** goes from the highlight's own color to film's red-orange.
+A warm glow around highlights, as film gives. Only the light brighter than **Threshold** glows, and the further a highlight is past it the stronger its glow, so something just over the threshold barely glows. The glow shows against darker surroundings, strongest just outside a bright edge, and hardly changes the highlight itself or other bright areas. **Amount** sets how strong it is, **Radius** how far it spreads, and **Warmth** goes from the highlight's own color to film's red-orange.
 
 ### Lens
 

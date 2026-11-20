@@ -261,7 +261,7 @@ struct EditInspector: View {
       Text("Halation").help("A warm glow around highlights, as film gives.")
     } content: {
       Self.percentSlider("Amount", halation.amount, help: "How strong the glow around highlights is, as film gives.")
-      Self.slider("Threshold", halation.threshold, 0...1, step: 0.01, digits: 2, help: "How bright light must be before it glows, 0 to 1. Lower makes more of the image glow.")
+      Self.slider("Threshold", halation.threshold, 0...1, step: 0.01, digits: 2, help: "How bright light must be before it starts to glow, 0 to 1. Only the light past it glows, more the further past it is.")
       Self.slider("Radius", halation.radius, EditOptions.Halation.radiusRange, step: 0.1, digits: 1, help: "How far the glow spreads, in pixels at full size.")
       Self.percentSlider("Warmth", halation.warmth, help: "The glow's colour, from the highlight's own colour (0%) to film's red-orange (100%).")
     }
