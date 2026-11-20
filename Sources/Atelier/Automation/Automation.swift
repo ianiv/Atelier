@@ -41,7 +41,8 @@ import SwiftUI
 /// (AutomationColorMatch.swift). `--input-entries-check` records and restores input entries, and
 /// `--entries-freeze-check` clicks through the strip after moodboard, Clear and Generate-mode runs
 /// (AutomationInputEntries.swift). `--tab-switch-bench` times switching back to Create
-/// (AutomationTabSwitch.swift).
+/// (AutomationTabSwitch.swift). `--edit-render-bench` times the Edit screen's renders
+/// (AutomationEdit.swift).
 @MainActor
 enum Automation {
   /// `--sampler`'s names: `SamplerType`'s case names, spelled out because the type describes
@@ -85,7 +86,7 @@ enum Automation {
       "--create-delete-check",
       "--history-loras-check",
       "--input-entries-check", "--entries-freeze-check", "--tab-switch-bench", "--delete-project-check",
-      "--paint-check", "--edit-screen-check", "--grain-reference",
+      "--paint-check", "--edit-screen-check", "--grain-reference", "--edit-render-bench",
     ]
     // The unit tests run inside the app. Like a scripted run, that leaves the user's data alone: no
     // cleanup at launch, no saving the session or queue.
@@ -115,6 +116,10 @@ enum Automation {
     }
     if args.contains("--resize-bench") {
       resizeBench(model)
+      return
+    }
+    if args.contains("--edit-render-bench") {
+      editRenderBench()
       return
     }
     if args.contains("--inspector-check") {
