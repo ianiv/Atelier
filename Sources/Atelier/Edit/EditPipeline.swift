@@ -270,17 +270,30 @@ nonisolated enum EditPipeline {
       return ColorMatch.cgImage(rgba: pixels, width: width, height: height)
     }
 
-    /// The pixels inside `x, y, width, height`, clamped to the image.
+    /// The pixels inside `x, y, width, height`, clamped to the image: the planes themselves when
+    /// that's all of them, with no copy.
     func cropped(x: Int, y: Int, width w: Int, height h: Int) -> Planes {
       let x0 = min(max(x, 0), width)
       let y0 = min(max(y, 0), height)
       let w = min(max(w, 0), width - x0)
       let h = min(max(h, 0), height - y0)
+      if x0 == 0, y0 == 0, w == width, h == height { return self }
+      let width = width
       func crop<T>(_ plane: [T]) -> [T] {
-        var out: [T] = []
-        out.reserveCapacity(w * h)
-        for row in y0..<y0 + h { out.append(contentsOf: plane[row * width + x0..<row * width + x0 + w]) }
-        return out
+        guard plane.count >= width * height, w > 0, h > 0 else { return [] }
+        return [T](unsafeUninitializedCapacity: w * h) { out, initialized in
+          plane.withUnsafeBufferPointer { plane in
+            let (plane, out) = (plane.baseAddress!, out.baseAddress!)
+            // Rows in bands across the cores.
+            let bandRows = max(16, h / (ProcessInfo.processInfo.activeProcessorCount * 2))
+            DispatchQueue.concurrentPerform(iterations: (h + bandRows - 1) / bandRows) { band in
+              for row in band * bandRows..<min((band + 1) * bandRows, h) {
+                (out + row * w).initialize(from: plane + (y0 + row) * width + x0, count: w)
+              }
+            }
+          }
+          initialized = w * h
+        }
       }
       return Planes(width: w, height: h, r: crop(r), g: crop(g), b: crop(b), alpha: crop(alpha))
     }
