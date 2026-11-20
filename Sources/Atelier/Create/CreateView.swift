@@ -1996,14 +1996,35 @@ extension View {
   func settingsForm(width: CGFloat = 600) -> some View {
     #if os(macOS)
       formStyle(.grouped)
-        .frame(width: width)
-        .fixedSize(horizontal: false, vertical: true)
+        .modifier(SettingsFormHeight(width: width))
     #else
       // A sheet on iPad: the form fills it.
       formStyle(.grouped)
     #endif
   }
 }
+
+#if os(macOS)
+  /// Sizes a Settings tab to its content, up to `maxHeight`, past which the form scrolls. The
+  /// Settings window takes its tab's height, so a tab sized to all of its content (as
+  /// `fixedSize` did) could outgrow the screen. The form's own scroll view reports the content
+  /// height; until it has, the tab keeps its content height as before.
+  private struct SettingsFormHeight: ViewModifier {
+    let width: CGFloat
+    static let maxHeight: CGFloat = 700
+    @State private var contentHeight: CGFloat?
+
+    func body(content: Content) -> some View {
+      content
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, height in
+          if height > 0 { contentHeight = height }
+        }
+        .frame(width: width)
+        .frame(height: contentHeight.map { min($0, Self.maxHeight) })
+        .fixedSize(horizontal: false, vertical: contentHeight == nil)
+    }
+  }
+#endif
 
 /// One Performance setting: Automatic (the engine's choice, named in the label) or an override.
 private struct PerformancePicker: View {
