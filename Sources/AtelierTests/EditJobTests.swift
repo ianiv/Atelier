@@ -1,4 +1,5 @@
 @testable import Atelier
+import CoreGraphics
 import Foundation
 import Testing
 
@@ -535,6 +536,16 @@ struct EditModelTests {
     #expect(differs == 0)
     let half = try await EditOriginal.window(source, EditPipeline.Window(x: 0, y: 0, width: 64, height: 48, scale: 0.5))
     #expect(half.width == 32 && half.height == 24)
+    // A deeper source keeps its depth.
+    let p3 = try #require(CGColorSpace(name: CGColorSpace.displayP3))
+    let deepContext = try #require(CGContext(
+      data: nil, width: 16, height: 16, bitsPerComponent: 16, bytesPerRow: 0, space: p3,
+      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder16Little.rawValue))
+    deepContext.setFillColor(CGColor(red: 0.3, green: 0.6, blue: 0.9, alpha: 1))
+    deepContext.fill(CGRect(x: 0, y: 0, width: 16, height: 16))
+    let deepSource = try #require(deepContext.makeImage())
+    let deep = try await EditOriginal.window(deepSource, EditPipeline.Window(x: 4, y: 4, width: 8, height: 8))
+    #expect(deep.bitsPerComponent == 16 && deep.width == 8 && deep.colorSpace?.name == CGColorSpace.displayP3)
   }
 
   /// The original's window is on a coarser grid, so it covers the edit's and a pan leaves it less often.

@@ -576,22 +576,31 @@ nonisolated enum EditOriginal {
   /// The part of the source `window` covers, at its scale: what the original's side draws zoomed
   /// in, over the fitted copy. Drawing the whole source there instead (a 24–96 MP image) kept the
   /// main thread getting it ready to draw for 90–220 ms the first frame. Made off the main actor in
-  /// the source's colour space, in the pixel layout the screen draws from, so it looks as the
-  /// source drawn there did and goes up without converting.
+  /// the source's colour space and depth (8-bit in the layout the screen draws from; a deeper or
+  /// floating-point source, extended range included, in 16-bit half floats), so it looks as the
+  /// source drawn there did. Should a context not be made for it, the crop of the source itself is
+  /// drawn. Sources come decoded (`ImageLoader` decodes through the thumbnail API, project images
+  /// are bitmaps); one that wasn't would be decoded here, still off the main actor.
   @concurrent static func window(_ source: CGImage, _ window: EditPipeline.Window) async throws -> CGImage {
     try Task.checkCancellation()
     let width = window.outputWidth, height = window.outputHeight
+    guard let part = source.cropping(to: CGRect(x: window.x, y: window.y, width: window.width, height: window.height)) else {
+      throw EditPipeline.RenderError.unreadableSource
+    }
     let space = source.colorSpace.flatMap { $0.model == .rgb ? $0 : nil } ?? CGColorSpace(name: CGColorSpace.sRGB)!
-    guard let part = source.cropping(to: CGRect(x: window.x, y: window.y, width: window.width, height: window.height)),
-          let context = CGContext(
-            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: space,
-            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
-    else { throw EditPipeline.RenderError.unreadableSource }
+    let deep = source.bitsPerComponent > 8 || source.bitmapInfo.contains(.floatComponents)
+    let context = deep
+      ? CGContext(
+        data: nil, width: width, height: height, bitsPerComponent: 16, bytesPerRow: 0, space: space,
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.floatComponents.rawValue | CGBitmapInfo.byteOrder16Little.rawValue)
+      : CGContext(
+        data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+        bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+    guard let context else { return part }
     context.interpolationQuality = .high
     context.draw(part, in: CGRect(x: 0, y: 0, width: width, height: height))
     try Task.checkCancellation()
-    guard let made = context.makeImage() else { throw EditPipeline.RenderError.unreadableSource }
-    return made
+    return context.makeImage() ?? part
   }
 }
 
@@ -702,6 +711,7 @@ private struct EditSliderPane: View {
   }
 }
 
+#if os(macOS)
 /// How many times the Edit screen's views worked out their bodies, by name, while `isOn`: for
 /// `--edit-ui-bench`, which drags a slider and counts what each tick re-evaluates. Off, noting
 /// is one branch.
@@ -734,3 +744,11 @@ enum EditViewCounts {
     turns = [:]
   }
 }
+#else
+/// The bench that reads these is Mac only (`--edit-ui-bench`); on iPad noting does nothing.
+@MainActor
+enum EditViewCounts {
+  @inline(__always) static func note(_: String) {}
+  @inline(__always) static func timeToNextTurn(_: String) {}
+}
+#endif
