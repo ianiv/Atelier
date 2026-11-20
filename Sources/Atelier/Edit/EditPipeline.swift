@@ -560,13 +560,16 @@ actor EditRenderer {
   }
 
   /// A sixteenth of the device's memory, from 512 MB to 2 GB. Each kept pixel is 13 bytes a
-  /// stage (three Float32 planes and alpha) and 12 for the grain fields (24 with real noise), so
-  /// a lane with every stage and both fields is 51–63 bytes a pixel. A full-screen 5K window's
-  /// fitted preview of a 3:2 photo (4230 × 2820, 11.9 MP) is then about 610–750 MB and its 100%
-  /// window (5248 × 2944, stages read with halation's margin, about 16 MP) about 830–1010 MB, so
-  /// both lanes fit in 2 GB together (a 32 GB or larger Mac) without either pushing the other
-  /// out. A 16 GB Mac or iPad gets 1 GB (an iPad's previews are about half the pixels); 8 GB,
-  /// the 512 MB the single pre-grain cache had.
+  /// stage (three Float32 planes and alpha) and 12 for the grain fields (24 with real noise). At
+  /// a full-screen 5K window's sizes for a 3:2 photo, with the default look's halation margin
+  /// (59 px each side): the fitted preview (4230 × 2820, 11.9 MP, every stage and field at that
+  /// size, 51–63 bytes a pixel) takes about 610–750 MB; the 100% window (5248 × 2944, 15.5 MP)
+  /// keeps its lens and colour stages at the margin's size (5366 × 3062, 16.4 MP) and its
+  /// halation stage and fields at its own, about 810–995 MB. Both lanes fit in 2 GB together (a
+  /// 32 GB or larger Mac) without either pushing the other out. A 16 GB Mac or iPad gets 1 GB
+  /// (an iPad's previews are about half the pixels). An 8 GB one gets the 512 MB the single
+  /// pre-grain cache had, whose third (the largest entry kept) is under that window's 200 MB
+  /// halation stage: there, as before, a full 5K screen's 100% window keeps no stages.
   static let defaultMemoryBudget: Int = {
     let sixteenth = ProcessInfo.processInfo.physicalMemory / 16
     return Int(min(max(sixteenth, 512 << 20), 2 << 30))
@@ -635,6 +638,7 @@ actor EditRenderer {
     let id = ObjectIdentifier(source)
     sources[id] = nil
     for key in store.keys where key.source == id { remove(key) }
+    for lane in laneTickets.keys where lane.source == id { laneTickets[lane] = nil }
   }
 
   /// Drops everything.
@@ -642,6 +646,7 @@ actor EditRenderer {
     sources = [:]
     store = [:]
     lanes = [:]
+    laneTickets = [:]
     storedBytes = 0
   }
 
@@ -669,7 +674,7 @@ actor EditRenderer {
     let id = ObjectIdentifier(source)
     // A full-size render (Save, Export…) is a one-off whose 16–24 MP stages would push the
     // screen's out of the budget: it reads what's kept but keeps nothing.
-    let lane = window == nil ? nil : Lane.Kind(geometry)
+    let lane = window == nil ? nil : await ticket(Lane.Kind(geometry))
 
     // Steps 1–8 from the newest stage kept (`staged`), then 9.
     var out = try await staged(entry, options: options, context: context, geometry: geometry, lane: lane, cancel: cancel)
@@ -728,7 +733,7 @@ actor EditRenderer {
   /// options (no smear or blur; no halation, whose output is then the colour stage's) isn't kept
   /// apart from the one before it.
   @concurrent private nonisolated func staged(
-    _ entry: SourceEntry, options: EditOptions, context: Context, geometry: Geometry, lane: Lane.Kind?, cancel: EditPipeline.Cancel
+    _ entry: SourceEntry, options: EditOptions, context: Context, geometry: Geometry, lane: Ticket?, cancel: EditPipeline.Cancel
   ) async throws -> Planes {
     let lensKey = LensKey(source: ObjectIdentifier(entry.image), lens: options.lens, geometry: geometry)
     let colourKey = ColourKey(lens: lensKey, options: options, context: context)
@@ -923,6 +928,7 @@ actor EditRenderer {
     while sources.count > max(sourceLimit, 1), let oldest = sources.min(by: { $0.value.lastUse < $1.value.lastUse }) {
       sources[oldest.key] = nil
       for key in store.keys where key.source == oldest.key { remove(key) }
+      for lane in laneTickets.keys where lane.source == oldest.key { laneTickets[lane] = nil }
     }
     return entry
   }
@@ -1191,8 +1197,23 @@ actor EditRenderer {
   }
 
   private var store: [Key: Stored] = [:]
-  /// Each lane's entry.
+  /// Each lane's entry, and the ticket of the render that kept it.
   private var lanes: [Lane: Key] = [:]
+  private var laneTickets: [Lane: UInt64] = [:]
+  private var tickets: UInt64 = 0
+
+  /// A render's place among those asked for, and the kind of lane it keeps its entries in.
+  struct Ticket: Sendable {
+    var kind: Lane.Kind
+    var number: UInt64
+  }
+
+  /// The next render's ticket: a render that finishes after a later one in its lane (the render
+  /// loop lets an in-flight one finish) mustn't replace that later render's entries.
+  private func ticket(_ kind: Lane.Kind) -> Ticket {
+    tickets += 1
+    return Ticket(kind: kind, number: tickets)
+  }
   private var storedBytes = 0
 
   private func lookup(_ key: Key) -> Value? {
@@ -1215,11 +1236,15 @@ actor EditRenderer {
   }
 
   /// Keeps `value` as `key`'s, in place of its lane's entry, with the least recently used of the
-  /// other lanes' dropped while it doesn't fit; nothing for no lane (a full-size render).
-  private func store(_ key: Key, _ value: Value, bytes: Int, lane kind: Lane.Kind?) {
+  /// other lanes' dropped while it doesn't fit; nothing for no lane (a full-size render), nor
+  /// from a render asked for before the one that kept the lane's entry. Planes two stages share
+  /// (a colour stage's alpha, say) count in each: the bytes are an upper bound.
+  private func store(_ key: Key, _ value: Value, bytes: Int, lane ticket: Ticket?) {
     // Not for a source that's been dropped since, nor bigger than a third of the budget.
-    guard let kind, sources[key.source] != nil, bytes <= memoryBudget / 3 else { return }
-    let lane = Lane(source: key.source, stage: key.stage, kind: kind)
+    guard let ticket, sources[key.source] != nil, bytes <= memoryBudget / 3 else { return }
+    let lane = Lane(source: key.source, stage: key.stage, kind: ticket.kind)
+    if let last = laneTickets[lane], last > ticket.number { return }
+    laneTickets[lane] = ticket.number
     if let previous = lanes[lane] { remove(previous) }
     remove(key)
     while storedBytes + bytes > memoryBudget, let oldest = store.min(by: { $0.value.lastUse < $1.value.lastUse }) {

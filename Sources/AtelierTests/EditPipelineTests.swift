@@ -1057,6 +1057,9 @@ extension EditPipelineTests {
     for view in View.allCases { _ = try await view.render(measuring, source, base, context) }
     let bothLanes = await measuring.keptBytes
     #expect(bothLanes > 0)
+    // A full-size render keeps nothing.
+    _ = try await measuring.full(source: source, options: base, context: context)
+    #expect(await measuring.keptBytes == bothLanes)
 
     for (dragged, other) in [(View.fitted, View.window), (.window, .fitted)] {
       let renderer = EditRenderer(memoryBudget: bothLanes)
@@ -1077,16 +1080,17 @@ extension EditPipelineTests {
     }
 
     // The bytes a pixel the fitted preview keeps (the whole image, so its stages have
-    // no margins), every stage and field kept, times a 5K screen's fitted preview (3951 × 2634)
-    // and 100% window (5120 × 2820, its stages with the default look's margins each side, which
-    // the fields don't have: a little over).
+    // no margins), every stage and field kept, times a full-screen 5K window's fitted preview of
+    // a 3:2 photo (4230 × 2820) and 100% window (5248 × 2944, every stage and field counted with
+    // the default look's margins each side, which only the lens and colour stages have: a little
+    // over).
     let fittedOnly = EditRenderer()
     let fitted = try await View.fitted.render(fittedOnly, source, base, context)
     let perPixel = Double(await fittedOnly.keptBytes) / Double(fitted.width * fitted.height)
     var look = EditOptions.grainDefaults
     look.halation.amount = 0.4
     let margin = EditPipeline.halationReach(look.halation, scale: 1) + EditPipeline.lensReach(look.lens, scale: 1)
-    let screen = perPixel * (3951 * 2634 + Double((5120 + 2 * margin) * (2820 + 2 * margin)))
+    let screen = perPixel * (4230 * 2820 + Double((5248 + 2 * margin) * (2944 + 2 * margin)))
     let budget = 2 << 30
     #expect(perPixel <= 64 && screen <= Double(budget), "\(perPixel) bytes a pixel, \(Int(screen) >> 20) MB at a 5K screen's sizes")
     #expect(EditRenderer.defaultMemoryBudget >= 512 << 20 && EditRenderer.defaultMemoryBudget <= budget)
