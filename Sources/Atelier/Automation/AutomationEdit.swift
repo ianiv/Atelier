@@ -553,6 +553,149 @@ extension Automation {
     }
   }
 
+  /// --edit-render-bench: times the Edit screen's renders on a made-up image (`testImage`), with no
+  /// model and nothing written, and prints one line per control:
+  ///
+  ///   Atelier --edit-render-bench [--size WxH] [--steps N] [--zoom] [--quit]
+  ///
+  /// It renders through an `EditRenderer` as `EditPane` does, the fitted preview for a pane of
+  /// 1100 × 760 points at 2× (`EditViewport.fitPixels`), starting from grain.py's defaults with
+  /// some halation, and sweeps Halation (amount), Vignette (amount), Grade (exposure) and Grain
+  /// (strength) over N values each (default 12), each render finishing before the next, as a
+  /// slider dragged slowly enough for every render to land. Each line gives the average and worst
+  /// milliseconds and the renderer's cache hits and misses over the sweep. `--zoom` adds a zoom
+  /// and pan sequence (50%, 100%, pans at 100%, 200%, back to fit), timing the window render for
+  /// each view with the fitted preview it's laid over. Last, the cancel latency: a render of a look
+  /// not yet cached (the fitted preview, then the full size) is cancelled 20 ms in, and the line
+  /// gives the milliseconds from the cancel until it returns. `--size` defaults to 6000x4000.
+  static func editRenderBench() {
+    let args = CommandLine.arguments
+    func value(_ name: String) -> String? { args.firstIndex(of: name).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } }
+    let size = value("--size").map { $0.lowercased().split(separator: "x").compactMap { Int($0) } }
+    let width = size?.count == 2 ? max(size![0], 16) : 6000
+    let height = size?.count == 2 ? max(size![1], 16) : 4000
+    let steps = max(value("--steps").flatMap(Int.init) ?? 12, 1)
+    let zoom = args.contains("--zoom")
+    Task { @MainActor in
+      func log(_ message: String) {
+        print(message)
+        fflush(stdout)
+      }
+      func milliseconds(_ duration: Duration) -> Double {
+        Double(duration.components.seconds) * 1000 + Double(duration.components.attoseconds) / 1e15
+      }
+      func summary(_ times: [Double]) -> String {
+        guard !times.isEmpty else { return "no renders" }
+        return String(format: "avg %7.1f ms, worst %7.1f ms", times.reduce(0, +) / Double(times.count), times.max() ?? 0)
+      }
+      func cacheLine(_ before: EditRenderer.Counters, _ after: EditRenderer.Counters) -> String {
+        "pre-grain \(after.preGrainHits - before.preGrainHits) hit / \(after.preGrainMisses - before.preGrainMisses) miss, "
+          + "fields \(after.fieldHits - before.fieldHits)/\(after.fieldMisses - before.fieldMisses), "
+          + "stats \(after.statsHits - before.statsHits)/\(after.statsMisses - before.statsMisses)"
+      }
+      @MainActor func finish() { if args.contains("--quit") { AppLifecycle.quit() } }
+      guard let image = testImage(width: width, height: height) else {
+        log("FAIL edit render bench: the \(width)x\(height) test image couldn't be made")
+        return finish()
+      }
+      let clock = ContinuousClock()
+      let renderer = EditRenderer()
+      let pane = CGSize(width: 1100, height: 760)
+      let fitted = EditViewport(imageWidth: width, imageHeight: height, viewSize: pane, displayScale: 2)
+      let fit = fitted.fitPixels
+      var base = EditOptions.grainDefaults
+      base.halation.amount = 0.4
+      base = base.snapped
+      log("edit render bench: \(width)x\(height) source, fitted preview \(fit.width)x\(fit.height), \(steps) steps per control")
+
+      // The first render reads the source's pixels and scales it; it's timed on its own.
+      do {
+        let start = clock.now
+        _ = try await renderer.preview(source: image, options: base, context: .empty, fitting: fit.width, height: fit.height)
+        log("  first render " + String(format: "%.1f ms", milliseconds(clock.now - start)))
+      } catch {
+        log("FAIL edit render bench: \(error.localizedDescription)")
+        return finish()
+      }
+
+      let controls: [(String, (inout EditOptions, Double) -> Void)] = [
+        ("Halation", { $0.halation.amount = 0.05 + 0.9 * $1 }),
+        ("Vignette", { $0.vignette.amount = 0.05 + 0.6 * $1 }),
+        ("Grade", { $0.grade.exposure = -1 + 2 * $1 }),
+        ("Grain", { $0.grain.lum = 2 + 28 * $1 }),
+      ]
+      for (name, vary) in controls {
+        let before = await renderer.counters
+        var times: [Double] = []
+        for step in 0..<steps {
+          var options = base
+          vary(&options, steps > 1 ? Double(step) / Double(steps - 1) : 1)
+          options = options.snapped
+          let start = clock.now
+          _ = try? await renderer.preview(source: image, options: options, context: .empty, fitting: fit.width, height: fit.height)
+          times.append(milliseconds(clock.now - start))
+        }
+        let after = await renderer.counters
+        log("  \(name.padding(toLength: 9, withPad: " ", startingAt: 0)) \(summary(times)); \(cacheLine(before, after))")
+      }
+
+      if zoom {
+        // Each view as the pane shows it: the fitted preview (cached after the first) and, zoomed
+        // past it, the window in view.
+        let views: [(String, Double?, CGSize)] = [
+          ("50%", 0.5, .zero), ("100%", 1, .zero), ("100% pan 1", 1, CGSize(width: -300, height: 0)),
+          ("100% pan 2", 1, CGSize(width: -600, height: -200)), ("100% pan 3", 1, CGSize(width: -900, height: -400)),
+          ("200%", 2, .zero), ("fit", nil, .zero),
+        ]
+        let before = await renderer.counters
+        var times: [Double] = []
+        for (label, scale, offset) in views {
+          let viewport = EditViewport(imageWidth: width, imageHeight: height, viewSize: pane, displayScale: 2, scale: scale, offset: offset)
+          let start = clock.now
+          let fitPixels = viewport.fitPixels
+          _ = try? await renderer.preview(source: image, options: base, context: .empty, fitting: fitPixels.width, height: fitPixels.height)
+          var what = "fitted"
+          if let window = viewport.window {
+            _ = try? await renderer.window(source: image, options: base, context: .empty, window: window)
+            what = "window \(window.outputWidth)x\(window.outputHeight)"
+          }
+          let time = milliseconds(clock.now - start)
+          times.append(time)
+          log("    zoom \(label.padding(toLength: 10, withPad: " ", startingAt: 0)) \(String(format: "%7.1f ms", time)) (\(what))")
+        }
+        let after = await renderer.counters
+        log("  Zoom      \(summary(times)); \(cacheLine(before, after))")
+      }
+
+      // Cancel latency: a look not cached yet, cancelled 20 ms in.
+      for full in [false, true] {
+        var latencies: [Double] = []
+        var finishedFirst = 0
+        for trial in 0..<3 {
+          var options = base
+          options.halation.amount = 0.5 + 0.03 * Double(trial) + (full ? 0.2 : 0)
+          options = options.snapped
+          let task = Task {
+            if full {
+              _ = try await renderer.full(source: image, options: options, context: .empty)
+            } else {
+              _ = try await renderer.preview(source: image, options: options, context: .empty, fitting: fit.width, height: fit.height)
+            }
+          }
+          try? await Task.sleep(for: .milliseconds(20))
+          let cancelled = clock.now
+          task.cancel()
+          if case .success = await task.result { finishedFirst += 1 }
+          latencies.append(milliseconds(clock.now - cancelled))
+        }
+        let note = finishedFirst > 0 ? " (\(finishedFirst) of 3 finished instead of stopping)" : ""
+        log("  Cancel \(full ? "full" : "fitted") \(summary(latencies))\(note)")
+      }
+      log("edit render bench: done")
+      finish()
+    }
+  }
+
   /// A flat grey image.
   static func flatImage(width: Int, height: Int, level: UInt8) -> CGImage? {
     var pixels = [UInt8](repeating: level, count: width * height * 4)

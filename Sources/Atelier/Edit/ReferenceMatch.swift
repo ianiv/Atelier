@@ -48,13 +48,16 @@ nonisolated enum ReferenceMatch {
   /// `planes` moved from `target`'s statistics (theirs, measured beforehand, e.g. on the whole
   /// image when `planes` is a window of it) toward `reference`'s, by `options` as
   /// `ColorMatch.transferred` moves them.
-  static func apply(_ options: ColorMatch.Options, to planes: inout EditPipeline.Planes, target: ColorMatch.Stats, reference: ColorMatch.Stats) {
+  static func apply(
+    _ options: ColorMatch.Options, to planes: inout EditPipeline.Planes, target: ColorMatch.Stats, reference: ColorMatch.Stats,
+    cancel: EditPipeline.Cancel = .never
+  ) {
     let matchesLightness = options.matchesLightness
     let l: (scale: Double, offset: Double) = matchesLightness
       ? ColorMatch.coefficients(target: target, reference: reference, channel: 0, mean: options.brightness, spread: options.contrast) : (1, 0)
     let a = ColorMatch.coefficients(target: target, reference: reference, channel: 1, mean: options.tint, spread: options.saturation)
     let b = ColorMatch.coefficients(target: target, reference: reference, channel: 2, mean: options.tint, spread: options.saturation)
-    planes.withPixelBands { range, red, green, blue in
+    planes.withPixelBands(cancel: cancel) { range, red, green, blue in
       for i in range {
         var lab = Self.lab(red[i], green[i], blue[i])
         if matchesLightness { lab.x = lab.x * l.scale + l.offset }

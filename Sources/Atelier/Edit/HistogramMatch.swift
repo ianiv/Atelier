@@ -31,7 +31,7 @@ nonisolated enum HistogramMatch {
   /// The cumulative histograms of the planes' pixels that aren't fully transparent, each value
   /// rounded to its nearest level (luma from the unrounded values). An image with no visible
   /// pixels gives the CDFs of an even spread, which matching to leaves an even image as it is.
-  static func table(of planes: EditPipeline.Planes) -> Edit.HistogramTable {
+  static func table(of planes: EditPipeline.Planes, cancel: EditPipeline.Cancel = .never) -> Edit.HistogramTable {
     let count = min(planes.width * planes.height, planes.r.count, planes.g.count, planes.b.count)
     // Each band counts into its own four histograms, added up after.
     let bandSize = 65536
@@ -45,6 +45,7 @@ nonisolated enum HistogramMatch {
             counts.withUnsafeMutableBufferPointer { counts in
               let counts = counts.baseAddress!
               DispatchQueue.concurrentPerform(iterations: bands) { band in
+                guard !cancel.isCancelled else { return }
                 let histogram = counts + band * 4 * levels
                 for index in band * bandSize..<min((band + 1) * bandSize, count) where index >= alpha.count || alpha[index] > 0 {
                   histogram[level(Grade.luma(r[index], g[index], b[index]))] += 1
@@ -132,15 +133,15 @@ nonisolated enum HistogramMatch {
   /// it). Nothing happens when `histogram.isIdentity`.
   static func apply(
     _ histogram: EditOptions.Histogram, to planes: inout EditPipeline.Planes, reference: Edit.HistogramTable,
-    source: Edit.HistogramTable? = nil
+    source: Edit.HistogramTable? = nil, cancel: EditPipeline.Cancel = .never
   ) {
     guard !histogram.isIdentity else { return }
-    let source = source ?? table(of: planes)
+    let source = source ?? table(of: planes, cancel: cancel)
     let amount = Float(min(histogram.amount, 1))
     switch histogram.space {
     case .luma:
       let map = curve(source: source.luma, reference: reference.luma)
-      planes.withPixelBands { range, r, g, b in
+      planes.withPixelBands(cancel: cancel) { range, r, g, b in
         for i in range {
           let y = Grade.luma(r[i], g[i], b[i])
           let target = y + amount * (mapped(y, map) - y)
@@ -161,7 +162,7 @@ nonisolated enum HistogramMatch {
       let red = curve(source: source.red, reference: reference.red)
       let green = curve(source: source.green, reference: reference.green)
       let blue = curve(source: source.blue, reference: reference.blue)
-      planes.withPixelBands { range, r, g, b in
+      planes.withPixelBands(cancel: cancel) { range, r, g, b in
         for i in range {
           r[i] += amount * (mapped(r[i], red) - r[i])
           g[i] += amount * (mapped(g[i], green) - g[i])

@@ -36,7 +36,7 @@ nonisolated enum Grade {
   static let skinProtection: Float = 0.6
 
   /// `planes` graded by `grade`. Nothing happens when it's `isIdentity`.
-  static func apply(_ grade: EditOptions.Grade, to planes: inout EditPipeline.Planes) {
+  static func apply(_ grade: EditOptions.Grade, to planes: inout EditPipeline.Planes, cancel: EditPipeline.Cancel = .never) {
     guard !grade.isIdentity else { return }
     let exposure: Float = grade.exposure != 0 ? Float(pow(2, grade.exposure)) : 1
     let t = Float(grade.temperature / 100)
@@ -52,7 +52,7 @@ nonisolated enum Grade {
     let saturates = grade.saturation != 0
     let vibrant = vibrance != 0
     let midGrey = midGrey
-    planes.withPixelBands { range, r, g, b in
+    planes.withPixelBands(cancel: cancel) { range, r, g, b in
       for i in range {
         var red = r[i]
         var green = g[i]
@@ -126,7 +126,7 @@ nonisolated enum Grade {
   /// the corners black); a negative one blends toward white by −amount · falloff.
   static func vignette(
     _ vignette: EditOptions.Vignette, to planes: inout EditPipeline.Planes, fullWidth: Int, fullHeight: Int,
-    window: EditPipeline.Window? = nil
+    window: EditPipeline.Window? = nil, cancel: EditPipeline.Cancel = .never
   ) {
     guard !vignette.isIdentity, planes.width > 0, planes.height > 0, fullWidth > 0, fullHeight > 0 else { return }
     let window = window ?? .whole(width: fullWidth, height: fullHeight)
@@ -141,7 +141,7 @@ nonisolated enum Grade {
     let stepY = Float(window.height) / Float(planes.height)
     let originX = Float(window.x)
     let originY = Float(window.y)
-    planes.withRowBands { rows, r, g, b in
+    planes.withRowBands(cancel: cancel) { rows, r, g, b in
       for row in rows {
         let y = originY + (Float(row) + 0.5) * stepY
         let dy = (y - cy) / cy
@@ -172,8 +172,10 @@ nonisolated enum Grade {
 
 extension EditPipeline.Planes {
   /// Runs `body` on bands of rows across the cores, with the three planes' storage: `body` gets
-  /// a band's rows and must touch only their pixels (`row * width + column`).
+  /// a band's rows and must touch only their pixels (`row * width + column`). Once `cancel` is
+  /// set, the bands not yet started are skipped.
   nonisolated mutating func withRowBands(
+    cancel: EditPipeline.Cancel = .never,
     _ body: (_ rows: Range<Int>, _ r: UnsafeMutablePointer<Float>, _ g: UnsafeMutablePointer<Float>, _ b: UnsafeMutablePointer<Float>) -> Void
   ) {
     let height = height
@@ -188,6 +190,7 @@ extension EditPipeline.Planes {
           let g = g.baseAddress!
           let b = b.baseAddress!
           DispatchQueue.concurrentPerform(iterations: bands) { band in
+            guard !cancel.isCancelled else { return }
             body(band * bandRows..<min((band + 1) * bandRows, height), r, g, b)
           }
         }
@@ -197,9 +200,10 @@ extension EditPipeline.Planes {
 
   /// `withRowBands`, with `body` given each band's pixel indices instead of its rows.
   nonisolated mutating func withPixelBands(
+    cancel: EditPipeline.Cancel = .never,
     _ body: (_ pixels: Range<Int>, _ r: UnsafeMutablePointer<Float>, _ g: UnsafeMutablePointer<Float>, _ b: UnsafeMutablePointer<Float>) -> Void
   ) {
     let width = width
-    withRowBands { rows, r, g, b in body(rows.lowerBound * width..<rows.upperBound * width, r, g, b) }
+    withRowBands(cancel: cancel) { rows, r, g, b in body(rows.lowerBound * width..<rows.upperBound * width, r, g, b) }
   }
 }

@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import Synchronization
 
 /// Renders an Edit screen look (`EditOptions`) onto an image, on the CPU with Accelerate (no
 /// Metal, no Core Image, as `ColorMatch` does, so the numbers follow grain.py's). The order is
@@ -84,6 +85,35 @@ nonisolated enum EditPipeline {
     }
   }
 
+  /// A render's cancellation, as the steps' inner loops read it. `Task.isCancelled` can't be read
+  /// from a `concurrentPerform` worker (it isn't the task's thread), so `EditRenderer.render` sets
+  /// this from a task cancellation handler, and every step checks it once per band or row and
+  /// skips the rest of its work. The step's result is then garbage and the render throws
+  /// `CancellationError` before anything is kept. Not cancelled, the checks change nothing: the
+  /// output is bit for bit what it was without them.
+  final class Cancel: Sendable {
+    private let flag = Atomic<Bool>(false)
+    private let cancellable: Bool
+
+    init() { cancellable = true }
+    private init(cancellable: Bool) { self.cancellable = cancellable }
+
+    /// The default for a step called on its own: never cancelled (and `cancel()` does nothing).
+    static let never = Cancel(cancellable: false)
+
+    var isCancelled: Bool { cancellable && flag.load(ordering: .relaxed) }
+
+    func cancel() {
+      guard cancellable else { return }
+      flag.store(true, ordering: .relaxed)
+    }
+
+    /// Throws `CancellationError` once cancelled.
+    func check() throws {
+      if isCancelled { throw CancellationError() }
+    }
+  }
+
   /// The part of the full-size render to make, and at what scale: the 100% view renders only
   /// what's visible, and the resampler takes this window in full-size pixels, so its grain is
   /// exactly that part of the full render's. Blur and smear lengths are in full-size pixels and
@@ -158,7 +188,10 @@ nonisolated enum EditPipeline {
 
     /// RGBA8, each value clipped to 0–255 and truncated, as grain.py's
     /// `np.clip(a, 0, 255).astype(np.uint8)` (step 12).
-    var rgba: [UInt8] {
+    var rgba: [UInt8] { rgba(cancel: .never) }
+
+    /// `rgba`, rows skipped once `cancel` is set.
+    func rgba(cancel: Cancel) -> [UInt8] {
       let count = width * height
       var out = [UInt8](repeating: 0, count: count * 4)
       guard count > 0, r.count >= count, g.count >= count, b.count >= count, alpha.count >= count else { return out }
@@ -172,6 +205,7 @@ nonisolated enum EditPipeline {
               out.withUnsafeMutableBufferPointer { out in
                 let out = out
                 DispatchQueue.concurrentPerform(iterations: height) { row in
+                  guard !cancel.isCancelled else { return }
                   for index in row * width..<(row + 1) * width {
                     out[index * 4] = byte(r[index])
                     out[index * 4 + 1] = byte(g[index])
@@ -189,7 +223,7 @@ nonisolated enum EditPipeline {
 
     /// The part `x, y, width, height` of tightly packed RGBA8 `pixels` (`pixelWidth` wide) as
     /// planes, clamped to the image.
-    init(rgba pixels: [UInt8], pixelWidth: Int, x: Int, y: Int, width w: Int, height h: Int) {
+    init(rgba pixels: [UInt8], pixelWidth: Int, x: Int, y: Int, width w: Int, height h: Int, cancel: Cancel = .never) {
       let pixelHeight = pixelWidth > 0 ? pixels.count / 4 / pixelWidth : 0
       let x0 = min(max(x, 0), pixelWidth)
       let y0 = min(max(y, 0), pixelHeight)
@@ -207,6 +241,7 @@ nonisolated enum EditPipeline {
                 alpha.withUnsafeMutableBufferPointer { alpha in
                   let (r, g, b, alpha) = (r, g, b, alpha)
                   DispatchQueue.concurrentPerform(iterations: h) { row in
+                    guard !cancel.isCancelled else { return }
                     let source = ((y0 + row) * pixelWidth + x0) * 4
                     for column in 0..<w {
                       let i = row * w + column
@@ -226,7 +261,14 @@ nonisolated enum EditPipeline {
       self.init(width: w, height: h, r: r, g: g, b: b, alpha: alpha)
     }
 
-    var cgImage: CGImage? { ColorMatch.cgImage(rgba: rgba, width: width, height: height) }
+    var cgImage: CGImage? { cgImage(cancel: .never) }
+
+    /// `cgImage`; nil once `cancel` is set.
+    func cgImage(cancel: Cancel) -> CGImage? {
+      let pixels = rgba(cancel: cancel)
+      guard !cancel.isCancelled else { return nil }
+      return ColorMatch.cgImage(rgba: pixels, width: width, height: height)
+    }
 
     /// The pixels inside `x, y, width, height`, clamped to the image.
     func cropped(x: Int, y: Int, width w: Int, height h: Int) -> Planes {
@@ -307,21 +349,23 @@ nonisolated enum EditPipeline {
   /// `SourceStats` of a source fitted to `statsSide` (`proxy`, `proxyScale` of the full size),
   /// with grain.py's `channelStats` measured beforehand (nil when step 5 doesn't run).
   static func sourceStats(
-    proxy: Planes, proxyScale: Double, channelStats: GrainProfile.ChannelStats?, options: EditOptions, context: Context
+    proxy: Planes, proxyScale: Double, channelStats: GrainProfile.ChannelStats?, options: EditOptions, context: Context,
+    cancel: Cancel = .never
   ) -> SourceStats {
     var stats = SourceStats(channelStats: matchesColour(options, context) ? channelStats : nil)
     let lab = matchesLab(options, context)
     let histogram = matchesHistogram(options, context)
     guard lab || histogram else { return stats }
-    var planes = lens(proxy, options.lens, scale: proxyScale)
+    var planes = lens(proxy, options.lens, scale: proxyScale, cancel: cancel)
+    guard !cancel.isCancelled else { return stats }
     if lab {
       let target = ReferenceMatch.labStats(of: planes)
       stats.labTarget = target
       if histogram, let target = target.stats, let reference = context.referenceLab?.stats {
-        ReferenceMatch.apply(options.match.colorMatchOptions, to: &planes, target: target, reference: reference)
+        ReferenceMatch.apply(options.match.colorMatchOptions, to: &planes, target: target, reference: reference, cancel: cancel)
       }
     }
-    if histogram { stats.histogramSource = HistogramMatch.table(of: planes) }
+    if histogram { stats.histogramSource = HistogramMatch.table(of: planes, cancel: cancel) }
     return stats
   }
 
@@ -329,10 +373,10 @@ nonisolated enum EditPipeline {
 
   /// Steps 1 and 2: grain.py's motion smear (clamped, above 1 px) and blur, their lengths in
   /// full-size pixels times `scale` (a preview's ratio, as Grain Studio scales them).
-  static func lens(_ planes: Planes, _ lens: EditOptions.Lens, scale: Double = 1) -> Planes {
+  static func lens(_ planes: Planes, _ lens: EditOptions.Lens, scale: Double = 1, cancel: Cancel = .never) -> Planes {
     var out = planes
-    if lens.smears { out = Grain.motionSmear(out, length: lens.motion * scale, angle: lens.angle) }
-    if lens.blurs { out = Grain.blur(out, sigma: lens.blur * scale) }
+    if lens.smears { out = Grain.motionSmear(out, length: lens.motion * scale, angle: lens.angle, cancel: cancel) }
+    if lens.blurs, !cancel.isCancelled { out = Grain.blur(out, sigma: lens.blur * scale, cancel: cancel) }
     return out
   }
 
@@ -340,21 +384,21 @@ nonisolated enum EditPipeline {
   /// colour match, the grade (which owns exposure and tint, grain.py's included) and the LUT,
   /// then `sanitize`.
   /// `stats` is the whole image's (`SourceStats`); a step without its data is skipped.
-  static func color(_ planes: inout Planes, options: EditOptions, context: Context, stats: SourceStats) {
+  static func color(_ planes: inout Planes, options: EditOptions, context: Context, stats: SourceStats, cancel: Cancel = .never) {
     if matchesLab(options, context), let reference = context.referenceLab?.stats, let target = stats.labTarget?.stats {
-      ReferenceMatch.apply(options.match.colorMatchOptions, to: &planes, target: target, reference: reference)
+      ReferenceMatch.apply(options.match.colorMatchOptions, to: &planes, target: target, reference: reference, cancel: cancel)
     }
     if matchesHistogram(options, context), let reference = context.referenceHistogram, let source = stats.histogramSource {
-      HistogramMatch.apply(options.histogram, to: &planes, reference: reference, source: source)
+      HistogramMatch.apply(options.histogram, to: &planes, reference: reference, source: source, cancel: cancel)
     }
     if matchesColour(options, context), let reference = context.refStats, let source = stats.channelStats {
-      planes = Grain.colourMatch(planes, source: source, reference: reference, amount: options.match.colour)
+      planes = Grain.colourMatch(planes, source: source, reference: reference, amount: options.match.colour, cancel: cancel)
     }
-    Grade.apply(options.grade, to: &planes)
+    Grade.apply(options.grade, to: &planes, cancel: cancel)
     if !options.lut.isIdentity, let table = context.lut {
-      CubeLUT.apply(table, to: &planes, strength: options.lut.strength)
+      CubeLUT.apply(table, to: &planes, strength: options.lut.strength, cancel: cancel)
     }
-    sanitize(&planes)
+    sanitize(&planes, cancel: cancel)
   }
 
   /// The largest level kept between steps, either way: far past anything visible, small enough
@@ -364,9 +408,9 @@ nonisolated enum EditPipeline {
   /// Values that aren't numbers set to 0 and the rest kept to ±`levelLimit`, after the color
   /// steps: an unbounded grade (an agent's 200-stop exposure is infinity, times a black pixel
   /// NaN) would otherwise turn halation's and grain's sums, hence whole rows, into NaN.
-  static func sanitize(_ planes: inout Planes) {
+  static func sanitize(_ planes: inout Planes, cancel: Cancel = .never) {
     let limit = levelLimit
-    planes.withPixelBands { range, r, g, b in
+    planes.withPixelBands(cancel: cancel) { range, r, g, b in
       for i in range {
         if !(abs(r[i]) <= limit) { r[i] = r[i].isNaN ? 0 : (r[i] > 0 ? limit : -limit) }
         if !(abs(g[i]) <= limit) { g[i] = g[i].isNaN ? 0 : (g[i] > 0 ? limit : -limit) }
@@ -379,16 +423,17 @@ nonisolated enum EditPipeline {
   /// noise, both weighted by the planes' own brightness, with fields made beforehand for the
   /// planes' place in the picture.
   static func grain(
-    _ planes: inout Planes, options: EditOptions, context: Context, fields: Grain.GrainFields?, realNoise: [[Float]]?
+    _ planes: inout Planes, options: EditOptions, context: Context, fields: Grain.GrainFields?, realNoise: [[Float]]?,
+    cancel: Cancel = .never
   ) {
     let grain = options.grain
     guard grain.lum != 0 || grain.chroma != 0 || (grain.real > 0 && realNoise != nil) else { return }
-    let luminance = Grain.luminance(planes)
-    if let fields {
-      Grain.addGrain(&planes, luminance: luminance, lum: grain.lum, chroma: grain.chroma, curve: context.curve, fields: fields)
+    let luminance = Grain.luminance(planes, cancel: cancel)
+    if let fields, !cancel.isCancelled {
+      Grain.addGrain(&planes, luminance: luminance, lum: grain.lum, chroma: grain.chroma, curve: context.curve, fields: fields, cancel: cancel)
     }
-    if grain.real > 0, let realNoise, let real = context.realNoise {
-      Grain.addRealNoise(&planes, luminance: luminance, curve: real.curve, amount: grain.real, field: realNoise)
+    if grain.real > 0, let realNoise, let real = context.realNoise, !cancel.isCancelled {
+      Grain.addRealNoise(&planes, luminance: luminance, curve: real.curve, amount: grain.real, field: realNoise, cancel: cancel)
     }
   }
 
@@ -471,7 +516,8 @@ nonisolated enum EditPipeline {
 /// and the save and export jobs (Slice H). One per screen; every call may run at once with the
 /// others (the work runs off the actor, which only holds the caches), and each stops with
 /// `CancellationError` when its task is cancelled, so a `.task(id:)` re-render just drops the
-/// last.
+/// last. The steps stop within a band of rows of the cancel (`EditPipeline.Cancel`), and
+/// nothing a cancelled render made is kept.
 ///
 /// - `preview(source:options:context:fitting:)`: the whole image fitted to a size (the fitted
 ///   view). Smear, blur and halation lengths scale by the preview's ratio, and the grain is the
@@ -572,6 +618,18 @@ actor EditRenderer {
     try Task.checkCancellation()
     // Nothing to do: the source as it is.
     if options.isIdentity, window == nil || window == .whole(width: source.width, height: source.height) { return source }
+    let cancel = EditPipeline.Cancel()
+    return try await withTaskCancellationHandler {
+      try await render(source: source, options: options, context: context, window: window, cancel: cancel)
+    } onCancel: {
+      cancel.cancel()
+    }
+  }
+
+  /// `render`, its steps stopping when `cancel` is set.
+  @concurrent private nonisolated func render(
+    source: CGImage, options: EditOptions, context: Context, window: Window?, cancel: EditPipeline.Cancel
+  ) async throws -> CGImage {
     let entry = try await sourceEntry(source)
     let geometry = Geometry(width: entry.width, height: entry.height, window: window).withReach(options)
     let id = ObjectIdentifier(source)
@@ -582,14 +640,15 @@ actor EditRenderer {
     if case .planes(let cached)? = await lookup(.preGrain(preKey)) {
       planes = cached
     } else {
-      let stats = try await stats(entry, options: options, context: context)
-      try Task.checkCancellation()
-      let base = try await sourcePixels(entry, geometry: geometry)
-      try Task.checkCancellation()
-      planes = try Self.preGrain(base: base, geometry: geometry, options: options, context: context, stats: stats)
+      let stats = try await stats(entry, options: options, context: context, cancel: cancel)
+      try cancel.check()
+      let base = try await sourcePixels(entry, geometry: geometry, cancel: cancel)
+      try cancel.check()
+      planes = try Self.preGrain(base: base, geometry: geometry, options: options, context: context, stats: stats, cancel: cancel)
+      try cancel.check()
       await store(.preGrain(preKey), .planes(planes), bytes: planes.byteCount)
     }
-    try Task.checkCancellation()
+    try cancel.check()
 
     // Steps 10–12.
     var out = planes
@@ -608,7 +667,8 @@ actor EditRenderer {
       } else {
         let made = Grain.grainFields(
           lum: grain.lum, chroma: grain.chroma, size: grain.size, csize: grain.csize, seed: grain.seed, refWidth: context.refWidth,
-          layout: layout)
+          layout: layout, cancel: cancel)
+        try cancel.check()
         fields = made
         await store(.grain(key), .grain(made), bytes: made.byteCount)
       }
@@ -619,34 +679,40 @@ actor EditRenderer {
       if case .real(let cached)? = await lookup(.real(key)) {
         realField = cached
       } else {
-        let made = Grain.realNoiseField(real, refWidth: context.refWidth, seed: grain.seed, layout: layout)
+        let made = Grain.realNoiseField(real, refWidth: context.refWidth, seed: grain.seed, layout: layout, cancel: cancel)
+        try cancel.check()
         realField = made
         await store(.real(key), .real(made), bytes: made.reduce(0) { $0 + $1.count * 4 })
       }
     }
-    try Task.checkCancellation()
-    EditPipeline.grain(&out, options: options, context: context, fields: fields, realNoise: realField)
-    try Task.checkCancellation()
-    guard let image = out.cgImage else { throw EditPipeline.RenderError.unreadableSource }
+    try cancel.check()
+    EditPipeline.grain(&out, options: options, context: context, fields: fields, realNoise: realField, cancel: cancel)
+    try cancel.check()
+    let image = out.cgImage(cancel: cancel)
+    try cancel.check()
+    guard let image else { throw EditPipeline.RenderError.unreadableSource }
     return image
   }
 
   /// Steps 1–9 on `base`, the source pixels of `geometry.read` (the output region with the
   /// margins the smear, blur and halation reach into); the result is `geometry.region`.
   nonisolated static func preGrain(
-    base: Planes, geometry: Geometry, options: EditOptions, context: Context, stats: EditPipeline.SourceStats
+    base: Planes, geometry: Geometry, options: EditOptions, context: Context, stats: EditPipeline.SourceStats,
+    cancel: EditPipeline.Cancel = .never
   ) throws -> Planes {
     let scale = geometry.scale
     // 1–2, then cut to what halation needs.
-    var planes = EditPipeline.lens(base, options.lens, scale: scale)
+    var planes = EditPipeline.lens(base, options.lens, scale: scale, cancel: cancel)
+    try cancel.check()
     let glow = geometry.glow
     planes = planes.cropped(x: glow.x - geometry.read.x, y: glow.y - geometry.read.y, width: glow.width, height: glow.height)
-    try Task.checkCancellation()
+    try cancel.check()
     // 3–7.
-    EditPipeline.color(&planes, options: options, context: context, stats: stats)
-    try Task.checkCancellation()
+    EditPipeline.color(&planes, options: options, context: context, stats: stats, cancel: cancel)
+    try cancel.check()
     // 8, then cut to the output.
-    Halation.apply(options.halation, to: &planes, scale: scale)
+    Halation.apply(options.halation, to: &planes, scale: scale, cancel: cancel)
+    try cancel.check()
     let region = geometry.region
     if glow != region {
       planes = planes.cropped(x: region.x - glow.x, y: region.y - glow.y, width: region.width, height: region.height)
@@ -655,7 +721,8 @@ actor EditRenderer {
     // the frame).
     Grade.vignette(
       options.vignette, to: &planes, fullWidth: geometry.scaledWidth, fullHeight: geometry.scaledHeight,
-      window: Window(x: region.x, y: region.y, width: region.width, height: region.height))
+      window: Window(x: region.x, y: region.y, width: region.width, height: region.height), cancel: cancel)
+    try cancel.check()
     return planes
   }
 
@@ -764,10 +831,12 @@ actor EditRenderer {
   }
 
   /// The source pixels a render reads (`geometry.read`), from the full-size pixels or the scaled copy.
-  @concurrent private nonisolated func sourcePixels(_ entry: SourceEntry, geometry: Geometry) async throws -> Planes {
+  @concurrent private nonisolated func sourcePixels(
+    _ entry: SourceEntry, geometry: Geometry, cancel: EditPipeline.Cancel = .never
+  ) async throws -> Planes {
     let read = geometry.read
     if geometry.scaledWidth == entry.width, geometry.scaledHeight == entry.height {
-      return Planes(rgba: entry.rgba, pixelWidth: entry.width, x: read.x, y: read.y, width: read.width, height: read.height)
+      return Planes(rgba: entry.rgba, pixelWidth: entry.width, x: read.x, y: read.y, width: read.width, height: read.height, cancel: cancel)
     }
     let scaled: [UInt8]
     if let kept = await scaledCopy(entry, width: geometry.scaledWidth, height: geometry.scaledHeight) {
@@ -778,7 +847,8 @@ actor EditRenderer {
       await keepScaled(entry, width: geometry.scaledWidth, height: geometry.scaledHeight, rgba: made)
       scaled = made
     }
-    return Planes(rgba: scaled, pixelWidth: geometry.scaledWidth, x: read.x, y: read.y, width: read.width, height: read.height)
+    try cancel.check()
+    return Planes(rgba: scaled, pixelWidth: geometry.scaledWidth, x: read.x, y: read.y, width: read.width, height: read.height, cancel: cancel)
   }
 
   private func scaledCopy(_ entry: SourceEntry, width: Int, height: Int) -> [UInt8]? {
@@ -810,7 +880,9 @@ actor EditRenderer {
     }
   }
 
-  @concurrent private nonisolated func stats(_ entry: SourceEntry, options: EditOptions, context: Context) async throws -> EditPipeline.SourceStats {
+  @concurrent private nonisolated func stats(
+    _ entry: SourceEntry, options: EditOptions, context: Context, cancel: EditPipeline.Cancel = .never
+  ) async throws -> EditPipeline.SourceStats {
     let key = StatsKey(options, context)
     if let kept = await keptStats(entry, key) { return kept }
     var channelStats: GrainProfile.ChannelStats?
@@ -818,12 +890,14 @@ actor EditRenderer {
       if let kept = await keptChannelStats(entry) {
         channelStats = kept
       } else {
-        let measured = Grain.channelStats(rgba: entry.rgba, width: entry.width, height: entry.height)
+        let measured = Grain.channelStats(rgba: entry.rgba, width: entry.width, height: entry.height, cancel: cancel)
+        try cancel.check()
         await setChannelStats(entry, measured)
         channelStats = measured
       }
     }
     try Task.checkCancellation()
+    try cancel.check()
     var proxy: Planes?
     var proxyScale = 1.0
     if key.lens != nil {
@@ -840,8 +914,9 @@ actor EditRenderer {
     }
     try Task.checkCancellation()
     let stats = proxy.map {
-      EditPipeline.sourceStats(proxy: $0, proxyScale: proxyScale, channelStats: channelStats, options: options, context: context)
+      EditPipeline.sourceStats(proxy: $0, proxyScale: proxyScale, channelStats: channelStats, options: options, context: context, cancel: cancel)
     } ?? EditPipeline.SourceStats(channelStats: channelStats)
+    try cancel.check()
     await keepStats(entry, key, stats)
     return stats
   }
