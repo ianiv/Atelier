@@ -566,7 +566,8 @@ extension Automation {
   /// slider dragged slowly enough for every render to land. Each line gives the average and worst
   /// milliseconds and the renderer's cache hits and misses over the sweep. `--zoom` adds a zoom
   /// and pan sequence (50%, 100%, pans at 100%, 200%, back to fit), timing the window render for
-  /// each view with the fitted preview it's laid over. Last, the cancel latency: a render of a look
+  /// each view with the fitted preview it's laid over, and the four sweeps again at 100% (each
+  /// value's window in view, then the fitted preview under it, timed apart). Last, the cancel latency: a render of a look
   /// not yet cached (the fitted preview, then the full size) is cancelled 20 ms in, and the line
   /// gives the milliseconds from the cancel until it returns. `--size` defaults to 6000x4000.
   ///
@@ -605,7 +606,10 @@ extension Automation {
         return String(format: "avg %7.1f ms, worst %7.1f ms", times.reduce(0, +) / Double(times.count), times.max() ?? 0)
       }
       func cacheLine(_ before: EditRenderer.Counters, _ after: EditRenderer.Counters) -> String {
-        "pre-grain \(after.preGrainHits - before.preGrainHits) hit / \(after.preGrainMisses - before.preGrainMisses) miss, "
+        "pre-grain \(after.preGrainHits - before.preGrainHits) hit / \(after.preGrainMisses - before.preGrainMisses) miss "
+          + "(lens \(after.lensHits - before.lensHits)/\(after.lensMisses - before.lensMisses), "
+          + "colour \(after.colourHits - before.colourHits)/\(after.colourMisses - before.colourMisses), "
+          + "halation \(after.halationHits - before.halationHits)/\(after.halationMisses - before.halationMisses)), "
           + "fields \(after.fieldHits - before.fieldHits)/\(after.fieldMisses - before.fieldMisses), "
           + "stats \(after.statsHits - before.statsHits)/\(after.statsMisses - before.statsMisses)"
       }
@@ -664,6 +668,36 @@ extension Automation {
         }
 
         if zoom {
+          // The same sweeps zoomed to 100%, as the zoomed pane renders each value: the window in
+          // view, then the fitted preview under it.
+          let zoomed = EditViewport(imageWidth: width, imageHeight: height, viewSize: pane, displayScale: 2, scale: 1)
+          if let window = zoomed.window {
+            let zoomedFit = zoomed.fitPixels
+            log("  at 100%: window \(window.outputWidth)x\(window.outputHeight), fitted preview \(zoomedFit.width)x\(zoomedFit.height)")
+            _ = try? await renderer.window(source: image, options: base, context: .empty, window: window)
+            _ = try? await renderer.preview(source: image, options: base, context: .empty, fitting: zoomedFit.width, height: zoomedFit.height)
+            for (name, vary) in controls {
+              let before = await renderer.counters
+              var windowTimes: [Double] = []
+              var fittedTimes: [Double] = []
+              for step in 0..<steps {
+                var options = base
+                vary(&options, steps > 1 ? Double(step) / Double(steps - 1) : 1)
+                options = options.snapped
+                var start = clock.now
+                _ = try? await renderer.window(source: image, options: options, context: .empty, window: window)
+                windowTimes.append(milliseconds(clock.now - start))
+                start = clock.now
+                _ = try? await renderer.preview(source: image, options: options, context: .empty, fitting: zoomedFit.width, height: zoomedFit.height)
+                fittedTimes.append(milliseconds(clock.now - start))
+              }
+              let after = await renderer.counters
+              log("  \(name.padding(toLength: 9, withPad: " ", startingAt: 0)) 100% window \(summary(windowTimes)), then fitted \(summary(fittedTimes)); \(cacheLine(before, after))")
+            }
+          } else {
+            log("  at 100%: the image fits, no window to render")
+          }
+
           // Each view as the pane shows it: the fitted preview (cached after the first) and, zoomed
           // past it, the window in view.
           let views: [(String, Double?, CGSize)] = [

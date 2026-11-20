@@ -557,30 +557,66 @@ nonisolated enum EditPipeline {
 ///
 /// Caches, all keyed by the source image (held while cached, so its identity can't be reused):
 /// (a) per source, its pixels, grain.py's channel stats, a `statsSide` copy, a scaled copy for
-/// previews and the `SourceStats` for recent options; (b) the pre-grain image (steps 1–9) per
-/// options-before-grain, context and window, so a change to only the grain settings runs only
-/// steps 10–12; (c) the grain fields and real-noise fields per size, seed, cells and layout.
-/// (b) and (c) share `memoryBudget` bytes, least recently used out first, and an entry bigger
-/// than a third of it (a 16 MP full render's) isn't kept. Two sources are kept; `forget(_:)`
-/// drops one when the screen closes it.
+/// previews and the `SourceStats` for recent options; (b) three stages of the image before the
+/// vignette: the lens stage (steps 1–2, per smear, blur and window), the colour stage (steps
+/// 1–7: adds the matches, grade, LUT and the context data they use) and the halation stage
+/// (steps 1–8), so a change runs only from its own step: the vignette or grain alone runs steps
+/// 9–12, halation 8–12, the colour controls 3–12 (the vignette, a multiply per pixel, isn't
+/// kept); (c) the grain fields and real-noise fields per size, seed, cells and layout. (b) and
+/// (c) keep the newest entry per stage per lane (`Lane`: the whole image, as a fitted preview,
+/// or a part, as a zoomed window), so the fitted preview's and the window's sit side by side,
+/// within `memoryBudget` bytes (least recently used out first when they don't fit; an entry
+/// bigger than a third of it isn't kept). A full-size render reads them but keeps nothing.
+/// A window's lens and colour stages are read and kept with halation's margin, which grows with
+/// its radius: a Radius change zoomed in misses them (the fitted preview's margins are the
+/// whole image, so there it doesn't), and padding them to the largest radius instead would
+/// cost every window render up to 600 px more each side and change its float rounding. Two
+/// sources are kept; `forget(_:)` drops one when the screen closes it.
 actor EditRenderer {
   typealias Planes = EditPipeline.Planes
   typealias Window = EditPipeline.Window
   typealias Context = EditPipeline.Context
 
-  /// Bytes the pre-grain images and fields may take together.
+  /// Bytes the stages and fields may take together.
   let memoryBudget: Int
   /// Sources kept.
   let sourceLimit = 2
 
-  init(memoryBudget: Int = 512 << 20) {
+  init(memoryBudget: Int = EditRenderer.defaultMemoryBudget) {
     self.memoryBudget = memoryBudget
   }
 
+  /// A sixteenth of the device's memory, from 512 MB to 2 GB. Each kept pixel is 13 bytes a
+  /// stage (three Float32 planes and alpha) and 12 for the grain fields (24 with real noise). At
+  /// a full-screen 5K window's sizes for a 3:2 photo, with the default look's halation margin
+  /// (59 px each side): the fitted preview (4230 × 2820, 11.9 MP, every stage and field at that
+  /// size, 51–63 bytes a pixel) takes about 610–750 MB; the 100% window (5248 × 2944, 15.5 MP)
+  /// keeps its lens and colour stages at the margin's size (5366 × 3062, 16.4 MP) and its
+  /// halation stage and fields at its own, about 810–995 MB. Both lanes fit in 2 GB together (a
+  /// 32 GB or larger Mac) without either pushing the other out. A 16 GB Mac or iPad gets 1 GB
+  /// (an iPad's previews are about half the pixels). An 8 GB one gets the 512 MB the single
+  /// pre-grain cache had, whose third (the largest entry kept) is under that window's 200 MB
+  /// halation stage: there, as before, a full 5K screen's 100% window keeps no stages.
+  static let defaultMemoryBudget: Int = {
+    let sixteenth = ProcessInfo.processInfo.physicalMemory / 16
+    return Int(min(max(sixteenth, 512 << 20), 2 << 30))
+  }()
+
   /// Cache hits and misses since the renderer was made, for tests and timing.
   struct Counters: Hashable, Sendable {
+    /// Renders whose steps 1–8 all came from a kept stage (the halation stage, or the colour
+    /// stage when there's no halation), and those that ran at least one of them.
     var preGrainHits = 0
     var preGrainMisses = 0
+    /// Each stage's lookups: one is only looked up when every stage after it missed (and only
+    /// when it does something: no lens lookup without a smear or blur, no halation lookup
+    /// without halation).
+    var lensHits = 0
+    var lensMisses = 0
+    var colourHits = 0
+    var colourMisses = 0
+    var halationHits = 0
+    var halationMisses = 0
     var fieldHits = 0
     var fieldMisses = 0
     var statsHits = 0
@@ -629,12 +665,15 @@ actor EditRenderer {
     let id = ObjectIdentifier(source)
     sources[id] = nil
     for key in store.keys where key.source == id { remove(key) }
+    for lane in laneTickets.keys where lane.source == id { laneTickets[lane] = nil }
   }
 
   /// Drops everything.
   func removeAll() {
     sources = [:]
     store = [:]
+    lanes = [:]
+    laneTickets = [:]
     storedBytes = 0
   }
 
@@ -660,25 +699,17 @@ actor EditRenderer {
     let entry = try await sourceEntry(source)
     let geometry = Geometry(width: entry.width, height: entry.height, window: window).withReach(options)
     let id = ObjectIdentifier(source)
+    // A full-size render (Save, Export…) is a one-off whose 16–24 MP stages would push the
+    // screen's out of the budget: it reads what's kept but keeps nothing.
+    let lane = window == nil ? nil : await ticket(Lane.Kind(geometry))
 
-    // Steps 1–9, or the cached result.
-    let preKey = PreGrainKey(source: id, options: options, context: context, geometry: geometry)
-    let planes: Planes
-    if case .planes(let cached)? = await lookup(.preGrain(preKey)) {
-      planes = cached
-    } else {
-      let stats = try await stats(entry, options: options, context: context, cancel: cancel)
-      try cancel.check()
-      let base = try await sourcePixels(entry, geometry: geometry, cancel: cancel)
-      try cancel.check()
-      planes = try Self.preGrain(base: base, geometry: geometry, options: options, context: context, stats: stats, cancel: cancel)
-      try cancel.check()
-      await store(.preGrain(preKey), .planes(planes), bytes: planes.byteCount)
-    }
+    // Steps 1–8 from the newest stage kept (`staged`), then 9.
+    var out = try await staged(entry, options: options, context: context, geometry: geometry, lane: lane, cancel: cancel)
+    try cancel.check()
+    Self.vignetteStage(&out, geometry: geometry, options: options, cancel: cancel)
     try cancel.check()
 
     // Steps 10–12.
-    var out = planes
     let layout = Grain.Layout(
       width: geometry.scaledWidth, height: geometry.scaledHeight, aspect: Double(entry.height) / Double(max(entry.width, 1)),
       region: geometry.region)
@@ -697,7 +728,7 @@ actor EditRenderer {
           layout: layout, cancel: cancel)
         try cancel.check()
         fields = made
-        await store(.grain(key), .grain(made), bytes: made.byteCount)
+        await store(.grain(key), .grain(made), bytes: made.byteCount, lane: lane)
       }
     }
     var realField: [[Float]]?
@@ -709,7 +740,7 @@ actor EditRenderer {
         let made = Grain.realNoiseField(real, refWidth: context.refWidth, seed: grain.seed, layout: layout, cancel: cancel)
         try cancel.check()
         realField = made
-        await store(.real(key), .real(made), bytes: made.reduce(0) { $0 + $1.count * 4 })
+        await store(.real(key), .real(made), bytes: made.reduce(0) { $0 + $1.count * 4 }, lane: lane)
       }
     }
     try cancel.check()
@@ -721,36 +752,115 @@ actor EditRenderer {
     return image
   }
 
+  /// Steps 1–8 for `geometry` (the planes of `geometry.region`, before the vignette), from the
+  /// latest stage kept: the halation stage as it is, else the colour stage with halation run on
+  /// it, else the lens stage with the colour steps and halation, else everything from the source
+  /// pixels. Each stage it makes is kept in `lane` (none for nil) once it's checked not cancelled,
+  /// so nothing a cancelled render half-made is kept. A stage that does nothing with these
+  /// options (no smear or blur; no halation, whose output is then the colour stage's) isn't kept
+  /// apart from the one before it.
+  @concurrent private nonisolated func staged(
+    _ entry: SourceEntry, options: EditOptions, context: Context, geometry: Geometry, lane: Ticket?, cancel: EditPipeline.Cancel
+  ) async throws -> Planes {
+    let lensKey = LensKey(source: ObjectIdentifier(entry.image), lens: options.lens, geometry: geometry)
+    let colourKey = ColourKey(lens: lensKey, options: options, context: context)
+    let halationKey = HalationKey(colour: colourKey, halation: options.halation)
+    let halates = !options.halation.isIdentity
+
+    if halates, case .planes(let kept)? = await lookup(.halation(halationKey)) {
+      await count(preGrainHit: true)
+      return kept
+    }
+    var coloured: Planes?
+    if case .planes(let kept)? = await lookup(.colour(colourKey)) { coloured = kept }
+    await count(preGrainHit: !halates && coloured != nil)
+    if !halates, let coloured { return coloured }
+
+    if coloured == nil {
+      var lensed: Planes?
+      let lenses = !options.lens.isIdentity
+      if lenses, case .planes(let kept)? = await lookup(.lens(lensKey)) { lensed = kept }
+      if lensed == nil {
+        let base = try await sourcePixels(entry, geometry: geometry, cancel: cancel)
+        try cancel.check()
+        let made = try Self.lensStage(base: base, geometry: geometry, options: options, cancel: cancel)
+        try cancel.check()
+        if lenses { await store(.lens(lensKey), .planes(made), bytes: made.byteCount, lane: lane) }
+        lensed = made
+      }
+      let stats = try await stats(entry, options: options, context: context, cancel: cancel)
+      try cancel.check()
+      let made = try Self.colourStage(lensed!, options: options, context: context, stats: stats, cancel: cancel)
+      try cancel.check()
+      await store(.colour(colourKey), .planes(made), bytes: made.byteCount, lane: lane)
+      if !halates { return made }
+      coloured = made
+    }
+    let made = try Self.halationStage(coloured!, geometry: geometry, options: options, cancel: cancel)
+    try cancel.check()
+    await store(.halation(halationKey), .planes(made), bytes: made.byteCount, lane: lane)
+    return made
+  }
+
   /// Steps 1–9 on `base`, the source pixels of `geometry.read` (the output region with the
-  /// margins the smear, blur and halation reach into); the result is `geometry.region`.
+  /// margins the smear, blur and halation reach into); the result is `geometry.region`. The
+  /// stages one after another, kept nowhere: what `staged` and the vignette make, bit for bit.
   nonisolated static func preGrain(
     base: Planes, geometry: Geometry, options: EditOptions, context: Context, stats: EditPipeline.SourceStats,
     cancel: EditPipeline.Cancel = .never
   ) throws -> Planes {
-    let scale = geometry.scale
-    // 1–2, then cut to what halation needs.
-    var planes = EditPipeline.lens(base, options.lens, scale: scale, cancel: cancel)
+    let lensed = try lensStage(base: base, geometry: geometry, options: options, cancel: cancel)
+    let coloured = try colourStage(lensed, options: options, context: context, stats: stats, cancel: cancel)
+    var planes = try halationStage(coloured, geometry: geometry, options: options, cancel: cancel)
+    vignetteStage(&planes, geometry: geometry, options: options, cancel: cancel)
+    try cancel.check()
+    return planes
+  }
+
+  /// The lens stage: steps 1–2 on `base` (`geometry.read`), then cut to what halation needs
+  /// (`geometry.glow`).
+  nonisolated static func lensStage(base: Planes, geometry: Geometry, options: EditOptions, cancel: EditPipeline.Cancel = .never) throws -> Planes {
+    var planes = EditPipeline.lens(base, options.lens, scale: geometry.scale, cancel: cancel)
     try cancel.check()
     let glow = geometry.glow
     planes = planes.cropped(x: glow.x - geometry.read.x, y: glow.y - geometry.read.y, width: glow.width, height: glow.height)
     try cancel.check()
-    // 3–7.
+    return planes
+  }
+
+  /// The colour stage: steps 3–7 on the lens stage (`geometry.glow`).
+  nonisolated static func colourStage(
+    _ lensed: Planes, options: EditOptions, context: Context, stats: EditPipeline.SourceStats, cancel: EditPipeline.Cancel = .never
+  ) throws -> Planes {
+    var planes = lensed
     EditPipeline.color(&planes, options: options, context: context, stats: stats, cancel: cancel)
     try cancel.check()
-    // 8, then cut to the output.
-    Halation.apply(options.halation, to: &planes, scale: scale, cancel: cancel)
+    return planes
+  }
+
+  /// The halation stage: step 8 on the colour stage (`geometry.glow`), then cut to the output
+  /// (`geometry.region`; the same planes when there's no halation, whose glow is the region).
+  nonisolated static func halationStage(
+    _ coloured: Planes, geometry: Geometry, options: EditOptions, cancel: EditPipeline.Cancel = .never
+  ) throws -> Planes {
+    var planes = coloured
+    Halation.apply(options.halation, to: &planes, scale: geometry.scale, cancel: cancel)
     try cancel.check()
+    let glow = geometry.glow
     let region = geometry.region
     if glow != region {
       planes = planes.cropped(x: region.x - glow.x, y: region.y - glow.y, width: region.width, height: region.height)
     }
-    // 9, in the scaled image's coordinates (the vignette only depends on where a pixel is in
-    // the frame).
+    return planes
+  }
+
+  /// Step 9, in the scaled image's coordinates (the vignette only depends on where a pixel is in
+  /// the frame). Not kept: it's one multiply per pixel, about what copying a kept stage costs.
+  nonisolated static func vignetteStage(_ planes: inout Planes, geometry: Geometry, options: EditOptions, cancel: EditPipeline.Cancel = .never) {
+    let region = geometry.region
     Grade.vignette(
       options.vignette, to: &planes, fullWidth: geometry.scaledWidth, fullHeight: geometry.scaledHeight,
       window: Window(x: region.x, y: region.y, width: region.width, height: region.height), cancel: cancel)
-    try cancel.check()
-    return planes
   }
 
   /// Where a render sits: the scaled image it's a part of, the output region in it, and the
@@ -845,6 +955,7 @@ actor EditRenderer {
     while sources.count > max(sourceLimit, 1), let oldest = sources.min(by: { $0.value.lastUse < $1.value.lastUse }) {
       sources[oldest.key] = nil
       for key in store.keys where key.source == oldest.key { remove(key) }
+      for lane in laneTickets.keys where lane.source == oldest.key { laneTickets[lane] = nil }
     }
     return entry
   }
@@ -970,30 +1081,54 @@ actor EditRenderer {
     entry.proxyScale = scale
   }
 
-  // MARK: The pre-grain and field cache
+  // MARK: The stage and field cache
 
-  /// Everything steps 1–9 depend on: the options with the grain left out, the parts of the
-  /// context those steps use (by digest where there's one), and where the render sits.
-  struct PreGrainKey: Hashable, Sendable {
+  /// Everything the lens stage (steps 1–2) depends on: the smear and blur, and where the render
+  /// sits (its regions are what it reads and keeps).
+  struct LensKey: Hashable, Sendable {
     var source: ObjectIdentifier
+    var lens: EditOptions.Lens
+    var geometry: Geometry
+
+    init(source: ObjectIdentifier, lens: EditOptions.Lens, geometry: Geometry) {
+      self.source = source
+      // Every lens that does nothing is the same lens.
+      self.lens = lens.isIdentity ? .identity : lens
+      self.geometry = geometry
+    }
+  }
+
+  /// Everything the colour stage (steps 1–7) depends on: the lens stage's, the options for steps
+  /// 3–7 (all of them but halation, the vignette and grain, so a setting added later is in it
+  /// until it's taken out on purpose), and the parts of the context those steps use (by digest
+  /// where there's one).
+  struct ColourKey: Hashable, Sendable {
+    var lens: LensKey
     var options: EditOptions
     var referenceLab: Edit.LabStats?
     var histogram: String?
     var refStats: GrainProfile.ChannelStats?
     var lut: String?
-    var geometry: Geometry
 
-    init(source: ObjectIdentifier, options: EditOptions, context: Context, geometry: Geometry) {
-      self.source = source
+    init(lens: LensKey, options: EditOptions, context: Context) {
+      self.lens = lens
       var options = options
+      options.lens = lens.lens
+      options.halation = .init()
+      options.vignette = .init()
       options.grain = .identity
       self.options = options
       referenceLab = EditPipeline.matchesLab(options, context) ? context.referenceLab : nil
       histogram = EditPipeline.matchesHistogram(options, context) ? context.digests.referenceHistogram : nil
       refStats = EditPipeline.matchesColour(options, context) ? context.refStats : nil
       lut = options.lut.isIdentity ? nil : context.digests.lut ?? ""
-      self.geometry = geometry
     }
+  }
+
+  /// Everything the halation stage (steps 1–8) depends on.
+  struct HalationKey: Hashable, Sendable {
+    var colour: ColourKey
+    var halation: EditOptions.Halation
   }
 
   struct FieldKey: Hashable, Sendable {
@@ -1026,17 +1161,54 @@ actor EditRenderer {
   }
 
   enum Key: Hashable, Sendable {
-    case preGrain(PreGrainKey)
+    case lens(LensKey)
+    case colour(ColourKey)
+    case halation(HalationKey)
     case grain(FieldKey)
     case real(RealKey)
 
     var source: ObjectIdentifier {
       switch self {
-      case .preGrain(let key): key.source
+      case .lens(let key): key.source
+      case .colour(let key): key.lens.source
+      case .halation(let key): key.colour.lens.source
       case .grain(let key): key.source
       case .real(let key): key.source
       }
     }
+
+    var stage: Lane.Stage {
+      switch self {
+      case .lens: .lens
+      case .colour: .colour
+      case .halation: .halation
+      case .grain: .grain
+      case .real: .real
+      }
+    }
+  }
+
+  /// Where an entry is kept: one entry per stage (and field kind) per source and kind of render,
+  /// the newest. A slider drag makes a new key every tick; keeping only the newest of each lets
+  /// the fitted preview's stages and the 100% window's sit side by side within the budget
+  /// instead of the drag's stale ones pushing the other lane's out. A pane's fitted preview and
+  /// the Slider comparison's share the whole-image lane (only one shows at a time), and the
+  /// Side by Side original renders nothing.
+  struct Lane: Hashable, Sendable {
+    enum Stage: Hashable, Sendable { case lens, colour, halation, grain, real }
+    /// The whole (scaled) image, as a fitted preview is, or a part of it, as a zoomed window is.
+    enum Kind: Hashable, Sendable {
+      case whole, part
+
+      init(_ geometry: Geometry) {
+        let region = geometry.region
+        self = region.x == 0 && region.y == 0 && region.width == geometry.scaledWidth && region.height == geometry.scaledHeight ? .whole : .part
+      }
+    }
+
+    var source: ObjectIdentifier
+    var stage: Stage
+    var kind: Kind
   }
 
   enum Value: Sendable {
@@ -1052,15 +1224,32 @@ actor EditRenderer {
   }
 
   private var store: [Key: Stored] = [:]
+  /// Each lane's entry, and the ticket of the render that kept it.
+  private var lanes: [Lane: Key] = [:]
+  private var laneTickets: [Lane: UInt64] = [:]
+  private var tickets: UInt64 = 0
+
+  /// A render's place among those asked for, and the kind of lane it keeps its entries in.
+  struct Ticket: Sendable {
+    var kind: Lane.Kind
+    var number: UInt64
+  }
+
+  /// The next render's ticket: a render that finishes after a later one in its lane (the render
+  /// loop lets an in-flight one finish) mustn't replace that later render's entries.
+  private func ticket(_ kind: Lane.Kind) -> Ticket {
+    tickets += 1
+    return Ticket(kind: kind, number: tickets)
+  }
   private var storedBytes = 0
 
   private func lookup(_ key: Key) -> Value? {
     let hit = store[key] != nil
     switch key {
-    case .preGrain:
-      if hit { counters.preGrainHits += 1 } else { counters.preGrainMisses += 1 }
-    case .grain, .real:
-      if hit { counters.fieldHits += 1 } else { counters.fieldMisses += 1 }
+    case .lens: if hit { counters.lensHits += 1 } else { counters.lensMisses += 1 }
+    case .colour: if hit { counters.colourHits += 1 } else { counters.colourMisses += 1 }
+    case .halation: if hit { counters.halationHits += 1 } else { counters.halationMisses += 1 }
+    case .grain, .real: if hit { counters.fieldHits += 1 } else { counters.fieldMisses += 1 }
     }
     guard var stored = store[key] else { return nil }
     clock += 1
@@ -1069,22 +1258,39 @@ actor EditRenderer {
     return stored.value
   }
 
-  private func store(_ key: Key, _ value: Value, bytes: Int) {
+  private func count(preGrainHit hit: Bool) {
+    if hit { counters.preGrainHits += 1 } else { counters.preGrainMisses += 1 }
+  }
+
+  /// Keeps `value` as `key`'s, in place of its lane's entry, with the least recently used of the
+  /// other lanes' dropped while it doesn't fit; nothing for no lane (a full-size render), nor
+  /// from a render asked for before the one that kept the lane's entry. Planes two stages share
+  /// (a colour stage's alpha, say) count in each: the bytes are an upper bound.
+  private func store(_ key: Key, _ value: Value, bytes: Int, lane ticket: Ticket?) {
     // Not for a source that's been dropped since, nor bigger than a third of the budget.
-    guard sources[key.source] != nil, bytes <= memoryBudget / 3 else { return }
+    guard let ticket, sources[key.source] != nil, bytes <= memoryBudget / 3 else { return }
+    let lane = Lane(source: key.source, stage: key.stage, kind: ticket.kind)
+    if let last = laneTickets[lane], last > ticket.number { return }
+    laneTickets[lane] = ticket.number
+    if let previous = lanes[lane] { remove(previous) }
     remove(key)
     while storedBytes + bytes > memoryBudget, let oldest = store.min(by: { $0.value.lastUse < $1.value.lastUse }) {
       remove(oldest.key)
     }
     clock += 1
     store[key] = Stored(value: value, bytes: bytes, lastUse: clock)
+    lanes[lane] = key
     storedBytes += bytes
   }
 
   private func remove(_ key: Key) {
     guard let stored = store.removeValue(forKey: key) else { return }
     storedBytes -= stored.bytes
+    for (lane, kept) in lanes where kept == key { lanes[lane] = nil }
   }
+
+  /// Bytes kept in the stage and field cache, for tests.
+  var keptBytes: Int { storedBytes }
 }
 
 extension EditPipeline.Planes {
