@@ -98,11 +98,11 @@ final nonisolated class RemoteListener: Sendable {
   private let accepts: @Sendable (String) -> Bool
   private let onConnection: @Sendable (NWConnection) -> Void
   /// Told when a running listener fails, after it was ready.
-  private let onFailure: @Sendable (String) -> Void
+  private let onFailure: @Sendable (ListenFailure) -> Void
 
   init(
     accepts: @escaping @Sendable (String) -> Bool, onConnection: @escaping @Sendable (NWConnection) -> Void,
-    onFailure: @escaping @Sendable (String) -> Void
+    onFailure: @escaping @Sendable (ListenFailure) -> Void
   ) {
     self.accepts = accepts
     self.onConnection = onConnection
@@ -187,7 +187,8 @@ final nonisolated class RemoteListener: Sendable {
           if answer() {
             continuation.resume(throwing: error)
           } else {
-            self?.onFailure(Self.describe(error))
+            // On the listener's queue, off the main actor, where a busy port's owner is looked up.
+            self?.onFailure(ListenFailure.describe(error, port: Int(listener.port?.rawValue ?? port)))
           }
         default:
           break
@@ -272,11 +273,6 @@ final nonisolated class RemoteListener: Sendable {
       (Bundle.main.object(forInfoDictionaryKey: "NSBonjourServices") as? [String])?.contains(RemoteProtocol.serviceType) ?? false
     #endif
   }
-
-  static func describe(_ error: NWError) -> String {
-    if case .posix(.EADDRINUSE) = error { return "Another app is using this port." }
-    return error.localizedDescription
-  }
 }
 
 /// The Compute role: lets paired devices run jobs here. A job goes into this machine's own Queue,
@@ -308,12 +304,7 @@ final class RemoteServer {
   }
 
   private static let enabledKey = "remoteServer.enabled"
-  private nonisolated static let portKey = "remoteServer.port"
-
-  /// The port Compute's server is set to, for the MCP server's HTTPS to stay off it.
-  nonisolated static var configuredPort: Int {
-    UserDefaults.standard.object(forKey: portKey) as? Int ?? Int(RemoteProtocol.defaultPort)
-  }
+  private static let portKey = "remoteServer.port"
   private static let filterKey = "remoteServer.filter"
 
   var isEnabled: Bool {
@@ -343,12 +334,20 @@ final class RemoteServer {
   private(set) var pairing: Pairing?
   private(set) var isListening = false
   private(set) var listenError: String?
+  /// `listenError` is about the port (in use, not allowed, another server's): Try Again is on.
+  private(set) var listenPortError = false
+  /// Why the Port field didn't take the port typed, which is kept as it was.
+  private(set) var portRefusal: String?
+  /// Why serving over the tailnet failed while the server itself listens.
+  private(set) var tailnetError: String?
   /// The port actually bound.
   private(set) var boundPort: UInt16 = 0
   private(set) var tailscaleAddress: String?
   private(set) var tailscaleName: String?
 
   private let options: Options
+  /// The ports this device's servers hold, shared with the MCP server's.
+  private let ports: PortRegistry
   private weak var create: CreateModel?
   private weak var library: ModelLibrary?
   let store: RemoteJobStore
@@ -369,6 +368,7 @@ final class RemoteServer {
     self.create = create
     self.library = library
     self.options = options
+    ports = create.ports
     store = RemoteJobStore(root: options.root)
     let defaults = UserDefaults.standard
     isEnabled = options.isApp && defaults.bool(forKey: Self.enabledKey)
@@ -389,6 +389,7 @@ final class RemoteServer {
     guard let tailnet else { return }
     let tailnetPort = port != 0 ? port : boundPort
     let shouldListen = isEnabled && isListening && tailnet.serves && tailnet.isSignedIn && tailnetPort != 0
+    if !shouldListen { tailnetError = nil }
     guard shouldListen != (tailnetListening != nil) || (shouldListen && tailnetListening != tailnetPort) else { return }
     // Only this server's port: the MCP server may be serving another one on the same node.
     if let previous = tailnetListening { tailnet.stopListening(port: previous, owner: .compute) }
@@ -397,8 +398,10 @@ final class RemoteServer {
       let listener = listener
       do {
         try tailnet.startListening(port: tailnetPort, owner: .compute) { listener?.bridgePort }
+        tailnetError = nil
       } catch {
         Log.remote.error("Not serving over Tailscale: \(error.localizedDescription, privacy: .public)")
+        tailnetError = error.localizedDescription
         tailnetListening = nil
       }
     }
@@ -444,6 +447,12 @@ final class RemoteServer {
         }
       }
     }
+    // The MCP server already has it (turned on while this one was off): the system would let both
+    // listen, so it's refused here, before anything binds.
+    let requested = port
+    let clash = shouldListen && requested != 0 ? ports.claims.conflict(port: Int(requested), for: .compute) : nil
+    // Port 0 (a check's) keeps the one it was given last time, as the listener does.
+    ports.update { $0.claimCompute(isOn: shouldListen && clash == nil, port: Int(requested != 0 ? requested : boundPort)) }
     let listener = listener(creatingIfNeeded: shouldListen)
     let configuration = RemoteListener.Configuration(
       port: port, loopbackOnly: options.loopbackOnly, advertises: !options.loopbackOnly, keys: currentKeys,
@@ -451,24 +460,56 @@ final class RemoteServer {
     applying = Task { [weak self] in
       await previous?.value
       guard let listener else { return }
-      if shouldListen {
+      if let clash {
+        await listener.stop()
+        self?.isListening = false
+        self?.listenError = clash
+        self?.listenPortError = true
+        self?.syncTailnet()
+      } else if shouldListen {
         do {
           let bound = try await listener.update(configuration)
           self?.boundPort = bound
           self?.isListening = true
           self?.listenError = nil
+          self?.listenPortError = false
+          // A port picked by the system (a check's port 0) is claimed once it's known.
+          if requested == 0 { self?.ports.update { $0.claimCompute(isOn: true, port: Int(bound)) } }
           self?.syncTailnet()
         } catch {
+          let failure =
+            if let error = error as? NWError {
+              await ListenFailure.describeOffMain(error, port: Int(requested))
+            } else {
+              ListenFailure(error.localizedDescription, isPortError: false)
+            }
           self?.isListening = false
-          self?.listenError = (error as? NWError).map(RemoteListener.describe) ?? error.localizedDescription
+          self?.listenError = failure.message
+          self?.listenPortError = failure.isPortError
         }
       } else {
         await listener.stop()
         self?.isListening = false
         self?.listenError = nil
+        self?.listenPortError = false
         self?.syncTailnet()
       }
     }
+  }
+
+  /// Settings' Port field: takes `newPort` unless the MCP server holds it (its port, or an HTTPS
+  /// Port set by hand), in which case the port stays and `portRefusal` says whose it is.
+  @discardableResult func choosePort(_ newPort: UInt16) -> Bool {
+    portRefusal = ports.claims.conflict(port: Int(newPort), for: .compute)
+    guard portRefusal == nil else { return false }
+    port = newPort
+    return true
+  }
+
+  /// Try Again in Status, once whatever held the port has let it go.
+  func retryListening() {
+    portRefusal = nil
+    apply()
   }
 
   private func listener(creatingIfNeeded create: Bool) -> RemoteListener? {
@@ -486,10 +527,11 @@ final class RemoteServer {
         let session = RemoteSession(server: self, store: store, connection: RemoteConnection(connection))
         Task { await session.run() }
       },
-      onFailure: { [weak self] message in
+      onFailure: { [weak self] failure in
         Task { @MainActor in
           self?.isListening = false
-          self?.listenError = message
+          self?.listenError = failure.message
+          self?.listenPortError = failure.isPortError
         }
       })
     listener.setFilter(filter)

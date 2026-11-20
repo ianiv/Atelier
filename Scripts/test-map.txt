@@ -34,6 +34,8 @@ Sources/AtelierTests/Tags.swift | smoke |
 # Sources, one line per folder.
 Sources/Atelier/Agents/      | HostTests,CanvasEditArgumentsTests,AgentAccessTests | --agent-canvas-check,--edit-screen-check,--agent-net-check
 Sources/Atelier/App/         | HostTests,TemporaryFilesTests,ClipCacheTests,OrphanTests,ModelFolderTests,WaitUntilTests,ShareTests,SharePickerTests | --cleanup-check,--ux-check,--resize-bench,--tab-switch-bench,--model-folders-check
+Sources/Atelier/App/PortClaims.swift | PortClaimsTests,AgentAccessTests,PortOwnerTests | --agent-net-check,--remote-net-check,--remote-check,--remote-tailnet-check
+Sources/Atelier/App/PortOwner.swift | PortOwnerTests,PortClaimsTests | --agent-net-check,--remote-net-check
 Sources/Atelier/Automation/  | HostTests,AutomationSamplerTests | --generate
 Sources/Atelier/Automation/AutomationAgentNet.swift | AgentAccessTests | --agent-net-check
 Sources/Atelier/Automation/AutomationTestCertificate.swift | AgentAccessTests | --agent-net-check

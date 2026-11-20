@@ -188,6 +188,8 @@ struct AgentAccessTests {
     #expect(AgentAuth.httpsPort(for: 7862, avoiding: [7863]) == 7864)
     #expect(AgentAuth.httpsPort(for: 7862, avoiding: [7864]) == 7865, "Compute moved onto it")
     #expect(AgentAuth.httpsPort(for: 7862, avoiding: [7864, 7865]) == 7866)
+    #expect(AgentAuth.httpsPort(for: 7861, avoiding: [7861, 7863]) == 7864, "Compute's default skipped")
+    #expect(AgentAuth.httpsPort(for: 7862, avoiding: [7862, 7863]) == 7864, "both servers at their defaults")
     #expect(AgentAuth.httpsPort(for: 1) == 3)
     #expect(AgentAuth.httpsPort(for: 65533) == 65535)
     #expect(AgentAuth.httpsPort(for: 65534) == nil, "no port that far")

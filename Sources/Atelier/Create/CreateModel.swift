@@ -30,6 +30,8 @@ final class CreateModel {
   let remoteStyles = RemoteStyleLibrary()
   /// Atelier's own place on your tailnet.
   let tailnet = RemoteTailnet()
+  /// The ports this device's servers (MCP, Compute) hold, so neither takes the other's.
+  let ports = PortRegistry()
   /// What runs jobs for `target`.
   func backend(for target: JobTarget) -> any GenerationBackend {
     switch target {

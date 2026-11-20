@@ -71,7 +71,7 @@ The server's **Accept connections from** setting is a second layer on top of tho
 
 A pairing link holds all the server's addresses, and the client tries the local network first, then Tailscale. Tailscale doesn't carry Bonjour between machines, so a server is found through the addresses remembered from pairing. On the same network, servers also find each other: a paired one shows as online and is reached directly.
 
-Settings ▸ Compute shows this device's name on your tailnet when Atelier is signed in, and its address when it has the Tailscale app. The default port is 7863.
+Settings ▸ Compute shows this device's name on your tailnet when Atelier is signed in, and its address when it has the Tailscale app. The default port is 7863, used on the local network and the tailnet alike. If it's taken, Status says by what (an app it names, another app or system service, or one of Atelier's own servers); free it or pick another port, then click **Try Again**. The Port field won't take a port the MCP server uses while it's on (Settings ▸ Agents, including an HTTPS Port typed there, or 443 with its Tailscale certificate), and Status says whose it is. A problem serving over the tailnet shows in Status as a separate line.
 
 ## What a paired device can do
 

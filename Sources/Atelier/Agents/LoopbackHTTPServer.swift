@@ -33,7 +33,7 @@ final nonisolated class LoopbackHTTPServer: Sendable {
   }
 
   /// Reports why listening failed (the port is taken, say); nil once it's listening.
-  typealias StateHandler = @Sendable (_ error: String?) -> Void
+  typealias StateHandler = @Sendable (_ failure: ListenFailure?) -> Void
   typealias Handler = @Sendable (Request, Responder) -> Void
   /// Looks at a request's peer and headers before its body is read: a status to refuse it with
   /// (the connection then closes without reading on), or nil.
@@ -76,11 +76,11 @@ final nonisolated class LoopbackHTTPServer: Sendable {
   func start(stateHandler: @escaping StateHandler) {
     queue.async { [self] in
       guard let nwPort = NWEndpoint.Port(rawValue: port), port != 0 || isBridge else {
-        stateHandler("\(port) isn't a valid port.")
+        stateHandler(ListenFailure(PortClaims.invalidMessage, isPortError: false))
         return
       }
       guard tls == nil || tls?.secIdentity != nil else {
-        stateHandler("The certificate can't be used for HTTPS.")
+        stateHandler(ListenFailure("The certificate can't be used for HTTPS.", isPortError: false))
         return
       }
       if case .all(let filter) = binding {
@@ -121,7 +121,7 @@ final nonisolated class LoopbackHTTPServer: Sendable {
               self.startLoopback(port: nwPort, retries: retries - 1, stateHandler: stateHandler)
             }
           } else {
-            stateHandler(Self.describe(error))
+            stateHandler(self?.describe(error) ?? ListenFailure(error.localizedDescription, isPortError: false))
           }
         default: break
         }
@@ -157,7 +157,7 @@ final nonisolated class LoopbackHTTPServer: Sendable {
     port nwPort: NWEndpoint.Port, filter: RemoteAddressFilter, retries: Int, stateHandler: @escaping StateHandler
   ) {
     guard let listener = try? NWListener(using: makeParameters(), on: nwPort) else {
-      stateHandler("Couldn't listen on port \(port).")
+      stateHandler(ListenFailure("Couldn't listen on port \(port).", isPortError: false))
       return
     }
     listener.stateUpdateHandler = { [weak self] state in
@@ -175,7 +175,7 @@ final nonisolated class LoopbackHTTPServer: Sendable {
             self.startAll(port: nwPort, filter: filter, retries: retries - 1, stateHandler: stateHandler)
           }
         } else {
-          stateHandler(Self.describe(error))
+          stateHandler(self?.describe(error) ?? ListenFailure(error.localizedDescription, isPortError: false))
         }
       default: break
       }
@@ -204,11 +204,10 @@ final nonisolated class LoopbackHTTPServer: Sendable {
     }
   }
 
-  private static func describe(_ error: NWError) -> String {
-    if case .posix(let code) = error, code == .EADDRINUSE {
-      return "Another app is using this port."
-    }
-    return error.localizedDescription
+  /// Runs on the listener's queue, off the main actor, where looking up a busy port's owner can
+  /// take its time.
+  private func describe(_ error: NWError) -> ListenFailure {
+    ListenFailure.describe(error, port: Int(port))
   }
 
   private func accept(_ connection: NWConnection) {
