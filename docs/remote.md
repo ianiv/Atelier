@@ -53,7 +53,7 @@ Atelier can join your [tailnet](https://tailscale.com) by itself: no Tailscale a
 
 **Control Server** is for [Headscale](https://headscale.net): enter its address before signing in, or leave it empty for Tailscale's own. **Preferred Hostname** is the name this device asks for on your tailnet. Tailscale may add a number if it's taken.
 
-The same node can serve Atelier's MCP server to agents on your tailnet over HTTPS (Settings ▸ Agents ▸ Encryption ▸ **Tailscale certificate**; see [MCP.md](../MCP.md#https)). That needs **MagicDNS** and **HTTPS Certificates** turned on for your tailnet, in the [DNS page of the Tailscale admin console](https://login.tailscale.com/admin/dns). The certificate comes from Let's Encrypt, so the device's tailnet name appears in public Certificate Transparency logs.
+The same node can serve Atelier's MCP server to agents on your tailnet over HTTPS (Settings ▸ Agents ▸ Encryption ▸ **Tailscale certificate**; see [MCP.md](../MCP.md#https)). That needs **MagicDNS** and **HTTPS Certificates** turned on for your tailnet, in the [DNS page of the Tailscale admin console](https://login.tailscale.com/admin/dns). The certificate comes from Let's Encrypt, so the device's tailnet name appears in public Certificate Transparency logs. Step by step, and what Status says when it doesn't work: [Certificates for HTTPS](certificates.md#tailscale-certificate).
 
 **Sign Out…** takes this device off your tailnet and forgets its sign-in. Atelier keeps that sign-in in its own folder, separate from the Tailscale app's.
 
