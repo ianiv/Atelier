@@ -29,6 +29,7 @@ struct EditScreen: View {
           .disabled(!edit.canUseCanvasImage)
           .help("Edit the image on the Create screen's canvas")
       }
+      HelpToolbarItem(section: .edit)
     }
     .detailInspector(selection: 0, isEmpty: false, clearSelection: {}) {
       EditInspector()

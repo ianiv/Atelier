@@ -161,6 +161,7 @@ struct StylesView: View {
             .help("Add a style")
             .disabled(source != nil)
         }
+        HelpToolbarItem(section: .styles)
       }
       .searchable(text: $styles.screenSearch, placement: .toolbar, prompt: "Filter styles")
       .safeAreaBar(edge: .bottom, spacing: 0) {

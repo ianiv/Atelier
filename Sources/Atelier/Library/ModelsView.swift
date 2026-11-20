@@ -130,6 +130,7 @@ struct ModelsView: View {
           Button("Import…", systemImage: "plus") { chooseFiles() }
             .help("Import .safetensors model checkpoints (or drop them here)")
         }
+        HelpToolbarItem(section: .models)
       }
       .searchable(text: $search, placement: .toolbar, prompt: "Filter models")
       .safeAreaBar(edge: .bottom, spacing: 0) { footer }

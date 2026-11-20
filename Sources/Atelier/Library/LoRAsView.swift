@@ -96,6 +96,7 @@ struct LoRAsView: View {
           Button("Import…", systemImage: "plus") { chooseFiles() }
             .help("Import .safetensors LoRA files (or drop them here)")
         }
+        HelpToolbarItem(section: .loras)
       }
       .searchable(text: screen.loraScreen.search, placement: .toolbar, prompt: "Filter LoRAs")
       .detailInspector(selection: selection, isEmpty: selected == nil, clearSelection: { selection = nil }) {

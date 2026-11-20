@@ -62,6 +62,7 @@
 		A7C3E91F4D2B6A8E0F1C5D93 /* MOSSImporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8D4FA204E3C7B9F102D6EA4 /* MOSSImporter.swift */; };
 		D1E2F3A4B5C66289D185957B /* SafeTensorsReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E2F3A4B5C6D782A32EF001 /* SafeTensorsReader.swift */; };
 		C1A2B3D4E5F60718293A4B5C /* H3ImageVAEImporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2B3C4E5F6071829304B5C6D /* H3ImageVAEImporter.swift */; };
+		A7E1C0DE00000000000000A1 /* HelpLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1C0DE00000000000000A2 /* HelpLinks.swift */; };
 		02980CB68834C5E6EA77013B /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75FDC53060CFC4942FDDBF2D /* ContentView.swift */; };
 		10171A503FBA24116D0D87F6 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C8D5C8071A6037BDD1122F9 /* AppSettings.swift */; };
 		15B3CBDDD4DC0FCE7C625161 /* CreateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B147BCDA9E5FEDE9CC9B373A /* CreateView.swift */; };
@@ -414,6 +415,7 @@
 		6BEA94A3173E8DEC703922D0 /* SettingsRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsRegistry.swift; sourceTree = "<group>"; };
 		703D619A6F074D5BFFC42B4F /* script_session_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = script_session_generated.swift; sourceTree = "<group>"; };
 		716BE47B7D8EFA0449CAF4AF /* AtelierApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtelierApp.swift; sourceTree = "<group>"; };
+		A7E1C0DE00000000000000A2 /* HelpLinks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelpLinks.swift; sourceTree = "<group>"; };
 		75FDC53060CFC4942FDDBF2D /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		799C86043C98B64CEAA68FA7 /* clip_mutating_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = clip_mutating_generated.swift; sourceTree = "<group>"; };
 		81D09E0E7038EB1757F9D82C /* script_session_mutating_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = script_session_mutating_generated.swift; sourceTree = "<group>"; };
@@ -637,6 +639,7 @@
 				3C8D5C8071A6037BDD1122F9 /* AppSettings.swift */,
 				716BE47B7D8EFA0449CAF4AF /* AtelierApp.swift */,
 				75FDC53060CFC4942FDDBF2D /* ContentView.swift */,
+				A7E1C0DE00000000000000A2 /* HelpLinks.swift */,
 				9895821DCBA0BD67EF40AB9D /* SessionState.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1F4 /* FileDialogs.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1F2 /* MacPlatform.swift */,
@@ -1286,6 +1289,7 @@
 				E17E00000000000000000001 /* AutomationInputEntries.swift in Sources */,
 				70E8E18439D847EA73F0D5DD /* AutomationTimeline.swift in Sources */,
 				02980CB68834C5E6EA77013B /* ContentView.swift in Sources */,
+				A7E1C0DE00000000000000A1 /* HelpLinks.swift in Sources */,
 				90D46F51CBD101C88E0BD1B0 /* CreateModel.swift in Sources */,
 				15B3CBDDD4DC0FCE7C625161 /* CreateView.swift in Sources */,
 				DE71CE4BC9D3833FBA7F38B6 /* VideoModel.swift in Sources */,

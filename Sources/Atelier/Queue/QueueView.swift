@@ -30,6 +30,7 @@ struct QueueView: View {
           .help("Remove the finished, failed and cancelled jobs from this list (their images stay in History)")
           .disabled(queue.recent.isEmpty)
       }
+      HelpToolbarItem(section: .queue)
     }
   }
 

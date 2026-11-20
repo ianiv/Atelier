@@ -14,6 +14,8 @@
 12. [Atelier for agents (MCP)](../MCP.md): letting Claude Code and other agents generate images and videos with your models, and work on the Create screen with you (Mac only).
 13. [Certificates for HTTPS](certificates.md): keeping the MCP server safe on your network, getting a Tailscale certificate or making your own (mkcert, OpenSSL, a company CA), and having agents trust it.
 
+In the app, the **?** button at the right of each screen's toolbar opens that screen's page, and Help ▸ Atelier Help (⌘?) opens this one.
+
 The iPad version works the same way, with a few differences noted under "On iPad" in each page; see [Atelier on iPad](getting-started.md#atelier-on-ipad) to build and install it.
 
 ## Keyboard shortcuts
@@ -35,6 +37,7 @@ The iPad version works the same way, with a few differences noted under "On iPad
 | ⌘0 | Actual size |
 | ⌥⌘I | Show or hide the inspector |
 | ⌘, | Settings |
+| ⌘? | Open this guide |
 
 On iPad, the same shortcuts work with a hardware keyboard.
 

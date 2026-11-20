@@ -105,6 +105,7 @@ struct AtelierApp: App {
       #endif
     }
     .commands {
+      HelpCommands()
       CommandGroup(after: .sidebar) {
         Button(inspectorShown ? "Hide Inspector" : "Show Inspector") { inspectorShown.toggle() }
           .keyboardShortcut("i", modifiers: [.command, .option])

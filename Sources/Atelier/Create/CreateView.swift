@@ -87,6 +87,7 @@ struct CreateView: View {
         ToolbarItem(placement: .primaryAction) {
           PresetMenu()
         }
+        HelpToolbarItem(section: .create, placement: .primaryAction)
         ToolbarSpacer(.fixed, placement: .primaryAction)
         ToolbarItem(placement: .primaryAction) {
           Button("Inspector", systemImage: "sidebar.trailing") { inspectorPresented.wrappedValue.toggle() }

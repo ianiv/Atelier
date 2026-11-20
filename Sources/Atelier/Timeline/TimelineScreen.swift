@@ -335,6 +335,7 @@ struct TimelineScreen: View {
         }
       }
     }
+    HelpToolbarItem(section: .videoEditor)
   }
 
   // MARK: - Editing

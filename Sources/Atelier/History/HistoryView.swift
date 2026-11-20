@@ -153,6 +153,7 @@ struct HistoryView: View {
           ToolbarItem { ToolbarPickerMenu(title: modelFilter ?? "All models", width: 150) { modelPicker } }
           ToolbarItem { inputsToggle }
         #endif
+        HelpToolbarItem(section: .history)
       }
       .searchable(text: $search, placement: .toolbar, prompt: "Filter by prompt")
       .detailInspector(selection: picks, isEmpty: selection.isEmpty, clearSelection: { selection = [] }) {
