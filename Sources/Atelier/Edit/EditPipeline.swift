@@ -145,6 +145,28 @@ nonisolated enum EditPipeline {
     var outputHeight: Int { max(1, Int((Double(height) * scale).rounded())) }
   }
 
+  /// A zoomed view's render: the part `region` of the image scaled by `scale`, in that scaled
+  /// image's pixels (`scaledSize`). `scale` is the zoom snapped to a quarter octave
+  /// (`EditViewport.renderScale`), so a pinch renders at a few scales rather than a new one every
+  /// frame, and the view's tiles (`EditRenderer.zoomed`) line up on the scaled image's grid.
+  struct Zoomed: Hashable, Sendable {
+    var scale: Double
+    var region: Resample.Region
+
+    init(scale: Double, region: Resample.Region) {
+      self.scale = scale
+      self.region = region
+    }
+  }
+
+  /// The whole image's size at `scale` (at most 1): what a render at that scale lays its parts,
+  /// grain and vignette in (`EditRenderer.Geometry`).
+  static func scaledSize(width: Int, height: Int, scale: Double) -> (width: Int, height: Int) {
+    let scale = min(max(scale, 1e-4), 1)
+    guard scale < 1 else { return (width, height) }
+    return (max(1, Int((Double(width) * scale).rounded())), max(1, Int((Double(height) * scale).rounded())))
+  }
+
   /// An image as the steps work on it: grain.py's float32 HxWx3 array in 0–255, as three planes,
   /// with alpha kept apart to pass through.
   struct Planes: Sendable {
@@ -273,6 +295,36 @@ nonisolated enum EditPipeline {
         rCount = count
       }
       self.init(width: w, height: h, r: r, g: g, b: b, alpha: alpha)
+    }
+
+    /// The part of tightly packed RGBA8 `pixels` (`pixelWidth` wide) at `x, y`, `width` ×
+    /// `height`, which must lie inside it, as its own tightly packed RGBA8.
+    static func part(of pixels: [UInt8], pixelWidth: Int, x: Int, y: Int, width w: Int, height h: Int) -> [UInt8] {
+      [UInt8](unsafeUninitializedCapacity: w * h * 4) { out, initialized in
+        pixels.withUnsafeBufferPointer { input in
+          for row in 0..<h {
+            (out.baseAddress! + row * w * 4).initialize(from: input.baseAddress! + ((y + row) * pixelWidth + x) * 4, count: w * 4)
+          }
+        }
+        initialized = w * h * 4
+      }
+    }
+
+    /// Copies tightly packed RGBA8 `part` (`width` × `height`) into `pixels` (`pixelWidth` wide)
+    /// at `x, y`, the rows and columns outside it cut off.
+    static func paste(_ part: [UInt8], width w: Int, height h: Int, into pixels: inout [UInt8], pixelWidth: Int, x: Int, y: Int) {
+      let pixelHeight = pixelWidth > 0 ? pixels.count / 4 / pixelWidth : 0
+      let x0 = max(x, 0), y0 = max(y, 0)
+      let x1 = min(x + w, pixelWidth), y1 = min(y + h, pixelHeight)
+      guard x1 > x0, y1 > y0 else { return }
+      part.withUnsafeBufferPointer { input in
+        pixels.withUnsafeMutableBufferPointer { output in
+          for row in y0..<y1 {
+            (output.baseAddress! + (row * pixelWidth + x0) * 4)
+              .update(from: input.baseAddress! + ((row - y) * w + x0 - x) * 4, count: (x1 - x0) * 4)
+          }
+        }
+      }
     }
 
     var cgImage: CGImage? { cgImage(cancel: .never) }
@@ -556,8 +608,8 @@ nonisolated enum EditPipeline {
 /// - `sourceStats(source:options:context:)` and `bakeLUT(...)`: Export LUT….
 ///
 /// Caches, all keyed by the source image (held while cached, so its identity can't be reused):
-/// (a) per source, its pixels, grain.py's channel stats, a `statsSide` copy, a scaled copy for
-/// previews and the `SourceStats` for recent options; (b) three stages of the image before the
+/// (a) per source, its pixels, grain.py's channel stats, a `statsSide` copy, scaled copies for
+/// the fitted preview and zoomed views (three sizes) and the `SourceStats` for recent options; (b) three stages of the image before the
 /// vignette: the lens stage (steps 1–2, per smear, blur and window), the colour stage (steps
 /// 1–7: adds the matches, grade, LUT and the context data they use) and the halation stage
 /// (steps 1–8), so a change runs only from its own step: the vignette or grain alone runs steps
@@ -571,19 +623,27 @@ nonisolated enum EditPipeline {
 /// its radius: a Radius change zoomed in misses them (the fitted preview's margins are the
 /// whole image, so there it doesn't), and padding them to the largest radius instead would
 /// cost every window render up to 600 px more each side and change its float rounding. Two
-/// sources are kept; `forget(_:)` drops one when the screen closes it.
+/// sources are kept; `forget(_:)` drops one when the screen closes it. The zoomed view's tiles
+/// (`zoomed`) and the scaled copies are kept apart, in `tileBudget` and `scaledBudget`.
 actor EditRenderer {
   typealias Planes = EditPipeline.Planes
   typealias Window = EditPipeline.Window
   typealias Context = EditPipeline.Context
 
-  /// Bytes the stages and fields may take together.
+  /// Bytes the stages and fields may take together. The zoomed view's tiles (`tileBudget`) and
+  /// the sources' scaled copies (`scaledBudget`) each take up to a quarter of it more, so all
+  /// that's kept stays within 1.5 times it (bar the newest scaled copy, always kept, as the one
+  /// copy there was).
   let memoryBudget: Int
   /// Sources kept.
   let sourceLimit = 2
 
-  init(memoryBudget: Int = EditRenderer.defaultMemoryBudget) {
+  /// The zoomed view's tiles' side, in output pixels (`zoomed`).
+  let tileSide: Int
+
+  init(memoryBudget: Int = EditRenderer.defaultMemoryBudget, tileSide: Int = 512) {
     self.memoryBudget = memoryBudget
+    self.tileSide = max(tileSide, 1)
   }
 
   /// A sixteenth of the device's memory, from 512 MB to 2 GB. Each kept pixel is 13 bytes a
@@ -621,6 +681,11 @@ actor EditRenderer {
     var fieldMisses = 0
     var statsHits = 0
     var statsMisses = 0
+    /// The scaled copies of the source (`sourcePixels`), and the zoomed view's tiles.
+    var scaledHits = 0
+    var scaledMisses = 0
+    var tileHits = 0
+    var tileMisses = 0
   }
 
   private(set) var counters = Counters()
@@ -666,6 +731,7 @@ actor EditRenderer {
     sources[id] = nil
     for key in store.keys where key.source == id { remove(key) }
     for lane in laneTickets.keys where lane.source == id { laneTickets[lane] = nil }
+    forgetTiles(of: id)
   }
 
   /// Drops everything.
@@ -675,6 +741,8 @@ actor EditRenderer {
     lanes = [:]
     laneTickets = [:]
     storedBytes = 0
+    tileStore = [:]
+    tileBytes = 0
   }
 
   // MARK: Rendering
@@ -698,10 +766,22 @@ actor EditRenderer {
   ) async throws -> CGImage {
     let entry = try await sourceEntry(source)
     let geometry = Geometry(width: entry.width, height: entry.height, window: window).withReach(options)
-    let id = ObjectIdentifier(source)
     // A full-size render (Save, Export…) is a one-off whose 16–24 MP stages would push the
     // screen's out of the budget: it reads what's kept but keeps nothing.
     let lane = window == nil ? nil : await ticket(Lane.Kind(geometry))
+    let out = try await finished(entry, options: options, context: context, geometry: geometry, lane: lane, cancel: cancel)
+    let image = out.cgImage(cancel: cancel)
+    try cancel.check()
+    guard let image else { throw EditPipeline.RenderError.unreadableSource }
+    return image
+  }
+
+  /// Steps 1–11 for `geometry` (the planes of `geometry.region`, before they're truncated to
+  /// bytes), keeping what it makes in `lane` (nothing for nil).
+  @concurrent private nonisolated func finished(
+    _ entry: SourceEntry, options: EditOptions, context: Context, geometry: Geometry, lane: Ticket?, cancel: EditPipeline.Cancel
+  ) async throws -> Planes {
+    let id = ObjectIdentifier(entry.image)
 
     // Steps 1–8 from the newest stage kept (`staged`), then 9.
     var out = try await staged(entry, options: options, context: context, geometry: geometry, lane: lane, cancel: cancel)
@@ -746,11 +826,315 @@ actor EditRenderer {
     try cancel.check()
     EditPipeline.grain(&out, options: options, context: context, fields: fields, realNoise: realField, cancel: cancel)
     try cancel.check()
-    let image = out.cgImage(cancel: cancel)
-    try cancel.check()
-    guard let image else { throw EditPipeline.RenderError.unreadableSource }
-    return image
+    return out
   }
+
+  // MARK: The zoomed view's tiles
+
+  /// The zoomed view `zoomed` of the render, made of tiles `tileSide` output pixels square on
+  /// the scaled image's grid, which are kept between calls (`TileKey`: the source, the look, the
+  /// scale and the tile), so a pan renders only the tiles it brings into view. With none of the
+  /// view's tiles kept (a new look, scale or source) the view renders at once, as a window does,
+  /// keeping its stages in the part lane, so the next look renders from its changed step; its
+  /// tiles wholly inside it are kept. With some kept, the rest render in rectangles of whole
+  /// tiles (kept, with no stages: the view's own stages are of another region), nearest the
+  /// view's centre first, and `progress` is handed the view so far after each rectangle but the
+  /// last (the parts still to come transparent; the screen draws it over the last complete
+  /// view). Not before the first: what's up already shows the kept tiles' part, and a pan that
+  /// asks again every 64 px would put up a whole view each time for nothing.
+  ///
+  /// Every tile is the same pixels the view rendered at once has there: each part is read with
+  /// the margins its smear, blur and halation reach (`Geometry.withReach`), and the vignette and
+  /// grain fields are laid in the whole scaled image's coordinates (`vignetteStage`,
+  /// `Grain.Layout.region`). The blurs' Float64 running sums start at each part's read edge, so
+  /// a value could in principle differ from the view's in its last bit, but rounded to Float32
+  /// and truncated to bytes the tiles come out byte for byte (`tiledZoomedViewIsTheWholeRender`).
+  /// `contextID` names `context` in the tiles' keys (the screen's context version), so they
+  /// needn't hash its data.
+  @concurrent nonisolated func zoomed(
+    source: CGImage, options: EditOptions, context: Context = .empty, contextID: Int = 0, zoomed: EditPipeline.Zoomed,
+    progress: (@Sendable (CGImage) async -> Void)? = nil
+  ) async throws -> CGImage {
+    try Task.checkCancellation()
+    let cancel = EditPipeline.Cancel()
+    return try await withTaskCancellationHandler {
+      try await tiled(source: source, options: options, context: context, contextID: contextID, zoomed: zoomed, progress: progress, cancel: cancel)
+    } onCancel: {
+      cancel.cancel()
+    }
+  }
+
+  /// How long the rest of a zoomed render must look to take for a partial view to go up.
+  nonisolated static let partialAfter = Duration.milliseconds(100)
+
+  /// The kept tiles of the zoomed view `zoomed` that aren't wholly inside `excluding` (the
+  /// last render up, at the same scale) nor in `skipping` (already up), as one image of their bounding box with the tiles not
+  /// kept transparent, and where it goes; nil when there are none. Renders nothing: what a pan
+  /// shows while it moves, kept small (the strip a pan brings into view) since the main thread
+  /// puts up each one.
+  @concurrent nonisolated func keptView(
+    source: CGImage, options: EditOptions, contextID: Int = 0, zoomed: EditPipeline.Zoomed, excluding: Resample.Region? = nil,
+    skipping: Set<Tile> = []
+  ) async -> (image: CGImage, zoomed: EditPipeline.Zoomed, tiles: Set<Tile>)? {
+    let view = Geometry(width: source.width, height: source.height, scale: zoomed.scale, region: zoomed.region)
+    let region = view.region, side = tileSide
+    let id = ObjectIdentifier(source)
+    func area(_ tile: Tile) -> Resample.Region {
+      let x = tile.column * side, y = tile.row * side
+      return Resample.Region(x: x, y: y, width: min(side, view.scaledWidth - x), height: min(side, view.scaledHeight - y))
+    }
+    let columns = region.x / side..<(region.x + region.width + side - 1) / side
+    let rows = region.y / side..<(region.y + region.height + side - 1) / side
+    let tiles = rows.flatMap { row in columns.map { Tile(column: $0, row: row) } }.filter { tile in
+      guard !skipping.contains(tile) else { return false }
+      guard let excluding else { return true }
+      let part = area(tile)
+      return !(part.x >= excluding.x && part.y >= excluding.y && part.x + part.width <= excluding.x + excluding.width
+        && part.y + part.height <= excluding.y + excluding.height)
+    }
+    func key(_ tile: Tile) -> TileKey { TileKey(source: id, options: options, context: contextID, scale: view.scale, tile: tile) }
+    let kept = await keptTiles(tiles.map(key), counting: false)
+    let found = tiles.filter { kept[key($0)] != nil }
+    guard !found.isEmpty, !Task.isCancelled else { return nil }
+    let x0 = found.map { area($0).x }.min()!, y0 = found.map { area($0).y }.min()!
+    let x1 = found.map { area($0).x + area($0).width }.max()!, y1 = found.map { area($0).y + area($0).height }.max()!
+    var canvas = [UInt8](repeating: 0, count: (x1 - x0) * (y1 - y0) * 4)
+    for tile in found {
+      let part = area(tile)
+      Planes.paste(kept[key(tile)]!, width: part.width, height: part.height, into: &canvas, pixelWidth: x1 - x0, x: part.x - x0, y: part.y - y0)
+    }
+    guard let image = ColorMatch.cgImage(rgba: canvas, width: x1 - x0, height: y1 - y0) else { return nil }
+    return (image, EditPipeline.Zoomed(scale: view.scale, region: .init(x: x0, y: y0, width: x1 - x0, height: y1 - y0)), Set(found))
+  }
+
+  /// `rects` merged into at most `limit`: each render of a part reads its margins and keeps no
+  /// stages, so a few larger ones cost less than many small ones. The pair whose bounding box
+  /// adds the fewest tiles is merged first (re-rendering a kept tile there gives its bytes again),
+  /// and rectangles a merge covers are dropped.
+  nonisolated static func merged(_ rects: [TileRect], limit: Int) -> [TileRect] {
+    var rects = rects
+    func area(_ rect: TileRect) -> Int { rect.columns.count * rect.rows.count }
+    func union(_ a: TileRect, _ b: TileRect) -> TileRect {
+      TileRect(
+        columns: min(a.columns.lowerBound, b.columns.lowerBound)..<max(a.columns.upperBound, b.columns.upperBound),
+        rows: min(a.rows.lowerBound, b.rows.lowerBound)..<max(a.rows.upperBound, b.rows.upperBound))
+    }
+    while rects.count > max(limit, 1) {
+      var best = (i: 0, j: 1, cost: Int.max)
+      for i in rects.indices {
+        for j in rects.indices where j > i {
+          let cost = area(union(rects[i], rects[j])) - area(rects[i]) - area(rects[j])
+          if cost < best.cost { best = (i, j, cost) }
+        }
+      }
+      let joined = union(rects[best.i], rects[best.j])
+      rects = rects.enumerated().filter { index, rect in
+        index != best.i && index != best.j && !(joined.columns.contains(rect.columns.lowerBound) && joined.columns.upperBound >= rect.columns.upperBound
+          && joined.rows.contains(rect.rows.lowerBound) && joined.rows.upperBound >= rect.rows.upperBound)
+      }.map(\.element) + [joined]
+    }
+    return rects
+  }
+
+  /// A tile of the zoomed view: its column and row on the scaled image's grid.
+  struct Tile: Hashable, Sendable {
+    var column: Int
+    var row: Int
+  }
+
+  /// What a kept tile is of.
+  struct TileKey: Hashable, Sendable {
+    var source: ObjectIdentifier
+    var options: EditOptions
+    var context: Int
+    var scale: Double
+    var tile: Tile
+  }
+
+  /// Tiles side by side: columns × rows.
+  struct TileRect: Hashable, Sendable {
+    var columns: Range<Int>
+    var rows: Range<Int>
+  }
+
+  /// `tiles` grouped into rectangles: each row's runs of tiles, a run joined with the one below
+  /// it when they're the same columns.
+  nonisolated static func rectangles(_ tiles: Set<Tile>) -> [TileRect] {
+    var done: [TileRect] = []
+    var open: [Range<Int>: Range<Int>] = [:]
+    for row in Set(tiles.map(\.row)).sorted() {
+      let columns = tiles.filter { $0.row == row }.map(\.column).sorted()
+      var runs: [Range<Int>] = []
+      for column in columns {
+        if let last = runs.last, last.upperBound == column { runs[runs.count - 1] = last.lowerBound..<column + 1 } else { runs.append(column..<column + 1) }
+      }
+      var next: [Range<Int>: Range<Int>] = [:]
+      for run in runs {
+        if let rows = open.removeValue(forKey: run), rows.upperBound == row { next[run] = rows.lowerBound..<row + 1 } else { next[run] = row..<row + 1 }
+      }
+      done += open.map { TileRect(columns: $0.key, rows: $0.value) }
+      open = next
+    }
+    done += open.map { TileRect(columns: $0.key, rows: $0.value) }
+    return done
+  }
+
+  @concurrent private nonisolated func tiled(
+    source: CGImage, options: EditOptions, context: Context, contextID: Int, zoomed: EditPipeline.Zoomed,
+    progress: (@Sendable (CGImage) async -> Void)?, cancel: EditPipeline.Cancel
+  ) async throws -> CGImage {
+    let entry = try await sourceEntry(source)
+    let view = Geometry(width: entry.width, height: entry.height, scale: zoomed.scale, region: zoomed.region)
+    let region = view.region
+    let side = tileSide
+    let (scaledWidth, scaledHeight) = (view.scaledWidth, view.scaledHeight)
+    let id = ObjectIdentifier(source)
+    func key(_ tile: Tile) -> TileKey { TileKey(source: id, options: options, context: contextID, scale: view.scale, tile: tile) }
+    /// A tile's pixels in the scaled image.
+    func area(_ tile: Tile) -> Resample.Region {
+      let x = tile.column * side, y = tile.row * side
+      return Resample.Region(x: x, y: y, width: min(side, scaledWidth - x), height: min(side, scaledHeight - y))
+    }
+    let columns = region.x / side..<(region.x + region.width + side - 1) / side
+    let rows = region.y / side..<(region.y + region.height + side - 1) / side
+    let tiles = rows.flatMap { row in columns.map { Tile(column: $0, row: row) } }
+    let kept = await keptTiles(tiles.map(key))
+
+    if kept.isEmpty {
+      let geometry = view.withReach(options)
+      let lane = await ticket(Lane.Kind(geometry))
+      let out = try await finished(entry, options: options, context: context, geometry: geometry, lane: lane, cancel: cancel)
+      let rgba = out.rgba(cancel: cancel)
+      try cancel.check()
+      var made: [(TileKey, [UInt8])] = []
+      for tile in tiles {
+        let part = area(tile)
+        guard part.x >= region.x, part.y >= region.y, part.x + part.width <= region.x + region.width,
+              part.y + part.height <= region.y + region.height
+        else { continue }
+        made.append((key(tile), Planes.part(
+          of: rgba, pixelWidth: region.width, x: part.x - region.x, y: part.y - region.y, width: part.width, height: part.height)))
+      }
+      await keepTiles(made)
+      guard let image = ColorMatch.cgImage(rgba: rgba, width: region.width, height: region.height) else {
+        throw EditPipeline.RenderError.unreadableSource
+      }
+      return image
+    }
+
+    var canvas = [UInt8](repeating: 0, count: region.width * region.height * 4)
+    func paste(_ pixels: [UInt8], _ tile: Tile) {
+      let part = area(tile)
+      Planes.paste(pixels, width: part.width, height: part.height, into: &canvas, pixelWidth: region.width, x: part.x - region.x, y: part.y - region.y)
+    }
+    func image() throws -> CGImage {
+      guard let image = ColorMatch.cgImage(rgba: canvas, width: region.width, height: region.height) else {
+        throw EditPipeline.RenderError.unreadableSource
+      }
+      return image
+    }
+    for tile in tiles { if let pixels = kept[key(tile)] { paste(pixels, tile) } }
+    let missing = Set(tiles.filter { kept[key($0)] == nil })
+    guard !missing.isEmpty else { return try image() }
+    // Nearest the view's centre first.
+    let centreX = Double(region.x) + Double(region.width) / 2, centreY = Double(region.y) + Double(region.height) / 2
+    let rects = Self.merged(Self.rectangles(missing), limit: 3).sorted { a, b in
+      func distance(_ rect: TileRect) -> Double {
+        let x = (Double(rect.columns.lowerBound) + Double(rect.columns.count) / 2) * Double(side) - centreX
+        let y = (Double(rect.rows.lowerBound) + Double(rect.rows.count) / 2) * Double(side) - centreY
+        return x * x + y * y
+      }
+      return distance(a) < distance(b)
+    }
+    let clock = ContinuousClock(), started = clock.now
+    func pixels(_ rect: TileRect) -> Int {
+      (min(rect.columns.upperBound * side, scaledWidth) - rect.columns.lowerBound * side)
+        * (min(rect.rows.upperBound * side, scaledHeight) - rect.rows.lowerBound * side)
+    }
+    var remaining = rects.reduce(0) { $0 + pixels($1) }, done = 0
+    for (index, rect) in rects.enumerated() {
+      let x = rect.columns.lowerBound * side, y = rect.rows.lowerBound * side
+      let part = Resample.Region(
+        x: x, y: y, width: min(rect.columns.upperBound * side, scaledWidth) - x, height: min(rect.rows.upperBound * side, scaledHeight) - y)
+      let geometry = Geometry(width: entry.width, height: entry.height, scale: view.scale, region: part).withReach(options)
+      let out = try await finished(entry, options: options, context: context, geometry: geometry, lane: nil, cancel: cancel)
+      let rgba = out.rgba(cancel: cancel)
+      try cancel.check()
+      var made: [(TileKey, [UInt8])] = []
+      for row in rect.rows {
+        for column in rect.columns {
+          let tile = Tile(column: column, row: row), tileArea = area(tile)
+          let pixels = Planes.part(
+            of: rgba, pixelWidth: part.width, x: tileArea.x - part.x, y: tileArea.y - part.y, width: tileArea.width, height: tileArea.height)
+          paste(pixels, tile)
+          made.append((key(tile), pixels))
+        }
+      }
+      await keepTiles(made)
+      done += pixels(rect)
+      remaining -= pixels(rect)
+      // A partial costs a copy of the view and a moment of the main thread to put up: only
+      // when what's left looks like it'll take a while yet, at the pace so far.
+      let elapsed = clock.now - started
+      if index < rects.count - 1, let progress, elapsed * (Double(remaining) / Double(max(done, 1))) >= Self.partialAfter {
+        await progress(try image())
+      }
+    }
+    return try image()
+  }
+
+  private struct KeptTile {
+    var rgba: [UInt8]
+    var lastUse: UInt64
+  }
+
+  private var tileStore: [TileKey: KeptTile] = [:]
+  private var tileBytes = 0
+
+  /// Bytes the zoomed view's tiles may take, apart from the stages': a quarter of the budget
+  /// (128–512 MB; a full-screen 5K view at 100% is about 60 MB of tiles).
+  nonisolated var tileBudget: Int { memoryBudget / 4 }
+
+  private func keptTiles(_ keys: [TileKey], counting: Bool = true) -> [TileKey: [UInt8]] {
+    var found: [TileKey: [UInt8]] = [:]
+    for key in keys {
+      guard var kept = tileStore[key] else {
+        if counting { counters.tileMisses += 1 }
+        continue
+      }
+      if counting { counters.tileHits += 1 }
+      clock += 1
+      kept.lastUse = clock
+      tileStore[key] = kept
+      found[key] = kept.rgba
+    }
+    return found
+  }
+
+  /// Keeps `made`, the least recently used tiles dropped while they don't fit; nothing for a
+  /// source that's been dropped since.
+  private func keepTiles(_ made: [(TileKey, [UInt8])]) {
+    for (key, rgba) in made where sources[key.source] != nil && rgba.count <= tileBudget {
+      if let old = tileStore.removeValue(forKey: key) { tileBytes -= old.rgba.count }
+      while tileBytes + rgba.count > tileBudget, let oldest = tileStore.min(by: { $0.value.lastUse < $1.value.lastUse }) {
+        tileStore[oldest.key] = nil
+        tileBytes -= oldest.value.rgba.count
+      }
+      clock += 1
+      tileStore[key] = KeptTile(rgba: rgba, lastUse: clock)
+      tileBytes += rgba.count
+    }
+  }
+
+  private func forgetTiles(of source: ObjectIdentifier) {
+    for (key, kept) in tileStore where key.source == source {
+      tileStore[key] = nil
+      tileBytes -= kept.rgba.count
+    }
+  }
+
+  /// Bytes kept in the tile cache, for tests.
+  var keptTileBytes: Int { tileBytes }
 
   /// Steps 1–8 for `geometry` (the planes of `geometry.region`, before the vignette), from the
   /// latest stage kept: the halation stage as it is, else the colour stage with halation run on
@@ -876,13 +1260,7 @@ actor EditRenderer {
     init(width: Int, height: Int, window: Window?) {
       let window = window ?? .whole(width: width, height: height)
       let scale = min(max(window.scale, 1e-4), 1)
-      if scale == 1 {
-        scaledWidth = width
-        scaledHeight = height
-      } else {
-        scaledWidth = max(1, Int((Double(width) * scale).rounded()))
-        scaledHeight = max(1, Int((Double(height) * scale).rounded()))
-      }
+      (scaledWidth, scaledHeight) = EditPipeline.scaledSize(width: width, height: height, scale: scale)
       self.scale = scale
       let x = min(max(Int((Double(window.x) * scale).rounded()), 0), scaledWidth - 1)
       let y = min(max(Int((Double(window.y) * scale).rounded()), 0), scaledHeight - 1)
@@ -891,6 +1269,21 @@ actor EditRenderer {
       region = Resample.Region(x: x, y: y, width: w, height: h)
       glow = region
       read = region
+    }
+
+    /// The part `region` (in scaled pixels, kept to the scaled image) of an image of `width` ×
+    /// `height` at `scale`: a zoomed view, or one of its tiles.
+    init(width: Int, height: Int, scale: Double, region: Resample.Region) {
+      let scale = min(max(scale, 1e-4), 1)
+      (scaledWidth, scaledHeight) = EditPipeline.scaledSize(width: width, height: height, scale: scale)
+      self.scale = scale
+      let x = min(max(region.x, 0), scaledWidth - 1)
+      let y = min(max(region.y, 0), scaledHeight - 1)
+      let w = min(max(region.width, 1), scaledWidth - x)
+      let h = min(max(region.height, 1), scaledHeight - y)
+      self.region = Resample.Region(x: x, y: y, width: w, height: h)
+      glow = self.region
+      read = self.region
     }
 
     /// `region` grown by `margin` each side, kept to the scaled image.
@@ -923,8 +1316,9 @@ actor EditRenderer {
     var channelStats: GrainProfile.ChannelStats?
     var proxy: Planes?
     var proxyScale = 1.0
-    /// The source scaled for previews: one size at a time.
-    var scaled: (width: Int, height: Int, rgba: [UInt8])?
+    /// The source scaled for the fitted preview and zoomed views, the most recently used first:
+    /// up to `EditRenderer.scaledLimit` sizes, so the fitted preview's survives a zoom.
+    var scaled: [(width: Int, height: Int, rgba: [UInt8], lastUse: UInt64)] = []
     var stats: [StatsKey: EditPipeline.SourceStats] = [:]
     var lastUse: UInt64 = 0
 
@@ -956,6 +1350,7 @@ actor EditRenderer {
       sources[oldest.key] = nil
       for key in store.keys where key.source == oldest.key { remove(key) }
       for lane in laneTickets.keys where lane.source == oldest.key { laneTickets[lane] = nil }
+      forgetTiles(of: oldest.key)
     }
     return entry
   }
@@ -989,13 +1384,47 @@ actor EditRenderer {
     return Planes(rgba: scaled, pixelWidth: geometry.scaledWidth, x: read.x, y: read.y, width: read.width, height: read.height, cancel: cancel)
   }
 
+  /// Scaled copies kept per source. With a single one (as there was), a zoomed view's scale
+  /// pushed out the fitted preview's, and the next look scaled the whole source again for it.
+  static let scaledLimit = 3
+
   private func scaledCopy(_ entry: SourceEntry, width: Int, height: Int) -> [UInt8]? {
-    guard let scaled = entry.scaled, scaled.width == width, scaled.height == height else { return nil }
-    return scaled.rgba
+    guard let index = entry.scaled.firstIndex(where: { $0.width == width && $0.height == height }) else {
+      counters.scaledMisses += 1
+      return nil
+    }
+    counters.scaledHits += 1
+    var copy = entry.scaled.remove(at: index)
+    clock += 1
+    copy.lastUse = clock
+    entry.scaled.insert(copy, at: 0)
+    return copy.rgba
   }
 
+  /// Bytes every source's scaled copies may take together: a quarter of the budget, apart from
+  /// the stages' and the tiles' (`memoryBudget` documents the three).
+  nonisolated var scaledBudget: Int { memoryBudget / 4 }
+
+  /// Keeps a scaled copy first, dropping its source's least recently used past `scaledLimit`,
+  /// then any source's least recently used while all of them take more than `scaledBudget`
+  /// (the newest is always kept, as the single one was).
   private func keepScaled(_ entry: SourceEntry, width: Int, height: Int, rgba: [UInt8]) {
-    entry.scaled = (width, height, rgba)
+    entry.scaled.removeAll { $0.width == width && $0.height == height }
+    clock += 1
+    entry.scaled.insert((width, height, rgba, clock), at: 0)
+    if entry.scaled.count > Self.scaledLimit { entry.scaled.removeLast(entry.scaled.count - Self.scaledLimit) }
+    func total() -> Int { sources.values.reduce(0) { $0 + $1.scaled.reduce(0) { $0 + $1.rgba.count } } }
+    while total() > scaledBudget {
+      // The oldest copy other than the one just kept.
+      var oldest: (entry: SourceEntry, index: Int, use: UInt64)?
+      for source in sources.values {
+        for (index, copy) in source.scaled.enumerated() where !(source === entry && index == 0) {
+          if copy.lastUse < oldest?.use ?? .max { oldest = (source, index, copy.lastUse) }
+        }
+      }
+      guard let oldest else { break }
+      oldest.entry.scaled.remove(at: oldest.index)
+    }
   }
 
   /// What `SourceStats` depends on besides the source.

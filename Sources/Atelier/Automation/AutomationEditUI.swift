@@ -15,9 +15,12 @@ extension Automation {
   /// (strength) are dragged as a slider drags them (a change every 16 ms for N ticks, default
   /// 90, between the slider saying it's pressed and let go) with the preview fitted; Side by Side
   /// is chosen and zoomed to 100% (the first frame zoomed draws the original's side); Halation is
-  /// dragged again there. Each line gives the main thread's stalls over 12 ms (how many, their
+  /// dragged again there; then, in one pane, pinches from fit to
+  /// 37%, 50%, 71% and 100% (those past fit) and 1 s of pan at 100% and back, marked as moving as
+  /// the pane's gestures mark them. Each line gives the main thread's stalls over 12 ms (how many, their
   /// total and the worst, from a background thread timing a hop to the main queue every
-  /// couple of milliseconds, `MainStallMonitor`), how long the phase took to go idle, and the screen's views' body evaluations
+  /// couple of milliseconds, `MainStallMonitor`), how long the phase took to go idle, the renders started and stopped
+  /// on their way (`EditRenderCounts`), and the screen's views' body evaluations
   /// (`EditViewCounts`), per tick for a drag. The screen's look, comparison and zoom are put back.
   static func editUIBench(navigation: Navigation) {
     let args = CommandLine.arguments
@@ -80,6 +83,7 @@ extension Automation {
         _ = monitor.take()
         EditViewCounts.reset()
         EditViewCounts.isOn = true
+        let renders = (EditRenderCounts.started, EditRenderCounts.stopped)
         let start = clock.now
         await body()
         await idle()
@@ -94,6 +98,7 @@ extension Automation {
         }
         log("  \(name.padding(toLength: 26, withPad: " ", startingAt: 0)) stalls>12ms \(stalls.count), "
           + String(format: "total %4.0f ms, worst %4.0f ms; idle after %5.0f ms", stalls.reduce(0, +), stalls.max() ?? 0, took)
+          + "; renders \(EditRenderCounts.started - renders.0) started, \(EditRenderCounts.stopped - renders.1) stopped"
           + (counts.isEmpty ? "" : "; bodies: " + counts.joined(separator: ", "))
           + (turns.isEmpty ? "" : "; to the next turn: " + turns.joined(separator: ", ")))
       }
@@ -131,6 +136,31 @@ extension Automation {
       }
       await phase("side by side 100% Halation", ticks: ticks) { await drag(halation) }
       await phase("fit") { edit.canvas.zoomToFit() }
+      // Pinches and a pan in one pane, as the pane's gestures move the view (marked as moving
+      // until the gesture ends): fit to 37%, 50%, 71% and 100% (the levels past fit), 12 ticks
+      // each, then 1 s of pan at 100%. "idle after" counts from the first tick, so it holds the
+      // gesture's 0.2 s (pinch) or 1 s (pan).
+      await phase("hold") { edit.compareMode = .hold }
+      @MainActor func moving(_ ticks: Int, _ move: (Int) -> Void) async {
+        edit.isMovingView = true
+        let start = clock.now
+        for index in 1...ticks {
+          try? await Task.sleep(until: start + .milliseconds(16) * index, clock: clock)
+          move(index)
+        }
+        edit.isMovingView = false
+      }
+      var from = edit.canvas.fitScale
+      for level in [0.37, 0.5, 0.71, 1.0] where level > edit.canvas.fitScale * 1.01 {
+        let start = from
+        await phase("pinch \(Int((start * 100).rounded()))→\(Int((level * 100).rounded()))%", ticks: 12) {
+          await moving(12) { edit.canvas.zoom(to: start * pow(level / start, Double($0) / 12)) }
+        }
+        from = level
+      }
+      await phase("pan 1 s at 100%", ticks: 62) { await moving(62) { _ in edit.canvas.offset.width -= 20 } }
+      await phase("pan back", ticks: 62) { await moving(62) { _ in edit.canvas.offset.width += 20 } }
+      await phase("fit again") { edit.canvas.zoomToFit() }
       monitor.stop()
 
       edit.options = optionsBefore

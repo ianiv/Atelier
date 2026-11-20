@@ -80,7 +80,7 @@ The bottom bar's comparison picks how you see the original:
 - **Side by Side** shows the original and the edit next to each other.
 - **Slider** shows one picture with a divider you drag across it. It shows the whole image only.
 
-Zoom with the − and + buttons, ⌘+ and ⌘−, a pinch, or the zoom menu (**Zoom to Fit**, **Zoom to Fill**, actual size); drag to move around, and double-click for actual size or to fit. At 100% and above the screen renders only what's visible, at full detail, so the grain you see is the grain you'll save. When a render takes more than a moment, a small spinner shows in the preview's corner while the last preview stays up; changing a setting again stops a render that's under way.
+Zoom with the − and + buttons, ⌘+ and ⌘−, a pinch, or the zoom menu (**Zoom to Fit**, **Zoom to Fill**, actual size); drag to move around, and double-click for actual size or to fit. At 100% and above the screen renders only what's visible, at full detail, so the grain you see is the grain you'll save. While you pinch or drag, the preview you had moves and scales with you, and parts you've already seen at that zoom show as they come into view; the rest renders sharp once you let go. When a render takes more than a moment, a small spinner shows in the preview's corner while the last preview stays up; changing a setting again stops a render that's under way.
 
 ## Saving
 

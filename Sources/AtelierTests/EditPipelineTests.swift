@@ -1201,3 +1201,172 @@ extension EditPipelineTests {
     if ProcessInfo.processInfo.physicalMemory >= 32 << 30 { #expect(EditRenderer.defaultMemoryBudget == budget) }
   }
 }
+
+/// The zoomed view (`EditRenderer.zoomed`): its tiles, kept between renders, make the pixels the
+/// view rendered at once does, and the source's scaled copies outlive a zoom.
+extension EditPipelineTests {
+  /// Records the partial views a zoomed render hands up.
+  private actor Partials {
+    var count = 0
+    func add() { count += 1 }
+  }
+
+  /// Every pixel of a view made partly from tiles kept from another view, the rest rendered
+  /// in rectangles of tiles, is the view rendered at once with nothing kept, at scales from 1
+  /// to below a half, with smear, blur, every match, halation, vignette, grain and real noise
+  /// on, across tiles that meet inside the halation's and blur's reach.
+  @Test func tiledZoomedViewIsTheWholeRender() async throws {
+    let (options, context) = everything()
+    let width = 330
+    let height = 250
+    let source = try image(GrainTests.picture(width: width, height: height))
+    var differing = 0, compared = 0, worst = 0
+    for scale in [1, EditViewport.renderScale(zoom: 0.8), EditViewport.renderScale(zoom: 0.45)] {
+      let size = EditPipeline.scaledSize(width: width, height: height, scale: scale)
+      let views: [(first: Resample.Region, second: Resample.Region)] = [
+        (.init(x: 10, y: 7, width: 150, height: 120), .init(x: 75, y: 40, width: 140, height: 110)),
+        (
+          .init(x: 0, y: 0, width: size.width * 2 / 3, height: size.height * 2 / 3),
+          .init(x: size.width / 3, y: size.height / 3, width: size.width - size.width / 3, height: size.height - size.height / 3)
+        ),
+      ]
+      for (first, second) in views {
+        let zoomed = EditPipeline.Zoomed(scale: scale, region: second)
+        let whole = try await EditRenderer(tileSide: 48).zoomed(source: source, options: options, context: context, zoomed: zoomed)
+        let tiled = EditRenderer(tileSide: 48)
+        _ = try await tiled.zoomed(source: source, options: options, context: context, zoomed: .init(scale: scale, region: first))
+        let before = await tiled.counters
+        let partials = Partials()
+        let made = try await tiled.zoomed(source: source, options: options, context: context, zoomed: zoomed) { _ in await partials.add() }
+        let after = await tiled.counters
+        #expect(after.tileHits > before.tileHits && after.tileMisses > before.tileMisses, "scale \(scale): some tiles kept, some rendered")
+        // Partials go up only when the rest looks to take 100 ms or more (`partialAfter`): none need here.
+        _ = await partials.count
+        #expect(made.width == whole.width && made.height == whole.height)
+        let a = try #require(ColorMatch.rgba(made)), b = try #require(ColorMatch.rgba(whole))
+        compared += a.count
+        for (x, y) in zip(a, b) where x != y {
+          differing += 1
+          worst = max(worst, abs(Int(x) - Int(y)))
+        }
+        // The whole view again, every tile now kept, without rendering anything.
+        let again = try await tiled.zoomed(source: source, options: options, context: context, zoomed: zoomed)
+        #expect(ColorMatch.rgba(again) == a)
+      }
+    }
+    // Byte for byte. (The blurs' Float64 running sums start at each part's read edge, so a
+    // float could in principle differ in its last bit; rounded to Float32 and truncated to
+    // bytes, none does here, and the renders are deterministic, so this can't flicker.)
+    #expect(differing == 0 && worst == 0, "\(differing) of \(compared) bytes differ, by up to \(worst)")
+  }
+
+  /// The seams at a size where they're far from the image's edges: 128 px tiles of a 1500 × 1000
+  /// image at 2^-0.75 (not an octave, so the scaled copy is resampled), a view well inside it,
+  /// half of it kept from an overlapping view, with small blur, smear and halation radii (each
+  /// tile's margins are then cut from inside the image, never clipped by its edges) and every
+  /// other step on: byte for byte the view rendered at once.
+  @Test func tiledZoomedViewIsTheWholeRenderInsideALargeImage() async throws {
+    var (options, context) = everything()
+    options.lens = .init(motion: 3, angle: 35, blur: 1.2)
+    options.halation.radius = 4
+    let source = try image(GrainTests.picture(width: 1500, height: 1000))
+    let scale = pow(2, -0.75)
+    let size = EditPipeline.scaledSize(width: 1500, height: 1000, scale: scale)
+    let view = Resample.Region(x: 200, y: 150, width: 460, height: 330)
+    #expect(view.x + view.width < size.width - 100 && view.y + view.height < size.height - 100)
+    let zoomed = EditPipeline.Zoomed(scale: scale, region: view)
+    let whole = try await EditRenderer(tileSide: 128).zoomed(source: source, options: options, context: context, zoomed: zoomed)
+    let tiled = EditRenderer(tileSide: 128)
+    _ = try await tiled.zoomed(source: source, options: options, context: context, zoomed: .init(scale: scale, region: .init(x: 70, y: 90, width: 420, height: 330)))
+    let before = await tiled.counters
+    let made = try await tiled.zoomed(source: source, options: options, context: context, zoomed: zoomed)
+    let after = await tiled.counters
+    #expect(after.tileHits > before.tileHits && after.tileMisses > before.tileMisses)
+    #expect(ColorMatch.rgba(made) == ColorMatch.rgba(whole))
+    // The kept tiles alone, as a pan shows them: those pixels, the rest transparent.
+    let kept = try #require(await tiled.keptView(source: source, options: options, zoomed: zoomed))
+    let keptPixels = try #require(ColorMatch.rgba(kept.image)), wholePixels = try #require(ColorMatch.rgba(whole))
+    let at = kept.zoomed.region
+    var mismatched = 0, shown = 0
+    for y in 0..<at.height {
+      for x in 0..<at.width {
+        let vx = at.x + x - view.x, vy = at.y + y - view.y
+        let k = (y * at.width + x) * 4
+        guard keptPixels[k + 3] != 0, vx >= 0, vy >= 0, vx < view.width, vy < view.height else { continue }
+        shown += 1
+        let w = (vy * view.width + vx) * 4
+        if keptPixels[k..<k + 4] != wholePixels[w..<w + 4] { mismatched += 1 }
+      }
+    }
+    #expect(shown > 0 && mismatched == 0)
+    // Nothing outside a view that covers them all.
+    #expect(await tiled.keptView(source: source, options: options, zoomed: zoomed, excluding: .init(x: 0, y: 0, width: 2000, height: 2000)) == nil)
+  }
+
+  /// The tiles are kept within their budget, and dropped with their source.
+  @Test func tilesStayWithinTheirBudget() async throws {
+    let (base, context) = everything()
+    let source = try image(GrainTests.picture(width: 200, height: 150))
+    let renderer = EditRenderer(memoryBudget: 4 * 48 * 48 * 4 * 4, tileSide: 48)
+    var options = base
+    for tick in 0..<4 {
+      options.grain.lum = 5 + Double(tick)
+      _ = try await renderer.zoomed(source: source, options: options, context: context, zoomed: .init(scale: 1, region: .init(x: 0, y: 0, width: 200, height: 150)))
+      #expect(await renderer.keptTileBytes <= renderer.tileBudget)
+    }
+    #expect(await renderer.keptTileBytes > 0)
+    await renderer.forget(source)
+    #expect(await renderer.keptTileBytes == 0)
+  }
+
+  /// The fitted preview's scaled copy of the source outlives a zoom to another scale and back,
+  /// and only the newest three sizes are kept.
+  @Test func scaledCopiesOutliveAZoom() async throws {
+    let source = try image(GrainTests.picture(width: 400, height: 300))
+    let renderer = EditRenderer()
+    // A new blur each time, so every render reads the source's pixels rather than a kept stage.
+    var blur = 1.0
+    func look() -> EditOptions {
+      var options = EditOptions.grainDefaults
+      options.lens.blur = blur
+      blur += 0.5
+      return options
+    }
+    func fitted() async throws { _ = try await renderer.preview(source: source, options: look(), fitting: 120, height: 90) }
+    func zoomed(_ scale: Double) async throws {
+      _ = try await renderer.zoomed(source: source, options: look(), zoomed: .init(scale: scale, region: .init(x: 0, y: 0, width: 60, height: 40)))
+    }
+    try await fitted()
+    try await zoomed(0.5)
+    var before = await renderer.counters
+    try await fitted()
+    #expect(await renderer.counters.scaledHits == before.scaledHits + 1, "fit → 50% → fit")
+    try await zoomed(0.5946)
+    try await zoomed(0.7071)
+    before = await renderer.counters
+    // 50% was the least recently used of four sizes.
+    try await zoomed(0.5)
+    #expect(await renderer.counters.scaledMisses == before.scaledMisses + 1)
+  }
+
+  /// A tile set's rectangles cover it exactly, each tile once.
+  @Test func tileRectanglesCoverTheTiles() {
+    let tiles: Set<EditRenderer.Tile> = [
+      .init(column: 0, row: 0), .init(column: 1, row: 0), .init(column: 0, row: 1), .init(column: 1, row: 1),
+      .init(column: 3, row: 1), .init(column: 0, row: 2), .init(column: 1, row: 2), .init(column: 2, row: 2), .init(column: 3, row: 2),
+    ]
+    let rects = EditRenderer.rectangles(tiles)
+    var covered: [EditRenderer.Tile] = []
+    for rect in rects {
+      for row in rect.rows {
+        for column in rect.columns { covered.append(.init(column: column, row: row)) }
+      }
+    }
+    #expect(covered.count == tiles.count && Set(covered) == tiles)
+    #expect(rects.count <= 3)
+    // Merged into two: every tile still covered.
+    let merged = EditRenderer.merged(rects, limit: 2)
+    #expect(merged.count <= 2)
+    for tile in tiles { #expect(merged.contains { $0.columns.contains(tile.column) && $0.rows.contains(tile.row) }) }
+  }
+}

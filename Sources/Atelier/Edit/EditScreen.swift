@@ -289,28 +289,78 @@ nonisolated struct EditViewport: Equatable {
     return (max(1, Int((Double(imageWidth) * scale).rounded())), max(1, Int((Double(imageHeight) * scale).rounded())))
   }
 
-  /// The part of the image to render on its own when the zoom is closer than the fitted preview
-  /// shows: the part in view plus a margin, on a 64 px grid (so a small move reuses the render),
-  /// at the zoom up to 1:1. Nil when the fitted preview is enough.
-  var window: EditPipeline.Window? { window(grid: 64) }
+  /// The scale a zoomed view renders at for `zoom`: 1 from 100% up, and below it the zoom snapped
+  /// up to the next quarter octave, 2^(k/4) (… 50%, 59%, 71%, 84%), which SwiftUI then draws at
+  /// the zoom itself (at most 19% smaller, so never enlarged). A pinch passes through a few of
+  /// these rather than a new scale every frame, and a scale's tiles and scaled source copy come
+  /// back when the zoom does.
+  static func renderScale(zoom: Double) -> Double {
+    guard zoom < 1 else { return 1 }
+    // The tolerance keeps a zoom that's on a level (50%) at it rather than the next one up.
+    let level = (4 * log2(max(zoom, 1e-4)) - 1e-9).rounded(.up)
+    return min(1, pow(2, level / 4))
+  }
 
-  /// `window` on a grid of `grid` pixels (the margin half of it): a coarser grid makes a larger
-  /// window that a pan leaves less often.
-  func window(grid: Double) -> EditPipeline.Window? {
-    guard imageWidth > 0, imageHeight > 0, zoom > min(1, fitScale) * 1.01 else { return nil }
+  var renderScale: Double { Self.renderScale(zoom: zoom) }
+
+  /// The fitted preview isn't enough: the zoom is past what it shows.
+  var isZoomedIn: Bool { imageWidth > 0 && imageHeight > 0 && zoom > min(1, fitScale) * 1.01 }
+
+  /// The part of the image in view, in image pixels; nil when none is.
+  private var visible: (x0: Double, y0: Double, x1: Double, y1: Double)? {
     let frame = imageFrame
     let ppp = pointsPerPixel
     let x0 = max(0, -frame.minX / ppp), y0 = max(0, -frame.minY / ppp)
     let x1 = min(Double(imageWidth), (viewSize.width - frame.minX) / ppp)
     let y1 = min(Double(imageHeight), (viewSize.height - frame.minY) / ppp)
-    guard x1 > x0, y1 > y0 else { return nil }
+    return x1 > x0 && y1 > y0 ? (x0, y0, x1, y1) : nil
+  }
+
+  /// What the edit renders on its own when the zoom is closer than the fitted preview shows: the
+  /// part in view at `renderScale`, in the scaled image's pixels, plus a margin, on a 64 px grid
+  /// there (so a small move asks for the same view). Nil when the fitted preview is enough.
+  var zoomed: EditPipeline.Zoomed? {
+    guard isZoomedIn, let visible else { return nil }
+    let scale = renderScale
+    let size = EditPipeline.scaledSize(width: imageWidth, height: imageHeight, scale: scale)
+    let sx = Double(size.width) / Double(imageWidth), sy = Double(size.height) / Double(imageHeight)
+    let grid = 64.0
+    let left = max(0, ((visible.x0 * sx - grid / 2) / grid).rounded(.down) * grid)
+    let top = max(0, ((visible.y0 * sy - grid / 2) / grid).rounded(.down) * grid)
+    let right = min(Double(size.width), ((visible.x1 * sx + grid / 2) / grid).rounded(.up) * grid)
+    let bottom = min(Double(size.height), ((visible.y1 * sy + grid / 2) / grid).rounded(.up) * grid)
+    guard right > left, bottom > top else { return nil }
+    return EditPipeline.Zoomed(
+      scale: scale, region: .init(x: Int(left), y: Int(top), width: Int(right - left), height: Int(bottom - top)))
+  }
+
+  /// Where a zoomed view's render is drawn, in points.
+  func frame(of zoomed: EditPipeline.Zoomed) -> CGRect {
+    let frame = imageFrame
+    let size = EditPipeline.scaledSize(width: imageWidth, height: imageHeight, scale: zoomed.scale)
+    let px = Double(imageWidth) / Double(size.width) * pointsPerPixel, py = Double(imageHeight) / Double(size.height) * pointsPerPixel
+    let region = zoomed.region
+    return CGRect(
+      x: frame.minX + Double(region.x) * px, y: frame.minY + Double(region.y) * py,
+      width: Double(region.width) * px, height: Double(region.height) * py)
+  }
+
+  /// The part of the image in view as a window on a 64 px grid of image pixels, at `renderScale`
+  /// (`window(grid:)`): what the original's side crops; the edit renders `zoomed` instead.
+  var window: EditPipeline.Window? { window(grid: 64) }
+
+  /// `window` on a grid of `grid` pixels (the margin half of it): a coarser grid makes a larger
+  /// window that a pan leaves less often.
+  func window(grid: Double) -> EditPipeline.Window? {
+    guard isZoomedIn, let visible else { return nil }
+    let (x0, y0, x1, y1) = visible
     let left = max(0, ((x0 - grid / 2) / grid).rounded(.down) * grid)
     let top = max(0, ((y0 - grid / 2) / grid).rounded(.down) * grid)
     let right = min(Double(imageWidth), ((x1 + grid / 2) / grid).rounded(.up) * grid)
     let bottom = min(Double(imageHeight), ((y1 + grid / 2) / grid).rounded(.up) * grid)
     guard right > left, bottom > top else { return nil }
     return EditPipeline.Window(
-      x: Int(left), y: Int(top), width: Int(right - left), height: Int(bottom - top), scale: min(1, zoom))
+      x: Int(left), y: Int(top), width: Int(right - left), height: Int(bottom - top), scale: renderScale)
   }
 
   /// Where a window's render is drawn, in points.
@@ -400,15 +450,9 @@ private struct EditPane: View {
   /// so Hold for Original pressed and let go leaves the edit's window as it was.
   @State private var originalWindow = EditPaneRenders.Loop()
   @State private var gestureStart: (scale: Double, offset: CGSize)?
-
-  /// What the pane's two lanes are to render, nil for nothing: the targets the pane's size and
-  /// zoom make, which go with the look when the pane schedules (`schedule`). The body works out
-  /// only these, never reading the look, so a slider moving doesn't work out the pane again
-  /// (`EditLookChanges` asks for its renders instead); only a render landing does.
-  private struct RenderTargets: Hashable {
-    var fitted: EditRenderTarget?
-    var window: EditRenderTarget?
-  }
+  /// A pinch or drag is moving the view (`EditModel.isMovingView`): reset by SwiftUI when the
+  /// gesture ends or is cancelled.
+  @GestureState private var moving = false
 
   /// The look the original's window lane keys its renders on: one that never changes, as the
   /// original doesn't.
@@ -428,13 +472,12 @@ private struct EditPane: View {
         imageWidth: image.width, imageHeight: image.height, viewSize: geometry.size, displayScale: displayScale,
         scale: canvas.scale, offset: canvas.offset)
       let frame = viewport.imageFrame
-      let fit = viewport.fitPixels
       // The original's crop on a coarse grid: it costs nothing to make again, but each new one
       // costs the main thread a moment to put up, so a pan should need few.
       let window = viewport.window(grid: showsOriginal ? 512 : 64)
-      let targets = RenderTargets(
-        fitted: showsOriginal ? nil : .init(source: ObjectIdentifier(image), width: fit.width, height: fit.height),
-        window: window.map { .init(source: ObjectIdentifier(image), window: $0) })
+      let targets = showsOriginal
+        ? EditPaneRenders.Targets(fitted: nil, window: window.map { .init(source: ObjectIdentifier(image), window: $0) })
+        : EditPaneRenders.targets(image, viewport)
       ZStack(alignment: .topLeading) {
         if showsOriginal {
           // The fitted copy, and zoomed past it the part in view at the zoom (the window lane's
@@ -452,15 +495,20 @@ private struct EditPane: View {
             .frame(width: frame.width, height: frame.height)
             .offset(x: frame.minX, y: frame.minY)
         }
-        if window != nil, let windowed = (showsOriginal ? originalWindow : renders.window).shown,
-           windowed.key.target.source == ObjectIdentifier(image), let shownWindow = windowed.key.target.window
-        {
-          let rect = viewport.frame(of: shownWindow)
-          Image(decorative: windowed.output, scale: 1)
-            .resizable()
-            .interpolation(viewport.pointsPerPixel > 2 ? .none : .high)
-            .frame(width: rect.width, height: rect.height)
-            .offset(x: rect.minX, y: rect.minY)
+        // The last zoomed render up, wherever it's of: during a pinch or pan none starts, and
+        // this one is drawn scaled and moved as the view is. A partial one (tiles still to come
+        // transparent) goes over the last complete one.
+        if viewport.isZoomedIn {
+          let lane = showsOriginal ? originalWindow : renders.window
+          if let complete = lane.complete, complete.key != lane.shown?.key, current(complete.key.look, lane.completeSerial) {
+            zoomedLayer(complete.key.target, complete.output, viewport)
+          }
+          if let shown = lane.shown, current(shown.key.look, lane.shownSerial) { zoomedLayer(shown.key.target, shown.output, viewport) }
+          if !showsOriginal {
+            ForEach(renders.overlays, id: \.serial) { overlay in
+              if overlay.serial > lane.completeSerial, current(overlay.look, overlay.serial) { zoomedLayer(overlay.target, overlay.image, viewport) }
+            }
+          }
         }
         if !showsOriginal, fitted == nil {
           ProgressView().frame(width: geometry.size.width, height: geometry.size.height)
@@ -502,13 +550,19 @@ private struct EditPane: View {
                 canvas.scale = start.scale
                 canvas.zoom(to: start.scale * value.magnification, around: anchor)
               }
-              .onEnded { _ in gestureStart = nil }))
+              .onEnded { _ in gestureStart = nil })
+          // Moving: no window renders start until the gesture ends; what's up is drawn scaled
+          // and moved meanwhile.
+          .updating($moving) { _, moving, _ in moving = true })
       .onTapGesture(count: 2) {
         if canvas.scale == nil { canvas.zoom(to: 1) } else { canvas.zoomToFit() }
       }
       .onChange(of: viewport.fitScale, initial: true) { canvas.fitScale = viewport.fitScale }
       .onChange(of: viewport.fillScale, initial: true) { canvas.fillScale = viewport.fillScale }
       .onChange(of: targets, initial: true) { _, targets in schedule(targets) }
+      .onChange(of: moving) { _, moving in edit.isMovingView = moving }
+      // The gesture's end: the view as it's left.
+      .onChange(of: edit.isMovingView) { _, moving in if !moving { schedule(targets) } }
       // Back after going away (which cancelled its lanes) with the same keys: onChange won't
       // fire, so ask again; asking for what's shown or rendering does nothing.
       .onAppear { schedule(targets) }
@@ -529,19 +583,45 @@ private struct EditPane: View {
     .onChange(of: renders.fitted.isBusy, initial: true) { _, busy in mark(.fitted, busy) }
     .onChange(of: renders.window.isBusy, initial: true) { _, busy in mark(.window, busy) }
     .onDisappear {
+      if moving { edit.isMovingView = false }
       renders.cancel()
       originalWindow.cancel()
       edit.endRenders(pane: paneID)
     }
   }
 
+  /// Whether a window lane's result of `look`, up at `serial`, is still the newest picture: not
+  /// when the fitted preview has since gone up with another look (zoomed out, the look changed,
+  /// zoomed back in: the old window would cover the newer fitted preview until its render lands).
+  /// The pane's body reads the fitted lane's look, never the model's, so a slider's tick doesn't
+  /// work it out again. The original's window always is.
+  private func current(_ look: EditRenderLook, _ serial: Int) -> Bool {
+    guard !showsOriginal, let fitted = renders.fitted.shown else { return true }
+    return fitted.key.look == look || renders.fitted.shownSerial < serial
+  }
+
+  /// A window lane's render, drawn where its window or zoomed view is; nothing for another source.
+  @ViewBuilder private func zoomedLayer(_ target: EditRenderTarget, _ output: CGImage, _ viewport: EditViewport) -> some View {
+    if target.source == ObjectIdentifier(image),
+       let rect = target.zoomed.map({ viewport.frame(of: $0) }) ?? target.window.map({ viewport.frame(of: $0) })
+    {
+      Image(decorative: output, scale: 1)
+        .resizable()
+        .interpolation(viewport.pointsPerPixel > 2 ? .none : .high)
+        .frame(width: rect.width, height: rect.height)
+        .offset(x: rect.minX, y: rect.minY)
+    }
+  }
+
   /// Hands the lanes the newest keys: `targets` with the look as it is now, each with a render of
   /// it. Showing the original, the edit's lanes have nothing to do and its own window lane crops
   /// the source.
-  private func schedule(_ targets: RenderTargets) {
+  private func schedule(_ targets: EditPaneRenders.Targets) {
     let image = image
     if showsOriginal {
       renders.update(fitted: nil, window: nil, settled: true)
+      // Moving, what's up stays (drawn scaled and moved) until the gesture ends.
+      if edit.isMovingView { return }
       if let target = targets.window, let window = target.window {
         originalWindow.request(.init(target: target, look: Self.originalLook)) { try await EditOriginal.window(image, window) }
       } else {
@@ -550,18 +630,10 @@ private struct EditPane: View {
       return
     }
     originalWindow.cancel()
-    let renderer = edit.renderer, context = edit.context
-    let look = EditRenderLook(options: edit.options, context: edit.contextVersion)
-    renders.update(
-      fitted: targets.fitted.map { target -> EditPaneRenders.Request in
-        (EditPaneRenders.Loop.Key(target: target, look: look), { try await renderer.preview(source: image, options: look.options, context: context, fitting: target.width, height: target.height) })
-      },
-      window: targets.window.flatMap { target in
-        target.window.map { window -> EditPaneRenders.Request in
-          (EditPaneRenders.Loop.Key(target: target, look: look), { try await renderer.window(source: image, options: look.options, context: context, window: window) })
-        }
-      },
-      settled: edit.lastChangeIsFinal && !edit.isAdjusting)
+    renders.schedule(
+      targets, image: image, renderer: edit.renderer, context: edit.context,
+      look: EditRenderLook(options: edit.options, context: edit.contextVersion), settled: edit.lastChangeIsFinal && !edit.isAdjusting,
+      moving: edit.isMovingView)
   }
 
   /// The pane's lanes as the model keeps them, for its spinner.

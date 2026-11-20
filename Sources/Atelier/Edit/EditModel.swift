@@ -184,6 +184,10 @@ final class EditModel {
     change()
   }
 
+  /// A pinch or drag is moving the preview's zoom or position now (`EditPane`'s gestures; the
+  /// benches set it as one would).
+  var isMovingView = false
+
   /// Any pane is rendering.
   var isRendering: Bool { !pendingRenders.isEmpty }
 

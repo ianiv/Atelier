@@ -556,7 +556,7 @@ extension Automation {
   /// --edit-render-bench: times the Edit screen's renders on a made-up image (`testImage`) or
   /// `--input FILE`, with no model and nothing written, and prints one line per control:
   ///
-  ///   Atelier --edit-render-bench [--size WxH | --input FILE] [--pane WxH] [--steps N] [--zoom] [--drag-only] [--quit]
+  ///   Atelier --edit-render-bench [--size WxH | --input FILE] [--pane WxH] [--steps N] [--zoom] [--gestures] [--drag-only] [--quit]
   ///
   /// It renders through an `EditRenderer` as `EditPane` does, the fitted preview for a pane of
   /// `--pane` points at 2× (default 2560 × 1410, a full-screen 5K window's preview;
@@ -566,8 +566,9 @@ extension Automation {
   /// slider dragged slowly enough for every render to land. Each line gives the average and worst
   /// milliseconds and the renderer's cache hits and misses over the sweep. `--zoom` adds a zoom
   /// and pan sequence (50%, 100%, pans at 100%, 200%, back to fit), timing the window render for
-  /// each view with the fitted preview it's laid over, and the four sweeps again at 100% (each
-  /// value's window in view, then the fitted preview under it, timed apart). Last, the cancel latency: a render of a look
+  /// each view with the fitted preview it's laid over, the four sweeps again at 100% (each
+  /// value's window in view, then the fitted preview under it, timed apart), and pinches and a
+  /// pan as gestures make them (`gestureBench`; `--gestures` runs only that). Last, the cancel latency: a render of a look
   /// not yet cached (the fitted preview, then the full size) is cancelled 20 ms in, and the line
   /// gives the milliseconds from the cancel until it returns. `--size` defaults to 6000x4000.
   ///
@@ -645,6 +646,12 @@ extension Automation {
         return finish()
       }
 
+      if args.contains("--gestures") {
+        await gestureBench(image: image, renderer: renderer, pane: pane, look: base, log: log)
+        log("edit render bench: done")
+        return finish()
+      }
+
       if !dragOnly {
         let controls: [(String, (inout EditOptions, Double) -> Void)] = [
           ("Halation", { $0.halation.amount = 0.05 + 0.9 * $1 }),
@@ -671,10 +678,10 @@ extension Automation {
           // The same sweeps zoomed to 100%, as the zoomed pane renders each value: the window in
           // view, then the fitted preview under it.
           let zoomed = EditViewport(imageWidth: width, imageHeight: height, viewSize: pane, displayScale: 2, scale: 1)
-          if let window = zoomed.window {
+          if let window = zoomed.zoomed {
             let zoomedFit = zoomed.fitPixels
-            log("  at 100%: window \(window.outputWidth)x\(window.outputHeight), fitted preview \(zoomedFit.width)x\(zoomedFit.height)")
-            _ = try? await renderer.window(source: image, options: base, context: .empty, window: window)
+            log("  at 100%: window \(window.region.width)x\(window.region.height), fitted preview \(zoomedFit.width)x\(zoomedFit.height)")
+            _ = try? await renderer.zoomed(source: image, options: base, context: .empty, zoomed: window)
             _ = try? await renderer.preview(source: image, options: base, context: .empty, fitting: zoomedFit.width, height: zoomedFit.height)
             for (name, vary) in controls {
               let before = await renderer.counters
@@ -685,7 +692,7 @@ extension Automation {
                 vary(&options, steps > 1 ? Double(step) / Double(steps - 1) : 1)
                 options = options.snapped
                 var start = clock.now
-                _ = try? await renderer.window(source: image, options: options, context: .empty, window: window)
+                _ = try? await renderer.zoomed(source: image, options: options, context: .empty, zoomed: window)
                 windowTimes.append(milliseconds(clock.now - start))
                 start = clock.now
                 _ = try? await renderer.preview(source: image, options: options, context: .empty, fitting: zoomedFit.width, height: zoomedFit.height)
@@ -713,9 +720,9 @@ extension Automation {
             let fitPixels = viewport.fitPixels
             _ = try? await renderer.preview(source: image, options: base, context: .empty, fitting: fitPixels.width, height: fitPixels.height)
             var what = "fitted"
-            if let window = viewport.window {
-              _ = try? await renderer.window(source: image, options: base, context: .empty, window: window)
-              what = "window \(window.outputWidth)x\(window.outputHeight)"
+            if let window = viewport.zoomed {
+              _ = try? await renderer.zoomed(source: image, options: base, context: .empty, zoomed: window)
+              what = "window \(window.region.width)x\(window.region.height)"
             }
             let time = milliseconds(clock.now - start)
             times.append(time)
@@ -723,6 +730,7 @@ extension Automation {
           }
           let after = await renderer.counters
           log("  Zoom      \(summary(times)); \(cacheLine(before, after))")
+          await gestureBench(image: image, renderer: renderer, pane: pane, look: base, log: log)
         }
 
         // Cancel latency: a look not cached yet, cancelled 20 ms in.
@@ -767,7 +775,7 @@ extension Automation {
       ]
       for zoomed in [false, true] {
         let viewport = EditViewport(imageWidth: width, imageHeight: height, viewSize: pane, displayScale: 2, scale: zoomed ? 1 : nil)
-        let fitPixels = viewport.fitPixels, window = viewport.window
+        let fitPixels = viewport.fitPixels, window = viewport.zoomed
         if zoomed, window == nil {
           log("  Drag zoomed: the image fits at 100%, no window to render")
           continue
@@ -775,19 +783,16 @@ extension Automation {
         for (name, gesture, vary) in dragControls {
           let tick = Duration.milliseconds(gesture == .drag ? 16 : 30), ticks = gesture == .drag ? 106 : 57
           let renders = EditPaneRenders.forScreen()
-          let source = ObjectIdentifier(image)
+          let targets = EditPaneRenders.targets(image, viewport)
           var lastKeys: (fitted: EditPaneRenders.Loop.Key, window: EditPaneRenders.Loop.Key?)?
           /// The pane's `schedule` for a look, and its keys.
           @MainActor func schedule(_ options: EditOptions, settled: Bool) {
             let look = EditRenderLook(options: options, context: 0)
-            let fittedKey = EditPaneRenders.Loop.Key(target: .init(source: source, width: fitPixels.width, height: fitPixels.height), look: look)
-            let windowKey = window.map { EditPaneRenders.Loop.Key(target: .init(source: source, window: $0), look: look) }
+            let fittedKey = EditPaneRenders.Loop.Key(target: targets.fitted!, look: look)
+            let windowKey = targets.window.map { EditPaneRenders.Loop.Key(target: $0, look: look) }
             if let last = lastKeys, last.fitted == fittedKey, last.window == windowKey { return }
             lastKeys = (fittedKey, windowKey)
-            renders.update(
-              fitted: (fittedKey, { try await renderer.preview(source: image, options: options, context: .empty, fitting: fitPixels.width, height: fitPixels.height) }),
-              window: windowKey.flatMap { key in window.map { window in (key, { try await renderer.window(source: image, options: options, context: .empty, window: window) }) } },
-              settled: settled)
+            renders.schedule(targets, image: image, renderer: renderer, context: .empty, look: look, settled: settled)
           }
           func options(at fraction: Double) -> EditOptions {
             var options = base
@@ -822,12 +827,82 @@ extension Automation {
           let counts = zoomed ? "\(during.window) window, \(during.fitted) fitted" : "\(during.fitted)"
           log("  Drag \(zoomed ? "zoomed" : "fitted") \(name.padding(toLength: 21, withPad: " ", startingAt: 0)) updates during drag \(counts); "
             + "first \(ms(firstUpdate)); release to final \(ms(shownAt))" + (zoomed ? ", fitted \(ms(fittedAt))" : "")
-            + (zoomed ? " (window \(window!.outputWidth)x\(window!.outputHeight))" : " (\(fitPixels.width)x\(fitPixels.height))"))
+            + (zoomed ? " (window \(window!.region.width)x\(window!.region.height))" : " (\(fitPixels.width)x\(fitPixels.height))"))
         }
       }
       log("edit render bench: done")
       finish()
     }
+  }
+
+  /// --edit-render-bench --zoom (or `--gestures`, which runs only this): pinches and a pan as the
+  /// pane's gestures move the view, through the lanes the pane runs (`EditPaneRenders.forScreen()`,
+  /// asked through `EditPaneRenders.schedule` with the targets `EditPaneRenders.targets` makes),
+  /// a tick every 16 ms marked as moving, then the gesture's end. The pinches go from fit (or, a
+  /// small image, the first level past it) to 37%, 50%, 71% and 100%, 12 ticks each, centred;
+  /// the pan moves 20 pt a tick for 1 s at 100%, then back. Each line gives the renders started
+  /// and stopped on their way (`EditRenderCounts`) during the gesture and after its end, and
+  /// the milliseconds from the end until the lanes are idle with the final view's window up.
+  @MainActor static func gestureBench(image: CGImage, renderer: EditRenderer, pane: CGSize, look options: EditOptions, log: (String) -> Void) async {
+    let clock = ContinuousClock()
+    func milliseconds(_ duration: Duration) -> Double {
+      Double(duration.components.seconds) * 1000 + Double(duration.components.attoseconds) / 1e15
+    }
+    let renders = EditPaneRenders.forScreen()
+    let look = EditRenderLook(options: options, context: 0)
+    func viewport(_ scale: Double?, _ offset: CGSize = .zero) -> EditViewport {
+      EditViewport(imageWidth: image.width, imageHeight: image.height, viewSize: pane, displayScale: 2, scale: scale, offset: offset)
+    }
+    var last: EditPaneRenders.Targets?
+    func schedule(_ viewport: EditViewport, moving: Bool) {
+      let targets = EditPaneRenders.targets(image, viewport)
+      // As the pane: asked when the targets change, and when the gesture ends.
+      if targets == last, moving { return }
+      last = targets
+      renders.schedule(targets, image: image, renderer: renderer, context: .empty, look: look, settled: true, moving: moving)
+    }
+    func settled(_ targets: EditPaneRenders.Targets) -> Bool {
+      guard !renders.fitted.isBusy, !renders.window.isBusy else { return false }
+      guard let window = targets.window else { return true }
+      return renders.window.shown?.key.target == window
+    }
+    /// One gesture: `views` a tick apart, moving, then the end.
+    func gesture(_ label: String, _ views: [EditViewport]) async {
+      let before = (EditRenderCounts.started, EditRenderCounts.stopped)
+      let start = clock.now
+      for (index, view) in views.enumerated() {
+        try? await Task.sleep(until: start + .milliseconds(16) * (index + 1), clock: clock)
+        schedule(view, moving: true)
+      }
+      let during = (EditRenderCounts.started - before.0, EditRenderCounts.stopped - before.1)
+      let ended = clock.now
+      schedule(views.last!, moving: false)
+      let targets = EditPaneRenders.targets(image, views.last!)
+      while !settled(targets), clock.now - ended < .seconds(30) { try? await Task.sleep(for: .milliseconds(1)) }
+      let settle = milliseconds(clock.now - ended)
+      let after = (EditRenderCounts.started - before.0 - during.0, EditRenderCounts.stopped - before.1 - during.1)
+      let window = views.last!.zoomed.map { "\($0.region.width)x\($0.region.height) at \(String(format: "%.3f", $0.scale))" } ?? "none"
+      log("    \(label.padding(toLength: 18, withPad: " ", startingAt: 0)) during: \(during.0) started, \(during.1) stopped; "
+        + "after the end: \(after.0) started, \(after.1) stopped; settled \(String(format: "%6.0f ms", settle)) (window \(window))")
+    }
+    // Up to date fitted first, as the pane is before the pinch.
+    let fitted = viewport(nil)
+    schedule(fitted, moving: false)
+    while renders.fitted.isBusy || renders.window.isBusy { try? await Task.sleep(for: .milliseconds(1)) }
+    let fit = fitted.fitScale
+    log("  Gestures (fit \(String(format: "%.3f", fit))):")
+    var from = fit
+    for level in [0.37, 0.5, 0.71, 1.0] where level > fit * 1.01 {
+      let ticks = 12
+      let views = (1...ticks).map { viewport(from * pow(level / from, Double($0) / Double(ticks))) }
+      await gesture("pinch \(Int((from * 100).rounded()))→\(Int((level * 100).rounded()))%", views)
+      from = level
+    }
+    let pan = (1...62).map { viewport(1, CGSize(width: -20 * Double($0), height: 0)) }
+    await gesture("pan 1 s at 100%", pan)
+    await gesture("pan back", pan.reversed().dropFirst().map(\.self) + [viewport(1)])
+    await gesture("pinch 100%→fit", (1...12).map { viewport($0 == 12 ? nil : pow(fit, Double($0) / 12)) })
+    renders.cancel()
   }
 
   /// --edit-render-bench --step-times: each step's own time on the source fitted to the pane (as
