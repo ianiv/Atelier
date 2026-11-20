@@ -261,6 +261,7 @@
 		ED17ED17000000000000F001 /* BuiltInLUTs.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000F000 /* BuiltInLUTs.swift */; };
 		ED17ED170000000000000021 /* Halation.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000020 /* Halation.swift */; };
 		ED17ED170000000000000023 /* AutomationEdit.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000022 /* AutomationEdit.swift */; };
+		ED2ED2ED0000000000000001 /* AutomationEditUI.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED2ED2ED0000000000000002 /* AutomationEditUI.swift */; };
 		ED17ED170000000000000025 /* CreateModel+Edit.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000024 /* CreateModel+Edit.swift */; };
 		ED17ED170000000000000027 /* EditJobTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000026 /* EditJobTests.swift */; };
 		ED17ED170000000000000029 /* EditPipelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000028 /* EditPipelineTests.swift */; };
@@ -551,6 +552,7 @@
 		ED17ED17000000000000F000 /* BuiltInLUTs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuiltInLUTs.swift; sourceTree = "<group>"; };
 		ED17ED170000000000000020 /* Halation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Halation.swift; sourceTree = "<group>"; };
 		ED17ED170000000000000022 /* AutomationEdit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationEdit.swift; sourceTree = "<group>"; };
+		ED2ED2ED0000000000000002 /* AutomationEditUI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationEditUI.swift; sourceTree = "<group>"; };
 		ED17ED170000000000000024 /* CreateModel+Edit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CreateModel+Edit.swift"; sourceTree = "<group>"; };
 		ED17ED170000000000000026 /* EditJobTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditJobTests.swift; sourceTree = "<group>"; };
 		ED17ED170000000000000028 /* EditPipelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditPipelineTests.swift; sourceTree = "<group>"; };
@@ -667,6 +669,7 @@
 			isa = PBXGroup;
 			children = (
 				ED17ED170000000000000022 /* AutomationEdit.swift */,
+				ED2ED2ED0000000000000002 /* AutomationEditUI.swift */,
 				60B649AE442AE955874615B1 /* AutomationAutoMask.swift */,
 				4E317D0BA709EEB6CB86F5A2 /* AutomationPaint.swift */,
 				5BA894EB2074F4930E321607 /* Automation.swift */,
@@ -1238,6 +1241,7 @@
 				ED17ED17000000000000F001 /* BuiltInLUTs.swift in Sources */,
 				ED17ED170000000000000021 /* Halation.swift in Sources */,
 				ED17ED170000000000000023 /* AutomationEdit.swift in Sources */,
+				ED2ED2ED0000000000000001 /* AutomationEditUI.swift in Sources */,
 				ED17ED170000000000000025 /* CreateModel+Edit.swift in Sources */,
 				10171A503FBA24116D0D87F6 /* AppSettings.swift in Sources */,
 				F1F29ECD79C50D354E0EE7E2 /* ClipUpscale.swift in Sources */,

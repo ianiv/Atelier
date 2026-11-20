@@ -441,6 +441,20 @@ enum AutomationWindows {
     return (Date().timeIntervalSince(start) / Double(frames), worst)
   }
 
+  /// The visible window's frame, nil with none; `setWindowFrame` puts one back.
+  static var windowFrame: CGRect? { visibleWindow?.frame }
+
+  /// Moves and sizes the visible window, laid out and drawn; its content's size and the screen's
+  /// backing scale after, nil with no visible window. Nil `frame` fills its screen's visible
+  /// area, as a full-screen window is sized, without going full screen.
+  @discardableResult static func setWindowFrame(_ frame: CGRect?) -> (content: CGSize, scale: CGFloat)? {
+    guard let window = visibleWindow, let target = frame ?? (window.screen ?? NSScreen.main)?.visibleFrame else { return nil }
+    window.setFrame(target, display: true)
+    window.contentView?.layoutSubtreeIfNeeded()
+    window.displayIfNeeded()
+    return (window.contentView?.bounds.size ?? .zero, window.backingScaleFactor)
+  }
+
   /// Asks for the visible window at `width` (the height kept) and returns its width before and
   /// the width it took once laid out: wider when its content won't go that narrow. Nil with no
   /// visible window.

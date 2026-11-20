@@ -102,10 +102,12 @@ extension Automation {
 }
 
 /// Measures how late the main queue runs: a background thread posts a block to it every couple of
-/// milliseconds and keeps the longest wait seen since `takeWorst()` was last called.
+/// milliseconds and keeps the longest wait seen since `takeWorst()` was last called, and every
+/// wait since `take()` was (for `--edit-ui-bench`, which adds up the stalls).
 final nonisolated class MainStallMonitor: @unchecked Sendable {
   private let lock = NSLock()
   private var worst: Double = 0
+  private var waits: [Double] = []
   private var running = false
 
   func start() {
@@ -117,7 +119,10 @@ final nonisolated class MainStallMonitor: @unchecked Sendable {
         DispatchQueue.main.async { done.signal() }
         done.wait()
         let waited = Double(DispatchTime.now().uptimeNanoseconds - sent) / 1e6
-        lock.withLock { worst = max(worst, waited) }
+        lock.withLock {
+          worst = max(worst, waited)
+          waits.append(waited)
+        }
         usleep(2000)
       }
     }
@@ -132,6 +137,14 @@ final nonisolated class MainStallMonitor: @unchecked Sendable {
     lock.withLock {
       defer { worst = 0 }
       return worst
+    }
+  }
+
+  /// Every wait since the last call, in milliseconds.
+  func take() -> [Double] {
+    lock.withLock {
+      defer { waits = [] }
+      return waits
     }
   }
 }

@@ -488,6 +488,65 @@ struct EditModelTests {
         == "This edit's real noise, reference histogram and LUT data is missing from the project, so Real Noise, the histogram match and the LUT are off.")
   }
 
+  /// The look is remembered a while after the last change, not on every one, and at once when
+  /// asked (a slider let go, the app going to the background or quitting).
+  @MainActor @Test func rememberingWaitsForTheLastChangeAndFlushes() async throws {
+    // A wait far longer than the test: only a flush saves.
+    var saved: [Int] = []
+    let save = DebouncedSave<Int>(delay: .seconds(60)) { saved.append($0) }
+    for value in 1...5 { save.schedule(value) }
+    await Task.yield()
+    #expect(saved.isEmpty && save.hasPending)
+    save.flush()
+    #expect(saved == [5] && !save.hasPending)
+    // Nothing waiting: a flush saves nothing.
+    save.flush()
+    #expect(saved == [5])
+    save.schedule(6)
+    save.flush()
+    #expect(saved == [5, 6])
+
+    // A short wait: the last value is saved once by itself, and nothing after.
+    var waited: [Int] = []
+    let quick = DebouncedSave<Int>(delay: .milliseconds(30)) { waited.append($0) }
+    quick.schedule(1)
+    quick.schedule(2)
+    let start = ContinuousClock.now
+    while waited.isEmpty, ContinuousClock.now - start < .seconds(10) { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(waited == [2] && !quick.hasPending)
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(waited == [2])
+  }
+
+  /// The original's side zoomed in draws the part in view: the source's pixels there, at the
+  /// window's scale.
+  @Test func theOriginalsWindowIsThePartInView() async throws {
+    let source = try CanvasRefineTests.pattern(width: 64, height: 48)
+    let window = EditPipeline.Window(x: 8, y: 4, width: 32, height: 20)
+    let part = try await EditOriginal.window(source, window)
+    #expect(part.width == 32 && part.height == 20)
+    let whole = try #require(ColorMatch.rgba(source)), cropped = try #require(ColorMatch.rgba(part))
+    var differs = 0
+    for y in 0..<20 {
+      for x in 0..<32 {
+        for channel in 0..<4 where whole[((y + 4) * 64 + x + 8) * 4 + channel] != cropped[(y * 32 + x) * 4 + channel] { differs += 1 }
+      }
+    }
+    #expect(differs == 0)
+    let half = try await EditOriginal.window(source, EditPipeline.Window(x: 0, y: 0, width: 64, height: 48, scale: 0.5))
+    #expect(half.width == 32 && half.height == 24)
+  }
+
+  /// The original's window is on a coarser grid, so it covers the edit's and a pan leaves it less often.
+  @Test func theOriginalsWindowIsOnACoarserGrid() throws {
+    let viewport = EditViewport(
+      imageWidth: 6000, imageHeight: 4000, viewSize: CGSize(width: 1280, height: 1410), displayScale: 2, scale: 1, offset: CGSize(width: -333, height: 77))
+    let fine = try #require(viewport.window), coarse = try #require(viewport.window(grid: 512))
+    #expect(coarse.x % 512 == 0 && coarse.y % 512 == 0)
+    #expect(coarse.x <= fine.x && coarse.y <= fine.y)
+    #expect(coarse.x + coarse.width >= fine.x + fine.width && coarse.y + coarse.height >= fine.y + fine.height)
+  }
+
   @Test func theFittedPreviewIsEnoughUntilZoomedPastIt() {
     var viewport = EditViewport(imageWidth: 4000, imageHeight: 3000, viewSize: CGSize(width: 800, height: 600), displayScale: 2)
     #expect(viewport.fitScale == 0.4)
