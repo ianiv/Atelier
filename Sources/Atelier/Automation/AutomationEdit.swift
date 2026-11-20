@@ -579,7 +579,8 @@ extension Automation {
   /// milliseconds to the first, and from the release until the final value's preview is up (the
   /// window's, zoomed, then the fitted preview's under it). Last, Halation by arrow key held on
   /// the slider (a change every 30 ms, no release), asked as the pane asks now and as it asked
-  /// before (each change final). `--drag-only` skips everything before.
+  /// before (each change final). `--drag-only` skips everything before. `--step-times` instead
+  /// times each step on its own (`stepTimes`) and stops.
   static func editRenderBench() {
     let args = CommandLine.arguments
     func value(_ name: String) -> String? { args.firstIndex(of: name).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } }
@@ -636,6 +637,11 @@ extension Automation {
         log("  first render " + String(format: "%.1f ms", milliseconds(clock.now - start)))
       } catch {
         log("FAIL edit render bench: \(error.localizedDescription)")
+        return finish()
+      }
+
+      if args.contains("--step-times") {
+        await stepTimes(image: image, fit: fit, base: base, log: log)
         return finish()
       }
 
@@ -822,6 +828,79 @@ extension Automation {
       log("edit render bench: done")
       finish()
     }
+  }
+
+  /// --edit-render-bench --step-times: each step's own time on the source fitted to the pane (as
+  /// the fitted preview's planes are), the median of 5 runs, with the bench's look (grain.py's
+  /// defaults with some halation) and a grade, vignette and identity LUT added. Then it stops.
+  static func stepTimes(image: CGImage, fit: (width: Int, height: Int), base: EditOptions, log: (String) -> Void) async {
+    guard let full = EditPipeline.Planes(image) else { return log("FAIL step times: unreadable source") }
+    func resized(_ plane: [Float]) -> [Float] {
+      Resample.resize(plane, width: full.width, height: full.height, toWidth: fit.width, height: fit.height)
+    }
+    let planes = EditPipeline.Planes(
+      width: fit.width, height: fit.height, r: resized(full.r), g: resized(full.g), b: resized(full.b),
+      alpha: [UInt8](repeating: 255, count: fit.width * fit.height))
+    let scale = Double(fit.width) / Double(full.width)
+    let clock = ContinuousClock()
+    func time(_ name: String, _ body: () -> Void) {
+      var times: [Double] = []
+      for _ in 0..<5 {
+        let start = clock.now
+        body()
+        let d = clock.now - start
+        times.append(Double(d.components.seconds) * 1000 + Double(d.components.attoseconds) / 1e15)
+      }
+      log("  step \(name.padding(toLength: 18, withPad: " ", startingAt: 0)) " + String(format: "%7.1f ms", times.sorted()[2]))
+    }
+    log("  step times on \(fit.width)x\(fit.height) planes (median of 5)")
+    let sigma = base.halation.radius * scale
+    time("Halation") {
+      var p = planes
+      Halation.apply(base.halation, to: &p, scale: scale)
+    }
+    time("Blur.gauss 1 plane") { _ = Blur.gauss(planes.r, width: fit.width, height: fit.height, sigma: sigma) }
+    let r = Blur.boxSizes(sigma: sigma)[0] / 2
+    time("box horizontal") { _ = Blur.boxBlur(planes.r, width: fit.width, height: fit.height, radius: r, horizontal: true) }
+    time("box vertical") { _ = Blur.boxBlur(planes.r, width: fit.width, height: fit.height, radius: r, horizontal: false) }
+    time("lens blur (σ 2)") { _ = Grain.blur(planes, sigma: 2 * scale) }
+    time("luminance") { _ = Grain.luminance(planes) }
+    var grade = EditOptions.Grade()
+    grade.exposure = 0.3
+    grade.contrast = 0.2
+    grade.saturation = 0.1
+    grade.vibrance = 0.2
+    time("Grade") {
+      var p = planes
+      Grade.apply(grade, to: &p)
+    }
+    var vignette = base.vignette
+    vignette.amount = 0.3
+    time("Vignette") {
+      var p = planes
+      Grade.vignette(vignette, to: &p, fullWidth: fit.width, fullHeight: fit.height)
+    }
+    let lut = CubeLUT.identity()
+    time("LUT") {
+      var p = planes
+      CubeLUT.apply(lut, to: &p)
+    }
+    time("sanitize") {
+      var p = planes
+      EditPipeline.sanitize(&p)
+    }
+    let grain = base.grain
+    let layout = Grain.Layout.whole(width: fit.width, height: fit.height)
+    let fields = Grain.grainFields(
+      lum: grain.lum, chroma: max(grain.chroma, 1), size: grain.size, csize: grain.csize, seed: grain.seed, refWidth: full.width, layout: layout)
+    let luminance = Grain.luminance(planes)
+    time("addGrain") {
+      var p = planes
+      Grain.addGrain(&p, luminance: luminance, lum: grain.lum, chroma: max(grain.chroma, 1), curve: nil, fields: fields)
+    }
+    time("cropped (whole)") { _ = planes.cropped(x: 0, y: 0, width: fit.width, height: fit.height) }
+    time("cropped (inset)") { _ = planes.cropped(x: 40, y: 40, width: fit.width - 80, height: fit.height - 80) }
+    time("rgba") { _ = planes.rgba }
   }
 
   /// A flat grey image.

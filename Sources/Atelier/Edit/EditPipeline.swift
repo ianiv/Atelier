@@ -190,22 +190,27 @@ nonisolated enum EditPipeline {
     /// `np.clip(a, 0, 255).astype(np.uint8)` (step 12).
     var rgba: [UInt8] { rgba(cancel: .never) }
 
-    /// `rgba`, rows skipped once `cancel` is set.
+    /// `rgba`, rows skipped (left black) once `cancel` is set.
     func rgba(cancel: Cancel) -> [UInt8] {
       let count = width * height
-      var out = [UInt8](repeating: 0, count: count * 4)
-      guard count > 0, r.count >= count, g.count >= count, b.count >= count, alpha.count >= count else { return out }
+      guard count > 0, r.count >= count, g.count >= count, b.count >= count, alpha.count >= count else {
+        return [UInt8](repeating: 0, count: max(count, 0) * 4)
+      }
       @inline(__always) func byte(_ value: Float) -> UInt8 { value.isNaN ? 0 : UInt8(min(max(value, 0), 255)) }
       let width = width
       let height = height
-      r.withUnsafeBufferPointer { r in
-        g.withUnsafeBufferPointer { g in
-          b.withUnsafeBufferPointer { b in
-            alpha.withUnsafeBufferPointer { alpha in
-              out.withUnsafeMutableBufferPointer { out in
+      // Every byte is written below, so the array isn't cleared first.
+      return [UInt8](unsafeUninitializedCapacity: count * 4) { out, initialized in
+        r.withUnsafeBufferPointer { r in
+          g.withUnsafeBufferPointer { g in
+            b.withUnsafeBufferPointer { b in
+              alpha.withUnsafeBufferPointer { alpha in
                 let out = out
                 DispatchQueue.concurrentPerform(iterations: height) { row in
-                  guard !cancel.isCancelled else { return }
+                  guard !cancel.isCancelled else {
+                    out.baseAddress!.advanced(by: row * width * 4).update(repeating: 0, count: width * 4)
+                    return
+                  }
                   for index in row * width..<(row + 1) * width {
                     out[index * 4] = byte(r[index])
                     out[index * 4 + 1] = byte(g[index])
@@ -217,8 +222,8 @@ nonisolated enum EditPipeline {
             }
           }
         }
+        initialized = count * 4
       }
-      return out
     }
 
     /// The part `x, y, width, height` of tightly packed RGBA8 `pixels` (`pixelWidth` wide) as
@@ -229,19 +234,24 @@ nonisolated enum EditPipeline {
       let y0 = min(max(y, 0), pixelHeight)
       let w = min(max(w, 0), pixelWidth - x0)
       let h = min(max(h, 0), pixelHeight - y0)
-      var r = [Float](repeating: 0, count: w * h)
-      var g = r
-      var b = r
-      var alpha = [UInt8](repeating: 255, count: w * h)
-      if w > 0, h > 0 {
-        pixels.withUnsafeBufferPointer { input in
-          r.withUnsafeMutableBufferPointer { r in
-            g.withUnsafeMutableBufferPointer { g in
-              b.withUnsafeMutableBufferPointer { b in
-                alpha.withUnsafeMutableBufferPointer { alpha in
+      // Every pixel is written below (rows a cancel skips as black), so the planes aren't
+      // cleared first.
+      var g = [Float](), b = [Float](), alpha = [UInt8]()
+      let count = max(w, 0) * max(h, 0)
+      let r = [Float](unsafeUninitializedCapacity: count) { r, rCount in
+        g = [Float](unsafeUninitializedCapacity: count) { g, gCount in
+          b = [Float](unsafeUninitializedCapacity: count) { b, bCount in
+            alpha = [UInt8](unsafeUninitializedCapacity: count) { alpha, alphaCount in
+              if count > 0 {
+                pixels.withUnsafeBufferPointer { input in
                   let (r, g, b, alpha) = (r, g, b, alpha)
                   DispatchQueue.concurrentPerform(iterations: h) { row in
-                    guard !cancel.isCancelled else { return }
+                    guard !cancel.isCancelled else {
+                      for i in row * w..<(row + 1) * w {
+                        (r[i], g[i], b[i], alpha[i]) = (0, 0, 0, 255)
+                      }
+                      return
+                    }
                     let source = ((y0 + row) * pixelWidth + x0) * 4
                     for column in 0..<w {
                       let i = row * w + column
@@ -254,9 +264,13 @@ nonisolated enum EditPipeline {
                   }
                 }
               }
+              alphaCount = count
             }
+            bCount = count
           }
+          gCount = count
         }
+        rCount = count
       }
       self.init(width: w, height: h, r: r, g: g, b: b, alpha: alpha)
     }
@@ -270,17 +284,30 @@ nonisolated enum EditPipeline {
       return ColorMatch.cgImage(rgba: pixels, width: width, height: height)
     }
 
-    /// The pixels inside `x, y, width, height`, clamped to the image.
+    /// The pixels inside `x, y, width, height`, clamped to the image: the planes themselves when
+    /// that's all of them, with no copy.
     func cropped(x: Int, y: Int, width w: Int, height h: Int) -> Planes {
       let x0 = min(max(x, 0), width)
       let y0 = min(max(y, 0), height)
       let w = min(max(w, 0), width - x0)
       let h = min(max(h, 0), height - y0)
+      if x0 == 0, y0 == 0, w == width, h == height { return self }
+      let width = width
       func crop<T>(_ plane: [T]) -> [T] {
-        var out: [T] = []
-        out.reserveCapacity(w * h)
-        for row in y0..<y0 + h { out.append(contentsOf: plane[row * width + x0..<row * width + x0 + w]) }
-        return out
+        guard plane.count >= width * height, w > 0, h > 0 else { return [] }
+        return [T](unsafeUninitializedCapacity: w * h) { out, initialized in
+          plane.withUnsafeBufferPointer { plane in
+            let (plane, out) = (plane.baseAddress!, out.baseAddress!)
+            // Rows in bands across the cores.
+            let bandRows = max(16, h / (ProcessInfo.processInfo.activeProcessorCount * 2))
+            DispatchQueue.concurrentPerform(iterations: (h + bandRows - 1) / bandRows) { band in
+              for row in band * bandRows..<min((band + 1) * bandRows, h) {
+                (out + row * w).initialize(from: plane + (y0 + row) * width + x0, count: w)
+              }
+            }
+          }
+          initialized = w * h
+        }
       }
       return Planes(width: w, height: h, r: crop(r), g: crop(g), b: crop(b), alpha: crop(alpha))
     }
