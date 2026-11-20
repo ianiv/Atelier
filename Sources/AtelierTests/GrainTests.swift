@@ -261,6 +261,41 @@ struct GrainTests {
     #expect(profile.refWidth == width && profile.settings.colour == 0.6 && profile.curve?.max() == 1)
   }
 
+  /// `Blur.boxBlur`, which sums lines side by side, gives exactly a line-at-a-time cumulative sum
+  /// (grain.py's `box_blur_axis`), at sizes that leave short groups and chunks and radii past the
+  /// plane's size.
+  @Test func boxBlurMatchesScalarSums() {
+    func scalar(_ plane: [Float], width: Int, height: Int, radius r: Int, horizontal: Bool) -> [Float] {
+      var out = plane
+      let (lines, length) = horizontal ? (height, width) : (width, height)
+      for line in 0..<lines {
+        func index(_ i: Int) -> Int { horizontal ? line * width + i : i * width + line }
+        var sums: [Double] = []
+        var total = 0.0
+        for k in 0..<length + 2 * r + 1 {
+          total += Double(plane[index(min(max(k - (r + 1), 0), length - 1))])
+          sums.append(total)
+        }
+        for i in 0..<length { out[index(i)] = Float((sums[i + 2 * r + 1] - sums[i]) / Double(2 * r + 1)) }
+      }
+      return out
+    }
+    var state: UInt64 = 9
+    for (width, height) in [(1, 1), (5, 3), (37, 11), (70, 9), (33, 100), (130, 17)] {
+      let plane = (0..<width * height).map { _ -> Float in
+        state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+        return Float(state >> 40) / Float(1 << 24) * 255
+      }
+      for r in [1, 2, 7, 60] {
+        for horizontal in [true, false] {
+          let fast = Blur.boxBlur(plane, width: width, height: height, radius: r, horizontal: horizontal)
+          let slow = scalar(plane, width: width, height: height, radius: r, horizontal: horizontal)
+          #expect(fast.map(\.bitPattern) == slow.map(\.bitPattern), "\(width)x\(height) r \(r) \(horizontal ? "across" : "down")")
+        }
+      }
+    }
+  }
+
   // MARK: - Parity with grain.py
 
   private struct Manifest: Decodable {

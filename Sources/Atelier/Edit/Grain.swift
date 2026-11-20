@@ -495,18 +495,36 @@ nonisolated enum Grain {
   /// grain.py's `L = np.clip(a.sum(-1) / 765, 0, 1)`: brightness 0–1 before grain, which sets
   /// the grain's strength (`gain`) and the real noise's.
   static func luminance(_ planes: EditPipeline.Planes, cancel: EditPipeline.Cancel = .never) -> [Float] {
-    var out = [Float](repeating: 0, count: planes.r.count)
+    let count = planes.r.count
+    guard count > 0, planes.g.count == count, planes.b.count == count else { return [Float](repeating: 0, count: count) }
     let scale = Float(765)
+    // Bands of rows across the cores (each pixel on its own, so the same values); a band a
+    // cancel skips is zeros.
     let width = max(planes.width, 1)
-    var start = 0
-    while start < out.count, !cancel.isCancelled {
-      for i in start..<min(start + width, out.count) {
-        let total = planes.r[i] + planes.g[i] + planes.b[i]
-        out[i] = min(max(total / scale, 0), 1)
+    let rows = (count + width - 1) / width
+    let bandRows = max(8, rows / (ProcessInfo.processInfo.activeProcessorCount * 4))
+    let bands = (rows + bandRows - 1) / bandRows
+    return [Float](unsafeUninitializedCapacity: count) { out, initialized in
+      planes.r.withUnsafeBufferPointer { r in
+        planes.g.withUnsafeBufferPointer { g in
+          planes.b.withUnsafeBufferPointer { b in
+            let (r, g, b, out) = (r.baseAddress!, g.baseAddress!, b.baseAddress!, out.baseAddress!)
+            DispatchQueue.concurrentPerform(iterations: bands) { band in
+              let pixels = band * bandRows * width..<min((band + 1) * bandRows * width, count)
+              guard !cancel.isCancelled else {
+                (out + pixels.lowerBound).update(repeating: 0, count: pixels.count)
+                return
+              }
+              for i in pixels {
+                let total = r[i] + g[i] + b[i]
+                out[i] = min(max(total / scale, 0), 1)
+              }
+            }
+          }
+        }
       }
-      start += width
+      initialized = count
     }
-    return out
   }
 
   /// grain.py's grain strength by brightness: `0.55 + 0.9 √L (1 − 0.5 L)` (float32), or the
