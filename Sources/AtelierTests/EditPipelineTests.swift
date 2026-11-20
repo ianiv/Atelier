@@ -854,9 +854,10 @@ struct EditRenderCancelTests {
     #expect(throws: CancellationError.self) { try cancel.check() }
   }
 
-  /// A full-size 4000 × 4000 render with halation, cancelled 20 ms in, throws within 300 ms of
-  /// the cancel, and the same look rendered after misses the pre-grain cache: nothing half-made
-  /// was kept. (`cancellationChecksLeaveTheRenderAlone` checks the bytes of renders that finish.)
+  /// A 4000 × 4000 render with halation at 100% (a window of the whole image, which keeps its
+  /// stages, unlike a full-size render), cancelled 20 ms in, throws within 300 ms of the cancel,
+  /// and the same look rendered after misses every stage: nothing half-made was kept.
+  /// (`cancellationChecksLeaveTheRenderAlone` checks the bytes of renders that finish.)
   @Test func cancelledHalationRenderStopsQuickly() async throws {
     let side = 4000
     let source = try #require(GrainTests.picture(width: side, height: side).cgImage)
@@ -865,7 +866,8 @@ struct EditRenderCancelTests {
     _ = try await renderer.preview(source: source, options: .grainDefaults, fitting: 64, height: 64)
     var options = EditOptions.grainDefaults
     options.halation = .init(amount: 0.7, threshold: 0.5, radius: 30, warmth: 0.6)
-    let task = Task { try await renderer.full(source: source, options: options) }
+    let window = EditPipeline.Window.whole(width: side, height: side)
+    let task = Task { try await renderer.window(source: source, options: options, window: window) }
     try await Task.sleep(for: .milliseconds(20))
     let clock = ContinuousClock()
     let cancelled = clock.now
@@ -876,9 +878,12 @@ struct EditRenderCancelTests {
     // Alone it stops in about a millisecond; the bound allows for the other suites running alongside.
     #expect(elapsed < .milliseconds(300), "took \(elapsed) to stop")
 
-    let missesBefore = await renderer.counters.preGrainMisses
-    _ = try await renderer.full(source: source, options: options)
-    #expect(await renderer.counters.preGrainMisses == missesBefore + 1)
+    let before = await renderer.counters
+    _ = try await renderer.window(source: source, options: options, window: window)
+    let after = await renderer.counters
+    #expect(after.preGrainMisses == before.preGrainMisses + 1)
+    #expect(after.halationMisses == before.halationMisses + 1 && after.colourMisses == before.colourMisses + 1)
+    #expect(after.lensMisses == before.lensMisses + 1)
   }
 
   /// Each step with a cancel that's never set gives exactly what it gives with `.never`, and
@@ -939,5 +944,152 @@ struct EditRenderLaneTests {
     #expect(!edit.isRendering(pane: left) && edit.isRendering(pane: right))
     edit.endRenders(pane: right)
     #expect(!edit.isRendering)
+  }
+}
+
+/// The renderer's stage caches (`EditRenderer`'s lens, colour and halation stages): a change
+/// runs from its own step on, the stages give the bytes an uncached render does, and the fitted
+/// preview's lane and the window's keep their entries through each other's drags.
+extension EditPipelineTests {
+  /// A fitted preview and a window, as the screen renders them.
+  private enum View: CaseIterable {
+    case fitted, window
+
+    func render(_ renderer: EditRenderer, _ source: CGImage, _ options: EditOptions, _ context: EditPipeline.Context) async throws -> CGImage {
+      switch self {
+      case .fitted: try await renderer.preview(source: source, options: options, context: context, fitting: 120, height: 120)
+      case .window:
+        try await renderer.window(
+          source: source, options: options, context: context, window: EditPipeline.Window(x: 50, y: 35, width: 70, height: 50))
+      }
+    }
+  }
+
+  /// Each control change looks up only the stages from its own step back to the first kept one,
+  /// and every render is byte for byte what a renderer that keeps nothing makes.
+  @Test func stagesRunFromTheChangedStep() async throws {
+    let (base, context) = everything()
+    let source = try image(GrainTests.picture(width: 160, height: 120))
+    for view in View.allCases {
+      let renderer = EditRenderer()
+      var options = base
+      var last = await renderer.counters
+      /// Renders `options`, checks it against an uncached render, and gives the counters' change.
+      func step() async throws -> EditRenderer.Counters {
+        let staged = try await view.render(renderer, source, options, context)
+        let unstaged = try await view.render(EditRenderer(memoryBudget: 0), source, options, context)
+        #expect(ColorMatch.rgba(staged) == ColorMatch.rgba(unstaged), "\(view)")
+        let now = await renderer.counters
+        defer { last = now }
+        return EditRenderer.Counters(
+          preGrainHits: now.preGrainHits - last.preGrainHits, preGrainMisses: now.preGrainMisses - last.preGrainMisses,
+          lensHits: now.lensHits - last.lensHits, lensMisses: now.lensMisses - last.lensMisses,
+          colourHits: now.colourHits - last.colourHits, colourMisses: now.colourMisses - last.colourMisses,
+          halationHits: now.halationHits - last.halationHits, halationMisses: now.halationMisses - last.halationMisses,
+          fieldHits: now.fieldHits - last.fieldHits, fieldMisses: now.fieldMisses - last.fieldMisses)
+      }
+      var change = try await step()
+      #expect(change.halationMisses == 1 && change.colourMisses == 1 && change.lensMisses == 1 && change.preGrainMisses == 1, "\(view) first")
+
+      // The vignette: from the halation stage, nothing before it looked up.
+      options.vignette.amount = 0.2
+      change = try await step()
+      #expect(change.halationHits == 1 && change.colourHits + change.colourMisses == 0 && change.lensHits + change.lensMisses == 0, "\(view) vignette")
+      #expect(change.preGrainHits == 1 && change.fieldMisses == 0, "\(view) vignette")
+
+      // Halation: from the colour stage.
+      options.halation.amount = 0.3
+      change = try await step()
+      #expect(change.halationMisses == 1 && change.colourHits == 1 && change.lensHits + change.lensMisses == 0, "\(view) halation")
+
+      // The grade: from the lens stage.
+      options.grade.exposure = -0.4
+      change = try await step()
+      #expect(change.halationMisses == 1 && change.colourMisses == 1 && change.lensHits == 1 && change.lensMisses == 0, "\(view) grade")
+
+      // The LUT's strength and a match are colour steps too.
+      options.lut.strength = 0.3
+      options.match.colour = 0.7
+      change = try await step()
+      #expect(change.colourMisses == 1 && change.lensHits == 1, "\(view) LUT and match")
+
+      // The grain: every stage and field kept.
+      options.grain.lum = 15
+      options.grain.real = 1.4
+      change = try await step()
+      #expect(change.halationHits == 1 && change.preGrainHits == 1 && change.fieldMisses == 0 && change.fieldHits > 0, "\(view) grain")
+      #expect(change.colourHits + change.colourMisses + change.lensHits + change.lensMisses == 0, "\(view) grain")
+
+      // The lens: everything again.
+      options.lens.blur = 3.5
+      change = try await step()
+      #expect(change.halationMisses == 1 && change.colourMisses == 1 && change.lensMisses == 1, "\(view) lens")
+
+      // No halation: the colour stage is the last one kept, and a vignette change starts there.
+      options.halation = .init()
+      change = try await step()
+      // The fitted preview's colour stage doesn't depend on halation (its margins are the whole
+      // image); the window's read halation's margin, which is gone.
+      #expect(change.halationHits + change.halationMisses == 0, "\(view) halation off")
+      #expect(view == .fitted ? change.colourHits == 1 : change.colourMisses == 1, "\(view) halation off")
+      options.vignette.amount = -0.3
+      change = try await step()
+      #expect(change.colourHits == 1 && change.preGrainHits == 1 && change.lensHits + change.lensMisses == 0, "\(view) vignette without halation")
+
+      // No smear or blur: no lens stage to look up, and a grade change reads the source again.
+      options.lens = .identity
+      options.halation.amount = 0.5
+      _ = try await step()
+      options.grade.contrast = 0.3
+      change = try await step()
+      #expect(change.colourMisses == 1 && change.lensHits + change.lensMisses == 0, "\(view) no lens")
+    }
+  }
+
+  /// A slider drag on one lane replaces its own stages, never the other lane's: with a budget
+  /// that just holds both lanes, many halation and grade changes on the fitted preview leave
+  /// the window's stages and fields kept, and the other way round. At the screen's sizes the
+  /// two lanes' bytes, from the bytes a pixel these renders keep, fit the default budget.
+  @Test func fittedAndWindowLanesKeepTheirStages() async throws {
+    let (base, context) = everything()
+    let source = try image(GrainTests.picture(width: 160, height: 120))
+    let measuring = EditRenderer()
+    for view in View.allCases { _ = try await view.render(measuring, source, base, context) }
+    let bothLanes = await measuring.keptBytes
+    #expect(bothLanes > 0)
+
+    for (dragged, other) in [(View.fitted, View.window), (.window, .fitted)] {
+      let renderer = EditRenderer(memoryBudget: bothLanes)
+      for view in View.allCases { _ = try await view.render(renderer, source, base, context) }
+      var options = base
+      for tick in 0..<8 {
+        options.halation.amount = 0.2 + 0.05 * Double(tick)
+        options.grade.exposure = tick.isMultiple(of: 2) ? 0.1 * Double(tick) : 0.2
+        _ = try await dragged.render(renderer, source, options, context)
+      }
+      #expect(await renderer.keptBytes <= bothLanes)
+      let before = await renderer.counters
+      var grained = base
+      grained.grain.lum = 20
+      _ = try await other.render(renderer, source, grained, context)
+      let after = await renderer.counters
+      #expect(after.halationHits == before.halationHits + 1 && after.fieldMisses == before.fieldMisses, "\(other) after a drag on \(dragged)")
+    }
+
+    // The bytes a pixel the fitted preview keeps (the whole image, so its stages have
+    // no margins), every stage and field kept, times a 5K screen's fitted preview (3951 × 2634)
+    // and 100% window (5120 × 2820, its stages with the default look's margins each side, which
+    // the fields don't have: a little over).
+    let fittedOnly = EditRenderer()
+    let fitted = try await View.fitted.render(fittedOnly, source, base, context)
+    let perPixel = Double(await fittedOnly.keptBytes) / Double(fitted.width * fitted.height)
+    var look = EditOptions.grainDefaults
+    look.halation.amount = 0.4
+    let margin = EditPipeline.halationReach(look.halation, scale: 1) + EditPipeline.lensReach(look.lens, scale: 1)
+    let screen = perPixel * (3951 * 2634 + Double((5120 + 2 * margin) * (2820 + 2 * margin)))
+    let budget = 2 << 30
+    #expect(perPixel <= 64 && screen <= Double(budget), "\(perPixel) bytes a pixel, \(Int(screen) >> 20) MB at a 5K screen's sizes")
+    #expect(EditRenderer.defaultMemoryBudget >= 512 << 20 && EditRenderer.defaultMemoryBudget <= budget)
+    if ProcessInfo.processInfo.physicalMemory >= 32 << 30 { #expect(EditRenderer.defaultMemoryBudget == budget) }
   }
 }
