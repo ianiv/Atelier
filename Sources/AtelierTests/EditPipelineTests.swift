@@ -432,6 +432,7 @@ struct EditPipelineTests {
       EditPipeline.Planes(rgba: gradient, width: width, height: height),
       EditPipeline.Planes(rgba: randomPixels(width * height, seed: 3), width: width, height: height),
       EditPipeline.Planes(rgba: randomPixels(width * height, in: 150...255, seed: 4), width: width, height: height),
+      outOfRange(width: width, height: height),
     ]
     let looks: [EditOptions.Halation] = [
       .init(amount: 1, threshold: 0.5, radius: 6, warmth: 0.6),
@@ -453,6 +454,22 @@ struct EditPipelineTests {
       }
     }
     #expect(worstValue < 0.01, "values differ by up to \(worstValue) of a level")
+  }
+
+  /// Values past 0–255 either way, as a grade leaves them: −40 and 300 in a checkerboard of 4 px
+  /// squares, each channel shifted, over a ramp.
+  private func outOfRange(width: Int, height: Int) -> EditPipeline.Planes {
+    var planes = GrainTests.picture(width: width, height: height)
+    for y in 0..<height {
+      for x in 0..<width where (x / 4 + y / 4) % 2 == 0 {
+        let i = y * width + x
+        let low = (x / 4) % 3
+        planes.r[i] = low == 0 ? -40 : 300
+        planes.g[i] = low == 1 ? -40 : 300
+        planes.b[i] = low == 2 ? -40 : 300
+      }
+    }
+    return planes
   }
 
   /// `Halation.apply` with the exact transfer functions and tint (`pow` each time).
@@ -934,8 +951,9 @@ struct EditRenderCancelTests {
   }
 
   /// A 4000 × 4000 render with halation at 100% (a window of the whole image, which keeps its
-  /// stages, unlike a full-size render), cancelled 20 ms in, throws within 300 ms of the cancel,
-  /// and the same look rendered after misses every stage: nothing half-made was kept.
+  /// stages, unlike a full-size render), cancelled 20 ms in, throws within a quarter of the time
+  /// the same render takes to finish, and that render after misses every stage: nothing
+  /// half-made was kept.
   /// (`cancellationChecksLeaveTheRenderAlone` checks the bytes of renders that finish.)
   @Test func cancelledHalationRenderStopsQuickly() async throws {
     let side = 4000
@@ -954,12 +972,16 @@ struct EditRenderCancelTests {
     let result = await task.result
     let elapsed = clock.now - cancelled
     #expect(throws: CancellationError.self) { try result.get() }
-    // Alone it stops in about a millisecond; the bound allows for the other suites running alongside.
-    #expect(elapsed < .milliseconds(300), "took \(elapsed) to stop")
 
     let before = await renderer.counters
+    let started = clock.now
     _ = try await renderer.window(source: source, options: options, window: window)
+    let whole = clock.now - started
     let after = await renderer.counters
+    // Alone it stops in about a millisecond, against well over 100 ms for the render. The bound
+    // is a share of the same render left to finish, timed just after, so the load from the other
+    // suites running alongside slows both alike: stopping must take far less than finishing.
+    #expect(elapsed < whole / 4, "took \(elapsed) to stop; the render takes \(whole)")
     #expect(after.preGrainMisses == before.preGrainMisses + 1)
     #expect(after.halationMisses == before.halationMisses + 1 && after.colourMisses == before.colourMisses + 1)
     #expect(after.lensMisses == before.lensMisses + 1)

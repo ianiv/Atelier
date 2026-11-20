@@ -51,7 +51,10 @@ nonisolated enum Halation {
   static func apply(
     _ halation: EditOptions.Halation, to planes: inout EditPipeline.Planes, scale: Double = 1, cancel: EditPipeline.Cancel = .never
   ) {
-    guard !halation.isIdentity, planes.width > 0, planes.height > 0 else { return }
+    let pixels = planes.width * planes.height
+    guard !halation.isIdentity, planes.width > 0, planes.height > 0,
+          planes.r.count >= pixels, planes.g.count >= pixels, planes.b.count >= pixels
+    else { return }
     let width = planes.width
     let height = planes.height
     let encodedThreshold = Float(min(max(halation.threshold, 0), 1))
@@ -129,7 +132,7 @@ nonisolated enum Halation {
                 let tints = warmth > 0
                 for row in rows {
                   let start = row * width
-                  var count = 0
+                  var taken = 0
                   for i in start..<start + width {
                     // Where no glow reaches (or the blur's rounding leaves a trace far below a
                     // level), the pixel keeps its exact value rather than going through the round trip.
@@ -139,24 +142,24 @@ nonisolated enum Halation {
                     // at sRGB 0.9 (Y 0.79) under 5%. White (or past it, from an overflowing grade)
                     // takes none and keeps its values.
                     guard luma(light) < 1 else { continue }
-                    taking[count] = i
-                    (lights[3 * count], lights[3 * count + 1], lights[3 * count + 2]) = (light.x, light.y, light.z)
+                    taking[taken] = i
+                    (lights[3 * taken], lights[3 * taken + 1], lights[3 * taken + 2]) = (light.x, light.y, light.z)
                     if tints {
                       let c = simd_max(SIMD3(gr[i], gg[i], gb[i]), .zero)
                       // `tint` doesn't use the powers where Y is this small.
                       let luminance = luma(c)
                       let y = luminance > 1e-9 ? luminance : 1
-                      (ratio[3 * count], ratio[3 * count + 1], ratio[3 * count + 2]) = (c.x / y, c.y / y, c.z / y)
+                      (ratio[3 * taken], ratio[3 * taken + 1], ratio[3 * taken + 2]) = (c.x / y, c.y / y, c.z / y)
                     }
-                    count += 1
+                    taken += 1
                   }
-                  guard count > 0 else { continue }
+                  guard taken > 0 else { continue }
                   if tints {
-                    var n = Int32(3 * count)
+                    var n = Int32(3 * taken)
                     var exponent = 1 - warmth
                     vvpowsf(power, &exponent, ratio, &n)
                   }
-                  for k in 0..<count {
+                  for k in 0..<taken {
                     let i = taking[k]
                     let light = SIMD3(lights[3 * k], lights[3 * k + 1], lights[3 * k + 2])
                     let dark = max(1 - luma(light), 0)
@@ -269,8 +272,8 @@ nonisolated enum Halation {
       read(decoding, level * (Float(size) / 255))
     }
 
-    /// `linearToSrgb(value)` from `encoding`: linear light (clamped to 0–1; NaN as 0) to encoded
-    /// 0–1, white exactly 1.
+    /// `linearToSrgb(value)` from `encoding`: linear light (clamped to 0–1) to encoded 0–1, white
+    /// exactly 1. NaN gives 1, as `linearToSrgb` does (the sanitized planes have none).
     @inline(__always) static func encode(_ value: Float, _ encoding: UnsafePointer<Float>) -> Float {
       guard value < 1 else { return 1 }
       return read(encoding, value * Float(size))
