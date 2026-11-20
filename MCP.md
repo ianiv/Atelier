@@ -69,8 +69,9 @@ Open the server to other computers only on a network you trust: your own home ne
 
 Anyone who can reach the server can do what an agent does: generate with your models and your GPU, read and change the Create screen, and see images in the current project. File paths from other devices are refused, so they can't read or write files on this Mac.
 
-- **The token** keeps other people on the network out. Without it, anyone on the network can use the server. Keep **Require Token** on.
-- **HTTPS** keeps the token secret. Without it, the token and every image cross the network in plain text: anyone on the same Wi-Fi can read them, then use the token themselves.
+> [!WARNING]
+> - **The token** keeps other people on the network out. Without it, anyone on the network can use the server. Keep **Require Token** on.
+> - **HTTPS** keeps the token secret. Without it, the token and every image cross the network in plain text: anyone on the same Wi-Fi can read them, then use the token themselves.
 
 The safest setting is **This Mac only**. On a network you don't fully trust, use [HTTPS](#https) (a Tailscale certificate or an imported one) and the token, or don't turn on Local network. Turn it off when you're not using it from another device, and click **Regenerate** if the token may have leaked.
 
