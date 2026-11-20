@@ -34,6 +34,10 @@ final class EditRenderLoop<Target: Hashable, Look: Hashable, Output: Sendable> {
   /// The last render that finished, as `shown` is but for a partial result (`showPartial`), which
   /// is drawn over it: a zoomed view's partial has holes where its tiles are still rendering.
   private(set) var complete: (key: Key, output: Output)?
+  /// When `shown` and `complete` went up, in the order of every lane's (`EditRenderCounts.serial`),
+  /// so a pane can tell which of two lanes' results is newer.
+  private(set) var shownSerial = 0
+  private(set) var completeSerial = 0
   /// What went wrong with the last render, nil once one succeeds.
   private(set) var failure: String?
   /// A render is under way, or waiting to start (`canStart`), for a key that isn't shown yet.
@@ -87,6 +91,8 @@ final class EditRenderLoop<Target: Hashable, Look: Hashable, Output: Sendable> {
   func showPartial(_ output: Output, of key: Key) {
     guard let running, running.key == key else { return }
     shown = (key, output)
+    EditRenderCounts.serial += 1
+    shownSerial = EditRenderCounts.serial
     partials += 1
   }
 
@@ -143,6 +149,9 @@ final class EditRenderLoop<Target: Hashable, Look: Hashable, Output: Sendable> {
     case .success(let output):
       shown = (running.key, output)
       complete = (running.key, output)
+      EditRenderCounts.serial += 1
+      shownSerial = EditRenderCounts.serial
+      completeSerial = shownSerial
       failure = nil
       deliveries += 1
     case .failure(let error):
@@ -165,6 +174,8 @@ final class EditRenderLoop<Target: Hashable, Look: Hashable, Output: Sendable> {
 enum EditRenderCounts {
   static var started = 0
   static var stopped = 0
+  /// Counts results going up in any lane (`EditRenderLoop.shownSerial`).
+  static var serial = 0
 }
 
 /// What an Edit preview render is of: a change to any of it means a render on its way can't
@@ -254,6 +265,11 @@ final class EditPaneRenders {
     _ targets: Targets, image: CGImage, renderer: EditRenderer, context: EditPipeline.Context, look: EditRenderLook, settled: Bool,
     moving: Bool = false
   ) {
+    if moving, let target = targets.window {
+      showKept(target, image: image, renderer: renderer, look: look)
+    } else {
+      endKept()
+    }
     update(
       fitted: targets.fitted.map { target -> Request in
         (Loop.Key(target: target, look: look), { try await renderer.preview(source: image, options: look.options, context: context, fitting: target.width, height: target.height) })
@@ -271,6 +287,75 @@ final class EditPaneRenders {
       settled: settled, holdingWindow: moving)
   }
 
+  @ObservationIgnored private var keptPass: (target: EditRenderTarget, task: Task<Void, Never>)?
+
+  /// Kept tiles put up while a pan or pinch moves the view (`showKept`), each a strip that came
+  /// into view, drawn over the window lane's last render; one that went up before the window
+  /// lane's last complete render (`EditRenderLoop.completeSerial`) is done with.
+  struct Overlay {
+    var target: EditRenderTarget
+    var look: EditRenderLook
+    var image: CGImage
+    var serial: Int
+  }
+
+  private(set) var overlays: [Overlay] = []
+  /// The tiles `overlays` hold, and the scale and look they're of.
+  @ObservationIgnored private var overlaid: (scale: Double, look: EditRenderLook, tiles: Set<EditRenderer.Tile>)?
+
+  /// While a pan or pinch moves the view: the kept tiles in view that neither the window lane's
+  /// last complete render nor an overlay already shows (`EditRenderer.keptView`), put up as one
+  /// more overlay, so tiles already rendered show as they come into view. Nothing renders; asked
+  /// again only when the tiles in view change, and only for the new strip, since the main thread
+  /// puts up each image.
+  func showKept(_ target: EditRenderTarget, image: CGImage, renderer: EditRenderer, look: EditRenderLook) {
+    guard let zoomed = target.zoomed else { return }
+    let side = renderer.tileSide, region = zoomed.region
+    let x = region.x / side * side, y = region.y / side * side
+    let aligned = EditRenderTarget(
+      source: target.source,
+      zoomed: .init(
+        scale: zoomed.scale,
+        region: .init(x: x, y: y, width: (region.x + region.width + side - 1) / side * side - x, height: (region.y + region.height + side - 1) / side * side - y)))
+    guard keptPass?.target != aligned else { return }
+    keptPass?.task.cancel()
+    pruneOverlays()
+    if let overlaid, overlaid.scale != zoomed.scale || overlaid.look != look {
+      overlays = []
+      self.overlaid = nil
+    }
+    let lane = window
+    // Only what the last complete render up doesn't already show.
+    let excluding = lane.complete.flatMap { complete in
+      complete.key.target.source == target.source && complete.key.look == look ? complete.key.target.zoomed : nil
+    }.flatMap { $0.scale == zoomed.scale ? $0.region : nil }
+    let skipping = overlaid?.tiles ?? []
+    let task = Task {
+      guard let kept = await renderer.keptView(
+              source: image, options: look.options, contextID: look.context, zoomed: aligned.zoomed!, excluding: excluding, skipping: skipping),
+        !Task.isCancelled
+      else { return }
+      EditRenderCounts.serial += 1
+      overlays.append(Overlay(target: EditRenderTarget(source: target.source, zoomed: kept.zoomed), look: look, image: kept.image, serial: EditRenderCounts.serial))
+      overlaid = (zoomed.scale, look, (overlaid?.tiles ?? []).union(kept.tiles))
+    }
+    keptPass = (aligned, task)
+  }
+
+  /// The gesture ended: no more kept-tile passes (the overlays up stay until the window's render
+  /// lands).
+  func endKept() {
+    keptPass?.task.cancel()
+    keptPass = nil
+    pruneOverlays()
+  }
+
+  private func pruneOverlays() {
+    guard overlays.contains(where: { $0.serial < window.completeSerial }) else { return }
+    overlays.removeAll { $0.serial < window.completeSerial }
+    if overlays.isEmpty { overlaid = nil }
+  }
+
   /// A slider was let go.
   func settle() {
     window.settle()
@@ -279,6 +364,9 @@ final class EditPaneRenders {
 
   /// The pane went away.
   func cancel() {
+    endKept()
+    overlays = []
+    overlaid = nil
     fitted.cancel()
     window.cancel()
   }

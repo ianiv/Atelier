@@ -500,8 +500,15 @@ private struct EditPane: View {
         // transparent) goes over the last complete one.
         if viewport.isZoomedIn {
           let lane = showsOriginal ? originalWindow : renders.window
-          if let complete = lane.complete, complete.key != lane.shown?.key { zoomedLayer(complete.key.target, complete.output, viewport) }
-          if let shown = lane.shown { zoomedLayer(shown.key.target, shown.output, viewport) }
+          if let complete = lane.complete, complete.key != lane.shown?.key, current(complete.key.look, lane.completeSerial) {
+            zoomedLayer(complete.key.target, complete.output, viewport)
+          }
+          if let shown = lane.shown, current(shown.key.look, lane.shownSerial) { zoomedLayer(shown.key.target, shown.output, viewport) }
+          if !showsOriginal {
+            ForEach(renders.overlays, id: \.serial) { overlay in
+              if overlay.serial > lane.completeSerial, current(overlay.look, overlay.serial) { zoomedLayer(overlay.target, overlay.image, viewport) }
+            }
+          }
         }
         if !showsOriginal, fitted == nil {
           ProgressView().frame(width: geometry.size.width, height: geometry.size.height)
@@ -581,6 +588,16 @@ private struct EditPane: View {
       originalWindow.cancel()
       edit.endRenders(pane: paneID)
     }
+  }
+
+  /// Whether a window lane's result of `look`, up at `serial`, is still the newest picture: not
+  /// when the fitted preview has since gone up with another look (zoomed out, the look changed,
+  /// zoomed back in: the old window would cover the newer fitted preview until its render lands).
+  /// The pane's body reads the fitted lane's look, never the model's, so a slider's tick doesn't
+  /// work it out again. The original's window always is.
+  private func current(_ look: EditRenderLook, _ serial: Int) -> Bool {
+    guard !showsOriginal, let fitted = renders.fitted.shown else { return true }
+    return fitted.key.look == look || renders.fitted.shownSerial < serial
   }
 
   /// A window lane's render, drawn where its window or zoomed view is; nothing for another source.
