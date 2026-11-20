@@ -351,7 +351,7 @@ final class AgentServer {
   /// server's own HTTPS Port), in which case the port stays and `portRefusal` says why.
   @discardableResult func choosePort(_ newPort: Int) -> Bool {
     var refusal = ports.claims.conflict(port: newPort, for: .mcp)
-    if refusal == nil, encryption == .certificate, explicitHTTPSPort == newPort {
+    if refusal == nil, explicitHTTPSPort == newPort {
       refusal = PortClaims.message(port: newPort, of: .mcpHTTPS)
     }
     portRefusal = refusal
@@ -588,7 +588,11 @@ final class AgentServer {
         self.servesTailnet = true
       } catch {
         self.httpsError = error.localizedDescription
-        self.httpsPortError = true
+        // Tailscale not running isn't the port's fault; Try Again can't help.
+        switch error as? RemoteTailnet.ListenError {
+        case .taken, .failed: self.httpsPortError = true
+        case .notRunning, nil: self.httpsPortError = false
+        }
         self.httpsEndpoint = nil
       }
     }
@@ -844,6 +848,7 @@ struct AgentSettingsView: View {
               }
             }
             Button("Try Again") { server.retryListening() }
+              .rowButton()
               .disabled(!server.listenPortError)
           }
         }
@@ -1019,6 +1024,7 @@ struct AgentSettingsView: View {
             }
           }
           Button("Try Again") { server.retryHTTPS() }
+            .rowButton()
             .disabled(!server.httpsPortError)
         }
       }

@@ -98,11 +98,11 @@ final nonisolated class RemoteListener: Sendable {
   private let accepts: @Sendable (String) -> Bool
   private let onConnection: @Sendable (NWConnection) -> Void
   /// Told when a running listener fails, after it was ready.
-  private let onFailure: @Sendable (String) -> Void
+  private let onFailure: @Sendable (ListenFailure) -> Void
 
   init(
     accepts: @escaping @Sendable (String) -> Bool, onConnection: @escaping @Sendable (NWConnection) -> Void,
-    onFailure: @escaping @Sendable (String) -> Void
+    onFailure: @escaping @Sendable (ListenFailure) -> Void
   ) {
     self.accepts = accepts
     self.onConnection = onConnection
@@ -187,7 +187,8 @@ final nonisolated class RemoteListener: Sendable {
           if answer() {
             continuation.resume(throwing: error)
           } else {
-            self?.onFailure(Self.describe(error))
+            // On the listener's queue, off the main actor, where a busy port's owner is looked up.
+            self?.onFailure(ListenFailure.describe(error, port: Int(listener.port?.rawValue ?? port)))
           }
         default:
           break
@@ -271,11 +272,6 @@ final nonisolated class RemoteListener: Sendable {
     #else
       (Bundle.main.object(forInfoDictionaryKey: "NSBonjourServices") as? [String])?.contains(RemoteProtocol.serviceType) ?? false
     #endif
-  }
-
-  static func describe(_ error: NWError) -> String {
-    if case .posix(.EADDRINUSE) = error { return "Another app is using this port." }
-    return error.localizedDescription
   }
 }
 
@@ -531,10 +527,11 @@ final class RemoteServer {
         let session = RemoteSession(server: self, store: store, connection: RemoteConnection(connection))
         Task { await session.run() }
       },
-      onFailure: { [weak self] message in
+      onFailure: { [weak self] failure in
         Task { @MainActor in
           self?.isListening = false
-          self?.listenError = message
+          self?.listenError = failure.message
+          self?.listenPortError = failure.isPortError
         }
       })
     listener.setFilter(filter)
