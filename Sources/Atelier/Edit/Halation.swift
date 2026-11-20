@@ -1,4 +1,5 @@
 import Foundation
+import simd
 
 /// Pipeline step 8: film halation, the warm glow that light scattered back through film's base
 /// spreads around bright highlights.
@@ -16,22 +17,29 @@ import Foundation
 ///    wall a full-strength emitter.
 /// 2. Spread: that blurred by `Blur.gauss` with sigma `radius` (full-size pixels, times the
 ///    render's scale).
-/// 3. Tint: the glow's color moved toward film's red-orange (`warm`, with red at 1, times the
-///    glow's luminance) by `warmth`. Red never exceeds the glow's luminance, so warmth can't push a
-///    channel past the light the glow carries.
+/// 3. Tint: the glow's color moved toward film's red-orange by `warmth`, geometrically per
+///    channel in linear light: Y · (c / Y)^(1 − warmth) · warmL^warmth, where c is the glow's color,
+///    Y its luminance and warmL `warm` linearized. Mixing linearly would leave a neutral glow
+///    beige at 60% (the gamma-space gains are much redder once decoded, and a straight mix only
+///    gets there at the very end). Then it's scaled back toward the glow's own luminance, so
+///    warmth changes its color more than its strength, but no further than red at twice the
+///    glow's luminance (`maxRed`), which would clip red around strong highlights.
 /// 4. Added back in linear light, times `amount` and times (1 − Y)² of the receiving pixel: on
 ///    film the glow shows against what's darker around a highlight and vanishes into the highlight
-///    itself, so bright areas take almost none and dark surroundings take it all. The result is
-///    encoded back and clamped to 0–255; pixels the glow doesn't reach, and white ones, keep
-///    their exact values.
+///    itself, so bright areas take almost none and dark surroundings take it all. What's added to
+///    a value is the change in its encoding (each channel clamped to 0–1 to work out), so values
+///    outside 0–255 that a grade leaves keep their offset and nothing jumps where the glow ends;
+///    pixels the glow doesn't reach, and white ones, keep their exact values.
 nonisolated enum Halation {
-  /// Film's halation color, red-orange, as RGB gains with red at 1.
+  /// Film's halation color, red-orange, as sRGB-encoded RGB gains with red at 1.
   static let warm = SIMD3<Float>(1, 0.4, 0.15)
+  /// `warm` in linear light, about (1, 0.133, 0.019).
+  static let warmLinear = SIMD3(srgbToLinear(warm.x), srgbToLinear(warm.y), srgbToLinear(warm.z))
+  /// The most the tint's luminance correction may raise red, in multiples of the glow's
+  /// luminance.
+  static let maxRed: Float = 2
   /// The soft knee's width, as a fraction of the range from the threshold to white.
   static let knee: Float = 0.25
-  /// The receiver weight's power: (1 − Y)² leaves midtones most of the glow (Y 0.2, about sRGB
-  /// 0.48, takes 64%) while a highlight at sRGB 0.9 (Y 0.79) takes under 5%.
-  static let receiverPower: Float = 2
 
   /// `planes` with `halation` added. `scale` is output pixels per full-size pixel (the render
   /// window's), which `radius` is multiplied by. Nothing happens when `halation.isIdentity`.
@@ -39,7 +47,11 @@ nonisolated enum Halation {
     guard !halation.isIdentity, planes.width > 0, planes.height > 0 else { return }
     let width = planes.width
     let height = planes.height
-    let threshold = srgbToLinear(Float(min(max(halation.threshold, 0), 1)))
+    let encodedThreshold = Float(min(max(halation.threshold, 0), 1))
+    let threshold = srgbToLinear(encodedThreshold)
+    // A pixel's luminance is at most its brightest channel's, so one whose brightest encoded
+    // channel is at or below the threshold can't emit, without decoding it.
+    let skipBelow = 255 * encodedThreshold
     let range = max(1 - threshold, 1e-4)
     let kneeTop = 1 - knee / 2
     // The emitters, in linear light, as a copy of the planes.
@@ -50,7 +62,7 @@ nonisolated enum Halation {
       source.withRowBands { rows, r, g, b in
         var found = false
         for i in rows.lowerBound * width..<rows.upperBound * width {
-          let light = linear(r[i], g[i], b[i])
+          let light = max(r[i], g[i], b[i]) > skipBelow ? linear(r[i], g[i], b[i]) : .zero
           let y = luma(light)
           guard y > threshold else {
             r[i] = 0
@@ -76,6 +88,7 @@ nonisolated enum Halation {
     let glow = Blur.gauss([source.r, source.g, source.b], width: width, height: height, sigma: sigma)
     let warmth = Float(min(max(halation.warmth, 0), 1))
     let amount = Float(min(max(halation.amount, 0), 1))
+    let warmPower = SIMD3(Foundation.pow(warmLinear.x, warmth), Foundation.pow(warmLinear.y, warmth), Foundation.pow(warmLinear.z, warmth))
     glow[0].withUnsafeBufferPointer { gr in
       glow[1].withUnsafeBufferPointer { gg in
         glow[2].withUnsafeBufferPointer { gb in
@@ -88,20 +101,38 @@ nonisolated enum Halation {
               // Where no glow reaches (or the blur's rounding leaves a trace far below a level),
               // the pixel keeps its exact value rather than going through the round trip.
               guard max(own.x, own.y, own.z) > 1e-6 else { continue }
-              let tint = own + warmth * (warm * luma(own) - own)
               let light = linear(r[i], g[i], b[i])
-              let receive = Foundation.pow(max(1 - luma(light), 0), receiverPower)
+              // (1 − Y)²: midtones (Y 0.2, about sRGB 0.48) take 64% of the glow, a highlight at
+              // sRGB 0.9 (Y 0.79) under 5%.
+              let dark = max(1 - luma(light), 0)
+              let receive = dark * dark
               // White (or past it, from an overflowing grade) takes no glow and keeps its values.
               guard receive > 0 else { continue }
-              let out = light + amount * receive * tint
-              r[i] = 255 * linearToSrgb(out.x)
-              g[i] = 255 * linearToSrgb(out.y)
-              b[i] = 255 * linearToSrgb(out.z)
+              let out = light + amount * receive * tint(own, warmth: warmth, warmPower: warmPower)
+              r[i] += 255 * (linearToSrgb(out.x) - linearToSrgb(light.x))
+              g[i] += 255 * (linearToSrgb(out.y) - linearToSrgb(light.y))
+              b[i] += 255 * (linearToSrgb(out.z) - linearToSrgb(light.z))
             }
           }
         }
       }
     }
+  }
+
+  /// Linear glow `color` moved toward `warmLinear` by `warmth` (`warmPower` is warmLinear to that
+  /// power), as the type's step 3 describes.
+  @inline(__always) static func tint(_ color: SIMD3<Float>, warmth: Float, warmPower: SIMD3<Float>) -> SIMD3<Float> {
+    // The blur's rounding can leave a trace below zero, which a power would turn into NaN.
+    let c = simd_max(color, .zero)
+    let y = luma(c)
+    guard warmth > 0, y > 1e-9 else { return c }
+    let keep = 1 - warmth
+    let t = y * SIMD3(Foundation.pow(c.x / y, keep), Foundation.pow(c.y / y, keep), Foundation.pow(c.z / y, keep)) * warmPower
+    let ty = luma(t)
+    guard ty > 1e-12 else { return t }
+    let restore = y / ty
+    let cap = t.x > 0 ? maxRed * y / t.x : restore
+    return t * min(restore, cap)
   }
 
   /// Rec. 709 luminance of linear light (the weights for linear values; `Grade.luma`'s Rec. 601

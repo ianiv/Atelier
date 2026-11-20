@@ -304,13 +304,61 @@ struct EditPipelineTests {
     Halation.apply(.init(amount: 1, threshold: 0.8, radius: 8, warmth: 0.6), to: &lit)
     let row = 8 * width
     func change(_ x: Int) -> Float { lit.r[row + x] - source.r[row + x] }
-    // The bright interior moves little; just outside the edge it moves most.
-    #expect(abs(change(40)) < 3)
+    // The bright interior moves little (red most, the warm tint's); just outside the edge it
+    // moves most.
+    #expect(abs(change(40)) < 5)
     #expect(change(80) > 20)
     #expect(change(80) > change(79) + 10)
     // Then it falls off with distance, to nothing far away.
     #expect(change(80) > change(88) && change(88) > change(96) && change(96) > change(110))
     #expect(change(159) == 0)
+  }
+
+  /// At 60% warmth the glow on a dark background reads orange-red, and deeper at 100%.
+  @Test func halationWarmthTintsTheGlow() {
+    let width = 160
+    var pixels = [SIMD3<Float>](repeating: [40, 40, 40], count: width * 16)
+    for y in 0..<16 {
+      for x in 0..<80 { pixels[y * width + x] = [242, 242, 242] }
+    }
+    let source = planes(pixels, width: width)
+    func edge(_ warmth: Double) -> SIMD3<Float> {
+      var lit = source
+      Halation.apply(.init(amount: 1, threshold: 0.8, radius: 8, warmth: warmth), to: &lit)
+      return pixel(lit, 8 * width + 82) - pixel(source, 8 * width + 82)
+    }
+    let neutral = edge(0)
+    let warm = edge(0.6)
+    let warmest = edge(1)
+    #expect(abs(neutral.x - neutral.y) < 0.01 && abs(neutral.y - neutral.z) < 0.01)
+    #expect(warm.x > 1.5 * warm.y && warm.y > warm.z)
+    #expect(warmest.y / warmest.x < warm.y / warm.x && warmest.z / warmest.x < warm.z / warm.x)
+  }
+
+  /// Values a grade leaves outside 0–255 keep their offset where the glow lands: on a −20
+  /// background the glow adds what it adds on a 0 one, so nothing jumps where its reach ends.
+  /// Past white nothing changes at all.
+  @Test func halationKeepsOutOfRangeValues() {
+    let width = 120
+    func row(background: Float) -> [Float] {
+      var pixels = [SIMD3<Float>](repeating: [background, background, background], count: width * 8)
+      for y in 0..<8 {
+        for x in 0..<20 { pixels[y * width + x] = [255, 255, 255] }
+      }
+      var lit = planes(pixels, width: width)
+      Halation.apply(.init(amount: 1, threshold: 0.8, radius: 6, warmth: 0.6), to: &lit)
+      return Array(lit.r[4 * width + 20..<5 * width])
+    }
+    let below = row(background: -20)
+    let black = row(background: 0)
+    #expect(below[0] > 0 && below.last == -20)
+    #expect(zip(below, black).allSatisfy { abs($0 - ($1 - 20)) < 1e-3 })
+    // On a background past white, nothing takes any glow.
+    let over = [SIMD3<Float>](repeating: [300, 300, 300], count: 40 * 40)
+    let overSource = planes(over, width: 40)
+    var overLit = overSource
+    Halation.apply(.init(amount: 1, threshold: 0.5, radius: 4, warmth: 0.6), to: &overLit)
+    #expect(overLit.r == overSource.r && overLit.g == overSource.g && overLit.b == overSource.b)
   }
 
   /// A uniform midtone is below any reasonable threshold and stays exactly as it was.
