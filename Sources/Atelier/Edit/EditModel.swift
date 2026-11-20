@@ -58,7 +58,7 @@ final class EditModel {
   // MARK: Look
 
   /// The look, always snapped (`EditOptions.snapped`), so the same settings make the same job
-  /// and the same cache keys. Remembered for the next launch.
+  /// and the same cache keys. Remembered for the next launch (`rememberedSave`).
   var options: EditOptions {
     get { storedOptions }
     set {
@@ -68,9 +68,17 @@ final class EditModel {
       guard snapped != storedOptions else { return }
       lastChangeIsFinal = !fromSlider
       storedOptions = snapped
-      Self.remember(snapped)
+      if SessionState.isEnabled { rememberedSave.schedule(snapped) }
     }
   }
+
+  /// Remembering the look: encoded and written to UserDefaults half a second after the last
+  /// change, rather than on each of a slider's 16 ms ticks, and at once when a slider is let go,
+  /// the app goes to the background or quits (`flushRemembered`), so nothing is lost.
+  @ObservationIgnored private let rememberedSave = DebouncedSave<EditOptions>(delay: .milliseconds(500)) { EditModel.remember($0) }
+
+  /// Writes the look now if a change to it is waiting to be remembered.
+  func flushRemembered() { rememberedSave.flush() }
 
   private var storedOptions: EditOptions
 
@@ -159,6 +167,7 @@ final class EditModel {
 
   func adjusting(_ editing: Bool) {
     adjustingCount = max(0, adjustingCount + (editing ? 1 : -1))
+    if !editing { flushRemembered() }
   }
 
   /// Whether the last change to the look is final: false for a slider's (dragged, or moved with
@@ -189,6 +198,11 @@ final class EditModel {
     profiles = SessionState.isEnabled
       ? GrainProfileStore()
       : GrainProfileStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent("Atelier Grain Profiles (scripted)"))
+    if SessionState.isEnabled {
+      // The model lives as long as the app, so these are never taken off.
+      AppLifecycle.onResignActive { [weak self] in self?.flushRemembered() }
+      AppLifecycle.onWillTerminate { [weak self] in self?.flushRemembered() }
+    }
   }
 
   var hasSource: Bool { image != nil }
@@ -799,6 +813,52 @@ final class EditModel {
   private static func remember(_ options: EditOptions) {
     guard SessionState.isEnabled, let data = encodeRemembered(options) else { return }
     UserDefaults.standard.set(data, forKey: optionsKey)
+  }
+}
+
+/// A save made a while after the last change rather than on every one: `schedule` notes the
+/// newest value and (re)starts the wait, `flush` saves a waiting value now. One task waits at a
+/// time, going back to sleep while changes keep coming, so a change costs no more than noting it.
+final class DebouncedSave<Value> {
+  let delay: Duration
+  private let save: (Value) -> Void
+  private var pending: Value?
+  private var deadline: ContinuousClock.Instant?
+  private var waiting: Task<Void, Never>?
+
+  init(delay: Duration, save: @escaping (Value) -> Void) {
+    self.delay = delay
+    self.save = save
+  }
+
+  /// Whether a value is waiting to be saved.
+  var hasPending: Bool { pending != nil }
+
+  /// `value` to be saved once `delay` has passed with no newer one.
+  func schedule(_ value: Value) {
+    pending = value
+    deadline = .now + delay
+    guard waiting == nil else { return }
+    waiting = Task { [weak self] in
+      while let deadline = self?.deadline, deadline > .now {
+        try? await Task.sleep(until: deadline, clock: .continuous)
+        if Task.isCancelled { return }
+      }
+      // Flushed meanwhile (and perhaps a newer wait begun): that one's in charge now.
+      guard !Task.isCancelled else { return }
+      self?.waiting = nil
+      self?.flush()
+    }
+  }
+
+  /// Saves the waiting value now, if there is one; nothing more is saved until the next change.
+  func flush() {
+    waiting?.cancel()
+    waiting = nil
+    deadline = nil
+    guard let value = pending else { return }
+    pending = nil
+    save(value)
   }
 }
 
