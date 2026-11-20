@@ -378,34 +378,28 @@ private struct EditPreview: View {
 ///
 /// The edit is drawn in two layers: the whole image fitted to the pane (rendered once per look
 /// and pane size), and, zoomed past that, the part in view rendered at the zoom (up to 1:1),
-/// laid over it where it belongs. Each renders in its own `.task(id:)`, so a newer look or a
-/// move cancels the render on its way; the last one stays up until the next arrives, with the
-/// pane's spinner in its corner once a render takes a while (`EditRenderingIndicator`).
+/// laid over it where it belongs. Each is a lane of `EditPaneRenders`, which decides when its
+/// renders start and which result goes up; the last one stays up until the next arrives, with
+/// the pane's spinner in its corner once a render takes a while (`EditRenderingIndicator`).
 private struct EditPane: View {
   @Environment(EditModel.self) private var edit
   @Environment(\.displayScale) private var displayScale
   let image: CGImage
   let showsOriginal: Bool
   var title: String?
-  /// The pause before every render (this pane's two and the Slider's), so a drag in progress
-  /// doesn't start a render per frame: each new value cancels the pause before the work starts.
-  static let renderPause = Duration.milliseconds(30)
   /// This pane's render lanes (`EditModel.RenderLane`).
   @State private var paneID = UUID()
-  @State private var fitted: CGImage?
-  @State private var windowed: (window: EditPipeline.Window, image: CGImage)?
+  @State private var renders = EditPaneRenders.forScreen()
   @State private var gestureStart: (scale: Double, offset: CGSize)?
-  @State private var failure: String?
 
-  /// What a render is for: a change to any of it renders again.
-  private struct RenderKey: Hashable {
-    var source: ObjectIdentifier
-    var options: EditOptions
-    var context: Int
-    var width: Int
-    var height: Int
-    var window: EditPipeline.Window?
+  /// What the pane's two lanes are to show, nil for nothing.
+  private struct RenderKeys: Hashable {
+    var fitted: EditPaneRenders.Loop.Key?
+    var window: EditPaneRenders.Loop.Key?
   }
+
+  private var fitted: CGImage? { renders.fitted.shown?.output }
+  private var failure: String? { renders.fitted.failure }
 
   var body: some View {
     GeometryReader { geometry in
@@ -416,6 +410,10 @@ private struct EditPane: View {
       let frame = viewport.imageFrame
       let fit = viewport.fitPixels
       let window = showsOriginal ? nil : viewport.window
+      let look = EditRenderLook(options: edit.options, context: edit.contextVersion)
+      let keys = RenderKeys(
+        fitted: showsOriginal ? nil : .init(target: .init(source: ObjectIdentifier(image), width: fit.width, height: fit.height), look: look),
+        window: window.map { .init(target: .init(source: ObjectIdentifier(image), window: $0), look: look) })
       ZStack(alignment: .topLeading) {
         if showsOriginal {
           // The source itself zoomed in; the fitted copy zoomed out, which draws smoother.
@@ -433,9 +431,9 @@ private struct EditPane: View {
               .frame(width: frame.width, height: frame.height)
               .offset(x: frame.minX, y: frame.minY)
           }
-          if window != nil, let windowed {
-            let rect = viewport.frame(of: windowed.window)
-            Image(decorative: windowed.image, scale: 1)
+          if window != nil, let windowed = renders.window.shown, let shownWindow = windowed.key.target.window {
+            let rect = viewport.frame(of: shownWindow)
+            Image(decorative: windowed.output, scale: 1)
               .resizable()
               .interpolation(viewport.pointsPerPixel > 2 ? .none : .high)
               .frame(width: rect.width, height: rect.height)
@@ -488,53 +486,38 @@ private struct EditPane: View {
       }
       .onChange(of: viewport.fitScale, initial: true) { canvas.fitScale = viewport.fitScale }
       .onChange(of: viewport.fillScale, initial: true) { canvas.fillScale = viewport.fillScale }
-      .task(id: showsOriginal ? nil : RenderKey(
-        source: ObjectIdentifier(image), options: edit.options, context: edit.contextVersion, width: fit.width, height: fit.height))
-      {
-        let lane = EditModel.RenderLane(pane: paneID, kind: .fitted)
-        guard !showsOriginal else { return edit.endRender(lane) }
-        edit.beginRender(lane)
-        let renderer = edit.renderer, options = edit.options, context = edit.context
-        do {
-          try await Task.sleep(for: Self.renderPause)
-          let rendered = try await renderer.preview(source: image, options: options, context: context, fitting: fit.width, height: fit.height)
-          // Cancelled after its last check: the newer task has the lane.
-          guard !Task.isCancelled else { return }
-          fitted = rendered
-          failure = nil
-        } catch is CancellationError {
-          return
-        } catch {
-          failure = error.localizedDescription
-        }
-        edit.endRender(lane)
-      }
-      .task(id: window.map {
-        RenderKey(source: ObjectIdentifier(image), options: edit.options, context: edit.contextVersion, width: 0, height: 0, window: $0)
-      }) {
-        let lane = EditModel.RenderLane(pane: paneID, kind: .window)
-        guard let window else { return edit.endRender(lane) }
-        edit.beginRender(lane)
-        let renderer = edit.renderer, options = edit.options, context = edit.context
-        do {
-          try await Task.sleep(for: Self.renderPause)
-          let rendered = try await renderer.window(source: image, options: options, context: context, window: window)
-          guard !Task.isCancelled else { return }
-          windowed = (window, rendered)
-        } catch is CancellationError {
-          return
-        } catch {
-          // The fitted preview's render says what went wrong.
-        }
-        edit.endRender(lane)
-      }
+      .onChange(of: keys, initial: true) { _, keys in schedule(keys) }
     }
     .accessibilityElement()
     .accessibilityLabel(showsOriginal ? "Original image" : "Edited image")
     .accessibilityAddTraits(.isImage)
     // Outside the pane's accessibility element, so VoiceOver can find it.
     .overlay(alignment: .topTrailing) { EditRenderingIndicator(pane: paneID, hidden: fitted == nil) }
-    .onDisappear { edit.endRenders(pane: paneID) }
+    .onChange(of: renders.fitted.isBusy, initial: true) { _, busy in mark(.fitted, busy) }
+    .onChange(of: renders.window.isBusy, initial: true) { _, busy in mark(.window, busy) }
+    .onDisappear {
+      renders.cancel()
+      edit.endRenders(pane: paneID)
+    }
+  }
+
+  /// Hands the lanes the newest keys, each with a render of it made from the look as it is now.
+  private func schedule(_ keys: RenderKeys) {
+    let renderer = edit.renderer, context = edit.context, image = image
+    renders.update(
+      fitted: keys.fitted.map { key in
+        (key, { try await renderer.preview(source: image, options: key.look.options, context: context, fitting: key.target.width, height: key.target.height) })
+      },
+      window: keys.window.flatMap { key in
+        key.target.window.map { window in (key, { try await renderer.window(source: image, options: key.look.options, context: context, window: window) }) }
+      },
+      settled: true)
+  }
+
+  /// The pane's lanes as the model keeps them, for its spinner.
+  private func mark(_ kind: EditModel.RenderLane.Kind, _ busy: Bool) {
+    let lane = EditModel.RenderLane(pane: paneID, kind: kind)
+    if busy { edit.beginRender(lane) } else { edit.endRender(lane) }
   }
 }
 
@@ -592,15 +575,7 @@ private struct EditSliderPane: View {
   @Environment(\.displayScale) private var displayScale
   let image: CGImage
   @State private var paneID = UUID()
-  @State private var fitted: CGImage?
-
-  private struct RenderKey: Hashable {
-    var source: ObjectIdentifier
-    var options: EditOptions
-    var context: Int
-    var width: Int
-    var height: Int
-  }
+  @State private var loop = EditPaneRenders.sliderLoop()
 
   var body: some View {
     GeometryReader { geometry in
@@ -609,26 +584,28 @@ private struct EditSliderPane: View {
         viewSize: CGSize(width: geometry.size.width, height: max(1, geometry.size.height - 22)), displayScale: displayScale)
       let fit = viewport.fitPixels
       SliderComparison(
-        matched: fitted, original: edit.originalPreview ?? image, matchedNote: "Rendering…",
+        matched: loop.shown?.output, original: edit.originalPreview ?? image, matchedNote: "Rendering…",
         shape: CGSize(width: image.width, height: image.height), matchedTitle: "Edited")
-        .task(id: RenderKey(source: ObjectIdentifier(image), options: edit.options, context: edit.contextVersion, width: fit.width, height: fit.height)) {
-          let lane = EditModel.RenderLane(pane: paneID, kind: .slider)
-          edit.beginRender(lane)
-          let renderer = edit.renderer, options = edit.options, context = edit.context
-          do {
-            try await Task.sleep(for: EditPane.renderPause)
-            let rendered = try await renderer.preview(source: image, options: options, context: context, fitting: fit.width, height: fit.height)
-            guard !Task.isCancelled else { return }
-            fitted = rendered
-          } catch is CancellationError {
-            return
-          } catch {
-            // The note stands in for the picture.
-          }
-          edit.endRender(lane)
-        }
+        .onChange(of: EditPaneRenders.Loop.Key(
+          target: .init(source: ObjectIdentifier(image), width: fit.width, height: fit.height),
+          look: .init(options: edit.options, context: edit.contextVersion)), initial: true)
+        { _, key in schedule(key) }
     }
-    .overlay(alignment: .topTrailing) { EditRenderingIndicator(pane: paneID, hidden: fitted == nil) }
-    .onDisappear { edit.endRenders(pane: paneID) }
+    .overlay(alignment: .topTrailing) { EditRenderingIndicator(pane: paneID, hidden: loop.shown == nil) }
+    .onChange(of: loop.isBusy, initial: true) { _, busy in
+      let lane = EditModel.RenderLane(pane: paneID, kind: .slider)
+      if busy { edit.beginRender(lane) } else { edit.endRender(lane) }
+    }
+    .onDisappear {
+      loop.cancel()
+      edit.endRenders(pane: paneID)
+    }
+  }
+
+  private func schedule(_ key: EditPaneRenders.Loop.Key) {
+    let renderer = edit.renderer, context = edit.context, image = image
+    loop.request(key, settled: true) {
+      try await renderer.preview(source: image, options: key.look.options, context: context, fitting: key.target.width, height: key.target.height)
+    }
   }
 }

@@ -249,6 +249,7 @@
 		ED17ED17000000000000000B /* Blur.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000000A /* Blur.swift */; };
 		ED17ED17000000000000000D /* EditModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000000C /* EditModel.swift */; };
 		ED17ED17000000000000000F /* EditScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000000E /* EditScreen.swift */; };
+		ED17ED170000000000005101 /* EditRenderLoop.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000005100 /* EditRenderLoop.swift */; };
 		ED17ED170000000000000011 /* EditInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000010 /* EditInspector.swift */; };
 		ED17ED170000000000000013 /* CompareView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000012 /* CompareView.swift */; };
 		ED17ED170000000000000015 /* Grain.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000014 /* Grain.swift */; };
@@ -537,6 +538,7 @@
 		ED17ED17000000000000000A /* Blur.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Blur.swift; sourceTree = "<group>"; };
 		ED17ED17000000000000000C /* EditModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditModel.swift; sourceTree = "<group>"; };
 		ED17ED17000000000000000E /* EditScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditScreen.swift; sourceTree = "<group>"; };
+		ED17ED170000000000005100 /* EditRenderLoop.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditRenderLoop.swift; sourceTree = "<group>"; };
 		ED17ED170000000000000010 /* EditInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditInspector.swift; sourceTree = "<group>"; };
 		ED17ED170000000000000012 /* CompareView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompareView.swift; sourceTree = "<group>"; };
 		ED17ED170000000000000014 /* Grain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Grain.swift; sourceTree = "<group>"; };
@@ -1017,6 +1019,7 @@
 				ED17ED17000000000000000A /* Blur.swift */,
 				ED17ED17000000000000000C /* EditModel.swift */,
 				ED17ED17000000000000000E /* EditScreen.swift */,
+				ED17ED170000000000005100 /* EditRenderLoop.swift */,
 				ED17ED170000000000000010 /* EditInspector.swift */,
 				ED17ED170000000000000012 /* CompareView.swift */,
 				ED17ED170000000000000014 /* Grain.swift */,
@@ -1220,6 +1223,7 @@
 				ED17ED17000000000000000B /* Blur.swift in Sources */,
 				ED17ED17000000000000000D /* EditModel.swift in Sources */,
 				ED17ED17000000000000000F /* EditScreen.swift in Sources */,
+				ED17ED170000000000005101 /* EditRenderLoop.swift in Sources */,
 				ED17ED170000000000000011 /* EditInspector.swift in Sources */,
 				ED17ED170000000000000013 /* CompareView.swift in Sources */,
 				ED17ED170000000000000015 /* Grain.swift in Sources */,
