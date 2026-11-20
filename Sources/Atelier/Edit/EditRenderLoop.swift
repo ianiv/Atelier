@@ -92,8 +92,10 @@ final class EditRenderLoop<Target: Hashable, Look: Hashable, Output: Sendable> {
   }
 
   private func stop() {
-    running?.task.cancel()
-    running = nil
+    guard let running else { return }
+    running.task.cancel()
+    self.running = nil
+    EditRenderCounts.stopped += 1
   }
 
   private func startNewest() {
@@ -114,6 +116,7 @@ final class EditRenderLoop<Target: Hashable, Look: Hashable, Output: Sendable> {
       }
     }
     running = (id, newest.key, task)
+    EditRenderCounts.started += 1
   }
 
   private func finish(_ id: Int, _ result: Result<Output, any Error>) {
@@ -137,6 +140,15 @@ final class EditRenderLoop<Target: Hashable, Look: Hashable, Output: Sendable> {
     if isBusy { isBusy = false }
     onIdle()
   }
+}
+
+/// Renders every Edit lane has started, and stopped on their way (a new target, or a cancel),
+/// since launch: for `--edit-render-bench` and `--edit-ui-bench`, which count what a pinch or
+/// pan sets off.
+@MainActor
+enum EditRenderCounts {
+  static var started = 0
+  static var stopped = 0
 }
 
 /// What an Edit preview render is of: a change to any of it means a render on its way can't
@@ -193,6 +205,42 @@ final class EditPaneRenders {
 
   private func request(_ fittedRequest: Request?, settled: Bool) {
     if let fittedRequest { fitted.request(fittedRequest.key, settled: settled, render: fittedRequest.render) } else { fitted.cancel() }
+  }
+
+  /// What a pane's two lanes are to render for `viewport`, nil for nothing: the targets its
+  /// size and zoom make, which go with the look when the pane schedules (`schedule`). The pane's
+  /// body works out only these, never reading the look, so a slider moving doesn't work out the
+  /// pane again; only a render landing does.
+  struct Targets: Hashable {
+    var fitted: EditRenderTarget?
+    var window: EditRenderTarget?
+  }
+
+  /// The edit's targets for `image` in `viewport`.
+  static func targets(_ image: CGImage, _ viewport: EditViewport) -> Targets {
+    let fit = viewport.fitPixels
+    return Targets(
+      fitted: .init(source: ObjectIdentifier(image), width: fit.width, height: fit.height),
+      window: viewport.window.map { .init(source: ObjectIdentifier(image), window: $0) })
+  }
+
+  /// Hands the lanes the newest keys: `targets` with `look`, each with a render of it, as
+  /// `EditPane` asks them (and the benches, through the same code). `moving`: a pinch or drag is
+  /// moving the view.
+  func schedule(
+    _ targets: Targets, image: CGImage, renderer: EditRenderer, context: EditPipeline.Context, look: EditRenderLook, settled: Bool,
+    moving _: Bool = false
+  ) {
+    update(
+      fitted: targets.fitted.map { target -> Request in
+        (Loop.Key(target: target, look: look), { try await renderer.preview(source: image, options: look.options, context: context, fitting: target.width, height: target.height) })
+      },
+      window: targets.window.flatMap { target in
+        target.window.map { window -> Request in
+          (Loop.Key(target: target, look: look), { try await renderer.window(source: image, options: look.options, context: context, window: window) })
+        }
+      },
+      settled: settled)
   }
 
   /// A slider was let go.

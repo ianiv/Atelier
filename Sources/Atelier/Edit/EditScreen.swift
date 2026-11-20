@@ -401,15 +401,6 @@ private struct EditPane: View {
   @State private var originalWindow = EditPaneRenders.Loop()
   @State private var gestureStart: (scale: Double, offset: CGSize)?
 
-  /// What the pane's two lanes are to render, nil for nothing: the targets the pane's size and
-  /// zoom make, which go with the look when the pane schedules (`schedule`). The body works out
-  /// only these, never reading the look, so a slider moving doesn't work out the pane again
-  /// (`EditLookChanges` asks for its renders instead); only a render landing does.
-  private struct RenderTargets: Hashable {
-    var fitted: EditRenderTarget?
-    var window: EditRenderTarget?
-  }
-
   /// The look the original's window lane keys its renders on: one that never changes, as the
   /// original doesn't.
   private static let originalLook = EditRenderLook(options: .grainDefaults, context: -1)
@@ -428,13 +419,12 @@ private struct EditPane: View {
         imageWidth: image.width, imageHeight: image.height, viewSize: geometry.size, displayScale: displayScale,
         scale: canvas.scale, offset: canvas.offset)
       let frame = viewport.imageFrame
-      let fit = viewport.fitPixels
       // The original's crop on a coarse grid: it costs nothing to make again, but each new one
       // costs the main thread a moment to put up, so a pan should need few.
       let window = viewport.window(grid: showsOriginal ? 512 : 64)
-      let targets = RenderTargets(
-        fitted: showsOriginal ? nil : .init(source: ObjectIdentifier(image), width: fit.width, height: fit.height),
-        window: window.map { .init(source: ObjectIdentifier(image), window: $0) })
+      let targets = showsOriginal
+        ? EditPaneRenders.Targets(fitted: nil, window: window.map { .init(source: ObjectIdentifier(image), window: $0) })
+        : EditPaneRenders.targets(image, viewport)
       ZStack(alignment: .topLeading) {
         if showsOriginal {
           // The fitted copy, and zoomed past it the part in view at the zoom (the window lane's
@@ -538,7 +528,7 @@ private struct EditPane: View {
   /// Hands the lanes the newest keys: `targets` with the look as it is now, each with a render of
   /// it. Showing the original, the edit's lanes have nothing to do and its own window lane crops
   /// the source.
-  private func schedule(_ targets: RenderTargets) {
+  private func schedule(_ targets: EditPaneRenders.Targets) {
     let image = image
     if showsOriginal {
       renders.update(fitted: nil, window: nil, settled: true)
@@ -550,18 +540,10 @@ private struct EditPane: View {
       return
     }
     originalWindow.cancel()
-    let renderer = edit.renderer, context = edit.context
-    let look = EditRenderLook(options: edit.options, context: edit.contextVersion)
-    renders.update(
-      fitted: targets.fitted.map { target -> EditPaneRenders.Request in
-        (EditPaneRenders.Loop.Key(target: target, look: look), { try await renderer.preview(source: image, options: look.options, context: context, fitting: target.width, height: target.height) })
-      },
-      window: targets.window.flatMap { target in
-        target.window.map { window -> EditPaneRenders.Request in
-          (EditPaneRenders.Loop.Key(target: target, look: look), { try await renderer.window(source: image, options: look.options, context: context, window: window) })
-        }
-      },
-      settled: edit.lastChangeIsFinal && !edit.isAdjusting)
+    renders.schedule(
+      targets, image: image, renderer: edit.renderer, context: edit.context,
+      look: EditRenderLook(options: edit.options, context: edit.contextVersion), settled: edit.lastChangeIsFinal && !edit.isAdjusting,
+      moving: edit.isMovingView)
   }
 
   /// The pane's lanes as the model keeps them, for its spinner.
