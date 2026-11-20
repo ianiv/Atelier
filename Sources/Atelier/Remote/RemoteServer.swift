@@ -308,7 +308,12 @@ final class RemoteServer {
   }
 
   private static let enabledKey = "remoteServer.enabled"
-  private static let portKey = "remoteServer.port"
+  private nonisolated static let portKey = "remoteServer.port"
+
+  /// The port Compute's server is set to, for the MCP server's HTTPS to stay off it.
+  nonisolated static var configuredPort: Int {
+    UserDefaults.standard.object(forKey: portKey) as? Int ?? Int(RemoteProtocol.defaultPort)
+  }
   private static let filterKey = "remoteServer.filter"
 
   var isEnabled: Bool {
@@ -386,11 +391,16 @@ final class RemoteServer {
     let shouldListen = isEnabled && isListening && tailnet.serves && tailnet.isSignedIn && tailnetPort != 0
     guard shouldListen != (tailnetListening != nil) || (shouldListen && tailnetListening != tailnetPort) else { return }
     // Only this server's port: the MCP server may be serving another one on the same node.
-    if let previous = tailnetListening { tailnet.stopListening(port: previous) }
+    if let previous = tailnetListening { tailnet.stopListening(port: previous, owner: .compute) }
     tailnetListening = shouldListen ? tailnetPort : nil
     if shouldListen {
       let listener = listener
-      tailnet.startListening(port: tailnetPort) { listener?.bridgePort }
+      do {
+        try tailnet.startListening(port: tailnetPort, owner: .compute) { listener?.bridgePort }
+      } catch {
+        Log.remote.error("Not serving over Tailscale: \(error.localizedDescription, privacy: .public)")
+        tailnetListening = nil
+      }
     }
   }
 

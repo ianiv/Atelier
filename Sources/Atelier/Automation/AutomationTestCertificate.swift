@@ -5,27 +5,40 @@ import Network
 import Security
 import X509
 
-/// A throwaway certificate authority and a server certificate it signed, made in memory for the
-/// HTTPS checks and unit tests: the server gets the identity, the client trusts only `authority`.
-/// Never offered to users (they bring their own or use Tailscale's); nothing touches the Keychain.
+/// A throwaway certificate authority, an intermediate it signed and a server certificate the
+/// intermediate signed, made in memory for the HTTPS checks and unit tests: the server gets the
+/// identity with the intermediate in its chain, the client trusts only the root (`authority`), so a
+/// connection that succeeds shows the server sends the intermediate. Never offered to users (they
+/// bring their own or use Tailscale's); nothing touches the Keychain.
 nonisolated struct AutomationTestCertificate: @unchecked Sendable {
   let authority: SecCertificate
+  let intermediate: SecCertificate
   let identity: AgentTLSIdentity
-  /// The leaf's key and certificate as PEM, in the order Tailscale's `type=pair` gives them.
+  /// The leaf's key, then its certificate and the intermediate, as PEM: the order Tailscale's
+  /// `type=pair` gives them.
   let pemPair: String
 
   /// A leaf for `hosts` (IP addresses or DNS names), valid for an hour.
   init(hosts: [String], lifetime: TimeInterval = 3600) throws {
     let now = Date()
-    let authorityKey = P256.Signing.PrivateKey()
-    let authorityName = try DistinguishedName { CommonName("Atelier Test CA") }
-    let authority = try Certificate(
-      version: .v3, serialNumber: .init(), publicKey: .init(authorityKey.publicKey), notValidBefore: now - 60, notValidAfter: now + lifetime,
-      issuer: authorityName, subject: authorityName, signatureAlgorithm: .ecdsaWithSHA256,
+    let rootKey = P256.Signing.PrivateKey()
+    let rootName = try DistinguishedName { CommonName("Atelier Test Root CA") }
+    let root = try Certificate(
+      version: .v3, serialNumber: .init(), publicKey: .init(rootKey.publicKey), notValidBefore: now - 60, notValidAfter: now + lifetime,
+      issuer: rootName, subject: rootName, signatureAlgorithm: .ecdsaWithSHA256,
+      extensions: try Certificate.Extensions {
+        Critical(BasicConstraints.isCertificateAuthority(maxPathLength: 1))
+        Critical(KeyUsage(keyCertSign: true))
+      }, issuerPrivateKey: .init(rootKey))
+    let intermediateKey = P256.Signing.PrivateKey()
+    let intermediateName = try DistinguishedName { CommonName("Atelier Test Intermediate CA") }
+    let intermediate = try Certificate(
+      version: .v3, serialNumber: .init(), publicKey: .init(intermediateKey.publicKey), notValidBefore: now - 60,
+      notValidAfter: now + lifetime, issuer: rootName, subject: intermediateName, signatureAlgorithm: .ecdsaWithSHA256,
       extensions: try Certificate.Extensions {
         Critical(BasicConstraints.isCertificateAuthority(maxPathLength: 0))
         Critical(KeyUsage(keyCertSign: true))
-      }, issuerPrivateKey: .init(authorityKey))
+      }, issuerPrivateKey: .init(rootKey))
     let leafKey = P256.Signing.PrivateKey()
     let names: [GeneralName] = hosts.map { host in
       if let v4 = IPv4Address(host) { return .ipAddress(.init(contentBytes: ArraySlice(v4.rawValue))) }
@@ -34,20 +47,25 @@ nonisolated struct AutomationTestCertificate: @unchecked Sendable {
     }
     let leaf = try Certificate(
       version: .v3, serialNumber: .init(), publicKey: .init(leafKey.publicKey), notValidBefore: now - 60, notValidAfter: now + lifetime,
-      issuer: authorityName, subject: try DistinguishedName { CommonName(hosts.first ?? "atelier-test") },
+      issuer: intermediateName, subject: try DistinguishedName { CommonName(hosts.first ?? "atelier-test") },
       signatureAlgorithm: .ecdsaWithSHA256,
       extensions: try Certificate.Extensions {
         Critical(BasicConstraints.notCertificateAuthority)
         Critical(KeyUsage(digitalSignature: true))
         try ExtendedKeyUsage([.serverAuth])
         SubjectAlternativeNames(names)
-      }, issuerPrivateKey: .init(authorityKey))
-    guard let authorityCertificate = SecCertificateCreateWithData(nil, Data(try authority.serializeAsPEM().derBytes) as CFData),
-      let leafCertificate = SecCertificateCreateWithData(nil, Data(try leaf.serializeAsPEM().derBytes) as CFData)
-    else { throw AgentTLSIdentity.Failure.noCertificate }
-    self.authority = authorityCertificate
-    identity = try AgentTLSIdentity(certificate: leafCertificate, key: leafKey)
+      }, issuerPrivateKey: .init(intermediateKey))
+    func secCertificate(_ certificate: Certificate) throws -> SecCertificate {
+      guard let made = SecCertificateCreateWithData(nil, Data(try certificate.serializeAsPEM().derBytes) as CFData) else {
+        throw AgentTLSIdentity.Failure.noCertificate
+      }
+      return made
+    }
+    authority = try secCertificate(root)
+    self.intermediate = try secCertificate(intermediate)
+    identity = try AgentTLSIdentity(certificate: try secCertificate(leaf), intermediates: [self.intermediate], key: leafKey)
     pemPair = leafKey.pemRepresentation + "\n" + (try leaf.serializeAsPEM().pemString) + "\n"
+      + (try intermediate.serializeAsPEM().pemString) + "\n"
   }
 }
 

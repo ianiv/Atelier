@@ -183,10 +183,15 @@ struct AgentAccessTests {
   }
 
   @Test func httpsPorts() {
-    #expect(AgentAuth.httpsPort(for: 7862) == 7863)
-    #expect(AgentAuth.httpsPort(for: 1) == 2)
-    #expect(AgentAuth.httpsPort(for: 65534) == 65535)
-    #expect(AgentAuth.httpsPort(for: 65535) == nil, "no port after the last")
+    // Two past the server's: the one after it, 7863, is Compute's default.
+    #expect(AgentAuth.httpsPort(for: 7862) == 7864)
+    #expect(AgentAuth.httpsPort(for: 7862, avoiding: [7863]) == 7864)
+    #expect(AgentAuth.httpsPort(for: 7862, avoiding: [7864]) == 7865, "Compute moved onto it")
+    #expect(AgentAuth.httpsPort(for: 7862, avoiding: [7864, 7865]) == 7866)
+    #expect(AgentAuth.httpsPort(for: 1) == 3)
+    #expect(AgentAuth.httpsPort(for: 65533) == 65535)
+    #expect(AgentAuth.httpsPort(for: 65534) == nil, "no port that far")
+    #expect(AgentAuth.httpsPort(for: 65533, avoiding: [65535]) == nil)
     #expect(AgentAuth.httpsPort(for: 0) == nil)
     #expect(AgentAuth.tailnetHTTPSPort == 443)
   }
@@ -212,12 +217,13 @@ struct AgentAccessTests {
     let parsed = try AgentTLSIdentity(pem: made.pemPair)
     #expect(parsed.fingerprint == made.identity.fingerprint)
     #expect(parsed.name == "studio-atelier.tail1234.ts.net")
-    #expect(parsed.chain.count == 1 && parsed.secIdentity != nil)
+    #expect(parsed.chain.count == 2 && parsed.secIdentity != nil, "the leaf, then the intermediate")
+    #expect(SecCertificateCopyData(parsed.chain[1]) as Data == SecCertificateCopyData(made.intermediate) as Data)
     let expires = try #require(parsed.expires)
     #expect(expires > Date() && expires < Date().addingTimeInterval(2 * 3600))
     // Either order, with text around the blocks.
     let blocks = AgentTLSIdentity.pemBlocks(made.pemPair)
-    #expect(blocks.map(\.label) == ["PRIVATE KEY", "CERTIFICATE"] || blocks.map(\.label) == ["EC PRIVATE KEY", "CERTIFICATE"])
+    #expect(blocks.map(\.label).dropFirst() == ["CERTIFICATE", "CERTIFICATE"] && blocks[0].label.hasSuffix("PRIVATE KEY"))
     let certificatePEM = made.pemPair[try #require(made.pemPair.range(of: "-----BEGIN CERTIFICATE-----")?.lowerBound...)]
     let keyPEM = made.pemPair[..<(try #require(made.pemPair.range(of: "-----BEGIN CERTIFICATE-----")?.lowerBound))]
     let reordered = try AgentTLSIdentity(pem: "intro\n" + certificatePEM + "\n" + keyPEM)

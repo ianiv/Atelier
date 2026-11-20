@@ -198,12 +198,38 @@ final class RemoteTailnet {
 
   private(set) var state: State
   private(set) var status = RemoteTailnetStatus()
-  /// Told when `state` or `serves` changes: Compute's server and the MCP server each add one.
-  @ObservationIgnored private var observers: [() -> Void] = []
+  /// Told when `state`, `serves` or this node's tailnet name changes: Compute's server and the MCP
+  /// server each add one.
+  @ObservationIgnored private var observers: [UUID: () -> Void] = [:]
 
-  func observe(_ handler: @escaping () -> Void) { observers.append(handler) }
+  /// Adds `handler`; pass what it returns to `removeObserver` when it's no longer wanted.
+  @discardableResult func observe(_ handler: @escaping () -> Void) -> UUID {
+    let token = UUID()
+    observers[token] = handler
+    return token
+  }
 
-  private func changed() { observers.forEach { $0() } }
+  func removeObserver(_ token: UUID) { observers[token] = nil }
+
+  private func changed() { observers.values.forEach { $0() } }
+
+  /// Who serves a tailnet port, so one server can't take over another's.
+  enum ListenOwner: String, Sendable {
+    case compute = "Compute"
+    case agents = "the MCP server"
+  }
+
+  enum ListenError: LocalizedError {
+    case notRunning, taken(UInt16, by: ListenOwner), failed(UInt16)
+
+    var errorDescription: String? {
+      switch self {
+      case .notRunning: "Tailscale isn't running."
+      case .taken(let port, let owner): "Port \(port) on the tailnet is already used by \(owner.rawValue)."
+      case .failed(let port): "Couldn't listen on the tailnet's port \(port)."
+      }
+    }
+  }
 
   /// Serve over Tailscale.
   var serves: Bool {
@@ -246,8 +272,9 @@ final class RemoteTailnet {
     var handle: Int32 = 0
     var status = RemoteTailnetStatus()
     var limitsToAccount = true
-    /// The listening socket for each port served (Compute's, the MCP server's 443).
+    /// The listening socket for each port served (Compute's, the MCP server's 443), and whose.
     var listeners: [UInt16: Int32] = [:]
+    var owners: [UInt16: ListenOwner] = [:]
     /// Bumped to end the accept loop of an earlier listener on the port.
     var listening: [UInt16: Int] = [:]
   }
@@ -355,8 +382,11 @@ final class RemoteTailnet {
     }
 
     private func update(_ new: RemoteTailnetStatus) {
+      let renamed = new.dnsName != status.dnsName
       status = new
       shared.withLock { $0.status = new }
+      // The MCP server's certificate is for this name.
+      defer { if renamed { changed() } }
       switch new.backendState {
       case "Running":
         set(.running)
@@ -468,40 +498,44 @@ final class RemoteTailnet {
 
   /// Accepts tailnet connections on `port` and passes each to this device's bridge listener. The
   /// caller is checked here, where its tailnet address is still known; past the bridge it's a
-  /// loopback connection like any other. Each port is its own listener: Compute's and the MCP
-  /// server's run side by side. Returns false if the node couldn't listen.
-  @discardableResult func startListening(port: UInt16, bridgePort: @escaping @Sendable () -> UInt16?) -> Bool {
+  /// loopback connection like any other. Each port is its own listener, so Compute's and the MCP
+  /// server's run side by side; a port another owner already serves is refused rather than taken
+  /// over (Compute set to 443, say), so neither silently stops the other.
+  func startListening(port: UInt16, owner: ListenOwner, bridgePort: @escaping @Sendable () -> UInt16?) throws(ListenError) {
     #if canImport(TailscaleKit)
-      stopListening(port: port)
+      if let holder = shared.withLock({ $0.owners[port] }), holder != owner { throw .taken(port, by: holder) }
+      stopListening(port: port, owner: owner)
       let handle = shared.withLock(\.handle)
-      guard handle != 0 else { return false }
+      guard handle != 0 else { throw .notRunning }
       var listener: Int32 = 0
       guard tailscale_listen(handle, "tcp", ":\(port)", &listener) == 0 else {
         Log.remote.error("Couldn't listen on the tailnet at port \(port, privacy: .public)")
-        return false
+        throw .failed(port)
       }
       let generation = shared.withLock { state -> Int in
         state.listeners[port] = listener
+        state.owners[port] = owner
         state.listening[port, default: 0] += 1
         return state.listening[port, default: 0]
       }
       Thread.detachNewThread { [self] in
         Self.accept(listener: listener, port: port, generation: generation, state: self, bridgePort: bridgePort)
       }
-      return true
     #else
-      return false
+      throw .notRunning
     #endif
   }
 
-  /// Stops serving `port`, or every port.
-  func stopListening(port: UInt16? = nil) {
+  /// Stops serving `port` if `owner` serves it, or with no port every port (the node stopping).
+  func stopListening(port: UInt16? = nil, owner: ListenOwner? = nil) {
     #if canImport(TailscaleKit)
       let closing = shared.withLock { state -> [Int32] in
         let ports = port.map { [$0] } ?? Array(state.listeners.keys)
         var closing: [Int32] = []
         for port in ports {
+          if let owner, let holder = state.owners[port], holder != owner { continue }
           if let listener = state.listeners.removeValue(forKey: port) { closing.append(listener) }
+          state.owners[port] = nil
           state.listening[port, default: 0] += 1
         }
         return closing

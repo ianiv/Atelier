@@ -166,10 +166,15 @@ nonisolated enum AgentAuth {
     return "\(scheme)://\(address)\(port == defaultPort ? "" : ":\(port)")/mcp"
   }
 
-  /// The port the local network's HTTPS takes with an imported certificate: the one after the
-  /// server's own, which then answers this Mac only. Nil past 65535.
-  static func httpsPort(for port: Int) -> Int? {
-    port >= 1 && port < 65535 ? port + 1 : nil
+  /// The port the local network's HTTPS takes with an imported certificate: two past the
+  /// server's own (which then answers this Mac only), since the one after it, 7863, is Compute's
+  /// default. If that's a port in `taken` (Compute set elsewhere), the next free one after it.
+  /// Nil past 65535.
+  static func httpsPort(for port: Int, avoiding taken: Set<Int> = []) -> Int? {
+    guard port >= 1 else { return nil }
+    var candidate = port + 2
+    while taken.contains(candidate) { candidate += 1 }
+    return candidate <= 65535 ? candidate : nil
   }
 
   /// Where the embedded Tailscale node takes the MCP server's HTTPS: the default, so clients name

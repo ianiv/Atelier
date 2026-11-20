@@ -70,6 +70,15 @@ https://github.com/sparkle-project/Sparkle
 Copyright Andy Matuschak, Sparkle Project contributors. Licensed under the MIT License.
 
 -------------------------------------------------------------------------------
+swift-certificates and swift-asn1 (Mac app only)
+https://github.com/apple/swift-certificates
+https://github.com/apple/swift-asn1
+Copyright Apple Inc. and the SwiftCertificates and SwiftASN1 project authors. Licensed under the
+Apache License, Version 2.0.
+
+Used by the MCP server's HTTPS checks to make throwaway test certificates.
+
+-------------------------------------------------------------------------------
 Apache License, Version 2.0
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not use these files

@@ -285,6 +285,10 @@ struct AboutSettingsView: View {
     #if os(macOS)
       credits.append(
         Credit(name: "Sparkle", detail: "Updates. MIT.", url: "https://github.com/sparkle-project/Sparkle"))
+      credits.append(
+        Credit(
+          name: "swift-certificates and swift-asn1", detail: "Test certificates for the MCP server's HTTPS checks. Apple, Apache-2.0.",
+          url: "https://github.com/apple/swift-certificates"))
     #endif
     return credits
   }

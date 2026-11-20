@@ -32,8 +32,8 @@ extension Automation {
   /// another site (403); file paths refused (get_image save_to, set_canvas_image with a path,
   /// edit_image_look lut_path, measure_reference path) and list_grain_profiles without its folder;
   /// Regenerate (the old token 401, the new 200); Require Token off (200 without one); HTTPS with
-  /// an imported certificate (a throwaway test authority's, made in memory, which only this
-  /// check's client trusts): the next port in HTTPS without the token, with it and from its own
+  /// an imported certificate (a throwaway root, intermediate and leaf, made in memory; the client
+  /// trusts only the root): the HTTPS port (two past the server's) without the token, with it and from its own
   /// page (401, 200, 200), plain HTTP to it and the network address on the plain port refused,
   /// 127.0.0.1 still 200, a client that doesn't trust the certificate refused; Tailscale's
   /// certificate without a signed-in node (an error, this Mac still 200); and This Mac only (the
@@ -188,7 +188,7 @@ extension Automation {
       // HTTPS with an imported certificate: the next port, and the plain one for this Mac only.
       started.requireToken = true
       let httpsToken = started.ensureToken()
-      let httpsPort = port + 1
+      let httpsPort = started.httpsPort ?? port + 2
       started.encryption = .certificate
       let httpsDeadline = Date().addingTimeInterval(15)
       while started.httpsEndpoint == nil || !started.isListening, started.httpsError == nil, started.listenError == nil, Date() < httpsDeadline {
@@ -205,7 +205,9 @@ extension Automation {
       let httpsMissing = await post(lan, list, scheme: "https", port: httpsPort, session: trusting)
       check(httpsMissing.status == 401, "HTTPS \(lan) without the token: 401 (got \(httpsMissing.status))")
       let httpsAllowed = await post(lan, list, token: httpsToken, scheme: "https", port: httpsPort, session: trusting)
-      check(httpsAllowed.status == 200, "HTTPS \(lan) with the token: 200 (got \(httpsAllowed.status))")
+      check(
+        httpsAllowed.status == 200 && started.activeCertificate?.chain.count == 2,
+        "HTTPS \(lan) with the token, trusting only the root (the leaf is the intermediate's, so the server sent it): 200 (got \(httpsAllowed.status))")
       let httpsPage = await post(lan, list, token: httpsToken, origin: "https://\(lan):\(httpsPort)", scheme: "https", port: httpsPort, session: trusting)
       check(httpsPage.status == 200, "HTTPS \(lan) from a page on its own address: 200 (got \(httpsPage.status))")
       let httpsForeign = await post(lan, list, token: httpsToken, origin: "https://example.com", scheme: "https", port: httpsPort, session: trusting)
