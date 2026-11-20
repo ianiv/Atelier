@@ -190,22 +190,27 @@ nonisolated enum EditPipeline {
     /// `np.clip(a, 0, 255).astype(np.uint8)` (step 12).
     var rgba: [UInt8] { rgba(cancel: .never) }
 
-    /// `rgba`, rows skipped once `cancel` is set.
+    /// `rgba`, rows skipped (left black) once `cancel` is set.
     func rgba(cancel: Cancel) -> [UInt8] {
       let count = width * height
-      var out = [UInt8](repeating: 0, count: count * 4)
-      guard count > 0, r.count >= count, g.count >= count, b.count >= count, alpha.count >= count else { return out }
+      guard count > 0, r.count >= count, g.count >= count, b.count >= count, alpha.count >= count else {
+        return [UInt8](repeating: 0, count: max(count, 0) * 4)
+      }
       @inline(__always) func byte(_ value: Float) -> UInt8 { value.isNaN ? 0 : UInt8(min(max(value, 0), 255)) }
       let width = width
       let height = height
-      r.withUnsafeBufferPointer { r in
-        g.withUnsafeBufferPointer { g in
-          b.withUnsafeBufferPointer { b in
-            alpha.withUnsafeBufferPointer { alpha in
-              out.withUnsafeMutableBufferPointer { out in
+      // Every byte is written below, so the array isn't cleared first.
+      return [UInt8](unsafeUninitializedCapacity: count * 4) { out, initialized in
+        r.withUnsafeBufferPointer { r in
+          g.withUnsafeBufferPointer { g in
+            b.withUnsafeBufferPointer { b in
+              alpha.withUnsafeBufferPointer { alpha in
                 let out = out
                 DispatchQueue.concurrentPerform(iterations: height) { row in
-                  guard !cancel.isCancelled else { return }
+                  guard !cancel.isCancelled else {
+                    out.baseAddress!.advanced(by: row * width * 4).update(repeating: 0, count: width * 4)
+                    return
+                  }
                   for index in row * width..<(row + 1) * width {
                     out[index * 4] = byte(r[index])
                     out[index * 4 + 1] = byte(g[index])
@@ -217,8 +222,8 @@ nonisolated enum EditPipeline {
             }
           }
         }
+        initialized = count * 4
       }
-      return out
     }
 
     /// The part `x, y, width, height` of tightly packed RGBA8 `pixels` (`pixelWidth` wide) as
@@ -229,19 +234,24 @@ nonisolated enum EditPipeline {
       let y0 = min(max(y, 0), pixelHeight)
       let w = min(max(w, 0), pixelWidth - x0)
       let h = min(max(h, 0), pixelHeight - y0)
-      var r = [Float](repeating: 0, count: w * h)
-      var g = r
-      var b = r
-      var alpha = [UInt8](repeating: 255, count: w * h)
-      if w > 0, h > 0 {
-        pixels.withUnsafeBufferPointer { input in
-          r.withUnsafeMutableBufferPointer { r in
-            g.withUnsafeMutableBufferPointer { g in
-              b.withUnsafeMutableBufferPointer { b in
-                alpha.withUnsafeMutableBufferPointer { alpha in
+      // Every pixel is written below (rows a cancel skips as black), so the planes aren't
+      // cleared first.
+      var g = [Float](), b = [Float](), alpha = [UInt8]()
+      let count = max(w, 0) * max(h, 0)
+      let r = [Float](unsafeUninitializedCapacity: count) { r, rCount in
+        g = [Float](unsafeUninitializedCapacity: count) { g, gCount in
+          b = [Float](unsafeUninitializedCapacity: count) { b, bCount in
+            alpha = [UInt8](unsafeUninitializedCapacity: count) { alpha, alphaCount in
+              if count > 0 {
+                pixels.withUnsafeBufferPointer { input in
                   let (r, g, b, alpha) = (r, g, b, alpha)
                   DispatchQueue.concurrentPerform(iterations: h) { row in
-                    guard !cancel.isCancelled else { return }
+                    guard !cancel.isCancelled else {
+                      for i in row * w..<(row + 1) * w {
+                        (r[i], g[i], b[i], alpha[i]) = (0, 0, 0, 255)
+                      }
+                      return
+                    }
                     let source = ((y0 + row) * pixelWidth + x0) * 4
                     for column in 0..<w {
                       let i = row * w + column
@@ -254,9 +264,13 @@ nonisolated enum EditPipeline {
                   }
                 }
               }
+              alphaCount = count
             }
+            bCount = count
           }
+          gCount = count
         }
+        rCount = count
       }
       self.init(width: w, height: h, r: r, g: g, b: b, alpha: alpha)
     }
