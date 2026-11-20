@@ -548,27 +548,41 @@ private struct EditRenderingIndicator: View {
   @State private var shown = false
 
   static let delay = Duration.milliseconds(300)
+  /// The spinner's square: a small ProgressView's size.
+  #if os(macOS)
+  private static let side: CGFloat = 16
+  #else
+  private static let side: CGFloat = 20
+  #endif
 
   var body: some View {
     let rendering = edit.isRendering(pane: pane)
     let visible = shown && !hidden
-    ProgressView()
-      .controlSize(.small)
-      .padding(6)
-      .glassEffect(.regular, in: .circle)
-      .padding(8)
-      .opacity(visible ? 1 : 0)
-      .allowsHitTesting(false)
-      .accessibilityLabel("Rendering")
-      .accessibilityHidden(!visible)
-      .task(id: rendering) {
-        guard rendering else {
-          shown = false
-          return
-        }
-        try? await Task.sleep(for: Self.delay)
-        if !Task.isCancelled { shown = true }
+    // Not shown, a clear square of the spinner's size holds its place: an indeterminate
+    // ProgressView keeps animating at opacity 0.
+    Group {
+      if visible {
+        ProgressView().controlSize(.small)
+      } else {
+        Color.clear
       }
+    }
+    .frame(width: Self.side, height: Self.side)
+    .padding(6)
+    .glassEffect(.regular, in: .circle)
+    .padding(8)
+    .opacity(visible ? 1 : 0)
+    .allowsHitTesting(false)
+    .accessibilityLabel("Rendering")
+    .accessibilityHidden(!visible)
+    .task(id: rendering) {
+      guard rendering else {
+        shown = false
+        return
+      }
+      try? await Task.sleep(for: Self.delay)
+      if !Task.isCancelled { shown = true }
+    }
   }
 }
 

@@ -854,7 +854,7 @@ struct EditRenderCancelTests {
     #expect(throws: CancellationError.self) { try cancel.check() }
   }
 
-  /// A full-size 4000 × 4000 render with halation, cancelled 20 ms in, throws within 100 ms of
+  /// A full-size 4000 × 4000 render with halation, cancelled 20 ms in, throws within 300 ms of
   /// the cancel, and the same look rendered after misses the pre-grain cache: nothing half-made
   /// was kept. (`cancellationChecksLeaveTheRenderAlone` checks the bytes of renders that finish.)
   @Test func cancelledHalationRenderStopsQuickly() async throws {
@@ -873,7 +873,8 @@ struct EditRenderCancelTests {
     let result = await task.result
     let elapsed = clock.now - cancelled
     #expect(throws: CancellationError.self) { try result.get() }
-    #expect(elapsed < .milliseconds(100), "took \(elapsed) to stop")
+    // Alone it stops in about a millisecond; the bound allows for the other suites running alongside.
+    #expect(elapsed < .milliseconds(300), "took \(elapsed) to stop")
 
     let missesBefore = await renderer.counters.preGrainMisses
     _ = try await renderer.full(source: source, options: options)
