@@ -63,6 +63,19 @@ Copilot's agent mode can then use Atelier's tools.
 
 Other clients that speak Streamable HTTP can use the same address. Clients that only launch stdio servers can go through a bridge such as `npx mcp-remote http://127.0.0.1:7862/mcp`.
 
+### Before you turn on Local network
+
+Open the server to other computers only on a network you trust: your own home network, with devices you control. Coffee-shop, hotel, office and school Wi-Fi, guest networks and the shared network of an apartment building are not that: you don't know who else is on them.
+
+Anyone who can reach the server can do what an agent does: generate with your models and your GPU, read and change the Create screen, and see images in the current project. File paths from other devices are refused, so they can't read or write files on this Mac.
+
+- **The token** keeps other people on the network out. Without it, anyone on the network can use the server. Keep **Require Token** on.
+- **HTTPS** keeps the token secret. Without it, the token and every image cross the network in plain text: anyone on the same Wi-Fi can read them, then use the token themselves.
+
+The safest setting is **This Mac only**. On a network you don't fully trust, use [HTTPS](#https) (a Tailscale certificate or an imported one) and the token, or don't turn on Local network. Turn it off when you're not using it from another device, and click **Regenerate** if the token may have leaked.
+
+Atelier is free software provided without any warranty (GPL-3.0, sections 15 and 16, in [LICENSE](LICENSE)). You're responsible for how you expose it on your network. If you're not comfortable with that, leave Access on This Mac only.
+
 ### From another device
 
 Set **Access** to **Local network** to let agents on other computers on your local network or tailnet use the server (addresses in the private ranges, link-local, and Tailscale's 100.64.0.0/10 and fd7a:115c:a1e0::/48; anything else is turned away before it's answered). Agents on this Mac keep working as before.
@@ -75,7 +88,7 @@ Set **Access** to **Local network** to let agents on other computers on your loc
   ```
 
 - Agents on other devices can't use this Mac's files: paths in `image`, `input_image`, `reference_images`, `mask`, the moodboard and `edit_image`'s references, `measure_reference`'s `path` and `edit_image_look`'s `reference_path` are refused, and so are `audio`, `save_to`, `lut_path`, `profile_path` and `save_profile_to`. Send images as `data:` URLs (or name a `history_step`), and use a built-in `lut` or a library `profile`; results come back inline, and `get_image` with `full_size: true` returns the full-resolution PNG. Results, including `get_job` and `list_jobs` for jobs started on this Mac, don't include this Mac's file paths (`list_grain_profiles` leaves out its `folder`).
-- Anyone on your network with the token can generate and read or change the Create screen. Without HTTPS (below), traffic is plain HTTP and isn't encrypted. A request from a web page on another site is refused.
+- Anyone on your network with the token can generate and read or change the Create screen. Without HTTPS (below), traffic is plain HTTP and isn't encrypted, so on a network you don't fully trust others can read the token and use it (see [Before you turn on Local network](#before-you-turn-on-local-network)). A request from a web page on another site is refused.
 - If the Mac's firewall is on, macOS may ask whether Atelier can accept incoming connections the first time you turn this on.
 
 #### HTTPS
@@ -84,6 +97,8 @@ Set **Access** to **Local network** to let agents on other computers on your loc
 
 - **Tailscale certificate**: Atelier's own Tailscale node (Settings ▸ Compute ▸ Tailscale, signed in) gets a certificate for its tailnet name and serves HTTPS on port 443 of your tailnet, at `https://<name>.<tailnet>.ts.net/mcp`. Your tailnet needs **MagicDNS** and **HTTPS Certificates** turned on, in the [DNS page of the Tailscale admin console](https://login.tailscale.com/admin/dns); Settings links there. The first certificate can take a minute. Atelier asks Tailscale for it again each day, and **Renew** asks now; either way Tailscale only issues a new certificate when the current one has less than 14 days left, and otherwise hands back the one it has. Status warns when the certificate has under 14 days left or a renewal failed. The certificate comes from Let's Encrypt, which publishes every certificate's name in public Certificate Transparency logs, so your tailnet's name (`<tailnet>.ts.net`) and this device's name on it become public. **Limit access to your Tailscale account** (Settings ▸ Compute) applies here too. Only devices on your tailnet can reach this address; a Tailscale app on the client is enough.
 - **Imported certificate**: **Import…** a `.p12` file (a certificate with its private key, and any intermediates) and type its password. HTTPS is then on the **HTTPS Port** on every interface, for the same networks as plain HTTP. Left empty (Automatic), that's two past the server's port (7864 by default; 7863 is Compute's): `https://<host>:7864/mcp`. If Compute is on that port, or moves there later, automatic HTTPS takes the next free one; Status shows which. A port you type stays put, and Compute's Port field won't take it. With the Tailscale certificate the HTTPS Port shows 443, which can't be changed, and Compute can't use 443 then. If the HTTPS port is taken, Status says by what, with **Try Again** beside it. The certificate must name the host clients use; Settings shows its name, expiry and SHA-256 fingerprint. The file and its password are kept in your Keychain. **Remove** forgets them.
+
+To make a certificate (with mkcert, OpenSSL, your company's CA or `tailscale cert`), have each agent trust it, and fix what Status reports, see [Certificates for HTTPS](docs/certificates.md).
 
 Settings ▸ Agents ▸ Encryption ▸ Status says where HTTPS is listening, or why it isn't. **Connect an Agent** then offers the `https://` addresses. The token rules don't change.
 

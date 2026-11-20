@@ -50,6 +50,7 @@ Start with the [user guide](docs/README.md).
 - [Models and LoRAs](docs/models-and-loras.md): downloading, importing, Make 8-bit Copy.
 - [Settings](docs/settings.md): models folder, output folder and performance.
 - [Atelier for agents (MCP)](MCP.md)
+- [Certificates for HTTPS](docs/certificates.md): serving agents on other devices safely, with a Tailscale certificate or one you make.
 
 ## License
 

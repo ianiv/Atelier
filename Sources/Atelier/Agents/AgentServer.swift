@@ -805,6 +805,7 @@ struct AgentSettingsView: View {
           Text("Access")
           Text(accessNote)
         }
+        Link("Before You Open the Server to Your Network", destination: Self.networkSafetyGuide)
         Toggle(isOn: $server.requireToken) {
           Text("Require Token")
           Text("Agents on other devices send this token. Agents on this Mac never need it.")
@@ -952,6 +953,11 @@ struct AgentSettingsView: View {
   /// Where the tailnet's DNS settings are, with MagicDNS and HTTPS Certificates.
   private static let tailnetDNSSettings = URL(string: "https://login.tailscale.com/admin/dns")!
 
+  /// The user guide's pages on GitHub: who should open the server to the network, and making and
+  /// trusting a certificate for HTTPS.
+  private static let networkSafetyGuide = URL(string: "https://github.com/ianiv/Atelier/blob/main/MCP.md#before-you-turn-on-local-network")!
+  private static let certificateGuide = URL(string: "https://github.com/ianiv/Atelier/blob/main/docs/certificates.md")!
+
   /// Settings → Agents → Encryption: HTTPS for other devices, and its certificate.
   @ViewBuilder private func encryptionSection(network: Bool) -> some View {
     @Bindable var server = server
@@ -1030,6 +1036,7 @@ struct AgentSettingsView: View {
       }
       Link("Turn On HTTPS Certificates for Your Tailnet", destination: Self.tailnetDNSSettings)
         .disabled(server.encryption != .tailscale)
+      Link("How to Make a Certificate", destination: Self.certificateGuide)
     } header: {
       Text("Encryption")
     } footer: {
@@ -1052,13 +1059,21 @@ struct AgentSettingsView: View {
     }
   }
 
+  /// Says which protection is missing: the token keeps others out, HTTPS keeps the token secret.
   private var accessNote: String {
-    guard server.activeAccess == .localNetwork else { return "Only apps on this Mac can connect." }
-    let shared =
-      server.requireToken
-      ? "Anyone on your network with the token can generate and read or change the Create screen."
-      : "Anyone on your network can generate and read or change the Create screen: no token is asked for."
-    return shared + (server.usesHTTPS ? " Traffic from other devices is encrypted (HTTPS)." : " Traffic isn't encrypted: turn on HTTPS below, or use Tailscale.")
+    guard server.activeAccess == .localNetwork else {
+      return "Only apps on this Mac can connect. Use Local network only on a network you trust; on any other, turn on HTTPS and Require Token too."
+    }
+    switch (server.requireToken, server.usesHTTPS) {
+    case (true, true):
+      return "Anyone on your network with the token can generate and read or change the Create screen. Traffic from other devices is encrypted (HTTPS)."
+    case (true, false):
+      return "Not encrypted: anyone on your network can read the token and images, then use the token. Use this only on a network you trust, or turn on HTTPS below."
+    case (false, true):
+      return "No token: anyone on your network can generate and read or change the Create screen. Use this only on a network you trust, or turn on Require Token."
+    case (false, false):
+      return "No token and not encrypted: anyone on your network can use the server and see its images. Use this only on a network you trust, or turn on Require Token and HTTPS."
+    }
   }
 
   private var tokenText: String {
