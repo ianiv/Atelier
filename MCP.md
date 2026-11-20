@@ -75,7 +75,7 @@ Anyone who can reach the server can do what an agent does: generate with your mo
 
 The safest setting is **This Mac only**. On a network you don't fully trust, use [HTTPS](#https) (a Tailscale certificate or an imported one) and the token, or don't turn on Local network. Turn it off when you're not using it from another device, and click **Regenerate** if the token may have leaked.
 
-Atelier is free software provided without any warranty (GPL-3.0, sections 15 and 16, in [LICENSE](LICENSE)). You're responsible for how you expose it on your network. If you're not comfortable with that, leave Access on This Mac only.
+**Atelier is free software provided without any warranty** (GPL-3.0, sections 15 and 16, in [LICENSE](LICENSE)). You're responsible for how you expose it on your network. If you're not comfortable with that, leave Access on This Mac only.
 
 ### From another device
 
