@@ -885,9 +885,7 @@ struct AgentSettingsView: View {
           .foregroundStyle(.secondary)
       }
     }
-    .formStyle(.grouped)
-    .frame(width: 600)
-    .fixedSize(horizontal: false, vertical: true)
+    .settingsForm()
     .onAppear {
       portText = String(server.port)
       httpsPortText = server.explicitHTTPSPort.map(String.init) ?? ""
