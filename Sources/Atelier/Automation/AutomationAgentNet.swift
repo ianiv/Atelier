@@ -4,7 +4,7 @@ import Foundation
 /// Settings kept in memory only, for a check's own server. A scratch suite would do, but removing
 /// it still leaves an empty plist in ~/Library/Preferences: cfprefsd writes the emptied domain out
 /// when the app quits, after any attempt to delete the file.
-private final nonisolated class MemoryDefaults: UserDefaults, @unchecked Sendable {
+final nonisolated class MemoryDefaults: UserDefaults, @unchecked Sendable {
   private let lock = NSLock()
   private nonisolated(unsafe) var values: [String: Any] = [:]
 
@@ -23,6 +23,52 @@ private final nonisolated class MemoryDefaults: UserDefaults, @unchecked Sendabl
   override func string(forKey defaultName: String) -> String? { object(forKey: defaultName) as? String }
 }
 
+/// A plain BSD socket listening on a port, standing in for another app that holds it: on 127.0.0.1,
+/// or on every interface (IPv6 with IPv4 mapped, as the servers' wildcard listeners are). No
+/// endpoint reuse, as most apps have none.
+final nonisolated class AutomationPortHolder {
+  private var fd: Int32
+
+  init?(port: Int, loopback: Bool) {
+    fd = socket(loopback ? AF_INET : AF_INET6, SOCK_STREAM, 0)
+    guard fd >= 0 else { return nil }
+    let result: Int32
+    if loopback {
+      var address = sockaddr_in()
+      address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+      address.sin_family = sa_family_t(AF_INET)
+      address.sin_addr.s_addr = inet_addr("127.0.0.1")
+      address.sin_port = UInt16(port).bigEndian
+      result = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+      }
+    } else {
+      var off: Int32 = 0
+      setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &off, socklen_t(MemoryLayout<Int32>.size))
+      var address = sockaddr_in6()
+      address.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
+      address.sin6_family = sa_family_t(AF_INET6)
+      address.sin6_addr = in6addr_any
+      address.sin6_port = UInt16(port).bigEndian
+      result = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in6>.size)) }
+      }
+    }
+    guard result == 0, listen(fd, 1) == 0 else {
+      Darwin.close(fd)
+      return nil
+    }
+  }
+
+  func close() {
+    guard fd >= 0 else { return }
+    Darwin.close(fd)
+    fd = -1
+  }
+
+  deinit { close() }
+}
+
 extension Automation {
   /// The MCP server on the local network, as PASS/FAIL lines: a second server of its own (settings
   /// and token in memory, a spare port), so the user's server, settings and Keychain are left
@@ -37,7 +83,10 @@ extension Automation {
   /// page (401, 200, 200), plain HTTP to it and the network address on the plain port refused,
   /// 127.0.0.1 still 200, a client that doesn't trust the certificate refused; Tailscale's
   /// certificate without a signed-in node (an error, this Mac still 200); and This Mac only (the
-  /// network address refused). Needs no model and changes nothing in the project, the user's
+  /// network address refused). Then ports: a port held by a socket of its own names Atelier in
+  /// Status with Try Again on, and Try Again listens once it's free, for the plain port and an
+  /// HTTPS Port; a Compute server of its own taking the automatic HTTPS port moves HTTPS, and each
+  /// field refuses the other's port. Needs no model and changes nothing in the project, the user's
   /// settings or Keychain.
   ///
   ///   Atelier --agent-net-check --project NAME [--quit]
@@ -55,8 +104,12 @@ extension Automation {
         return
       }
       var server: AgentServer?
+      var compute: RemoteServer?
+      let computeRoot = FileManager.default.temporaryDirectory.appending(path: "atelier-agent-net-\(UUID())", directoryHint: .isDirectory)
       @MainActor func finish() {
         server?.isEnabled = false
+        compute?.isEnabled = false
+        try? FileManager.default.removeItem(at: computeRoot)
         print(failures == 0 ? "agent net check: all passed" : "agent net check: \(failures) failed")
         fflush(stdout)
         if args.contains("--quit") { AppLifecycle.quit() }
@@ -245,6 +298,81 @@ extension Automation {
       check(
         shut.status == 0 && loopback.status == 200,
         "This Mac only: \(lan) refused, 127.0.0.1 200 (got \(shut.status), \(loopback.status)\(started.listenError.map { ", \($0)" } ?? ""), listening \(started.isListening))")
+
+      @MainActor func wait(_ seconds: Double = 15, until done: () -> Bool) async {
+        let deadline = Date().addingTimeInterval(seconds)
+        while !done(), Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
+      }
+      // A port another app holds (a socket of this process's own, so Atelier is named).
+      let busy = Int.random(in: 49000...52000)
+      if let holder = AutomationPortHolder(port: busy, loopback: true) {
+        check(started.choosePort(busy), "the Port field takes a free port \(busy)")
+        await wait { started.isListening || started.listenError != nil }
+        check(
+          !started.isListening && started.listenError?.contains("Atelier") == true && started.listenPortError,
+          "port \(busy) held elsewhere: \(started.listenError ?? "no error"), Try Again \(started.listenPortError ? "on" : "off")")
+        holder.close()
+        started.retryListening()
+        await wait { started.isListening || started.listenError != nil }
+        let freed = await post("127.0.0.1", list, port: busy)
+        check(started.isListening && !started.listenPortError && freed.status == 200, "Try Again once it's free: listening on \(busy) (\(started.listenError ?? "got \(freed.status)"))")
+      } else {
+        check(false, "held port \(busy) for the check")
+      }
+
+      // The same for an HTTPS Port.
+      started.access = .localNetwork
+      started.encryption = .certificate
+      let busyHTTPS = busy + 10
+      if let holder = AutomationPortHolder(port: busyHTTPS, loopback: false) {
+        check(started.chooseHTTPSPort(busyHTTPS), "the HTTPS Port field takes \(busyHTTPS)")
+        await wait { started.httpsEndpoint != nil || started.httpsError != nil }
+        check(
+          started.httpsEndpoint == nil && started.httpsError?.contains("Atelier") == true && started.httpsPortError,
+          "HTTPS port \(busyHTTPS) held elsewhere: \(started.httpsError ?? "no error"), Try Again \(started.httpsPortError ? "on" : "off")")
+        holder.close()
+        started.retryHTTPS()
+        await wait { started.httpsEndpoint != nil || started.httpsError != nil }
+        let secure = await post(lan, list, token: started.token, scheme: "https", port: busyHTTPS, session: trusting)
+        check(
+          started.httpsEndpoint != nil && !started.httpsPortError && secure.status == 200,
+          "HTTPS Try Again once it's free: listening on \(busyHTTPS) (\(started.httpsError ?? "got \(secure.status)"))")
+      } else {
+        check(false, "held port \(busyHTTPS) for the check")
+      }
+      check(!started.chooseHTTPSPort(busy) && started.httpsPortRefusal == PortClaims.message(port: busy, of: .mcp), "the HTTPS Port field refuses the server's own port (\(started.httpsPortRefusal ?? "taken"))")
+
+      // Automatic HTTPS moves off Compute's port when Compute takes it.
+      check(started.chooseHTTPSPort(nil), "HTTPS Port back to Automatic")
+      await wait { started.httpsEndpoint != nil || started.httpsError != nil }
+      let automatic = started.httpsPort ?? 0
+      check(started.httpsEndpoint != nil && automatic == busy + 2, "automatic HTTPS on \(automatic), two past \(busy)")
+      var options = RemoteServer.Options()
+      options.store = MemorySecretStore()
+      options.root = computeRoot
+      options.isApp = false
+      options.loopbackOnly = true
+      options.filter = .any
+      options.port = UInt16(automatic)
+      let computeServer = RemoteServer(create: model, library: nil, options: options)
+      compute = computeServer
+      computeServer.isEnabled = true
+      await computeServer.settled()
+      await wait { started.httpsPort != automatic && (started.httpsEndpoint != nil || started.httpsError != nil) }
+      let moved = started.httpsPort ?? 0
+      let movedCall = await post(lan, list, token: started.token, scheme: "https", port: moved, session: trusting)
+      check(
+        computeServer.isListening && Int(computeServer.boundPort) == automatic && moved != automatic && movedCall.status == 200,
+        "Compute on \(automatic): HTTPS moved to \(moved) (Compute \(computeServer.listenError ?? "listening"), HTTPS \(started.httpsError ?? "got \(movedCall.status)"))")
+      check(
+        !computeServer.choosePort(UInt16(busy)) && computeServer.portRefusal == PortClaims.message(port: busy, of: .mcp),
+        "Compute's Port field refuses the MCP server's port (\(computeServer.portRefusal ?? "taken"))")
+      check(
+        !started.choosePort(automatic) && started.portRefusal == PortClaims.message(port: automatic, of: .compute),
+        "the MCP Port field refuses Compute's port (\(started.portRefusal ?? "taken"))")
+      check(!started.chooseHTTPSPort(automatic), "the HTTPS Port field refuses Compute's port too")
+      computeServer.isEnabled = false
+      await computeServer.settled()
       finish()
     }
   }

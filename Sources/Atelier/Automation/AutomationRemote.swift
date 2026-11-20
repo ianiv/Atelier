@@ -765,6 +765,23 @@ extension Automation {
           }
         }
       }
+
+      // A port another app holds (a socket of this process's own, so Atelier is named), then Try
+      // Again once it's free.
+      let busy = Int.random(in: 52000...56000)
+      if let holder = AutomationPortHolder(port: busy, loopback: false) {
+        check(server.choosePort(UInt16(busy)), "the Port field takes a free port \(busy)")
+        await server.settled()
+        check(
+          !server.isListening && server.listenError?.contains("Atelier") == true && server.listenPortError,
+          "port \(busy) held elsewhere: \(server.listenError ?? "no error"), Try Again \(server.listenPortError ? "on" : "off")")
+        holder.close()
+        server.retryListening()
+        await server.settled()
+        check(server.isListening && Int(server.boundPort) == busy && !server.listenPortError, "Try Again once it's free: listening on \(server.boundPort) (\(server.listenError ?? "no error"))")
+      } else {
+        check(false, "held port \(busy) for the check")
+      }
       server.isEnabled = false
       await server.settled()
       finish()
@@ -790,8 +807,9 @@ extension Automation {
 
   /// Real tailnet connections on this one Mac, with no real sign-in: Tailscale's test control server
   /// stands in for theirs, and two nodes in this process play server and client. Pairing and a real
-  /// image go through the embedded nodes, then the account limit. Needs
-  /// `Scripts/build-tailscale.sh --with-test-control`.
+  /// image go through the embedded nodes, then the account limit, then Compute at 443 while an MCP
+  /// server of its own has Tailscale HTTPS (refused by the Port field and at start, with Try
+  /// Again on). Needs `Scripts/build-tailscale.sh --with-test-control`.
   ///
   ///   Atelier --remote-tailnet-check [--model M] [--quit]
   static func remoteTailnetCheck(_ model: CreateModel, library: ModelLibrary) {
@@ -937,6 +955,33 @@ extension Automation {
       await clientNode.signOut()
       let afterSignOut = await backend.client?.isReachable() ?? false
       check(!afterSignOut && clientNode.state == .signedOut, "signing out ends it")
+
+      // Compute can't have 443 while the MCP server's HTTPS serves the tailnet there: the MCP server
+      // is a check's own, its settings and keys in memory.
+      guard let defaults = MemoryDefaults(suiteName: nil), let presets = model.presets else {
+        check(false, "a scratch MCP server")
+        return finish()
+      }
+      defaults.set(true, forKey: "agentServer.enabled")
+      defaults.set(Int.random(in: 41000...48000), forKey: "agentServer.port")
+      defaults.set(AgentAccess.localNetwork.rawValue, forKey: "agentServer.access")
+      defaults.set(AgentEncryption.tailscale.rawValue, forKey: "agentServer.encryption")
+      let agents = AgentServer(create: model, presets: presets, defaults: defaults, secrets: MemorySecretStore(), commandLine: false)
+      _ = await wait(until: { agents.isListening || agents.listenError != nil }, seconds: 10)
+      let tailnetHTTPS = PortClaims.message(port: 443, of: .mcpHTTPS)
+      check(!server.choosePort(443) && server.portRefusal == tailnetHTTPS && server.isListening, "Compute's Port field refuses 443: \(server.portRefusal ?? "taken")")
+      // Turned on later at 443 (set while it was off): the clash shows in Status.
+      server.isEnabled = false
+      await server.settled()
+      server.port = 443
+      server.isEnabled = true
+      await server.settled()
+      check(
+        !server.isListening && server.listenError == tailnetHTTPS && server.listenPortError,
+        "Compute turned on at 443: \(server.listenError ?? "no error"), Try Again \(server.listenPortError ? "on" : "off")")
+      agents.isEnabled = false
+      server.isEnabled = false
+      await server.settled()
       finish()
     }
   }

@@ -11,9 +11,10 @@ import UniformTypeIdentifiers
 /// With Access set to Local network it also answers other devices on the local network or
 /// tailnet (`AgentAccess.networkFilter`), which send a bearer token unless Require Token is off
 /// and can't pass or get file paths (`AgentPathGuard`). In plain HTTP, unless Encryption picks a
-/// certificate: then the port answers this Mac only and other devices use HTTPS, on the next port
-/// with an imported certificate, or at the embedded Tailscale node's name with Tailscale's
-/// (`AgentEncryption`).
+/// certificate: then the port answers this Mac only and other devices use HTTPS, with an imported
+/// certificate on the HTTPS Port (by default two past the server's), or at the embedded Tailscale
+/// node's name with Tailscale's (`AgentEncryption`). Its ports are checked against Compute's
+/// (`PortClaims`), which the operating system wouldn't catch.
 ///
 /// Requests are JSON-RPC over POST. A `tools/call` whose client accepts an event stream gets one,
 /// with progress notifications while it generates; anything else gets a plain JSON response.
@@ -28,6 +29,7 @@ final class AgentServer {
   private static let accessKey = "agentServer.access"
   private static let requireTokenKey = "agentServer.requireToken"
   private static let encryptionKey = "agentServer.encryption"
+  private static let httpsPortKey = "agentServer.httpsPort"
 
   var isEnabled: Bool {
     didSet {
@@ -62,6 +64,16 @@ final class AgentServer {
     }
   }
 
+  /// Settings → Agents → Encryption → HTTPS Port, for an imported certificate: nil is Automatic
+  /// (`PortClaims.automaticHTTPSPort`). Set through `chooseHTTPSPort`, which refuses a clash.
+  private(set) var explicitHTTPSPort: Int? {
+    didSet {
+      guard explicitHTTPSPort != oldValue else { return }
+      if let explicitHTTPSPort { defaults.set(explicitHTTPSPort, forKey: Self.httpsPortKey) } else { defaults.removeObject(forKey: Self.httpsPortKey) }
+      if encryption == .certificate { restartHTTPS() }
+    }
+  }
+
   /// Whether other devices must send the token. Checked per request, so changing it needs no
   /// restart.
   var requireToken: Bool {
@@ -82,6 +94,10 @@ final class AgentServer {
 
   /// Why the server isn't listening although it's on.
   private(set) var listenError: String?
+  /// `listenError` is about the port (in use, not allowed, another server's): Try Again is on.
+  private(set) var listenPortError = false
+  /// Why the Port field didn't take the port typed, which is kept as it was.
+  private(set) var portRefusal: String?
   private(set) var isListening = false
 
   /// The imported certificate, read from the Keychain the first time it's needed.
@@ -95,6 +111,10 @@ final class AgentServer {
   private(set) var httpsEndpoint: String?
   /// Why HTTPS isn't listening although Encryption asks for it.
   private(set) var httpsError: String?
+  /// `httpsError` is about the port: Try Again is on.
+  private(set) var httpsPortError = false
+  /// Why the HTTPS Port field didn't take the port typed.
+  private(set) var httpsPortRefusal: String?
   /// Fetching Tailscale's certificate, which the first time can take a minute.
   private(set) var isFetchingCertificate = false
   /// Why the last daily renewal of Tailscale's certificate failed; the current one keeps serving.
@@ -128,6 +148,11 @@ final class AgentServer {
   private var tailnetWasRunning = false
   private var tailnetLastName: String?
   @ObservationIgnored private var tailnetObserver: UUID?
+  /// The ports Atelier's servers hold, shared with Compute's.
+  private let ports: PortRegistry
+  @ObservationIgnored private var portsObserver: UUID?
+  /// Compute's port last seen, for automatic HTTPS to move off it.
+  @ObservationIgnored private var computePortSeen: Int?
 
   private var server: LoopbackHTTPServer?
   /// The HTTPS listener: on every interface (imported certificate), or the tailnet's bridge.
@@ -148,8 +173,13 @@ final class AgentServer {
   var endpoint: String { AgentAuth.endpoint(host: "127.0.0.1", port: activePort) }
   /// Whether a client on another device has to send the token now.
   var networkNeedsToken: Bool { activeAccess == .localNetwork && requireToken }
-  /// The local network's HTTPS port with an imported certificate, kept off Compute's.
-  var httpsPort: Int? { AgentAuth.httpsPort(for: activePort, avoiding: [RemoteServer.configuredPort]) }
+  /// What HTTPS is set to: the tailnet's 443 with Tailscale's certificate, else the HTTPS Port.
+  private var httpsSetting: PortClaims.HTTPSPort {
+    encryption == .tailscale ? .tailnet : explicitHTTPSPort.map { .explicit($0) } ?? .automatic
+  }
+  /// The local network's HTTPS port with an imported certificate: the HTTPS Port, or by default
+  /// two past the server's, kept off Compute's while that's on.
+  var httpsPort: Int? { ports.claims.httpsPort(explicitHTTPSPort.map { .explicit($0) } ?? .automatic, plainPort: activePort) }
   /// Whether other devices get HTTPS (and the server's own port answers this Mac only).
   var usesHTTPS: Bool { activeAccess == .localNetwork && encryption != .none }
   /// The certificate Encryption picks.
@@ -203,6 +233,8 @@ final class AgentServer {
     certificates = AgentCertificateStore(secrets: secrets)
     certificateOverride = certificate
     tailnet = create.tailnet
+    ports = create.ports
+    explicitHTTPSPort = defaults.object(forKey: Self.httpsPortKey) as? Int
     encryption = defaults.string(forKey: Self.encryptionKey).flatMap(AgentEncryption.init(rawValue:)) ?? .none
     isEnabled = defaults.bool(forKey: Self.enabledKey)
     port = defaults.object(forKey: Self.portKey) as? Int ?? Self.defaultPort
@@ -221,6 +253,8 @@ final class AgentServer {
     tailnetWasRunning = tailnet?.isSignedIn ?? false
     tailnetLastName = tailnet?.status.dnsName
     tailnetObserver = tailnet?.observe { [weak self] in self?.tailnetChanged() }
+    computePortSeen = ports.claims.compute
+    portsObserver = ports.observe { [weak self] in self?.portsChanged() }
     restart()
   }
 
@@ -295,8 +329,61 @@ final class AgentServer {
 
   isolated deinit {
     if let tailnetObserver { tailnet?.removeObserver(tailnetObserver) }
+    if let portsObserver { ports.removeObserver(portsObserver) }
     stopHTTPS()
     server?.stop()
+    ports.update { $0.claimMCP(isOn: false, port: 0) }
+  }
+
+  /// Compute took another port or turned on or off: automatic HTTPS moves to stay off it, as it
+  /// would have started there. An explicit port stays (Compute's field refuses it).
+  private func portsChanged() {
+    let compute = ports.claims.compute
+    guard compute != computePortSeen else { return }
+    computePortSeen = compute
+    guard isEnabled || forcedOn, usesHTTPS, encryption == .certificate, explicitHTTPSPort == nil, ports.claims.mcpHTTPS != httpsPort else { return }
+    restartHTTPS()
+  }
+
+  // MARK: - Ports
+
+  /// The Port field: takes `newPort` unless another of Atelier's servers holds it (or it's this
+  /// server's own HTTPS Port), in which case the port stays and `portRefusal` says why.
+  @discardableResult func choosePort(_ newPort: Int) -> Bool {
+    var refusal = ports.claims.conflict(port: newPort, for: .mcp)
+    if refusal == nil, encryption == .certificate, explicitHTTPSPort == newPort {
+      refusal = PortClaims.message(port: newPort, of: .mcpHTTPS)
+    }
+    portRefusal = refusal
+    guard refusal == nil else { return false }
+    port = newPort
+    return true
+  }
+
+  /// The HTTPS Port field: nil for Automatic. Refuses a port Compute or the server's own plain port
+  /// holds, as `choosePort` does.
+  @discardableResult func chooseHTTPSPort(_ newPort: Int?) -> Bool {
+    if let newPort {
+      var refusal = ports.claims.conflict(port: newPort, for: .mcpHTTPS)
+      if refusal == nil, newPort == activePort { refusal = PortClaims.message(port: newPort, of: .mcp) }
+      httpsPortRefusal = refusal
+      guard refusal == nil else { return false }
+    }
+    httpsPortRefusal = nil
+    explicitHTTPSPort = newPort
+    return true
+  }
+
+  /// Try Again in the server's Status, once whatever held the port has let it go.
+  func retryListening() {
+    portRefusal = nil
+    startPlain()
+  }
+
+  /// Try Again in Encryption's Status.
+  func retryHTTPS() {
+    httpsPortRefusal = nil
+    restartHTTPS()
   }
 
   /// The node signed in or out, or its name came or changed: HTTPS on the tailnet follows it,
@@ -316,15 +403,23 @@ final class AgentServer {
   // MARK: - Listening
 
   private func restart() {
+    stopHTTPS()
+    syncGate()
+    startPlain()
+    if isEnabled || forcedOn, usesHTTPS { restartHTTPS() }
+  }
+
+  /// Replaces the plain listener, leaving HTTPS alone.
+  private func startPlain() {
     server?.stop()
     server = nil
     isListening = false
     listenError = nil
-    stopHTTPS()
-    syncGate()
+    listenPortError = false
+    ports.update { $0.claimMCP(isOn: false, port: activePort) }
     guard isEnabled || forcedOn else { return }
     guard let port = UInt16(exactly: activePort), port > 0 else {
-      listenError = "Pick a port from 1 to 65535."
+      listenError = PortClaims.invalidMessage
       return
     }
     let network = activeAccess == .localNetwork
@@ -332,24 +427,33 @@ final class AgentServer {
       if requireToken { ensureToken() }
       refreshEndpoints()
     }
+    // Compute already has it (turned on while this server was off): the system would let both
+    // listen, so it's refused here.
+    if let clash = ports.claims.conflict(port: activePort, for: .mcp) {
+      listenError = clash
+      listenPortError = true
+      Log.agents.error("MCP server not started: \(clash, privacy: .public)")
+      return
+    }
+    ports.update { $0.claimMCP(isOn: true, port: activePort) }
     // With HTTPS, other devices never get plain HTTP: the port answers this Mac only.
     let server = makeServer(
       port: port, binding: network && !usesHTTPS ? .all(AgentAccess.networkFilter) : .loopback, tls: nil,
       originPort: activePort)
     self.server = server
-    server.start { [weak self] error in
+    server.start { [weak self] failure in
       Task { @MainActor in
         guard let self, self.server === server else { return }
-        self.isListening = error == nil
-        self.listenError = error
-        if let error {
-          Log.agents.error("MCP server on port \(port, privacy: .public) failed: \(error, privacy: .public)")
+        self.isListening = failure == nil
+        self.listenError = failure?.message
+        self.listenPortError = failure?.isPortError ?? false
+        if let failure {
+          Log.agents.error("MCP server on port \(port, privacy: .public) failed: \(failure.message, privacy: .public)")
         } else {
           Log.agents.info("MCP server listening on \(self.endpoint, privacy: .public)")
         }
       }
     }
-    if usesHTTPS { restartHTTPS() }
   }
 
   /// A listener for this server's requests. `originPort` is the port clients name, which a page's
@@ -380,7 +484,9 @@ final class AgentServer {
     certificateRefresh = nil
     httpsEndpoint = nil
     httpsError = nil
+    httpsPortError = false
     isFetchingCertificate = false
+    ports.update { $0.claimMCPHTTPS(isOn: false, nil, plainPort: 0) }
   }
 
   /// Replaces the HTTPS listener (its certificate is fixed when it starts), leaving this Mac's
@@ -389,6 +495,15 @@ final class AgentServer {
     stopHTTPS()
     guard isEnabled || forcedOn, usesHTTPS else { return }
     refreshEndpoints()
+    // Claimed from here on, whether or not there's a certificate yet, so Compute can't take it.
+    let setting = httpsSetting
+    if let port = ports.claims.httpsPort(setting, plainPort: activePort), let clash = ports.claims.conflict(port: port, for: .mcpHTTPS) {
+      httpsError = clash
+      httpsPortError = true
+      Log.agents.error("MCP HTTPS not started: \(clash, privacy: .public)")
+      return
+    }
+    ports.update { $0.claimMCPHTTPS(isOn: true, setting, plainPort: activePort) }
     switch encryption {
     case .none:
       return
@@ -473,6 +588,7 @@ final class AgentServer {
         self.servesTailnet = true
       } catch {
         self.httpsError = error.localizedDescription
+        self.httpsPortError = true
         self.httpsEndpoint = nil
       }
     }
@@ -480,13 +596,14 @@ final class AgentServer {
 
   private func startSecure(_ secure: LoopbackHTTPServer, endpoint: String, onReady: (@MainActor @Sendable () -> Void)? = nil) {
     secureServer = secure
-    secure.start { [weak self] error in
+    secure.start { [weak self] failure in
       Task { @MainActor in
         guard let self, self.secureServer === secure else { return }
-        self.httpsError = error
-        self.httpsEndpoint = error == nil ? endpoint : nil
-        if let error {
-          Log.agents.error("MCP HTTPS failed: \(error, privacy: .public)")
+        self.httpsError = failure?.message
+        self.httpsPortError = failure?.isPortError ?? false
+        self.httpsEndpoint = failure == nil ? endpoint : nil
+        if let failure {
+          Log.agents.error("MCP HTTPS failed: \(failure.message, privacy: .public)")
         } else {
           onReady?()
           Log.agents.info("MCP server HTTPS at \(endpoint, privacy: .public)")
@@ -658,6 +775,7 @@ final class AgentServer {
 struct AgentSettingsView: View {
   @Environment(AgentServer.self) private var server
   @State private var portText = ""
+  @State private var httpsPortText = ""
   @State private var showsToken = false
   @AppStorage("agentClient") private var client = AgentClient.claudeCode
   /// The address the setup below uses: this Mac's, or one of its network addresses.
@@ -708,16 +826,25 @@ struct AgentSettingsView: View {
             .onSubmit { applyPort() }
         }
         LabeledContent("Status") {
-          if !server.isEnabled, !server.isListening {
-            Text("Off").foregroundStyle(.secondary)
-          } else if let error = server.listenError {
-            Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
-          } else if server.isListening {
-            Text(server.tools.activity ?? "Listening at \(server.endpoint)")
-              .foregroundStyle(.secondary)
-              .textSelection(.enabled)
-          } else {
-            Text("Starting…").foregroundStyle(.secondary)
+          HStack {
+            VStack(alignment: .trailing) {
+              if !server.isEnabled, !server.isListening {
+                Text("Off").foregroundStyle(.secondary)
+              } else if let error = server.listenError {
+                Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
+              } else if server.isListening {
+                Text(server.tools.activity ?? "Listening at \(server.endpoint)")
+                  .foregroundStyle(.secondary)
+                  .textSelection(.enabled)
+              } else {
+                Text("Starting…").foregroundStyle(.secondary)
+              }
+              if let refusal = server.portRefusal {
+                Label(refusal, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+              }
+            }
+            Button("Try Again") { server.retryListening() }
+              .disabled(!server.listenPortError)
           }
         }
         if let last = server.tools.lastResult {
@@ -758,6 +885,7 @@ struct AgentSettingsView: View {
     .fixedSize(horizontal: false, vertical: true)
     .onAppear {
       portText = String(server.port)
+      httpsPortText = server.explicitHTTPSPort.map(String.init) ?? ""
       server.refreshEndpoints()
       if server.activeAccess == .localNetwork, server.requireToken { server.ensureToken() }
       if address.isEmpty { address = server.endpoint }
@@ -851,22 +979,47 @@ struct AgentSettingsView: View {
           .lineLimit(2)
           .truncationMode(.middle)
       }
+      LabeledContent {
+        if server.encryption == .tailscale {
+          // Fixed: clients on the tailnet name no port.
+          TextField("HTTPS Port", text: .constant(String(AgentAuth.tailnetHTTPSPort)))
+            .labelsHidden()
+            .frame(width: 80)
+            .disabled(true)
+        } else {
+          TextField("HTTPS Port", text: $httpsPortText, prompt: Text("Automatic"))
+            .labelsHidden()
+            .frame(width: 80)
+            .onSubmit { applyHTTPSPort() }
+            .disabled(server.encryption != .certificate)
+        }
+      } label: {
+        Text("HTTPS Port")
+        Text("For an imported certificate. Leave empty for automatic: two past the server's port, kept off Compute's.")
+      }
       LabeledContent("Status") {
-        if !server.usesHTTPS || (!server.isEnabled && !server.isListening) {
-          Text("Off").foregroundStyle(.secondary)
-        } else if let error = server.httpsError {
-          Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
-        } else if server.isFetchingCertificate {
-          Text("Getting the certificate from Tailscale…").foregroundStyle(.secondary)
-        } else if let endpoint = server.httpsEndpoint {
+        HStack {
           VStack(alignment: .trailing) {
-            Text("Listening at \(endpoint)").foregroundStyle(.secondary).textSelection(.enabled)
-            if let warning = server.certificateWarning {
-              Label(warning, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+            if !server.usesHTTPS || (!server.isEnabled && !server.isListening) {
+              Text("Off").foregroundStyle(.secondary)
+            } else if let error = server.httpsError {
+              Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
+            } else if server.isFetchingCertificate {
+              Text("Getting the certificate from Tailscale…").foregroundStyle(.secondary)
+            } else if let endpoint = server.httpsEndpoint {
+              Text("Listening at \(endpoint)").foregroundStyle(.secondary).textSelection(.enabled)
+              if let warning = server.certificateWarning {
+                Label(warning, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+              }
+            } else {
+              Text("Starting…").foregroundStyle(.secondary)
+            }
+            if let refusal = server.httpsPortRefusal {
+              Label(refusal, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
             }
           }
-        } else {
-          Text("Starting…").foregroundStyle(.secondary)
+          Button("Try Again") { server.retryHTTPS() }
+            .disabled(!server.httpsPortError)
         }
       }
       Link("Turn On HTTPS Certificates for Your Tailnet", destination: Self.tailnetDNSSettings)
@@ -874,7 +1027,7 @@ struct AgentSettingsView: View {
     } header: {
       Text("Encryption")
     } footer: {
-      Text("With HTTPS, other devices can't use plain HTTP: port \(String(server.port)) answers this Mac only. An imported certificate serves the local network on port \(server.httpsPort.map(String.init) ?? "—") (two past the server's, kept off Compute's). Tailscale's certificate is for Atelier's own tailnet name and needs MagicDNS and HTTPS Certificates turned on for your tailnet; it comes from Let's Encrypt, which lists every certificate's name in public Certificate Transparency logs, so the name becomes public.")
+      Text("With HTTPS, other devices can't use plain HTTP: port \(String(server.port)) answers this Mac only. An imported certificate serves the local network on port \(server.httpsPort.map(String.init) ?? "—") (the HTTPS Port). Tailscale's certificate is for Atelier's own tailnet name and needs MagicDNS and HTTPS Certificates turned on for your tailnet; it comes from Let's Encrypt, which lists every certificate's name in public Certificate Transparency logs, so the name becomes public.")
         .foregroundStyle(.secondary)
     }
     .disabled(!network)
@@ -922,12 +1075,24 @@ struct AgentSettingsView: View {
     return server.token
   }
 
+  /// A port another of Atelier's servers holds is refused, the field going back to the current one
+  /// and Status saying whose it is.
   private func applyPort() {
-    if let port = Int(portText), (1...65535).contains(port) {
-      server.port = port
-    } else {
-      portText = String(server.port)
+    if let port = Int(portText), PortClaims.validPorts.contains(port) {
+      server.choosePort(port)
     }
+    portText = String(server.port)
+  }
+
+  /// Empty is Automatic.
+  private func applyHTTPSPort() {
+    let text = httpsPortText.trimmingCharacters(in: .whitespaces)
+    if text.isEmpty {
+      server.chooseHTTPSPort(nil)
+    } else if let port = Int(text), PortClaims.validPorts.contains(port) {
+      server.chooseHTTPSPort(port)
+    }
+    httpsPortText = server.explicitHTTPSPort.map(String.init) ?? ""
   }
 }
 #endif

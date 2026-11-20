@@ -14,6 +14,8 @@
 		D70A11000000000000000003 /* DrawThingsImport.swift in Sources */ = {isa = PBXBuildFile; fileRef = D70A11000000000000000004 /* DrawThingsImport.swift */; };
 		D70A11000000000000000001 /* CommunityCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = D70A11000000000000000002 /* CommunityCatalog.swift */; };
 		B7A1F0C2B3D4A59687786206 /* WaitUntilTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A1F0C2B3D4A59687786306 /* WaitUntilTests.swift */; };
+		9D6ACCF08FAB150F1607467F /* PortOwnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68CCF129D54BB1B7BB8A63CC /* PortOwnerTests.swift */; };
+		50252D9E3E3DD6DD513A84ED /* PortClaimsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B60B6A3483E3E6DF8132916 /* PortClaimsTests.swift */; };
 		C7A1F0C2B3D4A59687786206 /* CanvasDropTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A1F0C2B3D4A59687786306 /* CanvasDropTests.swift */; };
 		EB6EC16C5C8D9C4C67D558FA /* CanvasRefineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 267DD52FE466641E172AB19D /* CanvasRefineTests.swift */; };
 		7E5A65000000000000000002 /* Tags.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E5A65000000000000000001 /* Tags.swift */; };
@@ -73,6 +75,8 @@
 		A1B2C3D4E5F6A7B8C9D0E1FB /* SampleData.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1FC /* SampleData.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E1F9 /* FolderAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1FA /* FolderAccess.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E1F7 /* PlatformViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F8 /* PlatformViews.swift */; };
+		BC35127EE448C21DDE1CFF8F /* PortOwner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F91B1CE4586E68926AC00E6 /* PortOwner.swift */; };
+		06037B7F7EBF9F7FDAC1544A /* PortClaims.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5356DFE35B407D904E0270A3 /* PortClaims.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E1F5 /* iPadPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F6 /* iPadPlatform.swift */; };
 		44ADCE6EDF2708A792962F31 /* script_session_query_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1353E7B4836513F26BF2C88 /* script_session_query_generated.swift */; };
 		0548D687CD3EBC13AB0CF7FB /* AutomationRemote.swift in Sources */ = {isa = PBXBuildFile; fileRef = C89F3EE68C4E038C05EEB3D9 /* AutomationRemote.swift */; };
@@ -301,6 +305,8 @@
 		D70A11000000000000000004 /* DrawThingsImport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawThingsImport.swift; sourceTree = "<group>"; };
 		D70A11000000000000000002 /* CommunityCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommunityCatalog.swift; sourceTree = "<group>"; };
 		B7A1F0C2B3D4A59687786306 /* WaitUntilTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaitUntilTests.swift; sourceTree = "<group>"; };
+		68CCF129D54BB1B7BB8A63CC /* PortOwnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortOwnerTests.swift; sourceTree = "<group>"; };
+		0B60B6A3483E3E6DF8132916 /* PortClaimsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortClaimsTests.swift; sourceTree = "<group>"; };
 		C7A1F0C2B3D4A59687786306 /* CanvasDropTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasDropTests.swift; sourceTree = "<group>"; };
 		267DD52FE466641E172AB19D /* CanvasRefineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasRefineTests.swift; sourceTree = "<group>"; };
 		7E5A65000000000000000001 /* Tags.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tags.swift; sourceTree = "<group>"; };
@@ -422,6 +428,8 @@
 		A1B2C3D4E5F6A7B8C9D0E1FC /* SampleData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleData.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E1FA /* FolderAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderAccess.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E1F8 /* PlatformViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformViews.swift; sourceTree = "<group>"; };
+		9F91B1CE4586E68926AC00E6 /* PortOwner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortOwner.swift; sourceTree = "<group>"; };
+		5356DFE35B407D904E0270A3 /* PortClaims.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortClaims.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E1F6 /* iPadPlatform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iPadPlatform.swift; sourceTree = "<group>"; };
 		A3721E6BF065DEBAC3CB0FE9 /* clip_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = clip_generated.swift; sourceTree = "<group>"; };
 		ADE58B9D9E217745C8A73650 /* clip_data_model_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = clip_data_model_generated.swift; sourceTree = "<group>"; };
@@ -641,6 +649,8 @@
 				A7E1F0C2B3D4A5968778695A /* TemporaryFiles.swift */,
 				5A4E1C0D2B3F4A6E8D9C7B01 /* ShareItems.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1F8 /* PlatformViews.swift */,
+				9F91B1CE4586E68926AC00E6 /* PortOwner.swift */,
+				5356DFE35B407D904E0270A3 /* PortClaims.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1F6 /* iPadPlatform.swift */,
 			);
 			path = App;
@@ -954,6 +964,8 @@
 				7B3D9E1F2A4C6B8D0E1F3A52 /* AutomationSamplerTests.swift */,
 				7C1D0E5A9B3F4A2E8D6C1B41 /* ModelsLookupOrderTests.swift */,
 				B7A1F0C2B3D4A59687786306 /* WaitUntilTests.swift */,
+				68CCF129D54BB1B7BB8A63CC /* PortOwnerTests.swift */,
+				0B60B6A3483E3E6DF8132916 /* PortClaimsTests.swift */,
 				C7A1F0C2B3D4A59687786306 /* CanvasDropTests.swift */,
 				267DD52FE466641E172AB19D /* CanvasRefineTests.swift */,
 				7E5A65000000000000000001 /* Tags.swift */,
@@ -1340,6 +1352,8 @@
 				A7E1F0C2B3D4A5968778695B /* TemporaryFiles.swift in Sources */,
 				5A4E1C0D2B3F4A6E8D9C7B02 /* ShareItems.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1F7 /* PlatformViews.swift in Sources */,
+				BC35127EE448C21DDE1CFF8F /* PortOwner.swift in Sources */,
+				06037B7F7EBF9F7FDAC1544A /* PortClaims.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1F5 /* iPadPlatform.swift in Sources */,
 				4862B9A4F2A7A226E9BB6C7C /* SettingsRegistry.swift in Sources */,
 				A1D7E0C1B2F34A5D6E7F8091 /* Moodboard.swift in Sources */,
@@ -1436,6 +1450,8 @@
 				7B3D9E1F2A4C6B8D0E1F3A51 /* AutomationSamplerTests.swift in Sources */,
 				7C1D0E5A9B3F4A2E8D6C1B40 /* ModelsLookupOrderTests.swift in Sources */,
 				B7A1F0C2B3D4A59687786206 /* WaitUntilTests.swift in Sources */,
+				9D6ACCF08FAB150F1607467F /* PortOwnerTests.swift in Sources */,
+				50252D9E3E3DD6DD513A84ED /* PortClaimsTests.swift in Sources */,
 				C7A1F0C2B3D4A59687786206 /* CanvasDropTests.swift in Sources */,
 				EB6EC16C5C8D9C4C67D558FA /* CanvasRefineTests.swift in Sources */,
 				7E5A65000000000000000002 /* Tags.swift in Sources */,

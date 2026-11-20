@@ -42,14 +42,27 @@ struct RemoteSettingsView: View {
         }
         .disabled(!server.isEnabled)
         LabeledContent("Status") {
-          if !server.isEnabled {
-            Text("Off").foregroundStyle(.secondary)
-          } else if let error = server.listenError {
-            Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
-          } else if server.isListening {
-            Text("Listening on port \(String(server.boundPort))").foregroundStyle(.secondary)
-          } else {
-            Text("Starting…").foregroundStyle(.secondary)
+          HStack {
+            VStack(alignment: .trailing) {
+              if !server.isEnabled {
+                Text("Off").foregroundStyle(.secondary)
+              } else if let error = server.listenError {
+                Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
+              } else if server.isListening {
+                Text("Listening on port \(String(server.boundPort))").foregroundStyle(.secondary)
+              } else {
+                Text("Starting…").foregroundStyle(.secondary)
+              }
+              if server.isEnabled, let tailnetError = server.tailnetError {
+                Label(tailnetError, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+              }
+              if let refusal = server.portRefusal {
+                Label(refusal, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+              }
+            }
+            Button("Try Again") { server.retryListening() }
+              .rowButton()
+              .disabled(!server.isEnabled || !server.listenPortError)
           }
         }
         LabeledContent("Tailscale App") {
@@ -158,9 +171,11 @@ struct RemoteSettingsView: View {
     return "Last seen \(date.formatted(.relative(presentation: .named)))"
   }
 
+  /// A port the MCP server holds is refused, the field going back to the current one and Status
+  /// saying whose it is.
   private func applyPort() {
     if let port = UInt16(portText), port > 0 {
-      server.port = port
+      server.choosePort(port)
     }
     portText = String(server.port)
   }
