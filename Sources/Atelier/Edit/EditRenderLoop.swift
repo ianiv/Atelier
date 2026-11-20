@@ -297,6 +297,7 @@ final class EditPaneRenders {
     var look: EditRenderLook
     var image: CGImage
     var serial: Int
+    var tiles: Set<EditRenderer.Tile>
   }
 
   private(set) var overlays: [Overlay] = []
@@ -324,6 +325,17 @@ final class EditPaneRenders {
       overlays = []
       self.overlaid = nil
     }
+    // Strips a long or back-and-forth pan left behind: out of view, so dropped (their tiles can
+    // go up again when they're back).
+    let view = aligned.zoomed!.region
+    func inView(_ overlay: Overlay) -> Bool {
+      guard let region = overlay.target.zoomed?.region else { return false }
+      return region.x < view.x + view.width && view.x < region.x + region.width && region.y < view.y + view.height && view.y < region.y + region.height
+    }
+    if overlays.contains(where: { !inView($0) }) {
+      overlays.removeAll { !inView($0) }
+      overlaid = overlays.isEmpty ? nil : overlaid.map { ($0.scale, $0.look, overlays.reduce(into: Set()) { $0.formUnion($1.tiles) }) }
+    }
     let lane = window
     // Only what the last complete render up doesn't already show.
     let excluding = lane.complete.flatMap { complete in
@@ -336,7 +348,7 @@ final class EditPaneRenders {
         !Task.isCancelled
       else { return }
       EditRenderCounts.serial += 1
-      overlays.append(Overlay(target: EditRenderTarget(source: target.source, zoomed: kept.zoomed), look: look, image: kept.image, serial: EditRenderCounts.serial))
+      overlays.append(Overlay(target: EditRenderTarget(source: target.source, zoomed: kept.zoomed), look: look, image: kept.image, serial: EditRenderCounts.serial, tiles: kept.tiles))
       overlaid = (zoomed.scale, look, (overlaid?.tiles ?? []).union(kept.tiles))
     }
     keptPass = (aligned, task)
