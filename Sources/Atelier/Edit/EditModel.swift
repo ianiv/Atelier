@@ -130,10 +130,10 @@ final class EditModel {
     var kind: Kind
   }
 
-  /// The renders under way, for the panes' busy spinners. A pane's render task begins its lane
-  /// and ends it only when it finishes un-cancelled or has nothing to render: a task cancelled by
-  /// a newer look leaves the lane to the task replacing it, so the spinner doesn't flicker off
-  /// between the two. A pane that goes away ends its lanes (`endRenders(pane:)`).
+  /// The renders under way, for the panes' busy spinners. A pane begins and ends each lane as its
+  /// `EditRenderLoop` turns busy and idle, which stays busy from one render straight to the next,
+  /// so the spinner doesn't flicker off between them. A pane that goes away ends its lanes
+  /// (`endRenders(pane:)`).
   private(set) var pendingRenders: Set<RenderLane> = []
 
   func beginRender(_ lane: RenderLane) {
@@ -147,6 +147,12 @@ final class EditModel {
   func endRenders(pane: UUID) {
     if pendingRenders.contains(where: { $0.pane == pane }) { pendingRenders = pendingRenders.filter { $0.pane != pane } }
   }
+
+  /// A slider of the inspector is being dragged (`EditSlider`). While it is, the panes' renders
+  /// let one of an older value finish and go up before the newest (`EditRenderLoop`); let go,
+  /// and any other change (a toggle, a picker, a typed value), the look is final and a stale
+  /// render stops for it.
+  var isAdjusting = false
 
   /// Any pane is rendering.
   var isRendering: Bool { !pendingRenders.isEmpty }

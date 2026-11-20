@@ -493,6 +493,8 @@ private struct EditPane: View {
     .accessibilityAddTraits(.isImage)
     // Outside the pane's accessibility element, so VoiceOver can find it.
     .overlay(alignment: .topTrailing) { EditRenderingIndicator(pane: paneID, hidden: fitted == nil) }
+    // A slider let go: its last value is final, so a render of an older one stops for it.
+    .onChange(of: edit.isAdjusting) { _, adjusting in if !adjusting { renders.settle() } }
     .onChange(of: renders.fitted.isBusy, initial: true) { _, busy in mark(.fitted, busy) }
     .onChange(of: renders.window.isBusy, initial: true) { _, busy in mark(.window, busy) }
     .onDisappear {
@@ -511,7 +513,7 @@ private struct EditPane: View {
       window: keys.window.flatMap { key in
         key.target.window.map { window in (key, { try await renderer.window(source: image, options: key.look.options, context: context, window: window) }) }
       },
-      settled: true)
+      settled: !edit.isAdjusting)
   }
 
   /// The pane's lanes as the model keeps them, for its spinner.
@@ -592,6 +594,7 @@ private struct EditSliderPane: View {
         { _, key in schedule(key) }
     }
     .overlay(alignment: .topTrailing) { EditRenderingIndicator(pane: paneID, hidden: loop.shown == nil) }
+    .onChange(of: edit.isAdjusting) { _, adjusting in if !adjusting { loop.settle() } }
     .onChange(of: loop.isBusy, initial: true) { _, busy in
       let lane = EditModel.RenderLane(pane: paneID, kind: .slider)
       if busy { edit.beginRender(lane) } else { edit.endRender(lane) }
@@ -604,7 +607,7 @@ private struct EditSliderPane: View {
 
   private func schedule(_ key: EditPaneRenders.Loop.Key) {
     let renderer = edit.renderer, context = edit.context, image = image
-    loop.request(key, settled: true) {
+    loop.request(key, settled: !edit.isAdjusting) {
       try await renderer.preview(source: image, options: key.look.options, context: context, fitting: key.target.width, height: key.target.height)
     }
   }

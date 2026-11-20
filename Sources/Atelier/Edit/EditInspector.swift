@@ -337,10 +337,10 @@ struct EditInspector: View {
   /// `step:` on the slider (macOS draws a tick for each); the model snaps.
   static func slider(_ title: String, _ value: Binding<Double>, _ range: ClosedRange<Double>, step: Double, digits: Int, help: String) -> some View {
     sliderRow(title, help: help) {
-      Slider(
+      EditSlider(
+        title: title,
         value: Binding(get: { min(max(value.wrappedValue, range.lowerBound), range.upperBound) }, set: { value.wrappedValue = EditOptions.snap($0, step: step) }),
-        in: range
-      ) { Text(title) }
+        range: range)
     } value: {
       TextField("", value: value, format: .number.precision(.fractionLength(0...digits)))
         .labelsHidden()
@@ -352,7 +352,7 @@ struct EditInspector: View {
   /// An amount from 0 to 1, shown in whole percents.
   static func percentSlider(_ title: String, _ value: Binding<Double>, help: String) -> some View {
     sliderRow(title, help: help) {
-      Slider(value: Binding(get: { value.wrappedValue }, set: { value.wrappedValue = EditOptions.snap($0, 0...1) }), in: 0...1) { Text(title) }
+      EditSlider(title: title, value: Binding(get: { value.wrappedValue }, set: { value.wrappedValue = EditOptions.snap($0, 0...1) }), range: 0...1)
     } value: {
       Text("\(Int((value.wrappedValue * 100).rounded()))%")
         .monospacedDigit()
@@ -478,6 +478,25 @@ private extension View {
 }
 
 /// Choose History Step…: the current project's images, newest first, to take one as the reference.
+/// The inspector's slider: a `Slider` that says while it's being dragged (`EditModel.isAdjusting`),
+/// so the preview knows when its value is final.
+private struct EditSlider: View {
+  @Environment(EditModel.self) private var edit
+  let title: String
+  @Binding var value: Double
+  let range: ClosedRange<Double>
+  @State private var dragging = false
+
+  var body: some View {
+    Slider(value: $value, in: range) { Text(title) } onEditingChanged: { editing in
+      dragging = editing
+      edit.isAdjusting = editing
+    }
+    // Gone mid-drag (its section disabled, the screen left), it won't say it was let go.
+    .onDisappear { if dragging { edit.isAdjusting = false } }
+  }
+}
+
 private struct EditStepPicker: View {
   @Environment(HistoryStore.self) private var history
   @Environment(\.dismiss) private var dismiss

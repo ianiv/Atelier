@@ -264,6 +264,7 @@
 		ED17ED170000000000000025 /* CreateModel+Edit.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000024 /* CreateModel+Edit.swift */; };
 		ED17ED170000000000000027 /* EditJobTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000026 /* EditJobTests.swift */; };
 		ED17ED170000000000000029 /* EditPipelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000028 /* EditPipelineTests.swift */; };
+		ED17ED170000000000005103 /* EditRenderLoopTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000005102 /* EditRenderLoopTests.swift */; };
 		ED17ED17000000000000002B /* GrainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000002A /* GrainTests.swift */; };
 		ED17ED17000000000000002D /* LUTTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000002C /* LUTTests.swift */; };
 /* End PBXBuildFile section */
@@ -553,6 +554,7 @@
 		ED17ED170000000000000024 /* CreateModel+Edit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CreateModel+Edit.swift"; sourceTree = "<group>"; };
 		ED17ED170000000000000026 /* EditJobTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditJobTests.swift; sourceTree = "<group>"; };
 		ED17ED170000000000000028 /* EditPipelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditPipelineTests.swift; sourceTree = "<group>"; };
+		ED17ED170000000000005102 /* EditRenderLoopTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditRenderLoopTests.swift; sourceTree = "<group>"; };
 		ED17ED17000000000000002A /* GrainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrainTests.swift; sourceTree = "<group>"; };
 		ED17ED17000000000000002C /* LUTTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LUTTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -934,6 +936,7 @@
 			children = (
 				ED17ED170000000000000026 /* EditJobTests.swift */,
 				ED17ED170000000000000028 /* EditPipelineTests.swift */,
+				ED17ED170000000000005102 /* EditRenderLoopTests.swift */,
 				ED17ED17000000000000002A /* GrainTests.swift */,
 				ED17ED17000000000000002C /* LUTTests.swift */,
 				CC3541FFA68BA7C5424778CE /* AutoMaskTests.swift */,
@@ -1439,6 +1442,7 @@
 			files = (
 				ED17ED170000000000000027 /* EditJobTests.swift in Sources */,
 				ED17ED170000000000000029 /* EditPipelineTests.swift in Sources */,
+				ED17ED170000000000005103 /* EditRenderLoopTests.swift in Sources */,
 				ED17ED17000000000000002B /* GrainTests.swift in Sources */,
 				ED17ED17000000000000002D /* LUTTests.swift in Sources */,
 				B7A1F0C2B3D4A59687786200 /* ProjectMappingTests.swift in Sources */,
