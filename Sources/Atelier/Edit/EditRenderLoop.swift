@@ -31,6 +31,9 @@ final class EditRenderLoop<Target: Hashable, Look: Hashable, Output: Sendable> {
 
   /// The last render that finished, and what it was of.
   private(set) var shown: (key: Key, output: Output)?
+  /// The last render that finished, as `shown` is but for a partial result (`showPartial`), which
+  /// is drawn over it: a zoomed view's partial has holes where its tiles are still rendering.
+  private(set) var complete: (key: Key, output: Output)?
   /// What went wrong with the last render, nil once one succeeds.
   private(set) var failure: String?
   /// A render is under way, or waiting to start (`canStart`), for a key that isn't shown yet.
@@ -77,6 +80,18 @@ final class EditRenderLoop<Target: Hashable, Look: Hashable, Output: Sendable> {
     stop()
     startNewest()
   }
+
+  /// Puts up part of the render of `key` on its way (a zoomed view whose kept tiles are in and
+  /// whose others are still rendering), if that's still the one running; the lane stays busy
+  /// until the render finishes. Counted in `partials`, not `deliveries`.
+  func showPartial(_ output: Output, of key: Key) {
+    guard let running, running.key == key else { return }
+    shown = (key, output)
+    partials += 1
+  }
+
+  /// How many partial results have gone up (`showPartial`).
+  private(set) var partials = 0
 
   /// Tries again to start a render that was waiting on `canStart`.
   func resume() {
@@ -127,6 +142,7 @@ final class EditRenderLoop<Target: Hashable, Look: Hashable, Output: Sendable> {
     switch result {
     case .success(let output):
       shown = (running.key, output)
+      complete = (running.key, output)
       failure = nil
       deliveries += 1
     case .failure(let error):
@@ -158,6 +174,8 @@ nonisolated struct EditRenderTarget: Hashable, Sendable {
   var width = 0
   var height = 0
   var window: EditPipeline.Window?
+  /// A zoomed view (`EditRenderer.zoomed`), the edit's window lane.
+  var zoomed: EditPipeline.Zoomed?
 }
 
 /// The look an Edit preview render shows: the options and the context version they render with.
@@ -191,8 +209,13 @@ final class EditPaneRenders {
 
   /// The newest keys, nil for a lane with nothing to render. `settled` is false while a slider
   /// is being dragged (`EditRenderLoop.request`).
-  func update(fitted fittedRequest: Request?, window windowRequest: Request?, settled: Bool) {
-    if let windowRequest {
+  /// `holdingWindow`: a pinch or pan is moving the view, so the window lane is left as it is (a
+  /// render on its way finishes, none starts, what's shown stays up, drawn where the view puts
+  /// it) until the gesture ends and the pane asks again.
+  func update(fitted fittedRequest: Request?, window windowRequest: Request?, settled: Bool, holdingWindow: Bool = false) {
+    if holdingWindow {
+      request(fittedRequest, settled: settled)
+    } else if let windowRequest {
       // The window first, so the fitted lane sees it busy.
       window.request(windowRequest.key, settled: settled, render: windowRequest.render)
       request(fittedRequest, settled: settled)
@@ -221,7 +244,7 @@ final class EditPaneRenders {
     let fit = viewport.fitPixels
     return Targets(
       fitted: .init(source: ObjectIdentifier(image), width: fit.width, height: fit.height),
-      window: viewport.window.map { .init(source: ObjectIdentifier(image), window: $0) })
+      window: viewport.zoomed.map { .init(source: ObjectIdentifier(image), zoomed: $0) })
   }
 
   /// Hands the lanes the newest keys: `targets` with `look`, each with a render of it, as
@@ -229,18 +252,23 @@ final class EditPaneRenders {
   /// moving the view.
   func schedule(
     _ targets: Targets, image: CGImage, renderer: EditRenderer, context: EditPipeline.Context, look: EditRenderLook, settled: Bool,
-    moving _: Bool = false
+    moving: Bool = false
   ) {
     update(
       fitted: targets.fitted.map { target -> Request in
         (Loop.Key(target: target, look: look), { try await renderer.preview(source: image, options: look.options, context: context, fitting: target.width, height: target.height) })
       },
       window: targets.window.flatMap { target in
-        target.window.map { window -> Request in
-          (Loop.Key(target: target, look: look), { try await renderer.window(source: image, options: look.options, context: context, window: window) })
+        target.zoomed.map { zoomed -> Request in
+          let lane = window
+          return (Loop.Key(target: target, look: look), {
+            try await renderer.zoomed(source: image, options: look.options, context: context, contextID: look.context, zoomed: zoomed) { part in
+              await lane.showPartial(part, of: .init(target: target, look: look))
+            }
+          })
         }
       },
-      settled: settled)
+      settled: settled, holdingWindow: moving)
   }
 
   /// A slider was let go.

@@ -678,10 +678,10 @@ extension Automation {
           // The same sweeps zoomed to 100%, as the zoomed pane renders each value: the window in
           // view, then the fitted preview under it.
           let zoomed = EditViewport(imageWidth: width, imageHeight: height, viewSize: pane, displayScale: 2, scale: 1)
-          if let window = zoomed.window {
+          if let window = zoomed.zoomed {
             let zoomedFit = zoomed.fitPixels
-            log("  at 100%: window \(window.outputWidth)x\(window.outputHeight), fitted preview \(zoomedFit.width)x\(zoomedFit.height)")
-            _ = try? await renderer.window(source: image, options: base, context: .empty, window: window)
+            log("  at 100%: window \(window.region.width)x\(window.region.height), fitted preview \(zoomedFit.width)x\(zoomedFit.height)")
+            _ = try? await renderer.zoomed(source: image, options: base, context: .empty, zoomed: window)
             _ = try? await renderer.preview(source: image, options: base, context: .empty, fitting: zoomedFit.width, height: zoomedFit.height)
             for (name, vary) in controls {
               let before = await renderer.counters
@@ -692,7 +692,7 @@ extension Automation {
                 vary(&options, steps > 1 ? Double(step) / Double(steps - 1) : 1)
                 options = options.snapped
                 var start = clock.now
-                _ = try? await renderer.window(source: image, options: options, context: .empty, window: window)
+                _ = try? await renderer.zoomed(source: image, options: options, context: .empty, zoomed: window)
                 windowTimes.append(milliseconds(clock.now - start))
                 start = clock.now
                 _ = try? await renderer.preview(source: image, options: options, context: .empty, fitting: zoomedFit.width, height: zoomedFit.height)
@@ -720,9 +720,9 @@ extension Automation {
             let fitPixels = viewport.fitPixels
             _ = try? await renderer.preview(source: image, options: base, context: .empty, fitting: fitPixels.width, height: fitPixels.height)
             var what = "fitted"
-            if let window = viewport.window {
-              _ = try? await renderer.window(source: image, options: base, context: .empty, window: window)
-              what = "window \(window.outputWidth)x\(window.outputHeight)"
+            if let window = viewport.zoomed {
+              _ = try? await renderer.zoomed(source: image, options: base, context: .empty, zoomed: window)
+              what = "window \(window.region.width)x\(window.region.height)"
             }
             let time = milliseconds(clock.now - start)
             times.append(time)
@@ -775,7 +775,7 @@ extension Automation {
       ]
       for zoomed in [false, true] {
         let viewport = EditViewport(imageWidth: width, imageHeight: height, viewSize: pane, displayScale: 2, scale: zoomed ? 1 : nil)
-        let fitPixels = viewport.fitPixels, window = viewport.window
+        let fitPixels = viewport.fitPixels, window = viewport.zoomed
         if zoomed, window == nil {
           log("  Drag zoomed: the image fits at 100%, no window to render")
           continue
@@ -783,19 +783,16 @@ extension Automation {
         for (name, gesture, vary) in dragControls {
           let tick = Duration.milliseconds(gesture == .drag ? 16 : 30), ticks = gesture == .drag ? 106 : 57
           let renders = EditPaneRenders.forScreen()
-          let source = ObjectIdentifier(image)
+          let targets = EditPaneRenders.targets(image, viewport)
           var lastKeys: (fitted: EditPaneRenders.Loop.Key, window: EditPaneRenders.Loop.Key?)?
           /// The pane's `schedule` for a look, and its keys.
           @MainActor func schedule(_ options: EditOptions, settled: Bool) {
             let look = EditRenderLook(options: options, context: 0)
-            let fittedKey = EditPaneRenders.Loop.Key(target: .init(source: source, width: fitPixels.width, height: fitPixels.height), look: look)
-            let windowKey = window.map { EditPaneRenders.Loop.Key(target: .init(source: source, window: $0), look: look) }
+            let fittedKey = EditPaneRenders.Loop.Key(target: targets.fitted!, look: look)
+            let windowKey = targets.window.map { EditPaneRenders.Loop.Key(target: $0, look: look) }
             if let last = lastKeys, last.fitted == fittedKey, last.window == windowKey { return }
             lastKeys = (fittedKey, windowKey)
-            renders.update(
-              fitted: (fittedKey, { try await renderer.preview(source: image, options: options, context: .empty, fitting: fitPixels.width, height: fitPixels.height) }),
-              window: windowKey.flatMap { key in window.map { window in (key, { try await renderer.window(source: image, options: options, context: .empty, window: window) }) } },
-              settled: settled)
+            renders.schedule(targets, image: image, renderer: renderer, context: .empty, look: look, settled: settled)
           }
           func options(at fraction: Double) -> EditOptions {
             var options = base
@@ -830,7 +827,7 @@ extension Automation {
           let counts = zoomed ? "\(during.window) window, \(during.fitted) fitted" : "\(during.fitted)"
           log("  Drag \(zoomed ? "zoomed" : "fitted") \(name.padding(toLength: 21, withPad: " ", startingAt: 0)) updates during drag \(counts); "
             + "first \(ms(firstUpdate)); release to final \(ms(shownAt))" + (zoomed ? ", fitted \(ms(fittedAt))" : "")
-            + (zoomed ? " (window \(window!.outputWidth)x\(window!.outputHeight))" : " (\(fitPixels.width)x\(fitPixels.height))"))
+            + (zoomed ? " (window \(window!.region.width)x\(window!.region.height))" : " (\(fitPixels.width)x\(fitPixels.height))"))
         }
       }
       log("edit render bench: done")
@@ -884,7 +881,7 @@ extension Automation {
       while !settled(targets), clock.now - ended < .seconds(30) { try? await Task.sleep(for: .milliseconds(1)) }
       let settle = milliseconds(clock.now - ended)
       let after = (EditRenderCounts.started - before.0 - during.0, EditRenderCounts.stopped - before.1 - during.1)
-      let window = views.last!.window.map { "\($0.outputWidth)x\($0.outputHeight) at \(String(format: "%.3f", $0.scale))" } ?? "none"
+      let window = views.last!.zoomed.map { "\($0.region.width)x\($0.region.height) at \(String(format: "%.3f", $0.scale))" } ?? "none"
       log("    \(label.padding(toLength: 18, withPad: " ", startingAt: 0)) during: \(during.0) started, \(during.1) stopped; "
         + "after the end: \(after.0) started, \(after.1) stopped; settled \(String(format: "%6.0f ms", settle)) (window \(window))")
     }

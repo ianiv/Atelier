@@ -558,6 +558,38 @@ struct EditModelTests {
     #expect(coarse.x + coarse.width >= fine.x + fine.width && coarse.y + coarse.height >= fine.y + fine.height)
   }
 
+  /// Below 100% the zoomed view renders at the zoom snapped up to a quarter octave, never below
+  /// it and less than one step above; from 100% up at 1:1. A pinch from fit to 100% renders at
+  /// only a few scales.
+  @Test func zoomedRenderScaleSnapsToQuarterOctaves() {
+    #expect(EditViewport.renderScale(zoom: 1) == 1 && EditViewport.renderScale(zoom: 3) == 1)
+    #expect(EditViewport.renderScale(zoom: 0.5) == 0.5 && EditViewport.renderScale(zoom: 0.25) == 0.25)
+    #expect(abs(EditViewport.renderScale(zoom: 0.6) - pow(2, -0.5)) < 1e-12)
+    #expect(abs(EditViewport.renderScale(zoom: 0.37) - pow(2, -1.25)) < 1e-12)
+    #expect(abs(EditViewport.renderScale(zoom: 0.8) - pow(2, -0.25)) < 1e-12 && EditViewport.renderScale(zoom: 0.9) == 1)
+    var scales: Set<Double> = []
+    for step in 0...200 {
+      let zoom = 0.3 * pow(1 / 0.3, Double(step) / 200)
+      let scale = EditViewport.renderScale(zoom: zoom)
+      #expect(scale >= zoom - 1e-12 && (zoom >= 1 || scale < zoom * pow(2, 0.25) + 1e-12), "\(zoom)")
+      scales.insert(scale)
+    }
+    #expect(scales.count == 7)
+    // A zoomed view at an in-between zoom: on a 64 px grid of the scaled image, covering what's
+    // in view, and drawn over where that part of the image is.
+    let viewport = EditViewport(
+      imageWidth: 6000, imageHeight: 4000, viewSize: CGSize(width: 800, height: 600), displayScale: 2, scale: 0.6, offset: CGSize(width: 130, height: -40))
+    let zoomed = try? #require(viewport.zoomed)
+    guard let zoomed else { return }
+    #expect(abs(zoomed.scale - pow(2, -0.5)) < 1e-12)
+    #expect(zoomed.region.x % 64 == 0 && zoomed.region.y % 64 == 0)
+    let rect = viewport.frame(of: zoomed)
+    #expect(rect.minX <= 0 && rect.minY <= 0 && rect.maxX >= 800 && rect.maxY >= 600)
+    let size = EditPipeline.scaledSize(width: 6000, height: 4000, scale: zoomed.scale)
+    let whole = viewport.frame(of: EditPipeline.Zoomed(scale: zoomed.scale, region: .init(x: 0, y: 0, width: size.width, height: size.height)))
+    #expect(abs(whole.minX - viewport.imageFrame.minX) < 1e-9 && abs(whole.width - viewport.imageFrame.width) < 1e-9)
+  }
+
   @Test func theFittedPreviewIsEnoughUntilZoomedPastIt() {
     var viewport = EditViewport(imageWidth: 4000, imageHeight: 3000, viewSize: CGSize(width: 800, height: 600), displayScale: 2)
     #expect(viewport.fitScale == 0.4)

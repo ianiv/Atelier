@@ -332,4 +332,46 @@ struct EditRenderLoopTests {
     await until { !renders.fitted.isBusy && !renders.window.isBusy }
     #expect(renders.window.shown?.key.target.window == right && renders.window.deliveries == 1)
   }
+
+  /// While a pinch or pan moves the view, the window lane starts nothing and keeps what's up (a
+  /// render on its way finishes); the gesture's end asks for the view as it's left.
+  @Test @MainActor func aMovingViewHoldsTheWindowLane() async {
+    let renders = EditPaneRenders(), fake = FakeImages()
+    let left = EditPipeline.Window(x: 0, y: 0, width: 50, height: 50, scale: 1)
+    let right = EditPipeline.Window(x: 64, y: 0, width: 50, height: 50, scale: 1)
+    renders.update(fitted: (paneKey(nil, 0), fake.render("fitted")), window: (paneKey(left, 0), fake.render("left")), settled: true)
+    await until { fake.inFlight == ["left"] }
+    // Moving: the render on its way isn't stopped, and the new window doesn't start.
+    renders.update(fitted: (paneKey(nil, 0), fake.render("fitted")), window: (paneKey(right, 0), fake.render("right")), settled: true, holdingWindow: true)
+    try? await Task.sleep(for: .milliseconds(20))
+    #expect(fake.started == ["left"])
+    fake.finish("left")
+    // The window lane idle, the fitted preview may go.
+    await until { fake.inFlight == ["fitted"] }
+    fake.finish("fitted")
+    await until { !renders.fitted.isBusy }
+    #expect(renders.window.shown?.key.target.window == left && !renders.window.isBusy)
+    // The gesture's end.
+    renders.update(fitted: (paneKey(nil, 0), fake.render("fitted")), window: (paneKey(right, 0), fake.render("right")), settled: true)
+    await until { fake.inFlight == ["right"] }
+    fake.finish("right")
+    await until { !renders.window.isBusy }
+    #expect(renders.window.shown?.key.target.window == right && fake.started == ["left", "fitted", "right"])
+  }
+
+  /// A partial result goes up while its render runs, and not once it's stale.
+  @Test @MainActor func partialsGoUpOnlyForTheRunningKey() async throws {
+    let loop = EditPaneRenders.Loop(), fake = FakeImages()
+    let window = EditPipeline.Window(x: 0, y: 0, width: 50, height: 50, scale: 1)
+    let image = try #require(ColorMatch.cgImage(rgba: [9, 9, 9, 255], width: 1, height: 1))
+    loop.request(paneKey(window, 0), render: fake.render("a"))
+    await until { fake.inFlight == ["a"] }
+    loop.showPartial(image, of: paneKey(window, 0))
+    #expect(loop.shown?.key == paneKey(window, 0) && loop.partials == 1 && loop.deliveries == 0 && loop.isBusy)
+    loop.showPartial(image, of: paneKey(window, 1))
+    #expect(loop.partials == 1)
+    fake.finish("a")
+    await until { !loop.isBusy }
+    #expect(loop.deliveries == 1)
+  }
 }
