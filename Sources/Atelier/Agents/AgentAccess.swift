@@ -65,12 +65,14 @@ nonisolated enum AgentAuth {
     host.hasPrefix("[") ? String(host.prefix { $0 != "]" }) + "]" : String(host.prefix { $0 != ":" })
   }
 
-  /// The names a page on this Mac's own server could have as its Origin: its addresses and its
-  /// .local name. Brackets come off IPv6 addresses, as `URLComponents.host` gives them.
-  static func ownHosts(addresses: [String], hostName: String) -> Set<String> {
+  /// The names a page on this Mac's own server could have as its Origin: its addresses, its
+  /// .local name and the embedded Tailscale node's name (`tailnetName`, served over HTTPS).
+  /// Brackets come off IPv6 addresses, as `URLComponents.host` gives them.
+  static func ownHosts(addresses: [String], hostName: String, tailnetName: String? = nil) -> Set<String> {
     var hosts = Set(addresses.map { $0.lowercased() })
     let name = hostName.lowercased()
     if name.hasSuffix(".local") { hosts.insert(name) }
+    if let tailnetName, !tailnetName.isEmpty { hosts.insert(tailnetName.lowercased()) }
     return hosts
   }
 
@@ -154,8 +156,30 @@ nonisolated enum AgentAuth {
 
   /// `http://host:port/mcp`, with an IPv6 address in brackets.
   static func endpoint(host: String, port: Int) -> String {
-    "http://\(host.contains(":") ? "[\(host)]" : host):\(port)/mcp"
+    endpoint(scheme: "http", host: host, port: port)
   }
+
+  /// `scheme://host:port/mcp`, leaving out the scheme's default port (`https://name.ts.net/mcp`).
+  static func endpoint(scheme: String, host: String, port: Int) -> String {
+    let defaultPort = scheme == "https" ? 443 : 80
+    let address = host.contains(":") ? "[\(host)]" : host
+    return "\(scheme)://\(address)\(port == defaultPort ? "" : ":\(port)")/mcp"
+  }
+
+  /// The port the local network's HTTPS takes with an imported certificate: two past the
+  /// server's own (which then answers this Mac only), since the one after it, 7863, is Compute's
+  /// default. If that's a port in `taken` (Compute set elsewhere), the next free one after it.
+  /// Nil past 65535.
+  static func httpsPort(for port: Int, avoiding taken: Set<Int> = []) -> Int? {
+    guard port >= 1 else { return nil }
+    var candidate = port + 2
+    while taken.contains(candidate) { candidate += 1 }
+    return candidate <= 65535 ? candidate : nil
+  }
+
+  /// Where the embedded Tailscale node takes the MCP server's HTTPS: the default, so clients name
+  /// no port.
+  static let tailnetHTTPSPort = 443
 }
 
 /// `AgentAuth.Gate` behind a lock, shared by the server (which sets it) and its listener's

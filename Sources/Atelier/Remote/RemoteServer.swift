@@ -308,7 +308,12 @@ final class RemoteServer {
   }
 
   private static let enabledKey = "remoteServer.enabled"
-  private static let portKey = "remoteServer.port"
+  private nonisolated static let portKey = "remoteServer.port"
+
+  /// The port Compute's server is set to, for the MCP server's HTTPS to stay off it.
+  nonisolated static var configuredPort: Int {
+    UserDefaults.standard.object(forKey: portKey) as? Int ?? Int(RemoteProtocol.defaultPort)
+  }
   private static let filterKey = "remoteServer.filter"
 
   var isEnabled: Bool {
@@ -370,7 +375,7 @@ final class RemoteServer {
     filter = options.filter ?? defaults.string(forKey: Self.filterKey).flatMap(RemoteAddressFilter.init(rawValue:)) ?? .tailscale
     port = options.port ?? (defaults.object(forKey: Self.portKey) as? Int).flatMap { UInt16(exactly: $0) } ?? RemoteProtocol.defaultPort
     if isEnabled, !options.isApp || SessionState.isEnabled { apply() }
-    tailnet?.onChange = { [weak self] in self?.syncTailnet() }
+    tailnet?.observe { [weak self] in self?.syncTailnet() }
   }
 
   private var tailnet: RemoteTailnet? { options.tailnet ?? create?.tailnet }
@@ -385,12 +390,17 @@ final class RemoteServer {
     let tailnetPort = port != 0 ? port : boundPort
     let shouldListen = isEnabled && isListening && tailnet.serves && tailnet.isSignedIn && tailnetPort != 0
     guard shouldListen != (tailnetListening != nil) || (shouldListen && tailnetListening != tailnetPort) else { return }
+    // Only this server's port: the MCP server may be serving another one on the same node.
+    if let previous = tailnetListening { tailnet.stopListening(port: previous, owner: .compute) }
     tailnetListening = shouldListen ? tailnetPort : nil
     if shouldListen {
       let listener = listener
-      tailnet.startListening(port: tailnetPort) { listener?.bridgePort }
-    } else {
-      tailnet.stopListening()
+      do {
+        try tailnet.startListening(port: tailnetPort, owner: .compute) { listener?.bridgePort }
+      } catch {
+        Log.remote.error("Not serving over Tailscale: \(error.localizedDescription, privacy: .public)")
+        tailnetListening = nil
+      }
     }
   }
 

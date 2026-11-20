@@ -36,6 +36,7 @@ Sources/Atelier/Agents/      | HostTests,CanvasEditArgumentsTests,AgentAccessTes
 Sources/Atelier/App/         | HostTests,TemporaryFilesTests,ClipCacheTests,OrphanTests,ModelFolderTests,WaitUntilTests,ShareTests,SharePickerTests | --cleanup-check,--ux-check,--resize-bench,--tab-switch-bench,--model-folders-check
 Sources/Atelier/Automation/  | HostTests,AutomationSamplerTests | --generate
 Sources/Atelier/Automation/AutomationAgentNet.swift | AgentAccessTests | --agent-net-check
+Sources/Atelier/Automation/AutomationTestCertificate.swift | AgentAccessTests | --agent-net-check
 Sources/Atelier/Create/      | CanvasDropTests,CanvasPaintTests,CanvasRefineTests,ColorMatchTests,MaskMemoryTests,CanvasUndoTests,MoodboardWriterTests,MoodboardTests,SizePresetTests,MaskMorphologyTests,FrameSelectionTests,FaceFinderTests,CanvasEditTests | --edit-input-check,--refine-check,--paint-check,--color-match-check,--create-delete-check,--canvas-clip-check
 Sources/Atelier/Create/AutoMask/ | AutoMaskTests,MaskMemoryTests,SAMFolderTests,FaceFinderTests | --automask-check
 Sources/Atelier/Edit/        | GrainTests,EditPipelineTests,LUTTests,EditJobTests,EditProjectDataTests,EditModelTests | --edit-screen-check,--grain-reference
