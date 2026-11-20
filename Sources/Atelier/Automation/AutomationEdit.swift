@@ -553,13 +553,14 @@ extension Automation {
     }
   }
 
-  /// --edit-render-bench: times the Edit screen's renders on a made-up image (`testImage`), with no
-  /// model and nothing written, and prints one line per control:
+  /// --edit-render-bench: times the Edit screen's renders on a made-up image (`testImage`) or
+  /// `--input FILE`, with no model and nothing written, and prints one line per control:
   ///
-  ///   Atelier --edit-render-bench [--size WxH] [--steps N] [--zoom] [--quit]
+  ///   Atelier --edit-render-bench [--size WxH | --input FILE] [--pane WxH] [--steps N] [--zoom] [--drag-only] [--quit]
   ///
   /// It renders through an `EditRenderer` as `EditPane` does, the fitted preview for a pane of
-  /// 1100 × 760 points at 2× (`EditViewport.fitPixels`), starting from grain.py's defaults with
+  /// `--pane` points at 2× (default 2560 × 1410, a full-screen 5K window's preview;
+  /// `EditViewport.fitPixels`), starting from grain.py's defaults with
   /// some halation, and sweeps Halation (amount), Vignette (amount), Grade (exposure) and Grain
   /// (strength) over N values each (default 12), each render finishing before the next, as a
   /// slider dragged slowly enough for every render to land. Each line gives the average and worst
@@ -568,14 +569,28 @@ extension Automation {
   /// each view with the fitted preview it's laid over. Last, the cancel latency: a render of a look
   /// not yet cached (the fitted preview, then the full size) is cancelled 20 ms in, and the line
   /// gives the milliseconds from the cancel until it returns. `--size` defaults to 6000x4000.
+  ///
+  /// Then the drag test, as a slider drag on the screen: Halation (amount), Grade (exposure) and
+  /// Grain (strength) change every 16 ms for 1.7 s through the lanes the pane runs
+  /// (`EditPaneRenders.forScreen()`, asked as `EditPane.schedule` asks them, with the drag's end
+  /// as the slider's release), fitted and then zoomed to 100% (the window in view laid over the
+  /// fitted preview). Each line gives the previews that went up during the drag, the
+  /// milliseconds to the first, and from the release until the final value's preview is up (the
+  /// window's, zoomed, then the fitted preview's under it). Last, Halation by arrow key held on
+  /// the slider (a change every 30 ms, no release), asked as the pane asks now and as it asked
+  /// before (each change final). `--drag-only` skips everything before.
   static func editRenderBench() {
     let args = CommandLine.arguments
     func value(_ name: String) -> String? { args.firstIndex(of: name).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } }
     let size = value("--size").map { $0.lowercased().split(separator: "x").compactMap { Int($0) } }
-    let width = size?.count == 2 ? max(size![0], 16) : 6000
-    let height = size?.count == 2 ? max(size![1], 16) : 4000
+    let madeWidth = size?.count == 2 ? max(size![0], 16) : 6000
+    let madeHeight = size?.count == 2 ? max(size![1], 16) : 4000
     let steps = max(value("--steps").flatMap(Int.init) ?? 12, 1)
     let zoom = args.contains("--zoom")
+    let dragOnly = args.contains("--drag-only")
+    let input = value("--input")
+    let paneSize = value("--pane").map { $0.lowercased().split(separator: "x").compactMap { Double($0) } }
+    let pane = paneSize?.count == 2 ? CGSize(width: max(paneSize![0], 16), height: max(paneSize![1], 16)) : CGSize(width: 2560, height: 1410)
     Task { @MainActor in
       func log(_ message: String) {
         print(message)
@@ -594,19 +609,21 @@ extension Automation {
           + "stats \(after.statsHits - before.statsHits)/\(after.statsMisses - before.statsMisses)"
       }
       @MainActor func finish() { if args.contains("--quit") { AppLifecycle.quit() } }
-      guard let image = testImage(width: width, height: height) else {
-        log("FAIL edit render bench: the \(width)x\(height) test image couldn't be made")
+      let made = input.map { ImageLoader.image(at: URL(fileURLWithPath: $0)) } ?? testImage(width: madeWidth, height: madeHeight)
+      guard let image = made else {
+        log("FAIL edit render bench: " + (input.map { "couldn't read an image at \($0)" } ?? "the \(madeWidth)x\(madeHeight) test image couldn't be made"))
         return finish()
       }
+      let width = image.width, height = image.height
       let clock = ContinuousClock()
       let renderer = EditRenderer()
-      let pane = CGSize(width: 1100, height: 760)
       let fitted = EditViewport(imageWidth: width, imageHeight: height, viewSize: pane, displayScale: 2)
       let fit = fitted.fitPixels
       var base = EditOptions.grainDefaults
       base.halation.amount = 0.4
       base = base.snapped
-      log("edit render bench: \(width)x\(height) source, fitted preview \(fit.width)x\(fit.height), \(steps) steps per control")
+      log("edit render bench: \(width)x\(height) source\(input.map { " (\(($0 as NSString).lastPathComponent))" } ?? ""), "
+        + "pane \(Int(pane.width))x\(Int(pane.height)) pt at 2x, fitted preview \(fit.width)x\(fit.height), \(steps) steps per control")
 
       // The first render reads the source's pixels and scales it; it's timed on its own.
       do {
@@ -618,78 +635,155 @@ extension Automation {
         return finish()
       }
 
-      let controls: [(String, (inout EditOptions, Double) -> Void)] = [
-        ("Halation", { $0.halation.amount = 0.05 + 0.9 * $1 }),
-        ("Vignette", { $0.vignette.amount = 0.05 + 0.6 * $1 }),
-        ("Grade", { $0.grade.exposure = -1 + 2 * $1 }),
-        ("Grain", { $0.grain.lum = 2 + 28 * $1 }),
-      ]
-      for (name, vary) in controls {
-        let before = await renderer.counters
-        var times: [Double] = []
-        for step in 0..<steps {
-          var options = base
-          vary(&options, steps > 1 ? Double(step) / Double(steps - 1) : 1)
-          options = options.snapped
-          let start = clock.now
-          _ = try? await renderer.preview(source: image, options: options, context: .empty, fitting: fit.width, height: fit.height)
-          times.append(milliseconds(clock.now - start))
-        }
-        let after = await renderer.counters
-        log("  \(name.padding(toLength: 9, withPad: " ", startingAt: 0)) \(summary(times)); \(cacheLine(before, after))")
-      }
-
-      if zoom {
-        // Each view as the pane shows it: the fitted preview (cached after the first) and, zoomed
-        // past it, the window in view.
-        let views: [(String, Double?, CGSize)] = [
-          ("50%", 0.5, .zero), ("100%", 1, .zero), ("100% pan 1", 1, CGSize(width: -300, height: 0)),
-          ("100% pan 2", 1, CGSize(width: -600, height: -200)), ("100% pan 3", 1, CGSize(width: -900, height: -400)),
-          ("200%", 2, .zero), ("fit", nil, .zero),
+      if !dragOnly {
+        let controls: [(String, (inout EditOptions, Double) -> Void)] = [
+          ("Halation", { $0.halation.amount = 0.05 + 0.9 * $1 }),
+          ("Vignette", { $0.vignette.amount = 0.05 + 0.6 * $1 }),
+          ("Grade", { $0.grade.exposure = -1 + 2 * $1 }),
+          ("Grain", { $0.grain.lum = 2 + 28 * $1 }),
         ]
-        let before = await renderer.counters
-        var times: [Double] = []
-        for (label, scale, offset) in views {
-          let viewport = EditViewport(imageWidth: width, imageHeight: height, viewSize: pane, displayScale: 2, scale: scale, offset: offset)
-          let start = clock.now
-          let fitPixels = viewport.fitPixels
-          _ = try? await renderer.preview(source: image, options: base, context: .empty, fitting: fitPixels.width, height: fitPixels.height)
-          var what = "fitted"
-          if let window = viewport.window {
-            _ = try? await renderer.window(source: image, options: base, context: .empty, window: window)
-            what = "window \(window.outputWidth)x\(window.outputHeight)"
+        for (name, vary) in controls {
+          let before = await renderer.counters
+          var times: [Double] = []
+          for step in 0..<steps {
+            var options = base
+            vary(&options, steps > 1 ? Double(step) / Double(steps - 1) : 1)
+            options = options.snapped
+            let start = clock.now
+            _ = try? await renderer.preview(source: image, options: options, context: .empty, fitting: fit.width, height: fit.height)
+            times.append(milliseconds(clock.now - start))
           }
-          let time = milliseconds(clock.now - start)
-          times.append(time)
-          log("    zoom \(label.padding(toLength: 10, withPad: " ", startingAt: 0)) \(String(format: "%7.1f ms", time)) (\(what))")
+          let after = await renderer.counters
+          log("  \(name.padding(toLength: 9, withPad: " ", startingAt: 0)) \(summary(times)); \(cacheLine(before, after))")
         }
-        let after = await renderer.counters
-        log("  Zoom      \(summary(times)); \(cacheLine(before, after))")
+
+        if zoom {
+          // Each view as the pane shows it: the fitted preview (cached after the first) and, zoomed
+          // past it, the window in view.
+          let views: [(String, Double?, CGSize)] = [
+            ("50%", 0.5, .zero), ("100%", 1, .zero), ("100% pan 1", 1, CGSize(width: -300, height: 0)),
+            ("100% pan 2", 1, CGSize(width: -600, height: -200)), ("100% pan 3", 1, CGSize(width: -900, height: -400)),
+            ("200%", 2, .zero), ("fit", nil, .zero),
+          ]
+          let before = await renderer.counters
+          var times: [Double] = []
+          for (label, scale, offset) in views {
+            let viewport = EditViewport(imageWidth: width, imageHeight: height, viewSize: pane, displayScale: 2, scale: scale, offset: offset)
+            let start = clock.now
+            let fitPixels = viewport.fitPixels
+            _ = try? await renderer.preview(source: image, options: base, context: .empty, fitting: fitPixels.width, height: fitPixels.height)
+            var what = "fitted"
+            if let window = viewport.window {
+              _ = try? await renderer.window(source: image, options: base, context: .empty, window: window)
+              what = "window \(window.outputWidth)x\(window.outputHeight)"
+            }
+            let time = milliseconds(clock.now - start)
+            times.append(time)
+            log("    zoom \(label.padding(toLength: 10, withPad: " ", startingAt: 0)) \(String(format: "%7.1f ms", time)) (\(what))")
+          }
+          let after = await renderer.counters
+          log("  Zoom      \(summary(times)); \(cacheLine(before, after))")
+        }
+
+        // Cancel latency: a look not cached yet, cancelled 20 ms in.
+        for full in [false, true] {
+          var latencies: [Double] = []
+          var finishedFirst = 0
+          for trial in 0..<3 {
+            var options = base
+            options.halation.amount = 0.5 + 0.03 * Double(trial) + (full ? 0.2 : 0)
+            options = options.snapped
+            let task = Task {
+              if full {
+                _ = try await renderer.full(source: image, options: options, context: .empty)
+              } else {
+                _ = try await renderer.preview(source: image, options: options, context: .empty, fitting: fit.width, height: fit.height)
+              }
+            }
+            try? await Task.sleep(for: .milliseconds(20))
+            let cancelled = clock.now
+            task.cancel()
+            if case .success = await task.result { finishedFirst += 1 }
+            latencies.append(milliseconds(clock.now - cancelled))
+          }
+          let note = finishedFirst > 0 ? " (\(finishedFirst) of 3 finished instead of stopping)" : ""
+          log("  Cancel \(full ? "full" : "fitted") \(summary(latencies))\(note)")
+        }
       }
 
-      // Cancel latency: a look not cached yet, cancelled 20 ms in.
-      for full in [false, true] {
-        var latencies: [Double] = []
-        var finishedFirst = 0
-        for trial in 0..<3 {
-          var options = base
-          options.halation.amount = 0.5 + 0.03 * Double(trial) + (full ? 0.2 : 0)
-          options = options.snapped
-          let task = Task {
-            if full {
-              _ = try await renderer.full(source: image, options: options, context: .empty)
-            } else {
-              _ = try await renderer.preview(source: image, options: options, context: .empty, fitting: fit.width, height: fit.height)
-            }
-          }
-          try? await Task.sleep(for: .milliseconds(20))
-          let cancelled = clock.now
-          task.cancel()
-          if case .success = await task.result { finishedFirst += 1 }
-          latencies.append(milliseconds(clock.now - cancelled))
+      // The drag test.
+      /// How the value changes: a drag (16 ms ticks, then the release), or an arrow key held on
+      /// the focused slider (30 ms repeats, no onEditingChanged, so no release), each change
+      /// asked as not final as the pane asks a slider's, or (`settledKeys`) as final, as the pane
+      /// first asked every change made outside a drag.
+      enum Gesture { case drag, keys, settledKeys }
+      let halation: (inout EditOptions, Double) -> Void = { $0.halation.amount = 0.05 + 0.9 * $1 }
+      let dragControls: [(String, Gesture, (inout EditOptions, Double) -> Void)] = [
+        ("Halation", .drag, halation),
+        ("Grade", .drag, { $0.grade.exposure = -1 + 2 * $1 }),
+        ("Grain", .drag, { $0.grain.lum = 2 + 28 * $1 }),
+        ("Halation keys", .keys, halation),
+        ("Halation keys settled", .settledKeys, halation),
+      ]
+      for zoomed in [false, true] {
+        let viewport = EditViewport(imageWidth: width, imageHeight: height, viewSize: pane, displayScale: 2, scale: zoomed ? 1 : nil)
+        let fitPixels = viewport.fitPixels, window = viewport.window
+        if zoomed, window == nil {
+          log("  Drag zoomed: the image fits at 100%, no window to render")
+          continue
         }
-        let note = finishedFirst > 0 ? " (\(finishedFirst) of 3 finished instead of stopping)" : ""
-        log("  Cancel \(full ? "full" : "fitted") \(summary(latencies))\(note)")
+        for (name, gesture, vary) in dragControls {
+          let tick = Duration.milliseconds(gesture == .drag ? 16 : 30), ticks = gesture == .drag ? 106 : 57
+          let renders = EditPaneRenders.forScreen()
+          let source = ObjectIdentifier(image)
+          var lastKeys: (fitted: EditPaneRenders.Loop.Key, window: EditPaneRenders.Loop.Key?)?
+          /// The pane's `schedule` for a look, and its keys.
+          @MainActor func schedule(_ options: EditOptions, settled: Bool) {
+            let look = EditRenderLook(options: options, context: 0)
+            let fittedKey = EditPaneRenders.Loop.Key(target: .init(source: source, width: fitPixels.width, height: fitPixels.height), look: look)
+            let windowKey = window.map { EditPaneRenders.Loop.Key(target: .init(source: source, window: $0), look: look) }
+            if let last = lastKeys, last.fitted == fittedKey, last.window == windowKey { return }
+            lastKeys = (fittedKey, windowKey)
+            renders.update(
+              fitted: (fittedKey, { try await renderer.preview(source: image, options: options, context: .empty, fitting: fitPixels.width, height: fitPixels.height) }),
+              window: windowKey.flatMap { key in window.map { window in (key, { try await renderer.window(source: image, options: options, context: .empty, window: window) }) } },
+              settled: settled)
+          }
+          func options(at fraction: Double) -> EditOptions {
+            var options = base
+            vary(&options, fraction)
+            return options.snapped
+          }
+          // Up to date at the drag's start, as the pane is before the slider moves.
+          schedule(options(at: 0), settled: true)
+          while renders.fitted.isBusy || renders.window.isBusy { try? await Task.sleep(for: .milliseconds(1)) }
+          let shownLane = zoomed ? renders.window : renders.fitted
+          let before = (fitted: renders.fitted.deliveries, window: renders.window.deliveries)
+          var firstUpdate: Double?
+          let start = clock.now
+          for index in 1...ticks {
+            try? await Task.sleep(until: start + tick * index, clock: clock)
+            schedule(options(at: Double(index) / Double(ticks)), settled: gesture == .settledKeys)
+            if firstUpdate == nil, shownLane.deliveries > (zoomed ? before.window : before.fitted) { firstUpdate = milliseconds(clock.now - start) }
+          }
+          let during = (fitted: renders.fitted.deliveries - before.fitted, window: renders.window.deliveries - before.window)
+          // The release: the slider's onEditingChanged(false). Keys have none: from the last change.
+          let released = clock.now
+          if gesture == .drag { renders.settle() }
+          let final = lastKeys!
+          var shownAt: Double?, fittedAt: Double?
+          while shownAt == nil || fittedAt == nil, clock.now - released < .seconds(20) {
+            if shownAt == nil, shownLane.shown?.key == (zoomed ? final.window : final.fitted) { shownAt = milliseconds(clock.now - released) }
+            if fittedAt == nil, renders.fitted.shown?.key == final.fitted { fittedAt = milliseconds(clock.now - released) }
+            try? await Task.sleep(for: .milliseconds(1))
+          }
+          renders.cancel()
+          func ms(_ value: Double?) -> String { value.map { String(format: "%6.0f ms", $0) } ?? "  never" }
+          let counts = zoomed ? "\(during.window) window, \(during.fitted) fitted" : "\(during.fitted)"
+          log("  Drag \(zoomed ? "zoomed" : "fitted") \(name.padding(toLength: 21, withPad: " ", startingAt: 0)) updates during drag \(counts); "
+            + "first \(ms(firstUpdate)); release to final \(ms(shownAt))" + (zoomed ? ", fitted \(ms(fittedAt))" : "")
+            + (zoomed ? " (window \(window!.outputWidth)x\(window!.outputHeight))" : " (\(fitPixels.width)x\(fitPixels.height))"))
+        }
       }
       log("edit render bench: done")
       finish()
