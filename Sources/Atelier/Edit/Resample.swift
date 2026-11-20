@@ -97,13 +97,14 @@ nonisolated enum Resample {
   /// `resize_float`), or only the `region` of that output. The result is `region`'s size; a
   /// region not inside the output gives zeros.
   static func resize(
-    _ plane: [Float], width: Int, height: Int, toWidth newWidth: Int, height newHeight: Int, region: Region? = nil
+    _ plane: [Float], width: Int, height: Int, toWidth newWidth: Int, height newHeight: Int, region: Region? = nil,
+    cancel: EditPipeline.Cancel = .never
   ) -> [Float] {
     let region = region ?? .whole(width: newWidth, height: newHeight)
     guard plane.count == width * height else { return [Float](repeating: 0, count: max(region.width, 0) * max(region.height, 0)) }
     return plane.withUnsafeBufferPointer { input in
       let input = input
-      return resize(width: width, height: height, toWidth: newWidth, height: newHeight, region: region) { y, columns, out in
+      return resize(width: width, height: height, toWidth: newWidth, height: newHeight, region: region, cancel: cancel) { y, columns, out in
         for x in columns { out[x - columns.lowerBound] = input[y * width + x] }
       }
     }
@@ -114,7 +115,7 @@ nonisolated enum Resample {
   /// reads are asked for (each once, from any thread), so a big plane that's cheap to make row by
   /// row, a noise field, is never held whole. The same numbers as `resize` of the whole plane.
   static func resize(
-    width: Int, height: Int, toWidth newWidth: Int, height newHeight: Int, region: Region? = nil,
+    width: Int, height: Int, toWidth newWidth: Int, height newHeight: Int, region: Region? = nil, cancel: EditPipeline.Cancel = .never,
     row: (_ y: Int, _ columns: Range<Int>, _ out: UnsafeMutablePointer<Float>) -> Void
   ) -> [Float] {
     let region = region ?? .whole(width: newWidth, height: newHeight)
@@ -144,6 +145,7 @@ nonisolated enum Resample {
     temp.withUnsafeMutableBufferPointer { output in
       let output = output
       DispatchQueue.concurrentPerform(iterations: tempRows) { index in
+        guard !cancel.isCancelled else { return }
         withUnsafeTemporaryAllocation(of: Float.self, capacity: max(inColumns.count, 1)) { line in
           let line = line.baseAddress!
           row(index + firstRow, inColumns, line)
@@ -164,7 +166,7 @@ nonisolated enum Resample {
         }
       }
     }
-    guard let v = vertical else { return temp }
+    guard let v = vertical, !cancel.isCancelled else { return temp }
 
     // Vertical pass.
     var out = [Float](repeating: 0, count: region.height * outWidth)
@@ -175,6 +177,7 @@ nonisolated enum Resample {
           let output = output
           let k = k
           DispatchQueue.concurrentPerform(iterations: region.height) { j in
+            guard !cancel.isCancelled else { return }
             let start = v.first[j] - firstRow
             let base = j * v.size
             let n = v.count[j]
@@ -194,7 +197,9 @@ nonisolated enum Resample {
   /// Interleaved 8-bit RGB (`width` × `height` × 3) resized as Pillow resizes an "RGB" image with
   /// BICUBIC: fixed-point weights, rounding by adding half before the shift, a clip to 0–255
   /// after each pass (`ImagingResampleHorizontal_8bpc`, `ImagingResampleVertical_8bpc`).
-  static func resizeRGB8(_ pixels: [UInt8], width: Int, height: Int, toWidth newWidth: Int, height newHeight: Int) -> [UInt8] {
+  static func resizeRGB8(
+    _ pixels: [UInt8], width: Int, height: Int, toWidth newWidth: Int, height newHeight: Int, cancel: EditPipeline.Cancel = .never
+  ) -> [UInt8] {
     guard width > 0, height > 0, newWidth > 0, newHeight > 0, pixels.count == width * height * 3 else { return [] }
     if newWidth == width, newHeight == height { return pixels }
     let horizontal = newWidth != width ? Coefficients(inSize: width, outSize: newWidth, outputs: 0..<newWidth) : nil
@@ -219,6 +224,7 @@ nonisolated enum Resample {
           let input = input
           let output = output
           DispatchQueue.concurrentPerform(iterations: tempRows) { row in
+            guard !cancel.isCancelled else { return }
             let source = (row + firstRow) * width * 3
             let target = row * newWidth * 3
             for i in 0..<newWidth {
@@ -241,7 +247,7 @@ nonisolated enum Resample {
     } else {
       temp = Array(pixels[firstRow * width * 3..<lastRow * width * 3])
     }
-    guard let v = vertical else { return temp }
+    guard let v = vertical, !cancel.isCancelled else { return temp }
 
     let k = v.fixedPoint
     var out = [UInt8](repeating: 0, count: newHeight * newWidth * 3)
@@ -251,6 +257,7 @@ nonisolated enum Resample {
         let input = input
         let output = output
         DispatchQueue.concurrentPerform(iterations: newHeight) { j in
+          guard !cancel.isCancelled else { return }
           let start = v.first[j] - firstRow
           let target = j * rowLength
           for i in 0..<rowLength {

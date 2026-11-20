@@ -1,5 +1,6 @@
 @testable import Atelier
 import CoreGraphics
+import CryptoKit
 import Foundation
 import Testing
 
@@ -818,5 +819,124 @@ struct EditPipelineTests {
       crop(Resample.resize($0, width: texture.width, height: texture.height, toWidth: 300, height: 200), width: 300, layout.region)
     }
     #expect(Grain.realNoiseField(real, refWidth: 50, seed: 5, layout: layout) == expected)
+  }
+}
+
+extension EditPipelineTests {
+  /// The renders' bytes are exactly what they were before the steps learned to stop when
+  /// cancelled (`EditPipeline.Cancel`): every step, at full size, fitted and as a window. The
+  /// digest is of the renders made by the code before the change.
+  @Test func cancellationChecksLeaveTheRenderAlone() async throws {
+    let (options, context) = everything()
+    let source = try image(GrainTests.picture(width: 300, height: 200))
+    let renderer = EditRenderer()
+    let full = try await renderer.full(source: source, options: options, context: context)
+    let fitted = try await renderer.preview(source: source, options: options, context: context, fitting: 170, height: 170)
+    let window = try await renderer.window(
+      source: source, options: options, context: context, window: EditPipeline.Window(x: 40, y: 30, width: 120, height: 90, scale: 0.75))
+    var bytes: [UInt8] = []
+    for image in [full, fitted, window] { bytes += try #require(ColorMatch.rgba(image)) }
+    let digest = SHA256.hash(data: Data(bytes)).map { String(format: "%02x", $0) }.joined()
+    #expect(digest == "93599b90c1cd9d6c48836f5c11995a2a104e7749d4669d2b77ad6274a16da682", "digest \(digest)")
+  }
+}
+
+/// A render stops soon after its task is cancelled (`EditPipeline.Cancel`, checked in every
+/// step's bands), and keeps nothing it made.
+struct EditRenderCancelTests {
+  @Test func neverCantBeCancelled() throws {
+    EditPipeline.Cancel.never.cancel()
+    #expect(!EditPipeline.Cancel.never.isCancelled)
+    let cancel = EditPipeline.Cancel()
+    #expect(!cancel.isCancelled)
+    cancel.cancel()
+    #expect(cancel.isCancelled)
+    #expect(throws: CancellationError.self) { try cancel.check() }
+  }
+
+  /// A full-size 4000 × 4000 render with halation, cancelled 20 ms in, throws within 100 ms of
+  /// the cancel, and the same look rendered after misses the pre-grain cache: nothing half-made
+  /// was kept. (`cancellationChecksLeaveTheRenderAlone` checks the bytes of renders that finish.)
+  @Test func cancelledHalationRenderStopsQuickly() async throws {
+    let side = 4000
+    let source = try #require(GrainTests.picture(width: side, height: side).cgImage)
+    let renderer = EditRenderer()
+    // The source's pixels are read once, beforehand: that part can't stop midway.
+    _ = try await renderer.preview(source: source, options: .grainDefaults, fitting: 64, height: 64)
+    var options = EditOptions.grainDefaults
+    options.halation = .init(amount: 0.7, threshold: 0.5, radius: 30, warmth: 0.6)
+    let task = Task { try await renderer.full(source: source, options: options) }
+    try await Task.sleep(for: .milliseconds(20))
+    let clock = ContinuousClock()
+    let cancelled = clock.now
+    task.cancel()
+    let result = await task.result
+    let elapsed = clock.now - cancelled
+    #expect(throws: CancellationError.self) { try result.get() }
+    #expect(elapsed < .milliseconds(100), "took \(elapsed) to stop")
+
+    let missesBefore = await renderer.counters.preGrainMisses
+    _ = try await renderer.full(source: source, options: options)
+    #expect(await renderer.counters.preGrainMisses == missesBefore + 1)
+  }
+
+  /// Each step with a cancel that's never set gives exactly what it gives with `.never`, and
+  /// once set, stops (a cancelled blur leaves most of a big plane unwritten).
+  @Test func stepsHonourTheCancel() {
+    let planes = GrainTests.picture(width: 160, height: 120)
+    let live = EditPipeline.Cancel()
+    var options = EditOptions.grainDefaults
+    options.lens = .init(motion: 5, angle: 30, blur: 2)
+    options.grade = .init(exposure: 0.3, temperature: 20, tint: 2, contrast: 0.1, saturation: 0.2, vibrance: 0.3)
+    #expect(EditPipeline.lens(planes, options.lens, cancel: live).r == EditPipeline.lens(planes, options.lens).r)
+    var a = planes, b = planes
+    Grade.apply(options.grade, to: &a, cancel: live)
+    Grade.apply(options.grade, to: &b)
+    #expect(a.r == b.r && a.g == b.g && a.b == b.b)
+    Halation.apply(.init(amount: 0.6, threshold: 0.5, radius: 8, warmth: 0.5), to: &a, cancel: live)
+    Halation.apply(.init(amount: 0.6, threshold: 0.5, radius: 8, warmth: 0.5), to: &b)
+    #expect(a.r == b.r && a.g == b.g && a.b == b.b)
+    let stats = Grain.channelStats(planes)
+    let reference = GrainProfile.ChannelStats(m: [120, 110, 100], s: [40, 50, 60])
+    #expect(Grain.colourMatch(planes, source: stats, reference: reference, amount: 0.6, cancel: live).g
+      == Grain.colourMatch(planes, source: stats, reference: reference, amount: 0.6).g)
+    #expect(Grain.luminance(planes, cancel: live) == Grain.luminance(planes))
+
+    let stopped = EditPipeline.Cancel()
+    stopped.cancel()
+    let plane = [Float](repeating: 1, count: 512 * 512)
+    let blurred = Blur.gauss(plane, width: 512, height: 512, sigma: 4, cancel: stopped)
+    #expect(blurred == plane)
+    #expect(Blur.boxBlur(plane, width: 512, height: 512, radius: 3, horizontal: true, cancel: stopped).allSatisfy { $0 == 0 })
+  }
+}
+
+/// The Edit panes' render lanes, behind their busy spinners.
+@MainActor
+struct EditRenderLaneTests {
+  @Test func lanesArePerPane() {
+    let edit = EditModel()
+    let left = UUID(), right = UUID()
+    #expect(!edit.isRendering)
+    edit.beginRender(.init(pane: left, kind: .fitted))
+    edit.beginRender(.init(pane: left, kind: .fitted))
+    #expect(edit.isRendering && edit.isRendering(pane: left) && !edit.isRendering(pane: right))
+    edit.beginRender(.init(pane: left, kind: .window))
+    edit.beginRender(.init(pane: right, kind: .slider))
+    // One lane ending leaves the pane's other one, and the other pane's.
+    edit.endRender(.init(pane: left, kind: .fitted))
+    #expect(edit.isRendering(pane: left) && edit.isRendering(pane: right))
+    edit.endRender(.init(pane: left, kind: .window))
+    #expect(!edit.isRendering(pane: left) && edit.isRendering(pane: right))
+    // Ending a lane that isn't running changes nothing.
+    edit.endRender(.init(pane: left, kind: .window))
+    #expect(edit.pendingRenders.count == 1)
+    // A pane that goes away ends all of its lanes.
+    edit.beginRender(.init(pane: left, kind: .fitted))
+    edit.beginRender(.init(pane: left, kind: .window))
+    edit.endRenders(pane: left)
+    #expect(!edit.isRendering(pane: left) && edit.isRendering(pane: right))
+    edit.endRenders(pane: right)
+    #expect(!edit.isRendering)
   }
 }

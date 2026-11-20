@@ -43,7 +43,9 @@ nonisolated enum Halation {
 
   /// `planes` with `halation` added. `scale` is output pixels per full-size pixel (the render
   /// window's), which `radius` is multiplied by. Nothing happens when `halation.isIdentity`.
-  static func apply(_ halation: EditOptions.Halation, to planes: inout EditPipeline.Planes, scale: Double = 1) {
+  static func apply(
+    _ halation: EditOptions.Halation, to planes: inout EditPipeline.Planes, scale: Double = 1, cancel: EditPipeline.Cancel = .never
+  ) {
     guard !halation.isIdentity, planes.width > 0, planes.height > 0 else { return }
     let width = planes.width
     let height = planes.height
@@ -59,7 +61,7 @@ nonisolated enum Halation {
     var bright = [Bool](repeating: false, count: (height + 7) / 8 + 1)
     bright.withUnsafeMutableBufferPointer { bright in
       let bright = bright.baseAddress!
-      source.withRowBands { rows, r, g, b in
+      source.withRowBands(cancel: cancel) { rows, r, g, b in
         var found = false
         for i in rows.lowerBound * width..<rows.upperBound * width {
           let light = max(r[i], g[i], b[i]) > skipBelow ? linear(r[i], g[i], b[i]) : .zero
@@ -83,9 +85,10 @@ nonisolated enum Halation {
       }
     }
     let any = bright.contains(true)
-    guard any else { return }
+    guard any, !cancel.isCancelled else { return }
     let sigma = max(halation.radius * scale, 0)
-    let glow = Blur.gauss([source.r, source.g, source.b], width: width, height: height, sigma: sigma)
+    let glow = Blur.gauss([source.r, source.g, source.b], width: width, height: height, sigma: sigma, cancel: cancel)
+    guard !cancel.isCancelled else { return }
     let warmth = Float(min(max(halation.warmth, 0), 1))
     let amount = Float(min(max(halation.amount, 0), 1))
     let warmPower = SIMD3(Foundation.pow(warmLinear.x, warmth), Foundation.pow(warmLinear.y, warmth), Foundation.pow(warmLinear.z, warmth))
@@ -95,7 +98,7 @@ nonisolated enum Halation {
           let gr = gr.baseAddress!
           let gg = gg.baseAddress!
           let gb = gb.baseAddress!
-          planes.withPixelBands { range, r, g, b in
+          planes.withPixelBands(cancel: cancel) { range, r, g, b in
             for i in range {
               let own = SIMD3(gr[i], gg[i], gb[i])
               // Where no glow reaches (or the blur's rounding leaves a trace far below a level),

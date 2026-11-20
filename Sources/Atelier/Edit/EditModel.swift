@@ -119,6 +119,41 @@ final class EditModel {
   let renderer = EditRenderer()
   let profiles: GrainProfileStore
 
+  /// One of a preview pane's renders: its fitted preview, its zoomed window or the Slider's
+  /// preview. Each pane has its own id, so Side by Side's panes are apart.
+  struct RenderLane: Hashable, Sendable {
+    enum Kind: Hashable, Sendable {
+      case fitted, window, slider
+    }
+
+    var pane: UUID
+    var kind: Kind
+  }
+
+  /// The renders under way, for the panes' busy spinners. A pane's render task begins its lane
+  /// and ends it only when it finishes un-cancelled or has nothing to render: a task cancelled by
+  /// a newer look leaves the lane to the task replacing it, so the spinner doesn't flicker off
+  /// between the two. A pane that goes away ends its lanes (`endRenders(pane:)`).
+  private(set) var pendingRenders: Set<RenderLane> = []
+
+  func beginRender(_ lane: RenderLane) {
+    if !pendingRenders.contains(lane) { pendingRenders.insert(lane) }
+  }
+
+  func endRender(_ lane: RenderLane) {
+    if pendingRenders.contains(lane) { pendingRenders.remove(lane) }
+  }
+
+  func endRenders(pane: UUID) {
+    if pendingRenders.contains(where: { $0.pane == pane }) { pendingRenders = pendingRenders.filter { $0.pane != pane } }
+  }
+
+  /// Any pane is rendering.
+  var isRendering: Bool { !pendingRenders.isEmpty }
+
+  /// `pane` is rendering, in any of its lanes.
+  func isRendering(pane: UUID) -> Bool { pendingRenders.contains { $0.pane == pane } }
+
   init() {
     storedOptions = Self.rememberedOptions()
     compareMode = SessionState.isEnabled

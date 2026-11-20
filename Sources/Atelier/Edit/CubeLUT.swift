@@ -201,7 +201,7 @@ nonisolated enum CubeLUT {
 
   /// `planes` through `table`, blended with themselves by `strength` (0 leaves them, 1 is the
   /// LUT's output). Nothing happens at strength 0 or with a table whose data is the wrong size.
-  static func apply(_ table: Edit.LUTTable, to planes: inout EditPipeline.Planes, strength: Double = 1) {
+  static func apply(_ table: Edit.LUTTable, to planes: inout EditPipeline.Planes, strength: Double = 1, cancel: EditPipeline.Cancel = .never) {
     let strength = Float(min(max(strength, 0), 1))
     let n = table.size
     let values = table.values
@@ -218,7 +218,7 @@ nonisolated enum CubeLUT {
     let planeStride = n * n * 3
     values.withUnsafeBufferPointer { lut in
       let lut = lut.baseAddress!
-      planes.withPixelBands { range, r, g, b in
+      planes.withPixelBands(cancel: cancel) { range, r, g, b in
         for i in range {
           // A value that isn't a number (an overflowed grade) reads as black.
           let x = Self.grid(r[i] * sr + or, top)

@@ -322,10 +322,12 @@ nonisolated enum Grain {
   /// region (grain.py's `resize_float(noise_field(...), W, H)`). Only the cells the region reads
   /// are made, a row at a time, so a fine grain on a wide reference (thousands of cells each way)
   /// never holds the whole field; the values are the whole field's.
-  static func field(cells: (width: Int, height: Int), seed: Int, layout: Layout) -> [Float] {
+  static func field(cells: (width: Int, height: Int), seed: Int, layout: Layout, cancel: EditPipeline.Cancel = .never) -> [Float] {
     guard cells.width > 0, cells.height > 0 else { return [Float](repeating: 0, count: layout.region.width * layout.region.height) }
     let base = Random.mix(UInt64(bitPattern: Int64(seed)))
-    return Resample.resize(width: cells.width, height: cells.height, toWidth: layout.width, height: layout.height, region: layout.region) { y, columns, out in
+    return Resample.resize(
+      width: cells.width, height: cells.height, toWidth: layout.width, height: layout.height, region: layout.region, cancel: cancel
+    ) { y, columns, out in
       noiseRow(y, base: base, columns: columns, into: out)
     }
   }
@@ -335,7 +337,7 @@ nonisolated enum Grain {
   /// grain.py's `motion_smear`: the mean of `max(2, round(length))` copies shifted along `angle`
   /// (degrees, 0 = horizontal), each shift rounded half to even. Edges clamp (the user's choice)
   /// where `np.roll` wraps. grain.py smears only when `length > 1`; callers check.
-  static func motionSmear(_ planes: EditPipeline.Planes, length: Double, angle: Double) -> EditPipeline.Planes {
+  static func motionSmear(_ planes: EditPipeline.Planes, length: Double, angle: Double, cancel: EditPipeline.Cancel = .never) -> EditPipeline.Planes {
     let n = max(2, round(length))
     let t = angle * Double.pi / 180
     let shifts = (0..<n).map { i -> (dy: Int, dx: Int) in
@@ -344,12 +346,14 @@ nonisolated enum Grain {
     }
     let width = planes.width, height = planes.height
     func smear(_ plane: [Float]) -> [Float] {
+      guard !cancel.isCancelled else { return plane }
       var out = [Float](repeating: 0, count: plane.count)
       plane.withUnsafeBufferPointer { input in
         out.withUnsafeMutableBufferPointer { output in
           let input = input
           let output = output
           DispatchQueue.concurrentPerform(iterations: height) { y in
+            guard !cancel.isCancelled else { return }
             let row = y * width
             for shift in shifts {
               let source = min(max(y - shift.dy, 0), height - 1) * width
@@ -370,10 +374,10 @@ nonisolated enum Grain {
   }
 
   /// grain.py's `gauss(a, blur)` on the three colour planes.
-  static func blur(_ planes: EditPipeline.Planes, sigma: Double) -> EditPipeline.Planes {
+  static func blur(_ planes: EditPipeline.Planes, sigma: Double, cancel: EditPipeline.Cancel = .never) -> EditPipeline.Planes {
     guard sigma >= 0.3 else { return planes }
     var out = planes
-    let blurred = Blur.gauss([planes.r, planes.g, planes.b], width: planes.width, height: planes.height, sigma: sigma)
+    let blurred = Blur.gauss([planes.r, planes.g, planes.b], width: planes.width, height: planes.height, sigma: sigma, cancel: cancel)
     out.r = blurred[0]
     out.g = blurred[1]
     out.b = blurred[2]
@@ -397,21 +401,24 @@ nonisolated enum Grain {
 
   /// `channelStats` of an 8-bit image's RGBA (the same numbers as its planes give), without
   /// making the planes.
-  static func channelStats(rgba: [UInt8], width w: Int, height h: Int) -> GrainProfile.ChannelStats {
+  static func channelStats(rgba: [UInt8], width w: Int, height h: Int, cancel: EditPipeline.Cancel = .never) -> GrainProfile.ChannelStats {
     guard w > 0, h > 0, rgba.count >= w * h * 4 else { return GrainProfile.ChannelStats(m: [0, 0, 0], s: [1, 1, 1]) }
     var bytes = [UInt8](repeating: 0, count: w * h * 3)
-    for i in 0..<w * h {
-      bytes[i * 3] = rgba[i * 4]
-      bytes[i * 3 + 1] = rgba[i * 4 + 1]
-      bytes[i * 3 + 2] = rgba[i * 4 + 2]
+    for row in 0..<h {
+      guard !cancel.isCancelled else { break }
+      for i in row * w..<(row + 1) * w {
+        bytes[i * 3] = rgba[i * 4]
+        bytes[i * 3 + 1] = rgba[i * 4 + 1]
+        bytes[i * 3 + 2] = rgba[i * 4 + 2]
+      }
     }
-    return channelStats(rgb: bytes, width: w, height: h)
+    return channelStats(rgb: bytes, width: w, height: h, cancel: cancel)
   }
 
   /// `channelStats` of interleaved 8-bit RGB.
-  static func channelStats(rgb bytes: [UInt8], width w: Int, height h: Int) -> GrainProfile.ChannelStats {
+  static func channelStats(rgb bytes: [UInt8], width w: Int, height h: Int, cancel: EditPipeline.Cancel = .never) -> GrainProfile.ChannelStats {
     let smallHeight = max(1, round(512 * Double(h) / Double(w)))
-    let small = Resample.resizeRGB8(bytes, width: w, height: h, toWidth: 512, height: smallHeight)
+    let small = Resample.resizeRGB8(bytes, width: w, height: h, toWidth: 512, height: smallHeight, cancel: cancel)
     let count = small.count / 3
     var means: [Double] = []
     var spreads: [Double] = []
@@ -436,18 +443,23 @@ nonisolated enum Grain {
   /// `(a − sm) × (rs / ss) + rm`, mixed in by `amount` (0–1). `source` is the *unblurred* source's
   /// `channelStats`, as grain.py measures it, applied to the (smeared, blurred) planes.
   static func colourMatch(
-    _ planes: EditPipeline.Planes, source: GrainProfile.ChannelStats, reference: GrainProfile.ChannelStats, amount: Double
+    _ planes: EditPipeline.Planes, source: GrainProfile.ChannelStats, reference: GrainProfile.ChannelStats, amount: Double,
+    cancel: EditPipeline.Cancel = .never
   ) -> EditPipeline.Planes {
     guard amount > 0, source.m.count == 3, source.s.count == 3, reference.m.count == 3, reference.s.count == 3 else { return planes }
     let keep = Float(1 - amount), take = Float(amount)
-    func moved(_ plane: [Float], _ c: Int) -> [Float] {
-      let sm = Float(source.m[c]), ratio = Float(reference.s[c]) / Float(source.s[c]), rm = Float(reference.m[c])
-      return plane.map { a in a * keep + ((a - sm) * ratio + rm) * take }
-    }
+    let sm = (0..<3).map { Float(source.m[$0]) }
+    let ratio = (0..<3).map { Float(reference.s[$0]) / Float(source.s[$0]) }
+    let rm = (0..<3).map { Float(reference.m[$0]) }
+    @inline(__always) func moved(_ a: Float, _ c: Int) -> Float { a * keep + ((a - sm[c]) * ratio[c] + rm[c]) * take }
     var out = planes
-    out.r = moved(planes.r, 0)
-    out.g = moved(planes.g, 1)
-    out.b = moved(planes.b, 2)
+    out.withPixelBands(cancel: cancel) { range, r, g, b in
+      for i in range {
+        r[i] = moved(r[i], 0)
+        g[i] = moved(g[i], 1)
+        b[i] = moved(b[i], 2)
+      }
+    }
     return out
   }
 
@@ -482,12 +494,17 @@ nonisolated enum Grain {
 
   /// grain.py's `L = np.clip(a.sum(-1) / 765, 0, 1)`: brightness 0–1 before grain, which sets
   /// the grain's strength (`gain`) and the real noise's.
-  static func luminance(_ planes: EditPipeline.Planes) -> [Float] {
+  static func luminance(_ planes: EditPipeline.Planes, cancel: EditPipeline.Cancel = .never) -> [Float] {
     var out = [Float](repeating: 0, count: planes.r.count)
     let scale = Float(765)
-    for i in 0..<out.count {
-      let total = planes.r[i] + planes.g[i] + planes.b[i]
-      out[i] = min(max(total / scale, 0), 1)
+    let width = max(planes.width, 1)
+    var start = 0
+    while start < out.count, !cancel.isCancelled {
+      for i in start..<min(start + width, out.count) {
+        let total = planes.r[i] + planes.g[i] + planes.b[i]
+        out[i] = min(max(total / scale, 0), 1)
+      }
+      start += width
     }
     return out
   }
@@ -513,14 +530,16 @@ nonisolated enum Grain {
   }
 
   /// The fields `addGrain` adds for these settings.
-  static func grainFields(lum: Double, chroma: Double, size: Double, csize: Double, seed: Int, refWidth: Int, layout: Layout) -> GrainFields {
-    let n0 = lum != 0 ? field(cells: lumaCells(refWidth: refWidth, size: size, aspect: layout.aspect), seed: seed, layout: layout) : nil
+  static func grainFields(
+    lum: Double, chroma: Double, size: Double, csize: Double, seed: Int, refWidth: Int, layout: Layout, cancel: EditPipeline.Cancel = .never
+  ) -> GrainFields {
+    let n0 = lum != 0 ? field(cells: lumaCells(refWidth: refWidth, size: size, aspect: layout.aspect), seed: seed, layout: layout, cancel: cancel) : nil
     var c1: [Float]?
     var c2: [Float]?
     if chroma != 0 {
       let cells = chromaCells(refWidth: refWidth, size: csize, aspect: layout.aspect)
-      c1 = field(cells: cells, seed: seed + 99, layout: layout)
-      c2 = field(cells: cells, seed: seed + 199, layout: layout)
+      c1 = field(cells: cells, seed: seed + 99, layout: layout, cancel: cancel)
+      c2 = field(cells: cells, seed: seed + 199, layout: layout, cancel: cancel)
     }
     return GrainFields(luma: n0, c1: c1, c2: c2)
   }
@@ -540,7 +559,8 @@ nonisolated enum Grain {
 
   /// `addGrain` with its fields made beforehand (`grainFields`, the planes' size).
   static func addGrain(
-    _ planes: inout EditPipeline.Planes, luminance: [Float], lum: Double, chroma: Double, curve: [Double]?, fields: GrainFields
+    _ planes: inout EditPipeline.Planes, luminance: [Float], lum: Double, chroma: Double, curve: [Double]?, fields: GrainFields,
+    cancel: EditPipeline.Cancel = .never
   ) {
     let count = planes.r.count
     guard count == luminance.count, planes.width * planes.height == count else { return }
@@ -560,6 +580,7 @@ nonisolated enum Grain {
         planes.b.withUnsafeMutableBufferPointer { b in
           let r = r, g = g, b = b
           DispatchQueue.concurrentPerform(iterations: rows) { row in
+            guard !cancel.isCancelled else { return }
             for i in row * width..<(row + 1) * width {
               var luma: Float = 0
               if let n0 {
@@ -669,13 +690,17 @@ nonisolated enum Grain {
   /// The real-noise texture (`realNoiseTexture`) enlarged to the layout's region, three planes:
   /// what `addRealNoise` adds before its weight. Picture-independent, so `EditRenderer` keeps it.
   /// Made a row at a time from the tiles, only the rows and columns the region reads.
-  static func realNoiseField(_ real: GrainProfile.RealNoise, refWidth: Int, seed: Int, layout: Layout) -> [[Float]] {
+  static func realNoiseField(
+    _ real: GrainProfile.RealNoise, refWidth: Int, seed: Int, layout: Layout, cancel: EditPipeline.Cancel = .never
+  ) -> [[Float]] {
     let tiles = RealNoiseTiles(real, refWidth: refWidth, aspect: layout.aspect, seed: seed)
     guard tiles.width > 0, tiles.height > 0 else {
       return [[Float]](repeating: [Float](repeating: 0, count: layout.region.width * layout.region.height), count: 3)
     }
     return (0..<3).map { channel in
-      Resample.resize(width: tiles.width, height: tiles.height, toWidth: layout.width, height: layout.height, region: layout.region) { y, columns, out in
+      Resample.resize(
+        width: tiles.width, height: tiles.height, toWidth: layout.width, height: layout.height, region: layout.region, cancel: cancel
+      ) { y, columns, out in
         tiles.row(y, channel: channel, columns: columns, into: out)
       }
     }
@@ -692,11 +717,14 @@ nonisolated enum Grain {
   }
 
   /// `addRealNoise` with its field made beforehand (`realNoiseField`, the planes' size).
-  static func addRealNoise(_ planes: inout EditPipeline.Planes, luminance: [Float], curve: [Double], amount: Double, field enlarged: [[Float]]) {
+  static func addRealNoise(
+    _ planes: inout EditPipeline.Planes, luminance: [Float], curve: [Double], amount: Double, field enlarged: [[Float]],
+    cancel: EditPipeline.Cancel = .never
+  ) {
     let count = planes.r.count
     guard amount > 0, count == luminance.count, enlarged.count == 3, enlarged.allSatisfy({ $0.count == count }) else { return }
     let width = planes.width
-    planes.withRowBands { rows, r, g, b in
+    planes.withRowBands(cancel: cancel) { rows, r, g, b in
       for i in rows.lowerBound * width..<rows.upperBound * width {
         let weight = amount * interp(Double(luminance[i]), curve: curve)
         r[i] = Float(Double(r[i]) + Double(enlarged[0][i]) * weight)

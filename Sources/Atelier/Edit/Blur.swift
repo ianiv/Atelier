@@ -24,7 +24,9 @@ nonisolated enum Blur {
 
   /// grain.py's `box_blur_axis` along x (`horizontal`, numpy axis 1) or y (axis 0): the mean of
   /// the `2r + 1` pixels around each, edges clamped. Radius below 1 returns the plane as it is.
-  static func boxBlur(_ plane: [Float], width: Int, height: Int, radius r: Int, horizontal: Bool) -> [Float] {
+  static func boxBlur(
+    _ plane: [Float], width: Int, height: Int, radius r: Int, horizontal: Bool, cancel: EditPipeline.Cancel = .never
+  ) -> [Float] {
     guard r >= 1, width > 0, height > 0, plane.count == width * height else { return plane }
     var out = [Float](repeating: 0, count: plane.count)
     let lines = horizontal ? height : width
@@ -41,6 +43,7 @@ nonisolated enum Blur {
         let input = input
         let output = output
         DispatchQueue.concurrentPerform(iterations: tasks) { task in
+          guard !cancel.isCancelled else { return }
           // The padded line's cumulative sum: r + 1 copies of the first pixel, the line, r of the last.
           var sums = [Double](repeating: 0, count: length + 2 * r + 1)
           for line in task * chunk..<min((task + 1) * chunk, lines) {
@@ -63,19 +66,21 @@ nonisolated enum Blur {
 
   /// grain.py's `gauss(a, sigma)` for one plane: for each of `boxSizes(sigma)`, a box blur of
   /// radius `(size − 1) / 2` along x, then y. Below sigma 0.3 the plane is returned as it is.
-  static func gauss(_ plane: [Float], width: Int, height: Int, sigma: Double) -> [Float] {
+  static func gauss(_ plane: [Float], width: Int, height: Int, sigma: Double, cancel: EditPipeline.Cancel = .never) -> [Float] {
     guard sigma >= 0.3 else { return plane }
     var out = plane
     for size in boxSizes(sigma: sigma) {
+      // Each pass makes a whole new plane: none once cancelled.
+      guard !cancel.isCancelled else { return out }
       let r = (size - 1) / 2
-      out = boxBlur(out, width: width, height: height, radius: r, horizontal: true)
-      out = boxBlur(out, width: width, height: height, radius: r, horizontal: false)
+      out = boxBlur(out, width: width, height: height, radius: r, horizontal: true, cancel: cancel)
+      out = boxBlur(out, width: width, height: height, radius: r, horizontal: false, cancel: cancel)
     }
     return out
   }
 
   /// `gauss` for each plane of an image (grain.py's HxWxC case, which blurs channels apart).
-  static func gauss(_ planes: [[Float]], width: Int, height: Int, sigma: Double) -> [[Float]] {
-    planes.map { gauss($0, width: width, height: height, sigma: sigma) }
+  static func gauss(_ planes: [[Float]], width: Int, height: Int, sigma: Double, cancel: EditPipeline.Cancel = .never) -> [[Float]] {
+    planes.map { gauss($0, width: width, height: height, sigma: sigma, cancel: cancel) }
   }
 }
