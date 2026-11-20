@@ -477,9 +477,9 @@ private extension View {
   }
 }
 
-/// Choose History Step…: the current project's images, newest first, to take one as the reference.
-/// The inspector's slider: a `Slider` that says while it's being dragged (`EditModel.isAdjusting`),
-/// so the preview knows when its value is final.
+/// The inspector's slider: a `Slider` that says while it's being dragged (`EditModel.isAdjusting`)
+/// and marks its changes as not final (`EditModel.sliderChange`), so the preview knows when its
+/// value is final.
 private struct EditSlider: View {
   @Environment(EditModel.self) private var edit
   let title: String
@@ -488,15 +488,22 @@ private struct EditSlider: View {
   @State private var dragging = false
 
   var body: some View {
-    Slider(value: $value, in: range) { Text(title) } onEditingChanged: { editing in
+    Slider(value: Binding(get: { value }, set: { new in edit.sliderChange { value = new } }), in: range) { Text(title) } onEditingChanged: { editing in
+      guard editing != dragging else { return }
       dragging = editing
-      edit.isAdjusting = editing
+      edit.adjusting(editing)
     }
     // Gone mid-drag (its section disabled, the screen left), it won't say it was let go.
-    .onDisappear { if dragging { edit.isAdjusting = false } }
+    .onDisappear {
+      if dragging {
+        dragging = false
+        edit.adjusting(false)
+      }
+    }
   }
 }
 
+/// Choose History Step…: the current project's images, newest first, to take one as the reference.
 private struct EditStepPicker: View {
   @Environment(HistoryStore.self) private var history
   @Environment(\.dismiss) private var dismiss

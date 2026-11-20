@@ -217,6 +217,29 @@ struct EditRenderLoopTests {
     #expect(changes == [true, false])
   }
 
+  // MARK: - What's final
+
+  @Test @MainActor func slidersCountAndTheirChangesArentFinal() {
+    let edit = EditModel()
+    // Two sliders dragged at once (iPad): adjusting until both are let go.
+    edit.adjusting(true)
+    edit.adjusting(true)
+    edit.adjusting(false)
+    #expect(edit.isAdjusting)
+    edit.adjusting(false)
+    edit.adjusting(false)
+    #expect(!edit.isAdjusting && edit.adjustingCount == 0)
+    // A slider's change (dragged or by arrow key) isn't final; a toggle's or typed one is.
+    edit.sliderChange { edit.options.halation.amount = 0.37 }
+    #expect(!edit.lastChangeIsFinal)
+    edit.options.vignette.amount = 0.21
+    #expect(edit.lastChangeIsFinal)
+    // A slider change that snaps to no change leaves the next change as it is.
+    edit.sliderChange { edit.options.halation.amount = 0.37 }
+    edit.options.vignette.amount = 0.33
+    #expect(edit.lastChangeIsFinal)
+  }
+
   // MARK: - A pane's two lanes
 
   @MainActor private func paneKey(_ window: EditPipeline.Window?, _ look: Int) -> EditPaneRenders.Loop.Key {

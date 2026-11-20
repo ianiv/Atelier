@@ -63,7 +63,10 @@ final class EditModel {
     get { storedOptions }
     set {
       let snapped = newValue.snapped
+      let fromSlider = sliderChanging
+      sliderChanging = false
       guard snapped != storedOptions else { return }
+      lastChangeIsFinal = !fromSlider
       storedOptions = snapped
       Self.remember(snapped)
     }
@@ -148,11 +151,29 @@ final class EditModel {
     if pendingRenders.contains(where: { $0.pane == pane }) { pendingRenders = pendingRenders.filter { $0.pane != pane } }
   }
 
-  /// A slider of the inspector is being dragged (`EditSlider`). While it is, the panes' renders
-  /// let one of an older value finish and go up before the newest (`EditRenderLoop`); let go,
-  /// and any other change (a toggle, a picker, a typed value), the look is final and a stale
-  /// render stops for it.
-  var isAdjusting = false
+  /// Inspector sliders being dragged (`EditSlider`): more than one at once with several fingers
+  /// on iPad. While any is, the panes' renders let one of an older value finish and go up before
+  /// the newest (`EditRenderLoop`); let go, the look is final and a stale render stops for it.
+  private(set) var adjustingCount = 0
+  var isAdjusting: Bool { adjustingCount > 0 }
+
+  func adjusting(_ editing: Bool) {
+    adjustingCount = max(0, adjustingCount + (editing ? 1 : -1))
+  }
+
+  /// Whether the last change to the look is final: false for a slider's (dragged, or moved with
+  /// the arrow keys, which say nothing when they stop), so the render on its way finishes first;
+  /// true for a toggle, picker, typed value or new profile, LUT or reference, which stop a stale
+  /// render for themselves. Read when the panes schedule, so not observed.
+  @ObservationIgnored private(set) var lastChangeIsFinal = true
+  @ObservationIgnored private var sliderChanging = false
+
+  /// Sets the look from a slider (`EditSlider`), marking the change as not final.
+  func sliderChange(_ change: () -> Void) {
+    sliderChanging = true
+    defer { sliderChanging = false }
+    change()
+  }
 
   /// Any pane is rendering.
   var isRendering: Bool { !pendingRenders.isEmpty }
@@ -612,6 +633,7 @@ final class EditModel {
     if context != self.context {
       self.context = context
       contextVersion += 1
+      lastChangeIsFinal = true
     }
   }
 

@@ -398,7 +398,9 @@ private struct EditPane: View {
     var window: EditPaneRenders.Loop.Key?
   }
 
-  private var fitted: CGImage? { renders.fitted.shown?.output }
+  /// The fitted preview, only if it's of this pane's source: never another image's stretched
+  /// into this one's frame.
+  private var fitted: CGImage? { renders.fitted.shown.flatMap { $0.key.target.source == ObjectIdentifier(image) ? $0.output : nil } }
   private var failure: String? { renders.fitted.failure }
 
   var body: some View {
@@ -431,7 +433,9 @@ private struct EditPane: View {
               .frame(width: frame.width, height: frame.height)
               .offset(x: frame.minX, y: frame.minY)
           }
-          if window != nil, let windowed = renders.window.shown, let shownWindow = windowed.key.target.window {
+          if window != nil, let windowed = renders.window.shown, windowed.key.target.source == ObjectIdentifier(image),
+             let shownWindow = windowed.key.target.window
+          {
             let rect = viewport.frame(of: shownWindow)
             Image(decorative: windowed.output, scale: 1)
               .resizable()
@@ -487,6 +491,9 @@ private struct EditPane: View {
       .onChange(of: viewport.fitScale, initial: true) { canvas.fitScale = viewport.fitScale }
       .onChange(of: viewport.fillScale, initial: true) { canvas.fillScale = viewport.fillScale }
       .onChange(of: keys, initial: true) { _, keys in schedule(keys) }
+      // Back after going away (which cancelled its lanes) with the same keys: onChange won't
+      // fire, so ask again; asking for what's shown or rendering does nothing.
+      .onAppear { schedule(keys) }
     }
     .accessibilityElement()
     .accessibilityLabel(showsOriginal ? "Original image" : "Edited image")
@@ -513,7 +520,7 @@ private struct EditPane: View {
       window: keys.window.flatMap { key in
         key.target.window.map { window in (key, { try await renderer.window(source: image, options: key.look.options, context: context, window: window) }) }
       },
-      settled: !edit.isAdjusting)
+      settled: edit.lastChangeIsFinal && !edit.isAdjusting)
   }
 
   /// The pane's lanes as the model keeps them, for its spinner.
@@ -585,13 +592,16 @@ private struct EditSliderPane: View {
         imageWidth: image.width, imageHeight: image.height,
         viewSize: CGSize(width: geometry.size.width, height: max(1, geometry.size.height - 22)), displayScale: displayScale)
       let fit = viewport.fitPixels
+      let key = EditPaneRenders.Loop.Key(
+        target: .init(source: ObjectIdentifier(image), width: fit.width, height: fit.height),
+        look: .init(options: edit.options, context: edit.contextVersion))
       SliderComparison(
-        matched: loop.shown?.output, original: edit.originalPreview ?? image, matchedNote: "Rendering…",
+        matched: loop.shown.flatMap { $0.key.target.source == ObjectIdentifier(image) ? $0.output : nil },
+        original: edit.originalPreview ?? image, matchedNote: "Rendering…",
         shape: CGSize(width: image.width, height: image.height), matchedTitle: "Edited")
-        .onChange(of: EditPaneRenders.Loop.Key(
-          target: .init(source: ObjectIdentifier(image), width: fit.width, height: fit.height),
-          look: .init(options: edit.options, context: edit.contextVersion)), initial: true)
-        { _, key in schedule(key) }
+        .onChange(of: key, initial: true) { _, key in schedule(key) }
+        // As `EditPane`: back after going away, ask again.
+        .onAppear { schedule(key) }
     }
     .overlay(alignment: .topTrailing) { EditRenderingIndicator(pane: paneID, hidden: loop.shown == nil) }
     .onChange(of: edit.isAdjusting) { _, adjusting in if !adjusting { loop.settle() } }
@@ -607,7 +617,7 @@ private struct EditSliderPane: View {
 
   private func schedule(_ key: EditPaneRenders.Loop.Key) {
     let renderer = edit.renderer, context = edit.context, image = image
-    loop.request(key, settled: !edit.isAdjusting) {
+    loop.request(key, settled: edit.lastChangeIsFinal && !edit.isAdjusting) {
       try await renderer.preview(source: image, options: key.look.options, context: context, fitting: key.target.width, height: key.target.height)
     }
   }

@@ -576,7 +576,9 @@ extension Automation {
   /// as the slider's release), fitted and then zoomed to 100% (the window in view laid over the
   /// fitted preview). Each line gives the previews that went up during the drag, the
   /// milliseconds to the first, and from the release until the final value's preview is up (the
-  /// window's, zoomed, then the fitted preview's under it). `--drag-only` skips everything before.
+  /// window's, zoomed, then the fitted preview's under it). Last, Halation by arrow key held on
+  /// the slider (a change every 30 ms, no release), asked as the pane asks now and as it asked
+  /// before (each change final). `--drag-only` skips everything before.
   static func editRenderBench() {
     let args = CommandLine.arguments
     func value(_ name: String) -> String? { args.firstIndex(of: name).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } }
@@ -710,12 +712,19 @@ extension Automation {
       }
 
       // The drag test.
-      let dragControls: [(String, (inout EditOptions, Double) -> Void)] = [
-        ("Halation", { $0.halation.amount = 0.05 + 0.9 * $1 }),
-        ("Grade", { $0.grade.exposure = -1 + 2 * $1 }),
-        ("Grain", { $0.grain.lum = 2 + 28 * $1 }),
+      /// How the value changes: a drag (16 ms ticks, then the release), or an arrow key held on
+      /// the focused slider (30 ms repeats, no onEditingChanged, so no release), each change
+      /// asked as not final as the pane asks a slider's, or (`settledKeys`) as final, as the pane
+      /// first asked every change made outside a drag.
+      enum Gesture { case drag, keys, settledKeys }
+      let halation: (inout EditOptions, Double) -> Void = { $0.halation.amount = 0.05 + 0.9 * $1 }
+      let dragControls: [(String, Gesture, (inout EditOptions, Double) -> Void)] = [
+        ("Halation", .drag, halation),
+        ("Grade", .drag, { $0.grade.exposure = -1 + 2 * $1 }),
+        ("Grain", .drag, { $0.grain.lum = 2 + 28 * $1 }),
+        ("Halation keys", .keys, halation),
+        ("Halation keys settled", .settledKeys, halation),
       ]
-      let tick = Duration.milliseconds(16), ticks = 106
       for zoomed in [false, true] {
         let viewport = EditViewport(imageWidth: width, imageHeight: height, viewSize: pane, displayScale: 2, scale: zoomed ? 1 : nil)
         let fitPixels = viewport.fitPixels, window = viewport.window
@@ -723,7 +732,8 @@ extension Automation {
           log("  Drag zoomed: the image fits at 100%, no window to render")
           continue
         }
-        for (name, vary) in dragControls {
+        for (name, gesture, vary) in dragControls {
+          let tick = Duration.milliseconds(gesture == .drag ? 16 : 30), ticks = gesture == .drag ? 106 : 57
           let renders = EditPaneRenders.forScreen()
           let source = ObjectIdentifier(image)
           var lastKeys: (fitted: EditPaneRenders.Loop.Key, window: EditPaneRenders.Loop.Key?)?
@@ -753,13 +763,13 @@ extension Automation {
           let start = clock.now
           for index in 1...ticks {
             try? await Task.sleep(until: start + tick * index, clock: clock)
-            schedule(options(at: Double(index) / Double(ticks)), settled: false)
+            schedule(options(at: Double(index) / Double(ticks)), settled: gesture == .settledKeys)
             if firstUpdate == nil, shownLane.deliveries > (zoomed ? before.window : before.fitted) { firstUpdate = milliseconds(clock.now - start) }
           }
           let during = (fitted: renders.fitted.deliveries - before.fitted, window: renders.window.deliveries - before.window)
-          // The release: the slider's onEditingChanged(false).
+          // The release: the slider's onEditingChanged(false). Keys have none: from the last change.
           let released = clock.now
-          renders.settle()
+          if gesture == .drag { renders.settle() }
           let final = lastKeys!
           var shownAt: Double?, fittedAt: Double?
           while shownAt == nil || fittedAt == nil, clock.now - released < .seconds(20) {
@@ -770,7 +780,7 @@ extension Automation {
           renders.cancel()
           func ms(_ value: Double?) -> String { value.map { String(format: "%6.0f ms", $0) } ?? "  never" }
           let counts = zoomed ? "\(during.window) window, \(during.fitted) fitted" : "\(during.fitted)"
-          log("  Drag \(zoomed ? "zoomed" : "fitted") \(name.padding(toLength: 9, withPad: " ", startingAt: 0)) updates during drag \(counts); "
+          log("  Drag \(zoomed ? "zoomed" : "fitted") \(name.padding(toLength: 21, withPad: " ", startingAt: 0)) updates during drag \(counts); "
             + "first \(ms(firstUpdate)); release to final \(ms(shownAt))" + (zoomed ? ", fitted \(ms(fittedAt))" : "")
             + (zoomed ? " (window \(window!.outputWidth)x\(window!.outputHeight))" : " (\(fitPixels.width)x\(fitPixels.height))"))
         }
