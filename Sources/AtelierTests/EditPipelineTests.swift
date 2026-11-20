@@ -413,6 +413,83 @@ struct EditPipelineTests {
     }
   }
 
+  /// Halation's tables and vForce powers (`Halation.Transfer`) keep it within a level of the
+  /// exact formulas (`exactHalation`, the step with a `pow` per transfer and tint), on a gradient
+  /// and on random pixels, for several looks: each output byte within 1 (truncation can still
+  /// tip a value over a level), and the values within 0.01 of a level (about 0.004 here).
+  @Test func halationTablesStayWithinALevel() {
+    let width = 192, height = 128
+    var gradient = [UInt8](repeating: 255, count: width * height * 4)
+    for y in 0..<height {
+      for x in 0..<width {
+        let i = (y * width + x) * 4
+        gradient[i] = UInt8(255 * x / (width - 1))
+        gradient[i + 1] = UInt8(255 * (x + y) / (width + height - 2))
+        gradient[i + 2] = UInt8(255 * y / (height - 1))
+      }
+    }
+    let images = [
+      EditPipeline.Planes(rgba: gradient, width: width, height: height),
+      EditPipeline.Planes(rgba: randomPixels(width * height, seed: 3), width: width, height: height),
+      EditPipeline.Planes(rgba: randomPixels(width * height, in: 150...255, seed: 4), width: width, height: height),
+    ]
+    let looks: [EditOptions.Halation] = [
+      .init(amount: 1, threshold: 0.5, radius: 6, warmth: 0.6),
+      .init(amount: 0.4, threshold: 0.8, radius: 12, warmth: 0),
+      .init(amount: 1, threshold: 0.2, radius: 3, warmth: 1),
+      .init(amount: 0.7, threshold: 0.65, radius: 20, warmth: 0.3),
+    ]
+    var worstValue: Float = 0
+    for (n, image) in images.enumerated() {
+      for look in looks {
+        var fast = image
+        Halation.apply(look, to: &fast)
+        let exact = exactHalation(look, image)
+        let bytes = maxDifference(fast.rgba, exact.rgba)
+        #expect(bytes <= 1, "image \(n), \(look): bytes differ by \(bytes)")
+        for i in 0..<image.r.count {
+          worstValue = max(worstValue, abs(fast.r[i] - exact.r[i]), abs(fast.g[i] - exact.g[i]), abs(fast.b[i] - exact.b[i]))
+        }
+      }
+    }
+    #expect(worstValue < 0.01, "values differ by up to \(worstValue) of a level")
+  }
+
+  /// `Halation.apply` with the exact transfer functions and tint (`pow` each time).
+  private func exactHalation(_ halation: EditOptions.Halation, _ image: EditPipeline.Planes) -> EditPipeline.Planes {
+    var planes = image
+    func linear(_ i: Int) -> SIMD3<Float> {
+      SIMD3(Halation.srgbToLinear(planes.r[i] / 255), Halation.srgbToLinear(planes.g[i] / 255), Halation.srgbToLinear(planes.b[i] / 255))
+    }
+    let threshold = Halation.srgbToLinear(Float(halation.threshold))
+    let range = max(1 - threshold, 1e-4), knee = Halation.knee, kneeTop = 1 - knee / 2
+    var emitters = [[Float]](repeating: [Float](repeating: 0, count: planes.r.count), count: 3)
+    for i in 0..<planes.r.count {
+      let light = linear(i)
+      let y = Halation.luma(light)
+      guard y > threshold else { continue }
+      let s = min((y - threshold) / range, 1)
+      let e = (s < knee ? s * s / (2 * knee) : s - knee / 2) / kneeTop
+      let emitted = light * (e / max(y, 1e-6))
+      (emitters[0][i], emitters[1][i], emitters[2][i]) = (emitted.x, emitted.y, emitted.z)
+    }
+    let glow = Blur.gauss(emitters, width: planes.width, height: planes.height, sigma: halation.radius)
+    let warmth = Float(halation.warmth), amount = Float(halation.amount)
+    let warmPower = SIMD3(pow(Halation.warmLinear.x, warmth), pow(Halation.warmLinear.y, warmth), pow(Halation.warmLinear.z, warmth))
+    for i in 0..<planes.r.count {
+      let own = SIMD3(glow[0][i], glow[1][i], glow[2][i])
+      guard max(own.x, own.y, own.z) > 1e-6 else { continue }
+      let light = linear(i)
+      let dark = max(1 - Halation.luma(light), 0)
+      guard dark * dark > 0 else { continue }
+      let out = light + amount * dark * dark * Halation.tint(own, warmth: warmth, warmPower: warmPower)
+      planes.r[i] += 255 * (Halation.linearToSrgb(out.x) - Halation.linearToSrgb(light.x))
+      planes.g[i] += 255 * (Halation.linearToSrgb(out.y) - Halation.linearToSrgb(light.y))
+      planes.b[i] += 255 * (Halation.linearToSrgb(out.z) - Halation.linearToSrgb(light.z))
+    }
+    return planes
+  }
+
   // MARK: - Pipeline assembly (Slice F)
 
   /// A look with every step on, and a context holding everything those steps use.
@@ -825,7 +902,9 @@ struct EditPipelineTests {
 extension EditPipelineTests {
   /// The renders' bytes are exactly what they were before the steps learned to stop when
   /// cancelled (`EditPipeline.Cancel`): every step, at full size, fitted and as a window. The
-  /// digest is of the renders made by the code before the change.
+  /// digest is of the renders made by the code before the change, since remade once for
+  /// halation's transfer tables (`halationTablesStayWithinALevel`); the faster blur, luminance
+  /// and crops left it as it was.
   @Test func cancellationChecksLeaveTheRenderAlone() async throws {
     let (options, context) = everything()
     let source = try image(GrainTests.picture(width: 300, height: 200))
@@ -837,7 +916,7 @@ extension EditPipelineTests {
     var bytes: [UInt8] = []
     for image in [full, fitted, window] { bytes += try #require(ColorMatch.rgba(image)) }
     let digest = SHA256.hash(data: Data(bytes)).map { String(format: "%02x", $0) }.joined()
-    #expect(digest == "93599b90c1cd9d6c48836f5c11995a2a104e7749d4669d2b77ad6274a16da682", "digest \(digest)")
+    #expect(digest == "fa6b73cf17fa4fb217820c4b37c2c1173eb3a8c417808b3a68024c07c5d0ffe7", "digest \(digest)")
   }
 }
 
