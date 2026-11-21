@@ -108,6 +108,10 @@ nonisolated enum ProjectMapping {
     /// key: only marked steps are input entries, holding the whole moodboard and the canvas mask.
     /// Imported steps written before entries existed, and Draw Things' own, stay plain inputs.
     var inputEntry: Bool?
+    /// The step's scheduler (`Denoiser.Scheduler` case name, as the settings dump has it), only
+    /// when not the sampler's own. Draw Things' schema has no field for it, and its configuration
+    /// would run the step on the sampler's own schedule.
+    var scheduler: String?
 
     /// The band entry keys come from: above the audio tensors' (`Project.append`), so a key is
     /// never a tensor's id.
@@ -140,7 +144,8 @@ nonisolated enum ProjectMapping {
     init(
       duration: Double, inputTensorId: Int64?, parentTensorId: Int64?, inputAudioId: Int64? = nil,
       timings: [Timing] = [], refine: RefineRecord? = nil, colorMatch: ColorMatch.Record? = nil,
-      edit: Edit.Record? = nil, entryKey: Int64? = nil, entryMask: CanvasMask? = nil, inputEntry: Bool? = nil
+      edit: Edit.Record? = nil, entryKey: Int64? = nil, entryMask: CanvasMask? = nil, inputEntry: Bool? = nil,
+      scheduler: String? = nil
     ) {
       self.timings = timings
       self.duration = duration
@@ -153,11 +158,12 @@ nonisolated enum ProjectMapping {
       self.entryKey = entryKey
       self.entryMask = entryMask
       self.inputEntry = inputEntry
+      self.scheduler = scheduler
     }
 
     private enum CodingKeys: String, CodingKey {
       case timings, duration, inputTensorId, parentTensorId, inputAudioId, refineRect, refineScale, refineOffset
-      case refineMask, colorMatch, edit, entryKey, entryMask, inputEntry
+      case refineMask, colorMatch, edit, entryKey, entryMask, inputEntry, scheduler
     }
 
     /// Lenient past `duration`: a key that doesn't read (written by a later version, say) is left
@@ -180,6 +186,7 @@ nonisolated enum ProjectMapping {
       entryKey = lenient(Int64.self, .entryKey)
       entryMask = lenient(CanvasMask.self, .entryMask)
       inputEntry = lenient(Bool.self, .inputEntry)
+      scheduler = lenient(String.self, .scheduler)
     }
 
     init?(_ bytes: [UInt8]) {
@@ -266,7 +273,8 @@ nonisolated enum ProjectMapping {
         parentTensorId: step.parentTensorId ?? 0, inputAudioId: step.inputAudioId,
         timings: step.timings?.profileTimings ?? [], refine: step.refine,
         colorMatch: step.colorMatch, edit: step.edit, entryKey: step.entryKey, entryMask: step.entryMask,
-        inputEntry: step.isEntry ? true : nil
+        inputEntry: step.isEntry ? true : nil,
+        scheduler: d.string("scheduler").flatMap { $0 == defaultScheduler ? nil : $0 }
       ).bytes,
       teaCacheStart: i32("teaCacheStart", 5), teaCacheEnd: i32("teaCacheEnd", -1),
       teaCacheThreshold: d.float("teaCacheThreshold", 0.06), teaCache: d.bool("teaCache", false),
@@ -438,8 +446,12 @@ nonisolated enum ProjectMapping {
       "usesSolAttention": .bool(node.usesSolAttention),
       "solAttentionStart": n(node.solAttentionStart),
       "solAttentionTau": f(node.solAttentionTau),
+      "scheduler": .string(Profile(node.profileData)?.scheduler ?? defaultScheduler),
     ]
   }
+
+  /// `Denoiser.Scheduler.samplerDefault` as the settings dump names it.
+  static let defaultScheduler = "samplerDefault"
 
   private static func lora(_ d: Dump) -> ProjectFormat.LoRA {
     ProjectFormat.LoRA(

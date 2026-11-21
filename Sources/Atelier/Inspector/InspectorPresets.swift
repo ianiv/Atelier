@@ -1,4 +1,5 @@
 @preconcurrency import _MediaGenerationKit
+@preconcurrency import Diffusion
 import ImageIO
 import SwiftUI
 
@@ -473,6 +474,12 @@ enum DrawThingsJSON {
         dump[key] = name(of: SamplerType.self, raw: raw).map(JSONValue.string)
       case ("seedMode", .number(let raw)):
         dump[key] = name(of: SeedMode.self, raw: raw).map(JSONValue.string)
+      case ("scheduler", .string(let name)):
+        // Atelier's case names, ComfyUI's names (the raw values) or the inspector's titles.
+        dump[key] = Denoiser.Scheduler.allCases.first {
+          String(describing: $0) == name || $0.rawValue == name.lowercased()
+            || SettingsRegistry.schedulerTitles[$0]?.caseInsensitiveCompare(name) == .orderedSame
+        }.map { .string(String(describing: $0)) }
       case ("colorCalibration", .string(let name)):
         dump[key] = caseName(of: ColorCalibration.self, matching: name == "none" ? "disabled" : name)
       case ("compressionArtifacts", .string(let name)):
@@ -655,6 +662,11 @@ nonisolated enum ImageMetadata {
     {
       flat["sampler"] = .number(Double(sampler.rawValue))
     }
+    if case .string(let title)? = json["scheduler"],
+       let scheduler = SettingsRegistry.schedulerTitles.first(where: { $0.value == title })?.key
+    {
+      flat["scheduler"] = .string(String(describing: scheduler))
+    }
     if case .string(let title)? = json["seed_mode"],
        let mode = seedModeTitles.first(where: { $0.value == title })?.key
     {
@@ -696,6 +708,15 @@ nonisolated enum ImageMetadata {
     if sidecar.shift != 1 {
       json["shift"] = Double(sidecar.shift)
       description += ", Shift: \(sidecar.shift)"
+    }
+    // Draw Things has no scheduler; say so only when it isn't the sampler's own.
+    if case .string(let name)? = dump["scheduler"],
+       let scheduler = Denoiser.Scheduler.allCases.first(where: { String(describing: $0) == name }),
+       scheduler != .samplerDefault
+    {
+      let title = SettingsRegistry.schedulerTitles[scheduler] ?? name
+      json["scheduler"] = title
+      description += ", Scheduler: \(title)"
     }
     if let data = DrawThingsJSON.encode(values, model: sidecar.model, seed: sidecar.seed),
        let v2 = try? JSONSerialization.jsonObject(with: data)

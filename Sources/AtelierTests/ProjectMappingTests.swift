@@ -84,6 +84,20 @@ struct ProjectMappingTests {
     #expect(read.inputTensorId == 11 && read.parentTensorId == 12 && read.inputAudioId == 13)
   }
 
+  /// The scheduler lives in the profile (Draw Things' schema has no field), only when it isn't the
+  /// sampler's own, so a default step's profile is byte for byte what it was; a step without one
+  /// reads back as the sampler's own, so Use Settings resets it.
+  @Test func schedulerRoundTripsThroughTheProfile() {
+    let karras = ProjectMapping.node(for: step(), settings: ["scheduler": .string("karras")])
+    #expect(ProjectMapping.Profile(karras.profileData)?.scheduler == "karras")
+    #expect(ProjectMapping.dump(of: karras)["scheduler"] == .string("karras"))
+    let plain = ProjectMapping.node(for: step(), settings: [:])
+    let defaulted = ProjectMapping.node(for: step(), settings: ["scheduler": .string("samplerDefault")])
+    #expect(plain.profileData == defaulted.profileData)
+    #expect(!String(decoding: defaulted.profileData, as: UTF8.self).contains("scheduler"))
+    #expect(ProjectMapping.dump(of: plain)["scheduler"] == .string("samplerDefault"))
+  }
+
   /// Draw Things reads and writes the same field, as snake-case JSON.
   @Test func profileUsesDrawThingsKeys() throws {
     let text = String(decoding: ProjectMapping.Profile(duration: 1, inputTensorId: 5, parentTensorId: nil).bytes, as: UTF8.self)
