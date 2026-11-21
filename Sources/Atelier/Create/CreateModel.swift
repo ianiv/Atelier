@@ -2545,9 +2545,10 @@ final class CreateModel {
     runNext()
     adoptRemoteRun()
     // Once the queue is empty, the next run shows on the canvas again. A detached job doesn't
-    // count: the canvas follows none while only it runs, so your next Generate shows there. A
-    // run of yours still waiting behind it keeps what you chose (you looked away during the run
-    // before), as it would with no detached job between them.
+    // count: the canvas follows none while only it runs, so your next Generate shows there. Any
+    // non-detached job still waiting behind it (yours, an agent's generate, a paired device's)
+    // keeps what you chose (you looked away during the run before), as it would with no detached
+    // job between them.
     let ownRunLeft = queue.waiting.contains { !$0.detached } || queue.runningRemote.contains { !$0.detached }
     if generationTask == nil || (foregroundRunIsDetached && !ownRunLeft) { canvasFollowsRun = true }
   }

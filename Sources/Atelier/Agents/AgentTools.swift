@@ -838,6 +838,12 @@ final class AgentTools {
     }
   }
 
+  /// `project`, or the one now open under its name when it was closed since it was handed back
+  /// (a rename between the save and the answer closes it, `HistoryStore.renameCurrent`).
+  func reopened(_ project: Project) -> Project {
+    project.isOpen ? project : create.history.project(named: project.name) ?? project
+  }
+
   /// What a finished run answers with: the file written, the image inline and the structured
   /// result (plus `extra`). `saved` is the project the step is in when that may not be the open
   /// one (a detached job's, `JobQueue.Job.project`).
@@ -845,7 +851,7 @@ final class AgentTools {
     of item: HistoryItem, in saved: Project? = nil, model: String, configuration: PipelineConfiguration, seed: UInt32,
     summary: String, notes: [String], arguments: [String: Any], extra: [String: Any] = [:]
   ) async throws -> [String: Any] {
-    let saved = saved ?? create.history.project
+    let saved = reopened(saved ?? create.history.project)
     let png = try await create.history.pngData(item, in: saved)
     // A client on another device can't open a file here: it gets the image inline only.
     var url: URL?
@@ -978,8 +984,20 @@ final class AgentTools {
     let merged = request.merge != nil
 
     let summary = String(request.prompt.prefix(60))
-    let (item, savedIn) = try await run(request, target: create.runTarget, summary: summary, progress: progress)
-    let parent = item.inputTensorId.flatMap { create.history.item(tensorId: $0) }
+    let (item, returned) = try await run(request, target: create.runTarget, summary: summary, progress: progress)
+    let savedIn = reopened(returned)
+    // The step it followed is the saved-into project's, which may not be the open one now.
+    let parent: HistoryItem?
+    if savedIn === create.history.project {
+      parent = item.inputTensorId.flatMap { create.history.item(tensorId: $0) }
+    } else if let input = item.inputTensorId {
+      parent = await savedIn.read { project in
+        let tree = project.tree()
+        return tree.step(tensorId: input).flatMap { tree.items[$0] }
+      }
+    } else {
+      parent = nil
+    }
     // The saved image's own size: a merged one is the whole (maybe grown) image, not the frame.
     let saved = await savedIn.read { $0.image(for: item) }
     let size = saved.map { ["width": $0.width, "height": $0.height] } ?? ["width": item.sidecar.width, "height": item.sidecar.height]

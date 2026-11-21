@@ -1148,11 +1148,15 @@ extension Automation {
         check(model.canvasFollowsRun, "once the queue is empty, the canvas follows runs again")
       } catch {
         check(false, "edit_image between two of your runs (\(error.localizedDescription))")
+        // Whatever was queued finishes here, not in the sections after.
+        await idle()
       }
       if let stepsBefore { model.settings?.steps = stepsBefore }
 
       // The project renamed while edit_image and generate wait: each saves into it and answers
       // with its new name, the step there (`generate(forAgent:)` hands the project back).
+      // The calls waiting through the rename, awaited before leaving even when it fails.
+      var answers: [Task<(project: String?, step: Int64?, text: String), Error>] = []
       do {
         model.settings?.steps = max(runSteps, 12)
         let oldName = model.history.project.name
@@ -1181,6 +1185,7 @@ extension Automation {
             "model": model.selectedModel ?? "", "use_app_settings": true, "prompt": "a paper boat on a pond", "steps": runSteps,
             "include_image": false,
           ])
+        answers = [edit, generate]
         for _ in 0..<2400 where model.queue.waiting.count < waitingBefore + 2 { try? await Task.sleep(for: .milliseconds(25)) }
         let bothWaiting = model.queue.waiting.contains { $0.detached } && model.queue.waiting.contains { $0.fromAgent && !$0.detached }
         try await model.history.renameCurrent(to: newName)
@@ -1203,6 +1208,8 @@ extension Automation {
         model.projectRenamed(from: renamed, to: model.history.project.name)
       } catch {
         check(false, "a rename while agent runs wait (\(error.localizedDescription))")
+        for answer in answers { _ = try? await answer.value }
+        await idle()
       }
       if let stepsBefore { model.settings?.steps = stepsBefore }
 
