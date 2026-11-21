@@ -35,6 +35,8 @@ If the connection drops or you quit, the job carries on at the server. Atelier p
 | Upscale (Quality or Fast) | The clip's frames, unless the server still has them from making that clip | The upscaled frames |
 | Export Video with upscaling | The timeline's frames | The upscaled frames; this device encodes the video |
 
+A [Scheduler](creating-images.md#scheduler) other than Sampler's Own needs a server whose Atelier lists the "scheduler" feature; an older server refuses the job and says so, rather than run it on the sampler's own schedule.
+
 Inpainting with a mask needs a server whose Atelier lists the "mask" feature, which means an Atelier at least as new as this one. With an older server the Brush and Eraser are disabled, and Generate stays off while a mask is painted inside the frame; Clear Mask and Invert Mask still work.
 
 Upscale and Export use what's on the server: FlashVSR+ or ReCaVSR has to be downloaded there (and ReCaVSR's 8-bit copy made or imported there, for 8-bit; a server with only an imported copy offers 8-bit alone), and this device doesn't need it. An iPad server never offers ReCaVSR, since it doesn't run on iPad, and a server running an Atelier from before ReCaVSR doesn't offer it either; an iPad uses ReCaVSR only through a Mac that has it. The server holds all of an upscale's frames in memory at once, so very long timelines need a server with memory to spare.

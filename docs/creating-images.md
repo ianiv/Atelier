@@ -58,19 +58,31 @@ The inspector lists the model's settings in sections: Essentials, Sampling, LoRA
 - **Search**: type in the search field at the top to find any setting, including hidden ones.
 - **Changed**: when any setting differs from the model's defaults, a Changed group at the top lists them all, so nothing you changed is out of sight.
 - **More: N**: less common settings in a section are tucked under this disclosure.
-- **Settings that don't apply** to the selected model are hidden automatically (search still shows them, dimmed). Some depend on other settings too: Strategic Stochastic Sampling (SSS), the noise the TCD samplers add each step, shows only when the sampler is TCD or TCD Trailing.
+- **Settings that don't apply** to the selected model are hidden automatically (search still shows them, dimmed). Some depend on other settings too: Strategic Stochastic Sampling (SSS), the noise the TCD samplers add each step, shows only when the sampler is TCD or TCD Trailing, and Scheduler hides for the Substep samplers.
 - **Right-click any setting** (on iPad, touch and hold) for Reset to Default, Copy Value, and Hide from / Show in Inspector.
 - **Reset All to Model Defaults** at the bottom puts everything back to the model's recommended values (and its default preset).
 - Hover over any setting to see what it does.
 - Setting changes can be undone with ⌘Z.
+
+### Scheduler
+
+**Scheduler**, under Sampler, decides how the sampler spaces its steps, separately from the sampler's math, as in ComfyUI. **Sampler's Own** (the default) keeps the schedule the sampler's name implies: Karras for DPM++ 2M Karras, the trailing schedule for the … Trailing samplers, and so on. The others are ComfyUI's schedulers and give the same steps ComfyUI does for the same model:
+
+- **Simple** and **SGM Uniform**: evenly spaced along the model's own noise schedule (with Shift, on flow models).
+- **Normal**: evenly spaced timesteps from the model's highest noise to its lowest.
+- **Karras** and **Exponential**: more steps at low noise, for detail.
+- **Linear Quadratic**: Mochi's schedule, slow through the high-noise steps, then quickly down.
+- **Beta**: more steps at both ends (alpha and beta 0.6).
+
+So DPM++ 2M with Beta, or Euler A with Karras, are both one sampler and one scheduler away. Switching models puts Scheduler back to Sampler's Own. It's ignored by the Substep samplers (their timesteps are fixed), Stable Cascade, and HyperFlow H3 Flash (its distilled grids); models on EDM sigmas, such as Stable Video Diffusion, take only Karras and Exponential and run the others as Sampler's Own. MiniMax H3 Image follows its trained schedule with any scheduler, as in ComfyUI. The scheduler is saved with each step in the project and in the settings an image carries (Draw Things doesn't have one and runs such an image on the sampler's own schedule).
 
 ### Layouts
 
 A layout decides which settings are shown, their order, and which sections start expanded. It never changes values. Pick one from the menu at the top of the inspector:
 
 - **Simple**: size, steps, guidance and sampler.
-- **Standard**: adds LoRAs, shift, hires fix, refiner, upscaler, strength and other common settings.
-- **Video**: for video models: size, steps, guidance, sampler and length first, then LoRAs, shift, the second pass (LTX), the refiner (Wan 2.2's two experts), strength, TeaCache, Sol Attention (MiniMax H3) and tiled decoding. Settings a model doesn't use stay hidden.
+- **Standard**: adds the scheduler, LoRAs, shift, hires fix, refiner, upscaler, strength and other common settings.
+- **Video**: for video models: size, steps, guidance, sampler, scheduler and length first, then LoRAs, shift, the second pass (LTX), the refiner (Wan 2.2's two experts), strength, TeaCache, Sol Attention (MiniMax H3) and tiled decoding. Settings a model doesn't use stay hidden.
 - **Everything**: every setting.
 
 From the same menu:
