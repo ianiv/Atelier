@@ -1,5 +1,89 @@
 [
   {
+    "name": "MiniMax H3 Image",
+    "version": "minimax_h3_image",
+    "autoencoder": "minimax_h3_image_vae_f16.ckpt",
+    "prefix": "",
+    "modifier": "kontext",
+    "default_scale": 64,
+    "hires_fix_scale": 96,
+    "file": "minimax_h3_image_q8p.ckpt",
+    "upcast_attention": false,
+    "text_encoder": "qwen_3_vl_32b_50_i8x.ckpt",
+    "high_precision_autoencoder": false,
+    "objective": {
+      "u": {
+        "condition_scale": 1000
+      }
+    },
+    "note": "[MiniMax H3 Image](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image) generates and edits images of about 16 megapixels at every aspect ratio, from 4096\u00d74096 to 6272\u00d72688, without an upscaler. Provide up to 16 reference images through the canvas and moodboard, and identify them in the prompt as <Picture 1>, <Picture 2>, etc., or omit images for text-to-image. It expects a detailed English description of the whole image. The model is distilled to 6 steps without guidance: start with 4096\u00d74096, 6 DDIM Trailing steps, Text Guidance 1, and Shift 3 with resolution-dependent shift disabled. Released under the [MiniMax-H3-Image Community License](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image/blob/main/LICENSE).",
+    "copyright": "\u00a9 2026 MiniMax. All Rights Reserved.",
+    "hugging_face_link": "MiniMaxAI/MiniMax-H3-Image"
+  },
+  {
+    "name": "MiniMax H3 Image (6-bit)",
+    "version": "minimax_h3_image",
+    "autoencoder": "minimax_h3_image_vae_f16.ckpt",
+    "prefix": "",
+    "modifier": "kontext",
+    "default_scale": 64,
+    "hires_fix_scale": 96,
+    "file": "minimax_h3_image_q6p.ckpt",
+    "upcast_attention": false,
+    "text_encoder": "qwen_3_vl_32b_50_i8x.ckpt",
+    "high_precision_autoencoder": false,
+    "objective": {
+      "u": {
+        "condition_scale": 1000
+      }
+    },
+    "note": "[MiniMax H3 Image](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image) generates and edits images of about 16 megapixels at every aspect ratio, from 4096\u00d74096 to 6272\u00d72688, without an upscaler. Provide up to 16 reference images through the canvas and moodboard, and identify them in the prompt as <Picture 1>, <Picture 2>, etc., or omit images for text-to-image. It expects a detailed English description of the whole image. The model is distilled to 6 steps without guidance: start with 4096\u00d74096, 6 DDIM Trailing steps, Text Guidance 1, and Shift 3 with resolution-dependent shift disabled. Released under the [MiniMax-H3-Image Community License](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image/blob/main/LICENSE).",
+    "copyright": "\u00a9 2026 MiniMax. All Rights Reserved.",
+    "hugging_face_link": "MiniMaxAI/MiniMax-H3-Image"
+  },
+  {
+    "name": "MiniMax H3 Image (8-bit S)",
+    "version": "minimax_h3_image",
+    "autoencoder": "minimax_h3_image_vae_f16.ckpt",
+    "prefix": "",
+    "modifier": "kontext",
+    "default_scale": 64,
+    "hires_fix_scale": 96,
+    "file": "minimax_h3_image_i8x.ckpt",
+    "upcast_attention": false,
+    "text_encoder": "qwen_3_vl_32b_50_i8x.ckpt",
+    "high_precision_autoencoder": false,
+    "objective": {
+      "u": {
+        "condition_scale": 1000
+      }
+    },
+    "note": "[MiniMax H3 Image](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image) generates and edits images of about 16 megapixels at every aspect ratio, from 4096\u00d74096 to 6272\u00d72688, without an upscaler. Provide up to 16 reference images through the canvas and moodboard, and identify them in the prompt as <Picture 1>, <Picture 2>, etc., or omit images for text-to-image. It expects a detailed English description of the whole image. The model is distilled to 6 steps without guidance: start with 4096\u00d74096, 6 DDIM Trailing steps, Text Guidance 1, and Shift 3 with resolution-dependent shift disabled. Released under the [MiniMax-H3-Image Community License](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image/blob/main/LICENSE).",
+    "copyright": "\u00a9 2026 MiniMax. All Rights Reserved.",
+    "hugging_face_link": "MiniMaxAI/MiniMax-H3-Image"
+  },
+  {
+    "name": "MiniMax H3 Image (4-bit S)",
+    "version": "minimax_h3_image",
+    "autoencoder": "minimax_h3_image_vae_f16.ckpt",
+    "prefix": "",
+    "modifier": "kontext",
+    "default_scale": 64,
+    "hires_fix_scale": 96,
+    "file": "minimax_h3_image_i4x.ckpt",
+    "upcast_attention": false,
+    "text_encoder": "qwen_3_vl_32b_50_i8x.ckpt",
+    "high_precision_autoencoder": false,
+    "objective": {
+      "u": {
+        "condition_scale": 1000
+      }
+    },
+    "note": "[MiniMax H3 Image](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image) generates and edits images of about 16 megapixels at every aspect ratio, from 4096\u00d74096 to 6272\u00d72688, without an upscaler. Provide up to 16 reference images through the canvas and moodboard, and identify them in the prompt as <Picture 1>, <Picture 2>, etc., or omit images for text-to-image. It expects a detailed English description of the whole image. The model is distilled to 6 steps without guidance: start with 4096\u00d74096, 6 DDIM Trailing steps, Text Guidance 1, and Shift 3 with resolution-dependent shift disabled. Released under the [MiniMax-H3-Image Community License](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image/blob/main/LICENSE).",
+    "copyright": "\u00a9 2026 MiniMax. All Rights Reserved.",
+    "hugging_face_link": "MiniMaxAI/MiniMax-H3-Image"
+  },
+  {
     "name": "Pika H3 Flex",
     "version": "minimax_h3",
     "autoencoder": "minimax_h3_vae_f16.ckpt",
