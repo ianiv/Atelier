@@ -96,15 +96,19 @@ struct ProjectMappingTests {
   }
 
   /// The scheduler lives in the profile (Draw Things' schema has no field), only when it isn't the
-  /// sampler's own, so a default step's profile is byte for byte what it was; a step without one
-  /// reads back as the sampler's own, so Use Settings resets it.
+  /// sampler's own, so a default step's profile has the same fields as before; a step without one
+  /// reads back as the sampler's own, so Use Settings resets it. Profiles are compared decoded:
+  /// JSONEncoder doesn't keep its key order from one encode to the next.
   @Test func schedulerRoundTripsThroughTheProfile() {
     let karras = ProjectMapping.node(for: step(), settings: ["scheduler": .string("karras")])
     #expect(ProjectMapping.Profile(karras.profileData)?.scheduler == "karras")
     #expect(ProjectMapping.dump(of: karras)["scheduler"] == .string("karras"))
     let plain = ProjectMapping.node(for: step(), settings: [:])
     let defaulted = ProjectMapping.node(for: step(), settings: ["scheduler": .string("samplerDefault")])
-    #expect(plain.profileData == defaulted.profileData)
+    func fields(_ bytes: [UInt8]) -> NSDictionary? {
+      try? JSONSerialization.jsonObject(with: Data(bytes)) as? NSDictionary
+    }
+    #expect(fields(plain.profileData) != nil && fields(plain.profileData) == fields(defaulted.profileData))
     #expect(!String(decoding: defaulted.profileData, as: UTF8.self).contains("scheduler"))
     #expect(ProjectMapping.dump(of: plain)["scheduler"] == .string("samplerDefault"))
   }
