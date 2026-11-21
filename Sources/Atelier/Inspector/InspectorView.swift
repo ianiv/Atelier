@@ -340,7 +340,7 @@ struct SettingRow: View {
   var body: some View {
     let hint = descriptor.hint?(model)
     VStack(alignment: .leading, spacing: 0) {
-      control
+      control.disabled(descriptor.hasNoEffect(model.traits))
       if let hint {
         // Under the row, as Frames shows its seconds beside it.
         Text(hint.text)
@@ -364,6 +364,8 @@ struct SettingRow: View {
     var help = descriptor.help
     if !descriptor.applies(model.traits) {
       help += " Not used by \(model.selectedModelInfo?.name ?? "this model")."
+    } else if descriptor.hasNoEffect(model.traits) {
+      help += " Has no effect on \(model.selectedModelInfo?.name ?? "this model")."
     }
     return help
   }

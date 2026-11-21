@@ -169,6 +169,9 @@ struct SettingDescriptor: Identifiable {
   var control: SettingControl
   var keywords: [String] = []
   let applies: (ModelTraits) -> Bool
+  /// Shown, since the model family uses it, but disabled because this model ignores it (Shift on
+  /// MiniMax H3 Image, which the engine always runs at 1). Values still read and write as usual.
+  var hasNoEffect: (ModelTraits) -> Bool = { _ in false }
   let get: (PipelineConfiguration) -> JSONValue
   let set: (inout PipelineConfiguration, JSONValue) -> Void
   /// Reads this setting from a sidecar's configuration dump (keyed by property name).
@@ -177,6 +180,12 @@ struct SettingDescriptor: Identifiable {
   var hint: (@MainActor (CreateModel) -> SettingHint?)?
 
   var isFeatureToggle: Bool { section.featureToggle == id }
+
+  func withoutEffect(when condition: @escaping (ModelTraits) -> Bool) -> SettingDescriptor {
+    var descriptor = self
+    descriptor.hasNoEffect = condition
+    return descriptor
+  }
 
   func hinted(_ hint: @escaping @MainActor (CreateModel) -> SettingHint?) -> SettingDescriptor {
     var descriptor = self
@@ -400,7 +409,8 @@ enum SettingsRegistry {
       float(
         "shift", \.shift, "Shift", .sampling,
         "Shifts the noise schedule toward high noise; flow models like 3 to 6.", range: 0...12,
-        step: 0.1, applies: flow),
+        step: 0.1, applies: flow
+      ).withoutEffect { $0.isMiniMaxH3Image },
       toggle(
         "resolutionDependentShift", \.resolutionDependentShift, "Resolution-Dependent Shift",
         .sampling, "Scale the shift with image size. Off uses Shift as is.", applies: flow),
