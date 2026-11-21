@@ -300,6 +300,19 @@ final class HistoryStore {
     await reload()
   }
 
+  /// At quit, checkpoints the current project and any still held (`ProjectCompaction.checkpoint`),
+  /// so each .sqlite3 alone is complete once Atelier has quit: nothing closes them, and the
+  /// process exits with their connections open. Within what's left of `QuitDeadline`, at most a
+  /// second each, since a job writing at quit keeps the checkpoint waiting.
+  func checkpointBeforeQuit() {
+    let projects = [project] + heldProjects.values.compactMap(\.project)
+    for project in projects where project.isOpen {
+      let remaining = QuitDeadline.date.timeIntervalSinceNow
+      guard remaining > 0 else { break }
+      ProjectCompaction.checkpoint(at: project.url, timeout: min(remaining, 1))
+    }
+  }
+
   /// Sets the current project's output folder overrides.
   func setOutput(_ output: ProjectOutput) {
     self.output = output

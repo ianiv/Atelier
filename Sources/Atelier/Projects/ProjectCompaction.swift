@@ -120,6 +120,65 @@ nonisolated enum ProjectCompaction {
     sqlite3_exec(database, "PRAGMA journal_mode = WAL", nil, nil, nil)
   }
 
+  /// Makes an existing file readable by read-only connections, which every read here uses (dflat's
+  /// reader pool, `SQLiteConnectionPool`, and the tensor store's `openStore(flags: [.readOnly])`).
+  /// A file in WAL mode keeps that mode in its header, so one copied without its -wal and -shm (sent
+  /// by someone, copied in Finder, from Draw Things) needs them to be read, and a read-only
+  /// connection can't make them: its open succeeds but every statement fails with
+  /// SQLITE_CANTOPEN, which dflat's queries turn into no rows (`SQLiteQueryBuilder`), and its
+  /// read-write fallback only follows a failed open (`SQLiteConnection.init`). One read-write
+  /// read makes SQLite create them; the WAL is kept persistent so closing doesn't remove them again
+  /// (Apple's SQLite already does that by default). Nothing happens when both are there, or when
+  /// there's no file (`createDatabase` makes one).
+  static func makeReadable(at url: URL) {
+    let fileManager = FileManager.default
+    guard fileManager.fileExists(atPath: url.path) else { return }
+    let missing = ["-wal", "-shm"].filter { !fileManager.fileExists(atPath: url.path + $0) }
+    guard !missing.isEmpty else { return }
+    #if os(iOS)
+      // As `createDatabase`: SQLite would give the files it creates no protection.
+      for suffix in missing {
+        fileManager.createFile(
+          atPath: url.path + suffix, contents: nil,
+          attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+      }
+    #endif
+    let database: OpaquePointer
+    do {
+      database = try open(url)
+    } catch {
+      Log.project.error("Preparing \(url.lastPathComponent, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+      return
+    }
+    defer { sqlite3_close(database) }
+    var persist: Int32 = 1
+    sqlite3_file_control(database, "main", SQLITE_FCNTL_PERSIST_WAL, &persist)
+    guard integer(database, "SELECT count(*) FROM sqlite_master") != nil else {
+      Log.project.error("Reading \(url.lastPathComponent, privacy: .public) failed: \(message(database), privacy: .public)")
+      return
+    }
+    if missing.contains("-wal"), text(database, "PRAGMA journal_mode")?.lowercased() == "wal" {
+      // A file closed by Atelier (`checkpoint`) or Draw Things holds everything; one copied while
+      // it was open may lack its newest changes.
+      Log.project.info("\(url.lastPathComponent, privacy: .public) opened without its -wal: changes not yet checkpointed into it are missing")
+    }
+  }
+
+  /// Moves everything in the file's -wal into the file itself (a TRUNCATE checkpoint, from a
+  /// connection of its own), so the .sqlite3 alone holds the whole project: what someone copying
+  /// it in Finder gets. It stays in WAL mode, unlike dflat's `shutdown(flags: [.truncate])`, which
+  /// also switches to `journal_mode=DELETE`. Waits up to `timeout` for a write in progress; when
+  /// that runs out (or a reader is mid-transaction) the checkpoint is only partial, which is fine:
+  /// the -wal still has the rest. False when it didn't complete.
+  @discardableResult
+  static func checkpoint(at url: URL, timeout: TimeInterval) -> Bool {
+    guard FileManager.default.fileExists(atPath: url.path), let database = try? open(url) else { return false }
+    defer { sqlite3_close(database) }
+    sqlite3_busy_timeout(database, Int32(max(0, min(timeout, 30)) * 1000))
+    guard text(database, "PRAGMA journal_mode")?.lowercased() == "wal" else { return true }
+    return sqlite3_wal_checkpoint_v2(database, nil, SQLITE_CHECKPOINT_TRUNCATE, nil, nil) == SQLITE_OK
+  }
+
   // MARK: - Reading
 
   /// The file's pages, or nil when it can't be opened (it never creates one).

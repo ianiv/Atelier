@@ -64,7 +64,9 @@ final nonisolated class Project: Sendable {
     // overlapping writes to one project can each suspend a queue the other waits on. `.serial`
     // runs each project's transactions one after another on one queue and never waits.
     // A new file starts in incremental mode, so its free pages can be given back without a full
-    // VACUUM (`ProjectCompaction`).
+    // VACUUM (`ProjectCompaction`). A file that's there already gets its -wal and -shm first, if
+    // it came without them, or every read would find it empty.
+    ProjectCompaction.makeReadable(at: url)
     ProjectCompaction.createDatabase(at: url)
     workspace = SQLiteWorkspace(filePath: url.path, fileProtectionLevel: protection, writeConcurrency: .serial)
     ProjectCompaction.didOpen(url)
@@ -75,12 +77,16 @@ final nonisolated class Project: Sendable {
     // Shutting down drains the connection pool synchronously, waiting on its default-QoS
     // threads. The last release is often on the main thread (switching projects), so shut down
     // from a background queue instead of blocking the UI behind lower-priority work.
-    // Then the pages its deletes freed go back to the disk, unless it's opened again meanwhile.
+    // Its -wal is then checkpointed into the file, staying in WAL mode (no `.truncate`, which
+    // would switch it to DELETE), so the .sqlite3 alone is the whole project for anyone copying it,
+    // unless another `Project` still has it open. Then the pages its deletes freed go back to the
+    // disk, unless it's opened again meanwhile.
     let workspace = workspace
     let url = url
     DispatchQueue.global(qos: .utility).async {
       workspace.shutdown(flags: [], completion: nil)
       ProjectCompaction.didClose(url)
+      if !ProjectCompaction.isOpen(url) { ProjectCompaction.checkpoint(at: url, timeout: 5) }
       ProjectCompaction.scheduleCleanUp(at: url, whileOpen: false)
     }
   }
