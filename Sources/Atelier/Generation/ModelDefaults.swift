@@ -216,7 +216,7 @@ nonisolated enum ModelDefaults {
     // count that has one (`LocalImageGenerator.sampler(from:)`, `MiniMaxH3Layout.sigmaGrids`), and
     // shift 1 keeps it as trained, so these defaults are the native schedule; any other sampler,
     // step count or shift runs as on other flow models. Tuned for about 2,048 x 2,048 pixels of
-    // area; the size popover offers up to 24 megapixels for it (`SizePreset.largeMegapixels`).
+    // area; the size popover offers up to 48 megapixels for it (`SizePreset.largeMegapixels`).
     Fallback(
       prefix: "", steps: 6, guidanceScale: 1, shift: 1,
       resolutionDependentShift: false, sampler: .dDIMTrailing, size: (2048, 2048),

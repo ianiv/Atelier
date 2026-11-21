@@ -21,11 +21,12 @@ nonisolated enum SizePreset {
   static let megapixels: [Double] = [0.5, 1, 1.5, 2, 3, 4]
 
   /// MiniMax H3 Image works from about 4 to 20 megapixels and is at its best around 16, so it gets
-  /// larger choices, up to 24, and a longer side (21:9 at 16 megapixels is 6272 wide). Wide presets
-  /// above 16 would pass the side limit, so they stop at it (`size(aspect:megapixels:maxSide:)`).
-  static let largeMegapixels: [Double] = [1, 2, 4, 8, 12, 16, 20, 24]
+  /// larger choices, up to 48, and a longer side: 11264 lets every preset shape reach 48 megapixels
+  /// (21:9 there is 10816 × 4672), with the side limit only guarding typed sizes
+  /// (`size(aspect:megapixels:maxSide:)`).
+  static let largeMegapixels: [Double] = [1, 2, 4, 8, 12, 16, 20, 24, 32, 48]
   static let maxSide = 4096
-  static let largeMaxSide = 6400
+  static let largeMaxSide = 11264
 
   static func megapixels(for traits: ModelTraits) -> [Double] {
     traits.isMiniMaxH3Image ? largeMegapixels : megapixels

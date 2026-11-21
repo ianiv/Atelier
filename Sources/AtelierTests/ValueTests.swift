@@ -140,20 +140,20 @@ struct SizePresetTests {
     #expect(SizePreset.match(width: 100, height: 3000) == nil)
   }
 
-  /// MiniMax H3 Image's presets go to 24 megapixels, in multiples of 64, and never pass its
-  /// 6400 px side: wide shapes there stop at the limit, keeping their aspect.
+  /// MiniMax H3 Image's presets go to 48 megapixels, in multiples of 64, within its side limit,
+  /// and every shape reaches about 48 there rather than stopping at the limit.
   @Test func largePresetsStayWithinTheSideLimit() {
     for aspect in SizePreset.aspectRatios {
       for megapixels in SizePreset.largeMegapixels {
         let size = SizePreset.size(aspect: aspect, megapixels: megapixels, maxSide: SizePreset.largeMaxSide)
-        #expect(size.width <= 6400 && size.height <= 6400)
+        #expect(size.width <= SizePreset.largeMaxSide && size.height <= SizePreset.largeMaxSide)
         #expect(size.width % 64 == 0 && size.height % 64 == 0)
       }
+      let largest = SizePreset.size(aspect: aspect, megapixels: 48, maxSide: SizePreset.largeMaxSide)
+      #expect(Double(largest.width * largest.height) / 1_048_576 > 47)
     }
-    let square = SizePreset.size(aspect: .init(width: 1, height: 1), megapixels: 20, maxSide: SizePreset.largeMaxSide)
-    #expect(Double(square.width * square.height) / 1_048_576 > 19)
-    let wide = SizePreset.size(aspect: .init(width: 21, height: 9), megapixels: 24, maxSide: SizePreset.largeMaxSide)
-    #expect(wide.width == 6400)
+    let wide = SizePreset.size(aspect: .init(width: 21, height: 9), megapixels: 48, maxSide: SizePreset.largeMaxSide)
+    #expect(wide == (10816, 4672))
   }
 
   @Test func lockedSixteenByNineRoundTrips() throws {
@@ -285,10 +285,10 @@ struct SizePresetTests {
     #expect(!SizePreset.fits(width: 1024, height: 1024, ratio: .nan))
   }
 
-  /// A wide preset capped at the side limit still locks to its preset's exact ratio.
+  /// A large wide preset still locks to its preset's exact ratio.
   @Test func cappedLargePresetsLockToTheirRatio() {
     let wide = SizePreset.AspectRatio(width: 21, height: 9)
-    for megapixels in [20.0, 24] {
+    for megapixels in [24.0, 32, 48] {
       let size = SizePreset.size(aspect: wide, megapixels: megapixels, maxSide: SizePreset.largeMaxSide)
       let ratio = SizePreset.lockRatio(
         width: size.width, height: size.height, megapixels: SizePreset.largeMegapixels,
