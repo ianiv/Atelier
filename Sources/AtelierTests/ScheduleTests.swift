@@ -5,8 +5,11 @@ import Testing
 /// The engine's schedulers (`Denoiser.ScheduledDiscretization`) against ComfyUI's: the sigmas
 /// below come from comfy/samplers.py's scheduler functions on comfy/model_sampling.py's samplings
 /// (`ModelSamplingDiscreteFlow` at shift 3, `ModelSamplingDiscrete` for Stable Diffusion 1.5's
-/// betas, and `MiniMaxH3ImageModelSampling` on MiniMax H3 Image's grid, whose Karras and
-/// exponential end at the grid's last nonzero sigma as the engine's do), in float64.
+/// betas, and `MiniMaxH3ImageModelSampling` on MiniMax H3 Image's grid), in float64. For H3 Image
+/// the engine keeps every step at or above the grid's last nonzero sigma (0.232): Karras and
+/// exponential end there, and the others' nonzero sigmas are remapped linearly onto
+/// [0.232, top] when they'd go lower (`ScheduledDiscretization.floored`), so the H3 tables are
+/// ComfyUI's with that floor.
 @Suite(.tags(.smoke))
 struct ScheduleTests {
   private static let flow = Denoiser.Parameterization.rf(.init())
@@ -38,20 +41,20 @@ struct ScheduleTests {
   private static let h3ImageAt6: [Denoiser.Scheduler: [Double]] = [
     .simple: [1.0000000000, 0.9676535993, 0.8877084566, 0.7500000000, 0.5336428163, 0.2326104045, 0.0000000000],
     .sgmUniform: [1.0000000000, 0.9675689028, 0.8877711657, 0.7505744245, 0.5339834731, 0.2341022792, 0.0000000000],
-    .normal: [1.0000000000, 0.9516622521, 0.8329886434, 0.6207529522, 0.2941715505, 0.0019378122, 0.0000000000],
+    .normal: [1.0000000000, 0.9628049616, 0.8714877276, 0.7081761330, 0.4568775452, 0.2320088744, 0.0000000000],
     .karras: [1.0000000000, 0.7642847484, 0.5778930567, 0.4319055799, 0.3187429775, 0.2320088744, 0.0000000000],
     .exponential: [1.0000000000, 0.7466222350, 0.5574447618, 0.4162006540, 0.3107446625, 0.2320088744, 0.0000000000],
     .linearQuadratic: [1.0000000000, 0.9916666667, 0.9833333333, 0.9750000000, 0.8611111111, 0.5361111111, 0.0000000000],
-    .beta: [1.0000000000, 0.9822679369, 0.9155398220, 0.7508252910, 0.4293107390, 0.1280688987, 0.0000000000],
+    .beta: [1.0000000000, 0.9843817166, 0.9256080359, 0.7805285705, 0.4973406876, 0.2320088744, 0.0000000000],
   ]
   private static let h3ImageAt8: [Denoiser.Scheduler: [Double]] = [
-    .simple: [1.0000000000, 0.9756427705, 0.9275361001, 0.8531613797, 0.7500000000, 0.5870804340, 0.3823913932, 0.1740066558, 0.0000000000],
-    .sgmUniform: [1.0000000000, 0.9756766771, 0.9277030947, 0.8535921981, 0.7505744245, 0.5882143975, 0.3842754574, 0.1757022415, 0.0000000000],
-    .normal: [1.0000000000, 0.9722019167, 0.9105894109, 0.8094417237, 0.6579398718, 0.4486353910, 0.2005257314, 0.0019378122, 0.0000000000],
+    .simple: [1.0000000000, 0.9773531637, 0.9326245999, 0.8634725593, 0.7675552924, 0.6160761288, 0.4257605918, 0.2320088744, 0.0000000000],
+    .sgmUniform: [1.0000000000, 0.9773381694, 0.9326415957, 0.8635931113, 0.7676123385, 0.6163428990, 0.4263347442, 0.2320088744, 0.0000000000],
+    .normal: [1.0000000000, 0.9786098686, 0.9312001398, 0.8533687912, 0.7367908071, 0.5757347269, 0.3848187508, 0.2320088744, 0.0000000000],
     .karras: [1.0000000000, 0.8261726683, 0.6789156915, 0.5547545061, 0.4505879801, 0.3636574657, 0.2915176099, 0.2320088744, 0.0000000000],
     .exponential: [1.0000000000, 0.8116294548, 0.6587423718, 0.5346547121, 0.4339415125, 0.3521997132, 0.2858556612, 0.2320088744, 0.0000000000],
     .linearQuadratic: [1.0000000000, 0.9937500000, 0.9875000000, 0.9812500000, 0.9750000000, 0.9093750000, 0.7250000000, 0.4218750000, 0.0000000000],
-    .beta: [1.0000000000, 0.9888931034, 0.9630450835, 0.8896278611, 0.7508252910, 0.5267586112, 0.2506563067, 0.0807390883, 0.0000000000],
+    .beta: [1.0000000000, 0.9907208085, 0.9691262322, 0.9077902453, 0.7918284540, 0.6046332633, 0.3739652159, 0.2320088744, 0.0000000000],
   ]
 
   private static func sigmas(
@@ -107,6 +110,19 @@ struct ScheduleTests {
     let sigmas = try #require(Self.sigmas(.simple, Self.flow, steps: 6, shift: 1, grid: Self.grid))
     for (sigma, point) in zip(sigmas, Self.grid) {
       #expect(abs(sigma - point) < 1e-3, "\(sigmas) vs \(Self.grid)")
+    }
+  }
+
+  /// No H3 Image step sits below the grid's last nonzero sigma, at any step count, and no two
+  /// steps repeat.
+  @Test func h3ImageNeverGoesBelowTheGridFloor() throws {
+    for scheduler in Denoiser.Scheduler.allCases where scheduler != .samplerDefault {
+      for steps in [1, 4, 6, 8, 20, 50] {
+        let sigmas = try #require(Self.sigmas(scheduler, Self.flow, steps: steps, shift: 1, grid: Self.grid))
+        let nonzero = sigmas.dropLast()
+        #expect(nonzero.allSatisfy { $0 >= Self.grid[5] - 1e-12 }, "\(scheduler) @\(steps): \(sigmas)")
+        #expect(zip(nonzero, nonzero.dropFirst()).allSatisfy { $0 > $1 } || steps == 1, "\(scheduler) @\(steps): \(sigmas)")
+      }
     }
   }
 

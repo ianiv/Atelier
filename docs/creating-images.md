@@ -74,7 +74,7 @@ The inspector lists the model's settings in sections: Essentials, Sampling, LoRA
 - **Linear Quadratic**: Mochi's schedule, slow through the high-noise steps, then quickly down.
 - **Beta**: more steps at both ends (alpha and beta 0.6).
 
-So DPM++ 2M with Beta, or Euler A with Karras, are both one sampler and one scheduler away. Switching models puts Scheduler back to Sampler's Own. It's ignored by the Substep samplers (their timesteps are fixed), Stable Cascade, and HyperFlow H3 Flash (its distilled grids); models on EDM sigmas, such as Stable Video Diffusion, take only Karras and Exponential and run the others as Sampler's Own. MiniMax H3 Image follows its trained schedule with any scheduler, as in ComfyUI. The scheduler is saved with each step in the project and in the settings an image carries (Draw Things doesn't have one and runs such an image on the sampler's own schedule).
+So DPM++ 2M with Beta, or Euler A with Karras, are both one sampler and one scheduler away. Switching models puts Scheduler back to Sampler's Own. It's ignored by the Substep samplers (their timesteps are fixed), Stable Cascade, and HyperFlow H3 Flash (its distilled grids); models on EDM sigmas, such as Stable Video Diffusion, take only Karras and Exponential and run the others as Sampler's Own. On MiniMax H3 Image every scheduler follows the model's trained schedule, as in ComfyUI, but no step goes below the lowest noise the model was trained on (about 0.23): Karras and Exponential end there, and the others are spread out to end there when they would go lower. The scheduler is saved with each step in the project and in the settings an image carries (Draw Things doesn't have one and runs such an image on the sampler's own schedule).
 
 ### Layouts
 
