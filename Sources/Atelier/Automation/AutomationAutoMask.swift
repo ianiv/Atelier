@@ -4,7 +4,9 @@ import SwiftUI
 extension Automation {
   /// Auto masking through `CreateModel`'s entry points, on an image placed on the canvas (use a
   /// scratch `--project`; nothing is generated or saved):
-  ///   Vision (`--subject`, or without `--sam`): the subject under the first point (else the
+  ///   Vision (`--subject`, or without `--sam`): a selection made straight after the image is
+  ///     placed keeps its preview and “Select Subject” undo step once the Imported entry lands;
+  ///     the subject under the first point (else the
   ///     image's center) and every subject: the mask isn't empty and holds the click; Fill paints
   ///     exactly the selection in the paint colour, leaving the mask alone, and one undo takes it
   ///     away and brings the selection back.
@@ -90,6 +92,7 @@ extension Automation {
         while model.isBusy { try? await Task.sleep(for: .milliseconds(100)) }
       }
       model.layout = nil
+      let stepBeforeImport = model.history.currentTensorId
       model.placeOnCanvas(input)
       model.canvasTool = .select
       guard model.canPaintMask else {
@@ -101,6 +104,27 @@ extension Automation {
       note("input \(input.width)×\(input.height), click \(Int(click.x)),\(Int(click.y))")
 
       if usesSubject {
+        // The image's Imported entry lands seconds later in a big project, giving the canvas its
+        // step (`adoptImport`): a selection made before that stays, with its undo step. Selected
+        // straight after the drop, then waited out, so the rest doesn't depend on project size.
+        do {
+          let history = UndoManager()
+          history.groupsByEvent = false
+          history.beginUndoGrouping()
+          model.autoMask.selectSubject(at: click, model: model, undoManager: history)
+          history.endUndoGrouping()
+          while model.autoMask.isBusy { try? await Task.sleep(for: .milliseconds(50)) }
+          let landedBefore = model.history.currentTensorId != stepBeforeImport
+          let prompt = model.autoMask.prompt
+          await model.flushEntries()
+          let landed = model.history.currentItem?.entryReason == .imported
+          let previewKept = model.autoMask.preview != nil, samePrompt = model.autoMask.prompt == prompt
+          let nextUndo = history.canUndo ? history.undoActionName : "nothing"
+          check(
+            landed && previewKept && samePrompt && nextUndo == "Select Subject",
+            "import: a selection made before the Imported entry lands survives it (entry landed \(landed)\(landedBefore ? " before the selection finished, so the race wasn't tested" : ""), preview \(previewKept), points \(samePrompt), next to undo “\(nextUndo)”)")
+          model.autoMask.clearPoints(model: model, undoManager: nil)
+        }
         model.clearMask(undoManager: nil)
         do {
           let outcome = try await model.autoMaskSubject(at: click, mode: .replace, undoManager: nil)

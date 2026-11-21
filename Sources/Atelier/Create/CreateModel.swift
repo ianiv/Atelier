@@ -535,6 +535,9 @@ final class CreateModel {
   private var awaitsStepImage = false
   /// Set while `projectRenamed` relabels `imageStep`.
   @ObservationIgnored private var relabelsImageStep = false
+  /// Set while `adoptImport` gives the imported canvas image its step: the same image, so its
+  /// Select session and mask/paint undo steps stay (the entry can land seconds after the drop).
+  @ObservationIgnored private var adoptsImport = false
   /// The canvas image is open full size (`ImageViewer`).
   var viewingCanvasImage = false
   /// The image of the step the last run saved.
@@ -559,8 +562,10 @@ final class CreateModel {
       // Before anything else changes: the size it's kept at comes from what the canvas shows.
       if let oldValue { persistCanvasMask(for: oldValue) }
       // The old image's mask, paint and Select steps leave the history with it, and its selection.
-      retireCanvasUndo()
-      autoMask.follow(nil)
+      if !adoptsImport {
+        retireCanvasUndo()
+        autoMask.follow(nil)
+      }
       awaitsStepImage = imageStep != nil
       landedMask = nil
       maskPendingTensorId = imageStep?.tensorId
@@ -648,6 +653,9 @@ final class CreateModel {
   /// Counts restores (an entry, or a History image put back), so an entry gathered before one isn't
   /// made current over it (`recordEntry`).
   @ObservationIgnored private var restoreCount = 0
+  /// Counts moodboards being put back (`restoreMoodboard`), so a slow load can't replace a later
+  /// pick's board.
+  @ObservationIgnored private var moodboardRestores = 0
   /// Entries gathered and not yet taken up by the chain (`recordEntry`), in order: what quitting
   /// writes itself (`recordEntriesBeforeQuit`). Whichever takes one first removes it, so none is
   /// written twice.
@@ -1319,9 +1327,11 @@ final class CreateModel {
   }
 
   /// Whether `item`'s model is downloaded, so its settings can be loaded here. An input entry has no
-  /// settings to use: it's restored instead (`restore(entry:)`).
+  /// settings to use: it's restored instead (`restore(entry:)`). A model still loading doesn't hold
+  /// it up: the last pick wins, its settings waiting in `pendingSettings` for its model's load
+  /// (`use`), so a second clip picked while the first one's model loads isn't dropped.
   func canUse(_ item: HistoryItem) -> Bool {
-    !item.isEntry && !isBusy && !item.sidecar.configuration.isEmpty
+    !item.isEntry && !isRunning && !waitsForEntries && !item.sidecar.configuration.isEmpty
       && availableModels.contains { $0.file == item.sidecar.model }
   }
 
@@ -1407,8 +1417,11 @@ final class CreateModel {
     // The input entry's whole moodboard (weight-0 images too) when the run has one, else the
     // images the run took.
     let moodboardStep = (restoreInput ? history.inputEntry(of: item) : nil)?.id ?? item.id
+    moodboardRestores += 1
+    let restores = moodboardRestores
     let restoreMoodboard = Task {
-      await restoreMoodboard(from: moodboardStep, in: projectName)
+      // A later pick's board (and audio) wins over this one's.
+      guard await restoreMoodboard(from: moodboardStep, in: projectName, restores: restores) else { return }
       // Without the image, the board brought back goes with whatever the canvas shows: recorded
       // as a Moodboard entry (none when it's what the current entry holds), so a run from here
       // follows it and Use on that run brings this board back.
@@ -1437,7 +1450,8 @@ final class CreateModel {
       pendingSettings = sidecar.configuration
       generateWhenLoaded = newSeed
       if selectedModel == sidecar.model {
-        loadDefaults(for: sidecar.model)
+        // A load of this model already under way takes up the settings when it's done.
+        if !isLoadingModel { loadDefaults(for: sidecar.model) }
       } else {
         selectedModel = sidecar.model
       }
@@ -4008,7 +4022,9 @@ extension CreateModel {
     guard image === newImage, imageStep == nil, canvasIsImported else { return }
     let mask = canvasMask, hidden = layersHidden
     let paint = canvasPaint
+    adoptsImport = true
     imageStep = (history.project.name, tensorId)
+    adoptsImport = false
     canvasIsImported = false
     awaitsStepImage = false
     maskPendingTensorId = nil
@@ -4093,7 +4109,9 @@ extension CreateModel {
     stopFollowingRun()
     let projectName = history.project.name
     history.setCurrent(tensorId: entry.tensorId, exact: true)
-    Task { await restoreMoodboard(from: entry.id, in: projectName) }
+    moodboardRestores += 1
+    let restores = moodboardRestores
+    Task { await restoreMoodboard(from: entry.id, in: projectName, restores: restores) }
     lastSavedTensorId = nil
     canvasIsImported = false
     // A Draw entry opens on the picture it was painted on, with its paint as a layer that can
@@ -4145,11 +4163,16 @@ extension CreateModel {
   }
 
   /// Puts a recorded moodboard back on the board (`replace`, which isn't recorded), remembering
-  /// which of the project's tensors each image is, so the next entry shares them.
-  private func restoreMoodboard(from id: StepID, in projectName: String) async {
+  /// which of the project's tensors each image is, so the next entry shares them. Not when another
+  /// board was put back after `restores` (`moodboardRestores` as this one began) while the images
+  /// loaded: returns whether it was.
+  @discardableResult
+  private func restoreMoodboard(from id: StepID, in projectName: String, restores: Int) async -> Bool {
     let images = await history.moodboardImages(at: id, in: projectName)
+    guard moodboardRestores == restores else { return false }
     let ids = moodboard.replace(with: images.map { ($0.image, $0.weight) })
     if projectName == history.project.name { history.noteMoodboardShuffles(ids, images.map(\.shuffleId)) }
+    return true
   }
 
   /// Puts `mask` (an entry's) on the canvas image `tensorId`, as its own: no undo step, and kept as

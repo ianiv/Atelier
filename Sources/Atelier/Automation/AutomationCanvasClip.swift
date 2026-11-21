@@ -105,7 +105,8 @@ extension Automation {
         if let id = playback.shownFrameTensorId { seen.insert(id) }
         try? await Task.sleep(for: .milliseconds(10))
       }
-      let expected = Int(2 * playback.framesPerSecond)
+      // A clip shorter than 2 s has only so many frames to show.
+      let expected = min(Int(2 * playback.framesPerSecond), b.clip?.frames.count ?? Int.max)
       log("played 2 s: time \(String(format: "%.2f", playback.time)) s, \(seen.count) distinct frames of \(expected)")
       check(playback.isPlaying && playback.time > 0.5, "B plays (time \(String(format: "%.2f", playback.time)))")
       check(seen.count >= expected * 3 / 4, "the picture keeps up: \(seen.count) of \(expected) frames shown in 2 s")

@@ -9,7 +9,6 @@ Planned work that isn't built yet. Items marked **User request** or **User-repor
 
 ## Canvas
 
-- **Selection lost right after importing an image.** Drop an image on the canvas and use Select (Subject or points) straight away, and the selection and its points can vanish when the image's History entry is saved; mask and paint undo steps made in that moment are lost too. It shows mostly in large projects, where that save takes longer. Found by reading the code (the import's History entry resets the Select session and the canvas's undo steps) and not yet confirmed with a run; it is also why `--automask-check --subject` fails in a project with many steps.
 
 ## Agents
 
