@@ -85,9 +85,12 @@ A project is one file holding the images, their branches and their settings. Use
 - **New Project…**
 - **Rename** the current project.
 - **Delete** the current project, after asking. On the Mac its file goes to the Trash; on iPad it's deleted for good. The next project in the list opens in its place (a new empty one if there's no other). Jobs still in the queue carry on and save into the project that opens, as they do when you switch projects; Match Colors jobs for the deleted project are cancelled.
+- **Compact…**: give the space deleted images leave in the project file back to the disk. Deleting images frees space inside the file, but the file doesn't shrink by itself. Compacting rewrites the file without that space; it needs free disk space of twice the file's size while it works, waits until no job is running, and holds waiting jobs until it's done. The project can't be used meanwhile: a large file takes a few minutes. Afterwards it shows the file's size before and after. Compacting a project made by Draw Things or an older Atelier also lets it give space back by itself from then on.
 - **Output Folder…**: choose whether the project's new images are also saved to an output folder, and which one. **Save generated images** is **As in Settings** until you pick **On** or **Off**, and **Use a different folder for this project** sends them somewhere other than the folder in Settings. These choices are kept in the project file, so they stay with it when you rename it. See [Output folder](settings.md#output-folder).
 - **Show in Finder** (on iPad, **Show in Files**).
 
 Projects are stored in `~/Pictures/Atelier/Projects/` (on iPad, **On My iPad ▸ Atelier ▸ Atelier ▸ Projects**), one `.sqlite3` file each, in the same format Draw Things uses for its projects. The first project is called "Atelier".
+
+Atelier also gives back space from deletes by itself, a little at a time: when you switch away from a project, and about half a minute after a delete once the queue is empty. When a project opens with more than 500 MB unused, over a quarter of its file, a bar along the bottom of the window offers **Compact…**, which is much faster for that much space. **Don't Ask for This Project** hides it for good, and that's kept in the project file.
 
 When you bring an image in from outside, Atelier saves it in the project as an Imported [input entry](#input-entries), so the edited result can always find its input again. When the canvas isn't the frame's size, the frame a run was drawn from is saved too; History doesn't list it.

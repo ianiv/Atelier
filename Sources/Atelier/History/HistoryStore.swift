@@ -182,6 +182,19 @@ final class HistoryStore {
   @ObservationIgnored private var heldProjects: [String: WeakProject] = [:]
   /// Run before another project opens (`CreateModel` records a pending moodboard change).
   @ObservationIgnored var willSwitchProject: (() async -> Void)?
+  /// Whether nothing is running or waiting that could write to the project (`CreateModel`: the
+  /// queue is empty), for cleaning up after deletes.
+  @ObservationIgnored var isIdle: () -> Bool = { true }
+  /// The clean-up waiting for the app to be idle after a delete (`cleanUpWhenIdle`).
+  @ObservationIgnored private var idleCleanUp: Task<Void, Never>?
+  /// The current project's free space, when opening it found enough to offer Compact Project…
+  /// (`ProjectCompaction.offersCompaction`) and it wasn't turned down for the project.
+  private(set) var compactionOffer: CompactionOffer?
+
+  struct CompactionOffer: Equatable {
+    var project: String
+    var stats: ProjectCompaction.Stats
+  }
 
   private final class WeakProject {
     weak var project: Project?
@@ -219,14 +232,19 @@ final class HistoryStore {
   func reload() async {
     let project = project
     let readsMasks = storedMasksProject != ObjectIdentifier(project)
-    let (tree, stored, output, ratings, masks) = await project.read {
-      project -> (ProjectTree, StepID?, ProjectOutput, [Int64: Int], [Int64: Bool]?) in
+    let (tree, stored, output, ratings, masks, free) = await project.read {
+      project -> (ProjectTree, StepID?, ProjectOutput, [Int64: Int], [Int64: Bool]?, ProjectCompaction.Stats?) in
       let tree = project.tree()
+      // Once per opening, like the masks: whether to offer Compact Project….
+      let free = readsMasks && !project.declinedCompaction ? ProjectCompaction.stats(at: project.url) : nil
       return (
         tree, project.storedCurrentStep(in: tree), project.output, project.ratings,
-        readsMasks ? project.storedMaskImages() : nil)
+        readsMasks ? project.storedMaskImages() : nil, free)
     }
     guard project === self.project else { return }
+    if readsMasks {
+      compactionOffer = free.flatMap { ProjectCompaction.offersCompaction($0) ? CompactionOffer(project: project.name, stats: $0) : nil }
+    }
     self.output = output
     self.ratings = ratings
     if let masks {
@@ -273,6 +291,7 @@ final class HistoryStore {
     items = []
     tree = ProjectTree()
     currentTensorId = nil
+    compactionOffer = nil
     output = ProjectOutput()
     ratings = [:]
     storedMasks = [:]
@@ -340,6 +359,49 @@ final class HistoryStore {
     project = Project(url: target)
     if SessionState.isEnabled { UserDefaults.standard.set(name, forKey: Self.currentProjectKey) }
     await reload()
+  }
+
+  /// Turns down Compact Project… for the current project, for good: it isn't offered again when
+  /// the project opens.
+  func declineCompaction() {
+    compactionOffer = nil
+    project.declinedCompaction = true
+  }
+
+  /// Compacts the current project (`ProjectCompaction.compact`): closes it, so nothing else has the
+  /// file open while `VACUUM` rewrites it, and opens it again afterwards, whether or not that
+  /// worked, as a rename does. The caller keeps edits away meanwhile (`CreateModel.compactProject`).
+  func compactCurrent() async throws -> ProjectCompaction.Outcome {
+    idleCleanUp?.cancel()
+    let closing = project
+    await closing.close()
+    let result: Result<ProjectCompaction.Outcome, Error>
+    do {
+      result = try await .success(ProjectCompaction.compact(at: closing.url))
+    } catch {
+      result = .failure(error)
+    }
+    // Only when nothing else opened in its place meanwhile.
+    if project === closing {
+      project = Project(url: closing.url)
+      await reload()
+    }
+    return try result.get()
+  }
+
+  /// After a delete, once nothing is running or waiting (`isIdle`), frees the pages the delete left
+  /// (`ProjectCompaction.scheduleCleanUp`) while the project stays open. A delete or another project
+  /// meanwhile starts or ends the wait.
+  private func cleanUpWhenIdle() {
+    idleCleanUp?.cancel()
+    let project = project
+    idleCleanUp = Task { [weak self] in
+      repeat {
+        try? await Task.sleep(for: .seconds(30))
+        guard !Task.isCancelled, let self, project === self.project, project.isOpen else { return }
+      } while self?.isIdle() == false
+      ProjectCompaction.scheduleCleanUp(at: project.url, whileOpen: true)
+    }
   }
 
   /// The project opened in place of `name` when it's deleted while current: the one after it in
@@ -854,6 +916,7 @@ final class HistoryStore {
     // A later image could be given a deleted one's tensor: don't let it inherit the rating.
     let kept = ratings.filter { byTensor[$0.key] != nil }
     if kept.count != ratings.count { ratings = kept; project.ratings = kept }
+    cleanUpWhenIdle()
   }
 
   // MARK: - Masks

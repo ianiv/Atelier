@@ -50,6 +50,7 @@ struct ContentView: View {
 
   @Environment(Navigation.self) private var navigation
   @Environment(CreateModel.self) private var create
+  @Environment(HistoryStore.self) private var history
   @Environment(FileDialogs.self) private var fileDialogs
   @Environment(\.undoManager) private var undoManager
   @State private var showingSettings = false
@@ -116,6 +117,14 @@ struct ContentView: View {
         StylesView()
       }
     }
+    // Offered when a project opens with a lot of unused space; it doesn't stop anything.
+    .safeAreaInset(edge: .bottom, spacing: 0) {
+      if let offer = history.compactionOffer, !create.showsCompactProject {
+        CompactionOfferBar(offer: offer)
+      }
+    }
+    .sheet(isPresented: $create.showsCompactProject) { CompactProjectSheet() }
+    .debugPresents("compactProject", $create.showsCompactProject)
     .confirmationDialog(
       "Clear prompt history?", isPresented: $create.confirmClearRecentPrompts
     ) {

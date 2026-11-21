@@ -86,7 +86,7 @@ enum Automation {
       "--catalog-retry-check", "--model-move-check", "--add-folder-check", "--color-match-check", "--canvas-clip-check",
       "--create-delete-check",
       "--history-loras-check",
-      "--input-entries-check", "--entries-freeze-check", "--tab-switch-bench", "--delete-project-check",
+      "--input-entries-check", "--entries-freeze-check", "--tab-switch-bench", "--delete-project-check", "--compact-check",
       "--paint-check", "--edit-screen-check", "--grain-reference", "--edit-render-bench", "--edit-ui-bench",
     ]
     // The unit tests run inside the app. Like a scripted run, that leaves the user's data alone: no
@@ -177,6 +177,10 @@ enum Automation {
     }
     if args.contains("--delete-project-check") {
       deleteProjectCheck(model)
+      return
+    }
+    if args.contains("--compact-check") {
+      compactCheck(model)
       return
     }
     if args.contains("--flashvsr-check") {

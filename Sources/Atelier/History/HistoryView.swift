@@ -1339,7 +1339,7 @@ struct Thumbnail: View {
   }
 }
 
-/// The current project, with switching, New Project…, Rename… and Delete….
+/// The current project, with switching, New Project…, Rename…, Delete… and Compact….
 struct ProjectMenu: View {
   @Environment(HistoryStore.self) private var history
   @Environment(CreateModel.self) private var create
@@ -1376,6 +1376,8 @@ struct ProjectMenu: View {
       Button("New Project…") { naming = .new(suggested: history.availableName()) }
       Button("Rename “\(history.project.name)”…") { naming = .rename(current: history.project.name) }
       Button("Delete “\(history.project.name)”…", role: .destructive) { deleting = history.project.name }
+        .disabled(!history.isLoaded)
+      Button("Compact “\(history.project.name)”…") { create.showsCompactProject = true }
         .disabled(!history.isLoaded)
       Button("Output Folder…") { editingOutput = true }
       Button(Finder.showTitle) {

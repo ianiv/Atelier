@@ -63,7 +63,11 @@ final nonisolated class Project: Sendable {
     // blocks need and deadlocked. The suspends are also queued one table at a time, so two
     // overlapping writes to one project can each suspend a queue the other waits on. `.serial`
     // runs each project's transactions one after another on one queue and never waits.
+    // A new file starts in incremental mode, so its free pages can be given back without a full
+    // VACUUM (`ProjectCompaction`).
+    ProjectCompaction.createDatabase(at: url)
     workspace = SQLiteWorkspace(filePath: url.path, fileProtectionLevel: protection, writeConcurrency: .serial)
+    ProjectCompaction.didOpen(url)
   }
 
   deinit {
@@ -71,14 +75,22 @@ final nonisolated class Project: Sendable {
     // Shutting down drains the connection pool synchronously, waiting on its default-QoS
     // threads. The last release is often on the main thread (switching projects), so shut down
     // from a background queue instead of blocking the UI behind lower-priority work.
+    // Then the pages its deletes freed go back to the disk, unless it's opened again meanwhile.
     let workspace = workspace
-    DispatchQueue.global(qos: .utility).async { workspace.shutdown(flags: [], completion: nil) }
+    let url = url
+    DispatchQueue.global(qos: .utility).async {
+      workspace.shutdown(flags: [], completion: nil)
+      ProjectCompaction.didClose(url)
+      ProjectCompaction.scheduleCleanUp(at: url, whileOpen: false)
+    }
   }
 
   /// False once `close` has run (a rename does, before moving the file).
   var isOpen: Bool { !isClosed.withLock { $0 } }
 
-  /// Finishes pending writes and closes the database. The project can't be used afterwards.
+  /// Finishes pending writes and closes the database. The project can't be used afterwards. No
+  /// clean-up follows (`ProjectCompaction`), unlike when a project is let go: what closes one
+  /// (a rename, a delete, Compact Project…) does something to the file straight after.
   @concurrent func close() async {
     let wasClosed = isClosed.withLock {
       let wasClosed = $0
@@ -89,6 +101,14 @@ final nonisolated class Project: Sendable {
     await withCheckedContinuation { continuation in
       workspace.shutdown(flags: [.truncate]) { continuation.resume() }
     }
+    ProjectCompaction.didClose(url)
+  }
+
+  /// Whether Compact Project… was turned down for this project, kept in the project file so it
+  /// follows a rename. Draw Things ignores the key.
+  var declinedCompaction: Bool {
+    get { workspace.dictionary["atelier_compact_declined", Bool.self] ?? false }
+    set { workspace.dictionary["atelier_compact_declined", Bool.self] = newValue ? true : nil }
   }
 
   // MARK: - Reading

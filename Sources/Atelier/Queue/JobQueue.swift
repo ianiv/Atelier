@@ -98,6 +98,9 @@ final class JobQueue {
   private(set) var recent: [Job] = []
   /// Holds the waiting jobs; the running one finishes.
   var isPaused = false
+  /// Holds every waiting job, resumes too, without changing `isPaused`: the current project is
+  /// being compacted (`CreateModel.compactProject`), and jobs save into it.
+  var isHeld = false
   /// Input steps saved by finished Edit runs, by the canvas they were rendered from, so later
   /// jobs from the same canvas reuse the step instead of saving the canvas again.
   private var savedInputs: [String: Int64] = [:]
@@ -230,7 +233,7 @@ final class JobQueue {
   /// Takes the first job waiting for this device and marks it running, unless paused or one is
   /// running.
   func startNext() -> Job? {
-    guard running == nil, !isPaused, let index = waiting.firstIndex(where: { $0.target == .local }) else { return nil }
+    guard running == nil, !isPaused, !isHeld, let index = waiting.firstIndex(where: { $0.target == .local }) else { return nil }
     let job = started(waiting.remove(at: index))
     running = job
     return job
@@ -244,7 +247,7 @@ final class JobQueue {
     var index = 0
     while index < waiting.count {
       let job = waiting[index]
-      if job.target != .local, !busy.contains(job.target), !isPaused || job.resumesRemoteJob {
+      if job.target != .local, !busy.contains(job.target), !isHeld, !isPaused || job.resumesRemoteJob {
         busy.insert(job.target)
         jobs.append(started(waiting.remove(at: index)))
       } else {

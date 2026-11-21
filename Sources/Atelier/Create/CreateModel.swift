@@ -474,6 +474,9 @@ final class CreateModel {
   var focusPromptRequest = 0
   /// Set to ask before forgetting the recent prompts (Image ▸ Clear Prompt History…).
   var confirmClearRecentPrompts = false
+  /// Set to show Compact Project… (`CompactProjectSheet`), from the project menu or the offer
+  /// along the bottom of the window.
+  var showsCompactProject = false
 
   private(set) var phase: Phase = .idle
   /// The selected model's defaults are loading (a job may be running meanwhile).
@@ -1175,6 +1178,7 @@ final class CreateModel {
       moodboard.reportFailure = { [weak self] in self?.errorMessage = $0 }
       moodboard.onChange = { [weak self] in self?.moodboardDidChange() }
       history.willSwitchProject = { [weak self] in await self?.flushEntries() }
+      history.isIdle = { [weak self] in self?.queue.isEmpty ?? true }
     }
     if let session = SessionState.load() {
       restored = session
@@ -3624,6 +3628,32 @@ extension CreateModel {
   /// The Edit jobs, waiting or running, that read from and save into the project called `name`.
   func editJobs(in name: String) -> [JobQueue.Job] {
     ((queue.running.map { [$0] } ?? []) + queue.waiting).filter { $0.request?.edit?.project == name }
+  }
+
+  /// Whether Compact Project… can start: nothing running here or on a server, since every job
+  /// saves into a project and `VACUUM` needs the file to itself.
+  var canCompactProject: Bool { queue.running == nil && queue.runningRemote.isEmpty && history.isLoaded }
+
+  /// Compact Project… (`HistoryStore.compactCurrent`), with waiting jobs held until it's done. The
+  /// sheet it runs in keeps the window's edits away; pending canvas records go in first, as before
+  /// a project switch.
+  func compactProject() async throws -> ProjectCompaction.Outcome {
+    guard canCompactProject else { throw CompactError.busy }
+    queue.isHeld = true
+    defer {
+      queue.isHeld = false
+      runNext()
+    }
+    rememberCanvasMask()
+    await flushEntries()
+    return try await history.compactCurrent()
+  }
+
+  enum CompactError: LocalizedError {
+    case busy
+    var errorDescription: String? {
+      "A job is running. Compact the project once the queue has finished, or pause it and wait for the running job."
+    }
   }
 
   /// Deletes the project called `name` (Delete Project…), switching to another first when it's
