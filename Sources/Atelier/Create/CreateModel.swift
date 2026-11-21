@@ -3441,6 +3441,8 @@ final class CreateModel {
             recommended: (recommended.refinerModel, recommended.refinerStart))
           settings.refinerModel = refiner.model
           settings.refinerStart = refiner.start
+          // And the scheduler: one picked for a model's own sampler and steps rarely suits the next.
+          settings.scheduler = recommended.scheduler
         }
         self.settings = settings
       } catch {

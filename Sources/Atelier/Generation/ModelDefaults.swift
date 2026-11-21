@@ -213,9 +213,9 @@ nonisolated enum ModelDefaults {
       resolutionDependentShift: true, sampler: .eulerATrailing, size: (1024, 1024)),
     // MiniMax H3 Image, imported: distilled to 6 steps without CFG (the engine forces it off) on
     // its own sigma grid. The engine samples that grid with Euler only for DDIM Trailing at a step
-    // count that has one (`LocalImageGenerator.sampler(from:)`, `MiniMaxH3Layout.sigmaGrids`), and
-    // shift 1 keeps it as trained, so these defaults are the native schedule; any other sampler,
-    // step count or shift runs as on other flow models. Tuned for about 2,048 x 2,048 pixels of
+    // count that has one (`LocalImageGenerator.sampler(from:)`, `MiniMaxH3Layout.sigmaGrids`), so
+    // these defaults are the native schedule; any other sampler or step count runs as on other
+    // flow models. The engine ignores Shift for it (always 1), as ComfyUI does. Tuned for about 2,048 x 2,048 pixels of
     // area; the size popover offers up to 48 megapixels for it (`SizePreset.largeMegapixels`).
     Fallback(
       prefix: "", steps: 6, guidanceScale: 1, shift: 1,
@@ -243,6 +243,8 @@ nonisolated enum ModelDefaults {
     var settings = configuration
     // Hires fix runs a second sampling pass; keep it off unless the user turns it on.
     settings.hiresFix = false
+    // Every model starts on its sampler's own schedule.
+    settings.scheduler = .samplerDefault
     let version = ModelZoo.specificationForModel(model)?.version
     guard
       let fallback = fallbacks.first(where: {

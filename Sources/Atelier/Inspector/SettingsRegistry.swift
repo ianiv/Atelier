@@ -1,4 +1,5 @@
 @preconcurrency import _MediaGenerationKit
+@preconcurrency import Diffusion
 import Foundation
 
 /// MGK's configuration plus the engine settings MGK doesn't expose, which runs that call the
@@ -71,6 +72,12 @@ nonisolated struct ModelTraits: Equatable {
   }
   /// TCD and TCD Trailing are the only samplers that read Strategic Stochastic Sampling.
   var usesTCD: Bool { sampler == .TCD || sampler == .tCDTrailing }
+  /// Whether Scheduler changes anything (`LocalImageGenerator.sampler(from:)`): the substep
+  /// samplers have fixed timesteps and Stable Cascade a cosine schedule of their own.
+  var takesScheduler: Bool {
+    !version.hasPrefix("Stable Cascade") && sampler != .eulerASubstep
+      && sampler != .dPMPPSDESubstep
+  }
 }
 
 nonisolated enum SettingSection: String, CaseIterable, Identifiable, Codable {
@@ -208,6 +215,13 @@ enum SettingsRegistry {
     .DPMPP2MAYS: "DPM++ 2M AYS", .eulerAAYS: "Euler A AYS", .DPMPPSDEAYS: "DPM++ SDE AYS",
     .dPMPP2MTrailing: "DPM++ 2M Trailing", .dDIMTrailing: "DDIM Trailing",
     .uniPCTrailing: "UniPC Trailing", .uniPCAYS: "UniPC AYS", .tCDTrailing: "TCD Trailing",
+  ]
+
+  /// Scheduler titles, as ComfyUI's scheduler names read in its menus.
+  static let schedulerTitles: [Denoiser.Scheduler: String] = [
+    .samplerDefault: "Sampler's Own", .simple: "Simple", .sgmUniform: "SGM Uniform",
+    .normal: "Normal", .karras: "Karras", .exponential: "Exponential",
+    .linearQuadratic: "Linear Quadratic", .beta: "Beta",
   ]
 
   // MARK: - Building
@@ -375,6 +389,11 @@ enum SettingsRegistry {
       choice(
         "sampler", \.sampler, "Sampler", .essentials, "The sampling algorithm and its noise schedule.",
         titles: samplerTitles),
+      choice(
+        "scheduler", \.scheduler, "Scheduler", .essentials,
+        "How the sampler spaces its steps. Sampler's Own keeps the sampler's schedule (Karras, Trailing, …).",
+        titles: schedulerTitles, keywords: ["schedule", "sigmas", "karras", "beta", "comfyui"],
+        applies: { $0.takesScheduler }),
       loras,
 
       // Sampling

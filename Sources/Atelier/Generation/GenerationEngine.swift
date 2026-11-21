@@ -372,10 +372,17 @@ actor GenerationEngine {
     let negativePrompt = request.negativePrompt
     progress(.state(.preparing))
     let engineHints = hints
+    // The scheduler isn't part of `GenerationConfiguration`; it rides on this call's copy of the
+    // generator, as MGK's own local path does (`MediaGenerationExecutionUtilities.generate`).
+    let generator = {
+      var generator = engine.generator
+      generator.scheduler = settings.scheduler
+      return generator
+    }()
     let result: EngineResult = try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
         engine.queue.async {
-          let result = engine.generator.generate(
+          let result = generator.generate(
             trace: ImageGeneratorTrace(fromBridge: true), image: image, scaleFactor: 1, mask: nil,
             hints: engineHints, text: prompt, negativeText: negativePrompt, configuration: configuration,
             fileMapping: [:], keywords: [],

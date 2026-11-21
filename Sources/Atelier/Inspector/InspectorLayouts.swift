@@ -38,7 +38,7 @@ struct InspectorLayout: Codable, Hashable, Identifiable {
   static let standard = InspectorLayout(
     name: "Standard",
     shown: [
-      "size", "steps", "guidanceScale", "sampler", "loras", "shift", "resolutionDependentShift",
+      "size", "steps", "guidanceScale", "sampler", "scheduler", "loras", "shift", "resolutionDependentShift",
       "seedMode", "speedUpWithGuidanceEmbed", "guidanceEmbed", "hiresFix", "hiresFixWidth",
       "hiresFixHeight", "hiresFixStrength", "refinerModel", "refinerStart", "upscaler",
       "numFrames", "fps", "strength", "teaCache", "teaCacheThreshold", "usesSolAttention",
@@ -55,7 +55,7 @@ struct InspectorLayout: Codable, Hashable, Identifiable {
   static let video = InspectorLayout(
     name: "Video",
     shown: [
-      "size", "steps", "guidanceScale", "sampler", "numFrames", "fps", "motionScale", "loras",
+      "size", "steps", "guidanceScale", "sampler", "scheduler", "numFrames", "fps", "motionScale", "loras",
       "shift", "seedMode", "hiresFix", "hiresFixWidth", "hiresFixHeight", "hiresFixStrength",
       "stage2Steps", "refinerModel", "refinerStart", "strength", "teaCache", "teaCacheThreshold",
       "usesSolAttention", "tiledDecoding",
