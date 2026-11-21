@@ -91,6 +91,44 @@ struct StrengthStepsTests {
     #expect(half.startStep > 0 && half.startStep < 8 && less.startStep > half.startStep)
   }
 
+  /// A scheduler other than the sampler's own counts on its schedule: at Shift 1 the Simple
+  /// schedule on a flow model is the trailing one (sigma = t), so Strength 0.5 starts at step 4 of
+  /// 8 whatever the sampler, Karras included; Beta spends more steps near the ends.
+  @Test func aSchedulerCountsOnItsSchedule() throws {
+    func start(_ sampler: DataModels.SamplerType, _ scheduler: Denoiser.Scheduler) -> StrengthSteps.Start? {
+      StrengthSteps.start(
+        parameterization: Self.flow, objective: Self.flowObjective, version: .flux1, sampler: sampler,
+        sampling: Sampling(steps: 8, shift: 1), strength: 0.5, scheduler: scheduler)
+    }
+    for sampler in [DataModels.SamplerType.dPMPP2MKarras, .eulerA, .LCM, .uniPCAYS] {
+      let simple = try #require(start(sampler, .simple))
+      #expect(abs(simple.startStep - 4) < 1e-3, "\(sampler): \(simple.startStep)")
+    }
+    let karras = try #require(start(.eulerATrailing, .karras))
+    let plainKarras = try #require(Self.start(0.5, steps: 8, shift: 1, sampler: .dPMPP2MKarras))
+    #expect(karras.startStep != plainKarras.startStep)
+    // PLMS starts at a whole step whatever the schedule, as `PLMSSampler.timestep(for:)` does.
+    #expect(try #require(start(.PLMS, .beta)).startStep == 4)
+    // Substep samplers keep their own timesteps.
+    #expect(start(.eulerASubstep, .simple) == nil)
+  }
+
+  /// MiniMax H3 Image's LCM steps on its grid as DDIM Trailing does, and a scheduler on it follows
+  /// the grid too (`MiniMaxH3ImageModelSampling`).
+  @Test func h3ImageLCMAndSchedulersCountOnTheGrid() throws {
+    let grid = [1.0, 0.9675, 0.8875, 0.75, 0.5328, 0.2320, 0.0]
+    let grids: [Int: [Double]] = [6: grid]
+    func start(_ sampler: DataModels.SamplerType, _ scheduler: Denoiser.Scheduler = .samplerDefault) -> StrengthSteps.Start? {
+      StrengthSteps.start(
+        parameterization: Self.flow, objective: Self.flowObjective, version: .minimaxH3Image, sampler: sampler,
+        sampling: Sampling(steps: 6, shift: 1), strength: 0.5, h3ImageGrids: grids, scheduler: scheduler)
+    }
+    let ddim = try #require(start(.dDIMTrailing))
+    #expect(try #require(start(.LCM)) == ddim)
+    let simple = try #require(start(.eulerA, .simple))
+    #expect(abs(simple.startStep - ddim.startStep) < 0.01, "\(simple.startStep) vs \(ddim.startStep)")
+  }
+
   @Test func unknownModelsAreNotCounted() {
     #expect(
       StrengthSteps.start(

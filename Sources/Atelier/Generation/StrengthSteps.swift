@@ -29,10 +29,13 @@ nonisolated enum StrengthSteps {
   /// sampler's discretization (`LocalImageGenerator.sampler(from:)`). Nil where the steps run
   /// aren't the user's to count: a model `ModelZoo` doesn't know (a server's), the fixed sigma
   /// grids of HyperFlow H3 Flash, Würstchen, and samplers on manual timesteps or sigmas. MiniMax
-  /// H3 Image's grids are counted (`FixedGrid.ddimTrailing`).
+  /// H3 Image's grids are counted (`FixedGrid.ddimTrailing`). MiniMax H3 Image ignores Shift
+  /// (the engine runs it at 1, as ComfyUI does), and a `scheduler` other than the sampler's own
+  /// counts on that schedule (`Denoiser.ScheduledDiscretization`).
   static func start(
     model: String, sampler: DataModels.SamplerType, steps: Int, strength: Float, shift: Double,
-    resolutionDependentShift: Bool, width: Int, height: Int, tile: (width: Int, height: Int)? = nil
+    resolutionDependentShift: Bool, width: Int, height: Int, tile: (width: Int, height: Int)? = nil,
+    scheduler: Denoiser.Scheduler = .samplerDefault
   ) -> Start? {
     guard steps > 0, ModelZoo.specificationForModel(model) != nil else { return nil }
     let version = ModelZoo.versionForModel(model)
@@ -62,11 +65,13 @@ nonisolated enum StrengthSteps {
       let units = (width: width / 64, height: height / 64)
       let tiled = tile.map { (width: min($0.width / 64, units.width), height: min($0.height / 64, units.height)) } ?? units
       runShift = ModelZoo.shiftFor((width: UInt16(clamping: tiled.width), height: UInt16(clamping: tiled.height)), version: version)
+    } else if version == .minimaxH3Image {
+      runShift = 1
     }
     return start(
       parameterization: parameterization, objective: ModelZoo.objectiveForModel(model), version: version,
       sampler: sampler, sampling: Sampling(steps: steps, shift: runShift), strength: strength,
-      h3ImageGrids: h3ImageGrids)
+      h3ImageGrids: h3ImageGrids, scheduler: scheduler)
   }
 
   /// When a MiniMax H3 file runs Euler on its own sigma grid, as `LocalImageGenerator.sampler(from:)`
@@ -117,14 +122,27 @@ nonisolated enum StrengthSteps {
   /// the finest stretched) and Karras ends at their lowest nonzero sigma, as the engine does.
   static func start(
     parameterization: Denoiser.Parameterization, objective: Denoiser.Objective, version: ModelVersion,
-    sampler: DataModels.SamplerType, sampling: Sampling, strength: Float, h3ImageGrids: [Int: [Double]]? = nil
+    sampler: DataModels.SamplerType, sampling: Sampling, strength: Float, h3ImageGrids: [Int: [Double]]? = nil,
+    scheduler: Denoiser.Scheduler = .samplerDefault
   ) -> Start? {
     let strength = min(max(strength, 0), 1)
     func at(_ discretization: some Denoiser.Discretization) -> Start {
       Start(startStep: startStep(for: strength, sampling: sampling, discretization: discretization), steps: sampling.steps)
     }
+    // A scheduler replaces the sampler's schedule wherever the engine lets it
+    // (`LocalImageGenerator.sampler(from:)`); PLMS still starts at a whole step.
+    let takesScheduler =
+      scheduler != .samplerDefault && scheduler.isSupported(by: parameterization)
+        && sampler != .eulerASubstep && sampler != .dPMPPSDESubstep && sampler != .PLMS
+        && version != .wurstchenStageB && version != .wurstchenStageC
+    if takesScheduler {
+      return at(Denoiser.ScheduledDiscretization(
+        parameterization, objective: objective, scheduler: scheduler,
+        sigmaGrid: version == .minimaxH3Image ? (h3ImageGrids.flatMap { grids in grids.keys.max().flatMap { grids[$0] } } ?? []) : []))
+    }
     if let grids = h3ImageGrids, !grids.isEmpty {
-      if sampler == .dDIMTrailing {
+      // LCM steps on the grid too (it ghosted on its own table).
+      if sampler == .dDIMTrailing || sampler == .LCM {
         return at(Denoiser.RFSigmaGridDiscretization(parameterization, objective: objective, grids: grids, stretchesFinestGrid: true))
       }
       if sampler == .dPMPP2MKarras || sampler == .dPMPPSDEKarras, case .rf(var rf) = parameterization,
@@ -243,7 +261,7 @@ extension CreateModel {
     guard let start = StrengthSteps.start(
       model: file, sampler: sampler, steps: steps, strength: settings.strength, shift: Double(settings.shift),
       resolutionDependentShift: settings.resolutionDependentShift, width: settings.width, height: settings.height,
-      tile: tile)
+      tile: tile, scheduler: settings.scheduler)
     else { return nil }
     let editsInput = settings.strength < 1 && effectiveCanvasMode == .edit && image != nil && canvasClip == nil
     guard editsInput else {
@@ -251,7 +269,8 @@ extension CreateModel {
         text: "Runs all \(steps) steps",
         help: "With an input image on the canvas, Strength below 1 starts partway into the steps.", dimmed: true)
     }
-    let takesShift = SettingsRegistry.byID["shift"]?.applies(traits) == true
+    // MiniMax H3 Image runs at Shift 1 whatever the setting.
+    let takesShift = SettingsRegistry.byID["shift"]?.applies(traits) == true && !traits.isMiniMaxH3Image
     let hint = StrengthSteps.hint(start, strength: settings.strength, shift: takesShift ? Double(settings.shift) : nil)
     return SettingHint(text: hint.text, help: hint.help)
   }
