@@ -751,9 +751,9 @@ final class AgentTools {
     }
 
     let summary = String(prompt.prefix(60))
-    let item = try await run(request, summary: summary, progress: progress)
+    let (item, savedIn) = try await run(request, summary: summary, progress: progress)
     return try await result(
-      of: item, model: model, configuration: configuration, seed: seed, summary: summary, notes: notes,
+      of: item, in: savedIn, model: model, configuration: configuration, seed: seed, summary: summary, notes: notes,
       arguments: arguments)
   }
 
@@ -815,11 +815,12 @@ final class AgentTools {
 
   /// Queues `request` as an agent's run and waits for the step it saves, showing what it's doing
   /// in the Agents settings tab and reporting its progress. `target`, `detached` and `project`
-  /// are `CreateModel.generate(forAgent:)`'s.
+  /// are `CreateModel.generate(forAgent:)`'s, and so is the project returned with the step: the
+  /// one it was saved into, which a rename while it waited reopened under another name.
   func run(
     _ request: GenerationEngine.Request, target: JobTarget? = nil, detached: Bool = false, project: String? = nil,
     summary: String, progress: @escaping (Progress) -> Void
-  ) async throws -> HistoryItem {
+  ) async throws -> (item: HistoryItem, project: Project) {
     activity = "Waiting: “\(summary)”"
     progress(Progress(step: 0, total: nil, message: "Waiting for the current run to finish", isQueued: true))
     defer { activity = nil }
@@ -977,10 +978,10 @@ final class AgentTools {
     let merged = request.merge != nil
 
     let summary = String(request.prompt.prefix(60))
-    let item = try await run(request, target: create.runTarget, summary: summary, progress: progress)
+    let (item, savedIn) = try await run(request, target: create.runTarget, summary: summary, progress: progress)
     let parent = item.inputTensorId.flatMap { create.history.item(tensorId: $0) }
     // The saved image's own size: a merged one is the whole (maybe grown) image, not the frame.
-    let saved = await create.history.image(for: item)
+    let saved = await savedIn.read { $0.image(for: item) }
     let size = saved.map { ["width": $0.width, "height": $0.height] } ?? ["width": item.sidecar.width, "height": item.sidecar.height]
     var notes: [String] = []
     if selectionAdded {
@@ -990,7 +991,7 @@ final class AgentTools {
     if merged { notes.append("Merged into the whole image (\(size["width"]!)×\(size["height"]!)).") }
     if let parent { notes.append("It follows history step \(parent.id.logicalTime).") }
     return try await result(
-      of: item, model: model, configuration: request.configuration, seed: seed, summary: summary, notes: notes,
+      of: item, in: savedIn, model: model, configuration: request.configuration, seed: seed, summary: summary, notes: notes,
       arguments: arguments,
       extra: [
         "parent_history_step": parent?.id.logicalTime ?? NSNull(), "merged": merged,
