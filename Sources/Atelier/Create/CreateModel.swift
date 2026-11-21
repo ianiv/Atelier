@@ -604,9 +604,10 @@ final class CreateModel {
   var statusNote: String?
 
   private var generationTask: Task<Void, Never>?
-  /// An agent's progress and result callbacks, by its job.
+  /// An agent's progress and result callbacks, by its job. The result names the project it was
+  /// saved into, which a rename while the job waited may have closed and reopened under a new name.
   private var agentCallbacks:
-    [UUID: (progress: (GenerationEngine.Progress) -> Void, completion: (Result<HistoryItem, Error>) -> Void)] = [:]
+    [UUID: (progress: (GenerationEngine.Progress) -> Void, completion: (Result<(item: HistoryItem, project: Project), Error>) -> Void)] = [:]
   /// The frames a paired device sent to be upscaled, by job.
   private var deviceFrames: [UUID: [CGImage]] = [:]
   /// Paired devices' jobs (`RemoteServer`), which get the output itself instead of a saved step.
@@ -2039,11 +2040,13 @@ final class CreateModel {
   /// brings its own inputs (`CanvasEdit`) and names the step it follows (`parentTensorId`), so
   /// nothing of the screen is written to History for it first. That step is one of `project`'s
   /// (default: the open one), so that's where the result is saved, whichever project is open by
-  /// the time it ends; the item returned is that project's.
+  /// the time it ends. The item comes back with the project it was saved into, renamed or not:
+  /// a rename while the job waits closes the `Project` it was queued with (`renameCurrent`), so a
+  /// caller looking its project up again, by name or by the object it held, would miss the step.
   func generate(
     forAgent request: GenerationEngine.Request, target: JobTarget? = nil, detached: Bool = false, project: String? = nil,
     progress: @escaping (GenerationEngine.Progress) -> Void
-  ) async throws -> HistoryItem {
+  ) async throws -> (item: HistoryItem, project: Project) {
     // It follows what History has, as Generate's runs do (`recordEntriesBeforeRun`, which an
     // agent's run from the screen has done before taking it).
     if !detached { await flushEntries() }
@@ -2429,14 +2432,17 @@ final class CreateModel {
         let history = history
         // The mask painted on the source stays with the result, moved as the image grew.
         let keptMask = mergedOrigin.flatMap { origin in request.merge?.canvasMask?.translated(by: origin) }
-        let item = try await oneSaveAtATime {
+        let (item, savedInto) = try await oneSaveAtATime {
           // A rename since it started closed the project it would save into (`renameCurrent`).
           if let pinned, let name = job.project {
             guard history.project(named: name) === pinned, pinned.isOpen else { throw DetachedJobError.projectMissing(name) }
           }
-          return try await history.save(
+          // Nil `into` saves into the open project, as it is now.
+          let into = pinned ?? history.project
+          let item = try await history.save(
             output, request: request, startedAt: startedAt, finishedAt: Date(), timings: timings,
             refined: refined, resultMask: keptMask, into: pinned, makeCurrent: followsRun)
+          return (item, into)
         }
         if timings != nil {
           timings?.save = Date().timeIntervalSince(returnedAt)
@@ -2492,7 +2498,7 @@ final class CreateModel {
         // An input step saved into another project is no step for later jobs here to reuse.
         inputTensorId = inOpenProject ? item.inputTensorId : nil
         tipTensorId = item.clip?.frames.last
-        agentCallbacks.removeValue(forKey: job.id)?.completion(.success(item))
+        agentCallbacks.removeValue(forKey: job.id)?.completion(.success((item, savedInto)))
         if keepsRemoteJob, let remote = backend as? RemoteBackend {
           clientJobs.remove(job.id)
           // The server keeps a clip's frames a while, so upscaling it there needn't send them back.
@@ -2560,8 +2566,12 @@ final class CreateModel {
     runNext()
     adoptRemoteRun()
     // Once the queue is empty, the next run shows on the canvas again. A detached job doesn't
-    // count: the canvas follows none while only it runs, so your next Generate shows there.
-    if generationTask == nil || foregroundRunIsDetached { canvasFollowsRun = true }
+    // count: the canvas follows none while only it runs, so your next Generate shows there. Any
+    // non-detached job still waiting behind it (yours, an agent's generate, a paired device's)
+    // keeps what you chose (you looked away during the run before), as it would with no detached
+    // job between them.
+    let ownRunLeft = queue.waiting.contains { !$0.detached } || queue.runningRemote.contains { !$0.detached }
+    if generationTask == nil || (foregroundRunIsDetached && !ownRunLeft) { canvasFollowsRun = true }
   }
 
   /// Queues a style thumbnail (StyleStore) like Generate, with progress and previews in the status
@@ -3165,6 +3175,17 @@ final class CreateModel {
   func clearRecentPrompts() {
     recentPrompts = []
     UserDefaults.standard.removeObject(forKey: "recentPrompts")
+    recentIndex = nil
+  }
+
+  /// Puts the list back as it was: scripted checks that generate leave no prompts of theirs behind.
+  func restoreRecentPrompts(_ prompts: [String]) {
+    recentPrompts = prompts
+    if prompts.isEmpty {
+      UserDefaults.standard.removeObject(forKey: "recentPrompts")
+    } else {
+      UserDefaults.standard.set(prompts, forKey: "recentPrompts")
+    }
     recentIndex = nil
   }
 

@@ -540,9 +540,10 @@ extension AgentTools {
     }
 
     let summary = String(parsed.prompt.prefix(60))
-    let item = try await run(request, target: .local, detached: true, project: projectName, summary: summary, progress: progress)
-    // The project it was saved into, which may no longer be the open one.
-    let savedIn = create.history.project(named: projectName) ?? project
+    // The project it was saved into, as the job hands it back: renamed while the job waited, it
+    // has another name and object than the ones held here, and it may no longer be the open one.
+    let (item, returned) = try await run(request, target: .local, detached: true, project: projectName, summary: summary, progress: progress)
+    let savedIn = reopened(returned)
     let stillOpen = savedIn === create.history.project
     // The saved image's own size: a merged one is the whole (maybe grown) image, not the frame.
     let saved = await savedIn.read { $0.image(for: item) }

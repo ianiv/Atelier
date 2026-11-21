@@ -41,15 +41,18 @@ extension Automation {
   /// sensible size that merges at the image's size. It notes which models list_models says take
   /// reference images. Then, a region reaching past the image: edit_image says the result grew.
   /// While an edit_image runs, a History step shown and Generate pressed: the user's run still
-  /// shows on the canvas and becomes current. And with `--edit-model` and `--face-input` again,
+  /// shows on the canvas and becomes current. A History step shown during a run of the user's
+  /// with an edit_image and another run of theirs queued behind it: that next run stays off the
+  /// canvas too. The project renamed while an edit_image and a generate wait: both answer with
+  /// the new name and their step there (it's renamed back after). And with `--edit-model` and `--face-input` again,
   /// the same face fix on the canvas, a tool call at a time as an agent would make them
   /// (set_canvas_image, find_faces, set_canvas_frame, set_canvas_mask, grow_canvas_mask,
   /// set_canvas_paint, set_moodboard, set_create_screen, generate with use_canvas, match_colors
   /// with original_history_step), after which the model, settings and prompt are put back.
   /// Prints PASS/FAIL lines.
   ///
-  /// The canvas tools' remembered settings, Merge into Image, the canvas mode and the moodboard
-  /// are put back as they were when it ends.
+  /// The canvas tools' remembered settings, Merge into Image, the canvas mode, the moodboard and
+  /// the recent prompts are put back as they were when it ends.
   ///
   ///   Atelier --agent-canvas-check --project NAME --input FILE [--subject-input FILE]
   ///           [--subject-point x,y] [--face-input FILE] [--edit-model M] [--edit-scale S]
@@ -59,6 +62,7 @@ extension Automation {
     let restoreCanvasSettings = keepCanvasSettings(model)
     let mergeBefore = model.mergeIntoImage, modeBefore = model.canvasMode
     let moodboardBefore = model.moodboard.items
+    let recentPromptsBefore = model.recentPrompts
     let storedBefore = ["mergeIntoImage", "canvasMode"].map { ($0, UserDefaults.standard.object(forKey: $0)) }
     let args = CommandLine.arguments
     func value(_ name: String) -> String? {
@@ -79,6 +83,8 @@ extension Automation {
         // Exactly as they were: a key that wasn't set stays unset (the app's default).
         for (key, value) in storedBefore { UserDefaults.standard.set(value, forKey: key) }
         model.moodboard.replace(with: moodboardBefore.map { ($0.image, $0.weight) })
+        // Its own Generate presses would otherwise stay in ⌘↑'s list.
+        model.restoreRecentPrompts(recentPromptsBefore)
         print(failures == 0 ? "agent canvas check: all passed" : "agent canvas check: \(failures) failed")
         fflush(stdout)
         if args.contains("--quit") { AppLifecycle.quit() }
@@ -560,6 +566,7 @@ extension Automation {
       await expectError("set_canvas_frame", ["width": 512, "height": 512, "scale": 2], "not both", "a size and a scale")
       await expectError("set_canvas_frame", ["box": ["x": width + 50, "y": 0, "width": 10, "height": 10]], "overlap", "a box off the image")
       await expectError("set_canvas_frame", ["aspect_ratio": "wide"], "aspect_ratio", "a shape that isn't one")
+      await expectError("set_canvas_frame", ["width": true, "height": true], "output size", "true for width and height")
       _ = try? await call("set_canvas_mask", ["clear": true])
       await expectError("set_canvas_frame", [:], "nothing to frame", "no mask and no box")
       _ = try? await call("set_canvas_region", ["fit": true])
@@ -1089,6 +1096,122 @@ extension Automation {
       } catch {
         check(false, "Generate during an edit_image run (\(error.localizedDescription))")
       }
+
+      // Your run, an agent's edit_image behind it and another run of yours behind that. Looking
+      // at a History step during the first keeps the canvas off the second too: the edit taking
+      // the front between them mustn't turn following back on (`finish`).
+      let stepsBefore = model.settings?.steps
+      do {
+        // Long enough for the first run to still be in front when the rest is queued.
+        model.settings?.steps = max(runSteps, 12)
+        let finishedBefore = Set(model.queue.recent.map(\.id))
+        model.generate()
+        for _ in 0..<2400 where !(model.foregroundJobID != nil && !model.foregroundRunIsDetached) {
+          try? await Task.sleep(for: .milliseconds(25))
+        }
+        let firstID = model.foregroundJobID
+        var arguments = editArguments
+        arguments["seed"] = 12
+        arguments["background"] = true
+        let started = try await call("edit_image", arguments)
+        model.generate()
+        let firstInFront = firstID != nil && model.foregroundJobID == firstID && !model.foregroundRunIsDetached
+        if let shown = model.history.item(tensorId: item.tensorId) { model.show(shown) }
+        for _ in 0..<200 where !(model.canvasShowsImage && model.imageItem?.tensorId == item.tensorId) {
+          try? await Task.sleep(for: .milliseconds(10))
+        }
+        let followsAfterLooking = model.canvasFollowsRun
+        var sawEdit = false, secondFollowedAtStart: Bool?, covered = 0
+        for _ in 0..<9000 {
+          try? await Task.sleep(for: .milliseconds(20))
+          if model.foregroundRunIsDetached { sawEdit = true }
+          if let id = model.foregroundJobID, id != firstID, !model.foregroundRunIsDetached {
+            if secondFollowedAtStart == nil { secondFollowedAtStart = model.canvasFollowsRun }
+            if !(model.canvasShowsImage && model.imageItem?.tensorId == item.tensorId) { covered += 1 }
+          }
+          if secondFollowedAtStart != nil, !model.isBusy, model.queue.isEmpty { break }
+        }
+        await idle()
+        // Newest first: the second run of yours, then the first.
+        let own = model.queue.recent.filter { !finishedBefore.contains($0.id) && !$0.detached }
+        var secondTensor: Int64?
+        if own.count == 2, case .finished(let tensorId) = own[0].status { secondTensor = tensorId }
+        check(
+          firstInFront && sawEdit && model.queue.recent.contains { !finishedBefore.contains($0.id) && $0.detached },
+          "your run was in front, then edit_image, then your second run (job \(started["job_id"] ?? "none"))")
+        check(
+          !followsAfterLooking && secondFollowedAtStart == false,
+          "showing a History step during your run keeps the canvas off your next run, edit_image between them or not (after looking \(followsAfterLooking), as it started \(secondFollowedAtStart.map { "\($0)" } ?? "never started"))")
+        check(
+          covered == 0 && secondTensor != nil && model.imageItem?.tensorId == item.tensorId && model.imageItem?.tensorId != secondTensor,
+          "your second run didn't cover the shown step, and its result didn't take its place (\(covered) polls covered, \(own.first.map { "\($0.status)" } ?? "no run"))")
+        check(model.canvasFollowsRun, "once the queue is empty, the canvas follows runs again")
+      } catch {
+        check(false, "edit_image between two of your runs (\(error.localizedDescription))")
+        // Whatever was queued finishes here, not in the sections after.
+        await idle()
+      }
+      if let stepsBefore { model.settings?.steps = stepsBefore }
+
+      // The project renamed while edit_image and generate wait: each saves into it and answers
+      // with its new name, the step there (`generate(forAgent:)` hands the project back).
+      // The calls waiting through the rename, awaited before leaving even when it fails.
+      var answers: [Task<(project: String?, step: Int64?, text: String), Error>] = []
+      do {
+        model.settings?.steps = max(runSteps, 12)
+        let oldName = model.history.project.name
+        let newName = model.history.availableName("\(oldName) renamed")
+        model.generate()
+        for _ in 0..<2400 where !(model.foregroundJobID != nil && !model.foregroundRunIsDetached) {
+          try? await Task.sleep(for: .milliseconds(25))
+        }
+        if let stepsBefore { model.settings?.steps = stepsBefore }
+        var arguments = editArguments
+        arguments["seed"] = 13
+        let waitingBefore = model.queue.waiting.count
+        // What the answer says, as Sendable values to leave its task with.
+        @MainActor func answered(_ name: String, _ arguments: [String: Any]) -> Task<(project: String?, step: Int64?, text: String), Error> {
+          Task { @MainActor in
+            let answer = try await tools.call(name, arguments: arguments) { _ in }
+            let structured = answer["structuredContent"] as? [String: Any]
+            let text = (answer["content"] as? [[String: Any]])?.first?["text"] as? String ?? ""
+            return (structured?["project"] as? String, (structured?["history_step"] as? NSNumber)?.int64Value, text)
+          }
+        }
+        let edit = answered("edit_image", arguments)
+        let generate = answered(
+          "generate",
+          [
+            "model": model.selectedModel ?? "", "use_app_settings": true, "prompt": "a paper boat on a pond", "steps": runSteps,
+            "include_image": false,
+          ])
+        answers = [edit, generate]
+        for _ in 0..<2400 where model.queue.waiting.count < waitingBefore + 2 { try? await Task.sleep(for: .milliseconds(25)) }
+        let bothWaiting = model.queue.waiting.contains { $0.detached } && model.queue.waiting.contains { $0.fromAgent && !$0.detached }
+        try await model.history.renameCurrent(to: newName)
+        model.projectRenamed(from: oldName, to: model.history.project.name)
+        for (name, task) in [("edit_image", edit), ("generate", generate)] {
+          do {
+            let answer = try await task.value
+            let saved = model.history.items.first { $0.id.logicalTime == answer.step }
+            let image: CGImage? = if let saved { await model.history.image(for: saved) } else { nil }
+            check(
+              bothWaiting && answer.project == newName && image != nil && !answer.text.contains("isn't the open one now"),
+              "\(name) waiting through a rename answers with the new name and its step there (project \(answer.project ?? "?"), step \(answer.step.map { "\($0)" } ?? "none"))")
+          } catch {
+            check(false, "\(name) waiting through a rename returns its result (\(error.localizedDescription))")
+          }
+        }
+        await idle()
+        let renamed = model.history.project.name
+        try await model.history.renameCurrent(to: oldName)
+        model.projectRenamed(from: renamed, to: model.history.project.name)
+      } catch {
+        check(false, "a rename while agent runs wait (\(error.localizedDescription))")
+        for answer in answers { _ = try? await answer.value }
+        await idle()
+      }
+      if let stepsBefore { model.settings?.steps = stepsBefore }
 
       // The face fix on the canvas, a tool call at a time, as an agent following MCP.md makes them.
       if let editModel = value("--edit-model"), let facePath = value("--face-input"),

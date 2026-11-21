@@ -348,7 +348,16 @@ extension AgentTools {
       }
       padding = ratio * max(box.width, box.height)
     }
-    let width = Self.int(arguments["width"]), height = Self.int(arguments["height"])
+    // A JSON true is an NSNumber too, which `int` would read as 1: rejected like the other
+    // numbers' booleans. A null is as good as leaving it out.
+    func pixels(_ name: String) throws -> Int? {
+      guard let value = arguments[name], !(value is NSNull) else { return nil }
+      guard !Self.isBoolean(value), let given = Self.int(value) else {
+        throw ToolError("`\(name)` is the output size in pixels, a number above 0.")
+      }
+      return given
+    }
+    let width = try pixels("width"), height = try pixels("height")
     let scale = arguments["scale"].flatMap { Self.isBoolean($0) ? nil : Self.double($0) }
     if width != nil || height != nil, scale != nil || arguments["scale"] != nil {
       throw ToolError("Pass `width` and `height`, or `scale`, not both.")

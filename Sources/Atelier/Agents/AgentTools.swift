@@ -751,9 +751,9 @@ final class AgentTools {
     }
 
     let summary = String(prompt.prefix(60))
-    let item = try await run(request, summary: summary, progress: progress)
+    let (item, savedIn) = try await run(request, summary: summary, progress: progress)
     return try await result(
-      of: item, model: model, configuration: configuration, seed: seed, summary: summary, notes: notes,
+      of: item, in: savedIn, model: model, configuration: configuration, seed: seed, summary: summary, notes: notes,
       arguments: arguments)
   }
 
@@ -815,11 +815,12 @@ final class AgentTools {
 
   /// Queues `request` as an agent's run and waits for the step it saves, showing what it's doing
   /// in the Agents settings tab and reporting its progress. `target`, `detached` and `project`
-  /// are `CreateModel.generate(forAgent:)`'s.
+  /// are `CreateModel.generate(forAgent:)`'s, and so is the project returned with the step: the
+  /// one it was saved into, which a rename while it waited reopened under another name.
   func run(
     _ request: GenerationEngine.Request, target: JobTarget? = nil, detached: Bool = false, project: String? = nil,
     summary: String, progress: @escaping (Progress) -> Void
-  ) async throws -> HistoryItem {
+  ) async throws -> (item: HistoryItem, project: Project) {
     activity = "Waiting: “\(summary)”"
     progress(Progress(step: 0, total: nil, message: "Waiting for the current run to finish", isQueued: true))
     defer { activity = nil }
@@ -837,6 +838,12 @@ final class AgentTools {
     }
   }
 
+  /// `project`, or the one now open under its name when it was closed since it was handed back
+  /// (a rename between the save and the answer closes it, `HistoryStore.renameCurrent`).
+  func reopened(_ project: Project) -> Project {
+    project.isOpen ? project : create.history.project(named: project.name) ?? project
+  }
+
   /// What a finished run answers with: the file written, the image inline and the structured
   /// result (plus `extra`). `saved` is the project the step is in when that may not be the open
   /// one (a detached job's, `JobQueue.Job.project`).
@@ -844,7 +851,7 @@ final class AgentTools {
     of item: HistoryItem, in saved: Project? = nil, model: String, configuration: PipelineConfiguration, seed: UInt32,
     summary: String, notes: [String], arguments: [String: Any], extra: [String: Any] = [:]
   ) async throws -> [String: Any] {
-    let saved = saved ?? create.history.project
+    let saved = reopened(saved ?? create.history.project)
     let png = try await create.history.pngData(item, in: saved)
     // A client on another device can't open a file here: it gets the image inline only.
     var url: URL?
@@ -977,10 +984,22 @@ final class AgentTools {
     let merged = request.merge != nil
 
     let summary = String(request.prompt.prefix(60))
-    let item = try await run(request, target: create.runTarget, summary: summary, progress: progress)
-    let parent = item.inputTensorId.flatMap { create.history.item(tensorId: $0) }
+    let (item, returned) = try await run(request, target: create.runTarget, summary: summary, progress: progress)
+    let savedIn = reopened(returned)
+    // The step it followed is the saved-into project's, which may not be the open one now.
+    let parent: HistoryItem?
+    if savedIn === create.history.project {
+      parent = item.inputTensorId.flatMap { create.history.item(tensorId: $0) }
+    } else if let input = item.inputTensorId {
+      parent = await savedIn.read { project in
+        let tree = project.tree()
+        return tree.step(tensorId: input).flatMap { tree.items[$0] }
+      }
+    } else {
+      parent = nil
+    }
     // The saved image's own size: a merged one is the whole (maybe grown) image, not the frame.
-    let saved = await create.history.image(for: item)
+    let saved = await savedIn.read { $0.image(for: item) }
     let size = saved.map { ["width": $0.width, "height": $0.height] } ?? ["width": item.sidecar.width, "height": item.sidecar.height]
     var notes: [String] = []
     if selectionAdded {
@@ -990,7 +1009,7 @@ final class AgentTools {
     if merged { notes.append("Merged into the whole image (\(size["width"]!)×\(size["height"]!)).") }
     if let parent { notes.append("It follows history step \(parent.id.logicalTime).") }
     return try await result(
-      of: item, model: model, configuration: request.configuration, seed: seed, summary: summary, notes: notes,
+      of: item, in: savedIn, model: model, configuration: request.configuration, seed: seed, summary: summary, notes: notes,
       arguments: arguments,
       extra: [
         "parent_history_step": parent?.id.logicalTime ?? NSNull(), "merged": merged,
