@@ -1,5 +1,7 @@
 @testable import Atelier
+@preconcurrency import Diffusion
 import Foundation
+@preconcurrency import NNC
 import SQLite3
 import Testing
 
@@ -148,5 +150,97 @@ struct ProjectCompactionTests {
     #expect(ProjectCompaction.offersCompaction(stats(total: 11400, free: 8900)))
     #expect(!ProjectCompaction.offersCompaction(stats(total: 1000, free: 400)))
     #expect(!ProjectCompaction.offersCompaction(stats(total: 10000, free: 2000)))
+  }
+
+  // MARK: - Copying a project's file alone
+
+  /// A step of its own, as a run would save.
+  func generate(_ project: Project, _ n: Int) async throws {
+    let tensor = try #require(ImageTensor.tensor(from: CanvasRefineTests.pattern(width: 8 + n, height: 8)))
+    _ = try await project.append(
+      tensor: tensor, model: "m", prompt: "run \(n)", negativePrompt: "", seed: UInt32(n), settings: [:],
+      createdAt: Date(), duration: 1, after: nil)
+  }
+
+  /// The .sqlite3 alone in a folder of its own, as someone sent it or Finder copied it.
+  func copyAlone(_ url: URL) throws -> URL {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent("copied-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    let copy = folder.appendingPathComponent(url.lastPathComponent)
+    try FileManager.default.copyItem(at: url, to: copy)
+    return copy
+  }
+
+  /// Header bytes 18-19 are 2 in WAL mode: what a copy keeps.
+  func isWALFile(_ url: URL) throws -> Bool {
+    let header = try Data(contentsOf: url).prefix(20)
+    return header.count == 20 && header[18] == 2 && header[19] == 2
+  }
+
+  /// A WAL-mode file without its -wal and -shm opens with what it holds (read-only connections
+  /// alone found nothing), and only a step not yet checkpointed into it is missing.
+  @Test func aFileCopiedWithoutItsWALOpens() async throws {
+    let url = try scratch()
+    let project = Project(url: url)
+    try await generate(project, 1)
+    #expect(ProjectCompaction.checkpoint(at: url, timeout: 5))
+    try await generate(project, 2)
+    let copy = try copyAlone(url)
+    #expect(try isWALFile(copy))
+    #expect(!FileManager.default.fileExists(atPath: copy.path + "-wal"))
+    let opened = Project(url: copy)
+    #expect(FileManager.default.fileExists(atPath: copy.path + "-wal"))
+    #expect(FileManager.default.fileExists(atPath: copy.path + "-shm"))
+    #expect(opened.items().map(\.sidecar.prompt) == ["run 1"])
+    await opened.close()
+    await project.close()
+  }
+
+  /// Once let go, a project's file alone holds every step, and stays in WAL mode, even while
+  /// something else still has the file open (a held `Project`'s store, another app), when closing
+  /// the last connection wouldn't have checkpointed it.
+  @Test func aLetGoProjectIsCompleteInItsFile() async throws {
+    let url = try scratch()
+    weak var released: Project?
+    do {
+      let project = Project(url: url)
+      released = project
+      try await generate(project, 1)
+      try await generate(project, 2)
+    }
+    var other: OpaquePointer?
+    #expect(sqlite3_open_v2(url.path, &other, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK)
+    defer { sqlite3_close(other) }
+    #expect(sqlite3_exec(other, "SELECT count(*) FROM sqlite_master", nil, nil, nil) == SQLITE_OK)
+    #expect(released == nil)
+    // `deinit` shuts down and checkpoints on a background queue: the -wal empties when it's done.
+    let wal = url.path + "-wal"
+    func walBytes() -> Int64? { (try? FileManager.default.attributesOfItem(atPath: wal)[.size] as? NSNumber)?.int64Value }
+    let deadline = Date().addingTimeInterval(10)
+    while Date() < deadline, ProjectCompaction.isOpen(url) || walBytes() != 0 {
+      try await Task.sleep(for: .milliseconds(50))
+    }
+    #expect(walBytes() == 0)
+    let copy = try copyAlone(url)
+    #expect(try isWALFile(copy))
+    let opened = Project(url: copy)
+    #expect(Set(opened.items().map(\.sidecar.prompt)) == ["run 1", "run 2"])
+    await opened.close()
+  }
+
+  /// The quit-time checkpoint (`HistoryStore.checkpointBeforeQuit`) works while the project is
+  /// still open, as it is when the app exits.
+  @Test func aCheckpointWhileOpenCompletesTheFile() async throws {
+    let url = try scratch()
+    let project = Project(url: url)
+    try await generate(project, 1)
+    try await generate(project, 2)
+    _ = project.items()
+    #expect(ProjectCompaction.checkpoint(at: url, timeout: 5))
+    let copy = try copyAlone(url)
+    let opened = Project(url: copy)
+    #expect(Set(opened.items().map(\.sidecar.prompt)) == ["run 1", "run 2"])
+    await opened.close()
+    await project.close()
   }
 }
