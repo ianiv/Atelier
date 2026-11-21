@@ -25,6 +25,10 @@ public enum SamplerType: Int8, DflatFriendlyValue, CaseIterable {
   case uniPCTrailing = 17
   case uniPCAYS = 18
   case tCDTrailing = 19
+  case DPMPP2MSDE = 100
+  case resMultistep = 101
+  case heun = 102
+  case ERSDE = 103
   public static func < (lhs: SamplerType, rhs: SamplerType) -> Bool {
     return lhs.rawValue < rhs.rawValue
   }
