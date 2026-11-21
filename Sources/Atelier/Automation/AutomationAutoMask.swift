@@ -120,9 +120,15 @@ extension Automation {
           let landed = model.history.currentItem?.entryReason == .imported
           let previewKept = model.autoMask.preview != nil, samePrompt = model.autoMask.prompt == prompt
           let nextUndo = history.canUndo ? history.undoActionName : "nothing"
-          check(
-            landed && previewKept && samePrompt && nextUndo == "Select Subject",
-            "import: a selection made before the Imported entry lands survives it (entry landed \(landed)\(landedBefore ? " before the selection finished, so the race wasn't tested" : ""), preview \(previewKept), points \(samePrompt), next to undo “\(nextUndo)”)")
+          let detail = "(entry landed \(landed), preview \(previewKept), points \(samePrompt), next to undo “\(nextUndo)”)"
+          if landedBefore {
+            // Nothing to hold the write back with: a quick write leaves the race untested.
+            note("SKIP import: the Imported entry landed before the selection finished, so the race wasn't exercised \(detail)")
+          } else {
+            check(
+              landed && previewKept && samePrompt && nextUndo == "Select Subject",
+              "import: a selection made before the Imported entry lands survives it \(detail)")
+          }
           model.autoMask.clearPoints(model: model, undoManager: nil)
         }
         model.clearMask(undoManager: nil)

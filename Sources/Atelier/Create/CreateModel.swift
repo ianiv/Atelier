@@ -638,6 +638,9 @@ final class CreateModel {
   /// While a slider drags, its changes share the undo step registered when the drag began.
   private var coalescingEdit = false
   private var generateWhenLoaded = false
+  /// The last pick's image and moodboard restores (`use`), which a rerun waiting on its model's
+  /// load waits for too, as one made with the model loaded does.
+  @ObservationIgnored private var pendingRestore: Task<Void, Never>?
   /// Input entries being written, one after another (`recordEntry`), and how many.
   @ObservationIgnored private var entryChain: Task<Void, Never>?
   @ObservationIgnored private var entriesPending = 0
@@ -1449,6 +1452,10 @@ final class CreateModel {
     } else {
       pendingSettings = sidecar.configuration
       generateWhenLoaded = newSeed
+      pendingRestore = Task {
+        await restoreMoodboard.value
+        await restoreImage.value
+      }
       if selectedModel == sidecar.model {
         // A load of this model already under way takes up the settings when it's done.
         if !isLoadingModel { loadDefaults(for: sidecar.model) }
@@ -3467,7 +3474,20 @@ final class CreateModel {
       pendingSettings = nil
       generateWhenLoaded = false
       isLoadingModel = false
-      if shouldGenerate { generate() }
+      let restore = pendingRestore
+      pendingRestore = nil
+      if shouldGenerate {
+        if let restore {
+          // Not when another pick came while its image and moodboard came back.
+          let picks = moodboardRestores
+          Task {
+            await restore.value
+            if moodboardRestores == picks { generate() }
+          }
+        } else {
+          generate()
+        }
+      }
     }
   }
 
