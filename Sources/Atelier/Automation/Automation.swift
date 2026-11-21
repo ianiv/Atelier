@@ -1,6 +1,7 @@
 #if os(macOS)
 @preconcurrency import _MediaGenerationKit
 import AVFoundation
+@preconcurrency import Diffusion
 import ImageIO
 @preconcurrency import ModelZoo
 @preconcurrency import NNC
@@ -10,14 +11,16 @@ import SwiftUI
 /// progress to stdout and snapshots the window. Does nothing unless `--generate` is passed.
 ///
 ///   Atelier --generate --model moss_image_sft_i8x.ckpt --prompt "…" --width 1152 --height 896
-///           [--seed N] [--steps N] [--sampler NAME] [--shift X] [--num-frames N]
+///           [--seed N] [--steps N] [--sampler NAME] [--scheduler NAME] [--shift X] [--num-frames N]
 ///           [--hires-fix true|false] [--audio FILE] [--refiner FILE|none] [--refiner-start X]
 ///           [--cancel-at-step N] [--download]
 ///           [--snapshot-dir DIR] [--quit]
 ///
 /// `--sampler` takes the engine's sampler name (`SamplerType` case, e.g. dDIMTrailing,
 /// eulerATrailing, LCM, dPMPP2MKarras, uniPCTrailing) or its inspector title, in any case; an unknown name fails the run
-/// with the valid ones. `--shift` sets Shift as the inspector does. `--refiner` replaces the
+/// with the valid ones. `--scheduler` takes a `Denoiser.Scheduler` case name, ComfyUI name
+/// (simple, sgm_uniform, normal, karras, exponential, linear_quadratic, beta, default) or
+/// inspector title. `--shift` sets Shift as the inspector does. `--refiner` replaces the
 /// model's refiner (`none` turns it off), to compare a run with and without it, and
 /// `--refiner-start` sets Refiner Start; the log says at which step the refiner takes over.
 ///
@@ -341,7 +344,7 @@ enum Automation {
       }
       guard var settings = model.settings else { return }
       log(
-        "defaults for \(model.selectedModel ?? "?"): steps \(settings.steps), guidance \(settings.guidanceScale), shift \(settings.shift), rds \(settings.resolutionDependentShift), sampler \(settings.sampler), hires \(settings.hiresFix), size \(settings.width)x\(settings.height)"
+        "defaults for \(model.selectedModel ?? "?"): steps \(settings.steps), guidance \(settings.guidanceScale), shift \(settings.shift), rds \(settings.resolutionDependentShift), sampler \(settings.sampler), scheduler \(settings.scheduler), hires \(settings.hiresFix), size \(settings.width)x\(settings.height)"
       )
       if let width = value("--width").flatMap(Int.init) { settings.width = width }
       let editDuringRun = args.contains("--edit-during-run")
@@ -355,6 +358,17 @@ enum Automation {
           return
         }
         settings.sampler = sampler
+      }
+      if let name = value("--scheduler") {
+        guard let scheduler = Denoiser.Scheduler.allCases.first(where: {
+          String(describing: $0).lowercased() == name.lowercased() || $0.rawValue == name.lowercased()
+            || SettingsRegistry.schedulerTitles[$0]?.lowercased() == name.lowercased()
+        }) else {
+          log("FAIL: unknown scheduler \(name); valid: \(Denoiser.Scheduler.allCases.map(\.rawValue).joined(separator: ", "))")
+          if args.contains("--quit") { AppLifecycle.quit() }
+          return
+        }
+        settings.scheduler = scheduler
       }
       if let shift = value("--shift").flatMap(Float.init) { settings.shift = shift }
       if let refiner = value("--refiner") { settings.refinerModel = refiner == "none" ? nil : refiner }

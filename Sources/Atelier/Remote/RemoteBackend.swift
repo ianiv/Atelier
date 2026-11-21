@@ -1,5 +1,6 @@
 @preconcurrency import _MediaGenerationKit
 import CoreGraphics
+@preconcurrency import Diffusion
 import Foundation
 @preconcurrency import ModelZoo
 import Network
@@ -321,6 +322,13 @@ nonisolated struct RemoteBackend: GenerationBackend {
     if request.mask != nil, try await !catalog().features.contains(RemoteProtocol.maskFeature) {
       throw RemoteError.server(
         "This server's Atelier is too old to inpaint with a mask. Update Atelier there, clear the mask, or run on this device.")
+    }
+    // One that predates schedulers would run the sampler's own schedule instead.
+    if request.configuration.scheduler != .samplerDefault,
+       try await !catalog().features.contains(RemoteProtocol.schedulerFeature)
+    {
+      throw RemoteError.server(
+        "This server's Atelier is too old to use a Scheduler. Update Atelier there, set Scheduler to Sampler's Own, or run on this device.")
     }
     let prepared = try await Self.prepare(request)
     let total = prepared.blobs.reduce(0) { $0 + $1.data.count }
