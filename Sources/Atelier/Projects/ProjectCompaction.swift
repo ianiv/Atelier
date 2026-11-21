@@ -123,7 +123,8 @@ nonisolated enum ProjectCompaction {
   /// Makes an existing file readable by read-only connections, which every read here uses (dflat's
   /// reader pool, `SQLiteConnectionPool`, and the tensor store's `openStore(flags: [.readOnly])`).
   /// A file in WAL mode keeps that mode in its header, so one copied without its -wal and -shm (sent
-  /// by someone, copied in Finder, from Draw Things) needs them to be read, and a read-only
+  /// by someone, copied in Finder, from Draw Things, or still being copied in while Atelier lists
+  /// it) needs them to be read, and a read-only
   /// connection can't make them: its open succeeds but every statement fails with
   /// SQLITE_CANTOPEN, which dflat's queries turn into no rows (`SQLiteQueryBuilder`), and its
   /// read-write fallback only follows a failed open (`SQLiteConnection.init`). One read-write
@@ -151,6 +152,8 @@ nonisolated enum ProjectCompaction {
       return
     }
     defer { sqlite3_close(database) }
+    // Opening a project shouldn't wait 30 s on a file something else is still writing.
+    sqlite3_busy_timeout(database, 5000)
     var persist: Int32 = 1
     sqlite3_file_control(database, "main", SQLITE_FCNTL_PERSIST_WAL, &persist)
     guard integer(database, "SELECT count(*) FROM sqlite_master") != nil else {
@@ -169,10 +172,19 @@ nonisolated enum ProjectCompaction {
   /// it in Finder gets. It stays in WAL mode, unlike dflat's `shutdown(flags: [.truncate])`, which
   /// also switches to `journal_mode=DELETE`. Waits up to `timeout` for a write in progress; when
   /// that runs out (or a reader is mid-transaction) the checkpoint is only partial, which is fine:
-  /// the -wal still has the rest. False when it didn't complete.
+  /// the -wal still has the rest. The timeout bounds waiting for locks, not the copy itself, so
+  /// `maxWALBytes` skips a -wal larger than that (for quitting, which has a deadline). False when it
+  /// didn't complete.
   @discardableResult
-  static func checkpoint(at url: URL, timeout: TimeInterval) -> Bool {
-    guard FileManager.default.fileExists(atPath: url.path), let database = try? open(url) else { return false }
+  static func checkpoint(at url: URL, timeout: TimeInterval, maxWALBytes: Int64? = nil) -> Bool {
+    guard FileManager.default.fileExists(atPath: url.path) else { return false }
+    if let maxWALBytes,
+       let walBytes = (try? FileManager.default.attributesOfItem(atPath: url.path + "-wal")[.size] as? NSNumber)?.int64Value,
+       walBytes > maxWALBytes
+    {
+      return false
+    }
+    guard let database = try? open(url) else { return false }
     defer { sqlite3_close(database) }
     sqlite3_busy_timeout(database, Int32(max(0, min(timeout, 30)) * 1000))
     guard text(database, "PRAGMA journal_mode")?.lowercased() == "wal" else { return true }

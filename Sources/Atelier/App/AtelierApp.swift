@@ -45,6 +45,9 @@ struct AtelierApp: App {
     // After `CreateModel`'s own quit handlers (observers run in the order they were added), so the
     // entries it records at quit go into the checkpoint too.
     AppLifecycle.onWillTerminate { history.checkpointBeforeQuit() }
+    #if os(iOS)
+      AppLifecycle.onEnterBackground { history.checkpointInBackground() }
+    #endif
     let navigation = Navigation()
     _navigation = State(initialValue: navigation)
     let edit = EditModel()

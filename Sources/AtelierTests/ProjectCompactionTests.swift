@@ -196,7 +196,9 @@ struct ProjectCompactionTests {
     await project.close()
   }
 
-  /// Once let go, a project's file alone holds every step, and stays in WAL mode.
+  /// Once let go, a project's file alone holds every step, and stays in WAL mode, even while
+  /// something else still has the file open (a held `Project`'s store, another app), when closing
+  /// the last connection wouldn't have checkpointed it.
   @Test func aLetGoProjectIsCompleteInItsFile() async throws {
     let url = try scratch()
     weak var released: Project?
@@ -206,13 +208,19 @@ struct ProjectCompactionTests {
       try await generate(project, 1)
       try await generate(project, 2)
     }
+    var other: OpaquePointer?
+    #expect(sqlite3_open_v2(url.path, &other, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK)
+    defer { sqlite3_close(other) }
+    #expect(sqlite3_exec(other, "SELECT count(*) FROM sqlite_master", nil, nil, nil) == SQLITE_OK)
     #expect(released == nil)
     // `deinit` shuts down and checkpoints on a background queue: the -wal empties when it's done.
-    let deadline = Date().addingTimeInterval(10)
     let wal = url.path + "-wal"
-    while Date() < deadline, (try? FileManager.default.attributesOfItem(atPath: wal)[.size] as? NSNumber)?.int64Value ?? 0 != 0 {
+    func walBytes() -> Int64? { (try? FileManager.default.attributesOfItem(atPath: wal)[.size] as? NSNumber)?.int64Value }
+    let deadline = Date().addingTimeInterval(10)
+    while Date() < deadline, ProjectCompaction.isOpen(url) || walBytes() != 0 {
       try await Task.sleep(for: .milliseconds(50))
     }
+    #expect(walBytes() == 0)
     let copy = try copyAlone(url)
     #expect(try isWALFile(copy))
     let opened = Project(url: copy)

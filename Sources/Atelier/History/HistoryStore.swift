@@ -300,18 +300,42 @@ final class HistoryStore {
     await reload()
   }
 
+  /// The largest -wal checkpointed at quit or on going to the background: copying one takes time no
+  /// busy timeout bounds. A larger one stays beside its file until the project is let go.
+  static let quickCheckpointWALBytes: Int64 = 64 * 1024 * 1024
+
+  /// The current project and any still held, open ones.
+  private var openProjectURLs: [URL] {
+    ([project] + heldProjects.values.compactMap(\.project)).filter(\.isOpen).map(\.url)
+  }
+
   /// At quit, checkpoints the current project and any still held (`ProjectCompaction.checkpoint`),
   /// so each .sqlite3 alone is complete once Atelier has quit: nothing closes them, and the
   /// process exits with their connections open. Within what's left of `QuitDeadline`, at most a
   /// second each, since a job writing at quit keeps the checkpoint waiting.
   func checkpointBeforeQuit() {
-    let projects = [project] + heldProjects.values.compactMap(\.project)
-    for project in projects where project.isOpen {
+    for url in openProjectURLs {
       let remaining = QuitDeadline.date.timeIntervalSinceNow
       guard remaining > 0 else { break }
-      ProjectCompaction.checkpoint(at: project.url, timeout: min(remaining, 1))
+      ProjectCompaction.checkpoint(at: url, timeout: min(remaining, 1), maxWALBytes: Self.quickCheckpointWALBytes)
     }
   }
+
+  #if os(iOS)
+    /// iPadOS rarely says the app is ending: it suspends it in the background and may end it from
+    /// there. So the checkpoint `checkpointBeforeQuit` does runs on going to the background too, off
+    /// the main thread. A job still running there (`BackgroundTask`) only keeps it waiting a second
+    /// per project; one cut short by suspension is simply partial, and the -wal keeps the rest.
+    func checkpointInBackground() {
+      let urls = openProjectURLs
+      let limit = Self.quickCheckpointWALBytes
+      Task.detached(priority: .utility) {
+        for url in urls {
+          ProjectCompaction.checkpoint(at: url, timeout: 1, maxWALBytes: limit)
+        }
+      }
+    }
+  #endif
 
   /// Sets the current project's output folder overrides.
   func setOutput(_ output: ProjectOutput) {
