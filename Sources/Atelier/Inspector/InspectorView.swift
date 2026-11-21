@@ -458,7 +458,9 @@ struct SettingRow: View {
         label
       } control: {
         Picker(descriptor.title, selection: bindings.json) {
-          ForEach(options, id: \.self) { Text($0.title).tag($0.value) }
+          ForEach(options, id: \.self) {
+            Text($0.title).tag($0.value).disabled(descriptor.optionHasNoEffect(model.traits, $0.value))
+          }
         }
         .labelsHidden()
         .fixedSize()

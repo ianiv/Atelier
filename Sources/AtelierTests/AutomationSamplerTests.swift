@@ -15,6 +15,9 @@ struct AutomationSamplerTests {
     #expect(Set(names).count == names.count)
     #expect(Automation.samplerNames["ddimtrailing"] == .dDIMTrailing)
     #expect(Automation.samplerNames["ddim trailing"] == .dDIMTrailing)
+    #expect(Automation.samplerNames["dpmpp_2m_sde"] == .DPMPP2MSDE)
+    #expect(Automation.samplerNames["er-sde"] == .ERSDE)
+    #expect(Automation.samplerNames["heun"] == .heun)
   }
 }
 #endif

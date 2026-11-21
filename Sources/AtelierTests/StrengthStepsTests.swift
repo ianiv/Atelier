@@ -1,6 +1,7 @@
 @testable import Atelier
 @preconcurrency import DataModels
 @preconcurrency import Diffusion
+@preconcurrency import LocalImageGenerator
 import Testing
 
 /// Strength's start step, worked out as the engine's samplers work it out
@@ -127,6 +128,28 @@ struct StrengthStepsTests {
     #expect(try #require(start(.LCM)) == ddim)
     let simple = try #require(start(.eulerA, .simple))
     #expect(abs(simple.startStep - ddim.startStep) < 0.01, "\(simple.startStep) vs \(ddim.startStep)")
+  }
+
+  /// The ComfyUI samplers count on a scheduler's schedule, their own being Simple on flow models
+  /// (`Scheduler.resolved(for:sampler:)`), with a fractional start between steps, as their sampler
+  /// interpolates it; on MiniMax H3 video they count as their fallback does.
+  @Test func comfySamplersCountOnTheirScheduler() throws {
+    func start(
+      _ sampler: DataModels.SamplerType, _ scheduler: Denoiser.Scheduler = .samplerDefault,
+      version: ModelVersion = .flux1, strength: Float = 0.5
+    ) -> StrengthSteps.Start? {
+      StrengthSteps.start(
+        parameterization: Self.flow, objective: Self.flowObjective, version: version, sampler: sampler,
+        sampling: Sampling(steps: 8, shift: 3), strength: strength, scheduler: scheduler)
+    }
+    for sampler in [DataModels.SamplerType.DPMPP2MSDE, .resMultistep, .heun, .ERSDE] {
+      let own = try #require(start(sampler))
+      #expect(own == start(.eulerA, .simple), "\(sampler)")
+      #expect(try #require(start(sampler, .beta)) == start(.eulerA, .beta), "\(sampler)")
+      let fractional = try #require(start(sampler, strength: 0.55))
+      #expect(fractional.startStep != fractional.startStep.rounded(), "\(sampler): \(fractional.startStep)")
+      #expect(start(sampler, version: .minimaxH3) == start(sampler.comfyFallback, version: .minimaxH3))
+    }
   }
 
   @Test func unknownModelsAreNotCounted() {

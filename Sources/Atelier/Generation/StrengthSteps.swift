@@ -1,6 +1,7 @@
 @preconcurrency import DataModels
 @preconcurrency import Diffusion
 import Foundation
+@preconcurrency import LocalImageGenerator
 import ModelZoo
 import Synchronization
 
@@ -126,6 +127,15 @@ nonisolated enum StrengthSteps {
     scheduler: Denoiser.Scheduler = .samplerDefault
   ) -> Start? {
     let strength = min(max(strength, 0), 1)
+    // The ComfyUI samplers run the nearest Draw Things one on models that can't take them
+    // (`SamplerType.comfyFallback`), and otherwise always step on a scheduler's sigmas, their own
+    // being Simple on flow models and Karras on the rest (`Scheduler.resolved(for:sampler:)`).
+    if sampler.comfySampler != nil, !LocalImageGenerator.runsComfySamplers(version) {
+      return start(
+        parameterization: parameterization, objective: objective, version: version, sampler: sampler.comfyFallback,
+        sampling: sampling, strength: strength, h3ImageGrids: h3ImageGrids, scheduler: scheduler)
+    }
+    let scheduler = scheduler.resolved(for: parameterization, sampler: sampler.comfySampler)
     func at(_ discretization: some Denoiser.Discretization) -> Start {
       Start(startStep: startStep(for: strength, sampling: sampling, discretization: discretization), steps: sampling.steps)
     }
@@ -165,6 +175,9 @@ nonisolated enum StrengthSteps {
       return at(Denoiser.LinearDiscretization(parameterization, objective: objective))
     case .DDIM:
       return at(Denoiser.LinearDiscretization(parameterization, objective: objective, timestepSpacing: .leading))
+    case .DPMPP2MSDE, .resMultistep, .heun, .ERSDE:
+      // Always on a scheduler (above); never reached.
+      return at(Denoiser.ScheduledDiscretization(parameterization, objective: objective, scheduler: .simple))
     case .PLMS:
       let encoded = Int(strength * Float(sampling.steps))
       return Start(startStep: Float(sampling.steps - encoded), steps: sampling.steps)

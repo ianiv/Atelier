@@ -18,13 +18,16 @@ nonisolated enum RemoteProtocol {
   static let maxDeviceNameLength = 64
   /// What this copy can do beyond version 1, listed in its catalog so a client can tell an older
   /// server (which lists none) apart without refusing it outright.
-  static let features = [maskFeature, schedulerFeature]
+  static let features = [maskFeature, schedulerFeature, comfySamplersFeature]
   /// Runs a job's inpainting mask (`RemoteJobRequest.mask`). A server without it would ignore the
   /// mask and regenerate the whole frame.
   static let maskFeature = "mask"
   /// Runs a job's Scheduler (the settings' `scheduler`). A server without it would run the
   /// sampler's own schedule.
   static let schedulerFeature = "scheduler"
+  /// Runs the ComfyUI samplers (DPM++ 2M SDE, Res Multistep, Heun, ER-SDE). A server without them
+  /// reads their raw values as DPM++ 2M Karras and would run that instead.
+  static let comfySamplersFeature = "comfy-samplers"
 }
 
 nonisolated struct RemoteModelInfo: Codable, Hashable, Sendable {

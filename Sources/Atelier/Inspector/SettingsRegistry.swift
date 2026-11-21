@@ -1,6 +1,7 @@
 @preconcurrency import _MediaGenerationKit
 @preconcurrency import Diffusion
 import Foundation
+@preconcurrency import LocalImageGenerator
 
 /// MGK's configuration plus the engine settings MGK doesn't expose, which runs that call the
 /// engine directly write over the template (`engineConfiguration(template:)`). MGK's fields read
@@ -74,6 +75,11 @@ nonisolated struct ModelTraits: Equatable {
   var usesTCD: Bool { sampler == .TCD || sampler == .tCDTrailing }
   /// Whether Scheduler changes anything (`LocalImageGenerator.sampler(from:)`): the substep
   /// samplers have fixed timesteps and Stable Cascade a cosine schedule of their own.
+  /// Whether the engine runs the ComfyUI samplers (DPM++ 2M SDE, Res Multistep, Heun, ER-SDE)
+  /// for this model: not Stable Cascade's cosine schedule, nor MiniMax H3 video's joint video and
+  /// audio latent, which run the nearest Draw Things sampler instead
+  /// (`LocalImageGenerator.runsComfySamplers`). The inspector shows them disabled there.
+  var runsComfySamplers: Bool { !version.hasPrefix("Stable Cascade") && !isMiniMaxH3 }
   var takesScheduler: Bool {
     !version.hasPrefix("Stable Cascade") && sampler != .eulerASubstep
       && sampler != .dPMPPSDESubstep
@@ -172,6 +178,9 @@ struct SettingDescriptor: Identifiable {
   /// Shown, since the model family uses it, but disabled because this model ignores it (Shift on
   /// MiniMax H3 Image, which the engine always runs at 1). Values still read and write as usual.
   var hasNoEffect: (ModelTraits) -> Bool = { _ in false }
+  /// The same for one choice of a picker: shown, but disabled because this model can't run it
+  /// (the ComfyUI samplers on Stable Cascade and MiniMax H3 video).
+  var optionHasNoEffect: (ModelTraits, JSONValue) -> Bool = { _, _ in false }
   let get: (PipelineConfiguration) -> JSONValue
   let set: (inout PipelineConfiguration, JSONValue) -> Void
   /// Reads this setting from a sidecar's configuration dump (keyed by property name).
@@ -184,6 +193,12 @@ struct SettingDescriptor: Identifiable {
   func withoutEffect(when condition: @escaping (ModelTraits) -> Bool) -> SettingDescriptor {
     var descriptor = self
     descriptor.hasNoEffect = condition
+    return descriptor
+  }
+
+  func withoutEffect(forOption condition: @escaping (ModelTraits, JSONValue) -> Bool) -> SettingDescriptor {
+    var descriptor = self
+    descriptor.optionHasNoEffect = condition
     return descriptor
   }
 
@@ -224,6 +239,7 @@ enum SettingsRegistry {
     .DPMPP2MAYS: "DPM++ 2M AYS", .eulerAAYS: "Euler A AYS", .DPMPPSDEAYS: "DPM++ SDE AYS",
     .dPMPP2MTrailing: "DPM++ 2M Trailing", .dDIMTrailing: "DDIM Trailing",
     .uniPCTrailing: "UniPC Trailing", .uniPCAYS: "UniPC AYS", .tCDTrailing: "TCD Trailing",
+    .DPMPP2MSDE: "DPM++ 2M SDE", .resMultistep: "Res Multistep", .heun: "Heun", .ERSDE: "ER-SDE",
   ]
 
   /// Scheduler titles, as ComfyUI's scheduler names read in its menus.
@@ -397,7 +413,11 @@ enum SettingsRegistry {
         keywords: ["cfg", "text guidance"], applies: { !$0.isWithoutCFG }),
       choice(
         "sampler", \.sampler, "Sampler", .essentials, "The sampling algorithm and its noise schedule.",
-        titles: samplerTitles),
+        titles: samplerTitles
+      ).withoutEffect(forOption: { traits, value in
+        guard !traits.runsComfySamplers, case .string(let name) = value else { return false }
+        return SamplerType.allCases.first { String(describing: $0) == name }?.comfySampler != nil
+      }),
       choice(
         "scheduler", \.scheduler, "Scheduler", .essentials,
         "How the sampler spaces its steps. Sampler's Own keeps the sampler's schedule (Karras, Trailing, …).",

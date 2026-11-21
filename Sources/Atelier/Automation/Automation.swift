@@ -3,6 +3,7 @@
 import AVFoundation
 @preconcurrency import Diffusion
 import ImageIO
+@preconcurrency import LocalImageGenerator
 @preconcurrency import ModelZoo
 @preconcurrency import NNC
 import SwiftUI
@@ -17,7 +18,8 @@ import SwiftUI
 ///           [--snapshot-dir DIR] [--quit]
 ///
 /// `--sampler` takes the engine's sampler name (`SamplerType` case, e.g. dDIMTrailing,
-/// eulerATrailing, LCM, dPMPP2MKarras, uniPCTrailing) or its inspector title, in any case; an unknown name fails the run
+/// eulerATrailing, LCM, dPMPP2MKarras, uniPCTrailing), its inspector title, or for the ComfyUI samplers
+/// ComfyUI's name (dpmpp_2m_sde, res_multistep, heun, er_sde), in any case; an unknown name fails the run
 /// with the valid ones. `--scheduler` takes a `Denoiser.Scheduler` case name, ComfyUI name
 /// (simple, sgm_uniform, normal, karras, exponential, linear_quadratic, beta, default) or
 /// inspector title. `--shift` sets Shift as the inspector does. `--refiner` replaces the
@@ -59,6 +61,7 @@ enum Automation {
     ("DPMPP2MAYS", .DPMPP2MAYS), ("eulerAAYS", .eulerAAYS), ("DPMPPSDEAYS", .DPMPPSDEAYS),
     ("dPMPP2MTrailing", .dPMPP2MTrailing), ("dDIMTrailing", .dDIMTrailing),
     ("uniPCTrailing", .uniPCTrailing), ("uniPCAYS", .uniPCAYS), ("tCDTrailing", .tCDTrailing),
+    ("DPMPP2MSDE", .DPMPP2MSDE), ("resMultistep", .resMultistep), ("heun", .heun), ("ERSDE", .ERSDE),
   ]
 
   /// Lowercased case names and inspector titles to samplers, for `--sampler`.
@@ -66,6 +69,10 @@ enum Automation {
     var names = [String: SamplerType]()
     for (title, sampler) in SettingsRegistry.samplerTitles.map({ ($0.value, $0.key) }) + samplerCaseNames {
       names[title.lowercased()] = sampler
+    }
+    // The ComfyUI samplers by ComfyUI's names too (dpmpp_2m_sde, res_multistep, heun, er_sde).
+    for sampler in SamplerType.allCases {
+      if let comfy = sampler.comfySampler { names[comfy.rawValue] = sampler }
     }
     return names
   }

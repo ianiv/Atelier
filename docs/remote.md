@@ -35,7 +35,7 @@ If the connection drops or you quit, the job carries on at the server. Atelier p
 | Upscale (Quality or Fast) | The clip's frames, unless the server still has them from making that clip | The upscaled frames |
 | Export Video with upscaling | The timeline's frames | The upscaled frames; this device encodes the video |
 
-A [Scheduler](creating-images.md#scheduler) other than Sampler's Own needs a server whose Atelier lists the "scheduler" feature; an older server refuses the job and says so, rather than run it on the sampler's own schedule.
+A [Scheduler](creating-images.md#scheduler) other than Sampler's Own needs a server whose Atelier lists the "scheduler" feature; an older server refuses the job and says so, rather than run it on the sampler's own schedule. The same goes for the [ComfyUI samplers](creating-images.md#comfyui-samplers) (the "comfy-samplers" feature), which an older server would run as DPM++ 2M Karras.
 
 Inpainting with a mask needs a server whose Atelier lists the "mask" feature, which means an Atelier at least as new as this one. With an older server the Brush and Eraser are disabled, and Generate stays off while a mask is painted inside the frame; Clear Mask and Invert Mask still work.
 

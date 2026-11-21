@@ -2,6 +2,7 @@
 import CoreGraphics
 @preconcurrency import Diffusion
 import Foundation
+@preconcurrency import LocalImageGenerator
 @preconcurrency import ModelZoo
 import Network
 import Observation
@@ -329,6 +330,15 @@ nonisolated struct RemoteBackend: GenerationBackend {
     {
       throw RemoteError.server(
         "This server's Atelier is too old to use a Scheduler. Update Atelier there, set Scheduler to Sampler's Own, or run on this device.")
+    }
+    // And one that predates the ComfyUI samplers would run DPM++ 2M Karras in their place.
+    if request.configuration.sampler.comfySampler != nil,
+       try await !catalog().features.contains(RemoteProtocol.comfySamplersFeature)
+    {
+      // SamplerType describes itself by its title (DataModels Defaults.swift).
+      let title = String(describing: request.configuration.sampler)
+      throw RemoteError.server(
+        "This server's Atelier is too old to use \(title). Update Atelier there, pick another sampler, or run on this device.")
     }
     let prepared = try await Self.prepare(request)
     let total = prepared.blobs.reduce(0) { $0 + $1.data.count }

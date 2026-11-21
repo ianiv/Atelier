@@ -76,6 +76,17 @@ The inspector lists the model's settings in sections: Essentials, Sampling, LoRA
 
 So DPM++ 2M with Beta, or Euler A with Karras, are both one sampler and one scheduler away. Switching models puts Scheduler back to Sampler's Own. It's ignored by the Substep samplers (their timesteps are fixed), Stable Cascade, and HyperFlow H3 Flash (its distilled grids); models on EDM sigmas, such as Stable Video Diffusion, take only Karras and Exponential and run the others as Sampler's Own. On MiniMax H3 Image every scheduler follows the model's trained schedule, as in ComfyUI, but no step goes below the lowest noise the model was trained on (about 0.23): Karras and Exponential end there, and the others are spread out to end there when they would go lower. The scheduler is saved with each step in the project and in the settings an image carries (Draw Things doesn't have one and runs such an image on the sampler's own schedule).
 
+### ComfyUI samplers
+
+Four samplers come from ComfyUI and run as they do there (with ComfyUI's settings for those names):
+
+- **DPM++ 2M SDE**: DPM++ 2M with fresh noise each step (`dpmpp_2m_sde`).
+- **Res Multistep**: a second-order multistep sampler (`res_multistep`), deterministic.
+- **Heun**: two model passes per step, so a step takes about twice as long (`heun`); deterministic.
+- **ER-SDE**: an extended reverse-time SDE solver (`er_sde`), with fresh noise each step.
+
+DPM++ 2M SDE and ER-SDE add noise as they go, so the same seed gives the same image, but small changes to the settings move it more than with the others. They have no schedule of their own: with Scheduler on **Sampler's Own** they use Simple on flow models (on MiniMax H3 Image, its trained schedule) and Karras on Stable Diffusion and other models. Stable Cascade and MiniMax H3 video can't use them, so they're shown but disabled there (a preset or image that asks for one runs the closest built-in sampler). They're saved with each step and in the settings an image carries; Draw Things doesn't know them and reads them as DPM++ 2M Karras. A Compute server needs an Atelier that has them.
+
 ### Layouts
 
 A layout decides which settings are shown, their order, and which sections start expanded. It never changes values. Pick one from the menu at the top of the inspector:

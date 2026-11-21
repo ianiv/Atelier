@@ -76,6 +76,17 @@ struct ProjectMappingTests {
     #expect(dump["sampler"] != .string("noSuchSampler"))
   }
 
+  /// The ComfyUI samplers are SamplerType cases 100-103 in the project's own field, so they round
+  /// trip like Draw Things' samplers (an older reader takes them as DPM++ 2M Karras).
+  @Test func comfySamplersRoundTripThroughTheNode() {
+    for sampler in [DataModels.SamplerType.DPMPP2MSDE, .resMultistep, .heun, .ERSDE] {
+      let name = JSONValue.string(String(describing: sampler))
+      let node = ProjectMapping.node(for: step(), settings: ["sampler": name])
+      #expect(node.sampler.rawValue == sampler.rawValue && sampler.rawValue >= 100)
+      #expect(ProjectMapping.dump(of: node)["sampler"] == name)
+    }
+  }
+
   @Test func profileRoundTrip() throws {
     let profile = ProjectMapping.Profile(
       duration: 2.5, inputTensorId: 11, parentTensorId: 12, inputAudioId: 13)
