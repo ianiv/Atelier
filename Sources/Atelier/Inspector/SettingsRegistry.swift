@@ -73,13 +73,13 @@ nonisolated struct ModelTraits: Equatable {
   }
   /// TCD and TCD Trailing are the only samplers that read Strategic Stochastic Sampling.
   var usesTCD: Bool { sampler == .TCD || sampler == .tCDTrailing }
-  /// Whether Scheduler changes anything (`LocalImageGenerator.sampler(from:)`): the substep
-  /// samplers have fixed timesteps and Stable Cascade a cosine schedule of their own.
   /// Whether the engine runs the ComfyUI samplers (DPM++ 2M SDE, Res Multistep, Heun, ER-SDE)
   /// for this model: not Stable Cascade's cosine schedule, nor MiniMax H3 video's joint video and
   /// audio latent, which run the nearest Draw Things sampler instead
   /// (`LocalImageGenerator.runsComfySamplers`). The inspector shows them disabled there.
   var runsComfySamplers: Bool { !version.hasPrefix("Stable Cascade") && !isMiniMaxH3 }
+  /// Whether Scheduler changes anything (`LocalImageGenerator.sampler(from:)`): the substep
+  /// samplers have fixed timesteps and Stable Cascade a cosine schedule of their own.
   var takesScheduler: Bool {
     !version.hasPrefix("Stable Cascade") && sampler != .eulerASubstep
       && sampler != .dPMPPSDESubstep

@@ -1,4 +1,5 @@
 @testable import Atelier
+@preconcurrency import DataModels
 @preconcurrency import Diffusion
 import Foundation
 import Testing
@@ -104,6 +105,21 @@ struct ComfySamplerTests {
           break
         }
       }
+    }
+  }
+
+  /// Names from Draw Things, ComfyUI and A1111 / Forge parse to the right sampler; the DPM++ 2M
+  /// SDE Heun variants are DPM++ 2M SDE, not Heun (DataModels `SamplerType(from:)`).
+  @Test func namesParse() {
+    let cases: [(String, DataModels.SamplerType)] = [
+      ("DPM++ 2M SDE", .DPMPP2MSDE), ("dpmpp_2m_sde", .DPMPP2MSDE), ("dpmpp_2m_sde_heun", .DPMPP2MSDE),
+      ("DPM++ 2M SDE Heun Karras", .DPMPP2MSDE), ("Heun", .heun), ("heun", .heun),
+      ("Res Multistep", .resMultistep), ("res_multistep", .resMultistep), ("ER-SDE", .ERSDE),
+      ("er_sde", .ERSDE), ("DPM++ SDE Karras", .dPMPPSDEKarras), ("DPM++ 2M Karras", .dPMPP2MKarras),
+      ("Euler A Trailing", .eulerATrailing),
+    ]
+    for (name, sampler) in cases {
+      #expect(DataModels.SamplerType(from: name) == sampler, "\(name)")
     }
   }
 
