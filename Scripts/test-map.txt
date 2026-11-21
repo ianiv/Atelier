@@ -43,7 +43,7 @@ Sources/Atelier/Create/      | CanvasDropTests,CanvasPaintTests,CanvasRefineTest
 Sources/Atelier/Create/AutoMask/ | AutoMaskTests,MaskMemoryTests,SAMFolderTests,FaceFinderTests | --automask-check
 Sources/Atelier/Edit/        | GrainTests,EditPipelineTests,EditRenderCancelTests,EditRenderLaneTests,EditRenderLoopTests,LUTTests,EditJobTests,EditProjectDataTests,EditModelTests | --edit-screen-check,--grain-reference,--edit-render-bench,--edit-ui-bench
 Sources/AtelierTests/Fixtures/grain-parity/ | GrainTests |
-Sources/Atelier/Generation/  | StrengthStepsTests,ScheduleTests,ModelsLookupOrderTests,RefinerKickInTests,RefinerModelSwitchTests,PreviewDecoderTests,AutomationSamplerTests | --engine-check,--generate,--reuse
+Sources/Atelier/Generation/  | StrengthStepsTests,ScheduleTests,ComfySamplerTests,ModelsLookupOrderTests,RefinerKickInTests,RefinerModelSwitchTests,PreviewDecoderTests,AutomationSamplerTests | --engine-check,--generate,--reuse
 Sources/Atelier/History/     | HistoryGraphTests,ProjectCompactionTests,InputEntryTests,EntryTreeFuzzTests,PNGTextTests,JSONValueTests,ClipTests | --input-entries-check,--entries-freeze-check,--history-loras-check,--canvas-clip-check
 Sources/Atelier/Inspector/   | SizePresetTests,PresetImportTests | --inspector-check
 Sources/Atelier/Library/     | DrawThingsImportTests,LoRACopiesTests,MOSSImportTests,ModelMoveTests,ModelFolderTests,OrphanTests | --library-check,--model-folders-check,--model-move-check,--add-folder-check,--catalog-retry-check
