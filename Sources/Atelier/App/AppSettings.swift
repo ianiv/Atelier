@@ -132,7 +132,9 @@ nonisolated enum PerformanceSetting: String, CaseIterable, Identifiable {
   static let automatic = -1
 
   var value: Int? {
-    let saved = UserDefaults.standard.object(forKey: defaultsKey) as? Int
+    // A launch argument (`-performance.merge_lora 1`, for scripted runs) arrives as a string.
+    let object = UserDefaults.standard.object(forKey: defaultsKey)
+    let saved = object as? Int ?? (object as? String).flatMap { Int($0) }
     return saved == Self.automatic ? nil : saved
   }
 

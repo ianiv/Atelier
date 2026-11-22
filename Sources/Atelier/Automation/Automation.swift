@@ -14,7 +14,7 @@ import SwiftUI
 ///   Atelier --generate --model moss_image_sft_i8x.ckpt --prompt "…" --width 1152 --height 896
 ///           [--seed N] [--steps N] [--sampler NAME] [--scheduler NAME] [--shift X] [--num-frames N]
 ///           [--hires-fix true|false] [--audio FILE] [--refiner FILE|none] [--refiner-start X]
-///           [--cancel-at-step N] [--download]
+///           [--cancel-at-step N] [--download] [--lora FILE[@WEIGHT][,FILE…]]
 ///           [--snapshot-dir DIR] [--quit]
 ///
 /// `--sampler` takes the engine's sampler name (`SamplerType` case, e.g. dDIMTrailing,
@@ -25,6 +25,8 @@ import SwiftUI
 /// inspector title. `--shift` sets Shift as the inspector does. `--refiner` replaces the
 /// model's refiner (`none` turns it off), to compare a run with and without it, and
 /// `--refiner-start` sets Refiner Start; the log says at which step the refiner takes over.
+/// `--lora` adds LoRAs from the models folder; whether they merge follows Settings ▸ Merge LoRA,
+/// which a launch argument such as `-performance.merge_lora 0` overrides for one run.
 ///
 /// `--show history` opens that sidebar section at launch. `--project NAME` saves to (and reads
 /// history from) that project instead of the user's current one.
@@ -388,6 +390,14 @@ enum Automation {
       if let blur = value("--mask-blur").flatMap(Float.init) { settings.maskBlur = blur }
       if let outset = value("--mask-blur-outset").flatMap(Int.init) { settings.maskBlurOutset = outset }
       if let preserve = value("--preserve-original") { settings.preserveOriginalAfterInpaint = preserve == "true" }
+      // --lora FILE[@WEIGHT][,FILE…]: LoRAs from the models folder, weight 1 unless given.
+      if let list = value("--lora") {
+        settings.loras = list.split(separator: ",").map { entry in
+          let parts = entry.split(separator: "@")
+          return LoRA(file: String(parts[0]), weight: parts.count > 1 ? Float(parts[1]) ?? 1 : 1, mode: .all)
+        }
+        log("loras \(settings.loras.map { "\($0.file ?? "?")@\($0.weight)" }.joined(separator: ", "))")
+      }
       model.settings = settings
       log("mask blur \(settings.maskBlur), outset \(settings.maskBlurOutset), preserve original \(settings.preserveOriginalAfterInpaint)")
       if let refiner = settings.refinerModel {
