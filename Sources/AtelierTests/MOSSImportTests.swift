@@ -216,6 +216,39 @@ struct MOSSImportTests {
     #expect(worst < 0.03)
   }
 
+  /// An 8-bit copy of a store holding BFloat16 weights keeps their values: ccv's direct BFloat16
+  /// to Float16 conversion reads its output buffer, so `quantize` has to go by way of Float32.
+  @Test func eightBitCopyOfBFloat16Weights() throws {
+    let rows = 64
+    let columns = 64
+    var generator = Generator(state: 11)
+    let values = (0..<(rows * columns)).map { _ in Float.random(in: -1...1, using: &generator) }
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent("MOSSImportTests-" + UUID().uuidString)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let source = folder.appendingPathComponent("model_f16.ckpt").path
+    let output = folder.appendingPathComponent("model_q8p.ckpt").path
+    let key = "__dit__[t-x_q-0-0]"
+    let bf16 = Tensor<BFloat16>(from: Tensor<Float>(values, .CPU, .NC(rows, columns)))
+    let graph = DynamicGraph()
+    graph.openStore(source) { $0.write(key, tensor: bf16) }
+    MOSSImporter.quantize(source, to: output, format: .palettized, progress: { _ in })
+
+    var copied: Tensor<Float>?
+    graph.openStore(output, flags: .readOnly) { store in
+      copied = store.read(key, codec: [.q8p, .ezm7]).map { Tensor<Float>(from: $0) }
+    }
+    let tensor = try #require(copied)
+    #expect(Array(tensor.shape) == [rows, columns])
+    let expected = Tensor<Float>(from: bf16)
+    var worst: Float = 0
+    for r in 0..<rows {
+      for c in 0..<columns { worst = max(worst, abs(tensor[r, c] - expected[r, c])) }
+    }
+    // q8p keeps 256 levels per block; over [-1, 1] that's well under 0.02.
+    #expect(worst < 0.02)
+  }
+
   @Test func otherQuantizationIsRefusedByName() throws {
     let quant = Data(#"{"format":"mxfp8"}"#.utf8)
     let url = try Self.write([

@@ -194,10 +194,9 @@ nonisolated enum MOSSImporter {
             }
             continue
           }
-          // BFloat16 goes by way of Float32: ccv's direct BFloat16 to Float16 conversion
-          // (ccv_bfloat_to_half_precision) reads its output instead of its input. The engine's
-          // Tensor(bfloat16SafeFrom:) in LoRALoader.swift does the same.
-          let fp16 = tensor.dataType == .BFloat16 ? Tensor<Float16>(from: Tensor<Float32>(from: tensor)) : Tensor<Float16>(from: tensor)
+          // Not Tensor(from:): ccv's direct BFloat16 to Float16 conversion reads its output instead
+          // of its input, and the engine's helper (LoRALoader.swift) goes by way of Float32.
+          let fp16 = Tensor<Float16>(bfloat16SafeFrom: tensor)
           if miniMaxH3 {
             let isMatrix = fp16.shape.filter { $0 > 1 }.count > 1
             let isSmallAdaLN =
