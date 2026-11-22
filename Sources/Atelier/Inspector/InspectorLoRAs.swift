@@ -31,6 +31,13 @@ struct LoRAEditor: View {
     return items
   }
 
+  /// The setting's value for a list of entries; what `write` stores.
+  nonisolated static func json(_ items: [Item]) -> JSONValue {
+    .array(items.map {
+      .object(["file": .string($0.file), "weight": .number($0.weight), "mode": $0.mode])
+    })
+  }
+
   /// What the replace picker offers: LoRAs other entries already use are hidden, the entry's own
   /// stays (the picker marks it). Add LoRA… doesn't filter, since it still allows duplicates.
   nonisolated static func filteredForReplacing<T>(
@@ -61,10 +68,7 @@ struct LoRAEditor: View {
   }
 
   private func write(_ items: [Item], undo: Bool = true) {
-    let value = JSONValue.array(items.map {
-      .object(["file": .string($0.file), "weight": .number($0.weight), "mode": $0.mode])
-    })
-    model.set(descriptor, to: value, undoManager: undo ? undoManager : nil)
+    model.set(descriptor, to: Self.json(items), undoManager: undo ? undoManager : nil)
   }
 
   var body: some View {
@@ -86,7 +90,7 @@ struct LoRAEditor: View {
             }
             .buttonStyle(.borderless)
             .foregroundStyle(.primary)
-            .help("Change LoRA")
+            .help("Change LoRA (\(item.file))")
             .accessibilityLabel("Change LoRA: \(name(item.file))")
             .popover(
               isPresented: Binding(
@@ -94,15 +98,16 @@ struct LoRAEditor: View {
                 set: { if !$0, replacing == index { replacing = nil } }),
               arrowEdge: inspectorPopoverEdge
             ) {
+              let downloaded = model.availableLoRAs(in: library).filter(\.isDownloaded)
+              let offered = Self.filteredForReplacing(downloaded, file: \.file, items: items, at: index)
               LoRAPicker(
-                catalog: Self.filteredForReplacing(
-                  model.availableLoRAs(in: library).filter(\.isDownloaded), file: \.file,
-                  items: items, at: index),
+                catalog: offered,
                 compatible: compatible, modelFamily: model.selectedModelInfo?.version,
-                current: item.file
+                current: item.file, allUsed: offered.isEmpty && !downloaded.isEmpty
               ) { lora in
-                let all = model.availableLoRAs(in: library)
-                let old = all.first { $0.file == item.file }?.defaultWeight ?? 1
+                // A server's catalog may not list the file; this Mac's library might.
+                let old = model.availableLoRAs(in: library).first { $0.file == item.file }?.defaultWeight
+                  ?? library.loras.first { $0.file == item.file }?.defaultWeight ?? 1
                 write(Self.replacing(
                   items, at: index, with: lora.file, newDefault: lora.defaultWeight, oldDefault: old))
                 replacing = nil
@@ -196,6 +201,8 @@ struct LoRAPicker: View {
   let modelFamily: String?
   /// File of the LoRA being replaced, marked with a checkmark; nil when adding.
   var current: String?
+  /// Every downloaded LoRA is already used by another entry (replace picker only).
+  var allUsed = false
   let pick: (ModelLibrary.LoRA) -> Void
   @State private var query = ""
   @AppStorage("loraPickerShowAll") private var showAll = false
@@ -213,7 +220,10 @@ struct LoRAPicker: View {
     VStack(spacing: 0) {
       SearchField(text: $query, prompt: "Search LoRAs").padding(8)
       Divider()
-      if catalog.isEmpty {
+      if allUsed {
+        Text("All downloaded LoRAs are already in the list.")
+          .foregroundStyle(.secondary).padding()
+      } else if catalog.isEmpty {
         Text("No LoRAs yet. Import them in the LoRAs section.")
           .foregroundStyle(.secondary).padding()
       } else if fitting.isEmpty, !showAll {

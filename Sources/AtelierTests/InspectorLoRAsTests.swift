@@ -39,11 +39,8 @@ struct InspectorLoRAsTests {
     #expect(shown == ["b", "d"])
   }
 
-  @Test func descriptorJSONRoundTrip() {
-    let list = [item("a", 0.5, "base")]
-    let value = JSONValue.array(list.map {
-      .object(["file": .string($0.file), "weight": .number($0.weight), "mode": $0.mode])
-    })
+  @Test func descriptorJSON() {
+    let value = LoRAEditor.json([item("a", 0.5, "base")])
     guard case .array(let entries) = value, case .object(let fields) = entries[0] else {
       Issue.record("not an array of objects")
       return
