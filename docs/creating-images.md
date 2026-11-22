@@ -104,7 +104,7 @@ From the same menu:
 
 ### LoRAs
 
-In the LoRAs section, click **Add LoRA…** to pick one. The list only offers LoRAs made for the selected model's family; turn on **Show LoRAs for other models** to see the rest. A LoRA that doesn't match the current model is marked and skipped. Many LoRAs need their trigger words in the prompt; you'll find them in the LoRAs section of the sidebar. A new LoRA starts at weight 1 with a slider from −1.5 to 2.5, unless its entry in `custom_lora.json` gives another weight and range (as Draw Things' LoRA Config Editor script sets them); then it uses those.
+In the LoRAs section, click **Add LoRA…** to pick one. The list only offers LoRAs made for the selected model's family; turn on **Show LoRAs for other models** to see the rest. A LoRA that doesn't match the current model is marked and skipped. Many LoRAs need their trigger words in the prompt; you'll find them in the LoRAs section of the sidebar. A new LoRA starts at weight 1 with a slider from −1.5 to 2.5, unless its entry in `custom_lora.json` gives another weight and range (as Draw Things' LoRA Config Editor script sets them); then it uses those. Click a LoRA's name to pick a different one; its weight is kept unless you hadn't changed it from the old LoRA's default.
 
 ## Presets
 

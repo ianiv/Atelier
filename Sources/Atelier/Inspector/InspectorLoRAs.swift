@@ -7,11 +7,37 @@ struct LoRAEditor: View {
   @Environment(ModelLibrary.self) private var library
   @Environment(\.undoManager) private var undoManager
   @State private var picking = false
+  /// Index of the entry whose LoRA is being changed; its picker popover is open.
+  @State private var replacing: Int?
 
-  private struct Item: Hashable {
+  nonisolated struct Item: Hashable {
     var file: String
     var weight: Double
     var mode: JSONValue
+  }
+
+  /// The list after swapping the LoRA at `index` for `newFile`. The entry keeps its place and mode.
+  /// Its weight moves to the new LoRA's default only if it still sits at the old LoRA's default
+  /// (the user never changed it); a weight the user chose carries over. Picking the same file, or
+  /// an index that isn't there, leaves the list as it was.
+  nonisolated static func replacing(
+    _ items: [Item], at index: Int, with newFile: String, newDefault: Double, oldDefault: Double
+  ) -> [Item] {
+    guard items.indices.contains(index), items[index].file != newFile else { return items }
+    var items = items
+    // Weights are stored rounded to 0.01 by the slider, so compare with that tolerance.
+    if abs(items[index].weight - oldDefault) < 0.005 { items[index].weight = newDefault }
+    items[index].file = newFile
+    return items
+  }
+
+  /// What the replace picker offers: LoRAs other entries already use are hidden, the entry's own
+  /// stays (the picker marks it). Add LoRA… doesn't filter, since it still allows duplicates.
+  nonisolated static func filteredForReplacing<T>(
+    _ catalog: [T], file: (T) -> String, items: [Item], at index: Int
+  ) -> [T] {
+    let others = Set(items.enumerated().filter { $0.offset != index }.map(\.element.file))
+    return catalog.filter { !others.contains(file($0)) }
   }
 
   private var items: [Item] {
@@ -52,8 +78,36 @@ struct LoRAEditor: View {
         let range = weightRange(item)
         VStack(alignment: .leading, spacing: 2) {
           HStack {
-            Text(name(item.file)).lineLimit(1).truncationMode(.middle)
-              .help(item.file)
+            Button {
+              replacing = index
+            } label: {
+              Text(name(item.file)).lineLimit(1).truncationMode(.middle)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.primary)
+            .help("Change LoRA")
+            .accessibilityLabel("Change LoRA: \(name(item.file))")
+            .popover(
+              isPresented: Binding(
+                get: { replacing == index },
+                set: { if !$0, replacing == index { replacing = nil } }),
+              arrowEdge: inspectorPopoverEdge
+            ) {
+              LoRAPicker(
+                catalog: Self.filteredForReplacing(
+                  model.availableLoRAs(in: library).filter(\.isDownloaded), file: \.file,
+                  items: items, at: index),
+                compatible: compatible, modelFamily: model.selectedModelInfo?.version,
+                current: item.file
+              ) { lora in
+                let all = model.availableLoRAs(in: library)
+                let old = all.first { $0.file == item.file }?.defaultWeight ?? 1
+                write(Self.replacing(
+                  items, at: index, with: lora.file, newDefault: lora.defaultWeight, oldDefault: old))
+                replacing = nil
+              }
+            }
             if let lora = model.availableLoRAs(in: library).first(where: { $0.file == item.file }),
                !compatible.contains(lora.family)
             {
@@ -117,6 +171,7 @@ struct LoRAEditor: View {
           }
         }
     }
+    .onChange(of: items) { replacing = nil }
     .task { await library.reloadLoRAsIfRegistriesChanged() }
   }
 
@@ -139,6 +194,8 @@ struct LoRAPicker: View {
   let catalog: [ModelLibrary.LoRA]
   let compatible: Set<String>
   let modelFamily: String?
+  /// File of the LoRA being replaced, marked with a checkmark; nil when adding.
+  var current: String?
   let pick: (ModelLibrary.LoRA) -> Void
   @State private var query = ""
   @AppStorage("loraPickerShowAll") private var showAll = false
@@ -191,7 +248,11 @@ struct LoRAPicker: View {
       pick(lora)
     } label: {
       VStack(alignment: .leading) {
-        Text(lora.name)
+        HStack {
+          Text(lora.name)
+          Spacer()
+          if lora.file == current { Image(systemName: "checkmark").accessibilityLabel("Current LoRA") }
+        }
         Text(enabled ? lora.prefix.isEmpty ? lora.file : "Trigger: \(lora.prefix)" : lora.family)
           .font(.caption).foregroundStyle(.secondary).lineLimit(1)
       }

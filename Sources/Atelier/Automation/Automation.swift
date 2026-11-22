@@ -140,7 +140,7 @@ enum Automation {
       return
     }
     if args.contains("--inspector-check") {
-      inspectorCheck(model, navigation: navigation, layouts: layouts, presets: presets)
+      inspectorCheck(model, navigation: navigation, layouts: layouts, presets: presets, library: library)
       return
     }
     if args.contains("--library-check") {
@@ -1152,10 +1152,13 @@ enum Automation {
   ///
   /// The first form hides Shift in a custom layout, changes it as search would, round-trips the
   /// layout through export/import, applies a preset across models, checks undo and "Use settings",
-  /// and reads Strength's hint (the steps a run at 0.5 goes through; all of them at 1).
+  /// reads Strength's hint (the steps a run at 0.5 goes through; all of them at 1), and swaps a
+  /// LoRA entry for another as the LoRA row's picker does (order, mode, weight rule, one undo step
+  /// named "Change LoRAs"; SKIP without two compatible downloaded LoRAs).
   /// The second form, run after a relaunch, checks the custom layout was restored.
   private static func inspectorCheck(
-    _ model: CreateModel, navigation: Navigation, layouts: LayoutStore, presets: PresetStore
+    _ model: CreateModel, navigation: Navigation, layouts: LayoutStore, presets: PresetStore,
+    library: ModelLibrary
   ) {
     let args = CommandLine.arguments
     func value(_ name: String) -> String? {
@@ -1295,6 +1298,56 @@ enum Automation {
       layouts.moveSection(.loras, by: -1)
       layouts.moveSection(.loras, by: -1)
       check(layouts.current.sections.first == .loras, "moved LoRAs to the top (order: \(layouts.current.sections.prefix(3).map(\.title)))")
+
+      // Swap a LoRA entry for another, as the LoRA row's picker does.
+      do {
+        let lorasSetting = SettingsRegistry.byID["loras"]!
+        let families = ModelLibrary.loraFamilies(forModel: model.selectedModelInfo?.version, refiner: nil)
+        let usable = library.loras.filter { $0.isDownloaded && families.contains($0.family) }
+        if usable.count < 2 {
+          log("SKIP LoRA swap: needs two downloaded LoRAs made for \(modelA) (found \(usable.count))")
+        } else {
+          let (first, second) = (usable[0], usable[1])
+          let customWeight = first.defaultWeight + 0.25
+          @MainActor func entries() -> [LoRAEditor.Item] {
+            guard case .array(let list)? = model.value(lorasSetting) else { return [] }
+            return list.compactMap { entry in
+              guard case .object(let fields) = entry, case .string(let file)? = fields["file"] else { return nil }
+              return LoRAEditor.Item(
+                file: file, weight: fields["weight"]?.doubleValue ?? 1, mode: fields["mode"] ?? .string("all"))
+            }
+          }
+          @MainActor func put(_ items: [LoRAEditor.Item], _ manager: UndoManager?) {
+            model.set(
+              lorasSetting,
+              to: .array(items.map { .object(["file": .string($0.file), "weight": .number($0.weight), "mode": $0.mode]) }),
+              undoManager: manager)
+          }
+          let seed = [
+            LoRAEditor.Item(file: first.file, weight: customWeight, mode: .string("base")),
+            LoRAEditor.Item(file: "other.safetensors", weight: 0.5, mode: .string("all")),
+          ]
+          put(seed, nil)
+          let swapUndo = UndoManager()
+          swapUndo.groupsByEvent = false
+          swapUndo.beginUndoGrouping()
+          put(
+            LoRAEditor.replacing(
+              entries(), at: 0, with: second.file, newDefault: second.defaultWeight, oldDefault: first.defaultWeight),
+            swapUndo)
+          swapUndo.endUndoGrouping()
+          let after = entries()
+          check(after.map(\.file) == [second.file, "other.safetensors"], "swap replaced entry 0 in place (\(after.map(\.file)))")
+          check(after.first?.mode == .string("base") && after.last == seed.last, "swap kept the mode and the other entry")
+          check(after.first?.weight == customWeight, "a weight the user changed carried over (\(after.first?.weight ?? 0))")
+          check(swapUndo.undoActionName == "Change LoRAs", "swap's undo action is named “\(swapUndo.undoActionName)”")
+          swapUndo.undo()
+          check(entries() == seed, "undo restored the original LoRAs in one step")
+          swapUndo.redo()
+          check(entries() == after, "redo re-applied the swap")
+          model.resetToModelDefaults(undoManager: nil)
+        }
+      }
 
       // Export, delete, import.
       let original = layouts.current
