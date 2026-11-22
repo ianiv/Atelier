@@ -100,6 +100,24 @@ extension ModelLibrary {
       guard let continuation = pending.withLock({ waiting in defer { waiting = nil }; return waiting }) else { return }
       if let error { continuation.resume(throwing: error) } else { continuation.resume() }
     }
+    // A cancel waits while the downloader finalizes: once every byte is in, the backends hash the
+    // file (minutes for a large one) and move it into place, and a cancelled downloader still does
+    // that, unseen. A Resume meanwhile would start a second downloader on the same `.partial` and
+    // fail when the first moves it. So a cancel then lets it finish, and the call ends when it
+    // does; the file is complete and the next call finds it. A resumed download whose blocks are
+    // all in finalizes without reporting progress first, so one with a segment map counts as
+    // finalizing until its first progress report says otherwise.
+    let state = Mutex(CancelState(finalizing: FileManager.default.fileExists(atPath: destination.path + ".partial.map")))
+    let cancelNow: @Sendable () -> Void = {
+      DispatchQueue.global(qos: .userInitiated).async {
+        downloader.cancel()
+        // A block write already under way, and the download-task backend's resume data (`.part`),
+        // land moments after `cancel()` returns, so the call ends a little later.
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + .milliseconds(500)) {
+          finish(CancellationError())
+        }
+      }
+    }
     try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
         pending.withLock { $0 = continuation }
@@ -112,23 +130,48 @@ extension ModelLibrary {
             finish(error)
             return
           }
+          if isComplete {
+            progress(written, expected)
+            finish(nil)
+            return
+          }
+          let cancelsNow = state.withLock { state in
+            state.finalizing = expected > 0 && written >= expected
+            return state.takeDeferredCancel()
+          }
+          if cancelsNow { cancelNow() }
           progress(written, expected)
-          if isComplete { finish(nil) }
         }
       }
     } onCancel: {
-      // Returns only once the cancelled downloader has stopped, so a Resume (which waits for this
-      // task to end) can't start a second downloader on the same files while it still writes:
-      // `cancel()` stops new requests and block writes; a block write already under way, and the
-      // download-task backend's resume data (`.part`), land moments after, which the pause covers.
-      DispatchQueue.global(qos: .userInitiated).async {
-        downloader.cancel()
-        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + .milliseconds(500)) {
-          finish(CancellationError())
+      let cancelsNow = state.withLock { state in
+        state.cancelRequested = true
+        return state.takeDeferredCancel()
+      }
+      if cancelsNow {
+        cancelNow()
+      } else {
+        // Finalizing: give it a generous while, then cancel anyway rather than wait forever.
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + .seconds(30 * 60)) {
+          if state.withLock({ state in defer { state.cancelIssued = true }; return !state.cancelIssued }) { cancelNow() }
         }
       }
     }
     try Task.checkCancellation()
+  }
+
+  /// A `fetch` call's cancel, held back while the downloader finalizes.
+  private nonisolated struct CancelState {
+    var finalizing: Bool
+    var cancelRequested = false
+    var cancelIssued = false
+
+    /// Whether to cancel the downloader now: asked for, not yet done, and not finalizing.
+    mutating func takeDeferredCancel() -> Bool {
+      guard cancelRequested, !cancelIssued, !finalizing else { return false }
+      cancelIssued = true
+      return true
+    }
   }
 
   // MARK: - Imports

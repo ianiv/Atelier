@@ -572,7 +572,7 @@ final class ModelLibrary {
       var imported: [String] = []
       var notices: [String] = []
       // Files from link downloads that imported; a staging folder goes once all of its have.
-      var linkImported: [URL: Set<String>] = [:]
+      var linkFolders = Set<URL>()
       while let item = importingModels.first {
         if item.canImport {
           do {
@@ -586,14 +586,17 @@ final class ModelLibrary {
               }
               if item.ownedFolder != nil { notices += Self.undownloadableCompanions(of: file) }
             }
-            if let folder = item.ownedFolder { linkImported[folder, default: []].insert(item.source.lastPathComponent) }
+            if let folder = item.ownedFolder {
+              Self.recordImport(of: item.source.lastPathComponent, in: folder)
+              linkFolders.insert(folder)
+            }
           } catch {
             failures.append("\(item.source.lastPathComponent): \(error.localizedDescription)")
           }
         }
         importingModels.removeFirst()
       }
-      removeLinkStaging(fullyImported: linkImported)
+      removeLinkStaging(ifFullyImported: linkFolders)
       await afterChange()
       for file in imported {
         if let model = catalog.first(where: { $0.file == file }) { download(model) }
@@ -1379,17 +1382,20 @@ final class ModelLibrary {
         }
       }
       var failures: [String] = []
-      var linkImported: [URL: Set<String>] = [:]
+      var linkFolders = Set<URL>()
       while let item = importing.first {
         do {
           try await importLoRA(item, version: forced ?? item.version)
-          if let folder = item.ownedFolder { linkImported[folder, default: []].insert(item.source.lastPathComponent) }
+          if let folder = item.ownedFolder {
+            Self.recordImport(of: item.source.lastPathComponent, in: folder)
+            linkFolders.insert(folder)
+          }
         } catch {
           failures.append("\(item.source.lastPathComponent): \(error.localizedDescription)")
         }
         importing.removeFirst()
       }
-      removeLinkStaging(fullyImported: linkImported)
+      removeLinkStaging(ifFullyImported: linkFolders)
       // Before `isImporting` turns false, so whoever waits for it finds the new LoRAs listed.
       await reloadLoRAs()
       importTask = nil

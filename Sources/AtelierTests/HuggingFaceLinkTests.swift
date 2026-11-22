@@ -255,6 +255,33 @@ struct HuggingFaceLinkTests {
     #expect(ModelLibrary.uniqueOutputs(items) == items)
   }
 
+  @Test func importedOutputsCarryAcrossRuns() throws {
+    let items = ["a.safetensors", "b.safetensors"].map {
+      LinkDownloadRecord.Item(title: $0, files: [file($0)], index: nil, merges: false, output: $0)
+    }
+    let record = LinkDownloadRecord(link: "a/b", repo: "a/b", sha: "0123456789abcdef", kind: .lora, items: items, created: Date())
+    let root = FileManager.default.temporaryDirectory.appending(path: "HuggingFaceLinkTests-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let folder = try ModelLibrary.makeStagingFolder(for: record, in: root)
+    #expect(ModelLibrary.readRecord(in: folder)?.remainingItems.map(\.output) == ["a.safetensors", "b.safetensors"])
+    // One run imports a; a later run imports b.
+    ModelLibrary.recordImport(of: "a.safetensors", in: folder)
+    ModelLibrary.recordImport(of: "a.safetensors", in: folder)
+    ModelLibrary.recordImport(of: "unknown.safetensors", in: folder)
+    let partly = try #require(ModelLibrary.readRecord(in: folder))
+    #expect(partly.imported == ["a.safetensors"] && !partly.isFullyImported)
+    #expect(partly.remainingItems.map(\.output) == ["b.safetensors"])
+    ModelLibrary.recordImport(of: "b.safetensors", in: folder)
+    #expect(ModelLibrary.readRecord(in: folder)?.isFullyImported == true)
+    // A record written before `imported` existed still reads, with nothing imported.
+    var data = try Data(contentsOf: folder.appendingPathComponent(ModelLibrary.recordName))
+    var object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    object["imported"] = nil
+    data = try JSONSerialization.data(withJSONObject: object)
+    try data.write(to: folder.appendingPathComponent(ModelLibrary.recordName))
+    #expect(ModelLibrary.readRecord(in: folder)?.remainingItems.count == 2)
+  }
+
   @Test func downloadErrorsSayWhatToDo() {
     let unauthorized = Downloader.ResumableDownloader.DownloadError.server(401)
     #expect(ModelLibrary.describe(unauthorized, repo: "a/b", user: nil, hasToken: false) == HuggingFaceError.needsToken.localizedDescription)

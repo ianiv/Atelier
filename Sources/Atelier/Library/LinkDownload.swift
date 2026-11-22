@@ -27,8 +27,21 @@ nonisolated struct LinkDownloadRecord: Codable, Equatable, Sendable {
   var kind: HuggingFaceListing.Kind
   var items: [Item]
   var created: Date
+  /// Outputs already imported, across import runs: a later Import queues only the others, so a
+  /// file isn't converted twice, and the staging folder goes once every output is in here.
+  /// Optional so records written before it still read.
+  var imported: [String]?
 
   var size: Int64 { items.flatMap(\.files).reduce(0) { $0 + $1.size } }
+  /// The items still to import.
+  var remainingItems: [Item] { items.filter { !(imported ?? []).contains($0.output) } }
+  var isFullyImported: Bool { remainingItems.isEmpty }
+
+  /// Notes `output` as imported.
+  mutating func markImported(_ output: String) {
+    guard items.contains(where: { $0.output == output }), !(imported ?? []).contains(output) else { return }
+    imported = (imported ?? []) + [output]
+  }
   var title: String { repo + ": " + items.map(\.title).joined(separator: ", ") }
 }
 
@@ -468,7 +481,13 @@ extension ModelLibrary {
   /// Hands the downloaded files to the import sheet for the record's kind; the sheet converts and
   /// registers them, and the staging folder goes once they've imported.
   func handOff(_ record: LinkDownloadRecord, in folder: URL) {
-    let urls = record.items.map { folder.appendingPathComponent($0.output) }
+    // What an earlier run imported isn't queued again.
+    let remaining = (Self.readRecord(in: folder) ?? record).remainingItems
+    guard !remaining.isEmpty else {
+      removeLinkStaging([folder])
+      return
+    }
+    let urls = remaining.map { folder.appendingPathComponent($0.output) }
     switch record.kind {
     case .model: prepareModelImport(urls, ownedFolder: folder)
     case .lora: prepareImport(urls, ownedFolder: folder)
@@ -526,14 +545,18 @@ extension ModelLibrary {
   }
 
   /// Removes the staging folders whose every item (by output name, from download.json) is among
-  /// the files that imported. One whose import failed, or whose file was removed from the import
-  /// sheet, stays under Unfinished Downloads.
-  func removeLinkStaging(fullyImported imported: [URL: Set<String>]) {
-    let complete = imported.filter { folder, names in
-      guard let record = Self.readRecord(in: folder) else { return false }
-      return record.items.allSatisfy { names.contains($0.output) }
-    }
-    removeLinkStaging(Set(complete.keys))
+  /// download.json's imported outputs, from this run and earlier ones. One whose import failed, or
+  /// whose file was removed from the import sheet, stays under Unfinished Downloads.
+  func removeLinkStaging(ifFullyImported folders: Set<URL>) {
+    removeLinkStaging(folders.filter { Self.readRecord(in: $0)?.isFullyImported == true })
+  }
+
+  /// Notes in the staging folder's download.json that `output` imported, at once, so it holds even
+  /// if the rest of the run is cancelled or the app quits.
+  nonisolated static func recordImport(of output: String, in folder: URL) {
+    guard var record = readRecord(in: folder) else { return }
+    record.markImported(output)
+    try? writeRecord(record, in: folder)
   }
 
   /// Removes staging folders, then their repo folder and `.huggingface` when that leaves them empty.
