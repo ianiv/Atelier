@@ -6,6 +6,7 @@ Planned work that isn't built yet. Items marked **User request** or **User-repor
 
 - **Import from Hugging Face links.** Paste a Hugging Face link to a model or LoRA and Atelier downloads and imports it directly, as Draw Things does.
 - **Change a selected LoRA in place.** Pick a different LoRA for an entry in the Inspector's LoRA list without removing it and adding the new one.
+- **LoRA trigger word picker.** When the selected LoRAs have trigger words configured, list them so each can be turned on or off; the ones turned on are prepended to the prompt the generation uses.
 
 ## Canvas
 
