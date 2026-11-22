@@ -85,8 +85,15 @@ struct LoRAEditor: View {
             Button {
               replacing = index
             } label: {
-              Text(name(item.file)).lineLimit(1).truncationMode(.middle)
-                .contentShape(.rect)
+              // The chevron is the pop-up menu indicator: it says the name opens a list. It sits
+              // outside the Text so the name's middle truncation never cuts it off.
+              HStack(spacing: 4) {
+                Text(name(item.file)).lineLimit(1).truncationMode(.middle)
+                Image(systemName: "chevron.up.chevron.down")
+                  .font(.caption2).foregroundStyle(.secondary)
+                  .accessibilityHidden(true)
+              }
+              .contentShape(.rect)
             }
             .buttonStyle(.borderless)
             .foregroundStyle(.primary)
