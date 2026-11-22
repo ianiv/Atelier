@@ -159,7 +159,7 @@ nonisolated enum PerformanceSetting: String, CaseIterable, Identifiable {
     case .appleNeuralEngine:
       "Runs 8-bit S models on the Neural Engine. Usually faster on M4; on M5 often slower but more power efficient."
     case .mergeLoRA:
-      "Merging LoRA weights into the model is 10–30% faster. Running them separately keeps quantized weights and uses less RAM."
+      "Merging LoRA weights into the model is 10–30% faster. Always merges only on full-precision models; quantized (8-bit, 4-bit) models run LoRAs separately, which keeps their weights small and the LoRA intact."
     }
   }
 

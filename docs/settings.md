@@ -56,7 +56,7 @@ These match Draw Things' Machine Settings. **Automatic** uses what the engine pi
 | Weights Cache Size | Keeps model weights in memory so large models reload in under a second instead of several. Lower it to use less memory; Off disables it. |
 | Metal Flash Attention | Faster attention on Apple silicon. Quantized attention is faster still on M5 and later. |
 | Use Apple Neural Engine for 8-bit S Models | Runs 8-bit S models on the Neural Engine. Usually faster on M4; on M5 often slower but more power efficient. |
-| Merge LoRA | Merging LoRA weights into the model is 10–30% faster. Running them separately keeps quantized weights and uses less memory. |
+| Merge LoRA | Merging LoRA weights into the model is 10–30% faster. **Always** merges only on full-precision models: quantized (8-bit, 4-bit) models run LoRAs separately, since merging would turn their weights back into full-size ones (far more memory, often swapping) and squeezing the merged weights back to 8-bit loses most of the LoRA. A model whose LoRAs can't run separately still merges. |
 | Use High Resolution Preview When Possible | Sharper step previews, decoded on the Neural Engine when it can, so it rarely slows generation. Off shows a quicker low-resolution preview. |
 
 **Weights Cache Size** is what makes the second run with a model faster than the first: the model and its text encoder stay in memory between runs, so changing the prompt, the settings or the pixels on the canvas doesn't reload them from disk. A few things still reload:
