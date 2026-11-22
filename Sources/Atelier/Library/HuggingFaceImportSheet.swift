@@ -76,12 +76,14 @@ struct HuggingFaceImportSheet: View {
     .sheetFrame(width: 620)
     .onAppear {
       kind = request.kind
+      // Only a full Hugging Face link is taken from the clipboard and looked up on its own: other
+      // copied text, even one shaped like `owner/repo`, never leaves the device unasked.
       if let link = request.link {
         text = link
-      } else if let copied = Clipboard.string, HuggingFaceLink.parse(copied) != nil {
+      } else if let copied = Clipboard.string, HuggingFaceLink.isExplicitLink(copied) {
         text = copied.trimmingCharacters(in: .whitespacesAndNewlines)
       }
-      if HuggingFaceLink.parse(text) != nil { Task { await look() } }
+      if HuggingFaceLink.isExplicitLink(text) { Task { await look() } }
     }
     .task {
       await library.reloadUnfinishedLinkDownloads()
@@ -271,6 +273,7 @@ struct HuggingFaceImportSheet: View {
       case .detected(let family, _, let companions, _)?:
         return name + "Detected: \(family)" + (companions.isEmpty ? "" : ", plus \(companions.count) text encoder and VAE \(companions.count == 1 ? "file" : "files") to download")
       case .problem(let problem)?: return name + problem
+      case .warning(let warning)?: return name + warning
       case .afterDownload?: return name + "The family is detected after the download."
       }
     }.joined(separator: "\n")

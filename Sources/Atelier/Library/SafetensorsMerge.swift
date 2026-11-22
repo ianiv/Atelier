@@ -107,9 +107,11 @@ nonisolated enum SafetensorsMerge {
   /// index at `index` when given. Written beside it as `.partial` and renamed when complete, so an
   /// interrupted join leaves nothing under the real name. With `deletingShards`, each part is
   /// deleted once copied, so the join needs only one part's worth of extra disk space.
+  /// `isCancelled` is asked between chunks; when it says so the join stops with
+  /// `CancellationError`, leaving the `.partial` file and the parts not yet copied.
   static func merge(
     shards: [URL], index: URL?, into output: URL, deletingShards: Bool,
-    progress: @Sendable (Double) -> Void
+    isCancelled: () -> Bool = { false }, progress: @Sendable (Double) -> Void
   ) throws {
     let weightMap = try index.map { try Self.weightMap(Data(contentsOf: $0)) }
     let parts = try shards.map(part(at:))
@@ -128,10 +130,13 @@ nonisolated enum SafetensorsMerge {
     var copied: Int64 = 0
     for (url, part) in zip(shards, parts) {
       let input = try FileHandle(forReadingFrom: url)
+      var inputClosed = false
+      defer { if !inputClosed { try? input.close() } }
       let end = try input.seekToEnd()
       try input.seek(toOffset: end - UInt64(part.dataLength))
       var remaining = part.dataLength
       while remaining > 0 {
+        if isCancelled() { throw CancellationError() }
         try autoreleasepool {
           let count = Int(min(Int64(chunkSize), remaining))
           guard let data = try input.read(upToCount: count), data.count == count else {
@@ -144,6 +149,7 @@ nonisolated enum SafetensorsMerge {
         }
       }
       try input.close()
+      inputClosed = true
       if deletingShards { try fileManager.removeItem(at: url) }
     }
     try out.close()

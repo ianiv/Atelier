@@ -32,13 +32,7 @@
         func log(_ message: String) { print(message); fflush(stdout) }
         func check(_ ok: Bool, _ message: String) { log((ok ? "PASS " : "FAIL ") + message) }
         let args = CommandLine.arguments
-        let savedAddFolder = UserDefaults.standard.string(forKey: ModelLibrary.addFolderKey)
         @MainActor func finish() {
-          if let savedAddFolder {
-            UserDefaults.standard.set(savedAddFolder, forKey: ModelLibrary.addFolderKey)
-          } else {
-            UserDefaults.standard.removeObject(forKey: ModelLibrary.addFolderKey)
-          }
           log("DONE hf link check")
           if args.contains("--quit") { exit(0) }
         }
@@ -55,7 +49,8 @@
         }
         await model.reloadModels()
         await library.refresh()
-        library.setAddFolder(scratch)
+        // With SCRATCH the only folder, a saved Add To choice (another folder) can't be reached, so
+        // new files go to SCRATCH without changing that setting.
         guard library.addFolder.standardizedFileURL == scratch, library.directory.standardizedFileURL == scratch,
               library.directories.map(\.standardizedFileURL) == [scratch]
         else {
@@ -88,7 +83,9 @@
         @MainActor func start(_ entries: [HuggingFaceListing.Entry], _ kind: HuggingFaceListing.Kind, _ lookup: HuggingFaceLookup) -> String? {
           let before = Set(library.linkDownloadTasks.keys)
           library.startLinkDownload(entries, kind: kind, lookup: lookup, linkText: lookup.link.repo)
-          return Set(library.linkDownloadTasks.keys).subtracting(before).first
+          let key = Set(library.linkDownloadTasks.keys).subtracting(before).first
+          if key == nil { log("FAIL couldn't start the download from \(lookup.link.repo): \(library.errorMessage ?? "")") }
+          return key
         }
         @MainActor func waitForDownload(_ key: String) async {
           await waitUntil { library.linkDownloadTasks[key] == nil }
@@ -129,8 +126,6 @@
             check(library.unfinishedLinkDownloads.first { $0.id == key }?.isComplete == true, "a download whose import was cancelled is listed as downloaded, not imported")
             await discardAll()
             check(!fm.fileExists(atPath: key) && !fm.fileExists(atPath: staging.path), "Discard deletes the staging folder")
-          } else {
-            log("FAIL couldn't start the tiny LoRA download: \(library.errorMessage ?? "")")
           }
         }
 
@@ -143,7 +138,7 @@
           if let entry {
             let inspection = await library.inspectBeforeDownload(entry, lookup: lookup)
             log("  before download: \(inspection)")
-            check(inspection == .problem("Not a model checkpoint the importer recognizes."), "the header check before downloading says it isn't a checkpoint")
+            check(inspection == .warning(ModelLibrary.unrecognizedWarning), "the header check before downloading warns it isn't recognized, without blocking")
           }
           if let entry, let key = start([entry], .model, lookup) {
             await waitForDownload(key)
@@ -241,6 +236,8 @@
               check(library.loras.contains { $0.file.hasPrefix("lcm_lora_sdv1_5") && $0.registry.standardizedFileURL.path == scratch.path }, "the LoRA is in the library")
               check(!fm.fileExists(atPath: key), "the staging folder is deleted after the import")
             }
+          } else {
+            log("FAIL lcm-lora-sdv1-5's pytorch_lora_weights.safetensors isn't listed")
           }
         }
 
@@ -268,11 +265,16 @@
                 check(registry.contains("stable-diffusion-v1-5"), "listed in SCRATCH's custom.json")
                 check(!fm.fileExists(atPath: key), "the staging folder is deleted after the import")
                 await waitUntil { library.downloads.isEmpty }
-                if let file = library.catalog.first(where: { $0.file.hasPrefix("stable-diffusion-v1-5") })?.file,
+                // The file is named by the importer (stable_diffusion_v1_5_f16.ckpt); take it from
+                // the registry rather than guess.
+                if let file = ModelLibrary.readCustomModels(in: scratch).first,
                    let specification = ModelZoo.specificationForModel(file)
                 {
+                  log("  imported as \(file)")
                   let missing = ModelZoo.filesToDownload(specification).map(\.file).filter { !fm.fileExists(atPath: scratch.appendingPathComponent($0).path) }
                   check(missing.isEmpty, "its text encoder and VAE downloaded into SCRATCH (missing: \(missing))")
+                } else {
+                  log("FAIL the imported model isn't in SCRATCH's custom.json or the engine doesn't know it")
                 }
               }
             }
@@ -297,6 +299,8 @@
               library.cancelModelImports()
               await discardAll()
             }
+          } else {
+            log("FAIL FLUX.1-dev's ae.safetensors isn't listed")
           }
         }
 

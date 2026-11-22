@@ -117,8 +117,16 @@ extension ModelLibrary {
         }
       }
     } onCancel: {
-      DispatchQueue.global(qos: .userInitiated).async { downloader.cancel() }
-      finish(CancellationError())
+      // Returns only once the cancelled downloader has stopped, so a Resume (which waits for this
+      // task to end) can't start a second downloader on the same files while it still writes:
+      // `cancel()` stops new requests and block writes; a block write already under way, and the
+      // download-task backend's resume data (`.part`), land moments after, which the pause covers.
+      DispatchQueue.global(qos: .userInitiated).async {
+        downloader.cancel()
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + .milliseconds(500)) {
+          finish(CancellationError())
+        }
+      }
     }
     try Task.checkCancellation()
   }

@@ -21,6 +21,14 @@ nonisolated struct HuggingFaceLink: Equatable, Sendable {
 
   static let hosts: Set<String> = ["huggingface.co", "www.huggingface.co", "hf.co"]
 
+  /// A full link (`https://huggingface.co/…`, `https://hf.co/…` or `hf://…`), not just text that
+  /// could be a repo name: only those are filled in from the clipboard and looked up unasked.
+  static func isExplicitLink(_ text: String) -> Bool {
+    let lowered = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let prefixes = ["https://huggingface.co/", "https://www.huggingface.co/", "https://hf.co/", "hf://"]
+    return prefixes.contains { lowered.hasPrefix($0) } && parse(text) != nil
+  }
+
   static func parse(_ text: String) -> HuggingFaceLink? {
     var trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty, !trimmed.contains(" ") else { return nil }
@@ -118,6 +126,13 @@ nonisolated struct HuggingFaceRepoFile: Codable, Equatable, Hashable, Sendable {
   var sha256: String?
 
   var name: String { (path as NSString).lastPathComponent }
+
+  /// A repo path that stays inside the staging folder it's downloaded to: relative, with no `..`,
+  /// `.` or empty parts. A tree listing (or an edited download.json) with anything else is ignored.
+  static func isSafePath(_ path: String) -> Bool {
+    guard !path.isEmpty, !path.hasPrefix("/"), !path.hasPrefix("~"), !path.contains("\\"), !path.contains("\0") else { return false }
+    return path.split(separator: "/", omittingEmptySubsequences: false).allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
+  }
   var folder: String { (path as NSString).deletingLastPathComponent }
   var pathExtension: String { (path as NSString).pathExtension.lowercased() }
 }
@@ -147,7 +162,9 @@ nonisolated struct HuggingFaceRepoInfo: Equatable, Sendable {
       throw HuggingFaceError.unexpectedResponse
     }
     return items.compactMap { item in
-      guard item["type"] as? String == "file", let path = item["path"] as? String else { return nil }
+      guard item["type"] as? String == "file", let path = item["path"] as? String,
+            HuggingFaceRepoFile.isSafePath(path)
+      else { return nil }
       let lfs = item["lfs"] as? [String: Any]
       let size = (lfs?["size"] as? NSNumber ?? item["size"] as? NSNumber)?.int64Value ?? 0
       return HuggingFaceRepoFile(path: path, size: size, sha256: lfs?["oid"] as? String)

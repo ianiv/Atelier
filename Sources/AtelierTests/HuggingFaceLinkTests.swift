@@ -1,4 +1,5 @@
 @testable import Atelier
+@preconcurrency import Downloader
 import Foundation
 import Testing
 
@@ -206,6 +207,62 @@ struct HuggingFaceLinkTests {
     #expect(HuggingFaceAuth.headers(for: try #require(URL(string: "https://static.libnnc.org/x")), token: "hf_x").isEmpty)
     #expect(HuggingFaceAuth.headers(for: try #require(URL(string: "https://huggingface.co/a")), token: nil).isEmpty)
     #expect(HuggingFaceAuth.headers(for: try #require(URL(string: "https://huggingface.co/a")), token: "").isEmpty)
+  }
+
+  @Test func onlyFullLinksAreTakenFromTheClipboard() {
+    #expect(HuggingFaceLink.isExplicitLink("https://huggingface.co/a/b"))
+    #expect(HuggingFaceLink.isExplicitLink(" https://hf.co/a/b/blob/main/x.safetensors "))
+    #expect(HuggingFaceLink.isExplicitLink("hf://a/b"))
+    #expect(!HuggingFaceLink.isExplicitLink("a/b"))
+    #expect(!HuggingFaceLink.isExplicitLink("huggingface.co/a/b"))
+    #expect(!HuggingFaceLink.isExplicitLink("http://huggingface.co/a/b"))
+    #expect(!HuggingFaceLink.isExplicitLink("https://huggingface.co/datasets/a/b"))
+  }
+
+  @Test func treePathsOutsideTheRepoAreIgnored() throws {
+    let json = #"""
+    [{"type":"file","size":1,"path":"../escape.safetensors"},
+     {"type":"file","size":1,"path":"/etc/x.safetensors"},
+     {"type":"file","size":1,"path":"a/../../b.safetensors"},
+     {"type":"file","size":1,"path":"a//b.safetensors"},
+     {"type":"file","size":1,"path":"./c.safetensors"},
+     {"type":"file","size":1,"path":"ok/model.safetensors"}]
+    """#
+    #expect(try HuggingFaceRepoInfo.decodeTree(Data(json.utf8)).map(\.path) == ["ok/model.safetensors"])
+    #expect(HuggingFaceRepoFile.isSafePath("unet/diffusion_pytorch_model..fp16.safetensors"))
+    #expect(!HuggingFaceRepoFile.isSafePath(""))
+    #expect(!HuggingFaceRepoFile.isSafePath("~/x"))
+  }
+
+  @Test func outputNamesAreUniqueAcrossItems() {
+    func item(_ path: String, output: String) -> LinkDownloadRecord.Item {
+      LinkDownloadRecord.Item(title: path, files: [file(path)], index: nil, merges: false, output: output)
+    }
+    let items = ModelLibrary.uniqueOutputs([
+      item("repo.safetensors", output: "repo.safetensors"),
+      item("sub/model.safetensors", output: "repo.safetensors"),
+      item("other/model.safetensors", output: "repo.safetensors"),
+      item("x/sub/model.safetensors", output: "repo.safetensors"),
+    ])
+    #expect(items.map(\.output) == ["repo.safetensors", "repo-sub.safetensors", "repo-other.safetensors", "repo-2.safetensors"])
+    // An output can't land on a file another item downloads.
+    let clash = ModelLibrary.uniqueOutputs([
+      item("sub/x.safetensors", output: "x.safetensors"),
+      item("x.safetensors", output: "x.safetensors"),
+    ])
+    #expect(clash.map(\.output) == ["x-sub.safetensors", "x.safetensors"])
+    // The same input gives the same names, so a resume finds the files.
+    #expect(ModelLibrary.uniqueOutputs(items) == items)
+  }
+
+  @Test func downloadErrorsSayWhatToDo() {
+    let unauthorized = Downloader.ResumableDownloader.DownloadError.server(401)
+    #expect(ModelLibrary.describe(unauthorized, repo: "a/b", user: nil, hasToken: false) == HuggingFaceError.needsToken.localizedDescription)
+    #expect(ModelLibrary.describe(unauthorized, repo: "a/b", user: "me", hasToken: true) == HuggingFaceError.tokenRejected.localizedDescription)
+    #expect(ModelLibrary.isCancellation(URLError(.cancelled)))
+    #expect(ModelLibrary.isCancellation(Downloader.ResumableDownloader.DownloadError.local(URLError(.cancelled))))
+    #expect(ModelLibrary.isCancellation(CancellationError()))
+    #expect(!ModelLibrary.isCancellation(URLError(.timedOut)))
   }
 
   @Test func spaceNeededByKind() {

@@ -130,10 +130,9 @@ struct LoRAsView: View {
         LoRAImportSheet()
       }
       .sheet(item: $linkRequest) { HuggingFaceImportSheet(request: $0) }
-      // A link download that finishes while its sheet is open hands over to the import sheet.
-      .onChange(of: library.importing.isEmpty) { _, isEmpty in
-        if !isEmpty { linkRequest = nil }
-      }
+      // A link download that finishes while a link sheet is open hands over to the import sheet,
+      // on this screen or the other kind's, so the link sheet closes either way.
+      .onChange(of: library.linkHandOffCount) { linkRequest = nil }
       .safeAreaBar(edge: .bottom, spacing: 0) {
         HStack {
           Spacer()

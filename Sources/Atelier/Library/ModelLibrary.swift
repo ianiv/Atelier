@@ -176,6 +176,8 @@ final class ModelLibrary {
   /// Link downloads that stopped before their import: cancelled, failed, or downloaded and not
   /// imported yet. Kept until resumed or discarded.
   var unfinishedLinkDownloads: [UnfinishedLinkDownload] = []
+  /// Counts link downloads handed to an import sheet, so an open link sheet on either screen closes.
+  var linkHandOffCount = 0
   /// Shows the import sheet for a finished link download's kind (switches to Models or LoRAs).
   var onLinkDownloadReady: ((HuggingFaceListing.Kind) -> Void)?
   var errorMessage: String?
@@ -569,8 +571,8 @@ final class ModelLibrary {
       var failures: [String] = []
       var imported: [String] = []
       var notices: [String] = []
-      // Link downloads' staging folders whose files all imported, which go once the run ends.
-      var linkImported = Set<URL>(), linkFailed = Set<URL>()
+      // Files from link downloads that imported; a staging folder goes once all of its have.
+      var linkImported: [URL: Set<String>] = [:]
       while let item = importingModels.first {
         if item.canImport {
           do {
@@ -584,17 +586,14 @@ final class ModelLibrary {
               }
               if item.ownedFolder != nil { notices += Self.undownloadableCompanions(of: file) }
             }
-            if let folder = item.ownedFolder { linkImported.insert(folder) }
+            if let folder = item.ownedFolder { linkImported[folder, default: []].insert(item.source.lastPathComponent) }
           } catch {
             failures.append("\(item.source.lastPathComponent): \(error.localizedDescription)")
-            if let folder = item.ownedFolder { linkFailed.insert(folder) }
           }
-        } else if let folder = item.ownedFolder {
-          linkFailed.insert(folder)
         }
         importingModels.removeFirst()
       }
-      removeLinkStaging(linkImported.subtracting(linkFailed))
+      removeLinkStaging(fullyImported: linkImported)
       await afterChange()
       for file in imported {
         if let model = catalog.first(where: { $0.file == file }) { download(model) }
@@ -1380,18 +1379,17 @@ final class ModelLibrary {
         }
       }
       var failures: [String] = []
-      var linkImported = Set<URL>(), linkFailed = Set<URL>()
+      var linkImported: [URL: Set<String>] = [:]
       while let item = importing.first {
         do {
           try await importLoRA(item, version: forced ?? item.version)
-          if let folder = item.ownedFolder { linkImported.insert(folder) }
+          if let folder = item.ownedFolder { linkImported[folder, default: []].insert(item.source.lastPathComponent) }
         } catch {
           failures.append("\(item.source.lastPathComponent): \(error.localizedDescription)")
-          if let folder = item.ownedFolder { linkFailed.insert(folder) }
         }
         importing.removeFirst()
       }
-      removeLinkStaging(linkImported.subtracting(linkFailed))
+      removeLinkStaging(fullyImported: linkImported)
       // Before `isImporting` turns false, so whoever waits for it finds the new LoRAs listed.
       await reloadLoRAs()
       importTask = nil

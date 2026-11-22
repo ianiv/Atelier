@@ -155,6 +155,21 @@ struct SafetensorsMergeTests {
     }
   }
 
+  @Test func cancellingStopsTheJoinAndKeepsWhatsLeft() throws {
+    let folder = folder()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let (shards, index) = try makeParts(in: folder)
+    let output = folder.appendingPathComponent("joined.safetensors")
+    #expect(throws: CancellationError.self) {
+      try SafetensorsMerge.merge(shards: shards, index: index, into: output, deletingShards: true, isCancelled: { true }) { _ in }
+    }
+    #expect(!FileManager.default.fileExists(atPath: output.path))
+    #expect(shards.allSatisfy { FileManager.default.fileExists(atPath: $0.path) })
+    // Joining again afterwards works.
+    try SafetensorsMerge.merge(shards: shards, index: index, into: output, deletingShards: true) { _ in }
+    #expect(try SafetensorsHeader.read(output)?.count == 6)
+  }
+
   @Test func sparseStandInHasTheHeaderAndFullLength() throws {
     let folder = folder()
     defer { try? FileManager.default.removeItem(at: folder) }

@@ -73,7 +73,12 @@ enum LinkInspection: Equatable {
   /// The family's name and `ModelVersion` raw value, and the text encoders and VAE it still needs
   /// from the download server with their total size.
   case detected(family: String, version: String?, companions: [String], companionBytes: Int64)
+  /// Can't be downloaded or imported, whatever its weights: Hugging Face refused, or the header
+  /// isn't a safetensors one. Blocks Download.
   case problem(String)
+  /// What the inspection made of the stand-in; doesn't block Download, since detection can depend
+  /// on tensor values the stand-in doesn't have.
+  case warning(String)
   /// Only known once downloaded: not a safetensors, or the header couldn't be read.
   case afterDownload
 }
@@ -140,11 +145,17 @@ extension ModelLibrary {
 
   /// Reads the header of `entry`'s files from Hugging Face (two small range requests each),
   /// writes it into a sparse stand-in of the full file, and runs the import's own inspection on
-  /// it, so the family, or why it can't be imported, shows before gigabytes are downloaded.
+  /// it, so the family shows before gigabytes are downloaded. The stand-in has no tensor data, so
+  /// what the inspection can't make of it is only a warning: the import sheet checks the real file.
+  /// It goes in the system's temporary folder, and only on a volume with sparse files (APFS), where
+  /// it takes no space; exFAT and HFS+ would write out its full length.
   func inspectBeforeDownload(_ entry: HuggingFaceListing.Entry, lookup: HuggingFaceLookup) async -> LinkInspection {
     guard entry.isSafetensors else { return .afterDownload }
-    let scratch = addFolder.appendingPathComponent(Self.stagingFolderName, isDirectory: true)
-      .appendingPathComponent(".inspect-\(UUID().uuidString)", isDirectory: true)
+    let temporary = FileManager.default.temporaryDirectory
+    guard (try? temporary.resourceValues(forKeys: [.volumeSupportsSparseFilesKey]))?.volumeSupportsSparseFiles == true else {
+      return .afterDownload
+    }
+    let scratch = temporary.appendingPathComponent("AtelierLinkInspect-\(UUID().uuidString)", isDirectory: true)
     let result = await Self.inspectRemote(
       entry, repo: lookup.link.repo, sha: lookup.info.sha, token: huggingFace.token, user: huggingFace.userName,
       scratch: scratch)
@@ -198,11 +209,11 @@ extension ModelLibrary {
       switch await ModelLibrary.inspectedVersion(of: standIn) {
       case .success(let version):
         if version != .mossImage, unconvertibleVersions.contains(version) {
-          return .problem("\(ModelZoo.humanReadableNameForVersion(version)) checkpoints can't be converted yet.")
+          return .warning("Looks like \(ModelZoo.humanReadableNameForVersion(version)), which can't be converted yet.")
         }
         return .detected(family: ModelZoo.humanReadableNameForVersion(version), version: version.rawValue, companions: [], companionBytes: 0)
       case .failure:
-        return .problem("Not a model checkpoint the importer recognizes.")
+        return .warning(unrecognizedWarning)
       }
     } catch let error as HuggingFaceError {
       return .problem(error.localizedDescription)
@@ -212,6 +223,7 @@ extension ModelLibrary {
   }
 
   nonisolated static let h3ImageVAEFamily = "MiniMax H3 Image VAE"
+  nonisolated static let unrecognizedWarning = "The importer doesn't recognize it from its header; the import checks the downloaded file again."
 
   /// The text encoders and VAE a model of `version` downloads after its import that no models
   /// folder has, from a catalog model of that family (what the imported model's specification will
@@ -250,9 +262,9 @@ extension ModelLibrary {
     errorMessage = nil
     let record = LinkDownloadRecord(
       link: linkText, repo: lookup.link.repo, sha: lookup.info.sha, kind: kind,
-      items: entries.map {
+      items: Self.uniqueOutputs(entries.map {
         LinkDownloadRecord.Item(title: $0.title, files: $0.files, index: $0.index, merges: $0.merges, output: $0.output(for: kind))
-      },
+      }),
       created: Date())
     do {
       let folder = try Self.makeStagingFolder(for: record, in: addFolder)
@@ -260,6 +272,33 @@ extension ModelLibrary {
     } catch {
       errorMessage = "Couldn't start the download: \(error.localizedDescription)"
     }
+  }
+
+  /// Gives each item an output name no other item uses, as an output or as a file it downloads:
+  /// generic names in different folders (`unet/model.safetensors`, `sub/model.safetensors`) all
+  /// take the repo's name. A later item that collides gets its folder's name added, then a number.
+  /// Decided once, when the download starts, and kept in download.json, so a resume finds the files.
+  nonisolated static func uniqueOutputs(_ items: [LinkDownloadRecord.Item]) -> [LinkDownloadRecord.Item] {
+    var taken = Set<String>()
+    var result: [LinkDownloadRecord.Item] = []
+    for (number, item) in items.enumerated() {
+      // Files the other items download, except a single file that is its own output.
+      let others = items.enumerated().filter { $0.offset != number }.flatMap { $0.element.files.map(\.path) }
+      func isFree(_ name: String) -> Bool { !taken.contains(name) && !others.contains(name) }
+      var item = item
+      if !isFree(item.output) {
+        let ext = (item.output as NSString).pathExtension
+        let stem = (item.output as NSString).deletingPathExtension
+        let folder = (item.weights.first.map { ($0.path as NSString).deletingLastPathComponent } ?? "")
+          .split(separator: "/").last.map(String.init) ?? ""
+        var candidates = folder.isEmpty ? [] : ["\(stem)-\(folder)"]
+        candidates += (2...999).map { "\(stem)-\($0)" }
+        item.output = candidates.map { $0 + "." + ext }.first(where: isFree) ?? item.output
+      }
+      taken.insert(item.output)
+      result.append(item)
+    }
+    return result
   }
 
   /// A new folder for `record` under `<folder>/.huggingface/<owner>__<repo>/`, named after the
@@ -317,11 +356,12 @@ extension ModelLibrary {
       var finished = false
       do {
         try await Self.performLinkDownload(record, in: folder, token: token, user: user, progress: show)
-        finished = true
-      } catch is CancellationError {
+        // Cancelled just as it finished: still not handed over.
+        finished = !Task.isCancelled
+      } catch where Self.isCancellation(error) || Task.isCancelled {
         // Cancelled: the partial files stay for Resume.
       } catch {
-        errorMessage = "Couldn't download from \(record.repo): \(Self.describe(error, repo: record.repo, user: user))"
+        errorMessage = "Couldn't download from \(record.repo): \(Self.describe(error, repo: record.repo, user: user, hasToken: token != nil))"
       }
       linkDownloads[key] = nil
       linkDownloadTasks[key] = nil
@@ -334,11 +374,23 @@ extension ModelLibrary {
     linkDownloadTasks[folder]?.cancel()
   }
 
+  /// A cancelled task, or a request cancelled under it (URLSession's, or wrapped by the
+  /// downloader), which isn't worth an error message.
+  nonisolated static func isCancellation(_ error: Error) -> Bool {
+    if error is CancellationError { return true }
+    if case ResumableDownloader.DownloadError.local(let inner)? = error as? ResumableDownloader.DownloadError {
+      return isCancellation(inner)
+    }
+    let nsError = error as NSError
+    return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
+  }
+
   /// The downloader's errors in terms of what to do: a 401 or 403 from a gated or private repo.
-  nonisolated static func describe(_ error: Error, repo: String, user: String?) -> String {
+  /// A 401 with a token means Hugging Face turned the token down.
+  nonisolated static func describe(_ error: Error, repo: String, user: String?, hasToken: Bool) -> String {
     if case ResumableDownloader.DownloadError.server(let status)? = error as? ResumableDownloader.DownloadError {
       switch status {
-      case 401: return HuggingFaceError.needsToken.localizedDescription
+      case 401: return (hasToken ? HuggingFaceError.tokenRejected : HuggingFaceError.needsToken).localizedDescription
       case 403: return HuggingFaceError.gated(repo: repo, user: user).localizedDescription
       case 404: return HuggingFaceError.notFound.localizedDescription
       default: break
@@ -368,6 +420,9 @@ extension ModelLibrary {
       }
       for file in item.files {
         try Task.checkCancellation()
+        guard HuggingFaceRepoFile.isSafePath(file.path), HuggingFaceRepoFile.isSafePath(item.output) else {
+          throw HuggingFaceError.unexpectedResponse
+        }
         index += 1
         let destination = folder.appendingPathComponent(file.path)
         let number = index
@@ -392,15 +447,18 @@ extension ModelLibrary {
         let shards = item.weights.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
           .map { folder.appendingPathComponent($0.path) }
         progress(nil, 0)
+        // Cancelling stops between chunks (`CancellationError`); the parts not yet copied stay and
+        // the deleted ones download again on Resume, which joins them from the start.
         try SafetensorsMerge.merge(
           shards: shards, index: item.index.map { folder.appendingPathComponent($0) }, into: output,
-          deletingShards: true
+          deletingShards: true, isCancelled: { Task.isCancelled }
         ) { fraction in progress(nil, fraction) }
       } else if let file = item.files.first, file.path != item.output {
         try? fileManager.removeItem(at: output)
         try fileManager.moveItem(at: folder.appendingPathComponent(file.path), to: output)
       }
     }
+    try Task.checkCancellation()
   }
 
   nonisolated static func size(of url: URL) -> Int64? {
@@ -415,6 +473,7 @@ extension ModelLibrary {
     case .model: prepareModelImport(urls, ownedFolder: folder)
     case .lora: prepareImport(urls, ownedFolder: folder)
     }
+    linkHandOffCount += 1
     onLinkDownloadReady?(record.kind)
   }
 
@@ -464,6 +523,17 @@ extension ModelLibrary {
     guard linkDownloadTasks[unfinished.id] == nil else { return }
     removeLinkStaging([unfinished.folder])
     await reloadUnfinishedLinkDownloads()
+  }
+
+  /// Removes the staging folders whose every item (by output name, from download.json) is among
+  /// the files that imported. One whose import failed, or whose file was removed from the import
+  /// sheet, stays under Unfinished Downloads.
+  func removeLinkStaging(fullyImported imported: [URL: Set<String>]) {
+    let complete = imported.filter { folder, names in
+      guard let record = Self.readRecord(in: folder) else { return false }
+      return record.items.allSatisfy { names.contains($0.output) }
+    }
+    removeLinkStaging(Set(complete.keys))
   }
 
   /// Removes staging folders, then their repo folder and `.huggingface` when that leaves them empty.
