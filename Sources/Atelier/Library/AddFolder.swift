@@ -45,7 +45,8 @@ extension ModelLibrary {
   /// into `folder`, following MGK's `ensureModelReady` and `downloadFile`.
   nonisolated static func downloadModel(
     _ file: String, into folder: URL,
-    progress: @escaping @Sendable (_ file: String, _ index: Int, _ total: Int, _ written: Int64, _ expected: Int64) -> Void
+    progress: @escaping @Sendable (_ file: String, _ index: Int, _ total: Int, _ written: Int64, _ expected: Int64) -> Void,
+    finishing: @escaping @Sendable (_ file: String, _ cancelPending: Bool) -> Void = { _, _ in }
   ) async throws {
     // Resolving puts a community model's specification where ModelZoo looks (MGK's
     // `ModelResolver.primeOverrideMapping`), so its text encoders and VAE are listed too.
@@ -56,9 +57,10 @@ extension ModelLibrary {
     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
     for (index, name) in missing.enumerated() {
       try Task.checkCancellation()
-      try await downloadFile(name, to: folder.appendingPathComponent(name)) { written, expected in
-        progress(name, index + 1, missing.count, written, expected)
-      }
+      try await downloadFile(
+        name, to: folder.appendingPathComponent(name),
+        progress: { written, expected in progress(name, index + 1, missing.count, written, expected) },
+        finishing: { finishing(name, $0) })
     }
   }
 
@@ -73,104 +75,141 @@ extension ModelLibrary {
   /// One file, resumable, checked against the catalog's SHA-256 when it has one.
   private nonisolated static func downloadFile(
     _ name: String, to destination: URL,
-    progress: @escaping @Sendable (_ written: Int64, _ expected: Int64) -> Void
+    progress: @escaping @Sendable (_ written: Int64, _ expected: Int64) -> Void,
+    finishing: @escaping @Sendable (_ cancelPending: Bool) -> Void = { _ in }
   ) async throws {
     let source = ModelDefaults.downloadSources[name]
     guard let url = source?.url ?? URL(string: "https://static.libnnc.org/\(name)") else { return }
     try await fetch(
       url: url, to: destination, sha256: source?.sha256 ?? ModelZoo.fileSHA256ForModelDownloaded(name),
-      progress: progress)
+      progress: progress, finishing: finishing)
   }
 
   /// Downloads `url` to `destination` with the engine's resumable downloader (segmented when the
   /// server takes ranges; `.partial` and `.partial.map` beside the file let a later call resume),
   /// checked against `sha256` when given. `headers` go with every request, and the fork's
   /// downloader drops `Authorization` on a redirect to another host. Cancelling the task cancels
-  /// the download and keeps what it has.
+  /// the download and keeps what it has. `finishing` is called when every byte is in and the file
+  /// is being checked and moved, and again with `true` when a cancel then waits for that to end.
   nonisolated static func fetch(
     url: URL, to destination: URL, sha256: String?, headers: [String: String] = [:],
-    progress: @escaping @Sendable (_ written: Int64, _ expected: Int64) -> Void
+    progress: @escaping @Sendable (_ written: Int64, _ expected: Int64) -> Void,
+    finishing: @escaping @Sendable (_ cancelPending: Bool) -> Void = { _ in }
   ) async throws {
     let downloader = ResumableDownloader(
       remoteUrl: url, localUrl: destination, sha256: sha256, headers: headers)
-    // The handler can be called again after it's done (MGK's bridge guards the same way), and a
-    // cancelled downloader stops calling it, so cancelling finishes the wait itself.
-    let pending = Mutex<CheckedContinuation<Void, Error>?>(nil)
-    let finish: @Sendable (Error?) -> Void = { error in
-      guard let continuation = pending.withLock({ waiting in defer { waiting = nil }; return waiting }) else { return }
-      if let error { continuation.resume(throwing: error) } else { continuation.resume() }
-    }
     // A cancel waits while the downloader finalizes: once every byte is in, the backends hash the
     // file (minutes for a large one) and move it into place, and a cancelled downloader still does
     // that, unseen. A Resume meanwhile would start a second downloader on the same `.partial` and
-    // fail when the first moves it. So a cancel then lets it finish, and the call ends when it
-    // does; the file is complete and the next call finds it. A resumed download whose blocks are
-    // all in finalizes without reporting progress first, so one with a segment map counts as
-    // finalizing until its first progress report says otherwise.
-    let state = Mutex(CancelState(finalizing: FileManager.default.fileExists(atPath: destination.path + ".partial.map")))
-    let cancelNow: @Sendable () -> Void = {
-      DispatchQueue.global(qos: .userInitiated).async {
-        downloader.cancel()
-        // A block write already under way, and the download-task backend's resume data (`.part`),
-        // land moments after `cancel()` returns, so the call ends a little later.
-        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + .milliseconds(500)) {
-          finish(CancellationError())
-        }
-      }
-    }
+    // fail when the first moves it. So a cancel then lets it finish (`finishing` reports it, with
+    // the cancel pending), and the call ends when it does; the file is complete and the next call
+    // finds it. A resume whose segment map has every block finalizes without reporting progress
+    // first, so it counts as finalizing from the start.
+    let control = FetchControl(
+      downloader: downloader, finalizing: Self.segmentMapIsComplete(destination.path + ".partial.map"), finishing: finishing)
     try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-        pending.withLock { $0 = continuation }
+        control.pending.withLock { $0 = continuation }
         if Task.isCancelled {
-          finish(CancellationError())
+          control.finish(CancellationError())
           return
         }
-        downloader.resume { written, expected, isComplete, error in
+        if control.state.withLock({ $0.finalizing }) { finishing(false) }
+        downloader.resume { [control] written, expected, isComplete, error in
           if let error {
-            finish(error)
+            control.finish(error)
             return
           }
           if isComplete {
             progress(written, expected)
-            finish(nil)
+            control.finish(nil)
             return
           }
-          let cancelsNow = state.withLock { state in
-            state.finalizing = expected > 0 && written >= expected
-            return state.takeDeferredCancel()
+          let (cancelsNow, startsFinalizing) = control.state.withLock { state in
+            let finalizing = expected > 0 && written >= expected
+            defer { state.finalizing = finalizing }
+            return (state.takeDeferredCancel(finalizing: finalizing), finalizing && !state.finalizing)
           }
-          if cancelsNow { cancelNow() }
           progress(written, expected)
+          if startsFinalizing { finishing(false) }
+          if cancelsNow { control.cancelNow() }
         }
       }
     } onCancel: {
-      let cancelsNow = state.withLock { state in
+      let cancelsNow = control.state.withLock { state in
         state.cancelRequested = true
-        return state.takeDeferredCancel()
+        return state.takeDeferredCancel(finalizing: state.finalizing)
       }
       if cancelsNow {
-        cancelNow()
+        control.cancelNow()
       } else {
-        // Finalizing: give it a generous while, then cancel anyway rather than wait forever.
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + .seconds(30 * 60)) {
-          if state.withLock({ state in defer { state.cancelIssued = true }; return !state.cancelIssued }) { cancelNow() }
+        control.finishing(true)
+        // Give finalizing a generous while, then cancel anyway rather than wait forever. Held
+        // weakly, so a download that ends first releases everything at once.
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + .seconds(30 * 60)) { [weak control] in
+          guard let control, control.state.withLock({ state in defer { state.cancelIssued = true }; return !state.cancelIssued })
+          else { return }
+          control.cancelNow()
         }
       }
     }
     try Task.checkCancellation()
   }
 
-  /// A `fetch` call's cancel, held back while the downloader finalizes.
-  private nonisolated struct CancelState {
-    var finalizing: Bool
-    var cancelRequested = false
-    var cancelIssued = false
+  /// Whether a segmented download's map (`.partial.map`, the engine's `SegmentedDownloadManifest`
+  /// as a property list) has every block, so resuming it goes straight to finalizing.
+  nonisolated static func segmentMapIsComplete(_ path: String) -> Bool {
+    guard let data = FileManager.default.contents(atPath: path),
+          let map = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+          let blocks = map["completedBlocks"] as? [Bool]
+    else { return false }
+    return !blocks.isEmpty && blocks.allSatisfy(\.self)
+  }
 
-    /// Whether to cancel the downloader now: asked for, not yet done, and not finalizing.
-    mutating func takeDeferredCancel() -> Bool {
-      guard cancelRequested, !cancelIssued, !finalizing else { return false }
-      cancelIssued = true
-      return true
+  /// One `fetch` call's waiting continuation and its cancel, held back while the downloader
+  /// finalizes.
+  private final nonisolated class FetchControl: @unchecked Sendable {
+    struct State {
+      var finalizing: Bool
+      var cancelRequested = false
+      var cancelIssued = false
+
+      /// Whether to cancel the downloader now: asked for, not yet done, and not finalizing.
+      mutating func takeDeferredCancel(finalizing: Bool) -> Bool {
+        guard cancelRequested, !cancelIssued, !finalizing else { return false }
+        cancelIssued = true
+        return true
+      }
+    }
+
+    let downloader: ResumableDownloader
+    let state: Mutex<State>
+    let pending = Mutex<CheckedContinuation<Void, Error>?>(nil)
+    let finishing: @Sendable (Bool) -> Void
+
+    init(downloader: ResumableDownloader, finalizing: Bool, finishing: @escaping @Sendable (Bool) -> Void) {
+      self.downloader = downloader
+      state = Mutex(State(finalizing: finalizing))
+      self.finishing = finishing
+    }
+
+    /// Ends the wait. The handler can be called again after it's done (MGK's bridge guards the
+    /// same way), so only the first call counts.
+    func finish(_ error: Error?) {
+      guard let continuation = pending.withLock({ waiting in defer { waiting = nil }; return waiting }) else { return }
+      if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+    }
+
+    /// Cancels the downloader, which then stops calling back, and ends the wait a little later: a
+    /// block write already under way, and the download-task backend's resume data (`.part`), land
+    /// moments after `cancel()` returns.
+    func cancelNow() {
+      DispatchQueue.global(qos: .userInitiated).async { [self] in
+        downloader.cancel()
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + .milliseconds(500)) { [self] in
+          finish(CancellationError())
+        }
+      }
     }
   }
 

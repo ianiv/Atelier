@@ -352,7 +352,7 @@ struct HuggingFaceImportSheet: View {
       Button("Cancel Download") {
         if let started { library.cancelLinkDownload(started) }
       }
-      .disabled(!isDownloading)
+      .disabled(!isDownloading || progress?.download?.cancelPending == true)
     }
   }
 
@@ -423,7 +423,8 @@ struct LinkDownloadsStatus: View {
           Image(systemName: "xmark.circle.fill")
         }
         .buttonStyle(.borderless)
-        .help("Cancel download")
+        .disabled(progress.download?.cancelPending == true)
+        .help(progress.download?.cancelPending == true ? "Cancels when the file is finished" : "Cancel download")
         .accessibilityLabel("Cancel download")
       }
       .help("\(progress.title): \(progress.description)")

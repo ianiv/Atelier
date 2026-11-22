@@ -71,6 +71,10 @@ final class ModelLibrary {
     var totalFiles: Int
     var bytesWritten: Int64
     var totalBytes: Int64
+    /// Every byte is in and the file is being checked and moved (`fetch`'s `finishing`).
+    var finishing = false
+    /// Cancel was pressed while finishing; the download stops once that's done.
+    var cancelPending = false
 
     var fraction: Double? {
       totalBytes > 0 ? Double(bytesWritten) / Double(totalBytes) : nil
@@ -343,11 +347,20 @@ final class ModelLibrary {
               totalBytes: expected))
           }
         } else {
-          try await Self.downloadModel(file, into: folder) { name, index, total, written, expected in
-            show(Download(
-              file: name, fileIndex: index, totalFiles: total, bytesWritten: written,
-              totalBytes: expected))
-          }
+          try await Self.downloadModel(
+            file, into: folder,
+            progress: { name, index, total, written, expected in
+              show(Download(
+                file: name, fileIndex: index, totalFiles: total, bytesWritten: written,
+                totalBytes: expected))
+            },
+            finishing: { _, cancelPending in
+              Task { @MainActor in
+                guard self.downloadTasks[file] != nil else { return }
+                self.downloads[file]?.finishing = true
+                self.downloads[file]?.cancelPending = cancelPending
+              }
+            })
         }
         try await Self.downloadAudioEncoder(for: file, into: folder) { name, written, expected in
           let progress = Download(

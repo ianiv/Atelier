@@ -282,6 +282,23 @@ struct HuggingFaceLinkTests {
     #expect(ModelLibrary.readRecord(in: folder)?.remainingItems.count == 2)
   }
 
+  @Test func onlyAFullSegmentMapCountsAsFinalizing() throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: "HuggingFaceLinkTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    func map(_ blocks: [Bool]) throws -> String {
+      let path = root.appendingPathComponent(UUID().uuidString).path
+      let data = try PropertyListSerialization.data(fromPropertyList: ["version": 1, "completedBlocks": blocks], format: .binary, options: 0)
+      try data.write(to: URL(fileURLWithPath: path))
+      return path
+    }
+    #expect(ModelLibrary.segmentMapIsComplete(try map([true, true, true])))
+    #expect(!ModelLibrary.segmentMapIsComplete(try map([true, false, true])))
+    #expect(!ModelLibrary.segmentMapIsComplete(try map([false, false])))
+    #expect(!ModelLibrary.segmentMapIsComplete(try map([])))
+    #expect(!ModelLibrary.segmentMapIsComplete(root.appendingPathComponent("missing").path))
+  }
+
   @Test func downloadErrorsSayWhatToDo() {
     let unauthorized = Downloader.ResumableDownloader.DownloadError.server(401)
     #expect(ModelLibrary.describe(unauthorized, repo: "a/b", user: nil, hasToken: false) == HuggingFaceError.needsToken.localizedDescription)

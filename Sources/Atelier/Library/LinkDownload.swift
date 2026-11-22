@@ -3,6 +3,7 @@
 @preconcurrency import Downloader
 import Foundation
 @preconcurrency import ModelZoo
+import Synchronization
 
 /// What a link download fetches, kept as `download.json` in its staging folder so a download that
 /// stopped (cancelled, failed, quit) can be resumed or discarded later, and a finished one that
@@ -448,11 +449,15 @@ extension ModelLibrary {
           guard Int64(data.count) == file.size else { throw HuggingFaceError.unexpectedResponse }
           try data.write(to: destination, options: .atomic)
         } else {
+          let current = Mutex(ModelLibrary.Download(file: file.name, fileIndex: number, totalFiles: total, bytesWritten: 0, totalBytes: file.size))
           try await fetch(
-            url: url, to: destination, sha256: file.sha256, headers: HuggingFaceAuth.headers(for: url, token: token)
-          ) { written, expected in
-            progress(ModelLibrary.Download(file: file.name, fileIndex: number, totalFiles: total, bytesWritten: written, totalBytes: expected), nil)
-          }
+            url: url, to: destination, sha256: file.sha256, headers: HuggingFaceAuth.headers(for: url, token: token),
+            progress: { written, expected in
+              progress(current.withLock { $0.bytesWritten = written; $0.totalBytes = expected; return $0 }, nil)
+            },
+            finishing: { cancelPending in
+              progress(current.withLock { $0.finishing = true; $0.cancelPending = cancelPending; return $0 }, nil)
+            })
         }
       }
       try Task.checkCancellation()

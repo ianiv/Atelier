@@ -455,7 +455,9 @@ struct ModelStatus: View {
           Image(systemName: "xmark.circle.fill")
         }
         .buttonStyle(.borderless)
-        .help("Cancel download")
+        // While the file is checked and moved, a cancel waits for that; once asked, it's pending.
+        .disabled(download.cancelPending)
+        .help(download.cancelPending ? "Cancels when the file is finished" : "Cancel download")
         .accessibilityLabel("Cancel download")
       }
       .help(Self.describe(download))
@@ -482,6 +484,7 @@ struct ModelStatus: View {
   static func describe(_ download: ModelLibrary.Download) -> String {
     guard download.totalFiles > 0 else { return "Checking files…" }
     let file = "\(download.file) (\(download.fileIndex) of \(download.totalFiles))"
+    if download.finishing { return "\(file): Finishing…" + (download.cancelPending ? " (cancels when done)" : "") }
     guard download.totalBytes > 0 else { return file }
     return
       "\(file): \(ModelsView.bytes(download.bytesWritten)) of \(ModelsView.bytes(download.totalBytes))"
