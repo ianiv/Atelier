@@ -154,8 +154,15 @@ extension Automation {
         print("note: no main window (is the screen locked?); undoing with a stand-in undo manager")
       }
       AgentTools.undoManagerForChecks = undoManager
-      // The input's shape at about a quarter megapixel, so a fitted image fills the frame.
-      let frame = CanvasPlacement.frameSize(forRegion: CGSize(width: input.width, height: input.height), pixelCount: 512 * 512)
+      // The input's exact shape, so a fitted image fills the frame: the checks below take the frame
+      // to show exactly the image. `frameSize(forRegion:)` only comes near the shape (a 1216×832
+      // input gives 640×448, which reaches 10 pixels past the image's top and bottom, so every
+      // merge grows the canvas), so it's the fallback for a shape no size setting has.
+      let frame = exactFrame(for: CGSize(width: input.width, height: input.height), near: 512 * 512)
+        ?? CanvasPlacement.frameSize(forRegion: CGSize(width: input.width, height: input.height), pixelCount: 512 * 512)
+      if frame.width / frame.height != Double(input.width) / Double(input.height) {
+        print("note: no output size has the input's shape; fitted runs reach past the image, and checks that expect them not to fail")
+      }
       do {
         _ = try await call(
           "set_create_screen",
@@ -384,14 +391,16 @@ extension Automation {
         check(false, "the run's step isn't in History")
         return finish()
       }
-      // An imported image is stored as the step's first layer, not as a History step of its own.
+      // An imported image is an Imported entry in History (and Generate writes a Mask entry after
+      // it): the run follows that entry, and its first layer is the entry's image, not a copy.
+      let inputEntry = item.inputTensorId.flatMap { model.history.item(tensorId: $0) }
       check(
-        result["parent_history_step"] is NSNull && item.inputTensorId != nil,
-        "from an imported image, there's no parent step, and the input is kept with the step")
+        inputEntry?.isEntry == true && (result["parent_history_step"] as? NSNumber)?.int64Value == inputEntry?.id.logicalTime,
+        "from an imported image, the run follows its input entry (parent \(result["parent_history_step"] ?? "missing"), input \(inputEntry.map { "\($0.entryReason.map { "\($0)" } ?? "a run") step \($0.id.logicalTime)" } ?? "none"))")
       let layers = await model.history.project.read { $0.layerSummary(tensorId: item.tensorId) }
       check(
-        layers.count == 2 && layers[0].maskId > 0 && layers[0].tensorId == item.inputTensorId,
-        "it's stored as two layers, the input with the mask under the frame (\(layers.map { "\($0.tensorId)/\($0.maskId)@\($0.x),\($0.y)" }))")
+        layers.count == 2 && layers[0].maskId > 0 && layers[0].tensorId == inputEntry?.imageTensorId,
+        "it's stored as two layers, the input entry's image with the mask under the frame (\(layers.map { "\($0.tensorId)/\($0.maskId)@\($0.x),\($0.y)" }), entry image \(inputEntry?.imageTensorId.map(String.init) ?? "nil"))")
       check(item.sidecar.refine?.mask == mask, "the step keeps the agent's mask")
       // Mask Blur 4 frame pixels is about 12 at 3 sigma; in image pixels at this zoom, with a margin.
       let margin = 24 * width / frame.width
@@ -543,7 +552,8 @@ extension Automation {
       state = try? await call(
         "set_canvas_frame", ["box": ["x": width / 2, "y": height / 2, "width": side, "height": side], "padding": 0, "aspect_ratio": "1:1", "scale": 2])
       framed = rect(state?["region"])
-      let sized = max((side * 2 / 64).rounded(), 1) * 64
+      // Rounded up, as `FrameSelection.frame` sizes it, so the region still holds the box.
+      let sized = max((side * 2 / 64 - 1e-9).rounded(.up), 1) * 64
       check(
         model.settings?.width == Int(sized) && model.settings?.height == Int(sized) && near(state?["scale"] as? Double ?? 0, 2, 0.001)
           && (framed.map { abs($0.width - sized / 2) < 1 && abs($0.midX - (width / 2 + side / 2)) < 1.5 } ?? false),
@@ -1402,6 +1412,23 @@ extension Automation {
       }
       finish()
     }
+  }
+
+  /// The output size of exactly `size`'s shape, each side a multiple of 64 as the size setting
+  /// takes, nearest `pixelCount` pixels; nil when the smallest such size is over 2048 a side.
+  static func exactFrame(for size: CGSize, near pixelCount: Double) -> CGSize? {
+    func gcd(_ a: Int, _ b: Int) -> Int { b == 0 ? a : gcd(b, a % b) }
+    let width = Int(size.width), height = Int(size.height)
+    guard width > 0, height > 0 else { return nil }
+    let common = gcd(width, height)
+    let a = width / common, b = height / common
+    // The smallest multiplier that makes both sides multiples of 64.
+    let ka = 64 / gcd(64, a), kb = 64 / gcd(64, b)
+    let step = ka / gcd(ka, kb) * kb
+    let smallest = CGSize(width: a * step, height: b * step)
+    guard smallest.width <= 2048, smallest.height <= 2048 else { return nil }
+    let multiple = max((pixelCount / (smallest.width * smallest.height)).squareRoot().rounded(), 1)
+    return CGSize(width: smallest.width * multiple, height: smallest.height * multiple)
   }
 }
 #endif
