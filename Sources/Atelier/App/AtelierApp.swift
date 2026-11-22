@@ -63,6 +63,8 @@ struct AtelierApp: App {
     _presets = State(initialValue: presets)
     let library = ModelLibrary(create: create)
     _library = State(initialValue: library)
+    // A finished link download opens the import sheet of its kind, on that screen.
+    library.onLinkDownloadReady = { kind in navigation.section = kind == .model ? .models : .loras }
     let remoteServer = RemoteServer(create: create, library: library)
     _remoteServer = State(initialValue: remoteServer)
     if SessionState.isEnabled {

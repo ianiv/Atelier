@@ -22,6 +22,7 @@ struct ModelsView: View {
   @State private var pendingMove: ModelLibrary.Move?
   @State private var dropTargeted = false
   @State private var showingH3ImageInstall = false
+  @State private var linkRequest: LinkSheetRequest?
 
   private var filtered: [MediaGenerationResolvedModel] {
     let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -104,7 +105,12 @@ struct ModelsView: View {
         }
       }
       .dropDestination(for: URL.self) { urls, _ in
-        library.prepareModelImport(urls)
+        // A link dropped from a browser opens the link sheet; files go to the import sheet.
+        if let link = urls.first(where: { !$0.isFileURL }) {
+          linkRequest = LinkSheetRequest(kind: .model, link: link.absoluteString)
+        } else {
+          library.prepareModelImport(urls)
+        }
         return true
       } isTargeted: { dropTargeted = $0 }
       .toolbar {
@@ -127,8 +133,13 @@ struct ModelsView: View {
           .help("Reload the model catalog, the models folder, custom.json and custom_lora.json")
         }
         ToolbarItem {
-          Button("Import…", systemImage: "plus") { chooseFiles() }
-            .help("Import .safetensors model checkpoints (or drop them here)")
+          Menu {
+            Button("Choose Files…", systemImage: "folder") { chooseFiles() }
+            Button("From Hugging Face Link…", systemImage: "link") { linkRequest = LinkSheetRequest(kind: .model) }
+          } label: {
+            Label("Import…", systemImage: "plus")
+          }
+          .help("Import .safetensors model checkpoints from files (or drop them here) or a Hugging Face link")
         }
         HelpToolbarItem(section: .models)
       }
@@ -155,10 +166,15 @@ struct ModelsView: View {
       }
       .sheet(
         isPresented: Binding(
-          get: { !library.importingModels.isEmpty },
+          get: { !library.importingModels.isEmpty && linkRequest == nil },
           set: { if !$0 { library.cancelModelImports() } })
       ) {
         ModelImportSheet()
+      }
+      .sheet(item: $linkRequest) { HuggingFaceImportSheet(request: $0) }
+      // A link download that finishes while its sheet is open hands over to the import sheet.
+      .onChange(of: library.importingModels.isEmpty) { _, isEmpty in
+        if !isEmpty { linkRequest = nil }
       }
       .sheet(isPresented: $showingH3ImageInstall) {
         H3ImageInstallSheet()
@@ -319,6 +335,7 @@ struct ModelsView: View {
       Text("\(library.downloadedCount) downloaded, \(Self.bytes(library.downloadedSize))")
       Spacer()
       if library.isLoadingCatalog { ProgressView().controlSize(.small) }
+      LinkDownloadsStatus(library: library, kind: .model)
       AddFolderPicker().controlSize(.small)
       if let free = library.freeSpace { Text("\(Self.bytes(free)) free") }
     }

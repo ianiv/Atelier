@@ -95,7 +95,7 @@ enum Automation {
       "--timeline-check", "--upscale-check", "--timeline-export-check", "--flashvsr-check", "--recavsr-check",
       "--model-folders-check", "--styles-check", "--cleanup-check", "--engine-check", "--playback-check",
       "--remote-check", "--remote-net-check", "--remote-shots", "--remote-url-check", "--remote-tailnet-check",
-      "--catalog-retry-check", "--model-move-check", "--add-folder-check", "--color-match-check", "--canvas-clip-check",
+      "--catalog-retry-check", "--model-move-check", "--add-folder-check", "--hf-link-check", "--color-match-check", "--canvas-clip-check",
       "--create-delete-check",
       "--history-loras-check",
       "--input-entries-check", "--entries-freeze-check", "--tab-switch-bench", "--delete-project-check", "--compact-check",
@@ -261,6 +261,10 @@ enum Automation {
     }
     if args.contains("--add-folder-check") {
       addFolderCheck(model, library: library)
+      return
+    }
+    if args.contains("--hf-link-check") {
+      huggingFaceLinkCheck(model, library: library)
       return
     }
     if args.contains("--model-move-check") {

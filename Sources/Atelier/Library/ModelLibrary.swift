@@ -96,6 +96,9 @@ final class ModelLibrary {
     /// names, or the user's answer to `h3Question`. Nil leaves it to the engine's detection.
     var version: ModelVersion?
     var progress: Double?
+    /// The staging folder of the link download that made `source` (`LinkDownload.swift`),
+    /// deleted once the import succeeds. Nil for a file the person picked, which is never deleted.
+    var ownedFolder: URL?
     /// Holds a picked file open until it's imported or removed (iPad).
     private let access: ScopedAccess
 
@@ -122,6 +125,8 @@ final class ModelLibrary {
     /// Why the file can't be imported, if it can't.
     var problem: String?
     var progress: Double?
+    /// As `LoRAImport.ownedFolder`: a link download's staging folder, deleted after the import.
+    var ownedFolder: URL?
 
     var canImport: Bool { !isInspecting && problem == nil }
     var family: String? { isH3ImageVAE ? "MiniMax H3 Image VAE" : version.map(ModelLibrary.familyName) }
@@ -163,6 +168,16 @@ final class ModelLibrary {
   private(set) var freeSpace: Int64?
   /// The move to another models folder running now (see `ModelMove.swift`); one at a time.
   var moving: MoveProgress?
+  /// The Hugging Face token, for link imports (`HuggingFaceAuth.swift`).
+  let huggingFace = HuggingFaceAccount()
+  /// Downloads from Hugging Face links running now, by staging folder path (`LinkDownload.swift`).
+  var linkDownloads: [String: LinkDownloadProgress] = [:]
+  var linkDownloadTasks: [String: Task<Void, Never>] = [:]
+  /// Link downloads that stopped before their import: cancelled, failed, or downloaded and not
+  /// imported yet. Kept until resumed or discarded.
+  var unfinishedLinkDownloads: [UnfinishedLinkDownload] = []
+  /// Shows the import sheet for a finished link download's kind (switches to Models or LoRAs).
+  var onLinkDownloadReady: ((HuggingFaceListing.Kind) -> Void)?
   var errorMessage: String?
   /// The LoRAs screen's search, family filter, selection and sort, kept while it isn't shown.
   var loraScreen = LoRAScreenState()
@@ -469,7 +484,7 @@ final class ModelLibrary {
 
   /// Families ModelImporter detects but can't convert: it traps on them (`fatalError`) instead
   /// of throwing, so they're turned away after inspection. MOSS goes through MOSSImporter.
-  private nonisolated static let unconvertibleVersions: Set<ModelVersion> = [
+  nonisolated static let unconvertibleVersions: Set<ModelVersion> = [
     .mossImage, .hiDreamO1, .qwenImage2_1, .ltx2, .ltx2_3, .seedvr2_3b, .seedvr2_7b,
     .kandinsky21, .wurstchenStageB,
   ]
@@ -478,7 +493,7 @@ final class ModelLibrary {
 
   /// Queues checkpoints for import (shown in the import sheet until confirmed) and inspects each
   /// to detect its family.
-  func prepareModelImport(_ urls: [URL]) {
+  func prepareModelImport(_ urls: [URL], ownedFolder: URL? = nil) {
     let accepted = urls.filter {
       Self.checkpointExtensions.contains($0.pathExtension.lowercased())
     }
@@ -486,17 +501,18 @@ final class ModelLibrary {
       errorMessage = "Only .safetensors, .ckpt and .pt model checkpoints can be imported."
     }
     for url in accepted {
-      let item = ModelImport(source: url)
+      var item = ModelImport(source: url)
+      item.ownedFolder = ownedFolder
       importingModels.append(item)
       Task { await inspect(item.id, source: url) }
     }
   }
 
-  @concurrent private nonisolated static func isH3ImageVAE(_ source: URL) async -> Bool {
+  @concurrent nonisolated static func isH3ImageVAE(_ source: URL) async -> Bool {
     H3ImageVAEImporter.isVAE(source)
   }
 
-  @concurrent private nonisolated static func inspectedVersion(of source: URL) async -> Result<ModelVersion, Error> {
+  @concurrent nonisolated static func inspectedVersion(of source: URL) async -> Result<ModelVersion, Error> {
     Result {
       // ModelImporter doesn't know MOSS; MOSSImporter converts it.
       if MOSSImporter.isMOSS(source) { return .mossImage }
@@ -553,6 +569,8 @@ final class ModelLibrary {
       var failures: [String] = []
       var imported: [String] = []
       var notices: [String] = []
+      // Link downloads' staging folders whose files all imported, which go once the run ends.
+      var linkImported = Set<URL>(), linkFailed = Set<URL>()
       while let item = importingModels.first {
         if item.canImport {
           do {
@@ -564,13 +582,19 @@ final class ModelLibrary {
               if let notice = try await importH3ImageVAEIfNeeded(for: file, model: item) {
                 notices.append(notice)
               }
+              if item.ownedFolder != nil { notices += Self.undownloadableCompanions(of: file) }
             }
+            if let folder = item.ownedFolder { linkImported.insert(folder) }
           } catch {
             failures.append("\(item.source.lastPathComponent): \(error.localizedDescription)")
+            if let folder = item.ownedFolder { linkFailed.insert(folder) }
           }
+        } else if let folder = item.ownedFolder {
+          linkFailed.insert(folder)
         }
         importingModels.removeFirst()
       }
+      removeLinkStaging(linkImported.subtracting(linkFailed))
       await afterChange()
       for file in imported {
         if let model = catalog.first(where: { $0.file == file }) { download(model) }
@@ -1295,9 +1319,13 @@ final class ModelLibrary {
   }()
 
   /// Queues LoRA files for import (shown in the import sheet until confirmed).
-  func prepareImport(_ urls: [URL]) {
+  func prepareImport(_ urls: [URL], ownedFolder: URL? = nil) {
     let accepted = urls.filter { Self.loraExtensions.contains($0.pathExtension.lowercased()) }
-    importing += accepted.map { LoRAImport(source: $0) }
+    importing += accepted.map {
+      var item = LoRAImport(source: $0)
+      item.ownedFolder = ownedFolder
+      return item
+    }
     if accepted.count < urls.count {
       errorMessage = "Only .safetensors, .ckpt, .pt and .bin LoRA files can be imported."
     }
@@ -1352,14 +1380,18 @@ final class ModelLibrary {
         }
       }
       var failures: [String] = []
+      var linkImported = Set<URL>(), linkFailed = Set<URL>()
       while let item = importing.first {
         do {
           try await importLoRA(item, version: forced ?? item.version)
+          if let folder = item.ownedFolder { linkImported.insert(folder) }
         } catch {
           failures.append("\(item.source.lastPathComponent): \(error.localizedDescription)")
+          if let folder = item.ownedFolder { linkFailed.insert(folder) }
         }
         importing.removeFirst()
       }
+      removeLinkStaging(linkImported.subtracting(linkFailed))
       // Before `isImporting` turns false, so whoever waits for it finds the new LoRAs listed.
       await reloadLoRAs()
       importTask = nil

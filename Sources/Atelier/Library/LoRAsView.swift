@@ -10,6 +10,7 @@ struct LoRAsView: View {
   @State private var pendingDelete: ModelLibrary.LoRA?
   @State private var pendingMove: ModelLibrary.Move?
   @State private var dropTargeted = false
+  @State private var linkRequest: LinkSheetRequest?
   /// Search, family, selection and sort live on the library, so they're still there after
   /// visiting another screen.
   private var search: String { library.loraScreen.search }
@@ -74,7 +75,12 @@ struct LoRAsView: View {
         }
       }
       .dropDestination(for: URL.self) { urls, _ in
-        library.prepareImport(urls)
+        // A link dropped from a browser opens the link sheet; files go to the import sheet.
+        if let link = urls.first(where: { !$0.isFileURL }) {
+          linkRequest = LinkSheetRequest(kind: .lora, link: link.absoluteString)
+        } else {
+          library.prepareImport(urls)
+        }
         return true
       } isTargeted: { dropTargeted = $0 }
       .toolbar {
@@ -95,8 +101,8 @@ struct LoRAsView: View {
           }
         #endif
         ToolbarItem {
-          Button("Import…", systemImage: "plus") { chooseFiles() }
-            .help("Import .safetensors LoRA files (or drop them here)")
+          importMenu
+            .help("Import .safetensors LoRA files (or drop them here) or a Hugging Face link")
         }
         HelpToolbarItem(section: .loras)
       }
@@ -118,10 +124,22 @@ struct LoRAsView: View {
       }
       .sheet(
         isPresented: Binding(
-          get: { !library.importing.isEmpty },
+          get: { !library.importing.isEmpty && linkRequest == nil },
           set: { if !$0 { library.cancelImports() } })
       ) {
         LoRAImportSheet()
+      }
+      .sheet(item: $linkRequest) { HuggingFaceImportSheet(request: $0) }
+      // A link download that finishes while its sheet is open hands over to the import sheet.
+      .onChange(of: library.importing.isEmpty) { _, isEmpty in
+        if !isEmpty { linkRequest = nil }
+      }
+      .safeAreaBar(edge: .bottom, spacing: 0) {
+        HStack {
+          Spacer()
+          LinkDownloadsStatus(library: library, kind: .lora)
+        }
+        .padding(.horizontal, 12)
       }
       .debugPresents("loraImport", .constant(false)) {
         library.prepareImport([URL(fileURLWithPath: "/tmp/Example LoRA.safetensors")])
@@ -147,6 +165,15 @@ struct LoRAsView: View {
       .task { await library.reloadLoRAsIfRegistriesChanged() }
   }
 
+  private var importMenu: some View {
+    Menu {
+      Button("Choose Files…", systemImage: "folder") { chooseFiles() }
+      Button("From Hugging Face Link…", systemImage: "link") { linkRequest = LinkSheetRequest(kind: .lora) }
+    } label: {
+      Label("Import…", systemImage: "plus")
+    }
+  }
+
   @ViewBuilder
   private var content: some View {
     if library.loras.isEmpty {
@@ -155,7 +182,7 @@ struct LoRAsView: View {
       } description: {
         Text("Drop .safetensors LoRA files here, or click Import.")
       } actions: {
-        Button("Import…") { chooseFiles() }
+        importMenu.fixedSize()
       }
     } else if filtered.isEmpty {
       ContentUnavailableView.search(text: search)

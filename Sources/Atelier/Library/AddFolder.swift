@@ -77,15 +77,35 @@ extension ModelLibrary {
   ) async throws {
     let source = ModelDefaults.downloadSources[name]
     guard let url = source?.url ?? URL(string: "https://static.libnnc.org/\(name)") else { return }
+    try await fetch(
+      url: url, to: destination, sha256: source?.sha256 ?? ModelZoo.fileSHA256ForModelDownloaded(name),
+      progress: progress)
+  }
+
+  /// Downloads `url` to `destination` with the engine's resumable downloader (segmented when the
+  /// server takes ranges; `.partial` and `.partial.map` beside the file let a later call resume),
+  /// checked against `sha256` when given. `headers` go with every request, and the fork's
+  /// downloader drops `Authorization` on a redirect to another host. Cancelling the task cancels
+  /// the download and keeps what it has.
+  nonisolated static func fetch(
+    url: URL, to destination: URL, sha256: String?, headers: [String: String] = [:],
+    progress: @escaping @Sendable (_ written: Int64, _ expected: Int64) -> Void
+  ) async throws {
     let downloader = ResumableDownloader(
-      remoteUrl: url, localUrl: destination, sha256: source?.sha256 ?? ModelZoo.fileSHA256ForModelDownloaded(name))
-    let resumed = Mutex(false)
+      remoteUrl: url, localUrl: destination, sha256: sha256, headers: headers)
+    // The handler can be called again after it's done (MGK's bridge guards the same way), and a
+    // cancelled downloader stops calling it, so cancelling finishes the wait itself.
+    let pending = Mutex<CheckedContinuation<Void, Error>?>(nil)
+    let finish: @Sendable (Error?) -> Void = { error in
+      guard let continuation = pending.withLock({ waiting in defer { waiting = nil }; return waiting }) else { return }
+      if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+    }
     try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-        // The handler can be called again after it's done (MGK's bridge guards the same way).
-        let finish: @Sendable (Error?) -> Void = { error in
-          guard resumed.withLock({ done in defer { done = true }; return !done }) else { return }
-          if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+        pending.withLock { $0 = continuation }
+        if Task.isCancelled {
+          finish(CancellationError())
+          return
         }
         downloader.resume { written, expected, isComplete, error in
           if let error {
@@ -98,6 +118,7 @@ extension ModelLibrary {
       }
     } onCancel: {
       DispatchQueue.global(qos: .userInitiated).async { downloader.cancel() }
+      finish(CancellationError())
     }
     try Task.checkCancellation()
   }

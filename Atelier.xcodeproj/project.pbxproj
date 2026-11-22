@@ -47,6 +47,7 @@
 		A7E1F0C2B3D4A5968778696B /* Log.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1F0C2B3D4A5968778696A /* Log.swift */; };
 		A9C3E5F70B1D2E3F40516278 /* AutomationModelMove.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9C3E5F70B1D2E3F40516277 /* AutomationModelMove.swift */; };
 		B7D4E6F80C1D2E3F40516284 /* AutomationAddFolder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7D4E6F80C1D2E3F40516283 /* AutomationAddFolder.swift */; };
+		7CEF7E399F17F55DB9437B25 /* AutomationHuggingFace.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7667DBB8E194DAB4BAB329A /* AutomationHuggingFace.swift */; };
 		A7E1F0C2B3D4A5968778695D /* AutomationCleanup.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1F0C2B3D4A5968778695C /* AutomationCleanup.swift */; };
 		9A708F17725F20A474070951 /* AutomationTabSwitch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 562235479A708F17725F20A4 /* AutomationTabSwitch.swift */; };
 		A7E1F0C2B3D4A5968778695B /* TemporaryFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1F0C2B3D4A5968778695A /* TemporaryFiles.swift */; };
@@ -63,6 +64,11 @@
 		0113D79A95442376FD07EB82 /* clip_query_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FEF4CE7AD32E77D359D8F85 /* clip_query_generated.swift */; };
 		019DECB5A1E70541745FDF70 /* ModelLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 248FF150659188D7C4B12A12 /* ModelLibrary.swift */; };
 		A7C3E91F4D2B6A8E0F1C5D93 /* MOSSImporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8D4FA204E3C7B9F102D6EA4 /* MOSSImporter.swift */; };
+		59BBDC7A87A0427257581D5C /* HuggingFaceLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D344C28F894F4DDADA6AEA6 /* HuggingFaceLink.swift */; };
+		DC2FD97141EB73484F1CB0E3 /* HuggingFaceAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B1FA442CEEAB7F518C7AE6C /* HuggingFaceAuth.swift */; };
+		B8D3F4C2AAD6D37A2B811F31 /* SafetensorsMerge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468263FB0CAE2EF9AF05884B /* SafetensorsMerge.swift */; };
+		DBC7DB9616A40C62DDF7295F /* LinkDownload.swift in Sources */ = {isa = PBXBuildFile; fileRef = E19A051B96F40F8200ADB6E2 /* LinkDownload.swift */; };
+		3EFDDD6F3AB8E6E136E696E8 /* HuggingFaceImportSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EF19BDF54CC0D0FD69CC7A9 /* HuggingFaceImportSheet.swift */; };
 		D1E2F3A4B5C66289D185957B /* SafeTensorsReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E2F3A4B5C6D782A32EF001 /* SafeTensorsReader.swift */; };
 		C1A2B3D4E5F60718293A4B5C /* H3ImageVAEImporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2B3C4E5F6071829304B5C6D /* H3ImageVAEImporter.swift */; };
 		A7E1C0DE00000000000000A1 /* HelpLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1C0DE00000000000000A2 /* HelpLinks.swift */; };
@@ -224,6 +230,8 @@
 		39581119081A4BFFD6967A0B /* AutoMaskTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC3541FFA68BA7C5424778CE /* AutoMaskTests.swift */; };
 		C0104A7C11A0000000000005 /* ColorMatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0104A7C11A0000000000006 /* ColorMatchTests.swift */; };
 		D1E2F3A4B5C682C98498EB8C /* MOSSImportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E2F3A4B5C6E527578EEB1D /* MOSSImportTests.swift */; };
+		875C44A9DAA4EC8A64DC691A /* HuggingFaceLinkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F780B8CE85BD9AA1C111BB8 /* HuggingFaceLinkTests.swift */; };
+		5DF297A8ABBB463BBC570CF9 /* SafetensorsMergeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 026306C88E862992DD06EA78 /* SafetensorsMergeTests.swift */; };
 		E17E00000000000000000003 /* InputEntryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E17E00000000000000000004 /* InputEntryTests.swift */; };
 		F2EE5A000000000000000001 /* EntryTreeFuzzTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2EE5A000000000000000002 /* EntryTreeFuzzTests.swift */; };
 		F2EE5A000000000000000003 /* MoodboardWriterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2EE5A000000000000000004 /* MoodboardWriterTests.swift */; };
@@ -349,6 +357,7 @@
 		A7E1F0C2B3D4A5968778696A /* Log.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Log.swift; sourceTree = "<group>"; };
 		A9C3E5F70B1D2E3F40516277 /* AutomationModelMove.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationModelMove.swift; sourceTree = "<group>"; };
 		B7D4E6F80C1D2E3F40516283 /* AutomationAddFolder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationAddFolder.swift; sourceTree = "<group>"; };
+		E7667DBB8E194DAB4BAB329A /* AutomationHuggingFace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationHuggingFace.swift; sourceTree = "<group>"; };
 		A7E1F0C2B3D4A5968778695C /* AutomationCleanup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationCleanup.swift; sourceTree = "<group>"; };
 		562235479A708F17725F20A4 /* AutomationTabSwitch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationTabSwitch.swift; sourceTree = "<group>"; };
 		A7E1F0C2B3D4A5968778695A /* TemporaryFiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemporaryFiles.swift; sourceTree = "<group>"; };
@@ -392,6 +401,11 @@
 		206772509F6023806027971F /* thumbnail_history_mutating_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = thumbnail_history_mutating_generated.swift; sourceTree = "<group>"; };
 		248FF150659188D7C4B12A12 /* ModelLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelLibrary.swift; sourceTree = "<group>"; };
 		B8D4FA204E3C7B9F102D6EA4 /* MOSSImporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MOSSImporter.swift; sourceTree = "<group>"; };
+		7D344C28F894F4DDADA6AEA6 /* HuggingFaceLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HuggingFaceLink.swift; sourceTree = "<group>"; };
+		7B1FA442CEEAB7F518C7AE6C /* HuggingFaceAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HuggingFaceAuth.swift; sourceTree = "<group>"; };
+		468263FB0CAE2EF9AF05884B /* SafetensorsMerge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafetensorsMerge.swift; sourceTree = "<group>"; };
+		E19A051B96F40F8200ADB6E2 /* LinkDownload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkDownload.swift; sourceTree = "<group>"; };
+		3EF19BDF54CC0D0FD69CC7A9 /* HuggingFaceImportSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HuggingFaceImportSheet.swift; sourceTree = "<group>"; };
 		D1E2F3A4B5C6D782A32EF001 /* SafeTensorsReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafeTensorsReader.swift; sourceTree = "<group>"; };
 		D2B3C4E5F6071829304B5C6D /* H3ImageVAEImporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = H3ImageVAEImporter.swift; sourceTree = "<group>"; };
 		2986E6F53F78B9F10639ADE3 /* tensor_moodboard_data_data_model_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = tensor_moodboard_data_data_model_generated.swift; sourceTree = "<group>"; };
@@ -521,6 +535,8 @@
 		CC3541FFA68BA7C5424778CE /* AutoMaskTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoMaskTests.swift; sourceTree = "<group>"; };
 		C0104A7C11A0000000000006 /* ColorMatchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorMatchTests.swift; sourceTree = "<group>"; };
 		D1E2F3A4B5C6E527578EEB1D /* MOSSImportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MOSSImportTests.swift; sourceTree = "<group>"; };
+		0F780B8CE85BD9AA1C111BB8 /* HuggingFaceLinkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HuggingFaceLinkTests.swift; sourceTree = "<group>"; };
+		026306C88E862992DD06EA78 /* SafetensorsMergeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafetensorsMergeTests.swift; sourceTree = "<group>"; };
 		E17E00000000000000000004 /* InputEntryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputEntryTests.swift; sourceTree = "<group>"; };
 		F2EE5A000000000000000002 /* EntryTreeFuzzTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntryTreeFuzzTests.swift; sourceTree = "<group>"; };
 		F2EE5A000000000000000004 /* MoodboardWriterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoodboardWriterTests.swift; sourceTree = "<group>"; };
@@ -702,6 +718,7 @@
 				562235479A708F17725F20A4 /* AutomationTabSwitch.swift */,
 				A9C3E5F70B1D2E3F40516277 /* AutomationModelMove.swift */,
 				B7D4E6F80C1D2E3F40516283 /* AutomationAddFolder.swift */,
+				E7667DBB8E194DAB4BAB329A /* AutomationHuggingFace.swift */,
 				D70A1100000000000000000B /* AutomationDrawThings.swift */,
 				D2FF5ECF7B3949AB28ABC1A2 /* AutomationUpscale.swift */,
 				B7BD68E493CDB95E8BB1788B /* AutomationReCaVSR.swift */,
@@ -850,6 +867,11 @@
 				D70A1100000000000000000D /* community-models.json */,
 				248FF150659188D7C4B12A12 /* ModelLibrary.swift */,
 				B8D4FA204E3C7B9F102D6EA4 /* MOSSImporter.swift */,
+				7D344C28F894F4DDADA6AEA6 /* HuggingFaceLink.swift */,
+				7B1FA442CEEAB7F518C7AE6C /* HuggingFaceAuth.swift */,
+				468263FB0CAE2EF9AF05884B /* SafetensorsMerge.swift */,
+				E19A051B96F40F8200ADB6E2 /* LinkDownload.swift */,
+				3EF19BDF54CC0D0FD69CC7A9 /* HuggingFaceImportSheet.swift */,
 				D1E2F3A4B5C6D782A32EF001 /* SafeTensorsReader.swift */,
 				D2B3C4E5F6071829304B5C6D /* H3ImageVAEImporter.swift */,
 				C4CBE9BE880BD55127FC9066 /* ModelsView.swift */,
@@ -960,6 +982,8 @@
 				CC3541FFA68BA7C5424778CE /* AutoMaskTests.swift */,
 				C0104A7C11A0000000000006 /* ColorMatchTests.swift */,
 				D1E2F3A4B5C6E527578EEB1D /* MOSSImportTests.swift */,
+				0F780B8CE85BD9AA1C111BB8 /* HuggingFaceLinkTests.swift */,
+				026306C88E862992DD06EA78 /* SafetensorsMergeTests.swift */,
 				E17E00000000000000000004 /* InputEntryTests.swift */,
 				F2EE5A000000000000000002 /* EntryTreeFuzzTests.swift */,
 				F2EE5A000000000000000004 /* MoodboardWriterTests.swift */,
@@ -1311,6 +1335,7 @@
 				9A708F17725F20A474070951 /* AutomationTabSwitch.swift in Sources */,
 				A9C3E5F70B1D2E3F40516278 /* AutomationModelMove.swift in Sources */,
 				B7D4E6F80C1D2E3F40516284 /* AutomationAddFolder.swift in Sources */,
+				7CEF7E399F17F55DB9437B25 /* AutomationHuggingFace.swift in Sources */,
 				D70A1100000000000000000A /* AutomationDrawThings.swift in Sources */,
 				58D2F5882DA905D40744609C /* AutomationUpscale.swift in Sources */,
 				2F5E204A6500D7675B33E763 /* AutomationReCaVSR.swift in Sources */,
@@ -1371,6 +1396,11 @@
 				D70A11000000000000000005 /* DrawThingsImportSheet.swift in Sources */,
 				019DECB5A1E70541745FDF70 /* ModelLibrary.swift in Sources */,
 				A7C3E91F4D2B6A8E0F1C5D93 /* MOSSImporter.swift in Sources */,
+				59BBDC7A87A0427257581D5C /* HuggingFaceLink.swift in Sources */,
+				DC2FD97141EB73484F1CB0E3 /* HuggingFaceAuth.swift in Sources */,
+				B8D3F4C2AAD6D37A2B811F31 /* SafetensorsMerge.swift in Sources */,
+				DBC7DB9616A40C62DDF7295F /* LinkDownload.swift in Sources */,
+				3EFDDD6F3AB8E6E136E696E8 /* HuggingFaceImportSheet.swift in Sources */,
 				D1E2F3A4B5C66289D185957B /* SafeTensorsReader.swift in Sources */,
 				C1A2B3D4E5F60718293A4B5C /* H3ImageVAEImporter.swift in Sources */,
 				D42B1F3B6CDD906D20BB8275 /* Project.swift in Sources */,
@@ -1498,6 +1528,8 @@
 				39581119081A4BFFD6967A0B /* AutoMaskTests.swift in Sources */,
 				C0104A7C11A0000000000005 /* ColorMatchTests.swift in Sources */,
 				D1E2F3A4B5C682C98498EB8C /* MOSSImportTests.swift in Sources */,
+				875C44A9DAA4EC8A64DC691A /* HuggingFaceLinkTests.swift in Sources */,
+				5DF297A8ABBB463BBC570CF9 /* SafetensorsMergeTests.swift in Sources */,
 				E17E00000000000000000003 /* InputEntryTests.swift in Sources */,
 				F2EE5A000000000000000001 /* EntryTreeFuzzTests.swift in Sources */,
 				F2EE5A000000000000000003 /* MoodboardWriterTests.swift in Sources */,

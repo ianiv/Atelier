@@ -1670,6 +1670,7 @@ struct ModelsSettingsView: View {
         }
         AdditionalModelFoldersSection()
         drawThingsSection
+        HuggingFaceTokenSection()
       }
       .settingsForm()
       .sheet(isPresented: $importingDrawThings) { DrawThingsImportSheet() }
@@ -1706,6 +1707,7 @@ struct ModelsSettingsView: View {
       }
       AdditionalModelFoldersSection()
       drawThingsSection
+      HuggingFaceTokenSection()
     }
     .settingsForm()
     .sheet(isPresented: $importingDrawThings) { DrawThingsImportSheet() }
