@@ -307,6 +307,27 @@ nonisolated enum MOSSImporter {
   }
 }
 
+/// Reads a safetensors file's JSON header: an 8-byte little-endian length, then that many bytes of
+/// JSON (tensor names to dtype, shape and data offsets, plus an optional `__metadata__` of strings).
+nonisolated enum SafetensorsHeader {
+  /// The header of the file at `url`, or nil when it isn't a safetensors file.
+  static func read(_ url: URL) throws -> [String: Any]? {
+    let input = try FileHandle(forReadingFrom: url)
+    defer { try? input.close() }
+    return try read(from: input)
+  }
+
+  /// Reads the header from the start of `input`, leaving it at the first byte of tensor data.
+  static func read(from input: FileHandle) throws -> [String: Any]? {
+    guard let lengthData = try input.read(upToCount: 8), lengthData.count == 8 else { return nil }
+    let headerLength = lengthData.withUnsafeBytes { Int(UInt64(littleEndian: $0.loadUnaligned(as: UInt64.self))) }
+    guard headerLength > 0, headerLength < 100_000_000,
+          let headerData = try input.read(upToCount: headerLength), headerData.count == headerLength
+    else { return nil }
+    return (try? JSONSerialization.jsonObject(with: headerData)) as? [String: Any]
+  }
+}
+
 /// Rewrites a LoRA from the MOSS Image Edit trainer (github.com/Chenkin-x/Moss-Image-Edit, header
 /// format "moss-edit-lora") into names LoRAImporter reads. Its tensors are `<module>.lora_A` and
 /// `<module>.lora_B` with no `.weight`, so the importer matched none of them; the module names
@@ -322,13 +343,8 @@ nonisolated enum MOSSEditLoRA {
   static func convertedCopy(of url: URL) throws -> (url: URL, isEdit: Bool)? {
     let input = try FileHandle(forReadingFrom: url)
     defer { try? input.close() }
-    guard let lengthData = try input.read(upToCount: 8), lengthData.count == 8 else { return nil }
-    let headerLength = lengthData.withUnsafeBytes { Int(UInt64(littleEndian: $0.loadUnaligned(as: UInt64.self))) }
-    guard headerLength > 0, headerLength < 100_000_000,
-          let headerData = try input.read(upToCount: headerLength), headerData.count == headerLength,
-          // Not JSON means not a safetensors file, so not this format; the import goes on as usual.
-          let header = (try? JSONSerialization.jsonObject(with: headerData)) as? [String: Any]
-    else { return nil }
+    // Not a safetensors file means not this format; the import goes on as usual.
+    guard let header = try SafetensorsHeader.read(from: input) else { return nil }
     let suffixes = [".lora_A", ".lora_B"]
     guard header.keys.contains(where: { key in suffixes.contains { key.hasSuffix($0) } }) else {
       return nil

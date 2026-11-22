@@ -1,4 +1,6 @@
 @preconcurrency import _MediaGenerationKit
+@preconcurrency import Diffusion
+@preconcurrency import ModelZoo
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -325,6 +327,20 @@ struct LoRAImportSheet: View {
     }
     .sheetPadding()
     .sheetFrame(width: 520)
+    // The weights of H3 Image and H3 video LoRAs look alike but convert differently, so a file
+    // that doesn't say which is asked about before anything is converted.
+    .confirmationDialog(
+      "Is \u{201C}\(library.h3Question?.source.deletingPathExtension().lastPathComponent ?? "this LoRA")\u{201D} for MiniMax H3 Image or MiniMax H3 video?",
+      isPresented: Binding(
+        get: { library.h3Question != nil }, set: { if !$0 { library.answerH3Question(nil) } }),
+      titleVisibility: .visible
+    ) {
+      Button(ModelZoo.humanReadableNameForVersion(.minimaxH3Image)) { library.answerH3Question(.minimaxH3Image) }
+      Button("\(ModelZoo.humanReadableNameForVersion(.minimaxH3)) (Video)") { library.answerH3Question(.minimaxH3) }
+      Button("Don\u{2019}t Import", role: .cancel) { library.answerH3Question(nil) }
+    } message: {
+      Text("Its weights fit both, and the file doesn\u{2019}t say which model it was trained on. Pick the one it was made for; a LoRA imported as the other won\u{2019}t work.")
+    }
   }
 
   private func row(_ item: ModelLibrary.LoRAImport) -> some View {

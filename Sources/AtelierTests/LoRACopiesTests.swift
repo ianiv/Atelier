@@ -1,4 +1,5 @@
 @testable import Atelier
+@preconcurrency import Diffusion
 import Foundation
 import Testing
 
@@ -7,6 +8,70 @@ import Testing
 /// gave (`reference` below, kept verbatim), and stay fast with hundreds of each.
 @Suite(.tags(.smoke))
 struct LoRACopiesTests {
+  // MARK: - LoRA family from the safetensors header (`ModelLibrary.loraFamilyHint(header:)`)
+
+  /// A header shaped like ai-toolkit's H3 LoRAs (both H3 Image test files have exactly these
+  /// names and shapes), with `metadata` as its `__metadata__`.
+  private static func h3Header(metadata: [String: String]?, separator: String = ".") -> [String: Any] {
+    let prefix = ["diffusion_model", "blocks", "0", "attn", "qkv_proj"].joined(separator: separator)
+    let refiner = ["diffusion_model", "token_refiner", "blocks", "0", "attn", "qkv_proj"].joined(separator: separator)
+    var header: [String: Any] = [
+      prefix + ".lora_A.weight": ["dtype": "BF16", "shape": [32, 5376], "data_offsets": [0, 1]],
+      prefix + ".lora_B.weight": ["dtype": "BF16", "shape": [21504, 32], "data_offsets": [1, 2]],
+      refiner + ".lora_A.weight": ["dtype": "BF16", "shape": [32, 5376], "data_offsets": [2, 3]],
+      refiner + ".lora_B.weight": ["dtype": "BF16", "shape": [21504, 32], "data_offsets": [3, 4]],
+    ]
+    if let metadata { header["__metadata__"] = metadata }
+    return header
+  }
+
+  @Test func taggedH3ImageLoRAImportsAsH3Image() {
+    let header = Self.h3Header(metadata: ["ss_base_model_version": "minimax_h3_image", "format": "pt"])
+    #expect(ModelLibrary.loraFamilyHint(header: header) == .version(.minimaxH3Image))
+  }
+
+  @Test func untaggedH3LoRAAsks() {
+    #expect(ModelLibrary.loraFamilyHint(header: Self.h3Header(metadata: nil)) == .minimaxH3)
+    #expect(ModelLibrary.loraFamilyHint(header: Self.h3Header(metadata: ["ss_base_model_version": "something_else"])) == .minimaxH3)
+    // Kohya-style names with underscores and lora_down, as the engine's check reads them.
+    let kohya: [String: Any] = [
+      "lora_unet_token_refiner_blocks_0_attn_qkv_proj.lora_down.weight": ["dtype": "F16", "shape": [16, 5376], "data_offsets": [0, 1]],
+    ]
+    #expect(ModelLibrary.loraFamilyHint(header: kohya) == .minimaxH3)
+  }
+
+  @Test func otherLoRAsAreLeftToTheEngine() {
+    // Same names, another width: not H3.
+    let narrow: [String: Any] = [
+      "diffusion_model.token_refiner.blocks.0.attn.qkv_proj.lora_A.weight": ["dtype": "BF16", "shape": [32, 3072], "data_offsets": [0, 1]],
+    ]
+    #expect(ModelLibrary.loraFamilyHint(header: narrow) == nil)
+    // H3-wide, but not in the blocks the engine checks.
+    let elsewhere: [String: Any] = [
+      "diffusion_model.blocks.0.mlp.fc1.lora_A.weight": ["dtype": "BF16", "shape": [32, 5376], "data_offsets": [0, 1]],
+    ]
+    #expect(ModelLibrary.loraFamilyHint(header: elsewhere) == nil)
+    #expect(ModelLibrary.loraFamilyHint(header: ["__metadata__": ["ss_base_model_version": "flux_1"]]) == nil)
+  }
+
+  /// `SafetensorsHeader.read` on a file written here: the length prefix, then the JSON.
+  @Test func readsSafetensorsHeader() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent("LoRAHeader-" + UUID().uuidString)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let url = folder.appendingPathComponent("h3.safetensors")
+    let json = try JSONSerialization.data(withJSONObject: Self.h3Header(metadata: ["ss_base_model_version": "minimax_h3_image"]))
+    var data = withUnsafeBytes(of: UInt64(json.count).littleEndian) { Data($0) }
+    data.append(json)
+    data.append(Data(count: 4))
+    try data.write(to: url)
+    let header = try #require(try SafetensorsHeader.read(url))
+    #expect(ModelLibrary.loraFamilyHint(header: header) == .version(.minimaxH3Image))
+    let notSafetensors = folder.appendingPathComponent("x.safetensors")
+    try Data("hello".utf8).write(to: notSafetensors)
+    #expect(try SafetensorsHeader.read(notSafetensors) == nil)
+  }
+
   private static let folder = URL(fileURLWithPath: "/tmp/models", isDirectory: true)
 
   private static func lora(

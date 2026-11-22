@@ -92,6 +92,9 @@ final class ModelLibrary {
     /// Multiplies the LoRA's effect, baked into the converted file, as Draw Things' import dialog
     /// does. The importer applies a stored alpha ÷ rank itself; this is on top of that.
     var scaleFactor = 1.0
+    /// The family to import as when the sheet's picker is left on automatic: what the file's header
+    /// names, or the user's answer to `h3Question`. Nil leaves it to the engine's detection.
+    var version: ModelVersion?
     var progress: Double?
     /// Holds a picked file open until it's imported or removed (iPad).
     private let access: ScopedAccess
@@ -145,6 +148,10 @@ final class ModelLibrary {
   /// Downloads started by picking a preset, by model file: the preset applies when they finish.
   private(set) var presetDownloads: [String: PresetDownload] = [:]
   private(set) var importing: [LoRAImport] = []
+  /// A queued LoRA the engine would import as MiniMax H3 whose file doesn't say whether it's for
+  /// H3 Image or H3 video, while the import sheet asks (`answerH3Question`).
+  private(set) var h3Question: LoRAImport?
+  private var h3Answer: CheckedContinuation<String?, Never>?
   private(set) var importingModels: [ModelImport] = []
   /// 8-bit copies being written, by output file, with their progress.
   private(set) var quantizing: [String: Double] = [:]
@@ -1316,16 +1323,38 @@ final class ModelLibrary {
   var isImporting: Bool { importTask != nil }
 
   /// Converts the queued files one by one into `addFolder` and registers each with the
-  /// engine, so it can be used right away. `version` nil means detect it from the weights.
-  func runImports(version: String?) {
+  /// engine, so it can be used right away. `version` nil means detect it from the weights, after
+  /// the files' headers are read: a family a header names is used, and when `asksH3`, each file the
+  /// engine would call MiniMax H3 without saying which is asked about (`h3Question`) before any
+  /// file is converted. A file whose question is dismissed isn't imported.
+  func runImports(version: String?, asksH3: Bool = true) {
     guard importTask == nil, canRunImports else { return }
     errorMessage = nil
     let forced = version.flatMap(ModelVersion.init(rawValue:))
     importTask = Task {
+      if forced == nil {
+        for item in importing where item.version == nil {
+          let id = item.id
+          var answer: ModelVersion?
+          switch await Self.loraFamilyHint(of: item.source) {
+          case .version(let version):
+            answer = version
+          case .minimaxH3 where asksH3:
+            answer = await askH3(item)
+            if answer == nil {
+              importing.removeAll { $0.id == id }
+              continue
+            }
+          case .minimaxH3, nil:
+            break
+          }
+          if let index = importing.firstIndex(where: { $0.id == id }) { importing[index].version = answer }
+        }
+      }
       var failures: [String] = []
       while let item = importing.first {
         do {
-          try await importLoRA(item, version: forced)
+          try await importLoRA(item, version: forced ?? item.version)
         } catch {
           failures.append("\(item.source.lastPathComponent): \(error.localizedDescription)")
         }
@@ -1343,6 +1372,61 @@ final class ModelLibrary {
   func cancelImports() {
     guard importTask == nil else { return }
     importing.removeAll()
+  }
+
+  private func askH3(_ item: LoRAImport) async -> ModelVersion? {
+    // A raw value, since ModelVersion isn't Sendable.
+    let answer: String? = await withCheckedContinuation { continuation in
+      h3Answer = continuation
+      h3Question = item
+    }
+    return answer.flatMap(ModelVersion.init(rawValue:))
+  }
+
+  /// The family the user picked for `h3Question`, or nil to skip that file.
+  func answerH3Question(_ version: ModelVersion?) {
+    guard let continuation = h3Answer else { return }
+    h3Answer = nil
+    h3Question = nil
+    continuation.resume(returning: version?.rawValue)
+  }
+
+  /// What a LoRA file's safetensors header says about its family, before the engine converts it.
+  nonisolated enum LoRAFamilyHint: Equatable {
+    /// The header names the family.
+    case version(ModelVersion)
+    /// The engine's `LoRAImporter` would detect MiniMax H3 and nothing says whether it's for H3
+    /// Image or H3 video, whose weights have the same names and shapes but convert differently.
+    case minimaxH3
+  }
+
+  @concurrent private nonisolated static func loraFamilyHint(of url: URL) async -> LoRAFamilyHint? {
+    guard url.pathExtension.lowercased() == "safetensors",
+          let header = try? SafetensorsHeader.read(url)
+    else { return nil }
+    return loraFamilyHint(header: header)
+  }
+
+  /// Decides from a safetensors header. ai-toolkit (ostris/ai-toolkit) writes
+  /// `ss_base_model_version` `minimax_h3_image` for H3 Image LoRAs; nothing seen so far names H3
+  /// video, so an untagged H3 file is `.minimaxH3`, to ask. H3 is recognized the way the engine's
+  /// `LoRAImporter.modelVersion` (`isMiniMaxH3`) does: a 5376-wide down weight in the token
+  /// refiner or block 49's attention, on keys with dots made underscores as the importer does.
+  nonisolated static func loraFamilyHint(header: [String: Any]) -> LoRAFamilyHint? {
+    let metadata = header["__metadata__"] as? [String: Any]
+    if metadata?["ss_base_model_version"] as? String == ModelVersion.minimaxH3Image.rawValue {
+      return .version(.minimaxH3Image)
+    }
+    let isMiniMaxH3 = header.contains { key, value in
+      guard key != "__metadata__",
+            let shape = (value as? [String: Any])?["shape"] as? [NSNumber], shape.last?.intValue == 5_376
+      else { return false }
+      let name = key.replacingOccurrences(of: ".", with: "_")
+      return (name.hasSuffix("_lora_down_weight") || name.hasSuffix("_lora_A_weight"))
+        && (name.contains("token_refiner_refiner_blocks_") || name.contains("token_refiner_blocks_")
+          || name.contains("transformer_blocks_49_attn_") || name.contains("blocks_49_attn_qkv_proj"))
+    }
+    return isMiniMaxH3 ? .minimaxH3 : nil
   }
 
   @concurrent private nonisolated static func importLoRAFile(

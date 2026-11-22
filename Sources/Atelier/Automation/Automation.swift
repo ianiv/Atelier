@@ -768,7 +768,7 @@ enum Automation {
         navigation.section = .loras
         await shot("import-sheet.png")
         let importStart = Date()
-        library.runImports(version: nil)
+        library.runImports(version: nil, asksH3: false)
         while library.isImporting { try? await Task.sleep(for: .milliseconds(100)) }
         if let error = library.errorMessage { log("error: \(error)") }
         let added = library.loras.filter { !before.contains($0.file) }
