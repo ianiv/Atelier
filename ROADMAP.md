@@ -22,7 +22,6 @@ Planned work that isn't built yet. Items marked **User request** or **User-repor
 
 ## Agents
 
-- **Masked outpainting at 2 steps comes back empty.** `--agent-canvas-check` at `--steps 2` (z_image_turbo, Strength 0.7): `edit_image` on a region reaching past the image fails with “Generation failed”. The frame has transparent (code 1) and masked (code 2) areas, so the engine runs `generateImageWithMask1AndMask2`, which returned no image. The same check passes in full at `--steps 4`. Check whether 0.19.0 (before the Scheduler work, 5d91b6f) does the same.
 - **`--edit-input-check` leaves its test prompt in the prompt history.** Like `--agent-canvas-check` did, it should put the recent prompts back.
 
 - **Unit tests for off-canvas jobs in the queue.** Run Again keeping a job off the canvas and in its project, renaming a project with such a job waiting, and leaving these jobs out of the saved queue.
