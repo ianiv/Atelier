@@ -4,7 +4,6 @@ Planned work that isn't built yet. Items marked **User request** or **User-repor
 
 ## Models and LoRAs
 
-- **Change a selected LoRA in place.** Pick a different LoRA for an entry in the Inspector's LoRA list without removing it and adding the new one.
 - **LoRA trigger word picker.** When the selected LoRAs have trigger words configured, list them so each can be turned on or off; the ones turned on are prepended to the prompt the generation uses.
 - **pi-H3 (2- and 4-step MiniMax H3 video).** **User request.** [Lakonik/pi-H3](https://huggingface.co/Lakonik/pi-H3) ([docs](https://github.com/Lakonik/LakonLab/blob/main/docs/piH3.md), MiniMax H3 Community License) distills H3 video+audio to 2 or 4 steps. Its four adapters (2/4 step, each with or without DWD) are LoRAs on attention out and feed-forward plus full replacements for every block's `adaln_proj` (`[96768, 8]`), `norm_out`, `proj_out` and `audio_proj_out`, trained on the pruned H3 (`multimodalart/MiniMax-H3-Pruned`: `adaln_rank` 8, 1025-entry time table), so they ship as a merged checkpoint (pruned base + adapter, then Make 8-bit Copy), not a LoRA. Check that the engine's curve-form time path (`layout.usesTimeCurve`) loads that layout. Sampling is one Euler step per network call, no guidance, on fixed grids (`max_raw_t` 0.93 / 0.96, `final_step_size_scale` 0.6, shift 12 video / 3 audio): 2-step video σ [0.99374, 0.86534], audio [0.97552, 0.61636]; 4-step video [0.99654, 0.96445, 0.89930, 0.69565], audio from the same formula with shift 3 (`RFSigmaGridDiscretization`, separate audio grid). Stage 1: the non-DWD adapters, decoded by the H3 VAE, plus defaults (guidance 1, 24 fps, 17n+5 frames, 768 short side) and `docs/video.md`. Stage 2: DWD, which decodes pixels from the last step's features (`dwd_norm_out` → `SolH3DWDHead`: 8 blocks × 2048, 4 register tokens, 4×32×32 pixel patches, its own path for every 5th frame) instead of the video VAE; needs an engine port of the head (read LakonLab's `DWDHeadMixin` first) and a sampler that returns features. Audio still decodes through the audio VAE.
 
@@ -12,9 +11,6 @@ Planned work that isn't built yet. Items marked **User request** or **User-repor
 
 - **Extract depth map.** A Create screen command in the canvas menu (next to Match Colors…), not a tool (see Tool UI below), that turns the canvas image into a depth map, puts the depth map on the canvas, and records it as a step in History. The engine already has Depth Anything v1.0/v2.0 (`EverythingZoo`, `depth_anything_v2.0_f16.ckpt`), which Draw Things uses for depth control.
 - **Select by description.** Type what you want selected ("the red car", "her hair") and Segment Anything selects it. The Select tool had a placeholder **Select:** text field for this, removed in 6423498 because the feature was never finished.
-
-- **Edit runs don't record their input.** `--edit-input-check` fails 5 checks (z_image_turbo, 2 steps): the first Edit run doesn't record its input, iterating in place and Rerun don't link to the first result, Use Settings on the second step leaves Generate mode instead of putting the first result on the canvas in Edit, and Use Settings with its input deleted shows no note. Fails the same way without the 2026-11-21 fixes.
-- **Clip playback falls behind.** `--canvas-clip-check` "the picture keeps up" showed 4 of 48 frames in 2 s on a copy of the HyperFlow project, with and without the 2026-11-21 fixes. The screen was locked during those runs, which may be the cause; rerun unlocked before investigating.
 
 ## Edit screen
 
@@ -30,10 +26,14 @@ Planned work that isn't built yet. Items marked **User request** or **User-repor
 
 - **DPM++ 2M Trailing breaks on MiniMax H3 Image.** At 768 px, 8 steps (seed 1234, 2026-11-21), the result shows smeared mosaic bricks; DDIM Trailing and DPM++ 2M Karras are fine. Check whether 0.19.0 (before the Scheduler work, 5d91b6f) does the same, then find the cause (likely its schedule vs the trained sigma grid, as with LCM).
 
-## Agents
+## Known failures
+
+- **Edit runs don't record their input.** `--edit-input-check` fails 5 checks (z_image_turbo, 2 steps): the first Edit run doesn't record its input, iterating in place and Rerun don't link to the first result, Use Settings on the second step leaves Generate mode instead of putting the first result on the canvas in Edit, and Use Settings with its input deleted shows no note. Fails the same way without the 2026-11-21 fixes.
+- **Clip playback falls behind.** `--canvas-clip-check` "the picture keeps up" showed 4 of 48 frames in 2 s on a copy of the HyperFlow project, with and without the 2026-11-21 fixes. The screen was locked during those runs, which may be the cause; rerun unlocked before investigating.
+
+## Tests and checks
 
 - **`--edit-input-check` leaves its test prompt in the prompt history.** Like `--agent-canvas-check` did, it should put the recent prompts back.
-
 - **Unit tests for off-canvas jobs in the queue.** Run Again keeping a job off the canvas and in its project, renaming a project with such a job waiting, and leaving these jobs out of the saved queue.
 
 ## Upstream
