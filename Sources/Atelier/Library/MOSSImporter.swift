@@ -320,9 +320,16 @@ nonisolated enum SafetensorsHeader {
   /// Reads the header from the start of `input`, leaving it at the first byte of tensor data.
   static func read(from input: FileHandle) throws -> [String: Any]? {
     guard let lengthData = try input.read(upToCount: 8), lengthData.count == 8 else { return nil }
-    let headerLength = lengthData.withUnsafeBytes { Int(UInt64(littleEndian: $0.loadUnaligned(as: UInt64.self))) }
-    guard headerLength > 0, headerLength < 100_000_000,
-          let headerData = try input.read(upToCount: headerLength), headerData.count == headerLength
+    let length = lengthData.withUnsafeBytes { UInt64(littleEndian: $0.loadUnaligned(as: UInt64.self)) }
+    // Checked as UInt64 first: any file can be named .safetensors, and its first 8 bytes can be
+    // anything, which Int() would trap on. The header can't be longer than the rest of the file.
+    let end: UInt64 = (try? input.seekToEnd()) ?? 0
+    let rest: UInt64 = end > 8 ? end - 8 : 0
+    guard length > 0, length < 100_000_000, length <= rest else { return nil }
+    try input.seek(toOffset: 8)
+    let headerLength = Int(length)
+    guard
+      let headerData = try input.read(upToCount: headerLength), headerData.count == headerLength
     else { return nil }
     return (try? JSONSerialization.jsonObject(with: headerData)) as? [String: Any]
   }

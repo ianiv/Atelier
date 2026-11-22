@@ -112,7 +112,7 @@ Converting a LoRA to 8-bit in Draw Things deletes the original file and leaves t
 3. Optionally change the file's **scale factor**, the number after its trigger words (see below).
 4. Import. The LoRA is converted, saved in the folder chosen in **Add To** and registered in that folder's `custom_lora.json`. It's usable right away; no relaunch needed.
 
-MiniMax H3 Image and MiniMax H3 (video) LoRAs have the same weights, so detection alone can't tell them apart. A LoRA whose file says it was trained on H3 Image (ai-toolkit writes this) imports as MiniMax H3 Image. For any other H3 LoRA, Atelier asks which model it's for when you click **Import**, before anything is converted; **Don't Import** skips that file. Picking a family in **Model family** skips the question.
+MiniMax H3 Image and MiniMax H3 (video) LoRAs have weights with the same names and shapes, so detection alone can't tell them apart. A LoRA whose file says it was trained on H3 Image (ai-toolkit writes this) imports as MiniMax H3 Image. For any other H3 LoRA, Atelier asks which model it's for when you click **Import**, before anything is converted; **Don't Import** skips that file. Picking a family in **Model family** skips the question.
 
 #### Scale factor
 

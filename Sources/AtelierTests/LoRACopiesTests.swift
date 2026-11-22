@@ -38,6 +38,15 @@ struct LoRACopiesTests {
       "lora_unet_token_refiner_blocks_0_attn_qkv_proj.lora_down.weight": ["dtype": "F16", "shape": [16, 5376], "data_offsets": [0, 1]],
     ]
     #expect(ModelLibrary.loraFamilyHint(header: kohya) == .minimaxH3)
+    // PEFT with an adapter name (HiDream E1 style) and SD-Forge's `::lora::1` down weights.
+    let peft: [String: Any] = [
+      "base_model.model.token_refiner.blocks.0.attn.qkv_proj.lora_A.default.weight": ["dtype": "F16", "shape": [16, 5376], "data_offsets": [0, 1]],
+    ]
+    #expect(ModelLibrary.loraFamilyHint(header: peft) == .minimaxH3)
+    let forge: [String: Any] = [
+      "diffusion_model.token_refiner.blocks.0.attn.qkv_proj::lora::1": ["dtype": "F16", "shape": [16, 5376], "data_offsets": [0, 1]],
+    ]
+    #expect(ModelLibrary.loraFamilyHint(header: forge) == .minimaxH3)
   }
 
   @Test func otherLoRAsAreLeftToTheEngine() {
@@ -70,6 +79,14 @@ struct LoRACopiesTests {
     let notSafetensors = folder.appendingPathComponent("x.safetensors")
     try Data("hello".utf8).write(to: notSafetensors)
     #expect(try SafetensorsHeader.read(notSafetensors) == nil)
+    // A length prefix too big for Int, or longer than the file, is not a header.
+    for length in [UInt64.max, UInt64(Int.max) + 1, 1_000] {
+      let bogus = folder.appendingPathComponent("bogus.safetensors")
+      var bytes = withUnsafeBytes(of: length.littleEndian) { Data($0) }
+      bytes.append(Data("{}".utf8))
+      try bytes.write(to: bogus)
+      #expect(try SafetensorsHeader.read(bogus) == nil)
+    }
   }
 
   private static let folder = URL(fileURLWithPath: "/tmp/models", isDirectory: true)

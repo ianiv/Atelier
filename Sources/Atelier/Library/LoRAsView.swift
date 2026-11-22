@@ -332,15 +332,27 @@ struct LoRAImportSheet: View {
     .confirmationDialog(
       "Is \u{201C}\(library.h3Question?.source.deletingPathExtension().lastPathComponent ?? "this LoRA")\u{201D} for MiniMax H3 Image or MiniMax H3 video?",
       isPresented: Binding(
-        get: { library.h3Question != nil }, set: { if !$0 { library.answerH3Question(nil) } }),
+        get: { library.h3Question != nil },
+        // A dismissal without a button (Escape, a tap outside on iPad) skips the file. Deferred, so
+        // a button's answer comes first whichever order SwiftUI runs the two in; the late nil then
+        // finds no question and does nothing.
+        set: { presented in
+          guard !presented, let id = library.h3Question?.id else { return }
+          Task { @MainActor in library.answerH3Question(nil, for: id) }
+        }),
       titleVisibility: .visible
     ) {
-      Button(ModelZoo.humanReadableNameForVersion(.minimaxH3Image)) { library.answerH3Question(.minimaxH3Image) }
-      Button("\(ModelZoo.humanReadableNameForVersion(.minimaxH3)) (Video)") { library.answerH3Question(.minimaxH3) }
-      Button("Don\u{2019}t Import", role: .cancel) { library.answerH3Question(nil) }
+      Button(ModelZoo.humanReadableNameForVersion(.minimaxH3Image)) { answerH3(.minimaxH3Image) }
+      Button("\(ModelZoo.humanReadableNameForVersion(.minimaxH3)) (Video)") { answerH3(.minimaxH3) }
+      Button("Don\u{2019}t Import", role: .cancel) { answerH3(nil) }
     } message: {
       Text("Its weights fit both, and the file doesn\u{2019}t say which model it was trained on. Pick the one it was made for; a LoRA imported as the other won\u{2019}t work.")
     }
+  }
+
+  private func answerH3(_ version: ModelVersion?) {
+    guard let id = library.h3Question?.id else { return }
+    library.answerH3Question(version, for: id)
   }
 
   private func row(_ item: ModelLibrary.LoRAImport) -> some View {

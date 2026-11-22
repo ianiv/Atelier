@@ -1383,9 +1383,10 @@ final class ModelLibrary {
     return answer.flatMap(ModelVersion.init(rawValue:))
   }
 
-  /// The family the user picked for `h3Question`, or nil to skip that file.
-  func answerH3Question(_ version: ModelVersion?) {
-    guard let continuation = h3Answer else { return }
+  /// The family the user picked for the `h3Question` with `id`, or nil to skip that file. Only the
+  /// first answer to a question counts, so a late dismissal can't undo a button's answer.
+  func answerH3Question(_ version: ModelVersion?, for id: LoRAImport.ID) {
+    guard h3Question?.id == id, let continuation = h3Answer else { return }
     h3Answer = nil
     h3Question = nil
     continuation.resume(returning: version?.rawValue)
@@ -1422,7 +1423,11 @@ final class ModelLibrary {
             let shape = (value as? [String: Any])?["shape"] as? [NSNumber], shape.last?.intValue == 5_376
       else { return false }
       let name = key.replacingOccurrences(of: ".", with: "_")
-      return (name.hasSuffix("_lora_down_weight") || name.hasSuffix("_lora_A_weight"))
+      // The down-weight spellings the importer reads: kohya, PEFT, PEFT with an adapter name
+      // (HiDream E1) and SD-Forge's `::lora::1`.
+      let isDown = name.hasSuffix("_lora_down_weight") || name.hasSuffix("_lora_A_weight")
+        || name.hasSuffix("_lora_A_default_weight") || name.hasSuffix("::lora::1")
+      return isDown
         && (name.contains("token_refiner_refiner_blocks_") || name.contains("token_refiner_blocks_")
           || name.contains("transformer_blocks_49_attn_") || name.contains("blocks_49_attn_qkv_proj"))
     }
