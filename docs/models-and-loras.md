@@ -40,13 +40,30 @@ With [additional model folders](settings.md#additional-model-folders), the **Fol
 
 To use a model that isn't in the catalog, such as a fine-tune you downloaded:
 
-1. Click **Import…** in the Models toolbar and choose one or more `.safetensors` or `.ckpt` files, or drop them on the Models list.
+1. Click **Import…** in the Models toolbar, choose **Choose Files…** and pick one or more `.safetensors` or `.ckpt` files, or drop them on the Models list. To download one first, choose **From Hugging Face Link…** instead (see [Importing from a Hugging Face link](#importing-from-a-hugging-face-link)).
 2. Atelier inspects each file and shows the model family it detected. Give it a name if you like, or remove a file you don't want to import.
 3. Start the import. Converting a checkpoint takes a few minutes and a lot of memory; a 10 GB file can take 10 to 30 minutes.
 
 On iPad, Import… opens the Files picker. Importing a checkpoint and Make 8-bit Copy work there too but haven't been tried on an iPad yet; converting needs a lot of memory, so a Mac is the safer place for large checkpoints.
 
 The converted model is saved in the folder chosen in **Add To** as `<name>_f16.ckpt`, marked **Imported**, and any text encoders or VAE it needs are downloaded. It then appears in Create's model menu.
+
+### Importing from a Hugging Face link
+
+Atelier can download a model or LoRA from Hugging Face and import it in one go. Choose **Import… ▸ From Hugging Face Link…** on the Models or LoRAs screen, or drop a link from your browser on either list.
+
+1. Paste the link (one already on the clipboard is filled in) and click **Look Up**. Any link into a model repo works: the repo's page, a folder (`/tree/main/transformer`), a file's page (`/blob/…`), its download link (`/resolve/…`), `hf://owner/repo` or just `owner/repo`. Datasets, Spaces and other sites can't be imported.
+2. Pick what to import. Each checkpoint file in the repo is a row. A model split into parts (`model-00001-of-00003.safetensors` and so on, with its `.index.json`) is one row; the parts are joined into one file after downloading. A Diffusers repo (one with a `model_index.json`) gets a first row for its `transformer/` or `unet/` folder, with a **Precision** menu (fp16 is picked when there is one, then bf16, then the default files; `.safetensors` before `.bin`). Its `text_encoder/` and `vae/` aren't imported, since Atelier downloads its own converted text encoders and VAE for the family; the MiniMax H3 Image VAE is the exception. A file that can't be imported is still listed, with the reason.
+3. Check **Import as**: **Model** or **LoRA**. It starts on the screen's kind, and on LoRA for a repo or file that looks like one.
+4. For a model, Atelier reads the file's header from Hugging Face and shows the family it detected (**Detected: FLUX.1**) or why it can't be imported, before anything is downloaded. The size shown beside **Add To** is what the download and the import need: about twice the file for a model, plus the text encoders and VAE still to download, and a little more than the file for a LoRA.
+5. If the catalog already has the repo's model converted, **Download Converted** fetches that instead, with its text encoders and VAE.
+6. Click **Download**. Files download one at a time and are checked against Hugging Face's checksums. You can close the sheet with **Continue in Background**; progress shows at the bottom of the Models screen (and of the LoRAs screen for a LoRA). When the download is done, the usual import sheet opens with the file: name it and import as above. Once it has imported, the downloaded file is deleted.
+
+Downloads go into a hidden `.huggingface` folder inside the folder chosen in **Add To**, so nothing is copied between drives. A download that's cancelled, fails or is interrupted by quitting keeps what it has: the sheet's **Unfinished Downloads** lists it with the space it uses, and **Resume** carries on where it stopped (**Import** opens the import sheet again for one that finished downloading but wasn't imported). **Discard** deletes it. Nothing there is deleted on its own.
+
+**Gated and private repos** (FLUX.1 [dev], for example) need a [Hugging Face token](settings.md#hugging-face) and, for gated ones, the model's terms accepted on its Hugging Face page while signed in as the token's account. Atelier says which is missing. Public repos need no token.
+
+After importing, Atelier names any text encoder or VAE the model needs that the download server doesn't have, such as Fibo 2.0's; see the model's section below for converting it.
 
 **MOSS Image fine-tunes** are converted by a dedicated importer and work like the official MOSS Image model. It takes OpenMOSS' layout (for example Kromoss) and checkpoints saved by ComfyUI, including ComfyUI's INT8 (ConvRot) and FP8 checkpoints. Their weights are expanded to full precision, so the imported model is full size; make an 8-bit copy afterwards to shrink it. To edit images with MOSS Image, add a [MOSS Image Edit LoRA](#moss-image-edit-loras).
 
@@ -107,7 +124,7 @@ Converting a LoRA to 8-bit in Draw Things deletes the original file and leaves t
 
 ### Importing a LoRA
 
-1. Click **Import…** and choose `.safetensors` LoRA files, or drop them on the list.
+1. Click **Import…**, choose **Choose Files…** and pick `.safetensors` LoRA files, or drop them on the list. **From Hugging Face Link…** downloads one first; see [Importing from a Hugging Face link](#importing-from-a-hugging-face-link).
 2. For each file, check the name, add its **trigger words** (the words it was trained on, which you add to your prompt to bring it in), and leave **Model family** on **Detect automatically** unless detection picks the wrong one.
 3. Optionally change the file's **scale factor**, the number after its trigger words (see below).
 4. Import. The LoRA is converted, saved in the folder chosen in **Add To** and registered in that folder's `custom_lora.json`. It's usable right away; no relaunch needed.

@@ -22,6 +22,10 @@ When the same file name is in more than one folder, Atelier loads the copy on an
 
 **Import from Draw Things…** shares Draw Things' models folder and brings over its saved configurations and projects. It shows what it found with a checkbox for each, and nothing changes until you click **Import**. Control nets, textual inversions and scripts stay behind for now. See [Getting started](getting-started.md#import-from-draw-things).
 
+### Hugging Face
+
+A Hugging Face token lets [Import from a Hugging Face link](models-and-loras.md#importing-from-a-hugging-face-link) download from gated and private repos. Create a read token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens), paste it and click **Save**; **Status** says which account it signs in as, or that Hugging Face rejected it. **Remove** deletes it. The token is kept in the Keychain and sent only to huggingface.co and hf.co, never to the servers downloads are redirected to. Public repos don't need one.
+
 ## Images
 
 ### Saved images
