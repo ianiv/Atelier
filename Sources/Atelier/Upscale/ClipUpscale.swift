@@ -123,6 +123,34 @@ nonisolated struct ImageUpscale: Codable, Sendable, Hashable {
     return size.width * size.height > limit.pixels ? "\(limit.description). Choose Max for the largest it can make." : nil
   }
 
+  /// How SeedVR2 runs an upscale to `size`, following the engine's command line tool
+  /// (`DrawThingsCLI`, 652e3a70): one step, strength 1, no guidance, DDIM Trailing, and LAB color
+  /// calibration, which pulls the result's colors back to the input's (one step drifts them).
+  /// Here rather than in `ModelDefaults`, whose fallbacks would carry the color fix into ordinary
+  /// generations. `base` is the model's recommended configuration.
+  static func seedVR2Configuration(
+    base: PipelineConfiguration, size: (width: Int, height: Int)
+  ) -> PipelineConfiguration {
+    var configuration = base
+    configuration.width = size.width
+    configuration.height = size.height
+    configuration.steps = 1
+    configuration.strength = 1
+    configuration.guidanceScale = 1
+    configuration.sampler = .dDIMTrailing
+    configuration.colorCalibration = .lab
+    // Whole, past about 2896×2896 the decoder's attention is too large to reshape, and the engine
+    // asserts building it (`SeedVR2AttentionBlock2D`, until flash attention takes over at
+    // `FirstStage.decode`'s 256×176 latents). Tiles stay well under that.
+    if max(size.width, size.height) > 2048 {
+      configuration.tiledDecoding = true
+      configuration.decodingTileWidth = 1024
+      configuration.decodingTileHeight = 1024
+      configuration.decodingTileOverlap = 128
+    }
+    return configuration
+  }
+
   /// `image` stretched to exactly `width`×`height`: SeedVR2 restores what it's given at its size.
   static func stretched(_ image: CGImage, width: Int, height: Int) -> CGImage? {
     guard let context = CGContext(

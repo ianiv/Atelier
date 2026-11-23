@@ -3167,29 +3167,20 @@ final class CreateModel {
       if let problem = upscale.problem(width: image.width, height: image.height) {
         throw ImageUpscaleError(message: problem)
       }
-      // One step at the new size with the model's own defaults, as the catalog runs it.
+      // The engine's command line tool enlarges the input with bicubic (SeedVR2 was trained on
+      // that) before one step at the new size; CoreGraphics' stretch is the fallback for a
+      // shrink, which bicubic enlargement doesn't do.
       let size = upscale.outputSize(width: image.width, height: image.height)
-      guard let stretched = ImageUpscale.stretched(image, width: size.width, height: size.height) else {
-        throw ProjectError.badImage
-      }
-      var configuration = ModelDefaults.recommended(
+      guard
+        let canvas = BicubicEnlarge.resize(image, width: size.width, height: size.height)
+        ?? ImageUpscale.stretched(image, width: size.width, height: size.height)
+      else { throw ProjectError.badImage }
+      let base = ModelDefaults.recommended(
         for: file, configuration: try await engine.loadPipeline(for: file))
-      configuration.width = size.width
-      configuration.height = size.height
-      configuration.steps = 1
-      configuration.strength = 1
-      // Whole, past about 2896×2896 the decoder's attention is too large to reshape, and the engine
-      // asserts building it (`SeedVR2AttentionBlock2D`, until flash attention takes over at
-      // `FirstStage.decode`'s 256×176 latents). Tiles stay well under that.
-      if max(size.width, size.height) > 2048 {
-        configuration.tiledDecoding = true
-        configuration.decodingTileWidth = 1024
-        configuration.decodingTileHeight = 1024
-        configuration.decodingTileOverlap = 128
-      }
+      let configuration = ImageUpscale.seedVR2Configuration(base: base, size: size)
       var run = GenerationEngine.Request(
         model: file, prompt: "", negativePrompt: "", seed: request.seed, configuration: configuration)
-      run.canvas = stretched
+      run.canvas = canvas
       run.canvasIsImported = true
       let output = try await engine.generate(run, progress: progress)
       guard let frame = output.frames.first else { throw ProjectError.badImage }
