@@ -29,6 +29,7 @@ Planned work that isn't built yet. Items marked **User request** or **User-repor
 
 - **Edit runs don't record their input.** `--edit-input-check` fails 5 checks (z_image_turbo, 2 steps): the first Edit run doesn't record its input, iterating in place and Rerun don't link to the first result, Use Settings on the second step leaves Generate mode instead of putting the first result on the canvas in Edit, and Use Settings with its input deleted shows no note. Fails the same way without the 2026-11-21 fixes.
 - **Clip playback falls behind.** `--canvas-clip-check` "the picture keeps up" showed 4 of 48 frames in 2 s on a copy of the HyperFlow project, with and without the 2026-11-21 fixes. The screen was locked during those runs, which may be the cause; rerun unlocked before investigating.
+- **Agent tools can pick the wrong step.** `history_step` numbers aren't unique: steps saved from the same source share a number on their branches, and the agent tools take the first one listed, so an agent can act on a sibling of the step it meant. Affects every tool that takes `history_step`. Found while building Crop (2026-11-22); `--edit-tools-check` works around it.
 
 ## Tests and checks
 
