@@ -79,8 +79,9 @@ struct ReferenceVideoTests {
 
   @Test func framesBecomeOneTensor() throws {
     // In sRGB, as the project's frames are, so drawing converts no color.
+    let space = try #require(CGColorSpace(name: CGColorSpace.sRGB))
     let context = try #require(CGContext(
-      data: nil, width: 4, height: 4, bitsPerComponent: 8, bytesPerRow: 0, space: try #require(CGColorSpace(name: CGColorSpace.sRGB)),
+      data: nil, width: 4, height: 4, bitsPerComponent: 8, bytesPerRow: 0, space: space,
       bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
     context.setFillColor(red: 1, green: 0, blue: 0, alpha: 1)
     context.fill(CGRect(x: 0, y: 0, width: 4, height: 4))

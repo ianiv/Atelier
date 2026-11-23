@@ -281,6 +281,9 @@ extension Automation {
         return finish(false)
       }
       log("model \(file): \(settings.width)×\(settings.height), \(video.snapped(settings.numFrames)) frames, \(settings.steps) steps, sampler \(settings.sampler), seed \(model.seed)")
+      // As a user would: once the canvas shows the video and History has the moodboard.
+      _ = await wait(seconds: 30) { !model.isLoadingCanvasImage && model.canPressGenerate }
+      await model.recordEntriesBeforeRun()
       let known = Set((model.queue.waiting + model.queue.recent).map(\.id))
       let runStarted = Date()
       model.generate()
@@ -290,7 +293,7 @@ extension Automation {
         return job != nil
       }
       guard let id = job?.id else {
-        log("FAIL nothing was queued")
+        log("FAIL nothing was queued (\(model.statusNote ?? model.errorMessage ?? "no note"))")
         return finish(false)
       }
       _ = await wait(seconds: 3 * 3600) { model.queue.recent.contains { $0.id == id } }
