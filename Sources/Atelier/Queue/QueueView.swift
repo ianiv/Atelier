@@ -92,7 +92,8 @@ struct QueueView: View {
       .disabled(
         create.history.item(tensorId: tensorId) == nil
           || job.request?.colorMatch.map { $0.project != create.history.project.name } == true
-          || job.request?.edit.map { $0.project != create.history.project.name } == true)
+          || job.request?.edit.map { $0.project != create.history.project.name } == true
+          || job.request?.depthMap.map { $0.project != create.history.project.name } == true)
       Button("Run Again") { create.retry(job.id) }
       Button("Remove from List") { queue.removeRecent(job.id) }
     case .exported(let url):
@@ -189,6 +190,12 @@ struct QueueRow: View {
           .help("Saved from the Edit screen")
           .accessibilityLabel("Saved from the Edit screen")
       }
+      if request.depthMap != nil {
+        Image(systemName: DepthMap.symbol)
+          .foregroundStyle(.secondary)
+          .help("Extract Depth Map")
+          .accessibilityLabel("Extract Depth Map")
+      }
       if request.canvas != nil {
         Image(systemName: "photo")
           .foregroundStyle(.secondary)
@@ -237,6 +244,14 @@ struct QueueRow: View {
         } else {
           Image(systemName: Edit.symbol).foregroundStyle(.secondary).accessibilityHidden(true)
         }
+      } else if let depth = job.request?.depthMap {
+        // As a colour match: its steps are in its own project.
+        let tensorId = if case .finished(let tensorId) = job.status { tensorId } else { depth.sourceTensorId }
+        if depth.project == create.history.project.name, let item = create.history.item(tensorId: tensorId) {
+          Thumbnail(item: item)
+        } else {
+          Image(systemName: DepthMap.symbol).foregroundStyle(.secondary).accessibilityHidden(true)
+        }
       } else if case .finished(let tensorId) = job.status, let item = create.history.item(tensorId: tensorId) {
         Thumbnail(item: item)
       } else if job.status == .running, let image = create.runProgress(of: job)?.preview {
@@ -277,6 +292,7 @@ struct QueueRow: View {
   private func title(_ request: GenerationEngine.Request) -> String {
     if request.colorMatch != nil { return "Match colors to original" }
     if let edit = request.edit { return edit.profileName.map { "Edit with “\($0)”" } ?? "Edit" }
+    if request.depthMap != nil { return "Extract Depth Map" }
     if let upscale = request.imageUpscale {
       return upscale.scale == ImageUpscale.maxScale ? "Upscale to the largest size" : "Upscale \(upscale.scale)×"
     }
@@ -299,6 +315,12 @@ struct QueueRow: View {
     if let edit = request.edit {
       var parts: [String?] = [create.runLocationName(of: job), size]
       if edit.project != create.history.project.name { parts.insert("in “\(edit.project)”", at: 1) }
+      return (parts + [took]).compactMap(\.self).joined(separator: " · ")
+    }
+    // A depth map runs the depth model, not the step's: no seed or steps either.
+    if let depth = request.depthMap {
+      var parts: [String?] = [create.runLocationName(of: job), size, "Depth Anything v2"]
+      if depth.project != create.history.project.name { parts.insert("in “\(depth.project)”", at: 1) }
       return (parts + [took]).compactMap(\.self).joined(separator: " · ")
     }
     return [

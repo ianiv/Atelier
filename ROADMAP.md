@@ -8,7 +8,6 @@ Planned work that isn't built yet. Items marked **User request** or **User-repor
 
 ## Canvas
 
-- **Extract depth map.** A Create screen command in the canvas menu (next to Match Colors…), not a tool (see Tool UI below), that turns the canvas image into a depth map, puts the depth map on the canvas, and records it as a step in History. The engine already has Depth Anything v1.0/v2.0 (`EverythingZoo`, `depth_anything_v2.0_f16.ckpt`), which Draw Things uses for depth control.
 - **Select by description.** Type what you want selected ("the red car", "her hair") and Segment Anything selects it. The Select tool had a placeholder **Select:** text field for this, removed in 6423498 because the feature was never finished.
 
 ## Edit screen
@@ -23,6 +22,8 @@ Planned work that isn't built yet. Items marked **User request** or **User-repor
 - **DPM++ 2M Trailing breaks on MiniMax H3 Image.** At 768 px, 8 steps (seed 1234, 2026-11-21), the result shows smeared mosaic bricks; DDIM Trailing and DPM++ 2M Karras are fine. Check whether 0.19.0 (before the Scheduler work, 5d91b6f) does the same, then find the cause (likely its schedule vs the trained sigma grid, as with LCM).
 
 ## Known failures
+
+- **Jobs that finish after a project switch can use the wrong project.** **User-reported bug.** A job that finishes after the user switches projects can save into, or read from, the wrong project: step and tensor ids repeat across project files, so an id captured in one project can name a different step in the one open now. Needs one fix across the app (every path that captures a step id and acts on it later), not per feature. Extract Depth Map's download-then-queue path is one instance; it guards itself for now by not queueing when the open project changed during the download (`DepthModelDownload.outcome`).
 
 - **Edit runs don't record their input.** `--edit-input-check` fails 5 checks (z_image_turbo, 2 steps): the first Edit run doesn't record its input, iterating in place and Rerun don't link to the first result, Use Settings on the second step leaves Generate mode instead of putting the first result on the canvas in Edit, and Use Settings with its input deleted shows no note. Fails the same way without the 2026-11-21 fixes.
 - **Clip playback falls behind.** `--canvas-clip-check` "the picture keeps up" showed 4 of 48 frames in 2 s on a copy of the HyperFlow project, with and without the 2026-11-21 fixes. The screen was locked during those runs, which may be the cause; rerun unlocked before investigating.

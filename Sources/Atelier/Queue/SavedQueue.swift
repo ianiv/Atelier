@@ -45,6 +45,8 @@ nonisolated enum SavedQueue {
     /// it's read back, and a job's data is bounded (a full profile's patches are about 830 KB, a
     /// 65³ LUT about 1.6 MB). Once saved, the step keeps them in its project's tensor store.
     var edit: Edit.Job?
+    /// An Extract Depth Map job (`DepthMap.Job`): as `colorMatch`, it names its project.
+    var depthMap: DepthMap.Job?
   }
 
   /// An entry, or nil for one that doesn't read (written by a later version, say), so one entry
@@ -69,11 +71,12 @@ nonisolated enum SavedQueue {
     var target: JobTarget { entry.target ?? .local }
     var colorMatch: ColorMatch.Job? { entry.colorMatch }
     var edit: Edit.Job? { entry.edit }
+    var depthMap: DepthMap.Job? { entry.depthMap }
 
     /// The step it follows: kept in the same project, and by a job naming its own project (Match
     /// Colors, Edit) in any.
     var parentTensorId: Int64? {
-      sameProject || entry.colorMatch != nil || entry.edit != nil ? entry.parentTensorId : nil
+      sameProject || entry.colorMatch != nil || entry.edit != nil || entry.depthMap != nil ? entry.parentTensorId : nil
     }
 
     /// The job's request, with `configuration` (the model's defaults with `settings` applied).
@@ -107,6 +110,7 @@ nonisolated enum SavedQueue {
       // (`parentTensorId`).
       request.colorMatch = entry.colorMatch
       request.edit = entry.edit
+      request.depthMap = entry.depthMap
       return request
     }
   }
@@ -168,7 +172,8 @@ nonisolated enum SavedQueue {
           moodboardWeights: request.moodboard.map(\.weight), audio: request.audio,
           placement: request.placement, upscale: request.upscale, imageUpscale: request.imageUpscale,
           target: job.target, hasMask: request.mask != nil, merge: mergeRecord,
-          canvasSourceMask: request.canvasSourceMask, colorMatch: request.colorMatch, edit: request.edit))
+          canvasSourceMask: request.canvasSourceMask, colorMatch: request.colorMatch, edit: request.edit,
+          depthMap: request.depthMap))
     }
     if let data = try? JSONEncoder().encode(entries) {
       Log.attempt(Log.queue, "Saving the queue") {

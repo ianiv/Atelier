@@ -94,7 +94,7 @@ nonisolated struct HistoryItem: Identifiable, Hashable, Sendable {
   var accessibilityDescription: String {
     let prompt = sidecar.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
     if let entryReason { return "Input entry: \(entryReason.title)" }
-    let kind = isVideo ? "Video" : "Image"
+    let kind = isVideo ? "Video" : sidecar.depthMap != nil ? "Depth map" : "Image"
     if prompt.isEmpty { return kind }
     return "\(kind): \(prompt.count > 80 ? prompt.prefix(80) + "…" : prompt)"
   }
@@ -145,6 +145,8 @@ final class HistoryStore {
     /// record, a few KB: its real noise, histograms and LUT stay in the project's tensor store
     /// (`Edit.Record`), so exported PNGs, shares and agents' `get_image` don't carry them.
     var edit: Edit.Record?
+    /// For a step made by Extract Depth Map: the depth model (`DepthMap.Record`).
+    var depthMap: DepthMap.Record?
   }
 
   private(set) var project: Project
@@ -606,7 +608,7 @@ final class HistoryStore {
         settings: dump, createdAt: finishedAt,
         duration: finishedAt.timeIntervalSince(startedAt), timings: timings, moodboard: moodboard,
         inputTensorId: inputTensorId, after: parentTensorId, refined: refined, colorMatch: request.colorMatch?.record,
-        edit: request.edit?.record, editBlobs: request.edit?.blobs ?? Edit.Blobs())
+        edit: request.edit?.record, editBlobs: request.edit?.blobs ?? Edit.Blobs(), depthMap: request.depthMap?.record)
     }
     // An image from outside the project, saved now as a merge's input (the image itself),
     // remembers the mask it was queued with. One already in the project remembered it when the job

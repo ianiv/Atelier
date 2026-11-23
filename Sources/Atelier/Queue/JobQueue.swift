@@ -115,10 +115,12 @@ final class JobQueue {
 
   var isEmpty: Bool { waiting.isEmpty && running == nil && runningRemote.isEmpty }
 
-  /// Whether a waiting or running job uses `model`. A Match Colors to Original or Edit job only
-  /// names the model its step was made with; it never loads it.
+  /// Whether a waiting or running job uses `model`. A Match Colors to Original, Edit or Extract
+  /// Depth Map job only names the model its step was made with; it never loads it.
   func uses(_ model: String) -> Bool {
-    func uses(_ job: Job) -> Bool { job.request?.model == model && job.request?.colorMatch == nil && job.request?.edit == nil }
+    func uses(_ job: Job) -> Bool {
+      job.request?.model == model && job.request?.colorMatch == nil && job.request?.edit == nil && job.request?.depthMap == nil
+    }
     return running.map(uses) == true || waiting.contains(where: uses)
   }
 
@@ -134,14 +136,22 @@ final class JobQueue {
     ((running.map { [$0] } ?? []) + waiting).first { $0.request?.edit?.isSameEdit(as: edit) == true }
   }
 
-  /// Waiting jobs that name their own project (Match Colors to Original, Edit, and detached jobs)
-  /// follow one that was renamed.
+  /// The waiting or running Extract Depth Map job for the same image as `job`, if any.
+  func pendingDepthMap(_ job: DepthMap.Job) -> Job? {
+    ((running.map { [$0] } ?? []) + waiting).first { $0.request?.depthMap?.isSameJob(as: job) == true }
+  }
+
+  /// Waiting jobs that name their own project (Match Colors to Original, Edit, Extract Depth Map,
+  /// and detached jobs) follow one that was renamed.
   func renameProject(from old: String, to name: String) {
     for index in waiting.indices {
       if waiting[index].project == old { waiting[index].project = name }
-      guard case .generation(var request) = waiting[index].work, request.colorMatch?.project == old || request.edit?.project == old else { continue }
+      guard case .generation(var request) = waiting[index].work,
+            request.colorMatch?.project == old || request.edit?.project == old || request.depthMap?.project == old
+      else { continue }
       if request.colorMatch?.project == old { request.colorMatch?.project = name }
       if request.edit?.project == old { request.edit?.project = name }
+      if request.depthMap?.project == old { request.depthMap?.project = name }
       waiting[index].work = .generation(request)
     }
   }
@@ -170,10 +180,10 @@ final class JobQueue {
     _ requests: [GenerationEngine.Request], currentTensorId: Int64?, target: JobTarget = .local,
     fromAgent: Bool = false, styleThumbnail: String? = nil, detached: Bool = false, project: String? = nil
   ) -> [UUID] {
-    // Match Colors to Original and Edit jobs read and save their own project's steps, which only
-    // this device has: they always run here.
+    // Match Colors to Original, Edit and Extract Depth Map jobs read and save their own project's
+    // steps, which only this device has: they always run here.
     func runsOn(_ request: GenerationEngine.Request) -> JobTarget {
-      request.colorMatch != nil || request.edit != nil ? .local : target
+      request.colorMatch != nil || request.edit != nil || request.depthMap != nil ? .local : target
     }
     if detached {
       for request in requests {

@@ -32,7 +32,7 @@ Scripts/test-map.txt         | smoke |
 Sources/AtelierTests/Tags.swift | smoke |
 
 # Sources, one line per folder.
-Sources/Atelier/Agents/      | HostTests,CanvasEditArgumentsTests,AgentAccessTests,CropTests,HealTests | --agent-canvas-check,--edit-screen-check,--edit-tools-check,--agent-net-check
+Sources/Atelier/Agents/      | HostTests,CanvasEditArgumentsTests,AgentAccessTests,CropTests,HealTests | --agent-canvas-check,--depth-check,--edit-screen-check,--edit-tools-check,--agent-net-check
 Sources/Atelier/App/         | HostTests,TemporaryFilesTests,ClipCacheTests,OrphanTests,ModelFolderTests,WaitUntilTests,ShareTests,SharePickerTests | --cleanup-check,--ux-check,--resize-bench,--tab-switch-bench,--model-folders-check
 Sources/Atelier/App/PortClaims.swift | PortClaimsTests,AgentAccessTests,PortOwnerTests | --agent-net-check,--remote-net-check,--remote-check,--remote-tailnet-check
 Sources/Atelier/App/PortOwner.swift | PortOwnerTests,PortClaimsTests | --agent-net-check,--remote-net-check
@@ -41,7 +41,7 @@ Sources/Atelier/Automation/  | HostTests,AutomationSamplerTests | --generate
 Sources/Atelier/Automation/AutomationAgentNet.swift | AgentAccessTests | --agent-net-check
 Sources/Atelier/Automation/AutomationEditTools.swift | CropTests,EditJobTests | --edit-tools-check
 Sources/Atelier/Automation/AutomationTestCertificate.swift | AgentAccessTests | --agent-net-check
-Sources/Atelier/Create/      | CanvasDropTests,CanvasPaintTests,CanvasRefineTests,ColorMatchTests,MaskMemoryTests,CanvasUndoTests,MoodboardWriterTests,MoodboardTests,SizePresetTests,MaskMorphologyTests,FrameSelectionTests,FaceFinderTests,CanvasEditTests,TriggerWordsTests | --edit-input-check,--refine-check,--paint-check,--color-match-check,--create-delete-check,--canvas-clip-check
+Sources/Atelier/Create/      | CanvasDropTests,CanvasPaintTests,CanvasRefineTests,ColorMatchTests,MaskMemoryTests,CanvasUndoTests,MoodboardWriterTests,MoodboardTests,SizePresetTests,MaskMorphologyTests,FrameSelectionTests,FaceFinderTests,CanvasEditTests,TriggerWordsTests,DepthMapTests | --edit-input-check,--refine-check,--paint-check,--color-match-check,--depth-check,--create-delete-check,--canvas-clip-check
 Sources/Atelier/Create/AutoMask/ | AutoMaskTests,MaskMemoryTests,SAMFolderTests,FaceFinderTests | --automask-check
 Sources/Atelier/Edit/        | GrainTests,EditPipelineTests,EditRenderCancelTests,EditRenderLaneTests,EditRenderLoopTests,LUTTests,EditJobTests,EditProjectDataTests,EditModelTests,HealTests,HealStrokesTests,HealSolverTests,CropTests | --edit-screen-check,--edit-tools-check,--grain-reference,--edit-render-bench,--edit-ui-bench
 Sources/AtelierTests/Fixtures/grain-parity/ | GrainTests |

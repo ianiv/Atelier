@@ -765,6 +765,16 @@ final class CreateModel {
     return history.item(tensorId: imageStep.tensorId).flatMap { $0.isEntry ? nil : $0 }
   }
 
+  /// The step whose image the canvas shows, an Imported entry's too (`imageItem` leaves entries
+  /// out: they have no settings of their own): what Extract Depth Map reads. Nil for a preview,
+  /// a video or its frame, or an image not yet in the project.
+  var canvasImageStep: HistoryItem? {
+    guard canvasShowsImage, let imageStep, imageStep.project == history.project.name,
+          let item = history.item(tensorId: imageStep.tensorId), !item.isVideo, item.hasImage
+    else { return nil }
+    return item
+  }
+
   /// The video the canvas image is a frame of, when it shows one (`useFrame`): only its first
   /// frame is a History item of its own.
   private var canvasFrameClip: HistoryItem? {
@@ -851,7 +861,8 @@ final class CreateModel {
         running.export != nil
           ? "an upscaled export is running"
           : running.request?.colorMatch != nil
-          ? "colors are being matched" : running.request?.edit != nil ? "an edit is being saved" : "a generation is running")
+          ? "colors are being matched" : running.request?.edit != nil ? "an edit is being saved"
+          : running.request?.depthMap != nil ? "a depth map is being made" : "a generation is running")
     }
     if !queue.isPaused, !queue.waiting.isEmpty {
       parts.append(queue.waiting.count == 1 ? "1 job is queued" : "\(queue.waiting.count) jobs are queued")
@@ -1403,7 +1414,7 @@ final class CreateModel {
     var requests: [GenerationEngine.Request] = []
     for job in saved {
       let downloaded = models.contains(where: { $0.file == job.model })
-      let modelFree = job.colorMatch != nil || job.edit != nil
+      let modelFree = job.colorMatch != nil || job.edit != nil || job.depthMap != nil
       guard downloaded || modelFree else { continue }
       if downloaded, defaults[job.model] == nil, let configuration = try? await engine.loadPipeline(for: job.model) {
         defaults[job.model] = ModelDefaults.recommended(for: job.model, configuration: configuration)
@@ -2243,6 +2254,8 @@ final class CreateModel {
           "Matching colors"
         } else if job.request?.edit != nil {
           "Saving an edit"
+        } else if job.request?.depthMap != nil {
+          "Making a depth map"
         } else if job.request?.configuration.videoModel != nil {
           "Generating a video"
         } else {
@@ -2435,6 +2448,7 @@ final class CreateModel {
     guard let request = job.request else { return }
     if let match = request.colorMatch { return run(match, request: request, job: job) }
     if let edit = request.edit { return runEdit(edit, request: request, job: job) }
+    if let depth = request.depthMap { return runDepthMap(depth, request: request, job: job) }
     let startedAt = Date()
     beginRun(job, message: "Preparing…", totalSteps: request.configuration.steps, startedAt: startedAt)
     let backend = self.backend(for: job.target)
@@ -2811,6 +2825,10 @@ final class CreateModel {
   /// canvas can change while it's open.
   var colorMatchSheetItem: HistoryItem?
 
+  /// The step Extract Depth Map asks to download the depth model for (`DepthModelSheet`), which
+  /// it queues once the model is in.
+  var depthModelSheetItem: HistoryItem?
+
   /// Whether Match Colors… can open for the canvas: a finished image saved in the project (not a
   /// video) that has an original to match. A match already waiting or running doesn't keep it
   /// shut, since the sheet can queue one with other settings.
@@ -2845,7 +2863,7 @@ final class CreateModel {
   /// Whether a step has an image its colors can be matched to (see `originalImage(for:)`). A
   /// moodboard counts only with an image of weight above 0, the one `originalImage` would take.
   func hasOriginal(_ item: HistoryItem) -> Bool {
-    !item.isVideo && !item.isEntry && (item.sidecar.colorMatch != nil || item.inputTensorId != nil || item.weightedMoodboardCount > 0)
+    !item.isVideo && !item.isEntry && item.sidecar.depthMap == nil && (item.sidecar.colorMatch != nil || item.inputTensorId != nil || item.weightedMoodboardCount > 0)
   }
 
   /// The image an edit was made from: a Match Colors result's own original, else the step's input
@@ -3512,6 +3530,10 @@ final class CreateModel {
       statusNote = "That edit of that image is already queued, so it wasn't queued again."
       return
     }
+    if let depth = queue.recent.first(where: { $0.id == id })?.request?.depthMap, queue.pendingDepthMap(depth) != nil {
+      statusNote = "A depth map of that image is already queued, so it wasn't queued again."
+      return
+    }
     queue.retry(id)
     runNext()
   }
@@ -3789,6 +3811,11 @@ extension CreateModel {
     ((queue.running.map { [$0] } ?? []) + queue.waiting).filter { $0.request?.edit?.project == name }
   }
 
+  /// The Extract Depth Map jobs, waiting or running, that read from and save into the project called `name`.
+  func depthMapJobs(in name: String) -> [JobQueue.Job] {
+    ((queue.running.map { [$0] } ?? []) + queue.waiting).filter { $0.request?.depthMap?.project == name }
+  }
+
   /// Whether Compact Project… can start: nothing running here or on a server, since every job
   /// saves into a project and `VACUUM` needs the file to itself.
   var canCompactProject: Bool { queue.running == nil && queue.runningRemote.isEmpty && history.isLoaded }
@@ -3816,7 +3843,7 @@ extension CreateModel {
   }
 
   /// Deletes the project called `name` (Delete Project…), switching to another first when it's
-  /// current (`HistoryStore.delete`). Its Match Colors to Original and Edit jobs stop: they read from and
+  /// current (`HistoryStore.delete`). Its Match Colors to Original, Edit and Extract Depth Map jobs stop: they read from and
   /// save into that project alone. Every other job saves into whichever project is open, as after
   /// any switch, so it carries on into the one opened in its place. The canvas keeps showing its
   /// image, no longer a step of any project, so a project made later under the same name doesn't
@@ -3824,7 +3851,7 @@ extension CreateModel {
   /// Returns the trashed project file (`HistoryStore.delete`).
   @discardableResult
   func deleteProject(_ name: String) async throws -> URL? {
-    for job in colorMatchJobs(in: name) + editJobs(in: name) { cancel(job.id) }
+    for job in colorMatchJobs(in: name) + editJobs(in: name) + depthMapJobs(in: name) { cancel(job.id) }
     defer {
       if let step = imageStep, step.project == name, step.project != history.project.name { imageStep = nil }
     }

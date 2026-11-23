@@ -40,6 +40,8 @@ final class AgentTools {
     let colorMatch: ColorMatch.Job?
     /// An edit_image_look job's edit, likewise.
     let edit: Edit.Job?
+    /// An extract_depth_map job's image, likewise.
+    let depthMap: DepthMap.Job?
     let startedAt = Date()
     var progress = Progress(step: 0, total: nil, message: "Starting", isQueued: true)
     /// Checked its arguments and joined the queue (or failed doing so).
@@ -52,16 +54,19 @@ final class AgentTools {
     /// The waiting call's progress stream, while there is one.
     @ObservationIgnored var onProgress: ((Progress) -> Void)?
 
-    init(id: String, tool: String, label: String, colorMatch: ColorMatch.Job? = nil, edit: Edit.Job? = nil) {
+    init(id: String, tool: String, label: String, colorMatch: ColorMatch.Job? = nil, edit: Edit.Job? = nil, depthMap: DepthMap.Job? = nil) {
       self.id = id
       self.tool = tool
       self.label = label
       self.colorMatch = colorMatch
       self.edit = edit
+      self.depthMap = depthMap
     }
 
     /// Whether answers name it by what it does (`label`) rather than a prompt.
-    var isLabelled: Bool { tool == "match_colors" || tool == "edit_image_look" || tool == "crop_image" || tool == "heal_image" }
+    var isLabelled: Bool {
+      tool == "match_colors" || tool == "edit_image_look" || tool == "crop_image" || tool == "heal_image" || tool == "extract_depth_map"
+    }
 
     var status: String {
       if result != nil { return "done" }
@@ -450,6 +455,19 @@ final class AgentTools {
       ],
     ],
     [
+      "name": "extract_depth_map",
+      "title": "Extract depth map",
+      "description":
+        "Makes a depth map of an image with Depth Anything v2, like Extract Depth Map in the canvas menu, and saves it as a new history step after the image: grey, near white and far black, the same map Draw Things makes for depth control, so it can go back in as a depth ControlNet or depth model's input (set_canvas_image, use_canvas). The image is the step's own (an Imported entry's too) at its full size. Needs the depth model (depth_anything_v2.0_f16.ckpt, 670 MB) in a models folder: this tool doesn't download it; when it's missing the call fails and says so, and choosing Extract Depth Map in Atelier's canvas menu once downloads it. Runs as a job in Atelier's Queue on this device, after what's queued there: by default it waits and returns the new history_step, source_step and job_id (the step is shown on the canvas when that follows the queue). With background: true it returns a job_id at once for get_job, list_jobs and cancel_job. A depth map of the same image already waiting or running isn't queued twice: the call joins that job. Not for videos.",
+      "inputSchema": [
+        "type": "object",
+        "properties": [
+          "history_step": ["type": "integer", "description": "A history step from list_history or generate. Omit for the canvas image."],
+          "background": ["type": "boolean", "description": "Return a job_id at once instead of waiting. Default false."],
+        ],
+      ],
+    ],
+    [
       "name": "edit_image_look",
       "title": "Edit image look",
       "description":
@@ -558,7 +576,7 @@ final class AgentTools {
       "name": "get_job",
       "title": "Get job",
       "description": """
-        Checks on a generate, edit_image, match_colors or edit_image_look job: waiting (queued behind other runs), running (with step and \
+        Checks on a generate, edit_image, match_colors, extract_depth_map or edit_image_look job: waiting (queued behind other runs), running (with step and \
         total), done (with everything the job's tool returns: for generate and edit_image text, image and structured result), \
         failed or cancelled. Waits up to wait_seconds for it to finish first, so calling it in a \
         loop checks in periodically without busy polling.
@@ -567,7 +585,7 @@ final class AgentTools {
         "type": "object",
         "required": ["job_id"],
         "properties": [
-          "job_id": ["type": "string", "description": "From generate, edit_image, match_colors or edit_image_look with background, or list_jobs."],
+          "job_id": ["type": "string", "description": "From generate, edit_image, match_colors, extract_depth_map or edit_image_look with background, or list_jobs."],
           "wait_seconds": ["type": "integer", "description": "How long to wait for the job to finish before returning its progress, 0–60. Default 30."],
         ],
       ],
@@ -576,14 +594,14 @@ final class AgentTools {
     [
       "name": "list_jobs",
       "title": "List jobs",
-      "description": "Lists generate, edit_image, match_colors and edit_image_look jobs from the last hour, newest first: job_id, tool, status, progress, elapsed time and prompt (label for match_colors and edit_image_look). A generate or edit_image call that timed out, was cancelled or lost its connection keeps running and shows here.",
+      "description": "Lists generate, edit_image, match_colors, extract_depth_map and edit_image_look jobs from the last hour, newest first: job_id, tool, status, progress, elapsed time and prompt (label for match_colors, extract_depth_map and edit_image_look). A generate or edit_image call that timed out, was cancelled or lost its connection keeps running and shows here.",
       "inputSchema": ["type": "object", "properties": [String: Any]()],
       "annotations": ["readOnlyHint": true],
     ],
     [
       "name": "cancel_job",
       "title": "Cancel job",
-      "description": "Stops a generate, edit_image, match_colors or edit_image_look job, like Cancel in Atelier's Queue: a waiting job leaves the queue and a running one stops.",
+      "description": "Stops a generate, edit_image, match_colors, extract_depth_map or edit_image_look job, like Cancel in Atelier's Queue: a waiting job leaves the queue and a running one stops.",
       "inputSchema": [
         "type": "object",
         "required": ["job_id"],
@@ -629,6 +647,7 @@ final class AgentTools {
     case "list_history": return try Self.textResult(json: listHistory(arguments))
     case "get_image": return try await getImage(arguments)
     case "match_colors": return try await matchColors(arguments, progress: progress)
+    case "extract_depth_map": return try await extractDepthMap(arguments, progress: progress)
     case "edit_image_look": return try await editImageLook(arguments, progress: progress)
     case "crop_image": return try await cropImage(arguments, progress: progress)
     case "heal_image": return try await healImage(arguments, progress: progress)
@@ -1058,13 +1077,14 @@ final class AgentTools {
   /// Runs `work` as a job (see `startGenerate`): `work` reports progress, and its first report
   /// means its arguments checked out.
   func startJob(
-    tool: String, label: String, colorMatch: ColorMatch.Job? = nil, edit: Edit.Job? = nil, background: Bool,
+    tool: String, label: String, colorMatch: ColorMatch.Job? = nil, edit: Edit.Job? = nil, depthMap: DepthMap.Job? = nil,
+    background: Bool,
     progress: @escaping (Progress) -> Void,
     work: @escaping (@escaping (Progress) -> Void) async throws -> [String: Any]
   ) async throws -> [String: Any] {
     pruneJobs()
     jobCount += 1
-    let job = Job(id: "job-\(jobCount)", tool: tool, label: label, colorMatch: colorMatch, edit: edit)
+    let job = Job(id: "job-\(jobCount)", tool: tool, label: label, colorMatch: colorMatch, edit: edit, depthMap: depthMap)
     jobs[job.id] = job
     if !background { job.onProgress = progress }
     job.task = Task {
@@ -2276,6 +2296,61 @@ final class AgentTools {
         result["note"] = "Saved into “\(project)”, the project the step is in; another project is open now."
       }
       self.lastResult = "Matched colors of step \(matchedStep) in \(project)"
+      var answer = try Self.textResult(json: result)
+      answer["structuredContent"] = result
+      return answer
+    }
+  }
+
+  // MARK: - Depth maps
+
+  private func extractDepthMap(_ arguments: [String: Any], progress: @escaping (Progress) -> Void) async throws -> [String: Any] {
+    if arguments["history_step"] != nil, Self.int(arguments["history_step"]) == nil { throw ToolError("`history_step` is a history step number (see list_history).") }
+    if let background = arguments["background"], !Self.isBoolean(background) { throw ToolError("`background` must be true or false.") }
+    let background = arguments["background"] as? Bool == true
+    let item: HistoryItem
+    if let step = Self.int(arguments["history_step"]) {
+      guard let found = create.history.items.first(where: { $0.id.logicalTime == step }) else {
+        throw ToolError("No history step \(step) in “\(create.history.project.name)”. See list_history.")
+      }
+      item = found
+    } else {
+      guard let onCanvas = create.canvasImageStep else {
+        throw ToolError("The canvas doesn't show a saved image. Pass history_step (see list_history).")
+      }
+      item = onCanvas
+    }
+    guard !item.isVideo else { throw ToolError("History step \(item.id.logicalTime) is a video; extract_depth_map takes images.") }
+    guard item.hasImage else { throw ToolError("History step \(item.id.logicalTime) has no image (an input entry with an empty canvas).") }
+    // Checked here, not left to the job: the agent hears why at once.
+    guard DepthMap.isModelInstalled else {
+      throw ToolError(
+        "The depth model (Depth Anything v2, \(DepthMap.modelFile), 670 MB) isn't in a models folder. Ask the user to choose Extract Depth Map in Atelier's canvas menu once, which downloads it, then call this again.")
+    }
+    let project = create.history.project.name
+    let depth = create.depthMapJob(for: item)
+    // Another call's job for the same image: this call answers with it.
+    if let existing = jobs.values.first(where: { $0.finishedAt == nil && $0.depthMap?.isSameJob(as: depth) == true }) {
+      return try await answer(existing, background: background, progress: progress)
+    }
+    let sourceStep = item.id.logicalTime
+    return try await startJob(
+      tool: "extract_depth_map", label: "Depth map of step \(sourceStep)", depthMap: depth, background: background,
+      progress: progress
+    ) { [weak self] update in
+      guard let self else { throw CancellationError() }
+      update(Progress(step: 0, total: nil, message: "Waiting for the current run to finish", isQueued: true))
+      let saved = try await self.create.depthMap(forAgent: item) { step, message in
+        update(Progress(step: step, total: 1_000, message: message))
+      }
+      var result: [String: Any] = [
+        "project": project, "history_step": saved.id.logicalTime, "source_step": sourceStep,
+        "width": saved.sidecar.width, "height": saved.sidecar.height, "model": saved.sidecar.depthMap?.model ?? DepthMap.modelFile,
+      ]
+      if project != self.create.history.project.name {
+        result["note"] = "Saved into “\(project)”, the project the step is in; another project is open now."
+      }
+      self.lastResult = "Made a depth map of step \(sourceStep) in \(project)"
       var answer = try Self.textResult(json: result)
       answer["structuredContent"] = result
       return answer
