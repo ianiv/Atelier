@@ -89,6 +89,8 @@
 		A1B2C3D4E5F6A7B8C9D0E1F9 /* FolderAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1FA /* FolderAccess.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E1F7 /* PlatformViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F8 /* PlatformViews.swift */; };
 		BC35127EE448C21DDE1CFF8F /* PortOwner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F91B1CE4586E68926AC00E6 /* PortOwner.swift */; };
+		7D0C1A5E00000000000000A1 /* ToolUI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D0C1A5E00000000000000A2 /* ToolUI.swift */; };
+		7D0C1A5E00000000000000B1 /* ToolUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D0C1A5E00000000000000B2 /* ToolUITests.swift */; };
 		06037B7F7EBF9F7FDAC1544A /* PortClaims.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5356DFE35B407D904E0270A3 /* PortClaims.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E1F5 /* iPadPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F6 /* iPadPlatform.swift */; };
 		44ADCE6EDF2708A792962F31 /* script_session_query_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1353E7B4836513F26BF2C88 /* script_session_query_generated.swift */; };
@@ -466,6 +468,8 @@
 		A1B2C3D4E5F6A7B8C9D0E1FA /* FolderAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderAccess.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E1F8 /* PlatformViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformViews.swift; sourceTree = "<group>"; };
 		9F91B1CE4586E68926AC00E6 /* PortOwner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortOwner.swift; sourceTree = "<group>"; };
+		7D0C1A5E00000000000000A2 /* ToolUI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolUI.swift; sourceTree = "<group>"; };
+		7D0C1A5E00000000000000B2 /* ToolUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolUITests.swift; sourceTree = "<group>"; };
 		5356DFE35B407D904E0270A3 /* PortClaims.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortClaims.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E1F6 /* iPadPlatform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iPadPlatform.swift; sourceTree = "<group>"; };
 		A3721E6BF065DEBAC3CB0FE9 /* clip_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = clip_generated.swift; sourceTree = "<group>"; };
@@ -695,6 +699,7 @@
 				5A4E1C0D2B3F4A6E8D9C7B01 /* ShareItems.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1F8 /* PlatformViews.swift */,
 				9F91B1CE4586E68926AC00E6 /* PortOwner.swift */,
+				7D0C1A5E00000000000000A2 /* ToolUI.swift */,
 				5356DFE35B407D904E0270A3 /* PortClaims.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1F6 /* iPadPlatform.swift */,
 			);
@@ -1021,6 +1026,7 @@
 				CE226E20EA994092E7F84E7E /* AgentAccessTests.swift */,
 				B7A1F0C2B3D4A5968778CA02 /* InspectorLoRAsTests.swift */,
 				7A1C0E5D00000000000000B2 /* TriggerWordsTests.swift */,
+				7D0C1A5E00000000000000B2 /* ToolUITests.swift */,
 				B7A1F0C2B3D4A59687786305 /* ValueTests.swift */,
 				5A7E2C1B9D3F4E6A8B0C1D24 /* StrengthStepsTests.swift */,
 				5C4ED0A1B2C3D4E5F6A7B802 /* ScheduleTests.swift */,
@@ -1432,6 +1438,7 @@
 				5A4E1C0D2B3F4A6E8D9C7B02 /* ShareItems.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1F7 /* PlatformViews.swift in Sources */,
 				BC35127EE448C21DDE1CFF8F /* PortOwner.swift in Sources */,
+				7D0C1A5E00000000000000A1 /* ToolUI.swift in Sources */,
 				06037B7F7EBF9F7FDAC1544A /* PortClaims.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1F5 /* iPadPlatform.swift in Sources */,
 				4862B9A4F2A7A226E9BB6C7C /* SettingsRegistry.swift in Sources */,
@@ -1528,6 +1535,7 @@
 				849CCDE48F9A76E9FEAE8E8B /* AgentAccessTests.swift in Sources */,
 				B7A1F0C2B3D4A5968778CA01 /* InspectorLoRAsTests.swift in Sources */,
 				7A1C0E5D00000000000000B1 /* TriggerWordsTests.swift in Sources */,
+				7D0C1A5E00000000000000B1 /* ToolUITests.swift in Sources */,
 				B7A1F0C2B3D4A59687786205 /* ValueTests.swift in Sources */,
 				5A7E2C1B9D3F4E6A8B0C1D23 /* StrengthStepsTests.swift in Sources */,
 				5C4ED0A1B2C3D4E5F6A7B801 /* ScheduleTests.swift in Sources */,

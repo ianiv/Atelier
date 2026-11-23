@@ -11,7 +11,7 @@ struct MaskBar: View {
   var body: some View {
     let paints = model.canPaintMask
     let edits = model.canEditMask
-    HStack(spacing: 8) {
+    ToolBarPanel {
       Button("Invert", systemImage: "circle.lefthalf.filled") {
         model.invertMask(undoManager: undoManager)
       }
@@ -35,12 +35,5 @@ struct MaskBar: View {
       .fixedSize()
       .help("Copy the mask, or paste one copied from another image")
     }
-    .buttonStyle(.borderless)
-    .controlSize(.small)
-    .fixedSize()
-    .font(.callout)
-    .padding(.horizontal, 12)
-    .padding(.vertical, 6)
-    .glassEffect(.regular, in: .rect(cornerRadius: 12))
   }
 }

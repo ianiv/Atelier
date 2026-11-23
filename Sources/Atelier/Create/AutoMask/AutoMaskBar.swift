@@ -10,31 +10,16 @@ struct AutoMaskBar: View {
   private var download = SAMDownload.shared
 
   var body: some View {
-    VStack(spacing: 4) {
-      // One row when the canvas is wide enough, else two (an iPad in portrait, a narrow window).
-      ViewThatFits(in: .horizontal) {
-        HStack(spacing: 8) {
-          selecting
-          Divider().frame(height: 18)
-          committing
-        }
-        VStack(spacing: 6) {
-          HStack(spacing: 8) { selecting }
-          HStack(spacing: 8) { committing }
-        }
-      }
-      .buttonStyle(.borderless)
-      .controlSize(.small)
-      .fixedSize()
+    // One row when the canvas is wide enough, else two (an iPad in portrait, a narrow window).
+    ToolBarPanel(help: Self.gestureHelp) {
+      selecting
+    } second: {
+      committing
+    } footer: {
       if let failure = model.autoMask.failure ?? download.failure {
         Text(failure).font(.caption).foregroundStyle(.red).lineLimit(2)
       }
     }
-    .font(.callout)
-    .padding(.horizontal, 12)
-    .padding(.vertical, 6)
-    .glassEffect(.regular, in: .rect(cornerRadius: 12))
-    .help(Self.gestureHelp)
     .onAppear { download.refresh() }
   }
 

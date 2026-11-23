@@ -9,27 +9,12 @@ struct PaintBar: View {
   @Environment(\.undoManager) private var undoManager
 
   var body: some View {
-    @Bindable var model = model
     let paints = model.canPaintColor
-    ViewThatFits(in: .horizontal) {
-      HStack(spacing: 8) {
-        colors(paints)
-        Divider().frame(height: 18)
-        tools
-      }
-      VStack(spacing: 6) {
-        HStack(spacing: 8) { colors(paints) }
-        HStack(spacing: 8) { tools }
-      }
+    ToolBarPanel(help: Self.gestureHelp) {
+      colors(paints)
+    } second: {
+      tools
     }
-    .buttonStyle(.borderless)
-    .controlSize(.small)
-    .fixedSize()
-    .font(.callout)
-    .padding(.horizontal, 12)
-    .padding(.vertical, 6)
-    .glassEffect(.regular, in: .rect(cornerRadius: 12))
-    .help(Self.gestureHelp)
   }
 
   /// The colour picker and the recent colours.

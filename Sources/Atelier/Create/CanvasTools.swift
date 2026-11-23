@@ -5,7 +5,9 @@ import SwiftUI
 /// fingers always move and zoom, as in Draw Things; on the Mac a drag paints with Brush or Eraser
 /// and Space-drag moves. Select picks what to mask by clicking and dragging a box
 /// (`AutoMaskSession`).
-enum CanvasTool: String, CaseIterable, Identifiable {
+/// `nonisolated`: the default MainActor isolation would otherwise block its Hashable/CaseIterable
+/// conformances to `ScreenTool`.
+nonisolated enum CanvasTool: String, ScreenTool {
   /// Brush and Eraser work on the layer the Mask | Color switch picks (`CanvasLayer`).
   case move, brush, eraser, select
 
@@ -594,7 +596,6 @@ struct CanvasToolControls: View {
   @Environment(CreateModel.self) private var model
   @Environment(\.undoManager) private var undoManager
 
-  static let sizes: [Double] = [8, 16, 32, 64, 128, 256]
   private static let opacities: [Double] = [0, 0.25, 0.5, 0.75, 1]
 
   var body: some View {
@@ -603,17 +604,9 @@ struct CanvasToolControls: View {
     let paints = model.canPaintMask
     let edits = model.canEditMask
     HStack(spacing: 2) {
-      Picker("Canvas Tool", selection: $model.canvasTool) {
-        ForEach(CanvasTool.allCases) { tool in
-          Label(tool.title, systemImage: tool.systemImage).tag(tool)
-        }
-      }
-      .pickerStyle(.segmented)
-      .labelsHidden()
-      .fixedSize()
-      .help(Self.toolHelp)
-      // Color needs only an image to paint on; the mask tools check the target themselves.
-      .disabled(!edits)
+      ToolPicker("Canvas Tool", selection: $model.canvasTool, help: Self.toolHelp)
+        // Color needs only an image to paint on; the mask tools check the target themselves.
+        .disabled(!edits)
       Picker("Layer", selection: $model.canvasLayer) {
         ForEach(CanvasLayer.allCases) { layer in
           Text(layer.title).tag(layer)
@@ -626,19 +619,11 @@ struct CanvasToolControls: View {
       .disabled(!edits)
       // One size, the current layer's: each layer keeps its own.
       let colors = model.canvasLayer == .color
-      let size = colors ? model.paintBrushSize : model.brushSize
-      Menu {
-        ForEach(Self.sizes, id: \.self) { size in
-          Button("\(Int(size)) px") {
-            if colors { model.paintBrushSize = size } else { model.brushSize = size }
-          }
-        }
-      } label: {
-        Text("\(Int(size)) px").monospacedDigit().frame(minWidth: 44).touchTarget()
-      }
-      .menuIndicator(.hidden)
-      .fixedSize()
-      .help(colors ? "Color Brush Size, in frame pixels" : "Mask Brush Size, in frame pixels")
+      BrushSizeMenu(
+        colors ? "Color Brush Size" : "Mask Brush Size",
+        size: colors ? $model.paintBrushSize : $model.brushSize,
+        help: colors ? "Color Brush Size, in frame pixels" : "Mask Brush Size, in frame pixels"
+      )
       .disabled(colors ? !model.canPaintColor : !paints)
       Menu {
         Picker("Mask Opacity", selection: $model.maskOpacity) {
