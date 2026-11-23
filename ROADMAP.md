@@ -8,7 +8,6 @@ Planned work that isn't built yet. Items marked **User request** or **User-repor
 
 ## Canvas
 
-- **Extract depth map.** A Create screen command in the canvas menu (next to Match Colors…), not a tool (see Tool UI below), that turns the canvas image into a depth map, puts the depth map on the canvas, and records it as a step in History. The engine already has Depth Anything v1.0/v2.0 (`EverythingZoo`, `depth_anything_v2.0_f16.ckpt`), which Draw Things uses for depth control.
 - **Select by description.** Type what you want selected ("the red car", "her hair") and Segment Anything selects it. The Select tool had a placeholder **Select:** text field for this, removed in 6423498 because the feature was never finished.
 
 ## Edit screen

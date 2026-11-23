@@ -45,7 +45,8 @@ import SwiftUI
 /// into the canvas mask (AutomationAutoMask.swift). `--paint-check` paints colours on the canvas
 /// and runs from them (AutomationPaint.swift). `--queue-check` runs the queue
 /// (AutomationQueue.swift). `--color-match-check` matches an edit's colors to its original
-/// (AutomationColorMatch.swift). `--input-entries-check` records and restores input entries, and
+/// (AutomationColorMatch.swift). `--depth-check` extracts depth maps from the canvas menu and
+/// the agent tool (AutomationDepth.swift). `--input-entries-check` records and restores input entries, and
 /// `--entries-freeze-check` clicks through the strip after moodboard, Clear and Generate-mode runs
 /// (AutomationInputEntries.swift). `--tab-switch-bench` times switching back to Create
 /// (AutomationTabSwitch.swift). `--edit-render-bench` times the Edit screen's renders
@@ -96,7 +97,7 @@ enum Automation {
       "--timeline-check", "--upscale-check", "--timeline-export-check", "--flashvsr-check", "--recavsr-check",
       "--model-folders-check", "--styles-check", "--cleanup-check", "--engine-check", "--playback-check",
       "--remote-check", "--remote-net-check", "--remote-shots", "--remote-url-check", "--remote-tailnet-check",
-      "--catalog-retry-check", "--model-move-check", "--add-folder-check", "--hf-link-check", "--color-match-check", "--canvas-clip-check",
+      "--catalog-retry-check", "--model-move-check", "--add-folder-check", "--hf-link-check", "--color-match-check", "--depth-check", "--canvas-clip-check",
       "--create-delete-check",
       "--history-loras-check",
       "--input-entries-check", "--entries-freeze-check", "--tab-switch-bench", "--delete-project-check", "--compact-check",
@@ -278,6 +279,10 @@ enum Automation {
     }
     if args.contains("--upscale-check") {
       upscaleCheck(model)
+      return
+    }
+    if args.contains("--depth-check") {
+      depthCheck(model, presets: presets)
       return
     }
     if args.contains("--color-match-check") {

@@ -419,6 +419,9 @@ struct CanvasView: View {
     .sheet(item: Bindable(model).colorMatchSheetItem) { item in
       ColorMatchSheet(item: item)
     }
+    .sheet(item: Bindable(model).depthModelSheetItem) { item in
+      DepthModelSheet(item: item)
+    }
     .sheet(item: $droppedVideo) { video in
       VideoExportSheet(
         width: video.composition.width, height: video.composition.height,
@@ -792,6 +795,8 @@ struct CanvasView: View {
       .disabled(!model.canMatchCanvasColors)
     Button("Match Colors…") { model.colorMatchSheetItem = model.imageItem }
       .disabled(!model.canOpenMatchColors)
+    Button("Extract Depth Map") { model.extractCanvasDepthMap() }
+      .disabled(!model.canExtractCanvasDepthMap)
     Button("Open in Edit") {
       Task { await edit.openCanvasImage() }
       navigation.section = .edit

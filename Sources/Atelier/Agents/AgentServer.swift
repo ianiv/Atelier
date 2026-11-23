@@ -216,7 +216,8 @@ final class AgentServer {
     unchanged_only true. To finish an image without a model (film grain, a grade, a LUT, \
     matching a reference photo's colors and grain), use edit_image_look, with \
     list_grain_profiles and measure_reference; crop_image crops and heal_image removes spots and \
-    blemishes, copying from a source point you pick beside each. Coordinates are always the image's own pixels from its top left.
+    blemishes, copying from a source point you pick beside each. extract_depth_map makes an \
+    image's depth map (near white) as a new step, for a depth control's input. Coordinates are always the image's own pixels from its top left.
     """
 
   /// `defaults` and `secrets` are where the settings, token and certificate are kept: the user's,

@@ -1441,11 +1441,12 @@ struct ProjectMenu: View {
     // Generations save into whichever project is open; Match Colors and Edit jobs only into their own.
     let queue = create.queue
     let jobs = (queue.running.map { [$0] } ?? []) + queue.runningRemote + queue.waiting
-    if jobs.contains(where: { $0.request.map { $0.colorMatch == nil && $0.edit == nil } == true && $0.remoteDevice == nil && $0.styleThumbnail == nil }) {
+    if jobs.contains(where: { $0.request.map { $0.colorMatch == nil && $0.edit == nil && $0.depthMap == nil } == true && $0.remoteDevice == nil && $0.styleThumbnail == nil }) {
       parts.append("Jobs in the queue save into “\(next)” instead.")
     }
     if !create.colorMatchJobs(in: name).isEmpty { parts.append("Its Match Colors jobs are cancelled.") }
     if !create.editJobs(in: name).isEmpty { parts.append("Its Edit jobs are cancelled.") }
+    if !create.depthMapJobs(in: name).isEmpty { parts.append("Its Extract Depth Map jobs are cancelled.") }
     return parts.joined(separator: " ")
   }
 

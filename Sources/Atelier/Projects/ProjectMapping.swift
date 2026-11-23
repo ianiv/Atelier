@@ -50,6 +50,8 @@ nonisolated enum ProjectMapping {
     /// A step saved from the Edit screen: its look and everything it was rendered with
     /// (`Edit.Record`). Kept in `profile_data`.
     var edit: Edit.Record?
+    /// A step made by Extract Depth Map (`DepthMap.Record`). Kept in `profile_data`.
+    var depthMap: DepthMap.Record?
     /// A layered step (a merged refine): how many layers it has (`data_stored`) and the top
     /// layer's position and density, which Draw Things keeps as the node's content offset and
     /// `scale_factor_by_120` (`ImageHistoryManager` reads both back with the step's layers).
@@ -102,6 +104,8 @@ nonisolated enum ProjectMapping {
     /// large data (real noise, histograms, LUT) named by `edit_*` tensors in the store
     /// (`Edit.Record`), so it renders again exactly once the profile is gone.
     var edit: Edit.Record?
+    /// A step made by Extract Depth Map (`depth_map`): the depth model's name, nothing more.
+    var depthMap: DepthMap.Record?
     var entryKey: Int64?
     var entryMask: CanvasMask?
     /// Marks a step `Project.appendEntry` wrote (`input_entry`), an Imported one too, which has no
@@ -144,8 +148,8 @@ nonisolated enum ProjectMapping {
     init(
       duration: Double, inputTensorId: Int64?, parentTensorId: Int64?, inputAudioId: Int64? = nil,
       timings: [Timing] = [], refine: RefineRecord? = nil, colorMatch: ColorMatch.Record? = nil,
-      edit: Edit.Record? = nil, entryKey: Int64? = nil, entryMask: CanvasMask? = nil, inputEntry: Bool? = nil,
-      scheduler: String? = nil
+      edit: Edit.Record? = nil, depthMap: DepthMap.Record? = nil, entryKey: Int64? = nil, entryMask: CanvasMask? = nil,
+      inputEntry: Bool? = nil, scheduler: String? = nil
     ) {
       self.timings = timings
       self.duration = duration
@@ -155,6 +159,7 @@ nonisolated enum ProjectMapping {
       self.refine = refine
       self.colorMatch = colorMatch
       self.edit = edit
+      self.depthMap = depthMap
       self.entryKey = entryKey
       self.entryMask = entryMask
       self.inputEntry = inputEntry
@@ -163,7 +168,7 @@ nonisolated enum ProjectMapping {
 
     private enum CodingKeys: String, CodingKey {
       case timings, duration, inputTensorId, parentTensorId, inputAudioId, refineRect, refineScale, refineOffset
-      case refineMask, colorMatch, edit, entryKey, entryMask, inputEntry, scheduler
+      case refineMask, colorMatch, edit, depthMap, entryKey, entryMask, inputEntry, scheduler
     }
 
     /// Lenient past `duration`: a key that doesn't read (written by a later version, say) is left
@@ -183,6 +188,7 @@ nonisolated enum ProjectMapping {
       refineMask = lenient(CanvasMask.self, .refineMask)
       colorMatch = lenient(ColorMatch.Record.self, .colorMatch)
       edit = lenient(Edit.Record.self, .edit)
+      depthMap = lenient(DepthMap.Record.self, .depthMap)
       entryKey = lenient(Int64.self, .entryKey)
       entryMask = lenient(CanvasMask.self, .entryMask)
       inputEntry = lenient(Bool.self, .inputEntry)
@@ -272,7 +278,7 @@ nonisolated enum ProjectMapping {
         duration: step.generationTime, inputTensorId: step.inputTensorId,
         parentTensorId: step.parentTensorId ?? 0, inputAudioId: step.inputAudioId,
         timings: step.timings?.profileTimings ?? [], refine: step.refine,
-        colorMatch: step.colorMatch, edit: step.edit, entryKey: step.entryKey, entryMask: step.entryMask,
+        colorMatch: step.colorMatch, edit: step.edit, depthMap: step.depthMap, entryKey: step.entryKey, entryMask: step.entryMask,
         inputEntry: step.isEntry ? true : nil,
         scheduler: d.string("scheduler").flatMap { $0 == defaultScheduler ? nil : $0 }
       ).bytes,

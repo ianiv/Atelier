@@ -1,4 +1,5 @@
 @preconcurrency import _MediaGenerationKit
+import Atomics
 @preconcurrency import AudioConverter
 import CoreGraphics
 @preconcurrency import DataModels
@@ -65,6 +66,10 @@ actor GenerationEngine {
     /// `colorMatch` does; its `record` is what the saved step keeps. Never sent to the engine or
     /// a server.
     var edit: Edit.Job?
+    /// Saves a saved step's depth map (`DepthMap`) as a new step after it instead of generating
+    /// (`CreateModel.runDepthMap(_:request:job:)`), as `colorMatch` does. Always on this device;
+    /// never sent to a server.
+    var depthMap: DepthMap.Job?
   }
 
   /// What a run made: one frame for an image, every frame of a clip and its soundtrack for video.
@@ -480,6 +485,31 @@ actor GenerationEngine {
         upscaler.upscale(graph.variable(tensor.toGPU(0))).0.rawValue.toCPU()
       }
       return Output(frames: [result])
+    }
+  }
+
+  /// The depth map of `image` at its own size (`DepthMap.rgb`: grey, near white), with the
+  /// engine's Depth Anything v2 as Draw Things runs it for a depth control
+  /// (`ImageGeneratorUtils.extractDepthMap`, called from `LocalImageGenerator`'s `.depth` hint at
+  /// the image's size). The estimator resizes to its own grid (518–1036 px on the short side) and
+  /// the map is scaled back up. In turn with generations, on the engine's queue, as `upscale` is.
+  func depthMap(image: CGImage) async throws -> Output {
+    await waitForTurn()
+    defer { endTurn() }
+    try Task.checkCancellation()
+    guard ImageGeneratorUtils.isDepthModelAvailable else { throw DepthMap.Failure.modelMissing }
+    guard let tensor = ImageTensor.tensor(from: image) else { throw ProjectError.badImage }
+    let width = image.width, height = image.height
+    // As the generator decides it (`useMFA` from `DeviceCapability.isMFAEnabled`, the setting).
+    let usesFlashAttention = DeviceCapability.isMFAEnabled.load(ordering: .acquiring) > 0
+    return try await onEngineQueue { _ in
+      let graph = DynamicGraph()
+      let depth = graph.withNoGrad {
+        ImageGeneratorUtils.extractDepthMap(
+          graph.variable(tensor.toGPU(0)), imageWidth: width, imageHeight: height, usesFlashAttention: usesFlashAttention)
+      }
+      guard let rgb = DepthMap.rgb(depth: depth) else { throw ProjectError.badImage }
+      return Output(frames: [rgb])
     }
   }
 
