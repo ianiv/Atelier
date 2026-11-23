@@ -279,6 +279,8 @@
 		ED17ED17000000000000001D /* HistogramMatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000001C /* HistogramMatch.swift */; };
 		ED17ED17000000000000001F /* CubeLUT.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000001E /* CubeLUT.swift */; };
 		ED17ED17000000000000F001 /* BuiltInLUTs.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000F000 /* BuiltInLUTs.swift */; };
+		ED17ED17000000000000A101 /* HealBrush.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000A100 /* HealBrush.swift */; };
+		ED17ED17000000000000A103 /* HealStrokes.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000A102 /* HealStrokes.swift */; };
 		ED17ED170000000000000021 /* Halation.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000020 /* Halation.swift */; };
 		ED17ED170000000000000023 /* AutomationEdit.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000022 /* AutomationEdit.swift */; };
 		ED2ED2ED0000000000000001 /* AutomationEditUI.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED2ED2ED0000000000000002 /* AutomationEditUI.swift */; };
@@ -287,6 +289,8 @@
 		ED17ED170000000000000029 /* EditPipelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000000028 /* EditPipelineTests.swift */; };
 		ED17ED170000000000005103 /* EditRenderLoopTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED170000000000005102 /* EditRenderLoopTests.swift */; };
 		ED17ED17000000000000002B /* GrainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000002A /* GrainTests.swift */; };
+		ED17ED17000000000000A105 /* HealTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000A104 /* HealTests.swift */; };
+		ED17ED17000000000000A107 /* HealStrokesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000A106 /* HealStrokesTests.swift */; };
 		ED17ED17000000000000002D /* LUTTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000002C /* LUTTests.swift */; };
 /* End PBXBuildFile section */
 
@@ -590,6 +594,8 @@
 		ED17ED17000000000000001C /* HistogramMatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistogramMatch.swift; sourceTree = "<group>"; };
 		ED17ED17000000000000001E /* CubeLUT.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CubeLUT.swift; sourceTree = "<group>"; };
 		ED17ED17000000000000F000 /* BuiltInLUTs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuiltInLUTs.swift; sourceTree = "<group>"; };
+		ED17ED17000000000000A100 /* HealBrush.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealBrush.swift; sourceTree = "<group>"; };
+		ED17ED17000000000000A102 /* HealStrokes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealStrokes.swift; sourceTree = "<group>"; };
 		ED17ED170000000000000020 /* Halation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Halation.swift; sourceTree = "<group>"; };
 		ED17ED170000000000000022 /* AutomationEdit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationEdit.swift; sourceTree = "<group>"; };
 		ED2ED2ED0000000000000002 /* AutomationEditUI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationEditUI.swift; sourceTree = "<group>"; };
@@ -598,6 +604,8 @@
 		ED17ED170000000000000028 /* EditPipelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditPipelineTests.swift; sourceTree = "<group>"; };
 		ED17ED170000000000005102 /* EditRenderLoopTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditRenderLoopTests.swift; sourceTree = "<group>"; };
 		ED17ED17000000000000002A /* GrainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrainTests.swift; sourceTree = "<group>"; };
+		ED17ED17000000000000A104 /* HealTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealTests.swift; sourceTree = "<group>"; };
+		ED17ED17000000000000A106 /* HealStrokesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealStrokesTests.swift; sourceTree = "<group>"; };
 		ED17ED17000000000000002C /* LUTTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LUTTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -993,6 +1001,8 @@
 				ED17ED170000000000000028 /* EditPipelineTests.swift */,
 				ED17ED170000000000005102 /* EditRenderLoopTests.swift */,
 				ED17ED17000000000000002A /* GrainTests.swift */,
+				ED17ED17000000000000A104 /* HealTests.swift */,
+				ED17ED17000000000000A106 /* HealStrokesTests.swift */,
 				ED17ED17000000000000002C /* LUTTests.swift */,
 				CC3541FFA68BA7C5424778CE /* AutoMaskTests.swift */,
 				C0104A7C11A0000000000006 /* ColorMatchTests.swift */,
@@ -1095,6 +1105,8 @@
 				ED17ED17000000000000001C /* HistogramMatch.swift */,
 				ED17ED17000000000000F000 /* BuiltInLUTs.swift */,
 				ED17ED17000000000000001E /* CubeLUT.swift */,
+				ED17ED17000000000000A100 /* HealBrush.swift */,
+				ED17ED17000000000000A102 /* HealStrokes.swift */,
 				ED17ED170000000000000020 /* Halation.swift */,
 			);
 			path = Edit;
@@ -1299,6 +1311,8 @@
 				ED17ED17000000000000001D /* HistogramMatch.swift in Sources */,
 				ED17ED17000000000000001F /* CubeLUT.swift in Sources */,
 				ED17ED17000000000000F001 /* BuiltInLUTs.swift in Sources */,
+				ED17ED17000000000000A101 /* HealBrush.swift in Sources */,
+				ED17ED17000000000000A103 /* HealStrokes.swift in Sources */,
 				ED17ED170000000000000021 /* Halation.swift in Sources */,
 				ED17ED170000000000000023 /* AutomationEdit.swift in Sources */,
 				ED2ED2ED0000000000000001 /* AutomationEditUI.swift in Sources */,
@@ -1520,6 +1534,8 @@
 				ED17ED170000000000000029 /* EditPipelineTests.swift in Sources */,
 				ED17ED170000000000005103 /* EditRenderLoopTests.swift in Sources */,
 				ED17ED17000000000000002B /* GrainTests.swift in Sources */,
+				ED17ED17000000000000A105 /* HealTests.swift in Sources */,
+				ED17ED17000000000000A107 /* HealStrokesTests.swift in Sources */,
 				ED17ED17000000000000002D /* LUTTests.swift in Sources */,
 				B7A1F0C2B3D4A59687786200 /* ProjectMappingTests.swift in Sources */,
 				0052093D8FFD473C03A83673 /* ProjectCompactionTests.swift in Sources */,

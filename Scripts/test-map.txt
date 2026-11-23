@@ -42,7 +42,7 @@ Sources/Atelier/Automation/AutomationAgentNet.swift | AgentAccessTests | --agent
 Sources/Atelier/Automation/AutomationTestCertificate.swift | AgentAccessTests | --agent-net-check
 Sources/Atelier/Create/      | CanvasDropTests,CanvasPaintTests,CanvasRefineTests,ColorMatchTests,MaskMemoryTests,CanvasUndoTests,MoodboardWriterTests,MoodboardTests,SizePresetTests,MaskMorphologyTests,FrameSelectionTests,FaceFinderTests,CanvasEditTests,TriggerWordsTests | --edit-input-check,--refine-check,--paint-check,--color-match-check,--create-delete-check,--canvas-clip-check
 Sources/Atelier/Create/AutoMask/ | AutoMaskTests,MaskMemoryTests,SAMFolderTests,FaceFinderTests | --automask-check
-Sources/Atelier/Edit/        | GrainTests,EditPipelineTests,EditRenderCancelTests,EditRenderLaneTests,EditRenderLoopTests,LUTTests,EditJobTests,EditProjectDataTests,EditModelTests | --edit-screen-check,--grain-reference,--edit-render-bench,--edit-ui-bench
+Sources/Atelier/Edit/        | GrainTests,EditPipelineTests,EditRenderCancelTests,EditRenderLaneTests,EditRenderLoopTests,LUTTests,EditJobTests,EditProjectDataTests,EditModelTests,HealTests,HealStrokesTests,HealSolverTests | --edit-screen-check,--grain-reference,--edit-render-bench,--edit-ui-bench
 Sources/AtelierTests/Fixtures/grain-parity/ | GrainTests |
 Sources/Atelier/Generation/  | StrengthStepsTests,ScheduleTests,ComfySamplerTests,ModelsLookupOrderTests,RefinerKickInTests,RefinerModelSwitchTests,PreviewDecoderTests,AutomationSamplerTests | --engine-check,--generate,--reuse
 Sources/Atelier/History/     | HistoryGraphTests,ProjectCompactionTests,InputEntryTests,EntryTreeFuzzTests,PNGTextTests,JSONValueTests,ClipTests | --input-entries-check,--entries-freeze-check,--history-loras-check,--canvas-clip-check
