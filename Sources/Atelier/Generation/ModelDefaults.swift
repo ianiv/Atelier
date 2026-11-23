@@ -109,6 +109,16 @@ nonisolated enum ModelDefaults {
     return "\(modelName) needs its refiner file (\(refiner)), which isn't downloaded. Download the model in Models, or turn the refiner off."
   }
 
+  /// Why `model` can't run: `files`, text encoders or a VAE it needs, are in no models folder and
+  /// the download server doesn't have them.
+  static func missingFilesMessage(model: String, files: [String]) -> String {
+    let list = files.joined(separator: ", ")
+    if files == [Fibo2TextEncoderImporter.file] {
+      return "\(model) needs its text encoder (\(list)), which isn't in any models folder. Delete the model in Models and import it again with Import… ▸ From Hugging Face Link…, which converts the text encoder too."
+    }
+    return "\(model) needs \(list), which isn't in any models folder and can't be downloaded."
+  }
+
   /// The refiner to keep when the model changes. Switching models keeps the current settings,
   /// but a paired refiner is part of its model's recipe: a model that has one gets it (and its
   /// start), and one model's paired refiner doesn't carry over to another, which would otherwise
@@ -205,12 +215,14 @@ nonisolated enum ModelDefaults {
       prefix: "hyperflow_", steps: 6, guidanceScale: 1, shift: 12,
       resolutionDependentShift: false, sampler: .dDIMTrailing, size: (1344, 768), fps: 24,
       numFrames: 124, shiftForAudio: 3, replacesCatalog: true),
-    // Fibo 2.0 Edit Turbo, imported (`fibo_2_*`): distilled for 4 steps without CFG, which the
-    // engine forces off (`isCfgEnabled`). Its scheduler shifts by image size from a base of 3, as
-    // FLUX does, so resolution-dependent shift is on.
+    // Fibo 2.0 Edit Turbo, imported: distilled for 4 steps without CFG, which the engine forces
+    // off (`isCfgEnabled`). Its scheduler shifts by image size from a base of 3, as FLUX does, so
+    // resolution-dependent shift is on. Matched by family, not file name: a Hugging Face link
+    // import names it after the repo (`fibo_2.0_edit_turbo_f16.ckpt`).
     Fallback(
-      prefix: "fibo_2_", steps: 4, guidanceScale: 1, shift: 3,
-      resolutionDependentShift: true, sampler: .eulerATrailing, size: (1024, 1024)),
+      prefix: "", steps: 4, guidanceScale: 1, shift: 3,
+      resolutionDependentShift: true, sampler: .eulerATrailing, size: (1024, 1024),
+      version: .fibo2),
     // MiniMax H3 Image, imported: distilled to 6 steps without CFG (the engine forces it off) on
     // its own sigma grid. The engine samples that grid with Euler only for DDIM Trailing at a step
     // count that has one (`LocalImageGenerator.sampler(from:)`, `MiniMaxH3Layout.sigmaGrids`), so

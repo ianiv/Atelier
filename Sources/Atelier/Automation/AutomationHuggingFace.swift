@@ -27,6 +27,10 @@
     /// - `--diffusers`: stable-diffusion-v1-5's fp16 unet (1.7 GB): detected as SD 1.5 before the
     ///   download, imported, and its text encoder and VAE downloaded.
     /// - `--gated` (needs `HF_TOKEN`, run by hand): black-forest-labs/FLUX.1-dev's ae.safetensors.
+    /// - `--fibo` (needs `HF_TOKEN` with the terms accepted, about 25 GB down and 50 GB free, run by
+    ///   hand): briaai/Fibo-2.0-edit-turbo: detected as Fibo 2.0 before the download, text_encoder/
+    ///   downloaded with the transformer, the text encoder converted, the model imported, its VAE
+    ///   downloaded. Generate with it afterwards (`--generate`) to check the conversion.
     static func huggingFaceLinkCheck(_ model: CreateModel, library: ModelLibrary) {
       Task { @MainActor in
         func log(_ message: String) { print(message); fflush(stdout) }
@@ -39,7 +43,8 @@
         let fm = FileManager.default
         let scratch = URL(fileURLWithPath: model.modelsDirectory, isDirectory: true).standardizedFileURL
         try? fm.createDirectory(at: scratch, withIntermediateDirectories: true)
-        guard ((try? fm.contentsOfDirectory(atPath: scratch.path)) ?? []).isEmpty else {
+        // `--fibo --resume` picks up a Fibo download an earlier run left in SCRATCH.
+        guard args.contains("--resume") || ((try? fm.contentsOfDirectory(atPath: scratch.path)) ?? []).isEmpty else {
           log("FAIL \(scratch.path) isn't empty: pass an empty scratch folder as -modelsDirectory")
           return finish()
         }
@@ -92,7 +97,10 @@
         }
         @MainActor func discardAll() async {
           await library.reloadUnfinishedLinkDownloads()
-          for unfinished in library.unfinishedLinkDownloads { await library.discardLinkDownload(unfinished) }
+          // A Fibo download kept for `--resume` stays.
+          for unfinished in library.unfinishedLinkDownloads where unfinished.record.repo != "briaai/Fibo-2.0-edit-turbo" {
+            await library.discardLinkDownload(unfinished)
+          }
         }
 
         // (a) A tiny LoRA.
@@ -301,6 +309,75 @@
             }
           } else {
             log("FAIL FLUX.1-dev's ae.safetensors isn't listed")
+          }
+        }
+
+        if args.contains("--fibo") {
+          log("--fibo: briaai/Fibo-2.0-edit-turbo")
+          await library.huggingFace.check()
+          log("  token: \(library.huggingFace.statusText)")
+          if let lookup = await lookUp("https://huggingface.co/briaai/Fibo-2.0-edit-turbo"),
+             let entry = lookup.listing.diffusers?.variants.first?.entry
+          {
+            let inspection = await library.inspectBeforeDownload(entry, lookup: lookup)
+            log("  before download: \(inspection)")
+            guard case .detected(_, let version?, let companions, _) = inspection, version == ModelVersion.fibo2.rawValue else {
+              log("FAIL not detected as Fibo 2.0 before downloading")
+              return finish()
+            }
+            check(companions.contains(Fibo2TextEncoderImporter.file) || args.contains("--resume"), "detected as Fibo 2.0, with its text encoder still to get")
+            let before = Set(library.linkDownloadTasks.keys)
+            await library.reloadUnfinishedLinkDownloads()
+            if args.contains("--resume"), let unfinished = library.unfinishedLinkDownloads.first(where: { $0.record.repo == lookup.link.repo }) {
+              log("  resuming \(unfinished.folder.path)")
+              library.resumeLinkDownload(unfinished)
+            } else {
+              library.startLinkDownload([entry], kind: .model, lookup: lookup, linkText: lookup.link.repo, detected: [.fibo2])
+            }
+            guard let key = Set(library.linkDownloadTasks.keys).subtracting(before).first else {
+              log("FAIL couldn't start the download: \(library.errorMessage ?? "")")
+              return finish()
+            }
+            let record = ModelLibrary.readRecord(in: URL(fileURLWithPath: key))
+            check(record?.items.contains { $0.isSupport && $0.files.contains { $0.path == "text_encoder/model.safetensors" } } == true, "text_encoder/ is downloaded with the transformer")
+            var lastLog = Date.distantPast
+            while library.linkDownloadTasks[key] != nil {
+              if Date().timeIntervalSince(lastLog) > 60, let progress = library.linkDownloads[key] {
+                log("  \(progress.description)")
+                lastLog = Date()
+              }
+              try? await Task.sleep(for: .seconds(2))
+            }
+            if let message = library.errorMessage { log("FAIL download: \(message)") }
+            await waitUntil { !library.importingModels.contains { $0.isInspecting } }
+            let item = library.importingModels.first
+            check(item?.version == ModelVersion.fibo2.rawValue && item?.problem == nil, "the import sheet has the joined model, ready to import (\(item?.problem ?? "no problem"))")
+            let started = Date()
+            library.runModelImports()
+            while library.isImportingModels {
+              if Date().timeIntervalSince(lastLog) > 60, let item = library.importingModels.first {
+                log("  importing: \(item.stage ?? "model") \(Int((item.progress ?? 0) * 100))%")
+                lastLog = Date()
+              }
+              try? await Task.sleep(for: .seconds(2))
+            }
+            log("  import took \(Int(Date().timeIntervalSince(started))) s")
+            if let message = library.errorMessage { log("  import message: \(message)") }
+            check(fm.fileExists(atPath: scratch.appendingPathComponent(Fibo2TextEncoderImporter.file).path), "the text encoder was converted into SCRATCH")
+            check(!fm.fileExists(atPath: key), "the staging folder is deleted after the import")
+            await waitUntil { library.downloads.isEmpty }
+            if let file = ModelLibrary.readCustomModels(in: scratch).first,
+               let specification = ModelZoo.specificationForModel(file)
+            {
+              log("  imported as \(file)")
+              check(specification.version == .fibo2 && specification.textEncoder == Fibo2TextEncoderImporter.file, "registered as Fibo 2.0 with the converted text encoder")
+              let missing = ModelZoo.filesToDownload(specification).map(\.file).filter { !fm.fileExists(atPath: scratch.appendingPathComponent($0).path) }
+              check(missing.isEmpty, "everything it needs is in SCRATCH (missing: \(missing))")
+            } else {
+              log("FAIL the imported model isn't in SCRATCH's custom.json or the engine doesn't know it")
+            }
+          } else {
+            log("FAIL briaai/Fibo-2.0-edit-turbo's transformer isn't listed")
           }
         }
 

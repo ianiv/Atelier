@@ -1,4 +1,5 @@
 @preconcurrency import _MediaGenerationKit
+@preconcurrency import Diffusion
 import SwiftUI
 
 /// What opens the link sheet: the screen it's opened from (which kind it starts on) and a link
@@ -334,7 +335,11 @@ struct HuggingFaceImportSheet: View {
   private func download() {
     guard canDownload, let lookup else { return }
     let before = Set(library.linkDownloadTasks.keys)
-    library.startLinkDownload(selectedEntries, kind: kind, lookup: lookup, linkText: text)
+    let detected = selectedEntries.compactMap { entry -> ModelVersion? in
+      guard case .detected(_, let version?, _, _)? = inspections[inspectionKey(entry)] else { return nil }
+      return ModelVersion(rawValue: version)
+    }
+    library.startLinkDownload(selectedEntries, kind: kind, lookup: lookup, linkText: text, detected: detected)
     started = Set(library.linkDownloadTasks.keys).subtracting(before).first
   }
 

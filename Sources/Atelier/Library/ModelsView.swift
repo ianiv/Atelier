@@ -727,7 +727,7 @@ struct ModelImportSheet: View {
         } else if let problem = item.problem {
           Label(problem, systemImage: "exclamationmark.triangle")
         } else if let family = item.family {
-          Text("Detected: \(family)")
+          Text("Detected: \(family)" + (item.stage.map { ". \($0)" } ?? ""))
         }
       }
       .font(.caption).foregroundStyle(.secondary)

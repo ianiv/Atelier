@@ -129,6 +129,8 @@ final class ModelLibrary {
     /// Why the file can't be imported, if it can't.
     var problem: String?
     var progress: Double?
+    /// What `progress` is for when it isn't the checkpoint's conversion (Fibo 2.0's text encoder).
+    var stage: String?
     /// As `LoRAImport.ownedFolder`: a link download's staging folder, deleted after the import.
     var ownedFolder: URL?
 
@@ -569,6 +571,11 @@ final class ModelLibrary {
       if version != .mossImage, Self.unconvertibleVersions.contains(version) {
         importingModels[index].problem =
           "\(ModelZoo.humanReadableNameForVersion(version)) checkpoints can't be converted yet."
+      } else if version == .fibo2, Fibo2TextEncoderImporter.isMissing(in: directories),
+                await Self.siblingFibo2TextEncoder(of: source) == nil,
+                let index = importingModels.firstIndex(where: { $0.id == id })
+      {
+        importingModels[index].problem = Self.fibo2NeedsTextEncoder
       }
     case .failure:
       importingModels[index].problem = "Not a model checkpoint the importer recognizes."
@@ -607,12 +614,13 @@ final class ModelLibrary {
             if item.isH3ImageVAE {
               try await importH3ImageVAE(from: item.source, itemID: item.id)
             } else {
+              // Before the model, so a model whose text encoder can't be made isn't imported.
+              try await importFibo2TextEncoderIfNeeded(for: item)
               let file = try await importModel(item)
               imported.append(file)
               if let notice = try await importH3ImageVAEIfNeeded(for: file, model: item) {
                 notices.append(notice)
               }
-              if item.ownedFolder != nil { notices += Self.undownloadableCompanions(of: file) }
             }
             if let folder = item.ownedFolder {
               Self.recordImport(of: item.source.lastPathComponent, in: folder)
@@ -729,6 +737,10 @@ final class ModelLibrary {
     else {
       throw CocoaError(.fileNoSuchFile)
     }
+    // A model missing a text encoder or VAE no folder has and nothing can download would be
+    // listed but crash the engine when it loads, so the conversion is removed instead.
+    let unobtainable = await Self.unobtainableFiles(of: specification)
+    guard unobtainable.isEmpty else { throw ImportError.missingCompanions(unobtainable) }
     try registerImported(specification, in: folder)
     succeeded = true
     return specification.file
@@ -786,6 +798,84 @@ final class ModelLibrary {
 
   @concurrent private nonisolated static func siblingH3ImageVAE(of model: URL) async -> URL? {
     H3ImageVAEImporter.sibling(of: model)
+  }
+
+  nonisolated static let fibo2NeedsTextEncoder =
+    "Fibo 2.0 also needs its text encoder, which the download server doesn't have. Import it with Import… ▸ From Hugging Face Link…, which downloads and converts the text encoder too, or keep the repo's text_encoder folder beside this file."
+
+  @concurrent private nonisolated static func siblingFibo2TextEncoder(of model: URL) async -> URL? {
+    Fibo2TextEncoderImporter.sibling(of: model)
+  }
+
+  @concurrent private nonisolated static func convertFibo2TextEncoder(
+    _ source: URL, into folder: URL, progress: @escaping @Sendable (Float) -> Void
+  ) async throws {
+    try Fibo2TextEncoderImporter.convert(
+      source, to: folder.appendingPathComponent(Fibo2TextEncoderImporter.file).path, progress: progress)
+  }
+
+  /// Before importing a Fibo 2.0 checkpoint: when no models folder has its text encoder, converts
+  /// the `text_encoder` folder found beside the checkpoint into the folder the model goes to.
+  /// Throws when there's none, so the model isn't imported without it.
+  private func importFibo2TextEncoderIfNeeded(for item: ModelImport) async throws {
+    guard item.version == ModelVersion.fibo2.rawValue, Fibo2TextEncoderImporter.isMissing(in: directories) else { return }
+    guard let source = await Self.siblingFibo2TextEncoder(of: item.source) else {
+      throw ImportError.missingCompanions([Fibo2TextEncoderImporter.file])
+    }
+    if let index = importingModels.firstIndex(where: { $0.id == item.id }) {
+      importingModels[index].progress = 0
+      importingModels[index].stage = "Converting the text encoder…"
+    }
+    defer {
+      if let index = importingModels.firstIndex(where: { $0.id == item.id }) { importingModels[index].stage = nil }
+    }
+    try await Self.convertFibo2TextEncoder(source, into: addFolder, progress: importProgress(item.id))
+  }
+
+  /// Files only an Atelier import makes, which the download server doesn't have.
+  nonisolated static let locallyMadeFiles: Set<String> = [Fibo2TextEncoderImporter.file]
+
+  /// The text encoders and VAE `specification` needs that no models folder has, other than its
+  /// own file and the MiniMax H3 Image VAE (its import converts it afterwards or says how).
+  nonisolated static func missingCompanions(of specification: ModelZoo.Specification) -> [String] {
+    ModelZoo.filesToDownload(specification).map(\.file).filter {
+      $0 != specification.file && $0 != H3ImageVAEImporter.file && !ModelZoo.isModelDownloaded($0)
+    }
+  }
+
+  /// The missing companions only an import makes (`locallyMadeFiles`): without them the engine
+  /// would crash loading the model, and nothing can download them. No network, for a run's check.
+  nonisolated static func missingLocallyMadeFiles(of specification: ModelZoo.Specification) -> [String] {
+    missingCompanions(of: specification).filter { locallyMadeFiles.contains($0) }
+  }
+
+  /// The missing companions that can't be downloaded: those only an import makes, and those the
+  /// download server answers 403 or 404 for. A checksum in `ModelZoo` or a
+  /// `ModelDefaults.downloadSources` entry counts as downloadable, and so does a file the server
+  /// couldn't be asked about (offline), which the download after the import then reports.
+  /// (`ModelZoo` has no checksum for some files the server has, FLUX.2's VAE among them.)
+  @concurrent nonisolated static func unobtainableFiles(of specification: ModelZoo.Specification) async -> [String] {
+    var unobtainable: [String] = []
+    for file in missingCompanions(of: specification) {
+      if locallyMadeFiles.contains(file) {
+        unobtainable.append(file)
+        continue
+      }
+      guard ModelZoo.fileSHA256ForModelDownloaded(file) == nil, ModelDefaults.downloadSources[file] == nil,
+            let url = URL(string: "https://static.libnnc.org/\(file)")
+      else { continue }
+      let missing = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+        ResumableDownloader.probe(remoteUrl: url) { result in
+          if case .failure(ResumableDownloader.DownloadError.server(let status)) = result {
+            continuation.resume(returning: status == 403 || status == 404)
+          } else {
+            continuation.resume(returning: false)
+          }
+        }
+      }
+      if missing { unobtainable.append(file) }
+    }
+    return unobtainable
   }
 
   /// Whether `file` is a model that needs a VAE the app converts itself and no folder has it yet.
@@ -1099,9 +1189,15 @@ final class ModelLibrary {
 
   nonisolated enum ImportError: LocalizedError {
     case unconvertible(String)
+    /// Text encoders or VAE the model needs that no folder has and nothing can download.
+    case missingCompanions([String])
     var errorDescription: String? {
       switch self {
       case .unconvertible(let family): "\(family) checkpoints can't be converted yet."
+      case .missingCompanions(let files) where files == [Fibo2TextEncoderImporter.file]:
+        ModelLibrary.fibo2NeedsTextEncoder
+      case .missingCompanions(let files):
+        "It needs \(files.joined(separator: ", ")), which no models folder has and the download server doesn't carry, so it wasn't imported."
       }
     }
   }

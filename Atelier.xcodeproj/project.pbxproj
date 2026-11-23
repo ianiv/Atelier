@@ -73,6 +73,7 @@
 		3EFDDD6F3AB8E6E136E696E8 /* HuggingFaceImportSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EF19BDF54CC0D0FD69CC7A9 /* HuggingFaceImportSheet.swift */; };
 		D1E2F3A4B5C66289D185957B /* SafeTensorsReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E2F3A4B5C6D782A32EF001 /* SafeTensorsReader.swift */; };
 		C1A2B3D4E5F60718293A4B5C /* H3ImageVAEImporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2B3C4E5F6071829304B5C6D /* H3ImageVAEImporter.swift */; };
+		F1B0E2C3D4A5968778695A4B /* Fibo2TextEncoderImporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2B0E2C3D4A5968778695A4C /* Fibo2TextEncoderImporter.swift */; };
 		A7E1C0DE00000000000000A1 /* HelpLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1C0DE00000000000000A2 /* HelpLinks.swift */; };
 		02980CB68834C5E6EA77013B /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75FDC53060CFC4942FDDBF2D /* ContentView.swift */; };
 		10171A503FBA24116D0D87F6 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C8D5C8071A6037BDD1122F9 /* AppSettings.swift */; };
@@ -413,6 +414,7 @@
 		3EF19BDF54CC0D0FD69CC7A9 /* HuggingFaceImportSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HuggingFaceImportSheet.swift; sourceTree = "<group>"; };
 		D1E2F3A4B5C6D782A32EF001 /* SafeTensorsReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafeTensorsReader.swift; sourceTree = "<group>"; };
 		D2B3C4E5F6071829304B5C6D /* H3ImageVAEImporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = H3ImageVAEImporter.swift; sourceTree = "<group>"; };
+		F2B0E2C3D4A5968778695A4C /* Fibo2TextEncoderImporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Fibo2TextEncoderImporter.swift; sourceTree = "<group>"; };
 		2986E6F53F78B9F10639ADE3 /* tensor_moodboard_data_data_model_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = tensor_moodboard_data_data_model_generated.swift; sourceTree = "<group>"; };
 		2C75075F80A089CC22F04163 /* thumbnail_history_half_data_model_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = thumbnail_history_half_data_model_generated.swift; sourceTree = "<group>"; };
 		2EDDC888B4605901D459188A /* thumbnail_history_half_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = thumbnail_history_half_generated.swift; sourceTree = "<group>"; };
@@ -881,6 +883,7 @@
 				3EF19BDF54CC0D0FD69CC7A9 /* HuggingFaceImportSheet.swift */,
 				D1E2F3A4B5C6D782A32EF001 /* SafeTensorsReader.swift */,
 				D2B3C4E5F6071829304B5C6D /* H3ImageVAEImporter.swift */,
+				F2B0E2C3D4A5968778695A4C /* Fibo2TextEncoderImporter.swift */,
 				C4CBE9BE880BD55127FC9066 /* ModelsView.swift */,
 			);
 			path = Library;
@@ -1412,6 +1415,7 @@
 				3EFDDD6F3AB8E6E136E696E8 /* HuggingFaceImportSheet.swift in Sources */,
 				D1E2F3A4B5C66289D185957B /* SafeTensorsReader.swift in Sources */,
 				C1A2B3D4E5F60718293A4B5C /* H3ImageVAEImporter.swift in Sources */,
+				F1B0E2C3D4A5968778695A4B /* Fibo2TextEncoderImporter.swift in Sources */,
 				D42B1F3B6CDD906D20BB8275 /* Project.swift in Sources */,
 				FE932A5C887AE92B9E804707 /* ProjectMapping.swift in Sources */,
 				A931266D4F41EFBBDA557F82 /* ProjectCompaction.swift in Sources */,

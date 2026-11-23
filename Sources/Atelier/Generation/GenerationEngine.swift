@@ -248,6 +248,13 @@ actor GenerationEngine {
     {
       throw MediaGenerationKitError.generationFailed(message)
     }
+    // A text encoder only an import makes (Fibo 2.0's, from before Atelier converted it) that no
+    // folder has would crash the engine when it loads, so the run stops here instead.
+    if let specification = ModelZoo.specificationForModel(request.model),
+       case let missing = ModelLibrary.missingLocallyMadeFiles(of: specification), !missing.isEmpty
+    {
+      throw MediaGenerationKitError.generationFailed(ModelDefaults.missingFilesMessage(model: specification.name, files: missing))
+    }
     let pipeline = try await pipeline(for: request.model)
     await applyPerformanceSettings(using: pipeline)
     await dropCachedModelsIfInputsChanged(request)

@@ -365,6 +365,11 @@ nonisolated struct HuggingFaceListing: Equatable, Sendable {
     return HuggingFaceListing(diffusers: diffusers, entries: entries)
   }
 
+  /// The safetensors rows whose files are all in the repo's top-level `folder`.
+  func safetensorsEntries(inFolder folder: String) -> [Entry] {
+    entries.filter { entry in entry.isSafetensors && entry.weights.allSatisfy { $0.folder == folder } }
+  }
+
   /// The MiniMax H3 Image VAE, which `H3ImageVAEImporter` converts, so it can come from `vae/`.
   static func isH3ImageVAE(_ file: HuggingFaceRepoFile) -> Bool {
     file.name.lowercased().contains("h3_image") && file.pathExtension == "safetensors"

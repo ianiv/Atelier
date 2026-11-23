@@ -309,6 +309,43 @@ struct HuggingFaceLinkTests {
     #expect(!ModelLibrary.isCancellation(URLError(.timedOut)))
   }
 
+  @Test func fiboTextEncoderRowsAndSupportItems() throws {
+    let files = [
+      file("model_index.json"), file("transformer/config.json"),
+      file("transformer/diffusion_pytorch_model-00001-of-00002.safetensors"),
+      file("transformer/diffusion_pytorch_model-00002-of-00002.safetensors"),
+      file("transformer/diffusion_pytorch_model.safetensors.index.json"),
+      file("text_encoder/config.json"), file("text_encoder/model.safetensors", 8_000),
+      file("vae/diffusion_pytorch_model.safetensors"),
+    ]
+    let index: [String: Any] = ["_class_name": "FiboEditPipeline", "transformer": ["diffusers", "FiboTransformer"]]
+    let listing = HuggingFaceListing.make(repo: "briaai/Fibo-2.0-edit-turbo", files: files, modelIndex: index)
+    #expect(listing.safetensorsEntries(inFolder: "text_encoder").flatMap(\.files).map(\.path) == ["text_encoder/model.safetensors"])
+    #expect(listing.safetensorsEntries(inFolder: "transformer").isEmpty)
+
+    // Support files download but aren't imported on their own, so a record whose model imported
+    // is done; records written before the field still read.
+    let model = LinkDownloadRecord.Item(title: "transformer", files: [file("a.safetensors")], index: nil, merges: false, output: "Fibo-2.0-edit-turbo.safetensors")
+    let support = LinkDownloadRecord.Item(
+      title: "text_encoder", files: [file("text_encoder/model.safetensors")], index: nil, merges: false, output: "text_encoder", supportFiles: true)
+    var record = LinkDownloadRecord(link: "a/b", repo: "a/b", sha: "0123456789abcdef", kind: .model, items: [model, support], created: Date())
+    #expect(record.remainingItems.map(\.output) == ["Fibo-2.0-edit-turbo.safetensors"])
+    record.markImported("Fibo-2.0-edit-turbo.safetensors")
+    #expect(record.isFullyImported)
+    let old = #"{"link":"a/b","repo":"a/b","sha":"0","kind":"model","created":0,"items":[{"title":"t","files":[],"merges":false,"output":"x.safetensors"}]}"#
+    let decoded = try JSONDecoder().decode(LinkDownloadRecord.self, from: Data(old.utf8))
+    #expect(decoded.items.first?.isSupport == false)
+  }
+
+  @Test func fiboTextEncoderRotationIsInterleaved() {
+    // Two heads of 4 rows, 2 columns: rows i and i + 2 of each head become rows 2i and 2i + 1.
+    let values: [Float] = (0..<16).map(Float.init)
+    let result = Fibo2TextEncoderImporter.interleave(values, rows: 8, headDimension: 4)
+    #expect(result == [0, 1, 4, 5, 2, 3, 6, 7, 8, 9, 12, 13, 10, 11, 14, 15])
+    // A vector (norm weights) of one head.
+    #expect(Fibo2TextEncoderImporter.interleave([0, 1, 2, 3], rows: 4, headDimension: 4) == [0, 2, 1, 3])
+  }
+
   @Test func spaceNeededByKind() {
     #expect(ModelLibrary.requiredSpace(downloadSize: 10_000, kind: .model, companionBytes: 500) == 21_500)
     #expect(ModelLibrary.requiredSpace(downloadSize: 10_000, kind: .lora, companionBytes: 500) == 12_000)

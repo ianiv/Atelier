@@ -14,10 +14,16 @@ nonisolated struct LinkDownloadRecord: Codable, Equatable, Sendable {
     var files: [HuggingFaceRepoFile]
     var index: String?
     var merges: Bool
-    /// The file handed to the import sheet, in the staging folder.
+    /// The file handed to the import sheet, in the staging folder; for support files, the folder
+    /// they're in.
     var output: String
+    /// Files another item's import reads where they downloaded to, not imported themselves: Fibo
+    /// 2.0's `text_encoder/`, which `Fibo2TextEncoderImporter` converts with the model. Not joined,
+    /// moved or handed to the import sheet. Optional so records written before it still read.
+    var supportFiles: Bool?
 
     var weights: [HuggingFaceRepoFile] { files.filter { $0.path != index } }
+    var isSupport: Bool { supportFiles == true }
   }
 
   /// The link as pasted.
@@ -34,8 +40,8 @@ nonisolated struct LinkDownloadRecord: Codable, Equatable, Sendable {
   var imported: [String]?
 
   var size: Int64 { items.flatMap(\.files).reduce(0) { $0 + $1.size } }
-  /// The items still to import.
-  var remainingItems: [Item] { items.filter { !(imported ?? []).contains($0.output) } }
+  /// The items still to import (support files aren't imported on their own).
+  var remainingItems: [Item] { items.filter { !$0.isSupport && !(imported ?? []).contains($0.output) } }
   var isFullyImported: Bool { remainingItems.isEmpty }
 
   /// Notes `output` as imported.
@@ -177,8 +183,10 @@ extension ModelLibrary {
           let version = ModelVersion(rawValue: version)
     else { return result }
     let companions = Self.missingCompanions(for: version)
-    let bytes = await Self.downloadSize(of: companions)
-    return .detected(family: family, version: version.rawValue, companions: companions, companionBytes: bytes)
+    let support = supportItems(for: [version], listing: lookup.listing).flatMap(\.files).reduce(Int64(0)) { $0 + $1.size }
+    // Support files come from the repo, not the download server, and are converted beside it.
+    let bytes = await Self.downloadSize(of: support > 0 ? companions.filter { $0 != Fibo2TextEncoderImporter.file } : companions)
+    return .detected(family: family, version: version.rawValue, companions: companions, companionBytes: bytes + support * 2)
   }
 
   @concurrent nonisolated static func inspectRemote(
@@ -243,9 +251,27 @@ extension ModelLibrary {
   /// folder has, from a catalog model of that family (what the imported model's specification will
   /// name, `ModelImporter.inferModelSpecification`).
   static func missingCompanions(for version: ModelVersion) -> [String] {
-    guard let specification = ModelZoo.availableSpecifications.first(where: { $0.version == version }) else { return [] }
-    return ModelZoo.filesToDownload(specification).map(\.file)
-      .filter { $0 != specification.file && $0 != H3ImageVAEImporter.file && !ModelZoo.isModelDownloaded($0) }
+    let files: [String]
+    if let specification = ModelZoo.availableSpecifications.first(where: { $0.version == version }) {
+      files = ModelZoo.filesToDownload(specification).map(\.file).filter { $0 != specification.file }
+    } else if version == .fibo2 {
+      // No catalog model is Fibo 2.0; these are what `inferModelSpecification` names for it.
+      files = [Fibo2TextEncoderImporter.file, "flux_2_vae_f16.ckpt"]
+    } else {
+      return []
+    }
+    return files.filter { $0 != H3ImageVAEImporter.file && !ModelZoo.isModelDownloaded($0) }
+  }
+
+  /// Support files a download of a model of `version` from `listing` adds: Fibo 2.0's text
+  /// encoder, which the download server doesn't have, when no models folder has it converted.
+  func supportItems(for versions: [ModelVersion], listing: HuggingFaceListing) -> [LinkDownloadRecord.Item] {
+    guard versions.contains(.fibo2), Fibo2TextEncoderImporter.isMissing(in: directories) else { return [] }
+    let files = listing.safetensorsEntries(inFolder: Fibo2TextEncoderImporter.folderName).flatMap(\.files)
+    guard !files.isEmpty else { return [] }
+    return [LinkDownloadRecord.Item(
+      title: Fibo2TextEncoderImporter.folderName, files: files, index: nil, merges: false,
+      output: Fibo2TextEncoderImporter.folderName, supportFiles: true)]
   }
 
   /// The size of each file on the download server (a HEAD each), summed; unknown ones count 0.
@@ -272,13 +298,18 @@ extension ModelLibrary {
   // MARK: - Downloading
 
   /// Starts downloading `entries` of `lookup` as `kind` into a new staging folder in `addFolder`.
-  func startLinkDownload(_ entries: [HuggingFaceListing.Entry], kind: HuggingFaceListing.Kind, lookup: HuggingFaceLookup, linkText: String) {
+  /// `detected` is the families the header check found, which decide the support files it adds.
+  func startLinkDownload(
+    _ entries: [HuggingFaceListing.Entry], kind: HuggingFaceListing.Kind, lookup: HuggingFaceLookup, linkText: String,
+    detected: [ModelVersion] = []
+  ) {
     errorMessage = nil
+    let support = kind == .model ? supportItems(for: detected, listing: lookup.listing) : []
     let record = LinkDownloadRecord(
       link: linkText, repo: lookup.link.repo, sha: lookup.info.sha, kind: kind,
       items: Self.uniqueOutputs(entries.map {
         LinkDownloadRecord.Item(title: $0.title, files: $0.files, index: $0.index, merges: $0.merges, output: $0.output(for: kind))
-      }),
+      }) + support,
       created: Date())
     do {
       let folder = try Self.makeStagingFolder(for: record, in: addFolder)
@@ -428,7 +459,7 @@ extension ModelLibrary {
     var index = 0
     for item in record.items {
       let output = folder.appendingPathComponent(item.output)
-      if fileManager.fileExists(atPath: output.path), !fileManager.fileExists(atPath: output.path + ".partial") {
+      if !item.isSupport, fileManager.fileExists(atPath: output.path), !fileManager.fileExists(atPath: output.path + ".partial") {
         index += item.files.count
         continue
       }
@@ -461,7 +492,9 @@ extension ModelLibrary {
         }
       }
       try Task.checkCancellation()
-      if item.merges {
+      if item.isSupport {
+        // Stays where it downloaded to, for the model's import.
+      } else if item.merges {
         let shards = item.weights.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
           .map { folder.appendingPathComponent($0.path) }
         progress(nil, 0)
@@ -520,8 +553,11 @@ extension ModelLibrary {
       for repo in (try? fileManager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? [] {
         for folder in (try? fileManager.contentsOfDirectory(at: repo, includingPropertiesForKeys: nil)) ?? [] {
           guard let record = readRecord(in: folder) else { continue }
-          let complete = record.items.allSatisfy {
-            let output = folder.appendingPathComponent($0.output).path
+          let complete = record.items.allSatisfy { item in
+            if item.isSupport {
+              return item.files.allSatisfy { size(of: folder.appendingPathComponent($0.path)) == $0.size }
+            }
+            let output = folder.appendingPathComponent(item.output).path
             return fileManager.fileExists(atPath: output) && !fileManager.fileExists(atPath: output + ".partial")
           }
           found.append(UnfinishedLinkDownload(folder: folder, record: record, bytesOnDisk: allocatedSize(of: folder), isComplete: complete))
@@ -574,20 +610,6 @@ extension ModelLibrary {
         try? fileManager.removeItem(at: parent)
       }
     }
-  }
-
-  /// What to tell the person after importing `file` from a link: text encoders or a VAE its
-  /// specification needs that no folder has and the download server doesn't carry (no checksum in
-  /// `ModelZoo`, no `ModelDefaults.downloadSources` entry), so the download after the import can't
-  /// fetch them.
-  static func undownloadableCompanions(of file: String) -> [String] {
-    guard let specification = ModelZoo.specificationForModel(file) else { return [] }
-    return ModelZoo.filesToDownload(specification).map(\.file)
-      .filter {
-        $0 != file && $0 != H3ImageVAEImporter.file && !ModelZoo.isModelDownloaded($0)
-          && ModelZoo.fileSHA256ForModelDownloaded($0) == nil && ModelDefaults.downloadSources[$0] == nil
-      }
-      .map { "\($0) can't be downloaded; see the docs for converting it." }
   }
 }
 
