@@ -3245,10 +3245,21 @@ final class CreateModel {
 
   /// Seconds left in sampling, from the pace of the steps so far; nil until two steps are in.
   func estimatedRemaining(at now: Date) -> TimeInterval? {
-    guard let samplingStart, let lastStepAt, step > samplingStart.step, totalSteps > step
-    else { return nil }
+    guard let samplingStart, let lastStepAt, step > samplingStart.step else { return nil }
+    // A sampling step is reported as it starts (MGK's `.generating`, from the engine's
+    // `feedback(.sampling(step))` at the top of each sampler iteration), so step n of n still has
+    // itself to run; an upscale or other job reports what it has finished.
+    let left = totalSteps - step + (stepsReportStarts ? 1 : 0)
+    guard left > 0 else { return nil }
     let perStep = lastStepAt.timeIntervalSince(samplingStart.date) / Double(step - samplingStart.step)
-    return max(0, perStep * Double(totalSteps - step) - now.timeIntervalSince(lastStepAt))
+    return max(0, perStep * Double(left) - now.timeIntervalSince(lastStepAt))
+  }
+
+  /// Whether the foreground run's steps are sampling steps, reported as each one starts.
+  private var stepsReportStarts: Bool {
+    guard let request = foregroundJob?.request else { return false }
+    return request.upscale == nil && request.colorMatch == nil && request.edit == nil
+      && request.depthMap == nil
   }
 
   // MARK: - Recent prompts
@@ -3550,6 +3561,7 @@ final class CreateModel {
       case .generating(let step, let total) where step == self.step && step == total && lastStepAt != nil:
         // The engine reports the last step again once sampling has ended (`GenerationTimings`).
         phase = .running(Self.describe(.decoding))
+        samplingStart = nil  // Nothing left to estimate; a second pass starts its own.
       case .decoding:
         // The engine signals `.imageDecoded` once decoding is done; saving is what's left.
         phase = .running("Finishing…")
