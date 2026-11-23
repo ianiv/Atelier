@@ -2035,11 +2035,7 @@ final nonisolated class Project: Sendable {
 
   func contents() -> Contents {
     let key = { (lineage: Int64, logicalTime: Int64) in [lineage, logicalTime] }
-    let tensorNames = storeAccess.withLock { _ in
-      var names: [String] = []
-      _ = graph.openStore(url.path, flags: [.readOnly]) { names = $0.keys }
-      return names.sorted()
-    }
+    let tensorNames = storedTensorNames()
     return workspace.fetchWithinASnapshot {
       Contents(
         // JSONEncoder orders keys as it likes, so profiles are compared with their keys sorted.
@@ -2074,6 +2070,16 @@ final nonisolated class Project: Sendable {
   }
 
   // MARK: - Edit data
+
+  /// Every tensor's name in the store, sorted; empty when it won't open. Read-only, for the
+  /// scripted checks (which run in Release builds too) and `contents()`.
+  func storedTensorNames() -> [String] {
+    storeAccess.withLock { _ in
+      var names: [String] = []
+      _ = graph.openStore(url.path, flags: [.readOnly]) { names = $0.keys }
+      return names.sorted()
+    }
+  }
 
   /// Writes an Edit step's large data (`Edit.Blobs`) into the store as the record names it, and
   /// returns the record with each one's tensor id; names it newly wrote are added to `written`.

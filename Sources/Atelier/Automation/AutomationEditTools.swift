@@ -603,7 +603,7 @@ extension Automation {
       check(false, "the three steps don't share one heal tensor")
       return
     }
-    func stored() async -> Bool { await model.history.project.read { $0.contents().tensorNames }.contains(name) }
+    func stored() async -> Bool { await model.history.project.read { $0.storedTensorNames() }.contains(name) }
 
     do {
       _ = try await model.compactProject()
