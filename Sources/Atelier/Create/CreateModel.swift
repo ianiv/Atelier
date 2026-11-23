@@ -820,10 +820,18 @@ final class CreateModel {
   /// Why Generate can't take the reference video on the canvas as the settings are now
   /// (`ReferenceVideo.problem`); nil without one.
   var referenceVideoProblem: String? {
-    guard referenceClip != nil, let settings, let video = videoModel else { return nil }
+    guard let clip = referenceClip?.clip, let settings, let video = videoModel else { return nil }
     return ReferenceVideo.problem(
       takesReferences: video.takesReferences, strength: settings.strength, numFrames: video.snapped(settings.numFrames),
-      hasAudio: audio.url != nil)
+      hasAudio: audio.url != nil, clipFrames: Self.referenceFrames(of: clip, rate: video.framesPerSecond))
+  }
+
+  /// How many frames `clip` has at the model's `rate` (`ReferenceVideo.resampled`), up to the
+  /// minimum a reference needs: whether it's long enough to be one.
+  nonisolated static func referenceFrames(of clip: ClipInfo, rate: Double) -> Int {
+    ReferenceVideo.resampled(
+      sourceCount: clip.frameCount, sourceRate: clip.framesPerSecond, rate: rate, limit: ReferenceVideo.minimumFrames
+    ).count
   }
 
   /// The selected model, when it makes video.
@@ -2604,8 +2612,7 @@ final class CreateModel {
           // On this device the engine takes them as one tensor: made now, the images let go, so
           // the two aren't both kept through the run. A server gets them as images.
           if !(backend is RemoteBackend), let reference = request.referenceVideo {
-            let (width, height) = (request.configuration.width, request.configuration.height)
-            guard let made = await Task.detached(operation: { reference.withTensor(width: width, height: height) }).value else {
+            guard let made = await Task.detached(operation: { reference.withTensor() }).value else {
               throw ReferenceVideo.Failure.unreadable
             }
             request.referenceVideo = made
@@ -3382,24 +3389,25 @@ final class CreateModel {
     // An imported video's frames come from its file, which must be the one recorded.
     if let media = clip.media {
       guard let url = history.mediaURL(of: source), Self.fileSize(url) == media.bytes else { throw Media.Failure.missing }
-      let count = video.snapped(configuration.numFrames)
-      setRunMessage("Reading \(count) frames…", job)
-      return try await ReferenceVideo.fileFrames(
-        url: url, count: count, rate: video.framesPerSecond, width: configuration.width, height: configuration.height)
+      setRunMessage("Reading the video's frames…", job)
+      let frames = try await ReferenceVideo.fileFrames(
+        url: url, sourceCount: media.frameCount, sourceRate: media.framesPerSecond, numFrames: video.snapped(configuration.numFrames),
+        rate: video.framesPerSecond)
+      Self.logReference(frames)
+      return frames
     }
     let indices = ReferenceVideo.sourceIndices(
-      count: video.snapped(configuration.numFrames), rate: video.framesPerSecond, sourceCount: clip.frames.count,
+      numFrames: video.snapped(configuration.numFrames), rate: video.framesPerSecond, sourceCount: clip.frames.count,
       sourceRate: clip.framesPerSecond)
+    guard !indices.isEmpty else { throw ReferenceVideo.Failure.tooShort }
     let tensorIds = indices.map { clip.frames[$0] }
     setRunMessage("Reading \(Set(tensorIds).count) frames…", job)
-    let width = configuration.width
-    let height = configuration.height
     let project = history.project
     let frames = await project.read { project in
       var prepared: [Int64: CGImage] = [:]
       return tensorIds.map { id -> CGImage? in
         if let frame = prepared[id] { return frame }
-        let frame = project.image(tensorId: id).flatMap { ReferenceVideo.frame($0, width: width, height: height) }
+        let frame = project.image(tensorId: id).flatMap(ReferenceVideo.frame)
         prepared[id] = frame
         return frame
       }
@@ -3407,7 +3415,14 @@ final class CreateModel {
     let read = frames.compactMap(\.self)
     // The clip is there (checked above), so a frame missing here didn't read or decode.
     guard read.count == tensorIds.count else { throw ReferenceVideo.Failure.unreadable }
+    Self.logReference(read)
     return read
+  }
+
+  /// Says what a run's reference video is: its frame count and canvas size.
+  private nonisolated static func logReference(_ frames: [CGImage]) {
+    Log.engine.info(
+      "Reference video: \(frames.count, privacy: .public) frames at \(frames.first?.width ?? 0, privacy: .public)×\(frames.first?.height ?? 0, privacy: .public)")
   }
 
   private nonisolated static func fileSize(_ url: URL) -> Int64? {

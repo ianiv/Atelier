@@ -60,12 +60,13 @@ MiniMax H3 models (including FastH3 Omni and HyperFlow H3 Flash) always decode i
 
 MiniMax H3 Ref2VA models (FastH3 Omni and HyperFlow H3 Flash Ref2VA too) can follow a clip, its motion, camera or performance, as well as pictures. Open a video from History so it plays on the canvas (one you made, or one [brought in from outside](#videos-from-outside)), and switch to **Edit**: the canvas's badge says **Video 1**, and the clip is the reference video. Refer to it in the prompt as `<Video 1>`. The moodboard images are then Picture 1, Picture 2 and so on, since the canvas holds no picture.
 
-- The clip is read from its start at the model's frame rate (24 fps for H3), one frame for each frame of the new video. A clip shorter than the new video holds its last frame; a longer one is cut off. Each frame is scaled to fill the output size (the inspector's width and height) and cropped about its center, so a clip of another shape loses its edges.
+- The clip is read from its start at H3's 24 fps, as MiniMax's own pipeline reads one: up to the new video's length, then down to the nearest count the model takes whole (22, 39, 56, …). A clip shorter than the new video is a shorter reference; it's never padded. A clip with fewer than 22 frames at 24 fps (about a second) is too short, and Generate says so.
+- The clip keeps its own shape: its frames are resized to a 768-pixel short edge (at most 768 × 1344 pixels, sides in multiples of 32), whatever the output size, so nothing is cropped. Shapes beyond 1:4 or 4:1 are treated as 1:4 or 4:1.
 - The new video is made from noise, with the clip only as its reference: **Strength** must be 100%, and **Length** at least 22 frames.
 - It can't go with an audio file. With one in the **Audio** box, or with the Strength or Length above, Generate is disabled and the status bar (and the badge, in orange) says why.
 - The new video follows the clip in History, but isn't recorded as made from it: **Use Settings** brings back its prompt and settings, not the clip.
 - The queue keeps which clip, not its frames: they're read when the job starts, so a clip deleted while the job waits stops it with a message.
-- A video from outside is read from its file the same way (the way Draw Things' command line reads `--video`), upright and in SDR.
+- A video from outside is read from its file the same way, upright and in SDR.
 
 ## Videos from outside
 

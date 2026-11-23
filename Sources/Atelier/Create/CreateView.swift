@@ -295,7 +295,7 @@ struct CanvasView: View {
               .help(
                 reference != nil
                   ? referenceProblem
-                  ?? "Edit mode: this clip is the reference video, <Video 1> in the prompt; moodboard images are Picture 1 and on. It's read from its start at the model's frame rate, cropped to fill the frame, its last frame held if it's shorter than the new video."
+                  ?? "Edit mode: this clip is the reference video, <Video 1> in the prompt; moodboard images are Picture 1 and on. It's read from its start at 24 fps, up to the new video's length, at its own shape with a 768-pixel short edge; a shorter clip is a shorter reference."
                   : "Edit mode: what's inside the frame is sent to the model. Empty areas are filled in; with a mask, only the painted area changes.")
             }
             .position(x: frameRect.midX, y: frameRect.midY)

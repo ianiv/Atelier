@@ -129,42 +129,47 @@ struct MediaTests {
   }
 }
 
-/// An imported video's frames as H3 Ref2VA takes them (`ReferenceVideo.fileFrames`), the way the
-/// engine CLI's `loadInputVideoTensor` reads `--video`.
+/// An imported video's frames as H3 Ref2VA takes them (`ReferenceVideo.fileFrames`), as MiniMax's
+/// pipeline reads a reference video.
 @Suite(.tags(.smoke))
 struct MediaReferenceTests {
-  @Test func framesAreReadAt24FromA30FrameVideo() async throws {
+  @Test func framesAreResampledTo24FromA30FrameVideo() async throws {
     try await withMediaFolder { folder in
       let url = folder.appending(path: "thirty.mov")
       try await writeTestMovie(to: url, frames: 36, framesPerSecond: 30)
-      let frames = try await ReferenceVideo.fileFrames(url: url, count: 22, rate: 24, width: 32, height: 32)
+      let frames = try await ReferenceVideo.fileFrames(url: url, sourceCount: 36, sourceRate: 30, numFrames: 56, rate: 24)
+      // 36 frames at 30 fps are 29 at 24: snapped down to 22, never padded to 56.
       #expect(frames.count == 22)
-      #expect(frames.allSatisfy { $0.width == 32 && $0.height == 32 })
-      // Frame i is at i/24 s, which shows source frame floor(i × 30 / 24): the same gray as that
-      // frame decoded on its own (the codec's range conversion shifts levels a little).
+      // At its own shape: 64×32 on MiniMax's canvas.
+      #expect(frames.allSatisfy { $0.width == 1440 && $0.height == 704 })
+      // Each is the source frame `sourceIndices` names, the same gray as that frame on its own.
+      let wanted = ReferenceVideo.sourceIndices(numFrames: 56, rate: 24, sourceCount: 36, sourceRate: 30)
       var expected: [Int] = []
-      for index in 0..<22 {
-        expected.append(centerLevel(try await Media.frame(index * 30 / 24, of: url, framesPerSecond: 30)))
-      }
+      for index in wanted { expected.append(centerLevel(try await Media.frame(index, of: url, framesPerSecond: 30))) }
       let levels = frames.map(centerLevel)
       #expect(zip(levels, expected).allSatisfy { abs($0 - $1) <= 1 }, "levels \(levels), expected \(expected)")
-      // And they're distinct frames, not one held.
       #expect(Set(levels).count >= 15)
     }
   }
 
-  @Test func aShortVideoHoldsItsLastFrame() async throws {
+  @Test func aVideoTooShortIsRefused() async throws {
     try await withMediaFolder { folder in
       let url = folder.appending(path: "short.mov")
-      // Half a second at 24 fps: 12 frames.
+      // Half a second at 24 fps: 12 frames, under a reference's 22.
       try await writeTestMovie(to: url, frames: 12, framesPerSecond: 24)
-      let frames = try await ReferenceVideo.fileFrames(url: url, count: 22, rate: 24, width: 16, height: 16)
+      await #expect(throws: ReferenceVideo.Failure.self) {
+        try await ReferenceVideo.fileFrames(url: url, sourceCount: 12, sourceRate: 24, numFrames: 22, rate: 24)
+      }
+    }
+  }
+
+  @Test func aFileShorterThanItsRecordEndsTheReferenceEarlier() async throws {
+    try await withMediaFolder { folder in
+      let url = folder.appending(path: "fewer.mov")
+      try await writeTestMovie(to: url, frames: 30, framesPerSecond: 24)
+      // The record says 60; the file has 30, so the reference is 22, not 56 with held frames.
+      let frames = try await ReferenceVideo.fileFrames(url: url, sourceCount: 60, sourceRate: 24, numFrames: 56, rate: 24)
       #expect(frames.count == 22)
-      let levels = frames.map(centerLevel)
-      let last = centerLevel(try await Media.frame(11, of: url, framesPerSecond: 24))
-      #expect(abs(levels[11] - last) <= 1)
-      #expect(levels[10] != levels[11])
-      #expect(levels[12...].allSatisfy { abs($0 - last) <= 1 }, "levels \(levels)")
     }
   }
 
@@ -173,7 +178,7 @@ struct MediaReferenceTests {
       let url = folder.appending(path: "broken.mov")
       try Data("nope".utf8).write(to: url)
       await #expect(throws: (any Error).self) {
-        try await ReferenceVideo.fileFrames(url: url, count: 22, rate: 24, width: 16, height: 16)
+        try await ReferenceVideo.fileFrames(url: url, sourceCount: 30, sourceRate: 24, numFrames: 22, rate: 24)
       }
     }
   }

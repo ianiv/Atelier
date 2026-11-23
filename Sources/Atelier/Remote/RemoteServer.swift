@@ -709,17 +709,16 @@ final class RemoteServer {
         ? try await RemoteBackend.blankConfiguration(for: request.model)
         : try await defaults(for: request.model)
       SettingsRegistry.apply(dump: request.settings, to: &configuration)
-      // A reference video has one frame per output frame, so a list of any other length is
-      // refused before anything is decoded.
-      // Bounded too, as the decoded frames are kept until the tensor is made.
+      // A reference video is 17 n + 5 frames, no more than the video to make, so a list of any
+      // other length is refused before anything is decoded. Bounded too, as the decoded frames are
+      // kept until the tensor is made.
       if let frames = request.referenceVideo?.count {
-        let length = configuration.videoModel.map { $0.snapped(configuration.numFrames) }
-        guard frames == length, frames <= ReferenceVideo.maximumFrames else {
-          throw RemoteError.server("The reference video doesn't match the length of the video to make.")
+        let length = configuration.videoModel.map { $0.snapped(configuration.numFrames) } ?? 0
+        guard ReferenceVideo.isLength(frames), frames <= length, frames <= ReferenceVideo.maximumFrames else {
+          throw RemoteError.server("The reference video doesn't fit the length of the video to make.")
         }
       }
-      let inputs = try await Self.inputs(
-        of: request, device: device, store: store, outputSize: (configuration.width, configuration.height))
+      let inputs = try await Self.inputs(of: request, device: device, store: store)
       // Cancelled while the model's settings loaded.
       if await store.latestEvent(of: job, device: device)?.state.isFinal ?? true { return }
       var engineRequest = GenerationEngine.Request(
@@ -733,7 +732,7 @@ final class RemoteServer {
       engineRequest.upscale = request.upscale
       // Made into the engine's tensor now, so the queued job holds that rather than the images.
       if let frames = inputs.referenceVideo {
-        guard let reference = ReferenceVideo(frames: frames).withTensor(width: configuration.width, height: configuration.height) else {
+        guard let reference = ReferenceVideo(frames: frames).withTensor() else {
           throw RemoteError.server("The reference video's frames couldn't be read.")
         }
         engineRequest.referenceVideo = reference
@@ -764,9 +763,8 @@ final class RemoteServer {
 
   /// A job's images and audio, from its uploads. The audio gets a copy the queue owns, as a job
   /// queued on this machine does (`AudioClip.snapshot`).
-  /// `outputSize` is the run's: the reference video's frames were prepared at it.
   @concurrent private static func inputs(
-    of request: RemoteJobRequest, device: UUID, store: RemoteJobStore, outputSize: (width: Int, height: Int)
+    of request: RemoteJobRequest, device: UUID, store: RemoteJobStore
   ) async throws -> Inputs {
     func image(_ hash: String) async throws -> CGImage {
       guard let url = await store.blobURL(device: device, hash: hash), let image = ImageLoader.image(at: url) else {
@@ -810,24 +808,29 @@ final class RemoteServer {
     if let hashes = request.referenceVideo {
       // A held frame comes as the same upload each time: decoded once.
       var decoded: [String: CGImage] = [:]
+      var frameSize: (Int, Int)?
       var frames: [CGImage] = []
       frames.reserveCapacity(hashes.count)
       for hash in hashes {
         if let frame = decoded[hash] {
           frames.append(frame)
         } else {
-          // The client prepared each at the output size (`ReferenceVideo.frame`): the size is read
-          // from the file's header first, so no other size is ever decoded.
+          // The client put each on its clip's canvas (`ReferenceVideo.frame`): all one size, a
+          // multiple of 32, no larger than a canvas is. The size is read from the file's header
+          // first, so no other size is ever decoded.
           let url = await store.blobURL(device: device, hash: hash)
-          let size = url.flatMap { CGImageSourceCreateWithURL($0 as CFURL, nil) }
+          let header = url.flatMap { CGImageSourceCreateWithURL($0 as CFURL, nil) }
             .flatMap { CGImageSourceCopyPropertiesAtIndex($0, 0, nil) as? [CFString: Any] }
-            .map { ($0[kCGImagePropertyPixelWidth] as? Int, $0[kCGImagePropertyPixelHeight] as? Int) }
-          guard let size, size.0 == outputSize.width, size.1 == outputSize.height else {
-            throw RemoteError.server("The reference video's frames aren't the size of the video to make.")
+          guard let width = header?[kCGImagePropertyPixelWidth] as? Int, let height = header?[kCGImagePropertyPixelHeight] as? Int,
+                width > 0, height > 0, width % 32 == 0, height % 32 == 0, width * height <= ReferenceVideo.maximumCanvasPixels,
+                frameSize.map({ $0 == (width, height) }) ?? true
+          else {
+            throw RemoteError.server("The reference video's frames aren't the size of a clip's canvas.")
           }
+          frameSize = (width, height)
           let frame = try await image(hash)
-          guard frame.width == outputSize.width, frame.height == outputSize.height else {
-            throw RemoteError.server("The reference video's frames aren't the size of the video to make.")
+          guard frame.width == width, frame.height == height else {
+            throw RemoteError.server("The reference video's frames aren't the size of a clip's canvas.")
           }
           decoded[hash] = frame
           frames.append(frame)

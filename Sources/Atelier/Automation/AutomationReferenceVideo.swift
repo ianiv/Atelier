@@ -13,7 +13,7 @@ extension Automation {
   /// `screenRequest()` names the clip and sends no canvas image; generate's `reference_video`
   /// refuses what the screen refuses; the queued job comes back from a saved queue with its clip
   /// in its own project only; and a run with the reference reads its frames when it starts and
-  /// makes 22 frames after the clip, the engine given the clip as a 22-frame tensor. Steps default
+  /// makes 39 frames after the clip, the engine given the 22-frame clip unpadded at its own 768×768 canvas. Steps default
   /// to 2. `--probe-no-pictures` then runs once more with an empty moodboard and logs what
   /// happens (the distilled Ref2VA models need a picture), as no PASS or FAIL.
   static func referenceVideoCheck(_ model: CreateModel, presets: PresetStore) {
@@ -205,6 +205,10 @@ extension Automation {
       check(inputs?.contains("reference_video") == true, "list_models says it takes a reference_video (\(inputs ?? []))")
 
       // Queued and saved, it comes back with its clip in its own project only.
+      // The run is longer than the clip: the reference stays 22 frames, never padded.
+      var longer = settings
+      longer.numFrames = 39
+      model.settings = longer
       model.setQueuePaused(true)
       known = knownJobs()
       model.generate()
@@ -238,14 +242,15 @@ extension Automation {
       watcher.cancel()
       log(String(format: "reference run: %.1f s", Date().timeIntervalSince(runStart)))
       check(sawReading, "the job read the clip's frames when it started")
-      check(made?.isVideo == true && made?.clip?.frames.count == ReferenceVideo.minimumFrames, "the run made \(ReferenceVideo.minimumFrames) frames (\(made?.clip?.frames.count ?? 0))")
+      check(made?.isVideo == true && made?.clip?.frames.count == 39, "the run made 39 frames from a 22-frame clip (\(made?.clip?.frames.count ?? 0))")
       if let made {
         let parent = model.history.parent(of: made)
         check(parent?.tensorId == clip.tensorId, "it follows the clip (parent \(parent.map { "\($0.tensorId)" } ?? "none"))")
         check(made.inputTensorId == nil, "the result records no input image")
       }
       let shape = await model.engine.lastVideoImageShape
-      check(shape == [ReferenceVideo.minimumFrames, 256, 256, 3], "the engine got the clip as a 22-frame tensor (\(shape.map { "\($0)" } ?? "none"))")
+      // A 256×256 clip goes on MiniMax's 768×768 canvas, its own shape.
+      check(shape == [ReferenceVideo.minimumFrames, 768, 768, 3], "the engine got the clip as 22 frames at its own 768×768 canvas, not padded to 39 (\(shape.map { "\($0)" } ?? "none"))")
       model.moodboard.removeAll()
       if args.contains("--probe-no-pictures") {
         // Only the reference video: what the model makes of it is logged, not judged.

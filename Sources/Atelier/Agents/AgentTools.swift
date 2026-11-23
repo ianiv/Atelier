@@ -590,7 +590,7 @@ final class AgentTools {
           "reference_video": [
             "type": "object", "required": ["history_step"],
             "properties": ["history_step": ["type": "integer", "description": "A video step of the current project (see list_history)."]],
-            "description": "MiniMax H3 Ref2VA only: a clip from History as the reference video, <Video 1> in the prompt. Read from its start at the model's frame rate, cropped to fill the output size, its last frame held if it's shorter. Needs strength 1 and num_frames of 22 or more; not with input_image or audio.",
+            "description": "MiniMax H3 Ref2VA only: a clip from History as the reference video, <Video 1> in the prompt. Read from its start at the model's 24 fps, up to the video's length and snapped down to 17n+5 frames (a shorter clip is a shorter reference, never padded), at its own aspect ratio with a 768-pixel short edge. Needs strength 1 and num_frames of 22 or more; not with input_image or audio.",
           ],
           "save_to": ["type": "string", "description": "Where to write the PNG or MP4: a file path, or a folder. Defaults to a temporary folder."],
           "include_image": ["type": "boolean", "description": "Return the image inline (scaled to 1024 px on the long side). Default true."],
@@ -849,8 +849,12 @@ final class AgentTools {
       throw ToolError("reference_video needs num_frames of \(ReferenceVideo.minimumFrames) or more (this run makes \(configuration.numFrames)).")
     }
     let item = try historyItem(object["history_step"], name: "reference_video.history_step", canvas: false)
-    guard item.isVideo else {
+    guard let clip = item.clip else {
       throw ToolError("History step \(item.id.logicalTime) is an image, not a video. See list_history.")
+    }
+    // As the Create screen refuses it (`ReferenceVideo.problem`): no shorter than a whole reference.
+    if CreateModel.referenceFrames(of: clip, rate: video.framesPerSecond) < ReferenceVideo.minimumFrames {
+      throw ToolError("History step \(item.id.logicalTime) is too short to be a reference_video: it needs \(ReferenceVideo.minimumFrames) frames at 24 fps, about a second.")
     }
     return ReferenceVideo(sourceTensorId: item.tensorId, project: create.history.project.name)
   }

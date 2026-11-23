@@ -100,7 +100,7 @@ enum Automation {
       "--model-folders-check", "--styles-check", "--cleanup-check", "--engine-check", "--playback-check",
       "--remote-check", "--remote-net-check", "--remote-shots", "--remote-url-check", "--remote-tailnet-check",
       "--catalog-retry-check", "--model-move-check", "--add-folder-check", "--hf-link-check", "--color-match-check", "--depth-check", "--canvas-clip-check",
-      "--create-delete-check", "--reference-video-check",
+      "--create-delete-check", "--reference-video-check", "--reference-video-run",
       "--history-loras-check",
       "--input-entries-check", "--entries-freeze-check", "--tab-switch-bench", "--delete-project-check", "--compact-check",
       "--paint-check", "--edit-screen-check", "--edit-tools-check", "--grain-reference", "--edit-render-bench", "--edit-ui-bench",
@@ -213,6 +213,10 @@ enum Automation {
     }
     if args.contains("--history-loras-check") {
       historyLoRAsCheck(model, navigation: navigation, layouts: layouts, presets: presets, library: library)
+      return
+    }
+    if args.contains("--reference-video-run") {
+      referenceVideoRun(model, navigation: navigation, layouts: layouts, presets: presets)
       return
     }
     if args.contains("--reference-video-check") {

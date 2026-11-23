@@ -378,12 +378,15 @@ actor GenerationEngine {
       {
         throw MediaGenerationKitError.generationFailed(problem)
       }
-      // One per output frame at the output size (`CreateModel.run`, or a paired device's upload),
-      // usually made into the tensor already (`ReferenceVideo.withTensor`).
-      let tensor = reference.tensor ?? reference.withTensor(width: settings.width, height: settings.height)?.tensor
-      guard let tensor, tensor.shape == [settings.numFrames, settings.height, settings.width, 3] else {
+      // 17 n + 5 frames, no more than the run makes, at the clip's canvas size (`CreateModel.run`,
+      // or a paired device's upload), usually made into the tensor already
+      // (`ReferenceVideo.withTensor`). The engine sizes a clip itself (`minimaxH3CanvasSize`).
+      let tensor = reference.tensor ?? reference.withTensor()?.tensor
+      guard let tensor, tensor.shape.count == 4, tensor.shape[3] == 3, ReferenceVideo.isLength(tensor.shape[0]),
+            tensor.shape[0] <= settings.numFrames
+      else {
         throw MediaGenerationKitError.generationFailed(
-          "The reference video has \(reference.frameCount) frames, not the \(settings.numFrames) this run makes.")
+          "The reference video has \(reference.frameCount) frames, which isn't a whole reference (17 n + 5, at least 22) for a \(settings.numFrames)-frame run.")
       }
       image = tensor
     } else {

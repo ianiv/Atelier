@@ -175,7 +175,8 @@ extension Automation {
         check(model.history.parent(of: made)?.tensorId == item.tensorId, "it follows the imported step")
       }
       let shape = await model.engine.lastVideoImageShape
-      check(shape == [ReferenceVideo.minimumFrames, 256, 256, 3], "the engine got the video as a 22-frame tensor (\(shape.map { "\($0)" } ?? "none"))")
+      // 640×360 keeps its shape: 1344×768 on MiniMax's canvas, whatever the 256×256 output.
+      check(shape == [ReferenceVideo.minimumFrames, 768, 1344, 3], "the engine got the video as 22 frames at 1344×768, its own shape (\(shape.map { "\($0)" } ?? "none"))")
 
       // With its file gone the run says so.
       model.show(item)
@@ -196,6 +197,129 @@ extension Automation {
       check(left.isEmpty, "and the media folder is empty (\(left.count) left)")
       model.moodboard.removeAll()
       finish()
+    }
+  }
+
+  /// `--reference-video-run --model FILE --video FILE --project NAME [--image FILE] [--prompt-file FILE]
+  /// [--width W --height H] [--frames N] [--steps N] [--frames-dir DIR] [--quit]` makes one H3
+  /// Ref2VA video from a video file of the user's: imports it into the scratch project, puts
+  /// `--image` on the moodboard (Picture 1), and runs with the model's own settings but for the
+  /// size, length and (only when given) steps. It prints the reference's frame count and canvas
+  /// size as the engine got them, the step and how long it took, and writes frames 0, the middle
+  /// and the last of the result as PNGs to `--frames-dir`.
+  static func referenceVideoRun(_ model: CreateModel, navigation: Navigation, layouts: LayoutStore, presets: PresetStore) {
+    let args = CommandLine.arguments
+    func value(_ name: String) -> String? {
+      guard let index = args.firstIndex(of: name), index + 1 < args.count else { return nil }
+      return args[index + 1]
+    }
+    Task { @MainActor in
+      let started = Date()
+      func log(_ message: String) {
+        print(String(format: "[%7.2fs] ", Date().timeIntervalSince(started)) + message)
+        fflush(stdout)
+      }
+      @MainActor func finish(_ ok: Bool) {
+        log(ok ? "reference video run: done" : "reference video run: FAIL")
+        if args.contains("--quit") { AppLifecycle.quit() }
+      }
+      @MainActor func wait(seconds: Double, until condition: () -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while !condition() {
+          if Date() > deadline { return false }
+          try? await Task.sleep(for: .milliseconds(100))
+        }
+        return true
+      }
+      while !model.history.isLoaded || model.models.isEmpty || model.settings == nil || model.isBusy {
+        try? await Task.sleep(for: .milliseconds(100))
+      }
+      navigation.section = .create
+      ensureWindow(model, navigation: navigation, layouts: layouts, presets: presets)
+      guard let file = value("--model"), let videoPath = value("--video") else {
+        log("FAIL pass --model and --video")
+        return finish(false)
+      }
+      model.selectedModel = file
+      _ = await wait(seconds: 120) { !model.isLoadingModel && model.settings != nil }
+      model.resetToModelDefaults(undoManager: nil)
+      guard model.videoModel?.takesReferences == true, var settings = model.settings, let video = model.videoModel else {
+        log("FAIL \(file) isn't an H3 Ref2VA model")
+        return finish(false)
+      }
+      if let width = value("--width").flatMap(Int.init) { settings.width = width }
+      if let height = value("--height").flatMap(Int.init) { settings.height = height }
+      if let frames = value("--frames").flatMap(Int.init) { settings.numFrames = video.snapped(frames) }
+      if let steps = value("--steps").flatMap(Int.init) { settings.steps = steps }
+      settings.strength = 1
+      model.settings = settings
+      model.audio.clear()
+      model.count = 1
+      if let path = value("--prompt-file"), let prompt = try? String(contentsOfFile: path, encoding: .utf8) {
+        model.prompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+      }
+      model.moodboard.removeAll()
+      if let path = value("--image") {
+        guard let image = ImageLoader.image(at: URL(fileURLWithPath: path)) else {
+          log("FAIL couldn't read \(path)")
+          return finish(false)
+        }
+        model.moodboard.add(ImageLoader.fitted(image, maxSide: Moodboard.maxSide))
+      }
+      let url = URL(fileURLWithPath: videoPath)
+      model.importVideo(url, name: url.deletingPathExtension().lastPathComponent)
+      await model.videoImportFinished()
+      guard let item = model.history.items.first(where: \.isImported), let media = item.clip?.media else {
+        log("FAIL the video wasn't imported (\(model.errorMessage ?? ""))")
+        return finish(false)
+      }
+      log("imported “\(media.name)”: \(media.width)×\(media.height), \(media.frameCount) frames at \(String(format: "%.3f", media.framesPerSecond)) fps, step \(item.id.logicalTime)")
+      model.canvasMode = .edit
+      _ = await wait(seconds: 10) { model.referenceClip?.tensorId == item.tensorId }
+      if let problem = model.referenceVideoProblem {
+        log("FAIL \(problem)")
+        return finish(false)
+      }
+      log("model \(file): \(settings.width)×\(settings.height), \(video.snapped(settings.numFrames)) frames, \(settings.steps) steps, sampler \(settings.sampler), seed \(model.seed)")
+      let known = Set((model.queue.waiting + model.queue.recent).map(\.id))
+      let runStarted = Date()
+      model.generate()
+      var job: JobQueue.Job?
+      _ = await wait(seconds: 30) {
+        job = ([model.queue.running].compactMap(\.self) + model.queue.waiting + model.queue.recent).first { !known.contains($0.id) }
+        return job != nil
+      }
+      guard let id = job?.id else {
+        log("FAIL nothing was queued")
+        return finish(false)
+      }
+      _ = await wait(seconds: 3 * 3600) { model.queue.recent.contains { $0.id == id } }
+      let seconds = Date().timeIntervalSince(runStarted)
+      let shape = await model.engine.lastVideoImageShape
+      log("the engine got the reference as \(shape.map { "\($0)" } ?? "none") (frames, height, width, channels)")
+      guard case .finished(let tensorId)? = model.queue.recent.first(where: { $0.id == id })?.status,
+            let made = model.history.item(tensorId: tensorId), let clip = made.clip
+      else {
+        log("FAIL the run didn't finish: \(model.errorMessage ?? "")")
+        return finish(false)
+      }
+      log(String(format: "made step %lld (tensor %lld): %d frames in %.1f s", made.id.logicalTime, made.tensorId, clip.frames.count, seconds))
+      if let directory = value("--frames-dir") {
+        let folder = URL(fileURLWithPath: directory)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        for index in Set([0, clip.frames.count / 2, clip.frames.count - 1]).sorted() {
+          if let image = await model.history.frame(index, of: made), let png = ImageTensor.png(image) {
+            try? png.write(to: folder.appending(path: "frame-\(index).png"))
+          }
+        }
+        for index in [0, media.frameCount / 2] {
+          if let image = await model.history.frame(index, of: item), let png = ImageTensor.png(image) {
+            try? png.write(to: folder.appending(path: "source-\(index).png"))
+          }
+        }
+        log("frames written to \(folder.path)")
+      }
+      finish(true)
     }
   }
 
