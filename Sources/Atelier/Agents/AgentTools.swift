@@ -61,7 +61,7 @@ final class AgentTools {
     }
 
     /// Whether answers name it by what it does (`label`) rather than a prompt.
-    var isLabelled: Bool { tool == "match_colors" || tool == "edit_image_look" }
+    var isLabelled: Bool { tool == "match_colors" || tool == "edit_image_look" || tool == "crop_image" }
 
     var status: String {
       if result != nil { return "done" }
@@ -105,7 +105,7 @@ final class AgentTools {
 
   /// Every tool, as tools/list gives them: the ones here, then the canvas edit tools
   /// (`AgentToolsCanvasEdit.swift`) and edit_image (`AgentToolsEditImage.swift`).
-  static let definitions: [[String: Any]] = baseDefinitions + canvasEditDefinitions + [editImageDefinition]
+  static let definitions: [[String: Any]] = baseDefinitions + canvasEditDefinitions + [editImageDefinition, cropImageDefinition]
 
   private static let baseDefinitions: [[String: Any]] = [
     [
@@ -630,6 +630,7 @@ final class AgentTools {
     case "get_image": return try await getImage(arguments)
     case "match_colors": return try await matchColors(arguments, progress: progress)
     case "edit_image_look": return try await editImageLook(arguments, progress: progress)
+    case "crop_image": return try await cropImage(arguments, progress: progress)
     case "list_grain_profiles": return try Self.textResult(json: listGrainProfiles())
     case "measure_reference": return try await measureReference(arguments)
     case "generate": return try await startGenerate(arguments, progress: progress)
@@ -2531,17 +2532,25 @@ final class AgentTools {
   /// it records. The look's layers go on in the order the screen's controls would put them:
   /// that base (or no change), the profile (or Match Reference's), the LUT, the reference, then
   /// `options`. The Edit screen itself is left as it is.
-  private func editImageLook(_ arguments: [String: Any], progress: @escaping (Progress) -> Void) async throws -> [String: Any] {
+  ///
+  /// The base keeps the step's crop (its record's), so a new look never silently drops it.
+  /// `crop_image` comes through here with `crop`: the change it makes to that crop, worked out
+  /// against the source's size.
+  func editImageLook(
+    _ arguments: [String: Any], crop cropChange: CropArguments.Change? = nil, progress: @escaping (Progress) -> Void
+  ) async throws -> [String: Any] {
+    let tool = cropChange == nil ? "edit_image_look" : "crop_image"
     if let background = arguments["background"], !Self.isBoolean(background) { throw ToolError("`background` must be true or false.") }
     let background = arguments["background"] as? Bool == true
     if let given = arguments["match_reference"], !Self.isBoolean(given) { throw ToolError("`match_reference` must be true or false.") }
     let matchesReference = arguments["match_reference"] as? Bool == true
     let given = try historyItem(arguments["history_step"])
     guard !given.isVideo, given.hasImage else {
-      throw ToolError("History step \(given.id.logicalTime) is \(given.isVideo ? "a video" : "an input entry with an empty canvas"); edit_image_look takes images.")
+      throw ToolError("History step \(given.id.logicalTime) is \(given.isVideo ? "a video" : "an input entry with an empty canvas"); \(tool) takes images.")
     }
     let project = create.history.project
     var notes: [String] = []
+    var crop: Edit.Crop?
 
     // The base: an edited step's own look, on its source.
     var source = given
@@ -2556,6 +2565,7 @@ final class AgentTools {
       if let found = EditModel.reopening(record, in: create.history.tree) {
         source = found
         options = record.options
+        crop = record.crop
         profileName = record.profileName
         referenceName = record.referenceName
         referenceTensorId = record.referenceTensorId
@@ -2688,18 +2698,34 @@ final class AgentTools {
       savedProfile = url.path
     }
 
+    // The crop, in the source's pixels: the base's, or crop_image's change to it, kept inside the
+    // source (a record is read from a file; an agent's numbers are checked by `CropArguments`).
+    if crop != nil || cropChange != nil {
+      guard let tensorId = source.imageTensorId, let picture = await project.read({ $0.image(tensorId: tensorId) }) else {
+        throw ToolError("Step \(source.id.logicalTime)'s image couldn't be read.")
+      }
+      let width = picture.width, height = picture.height
+      if let cropChange { crop = try cropChange.crop(over: crop, width: width, height: height) }
+      crop = EditRetouch.effectiveCrop(crop, imageWidth: width, imageHeight: height).map { applied in
+        // The ratio it's held to stays with it, for the screen's lock.
+        var kept = applied
+        kept.aspect = crop?.aspect
+        kept.swapped = crop?.swapped ?? false
+        return kept
+      }
+    }
+
     let edit = Edit.Job(
       project: project.name, sourceTensorId: source.tensorId, options: options, profileName: profileName,
-      referenceTensorId: referenceTensorId, referenceName: referenceName, context: context)
+      referenceTensorId: referenceTensorId, referenceName: referenceName, context: context, retouch: Edit.Retouch(crop: crop))
     // Another call's job for the same edit: this call answers with it.
     if let existing = jobs.values.first(where: { $0.finishedAt == nil && $0.edit?.isSameEdit(as: edit) == true }) {
       return try await answer(existing, background: background, progress: progress)
     }
     let sourceStep = source.id.logicalTime
     let editedStep = given.id.logicalTime
-    return try await startJob(
-      tool: "edit_image_look", label: "Edit look of step \(sourceStep)", edit: edit, background: background, progress: progress
-    ) { [weak self] update in
+    let label = cropChange == nil ? "Edit look of step \(sourceStep)" : (crop == nil ? "Uncrop step \(sourceStep)" : "Crop step \(sourceStep)")
+    return try await startJob(tool: tool, label: label, edit: edit, background: background, progress: progress) { [weak self] update in
       guard let self else { throw CancellationError() }
       update(Progress(step: 0, total: nil, message: "Waiting for the current run to finish", isQueued: true))
       let saved = try await self.create.edit(forAgent: edit, item: source) { step, message in
@@ -2710,6 +2736,8 @@ final class AgentTools {
         "options": Self.lookJSON(saved.sidecar.edit?.options ?? options), "width": saved.sidecar.width, "height": saved.sidecar.height,
       ]
       if editedStep != sourceStep { result["edited_step"] = editedStep }
+      // The crop in the source's pixels, or null for none: coordinates are always the source's.
+      result["crop"] = (saved.sidecar.edit?.crop ?? crop).map { Self.cropJSON($0) as Any } ?? NSNull()
       if let profileName { result["profile"] = profileName }
       if let referenceName { result["reference"] = referenceName }
       if let lut = options.lut.name { result["lut"] = lut }
@@ -2720,7 +2748,8 @@ final class AgentTools {
         allNotes.append("Saved into “\(project.name)”, the project the step is in; another project is open now.")
       }
       if !allNotes.isEmpty { result["notes"] = allNotes }
-      self.lastResult = "Edited the look of step \(sourceStep) in \(project.name)"
+      self.lastResult = cropChange == nil
+        ? "Edited the look of step \(sourceStep) in \(project.name)" : "\(crop == nil ? "Uncropped" : "Cropped") step \(sourceStep) in \(project.name)"
       var answer = try Self.textResult(json: result)
       answer["structuredContent"] = Self.tidy(result)
       return answer

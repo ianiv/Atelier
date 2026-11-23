@@ -50,7 +50,8 @@ import SwiftUI
 /// (AutomationInputEntries.swift). `--tab-switch-bench` times switching back to Create
 /// (AutomationTabSwitch.swift). `--edit-render-bench` times the Edit screen's renders
 /// (AutomationEdit.swift), and `--edit-ui-bench` its main thread while it's driven
-/// (AutomationEditUI.swift).
+/// (AutomationEditUI.swift). `--edit-tools-check` checks the Edit screen's tools, Crop and
+/// `crop_image` (AutomationEditTools.swift).
 @MainActor
 enum Automation {
   /// `--sampler`'s names: `SamplerType`'s case names, spelled out because the type describes
@@ -99,7 +100,7 @@ enum Automation {
       "--create-delete-check",
       "--history-loras-check",
       "--input-entries-check", "--entries-freeze-check", "--tab-switch-bench", "--delete-project-check", "--compact-check",
-      "--paint-check", "--edit-screen-check", "--grain-reference", "--edit-render-bench", "--edit-ui-bench",
+      "--paint-check", "--edit-screen-check", "--edit-tools-check", "--grain-reference", "--edit-render-bench", "--edit-ui-bench",
     ]
     // The unit tests run inside the app. Like a scripted run, that leaves the user's data alone: no
     // cleanup at launch, no saving the session or queue.
@@ -285,6 +286,10 @@ enum Automation {
     }
     if args.contains("--edit-screen-check") {
       editScreenCheck(model, navigation: navigation, presets: presets)
+      return
+    }
+    if args.contains("--edit-tools-check") {
+      editToolsCheck(model, navigation: navigation, presets: presets)
       return
     }
     if let index = args.firstIndex(of: "--grain-reference") {

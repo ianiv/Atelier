@@ -1049,6 +1049,38 @@ struct EditRenderLaneTests {
     edit.endRenders(pane: right)
     #expect(!edit.isRendering)
   }
+
+  /// A pane's fitted render stays up for the working image that replaces its own when the size
+  /// is the same (a Heal stroke), and is dropped for a new size (a crop applied), which would be
+  /// stretched.
+  @Test func fittedRenderStandsInForTheSameSize() {
+    let old = NSObject(), new = NSObject()
+    let target = EditRenderTarget(source: ObjectIdentifier(old), width: 300, height: 200, sourceWidth: 1200, sourceHeight: 800)
+    #expect(target.stands(for: ObjectIdentifier(old), width: 1200, height: 800))
+    #expect(target.stands(for: ObjectIdentifier(new), width: 1200, height: 800))
+    #expect(!target.stands(for: ObjectIdentifier(new), width: 800, height: 600))
+    // The same size elsewhere in the source (a crop moved, or undone to another place) can't.
+    let cropped = EditRenderTarget(
+      source: ObjectIdentifier(old), width: 300, height: 200, sourceWidth: 1200, sourceHeight: 800, sourceX: 40, sourceY: 10)
+    #expect(cropped.stands(for: ObjectIdentifier(new), width: 1200, height: 800, origin: (40, 10)))
+    #expect(!cropped.stands(for: ObjectIdentifier(new), width: 1200, height: 800, origin: (0, 10)))
+    // A target that doesn't say its image's size stands only for its own.
+    let bare = EditRenderTarget(source: ObjectIdentifier(old), width: 300, height: 200)
+    #expect(bare.stands(for: ObjectIdentifier(old), width: 0, height: 0) && !bare.stands(for: ObjectIdentifier(new), width: 0, height: 0))
+  }
+
+  /// The tool and the comparison: a one-pane tool goes to Hold, a two-pane comparison back to Move.
+  @Test func cropToolAndComparisonModes() {
+    let edit = EditModel()
+    edit.compareMode = .sideBySide
+    edit.tool = .crop
+    #expect(edit.compareMode == .hold && edit.tool == .crop)
+    edit.compareMode = .slider
+    #expect(edit.tool == .move && edit.compareMode == .slider)
+    // No image: nothing to crop.
+    edit.setCrop(Edit.Crop(x: 0, y: 0, width: 100, height: 100), undoManager: nil)
+    #expect(edit.retouch.crop == nil && edit.workingImage == nil)
+  }
 }
 
 /// The renderer's stage caches (`EditRenderer`'s lens, colour and halation stages): a change

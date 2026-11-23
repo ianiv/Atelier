@@ -1,6 +1,6 @@
 # Editing images
 
-The **Edit** screen (below History in the sidebar) finishes an image without a model: film grain, color matching to a reference, a grade, a 3D LUT, halation, lens blur and a vignette. Its grain imitates a real camera's noise, and looks can be kept as `.grain.json` noise profiles. Editing is non-destructive: the screen always renders the image you opened with the current settings, and an edit saved to History remembers its settings, so you can open it again and change them.
+The **Edit** screen (below History in the sidebar) finishes an image without a model: a crop, film grain, color matching to a reference, a grade, a 3D LUT, halation, lens blur and a vignette. Its grain imitates a real camera's noise, and looks can be kept as `.grain.json` noise profiles. Editing is non-destructive: the screen always renders the image you opened with the current settings, and an edit saved to History remembers its settings, so you can open it again and change them.
 
 Edit works on images, not videos.
 
@@ -11,6 +11,32 @@ Edit works on images, not videos.
 - **Use Canvas Image** (toolbar) takes the image on the Create screen's canvas: its step when it's one, or the image itself.
 
 The image's name is in the bottom bar ("Project, step 12", or the file's name). The screen keeps the image and its look while you switch to other screens, and comes back to the same step at the next launch.
+
+## Tools
+
+The picker at the left of the bottom bar chooses what a drag on the image does:
+
+- **Move** drags the image around (when you're zoomed in).
+- **Crop** draws the crop over the whole image.
+
+Crop and the other tools act in a single picture: choosing one while **Side by Side** or **Slider** is on switches the comparison to **Hold for Original**, and choosing Side by Side or Slider goes back to Move.
+
+## Crop
+
+With **Crop** chosen the screen shows the whole image fitted, with the crop rectangle over it and the part outside it dimmed. Drag a corner or an edge to resize it, drag inside to move it, or drag outside it to draw a new one; a grid of thirds shows while you drag. Pinch to zoom, and on the Mac hold Space and drag to move the image. Coming back to Crop keeps the zoom you left it at. Choosing another tool applies the crop: the screen then shows the cropped picture with the look.
+
+The bar over the bottom of the image holds:
+
+- **Aspect**: **Free**, **Original** (the image's own ratio), or 1:1, 4:5, 2:3, 3:4, 9:16 or 16:9. Choosing a ratio holds the crop to it, keeping its center; with no crop it takes the largest crop of that ratio. Corners then keep the ratio as you drag.
+- **Orientation** turns the ratio on its side (4:5 to 5:4). It's unavailable for Free and 1:1.
+- The crop's size in pixels.
+- **Reset Crop** takes the crop off.
+
+Crops are in whole pixels, at least 16 on a side, anywhere in the image (not snapped to 64). Each finished drag, ratio change and Reset Crop is one step of **Undo** (⌘Z), named Crop or Reset Crop. The bottom bar's **Reset** resets the look only and leaves the crop.
+
+The crop goes on before the look, so the vignette centers on the cropped picture, the grain is sized to the cropped frame (as grain.py gives a cropped file), and the matches measure what's in the frame. Blur, smear and halation near the crop's edge read the edge's own pixels rather than what's beyond it. While Crop is chosen the look is drawn over the whole image, so its vignette is the whole image's until you leave Crop.
+
+The crop belongs to the image, not the look: opening another image starts with none, and profiles never hold one. The screen keeps the crop of the step it has open across a quit, saved or not.
 
 ## The look
 
@@ -80,24 +106,26 @@ The bottom bar's comparison picks how you see the original:
 - **Side by Side** shows the original and the edit next to each other.
 - **Slider** shows one picture with a divider you drag across it. It shows the whole image only.
 
+With a crop, the original is cropped the same way, so the two line up.
+
 Zoom with the − and + buttons, ⌘+ and ⌘−, a pinch, or the zoom menu (**Zoom to Fit**, **Zoom to Fill**, actual size); drag to move around, and double-click for actual size or to fit. At 100% and above the screen renders only what's visible, at full detail, so the grain you see is the grain you'll save. While you pinch or drag, the preview you had moves and scales with you, and parts you've already seen at that zoom show as they come into view; the rest renders sharp once you let go. When a render takes more than a moment, a small spinner shows in the preview's corner while the last preview stays up; changing a setting again stops a render that's under way.
 
 ## Saving
 
-- **Save to History** renders the image at full size with the look and saves it as a new step after the image it was opened from, with that step's settings. It's a job in the [Queue](queue.md) on this device, after what's already waiting, and saves into the image's own project even if you open another before it runs. While it's waiting or running, saving the same look again is unavailable: it would make the same image.
+- **Save to History** renders the image at full size with the crop and the look and saves it as a new step after the image it was opened from, with that step's settings. The new step is the crop's size; its input stays the whole image. It's a job in the [Queue](queue.md) on this device, after what's already waiting, and saves into the image's own project even if you open another before it runs. While it's waiting or running, saving the same look again is unavailable: it would make the same image.
 - **Add to History** is for an image opened from a file or Photos: it puts the image in the current project as an Imported [input entry](history.md#input-entries) and saves the edit after it.
-- **Export…** saves the edit at full size as a PNG, without the queue. For a step it carries the step's settings and the edit's, as History's exports do (unless Settings turns that off).
+- **Export…** saves the edit at full size as a PNG, without the queue (cropped, even while Crop is chosen). For a step it carries the step's settings and the edit's, as History's exports do (unless Settings turns that off).
 
 A project records image sizes in steps of 64 pixels, as Draw Things does, so History lists an edit of a 1600×1200 image as 1600×1152.
 
 ### Opening an edit again
 
-A step saved from Edit records its look: the settings, the profile's name, grain data and real noise, the reference's measurements, and the LUT's table. Opening it in Edit goes back to the image it was made from with that look, so you can change the settings rather than add grain over grain. The data is kept in the project, so the step can be opened again exactly even if the profile, reference or LUT file is gone; steps that share a profile or LUT share one copy. If the image it was made from has been deleted, the edit itself opens. If some of the step's data is gone from the project (its real noise, its reference's histograms or its LUT), only the setting that needs it is turned off, and the screen says which.
+A step saved from Edit records its look and its crop: the settings, the profile's name, grain data and real noise, the reference's measurements, and the LUT's table. Opening it in Edit goes back to the whole image it was made from with that look and crop, so you can change the settings or the crop rather than add grain over grain or crop a crop. The data is kept in the project, so the step can be opened again exactly even if the profile, reference or LUT file is gone; steps that share a profile or LUT share one copy. If the image it was made from has been deleted, the edit itself opens. An older Atelier opening a cropped edit shows the whole image with the look. If some of the step's data is gone from the project (its real noise, its reference's histograms or its LUT), only the setting that needs it is turned off, and the screen says which.
 
 ## On iPad
 
-The inspector is a panel beside the image, as in the Video Editor. The **Hold for Original** segment is pressed and held with a finger; pinch to zoom. The profile library lives in Atelier's own storage; use **Open Profile…** and **Save Profile…** to move profiles to and from Files.
+The inspector is a panel beside the image, as in the Video Editor. The **Hold for Original** segment is pressed and held with a finger; pinch to zoom. With Crop, one finger moves the crop's handles, and two fingers zoom and move the image together; a pinch never changes the crop. The profile library lives in Atelier's own storage; use **Open Profile…** and **Save Profile…** to move profiles to and from Files.
 
 ## Agents
 
-On the Mac, agents can give an image a look with `edit_image_look`, list your profiles with `list_grain_profiles`, and measure a reference with `measure_reference`. See [Atelier for agents](../MCP.md).
+On the Mac, agents can give an image a look with `edit_image_look`, crop it with `crop_image`, list your profiles with `list_grain_profiles`, and measure a reference with `measure_reference`. See [Atelier for agents](../MCP.md).

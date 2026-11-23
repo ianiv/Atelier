@@ -60,6 +60,34 @@ nonisolated struct EditSession: Codable, Equatable {
   }
 }
 
+/// The Edit screen's crop at quit, for the step `EditSession` names (D10): kept whether or not
+/// it was saved, so a relaunch shows the image as it was left. A small JSON file in Application
+/// Support rather than UserDefaults, as it'll hold Heal strokes too. Scripted runs neither read nor
+/// write it.
+nonisolated struct EditRetouchSession: Codable, Equatable {
+  var project: String
+  var tensorId: Int64
+  var crop: Edit.Crop
+
+  static var url: URL { URL.applicationSupportDirectory.appending(path: "Atelier/Edit Retouch.json") }
+
+  static func load(from url: URL = url) -> EditRetouchSession? {
+    guard SessionState.isEnabled, let data = try? Data(contentsOf: url) else { return nil }
+    return try? JSONDecoder().decode(EditRetouchSession.self, from: data)
+  }
+
+  func save(to url: URL = Self.url) {
+    guard SessionState.isEnabled, let data = try? JSONEncoder().encode(self) else { return }
+    try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try? data.write(to: url, options: .atomic)
+  }
+
+  static func clear(at url: URL = url) {
+    guard SessionState.isEnabled else { return }
+    try? FileManager.default.removeItem(at: url)
+  }
+}
+
 /// The one deadline every will-terminate handler that waits for writes shares (the moodboard's
 /// files, input entries still to be recorded), so together they stay within the few seconds iOS
 /// gives an app that's ending. The first handler to ask starts it; the later ones get what's left.

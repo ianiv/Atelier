@@ -7,6 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C3C3C3C3C0A6000000000001 /* CropTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3C3C3C3C0A6000000000002 /* CropTests.swift */; };
+		C3C3C3C3C0A5000000000001 /* AutomationEditTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3C3C3C3C0A5000000000002 /* AutomationEditTools.swift */; };
+		C3C3C3C3C0A4000000000001 /* CropBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3C3C3C3C0A4000000000002 /* CropBar.swift */; };
+		C3C3C3C3C0A3000000000001 /* CropOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3C3C3C3C0A3000000000002 /* CropOverlay.swift */; };
+		C3C3C3C3C0A2000000000001 /* EditTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3C3C3C3C0A2000000000002 /* EditTools.swift */; };
+		C3C3C3C3C0A1000000000001 /* EditRetouch.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3C3C3C3C0A1000000000002 /* EditRetouch.swift */; };
 		D70A1100000000000000000C /* community-models.json in Resources */ = {isa = PBXBuildFile; fileRef = D70A1100000000000000000D /* community-models.json */; };
 		D70A1100000000000000000A /* AutomationDrawThings.swift in Sources */ = {isa = PBXBuildFile; fileRef = D70A1100000000000000000B /* AutomationDrawThings.swift */; };
 		D70A11000000000000000007 /* DrawThingsImportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D70A11000000000000000008 /* DrawThingsImportTests.swift */; };
@@ -326,6 +332,12 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		C3C3C3C3C0A6000000000002 /* CropTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CropTests.swift; sourceTree = "<group>"; };
+		C3C3C3C3C0A5000000000002 /* AutomationEditTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationEditTools.swift; sourceTree = "<group>"; };
+		C3C3C3C3C0A4000000000002 /* CropBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CropBar.swift; sourceTree = "<group>"; };
+		C3C3C3C3C0A3000000000002 /* CropOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CropOverlay.swift; sourceTree = "<group>"; };
+		C3C3C3C3C0A2000000000002 /* EditTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditTools.swift; sourceTree = "<group>"; };
+		C3C3C3C3C0A1000000000002 /* EditRetouch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditRetouch.swift; sourceTree = "<group>"; };
 		D70A1100000000000000000D /* community-models.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = community-models.json; sourceTree = "<group>"; };
 		D70A1100000000000000000B /* AutomationDrawThings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationDrawThings.swift; sourceTree = "<group>"; };
 		D70A11000000000000000008 /* DrawThingsImportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawThingsImportTests.swift; sourceTree = "<group>"; };
@@ -719,6 +731,7 @@
 			children = (
 				ED17ED170000000000000022 /* AutomationEdit.swift */,
 				ED2ED2ED0000000000000002 /* AutomationEditUI.swift */,
+				C3C3C3C3C0A5000000000002 /* AutomationEditTools.swift */,
 				60B649AE442AE955874615B1 /* AutomationAutoMask.swift */,
 				4E317D0BA709EEB6CB86F5A2 /* AutomationPaint.swift */,
 				5BA894EB2074F4930E321607 /* Automation.swift */,
@@ -1037,6 +1050,7 @@
 				B7A1F0C2B3D4A5968778CA02 /* InspectorLoRAsTests.swift */,
 				7A1C0E5D00000000000000B2 /* TriggerWordsTests.swift */,
 				7D0C1A5E00000000000000B2 /* ToolUITests.swift */,
+				C3C3C3C3C0A6000000000002 /* CropTests.swift */,
 				B7A1F0C2B3D4A59687786305 /* ValueTests.swift */,
 				5A7E2C1B9D3F4E6A8B0C1D24 /* StrengthStepsTests.swift */,
 				5C4ED0A1B2C3D4E5F6A7B802 /* ScheduleTests.swift */,
@@ -1096,6 +1110,10 @@
 				ED17ED17000000000000000C /* EditModel.swift */,
 				ED17ED17000000000000000E /* EditScreen.swift */,
 				ED17ED170000000000005100 /* EditRenderLoop.swift */,
+				C3C3C3C3C0A4000000000002 /* CropBar.swift */,
+				C3C3C3C3C0A3000000000002 /* CropOverlay.swift */,
+				C3C3C3C3C0A2000000000002 /* EditTools.swift */,
+				C3C3C3C3C0A1000000000002 /* EditRetouch.swift */,
 				ED17ED170000000000000010 /* EditInspector.swift */,
 				ED17ED170000000000000012 /* CompareView.swift */,
 				ED17ED170000000000000014 /* Grain.swift */,
@@ -1302,6 +1320,10 @@
 				ED17ED17000000000000000D /* EditModel.swift in Sources */,
 				ED17ED17000000000000000F /* EditScreen.swift in Sources */,
 				ED17ED170000000000005101 /* EditRenderLoop.swift in Sources */,
+				C3C3C3C3C0A4000000000001 /* CropBar.swift in Sources */,
+				C3C3C3C3C0A3000000000001 /* CropOverlay.swift in Sources */,
+				C3C3C3C3C0A2000000000001 /* EditTools.swift in Sources */,
+				C3C3C3C3C0A1000000000001 /* EditRetouch.swift in Sources */,
 				ED17ED170000000000000011 /* EditInspector.swift in Sources */,
 				ED17ED170000000000000013 /* CompareView.swift in Sources */,
 				ED17ED170000000000000015 /* Grain.swift in Sources */,
@@ -1316,6 +1338,7 @@
 				ED17ED170000000000000021 /* Halation.swift in Sources */,
 				ED17ED170000000000000023 /* AutomationEdit.swift in Sources */,
 				ED2ED2ED0000000000000001 /* AutomationEditUI.swift in Sources */,
+				C3C3C3C3C0A5000000000001 /* AutomationEditTools.swift in Sources */,
 				ED17ED170000000000000025 /* CreateModel+Edit.swift in Sources */,
 				10171A503FBA24116D0D87F6 /* AppSettings.swift in Sources */,
 				F1F29ECD79C50D354E0EE7E2 /* ClipUpscale.swift in Sources */,
@@ -1552,6 +1575,7 @@
 				B7A1F0C2B3D4A5968778CA01 /* InspectorLoRAsTests.swift in Sources */,
 				7A1C0E5D00000000000000B1 /* TriggerWordsTests.swift in Sources */,
 				7D0C1A5E00000000000000B1 /* ToolUITests.swift in Sources */,
+				C3C3C3C3C0A6000000000001 /* CropTests.swift in Sources */,
 				B7A1F0C2B3D4A59687786205 /* ValueTests.swift in Sources */,
 				5A7E2C1B9D3F4E6A8B0C1D23 /* StrengthStepsTests.swift in Sources */,
 				5C4ED0A1B2C3D4E5F6A7B801 /* ScheduleTests.swift in Sources */,

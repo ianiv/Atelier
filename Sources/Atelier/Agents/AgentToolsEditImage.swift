@@ -701,4 +701,144 @@ extension AgentTools {
     return result
   }
 }
+/// What `crop_image` is asked for, read from its arguments alone (`CropArgumentsTests` in
+/// `CropTests`): a rectangle, a ratio, or no crop. Numbers come from an agent, so they're checked
+/// here (finite, a size) and against the image in `crop(over:width:height:)` before any becomes
+/// an Int.
+nonisolated enum CropArguments {
+  enum Change: Equatable, Sendable {
+    /// x, y, width, height in the source's pixels.
+    case rect(CGRect)
+    /// The largest crop of the ratio, centred.
+    case aspect(Edit.CropAspect, swapped: Bool)
+    case clear
+  }
+
+  typealias ToolError = AgentTools.ToolError
+
+  /// The ratios `aspect` takes: the Crop bar's, each either way up.
+  static let aspects: [String: (Edit.CropAspect, Bool)] = {
+    var names: [String: (Edit.CropAspect, Bool)] = ["original": (.original, false), "square": (.square, false)]
+    for aspect in Edit.CropAspect.allCases {
+      guard let parts = aspect.parts else { continue }
+      names["\(parts.width):\(parts.height)"] = (aspect, false)
+      if parts.width != parts.height { names["\(parts.height):\(parts.width)"] = aspect.swapping(false) }
+    }
+    return names
+  }()
+
+  static func parse(_ arguments: [String: Any]) throws -> Change {
+    let rectKeys = ["x", "y", "width", "height"]
+    let hasRect = rectKeys.contains { arguments[$0] != nil }
+    let hasAspect = arguments["aspect"] != nil
+    var clear = false
+    if let value = arguments["clear"] {
+      guard AgentTools.isBoolean(value), let flag = value as? Bool else { throw ToolError("`clear` is true or false.") }
+      clear = flag
+    }
+    guard [hasRect, hasAspect, clear].filter(\.self).count == 1 else {
+      throw ToolError("Pass the crop as `x`, `y`, `width` and `height`, or as `aspect`, or `clear: true`: one of them.")
+    }
+    if clear { return .clear }
+    if hasAspect {
+      guard let name = arguments["aspect"] as? String, let found = aspects[name.lowercased().replacingOccurrences(of: " ", with: "")] else {
+        throw ToolError("`aspect` is one of \(aspects.keys.sorted().joined(separator: ", ")).")
+      }
+      if let anchor = arguments["anchor"] {
+        guard anchor as? String == "center" else { throw ToolError("`anchor` can only be \"center\" (the default).") }
+      }
+      return .aspect(found.0, swapped: found.1)
+    }
+    if arguments["anchor"] != nil { throw ToolError("`anchor` goes with `aspect`.") }
+    var values: [Double] = []
+    for key in rectKeys {
+      guard let value = arguments[key], !AgentTools.isBoolean(value), let number = AgentTools.double(value), number.isFinite else {
+        throw ToolError("`x`, `y`, `width` and `height` are all needed, as numbers of the source's pixels from its top left.")
+      }
+      values.append(number)
+    }
+    guard values[2] > 0, values[3] > 0 else { throw ToolError("`width` and `height` must be above 0.") }
+    return .rect(CGRect(x: values[0], y: values[1], width: values[2], height: values[3]))
+  }
+}
+
+nonisolated extension CropArguments.Change {
+  /// The crop this makes on a `width` × `height` source with `current` there now (whose ratio
+  /// lock a rectangle drops, as a free drag would); nil for none. A rectangle must be inside the
+  /// image and at least `Edit.Crop.minimumSide` on a side.
+  func crop(over _: Edit.Crop?, width: Int, height: Int) throws -> Edit.Crop? {
+    switch self {
+    case .clear: return nil
+    case .aspect(let aspect, let swapped):
+      let bounds = CGSize(width: width, height: height)
+      let rect = CropGeometry.largest(ratio: aspect.ratio(imageWidth: width, imageHeight: height, swapped: swapped), in: bounds)
+      return Edit.Crop(rect: rect, imageWidth: width, imageHeight: height, aspect: aspect, swapped: swapped)
+    case .rect(let rect):
+      let side = Double(Edit.Crop.minimumSide)
+      guard rect.minX >= -0.5, rect.minY >= -0.5, rect.maxX <= Double(width) + 0.5, rect.maxY <= Double(height) + 0.5 else {
+        throw AgentTools.ToolError("The crop goes outside the source image, which is \(width)×\(height) pixels.")
+      }
+      guard rect.width >= side, rect.height >= side, let crop = Edit.Crop(rect: rect, imageWidth: width, imageHeight: height) else {
+        throw AgentTools.ToolError("The crop must be at least \(Edit.Crop.minimumSide)×\(Edit.Crop.minimumSide) pixels.")
+      }
+      return crop
+    }
+  }
+}
+
+/// `crop_image`: the Edit screen's Crop, saved as a step after the source as Save to History
+/// does, through `edit_image_look`'s job: the base is the step's record (its look and crop), so a
+/// look stays as it was and only the crop changes.
+extension AgentTools {
+  static let cropImageDefinition: [String: Any] = [
+    "name": "crop_image",
+    "title": "Crop an image",
+    "description": """
+      Crops an image as the Edit screen's Crop tool does and saves the result as a new history \
+      step after its source, like Save to History. Non-destructive, like edit_image_look: for a \
+      step this tool, edit_image_look or the Edit screen made, it goes back to that step's source \
+      and keeps the look the step records, changing only the crop; for any other step the look is \
+      no change. Coordinates are always the source image's pixels from its top left, never the \
+      cropped step's: call get_image on the source step (the source_step this tool returns) to see \
+      what you're cropping. Pass `x`, `y`, `width` and `height` (inside the image, at least 16 \
+      pixels a side); or `aspect` for the largest centered crop of that ratio (original, 1:1, 4:5, \
+      5:4, 2:3, 3:2, 3:4, 4:3, 9:16, 16:9); or `clear: true` to take the crop off. The crop goes \
+      before the look, so a vignette centers on it and grain is sized to the cropped frame. Runs \
+      as a job in the Queue on this device: by default it waits and returns history_step, \
+      source_step, crop ({x, y, width, height} in the source's pixels, or null), width, height \
+      and job_id; with background: true it returns a job_id at once for get_job. The same edit \
+      already waiting or running isn't queued twice. Leaves the Edit screen as the user has it. \
+      Not for videos.
+      """,
+    "inputSchema": [
+      "type": "object",
+      "properties": [
+        "history_step": ["type": "integer", "description": "A history step from list_history or generate. Omit for the canvas image."],
+        "x": ["type": "number", "description": "The crop's left edge, in the source's pixels."],
+        "y": ["type": "number", "description": "The crop's top edge, in the source's pixels."],
+        "width": ["type": "number", "description": "The crop's width in pixels (at least 16)."],
+        "height": ["type": "number", "description": "The crop's height in pixels (at least 16)."],
+        "aspect": ["type": "string", "description": "Instead of a rectangle: the largest centered crop of this ratio: original, 1:1, 4:5, 5:4, 2:3, 3:2, 3:4, 4:3, 9:16 or 16:9."],
+        "anchor": ["type": "string", "enum": ["center"], "description": "Where an `aspect` crop sits: center (the only choice, and the default)."],
+        "clear": ["type": "boolean", "description": "Take the crop off: the whole source with the step's look."],
+        "background": ["type": "boolean", "description": "Return a job_id at once instead of waiting. Default false."],
+      ],
+    ],
+  ]
+
+  /// crop_image: its arguments read, then `edit_image_look`'s path with only the crop changed.
+  func cropImage(_ arguments: [String: Any], progress: @escaping (Progress) -> Void) async throws -> [String: Any] {
+    let change = try CropArguments.parse(arguments)
+    var look: [String: Any] = [:]
+    for key in ["history_step", "background"] where arguments[key] != nil { look[key] = arguments[key] }
+    return try await editImageLook(look, crop: change, progress: progress)
+  }
+
+  /// A crop for answers, in the source's pixels.
+  nonisolated static func cropJSON(_ crop: Edit.Crop) -> [String: Any] {
+    var json: [String: Any] = ["x": crop.x, "y": crop.y, "width": crop.width, "height": crop.height]
+    if let aspect = crop.aspect { json["aspect"] = aspect.label(swapped: crop.swapped) }
+    return json
+  }
+}
 #endif

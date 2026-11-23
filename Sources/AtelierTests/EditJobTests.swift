@@ -138,7 +138,7 @@ struct EditJobTests {
     let read = try #require(ProjectMapping.Profile(profile.bytes))
     #expect(read.edit == record)
     let text = String(decoding: profile.bytes, as: UTF8.self)
-    #expect(text.contains(#""edit":"#) && text.contains(#""real_noise":"#) && text.contains(#""version":1"#))
+    #expect(text.contains(#""edit":"#) && text.contains(#""real_noise":"#) && text.contains(#""version":2"#))
     #expect(!text.contains(#""data":"#) && profile.bytes.count < 4_000)
     #expect(record.tensorNames == ["edit_noise_3000000001", "edit_histogram_3000000003", "edit_lut_3000000002"])
     // A step without one reads as none.
@@ -210,6 +210,45 @@ struct EditJobTests {
     // Another LUT table or other real noise under the same names makes another image.
     #expect(!job.isSameEdit(as: Self.job(project: "P", source: 1, context: Self.context(lutValue: 0.5))))
     #expect(!job.isSameEdit(as: Self.job(project: "P", source: 1, context: Self.context(noiseByte: 200))))
+  }
+
+  /// A crop goes in the record inline (a few numbers), round trips through `profile_data`, and
+  /// makes another image; a record from before crops reads with none.
+  @Test func recordKeepsItsCrop() throws {
+    let crop = Edit.Crop(x: 10, y: 20, width: 300, height: 200, aspect: .r3x4, swapped: true)
+    var job = Self.job()
+    job.retouch = Edit.Retouch(crop: crop)
+    #expect(job.record.crop == crop && job.retouch.crop == crop)
+    var profile = ProjectMapping.Profile(duration: 1, inputTensorId: 12, parentTensorId: 12)
+    profile.edit = job.record
+    let read = try #require(ProjectMapping.Profile(profile.bytes))
+    #expect(read.edit?.crop == crop && read.edit?.version == 2)
+    #expect(profile.bytes.count < 4_000)
+    let queued = try JSONDecoder().decode(Edit.Job.self, from: JSONEncoder().encode(job))
+    #expect(queued.retouch.crop == crop)
+    // Version 1, written before crops: none, and the rest as it was.
+    var object = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(Self.record())) as? [String: Any])
+    object["version"] = 1
+    object.removeValue(forKey: "crop")
+    let old = try JSONDecoder().decode(Edit.Record.self, from: JSONSerialization.data(withJSONObject: object))
+    #expect(old.crop == nil && old.version == 1 && old.options == Self.record().options)
+    // A crop of the wrong shape is no crop, not a lost record.
+    object["crop"] = ["x": "left"]
+    let bad = try JSONDecoder().decode(Edit.Record.self, from: JSONSerialization.data(withJSONObject: object))
+    #expect(bad.crop == nil && bad.sourceTensorId == 12)
+  }
+
+  @Test func sameEditComparesTheCrop() {
+    var a = Self.job(project: "P", source: 1)
+    var b = a
+    #expect(a.isSameEdit(as: b))
+    a.retouch = Edit.Retouch(crop: Edit.Crop(x: 0, y: 0, width: 100, height: 100))
+    #expect(!a.isSameEdit(as: b))
+    b.retouch = Edit.Retouch(crop: Edit.Crop(x: 0, y: 0, width: 100, height: 100, aspect: .square))
+    // The ratio it was held to doesn't change the image.
+    #expect(a.isSameEdit(as: b))
+    b.retouch = Edit.Retouch(crop: Edit.Crop(x: 1, y: 0, width: 100, height: 100))
+    #expect(!a.isSameEdit(as: b))
   }
 
   /// grain.py's `box_sizes`, worked by hand: sigma 3 has ideal width √37 ≈ 6.08, so 5 and 7, with

@@ -13,7 +13,12 @@ import Observation
 ///
 /// Agents (`edit_image_look`) and scripted checks drive it through the calls the screen makes:
 /// `open(_:)`, `open(image:name:)`, `options`, `applyProfile(_:)`, `setReference(image:name:tensorId:)`,
-/// `matchReference()`, `loadLUT(from:)`, `save()`, `addToHistory()`, `exportPNG()`, `exportLUT(name:)`.
+/// `matchReference()`, `loadLUT(from:)`, `save()`, `addToHistory()`, `exportPNG()`, `exportLUT(name:)`,
+/// and for the tools `tool`, `setCrop(_:actionName:undoManager:)`, `setCropAspect(_:undoManager:)`.
+///
+/// The retouch (`Edit.Retouch`: the crop now, Heal strokes later) is per image and goes on the
+/// source before the look: the panes render `workingImage`, the source with it, as they rendered
+/// the source before, so the renderer's caches need no change.
 @MainActor
 @Observable
 final class EditModel {
@@ -50,10 +55,181 @@ final class EditModel {
   /// The source's pixels. One instance per source, which the renderer's caches are keyed by;
   /// `renderer.forget` drops them when it's replaced.
   private(set) var image: CGImage?
-  /// A fitted copy of the source for the original's side of a comparison, made once per source.
+  /// A fitted copy of `workingOriginal` for the original's side of a comparison.
   private(set) var originalPreview: CGImage?
+  /// The source with the retouch, which the panes render the look over: the crop applied, except
+  /// while Crop is the tool, which shows the whole image with the crop drawn over it. One instance
+  /// per retouch, as `image` is per source, for the renderer's caches.
+  private(set) var workingImage: CGImage?
+  /// The comparison's original: the source with the crop the panes show, so Side by Side and the
+  /// Slider stay pixel for pixel over the edit. (Heal, when it comes, isn't on it.)
+  private(set) var workingOriginal: CGImage?
+  /// Where `workingImage` sits in the source: the applied crop's origin, (0, 0) uncropped. A
+  /// fitted render stands in only for a working image at the same place (`EditRenderTarget.stands`).
+  private(set) var workingOrigin: (x: Int, y: Int) = (0, 0)
   /// Reading a step or file.
   private(set) var isLoading = false
+
+  // MARK: Tools and retouch
+
+  /// The tool a drag on the image uses (the bottom bar's picker). Not remembered: the screen
+  /// starts with Move. Picking a one-pane tool while Side by Side or the Slider is chosen goes to
+  /// Hold for Original (D5); picking Crop shows the whole image fitted; leaving it applies it.
+  var tool: EditTool = .move {
+    didSet {
+      guard tool != oldValue else { return }
+      if tool.needsSinglePane, compareMode != .hold { compareMode = .hold }
+      // The whole image fitted the first time for an image; coming back, the zoom Crop was left
+      // at (the image it shows is the same whole image again).
+      if oldValue == .crop { cropView = (canvas.scale, canvas.offset) }
+      if tool == .crop {
+        if let cropView {
+          canvas.scale = cropView.scale
+          canvas.offset = cropView.offset
+        } else {
+          canvas.zoomToFit()
+        }
+      }
+      updateWorking()
+    }
+  }
+
+  /// What's done to the source's pixels before the look: the crop. Per image: cleared when
+  /// another opens, brought back from a saved step's record. Changed through `setCrop`.
+  private(set) var retouch = Edit.Retouch.none
+
+  /// The crop that applies to the source: nil for none, or one taking the whole image.
+  var effectiveCrop: Edit.Crop? {
+    guard let image else { return nil }
+    return EditRetouch.effectiveCrop(retouch.crop, imageWidth: image.width, imageHeight: image.height)
+  }
+
+  /// The size the edit saves and exports at: the crop's, or the source's.
+  var outputSize: (width: Int, height: Int)? {
+    guard let image else { return nil }
+    if let crop = effectiveCrop { return (crop.width, crop.height) }
+    return (image.width, image.height)
+  }
+
+  /// Sets the crop (nil: none), one undo step named `actionName` on `undoManager` (the window's,
+  /// shared with the other screens, D12). Kept inside the image and in whole pixels. The overlay
+  /// calls it when a drag ends, as do the Crop bar, `crop_image`'s checks and the scripted check.
+  func setCrop(_ crop: Edit.Crop?, actionName: String = "Crop", undoManager: UndoManager?) {
+    guard let image else { return }
+    let new = crop.flatMap { $0.clamped(imageWidth: image.width, imageHeight: image.height) }
+    let old = retouch.crop
+    guard new != old else { return }
+    retouch.crop = new
+    if let undoManager {
+      retouchUndoManager = undoManager
+      let source = ObjectIdentifier(image)
+      undoManager.registerUndo(withTarget: self) { model in
+        // Another image since: the step was dropped when it opened (`setSource`), but never put
+        // this image's crop on another.
+        guard model.image.map(ObjectIdentifier.init) == source else { return }
+        model.setCrop(old, actionName: actionName, undoManager: undoManager)
+      }
+      undoManager.setActionName(actionName)
+    }
+    saveRetouchSession()
+    updateWorking()
+  }
+
+  /// Reset Crop: no crop (D6: the bottom bar's Reset is the look's alone).
+  func resetCrop(undoManager: UndoManager?) {
+    setCrop(nil, actionName: "Reset Crop", undoManager: undoManager)
+  }
+
+  /// The Aspect menu's choice: Free (nil) keeps the rectangle and lets it go free; a ratio holds
+  /// the crop to it about its centre at about its area, or with no crop takes the largest of it.
+  func setCropAspect(_ aspect: Edit.CropAspect?, undoManager: UndoManager?) {
+    guard let image else { return }
+    guard let aspect else {
+      if var crop = retouch.crop {
+        crop.aspect = nil
+        crop.swapped = false
+        setCrop(crop, undoManager: undoManager)
+      }
+      return
+    }
+    setCrop(Self.held(retouch.crop, to: aspect, swapped: false, width: image.width, height: image.height), undoManager: undoManager)
+  }
+
+  /// Orientation: the crop's ratio turned on its side (4:5 to 5:4), about its centre.
+  func swapCropOrientation(undoManager: UndoManager?) {
+    guard let image, let crop = retouch.crop, let aspect = crop.aspect, aspect.canSwap else { return }
+    let turned = aspect.swapping(crop.swapped)
+    setCrop(Self.held(crop, to: turned.aspect, swapped: turned.swapped, width: image.width, height: image.height), undoManager: undoManager)
+  }
+
+  /// Whether Orientation can turn the crop: it's held to a ratio other than 1:1.
+  var canSwapCropOrientation: Bool { retouch.crop?.aspect?.canSwap == true }
+
+  /// `crop` (the whole image for none) held to `aspect`, as a crop of a `width` × `height` image.
+  nonisolated static func held(_ crop: Edit.Crop?, to aspect: Edit.CropAspect, swapped: Bool, width: Int, height: Int) -> Edit.Crop? {
+    let bounds = CGSize(width: width, height: height)
+    let ratio = aspect.ratio(imageWidth: width, imageHeight: height, swapped: swapped)
+    let rect = crop.map { CropGeometry.fitting($0.rect, ratio: ratio, in: bounds) } ?? CropGeometry.largest(ratio: ratio, in: bounds)
+    return Edit.Crop(rect: rect, imageWidth: width, imageHeight: height, aspect: aspect, swapped: swapped)
+  }
+
+  /// The zoom Crop was last left at for this image, which coming back to Crop restores.
+  @ObservationIgnored private var cropView: (scale: Double?, offset: CGSize)?
+  /// The undo manager the retouch's steps went on, so they're dropped when another image opens.
+  @ObservationIgnored private weak var retouchUndoManager: UndoManager?
+  /// What `workingImage` was made from, so the same retouch doesn't make a new image (and new
+  /// cache entries) each time.
+  @ObservationIgnored private var workingKey: (source: ObjectIdentifier, shown: Edit.Retouch)?
+  /// The source fitted once, for the original's side while it isn't cropped.
+  @ObservationIgnored private var sourcePreview: CGImage?
+
+  /// Makes `workingImage` and `workingOriginal` again for the source, retouch and tool, if they
+  /// changed. A cropped image replaced is let go by the renderer; the source's own entry stays,
+  /// as going back into Crop shows it again.
+  private func updateWorking() {
+    guard let image else {
+      workingKey = nil
+      workingImage = nil
+      workingOriginal = nil
+      return
+    }
+    var shown = retouch
+    if tool == .crop { shown.crop = nil }
+    if let workingKey, workingKey.source == ObjectIdentifier(image), workingKey.shown == shown, workingImage != nil { return }
+    workingKey = (ObjectIdentifier(image), shown)
+    let working = EditRetouch.apply(shown, to: image)
+    let crop = EditRetouch.effectiveCrop(shown.crop, imageWidth: image.width, imageHeight: image.height)
+    workingOrigin = (crop?.x ?? 0, crop?.y ?? 0)
+    if let old = workingImage, old !== working, old !== image {
+      let renderer = renderer
+      Task { await renderer.forget(old) }
+    }
+    workingImage = working
+    // No heal yet: the original is the same picture. With Heal it's the source with the crop alone.
+    workingOriginal = working
+    if working === image, let sourcePreview {
+      originalPreview = sourcePreview
+    } else {
+      originalPreview = nil
+      Task {
+        let fitted = await Self.fitted(working)
+        if self.workingOriginal === working {
+          originalPreview = fitted
+          if working === image { sourcePreview = fitted }
+        }
+      }
+    }
+  }
+
+  /// Keeps the open step's crop for the next launch (D10), or forgets it with no crop.
+  private func saveRetouchSession() {
+    guard SessionState.isEnabled else { return }
+    if case .step(let project, let tensorId) = source, let crop = retouch.crop {
+      EditRetouchSession(project: project, tensorId: tensorId, crop: crop).save()
+    } else {
+      EditRetouchSession.clear()
+    }
+  }
 
   // MARK: Look
 
@@ -82,9 +258,14 @@ final class EditModel {
 
   private var storedOptions: EditOptions
 
-  /// How the original is compared with the edit. Remembered.
+  /// How the original is compared with the edit. Remembered. One that shows two panes (or splits
+  /// one) leaves a one-pane tool for Move, which applies the crop, as picking that tool goes to
+  /// Hold (D5).
   var compareMode: Compare.Mode {
-    didSet { if SessionState.isEnabled { UserDefaults.standard.set(compareMode.rawValue, forKey: Self.compareModeKey) } }
+    didSet {
+      if SessionState.isEnabled { UserDefaults.standard.set(compareMode.rawValue, forKey: Self.compareModeKey) }
+      if compareMode != .hold, tool.needsSinglePane { tool = .move }
+    }
   }
 
   /// The loaded grain profile: from the library, a file, Match Reference, or a saved step's
@@ -264,6 +445,7 @@ final class EditModel {
     if let restored { restore(restored.record, data: restored.data) }
     rebuildContext()
     EditSession(project: project.name, tensorId: sourceItem.tensorId).save()
+    saveRetouchSession()
     await measureOriginal(of: sourceItem, in: project, generation: generation)
   }
 
@@ -314,6 +496,7 @@ final class EditModel {
     reference = reference.map { var kept = $0; kept.tensorId = nil; return kept }
     rebuildContext()
     EditSession.clear()
+    saveRetouchSession()
   }
 
   /// Opens an image file (Open Image…, a drop), read off the main actor with security-scoped access.
@@ -390,7 +573,13 @@ final class EditModel {
     guard source == nil, !isLoading, !opens.anyRequested, let saved = EditSession.load(), let create,
           create.history.project.name == saved.project, let item = create.history.item(tensorId: saved.tensorId)
     else { return }
+    // Read before opening, which writes the file for what it opens.
+    let retouch = EditRetouchSession.load()
     await open(item)
+    // The crop on the screen at the quit, saved or not (D10).
+    if let retouch, case .step(let project, let tensorId) = source, retouch.project == project, retouch.tensorId == tensorId {
+      setCrop(retouch.crop, undoManager: nil)
+    }
   }
 
   // MARK: Open generations
@@ -429,15 +618,22 @@ final class EditModel {
       let renderer = renderer
       Task { await renderer.forget(old) }
     }
+    if let old = workingImage, old !== image, old !== self.image {
+      let renderer = renderer
+      Task { await renderer.forget(old) }
+    }
+    // The last image's crop steps would act on this one.
+    retouchUndoManager?.removeAllActions(withTarget: self)
     self.source = source
     self.item = item
     self.image = image
-    originalPreview = nil
+    retouch = .none
+    cropView = nil
+    sourcePreview = nil
+    workingKey = nil
+    workingImage = nil
     canvas.zoomToFit()
-    Task {
-      let fitted = await Self.fitted(image)
-      if self.image === image { originalPreview = fitted }
-    }
+    updateWorking()
   }
 
   /// A saved step's look and data back on the screen. A setting whose data is gone from the
@@ -461,6 +657,9 @@ final class EditModel {
     }
     lut = context.lut
     fileLUT = builtInLUTName == nil ? lut : nil
+    // The crop it was saved with, kept inside this image: a record is read from a file.
+    if let image { retouch.crop = record.crop?.clamped(imageWidth: image.width, imageHeight: image.height) }
+    updateWorking()
   }
 
   /// Measures the step's input (the image it was made from) for `Match.Target.original`, shown
@@ -673,7 +872,8 @@ final class EditModel {
     return Edit.Job(
       project: project, sourceTensorId: tensorId, options: options, profileName: profile?.name,
       referenceTensorId: options.match.target == .reference ? target?.tensorId : nil,
-      referenceName: options.match.target == .reference ? target?.name : nil, context: context)
+      referenceName: options.match.target == .reference ? target?.name : nil, context: context,
+      retouch: Edit.Retouch(crop: effectiveCrop))
   }
 
   /// Save to History: queues the edit to render at full size and save as a new step after the
@@ -713,6 +913,7 @@ final class EditModel {
     source = .step(project: project.name, tensorId: entry.tensorId)
     item = entry
     EditSession(project: project.name, tensorId: entry.tensorId).save()
+    saveRetouchSession()
     guard history.project === project else { throw EditError.projectChanged(project.name) }
     return try save()
   }
@@ -727,7 +928,8 @@ final class EditModel {
     defer { isExporting = false }
     let options = options, context = context, item = item
     let job = AppSettings.embedsSettings ? pendingJob : nil
-    let rendered = try await renderer.full(source: image, options: options, context: context)
+    // The crop applied even while Crop is the tool: what Save to History would save.
+    let rendered = try await renderer.full(source: EditRetouch.apply(retouch, to: image), options: options, context: context)
     var sidecar: HistoryStore.Sidecar?
     if let item, let job {
       sidecar = item.sidecar
@@ -766,7 +968,7 @@ final class EditModel {
     guard let image else { throw EditError.noImage }
     isExporting = true
     defer { isExporting = false }
-    let table = try await renderer.bakeLUT(source: image, options: options, context: context, name: name)
+    let table = try await renderer.bakeLUT(source: EditRetouch.apply(retouch, to: image), options: options, context: context, name: name)
     return Data(CubeLUT.text(of: table).utf8)
   }
 
