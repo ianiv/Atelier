@@ -53,7 +53,8 @@ import SwiftUI
 /// (AutomationEdit.swift), and `--edit-ui-bench` its main thread while it's driven
 /// (AutomationEditUI.swift). `--edit-tools-check` checks the Edit screen's tools, Crop and
 /// `crop_image` (AutomationEditTools.swift). `--reference-video-check` runs H3 Ref2VA with a
-/// clip as its reference video (AutomationReferenceVideo.swift).
+/// clip as its reference video (AutomationReferenceVideo.swift), and with `--imported` a video
+/// brought in from outside (AutomationMedia.swift).
 @MainActor
 enum Automation {
   /// `--sampler`'s names: `SamplerType`'s case names, spelled out because the type describes
@@ -215,7 +216,11 @@ enum Automation {
       return
     }
     if args.contains("--reference-video-check") {
-      referenceVideoCheck(model, presets: presets)
+      if args.contains("--imported") {
+        referenceVideoImportCheck(model, navigation: navigation, layouts: layouts, presets: presets)
+      } else {
+        referenceVideoCheck(model, presets: presets)
+      }
       return
     }
     if args.contains("--canvas-clip-check") {

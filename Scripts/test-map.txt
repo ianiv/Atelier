@@ -41,6 +41,7 @@ Sources/Atelier/Automation/  | HostTests,AutomationSamplerTests | --generate
 Sources/Atelier/Automation/AutomationAgentNet.swift | AgentAccessTests | --agent-net-check
 Sources/Atelier/Automation/AutomationEditTools.swift | CropTests,EditJobTests | --edit-tools-check
 Sources/Atelier/Automation/AutomationReferenceVideo.swift | ReferenceVideoTests,SavedQueueTests | --reference-video-check
+Sources/Atelier/Automation/AutomationMedia.swift | MediaTests,MediaReferenceTests | --reference-video-check
 Sources/Atelier/Automation/AutomationTestCertificate.swift | AgentAccessTests | --agent-net-check
 Sources/Atelier/Create/      | CanvasDropTests,CanvasPaintTests,CanvasRefineTests,ColorMatchTests,MaskMemoryTests,CanvasUndoTests,MoodboardWriterTests,MoodboardTests,SizePresetTests,MaskMorphologyTests,FrameSelectionTests,FaceFinderTests,CanvasEditTests,TriggerWordsTests,DepthMapTests | --edit-input-check,--refine-check,--paint-check,--color-match-check,--depth-check,--create-delete-check,--canvas-clip-check,--reference-video-check
 Sources/Atelier/Create/AutoMask/ | AutoMaskTests,MaskMemoryTests,SAMFolderTests,FaceFinderTests | --automask-check
