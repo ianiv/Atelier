@@ -2,7 +2,7 @@ import CoreGraphics
 import Foundation
 
 // The retouch: what's done to the source's own pixels before the look (`EditPipeline`'s step 0),
-// per image. Heal strokes first (the Heal tool, still to come: `Retouch.heal`), then the crop.
+// per image. Heal strokes first (`Retouch.heal`, in the source's coordinates), then the crop.
 // It isn't part of `EditOptions`: the look is remembered from image to image and becomes grain
 // profiles, and a crop carried to the next image or into a `.grain.json` would be wrong.
 
@@ -200,31 +200,60 @@ extension Edit {
     }
   }
 
-  /// What's done to the source's pixels before the look, in order: Heal strokes (the Heal tool,
-  /// to come), then the crop. Per image: cleared when another image opens, brought back from a
-  /// saved step's record.
+  /// What's done to the source's pixels before the look, in order: Heal strokes, then the crop.
+  /// Per image: cleared when another image opens, brought back from a saved step's record. The
+  /// strokes are in the source's coordinates, so a crop changed later leaves them where they were.
   nonisolated struct Retouch: Hashable, Sendable {
     var crop: Crop?
-    // Heal (branch edit-heal) goes here: `var heal: HealStrokes = .empty`, applied before the crop.
+    var heal: HealStrokes = .empty
 
     static let none = Retouch()
 
-    var isIdentity: Bool { crop == nil }
+    init(crop: Crop? = nil, heal: HealStrokes = .empty) {
+      self.crop = crop
+      self.heal = heal
+    }
+
+    var isIdentity: Bool { crop == nil && heal.isEmpty }
   }
 }
 
 /// Applying the retouch to a source (step 0 of `EditPipeline`): what the screen, Save to History
-/// and Export render the look over. Heal, when it lands, goes first here; the crop is
-/// `CGImage.cropping(to:)`, which shares the source's pixels rather than copying them.
+/// and Export render the look over. The strokes heal a copy of the source's pixels
+/// (`HealBrush`, a few milliseconds a stroke); the crop is `CGImage.cropping(to:)`, which shares
+/// the healed image's pixels rather than copying them.
 nonisolated enum EditRetouch {
-  /// `source` with `retouch`: the source itself when there's nothing to do (or the crop takes it
-  /// all, or nothing of it is left in this image), so the renderer's caches for it still serve.
-  static func apply(_ retouch: Edit.Retouch, to source: CGImage) -> CGImage {
-    // Heal strokes go on here, before the crop: they're in the source's coordinates.
-    guard let crop = retouch.crop?.clamped(imageWidth: source.width, imageHeight: source.height),
-          !crop.isWhole(imageWidth: source.width, imageHeight: source.height)
-    else { return source }
-    return source.cropping(to: crop.rect) ?? source
+  /// `source` with `retouch`, worked out off the main actor and stopped when the task is
+  /// cancelled: Save to History's and Export's. The screen keeps its healed pixels instead
+  /// (`HealCanvas`), so a stroke there heals only itself.
+  @concurrent static func applied(_ retouch: Edit.Retouch, to source: CGImage) async throws -> CGImage {
+    let cancel = EditPipeline.Cancel()
+    return try await withTaskCancellationHandler {
+      try cropped(retouch.crop, healed(retouch.heal, source, cancel: cancel))
+    } onCancel: {
+      cancel.cancel()
+    }
+  }
+
+  /// `source` with `strokes` healed into it, as an sRGB image (what the renderer reads it as);
+  /// the source itself with none.
+  static func healed(_ strokes: Edit.HealStrokes, _ source: CGImage, cancel: EditPipeline.Cancel = .never) throws -> CGImage {
+    guard !strokes.isEmpty else { return source }
+    guard var pixels = ColorMatch.rgba(source), pixels.count == source.width * source.height * 4 else {
+      throw EditPipeline.RenderError.unreadableSource
+    }
+    try HealBrush.apply(strokes, to: &pixels, width: source.width, height: source.height, cancel: cancel)
+    guard let image = ColorMatch.cgImage(rgba: pixels, width: source.width, height: source.height) else {
+      throw EditPipeline.RenderError.unreadableSource
+    }
+    return image
+  }
+
+  /// `image` cropped: the image itself when there's no crop (or it takes it all, or nothing of it
+  /// is left in this image), so the renderer's caches for it still serve.
+  static func cropped(_ crop: Edit.Crop?, _ image: CGImage) -> CGImage {
+    guard let crop = effectiveCrop(crop, imageWidth: image.width, imageHeight: image.height) else { return image }
+    return image.cropping(to: crop.rect) ?? image
   }
 
   /// The crop that applies to a `width` × `height` source: nil for none, or one that takes it all.
@@ -233,6 +262,106 @@ nonisolated enum EditRetouch {
           !crop.isWhole(imageWidth: imageWidth, imageHeight: imageHeight)
     else { return nil }
     return crop
+  }
+}
+
+/// The Edit screen's healed pixels for its source: the strokes applied so far, as tightly packed
+/// sRGB RGBA8 and as the image the panes render. A stroke added heals only itself into the kept
+/// pixels (`HealBrush.apply`, milliseconds for a spot), so painting doesn't wait for every stroke
+/// before it; any other change (undo, Clear Heal, a step opened) heals them all again from the
+/// source. The work runs off the main actor, latest wins: strokes asked for while it runs are
+/// taken up when it's done, so a quick run of strokes is one pass, not one each.
+///
+/// Memory: the kept pixels and the image's own copy, two full-size RGBA buffers per source.
+@MainActor
+final class HealCanvas {
+  /// The strokes the kept pixels and `image` have.
+  private(set) var applied = Edit.HealStrokes.empty
+  /// The source with `applied` healed in; nil with none (the source is the picture).
+  private(set) var image: CGImage?
+  /// `image`'s pixels.
+  private(set) var pixels: [UInt8]?
+  /// Healing is under way.
+  var isBusy: Bool { task != nil }
+
+  private var source: CGImage?
+  private var target = Edit.HealStrokes.empty
+  private var task: Task<Void, Never>?
+  /// Called with each new healed picture and its pixels before it replaces `image`, so the caller
+  /// can hand the pixels to the renderer first (`EditRenderer.prime`).
+  var prime: @MainActor (CGImage, [UInt8]) async -> Void = { _, _ in }
+  /// Called once `image` and `applied` have changed.
+  var published: @MainActor () -> Void = {}
+
+  /// A new source: nothing healed, and whatever was under way dropped.
+  func reset(source: CGImage?) {
+    task?.cancel()
+    task = nil
+    self.source = source
+    applied = .empty
+    target = .empty
+    image = nil
+    pixels = nil
+  }
+
+  /// Heals `strokes` into the source, the new ones only when they follow what's applied.
+  func update(_ strokes: Edit.HealStrokes) {
+    target = strokes
+    guard task == nil, strokes != applied else { return }
+    task = Task { [weak self] in await self?.run() }
+  }
+
+  /// Waits for the healing under way, for checks and benches.
+  func settle() async {
+    while let task { await task.value }
+  }
+
+  private func run() async {
+    defer { task = nil }
+    while let source, target != applied, !Task.isCancelled {
+      let goal = target, from = applied, kept = pixels
+      let made = await Self.heal(source: source, pixels: kept, applied: from, target: goal)
+      guard !Task.isCancelled, self.source === source else { return }
+      guard let made else {
+        // The source couldn't be read: leave it unhealed rather than trying again and again.
+        applied = goal
+        image = nil
+        pixels = nil
+        published()
+        return
+      }
+      if let image = made.image, let pixels = made.pixels { await prime(image, pixels) }
+      guard !Task.isCancelled, self.source === source else { return }
+      applied = goal
+      image = made.image
+      pixels = made.pixels
+      published()
+    }
+  }
+
+  /// `target` healed into the source: from `pixels` (which have `applied`) when `target` goes on
+  /// from `applied`, else from the source's own pixels. Nil image and pixels for no strokes; nil
+  /// when the source can't be read.
+  @concurrent private nonisolated static func heal(
+    source: CGImage, pixels: [UInt8]?, applied: Edit.HealStrokes, target: Edit.HealStrokes
+  ) async -> (image: CGImage?, pixels: [UInt8]?)? {
+    guard !target.isEmpty else { return (nil, nil) }
+    let width = source.width, height = source.height
+    var buffer: [UInt8]
+    var start = 0
+    if let pixels, !applied.isEmpty, target.strokes.count >= applied.strokes.count, target.strokes.starts(with: applied.strokes) {
+      buffer = pixels
+      start = applied.strokes.count
+    } else {
+      guard let decoded = ColorMatch.rgba(source), decoded.count == width * height * 4 else { return nil }
+      buffer = decoded
+    }
+    for stroke in target.strokes[start...] {
+      if Task.isCancelled { return nil }
+      HealBrush.apply(stroke, to: &buffer, width: width, height: height)
+    }
+    guard let image = ColorMatch.cgImage(rgba: buffer, width: width, height: height, opaque: nil) else { return nil }
+    return (image, buffer)
   }
 }
 

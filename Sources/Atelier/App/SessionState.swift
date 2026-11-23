@@ -60,14 +60,35 @@ nonisolated struct EditSession: Codable, Equatable {
   }
 }
 
-/// The Edit screen's crop at quit, for the step `EditSession` names (D10): kept whether or not
-/// it was saved, so a relaunch shows the image as it was left. A small JSON file in Application
-/// Support rather than UserDefaults, as it'll hold Heal strokes too. Scripted runs neither read nor
-/// write it.
+/// The Edit screen's crop and Heal strokes at quit, for the step `EditSession` names (D10): kept
+/// whether or not they were saved, so a relaunch shows the image as it was left. A small JSON file
+/// in Application Support rather than UserDefaults, as the strokes can run to tens of KB. Scripted
+/// runs neither read nor write it.
 nonisolated struct EditRetouchSession: Codable, Equatable {
   var project: String
   var tensorId: Int64
-  var crop: Edit.Crop
+  var crop: Edit.Crop?
+  /// Nil for none (and in a file written before Heal).
+  var heal: Edit.HealStrokes?
+
+  init(project: String, tensorId: Int64, crop: Edit.Crop?, heal: Edit.HealStrokes?) {
+    self.project = project
+    self.tensorId = tensorId
+    self.crop = crop
+    self.heal = heal.flatMap { $0.isEmpty ? nil : $0 }
+  }
+
+  private enum CodingKeys: String, CodingKey { case project, tensorId, crop, heal }
+
+  /// Strict for the step, lenient for the rest: unreadable strokes (a newer encoding) leave the
+  /// crop, and a damaged crop leaves the strokes.
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    project = try c.decode(String.self, forKey: .project)
+    tensorId = try c.decode(Int64.self, forKey: .tensorId)
+    crop = (try? c.decodeIfPresent(Edit.Crop.self, forKey: .crop)) ?? nil
+    heal = (try? c.decodeIfPresent(Edit.HealStrokes.self, forKey: .heal)) ?? nil
+  }
 
   static var url: URL { URL.applicationSupportDirectory.appending(path: "Atelier/Edit Retouch.json") }
 

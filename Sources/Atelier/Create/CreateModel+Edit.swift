@@ -118,9 +118,11 @@ extension CreateModel {
         setRunStep(100, job)
         // Its own renderer: the screen's caches are for the screen's image, and a full render
         // isn't kept anyway (it's over the cache's size limit).
-        // The retouch first (the crop), then the look, as the screen shows it; the step's input
-        // stays the whole source, so Step's Input and Open in Edit go back to it.
-        let rendered = try await EditRenderer().full(source: EditRetouch.apply(edit.retouch, to: source), options: edit.options, context: edit.context)
+        // The retouch first (the Heal strokes, then the crop), then the look, as the screen shows
+        // it; the step's input stays the whole unhealed source, so Step's Input and Open in Edit
+        // go back to it.
+        let retouched = try await EditRetouch.applied(edit.retouch, to: source)
+        let rendered = try await EditRenderer().full(source: retouched, options: edit.options, context: edit.context)
         guard let tensor = ImageTensor.tensor(from: rendered) else { throw EditJobError.unreadable }
         try Task.checkCancellation()
         setRunMessage("Saving…", job)

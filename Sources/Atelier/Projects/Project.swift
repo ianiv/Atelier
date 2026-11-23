@@ -2086,6 +2086,7 @@ final nonisolated class Project: Sendable {
     var noiseTensor: Tensor<UInt8>?
     var histogramTensor: Tensor<Float64>?
     var lutTensor: Tensor<Float16>?
+    var healTensor: Tensor<UInt8>?
     if let ref = record.realNoise {
       guard let noise = blobs.realNoise, noise.digest == ref.digest, let tensor = Self.noiseTensor(noise) else {
         throw ProjectError.missingEditData
@@ -2103,6 +2104,12 @@ final nonisolated class Project: Sendable {
         throw ProjectError.missingEditData
       }
       lutTensor = tensor
+    }
+    if let ref = record.heal {
+      guard let strokes = blobs.heal, strokes.digest == ref.digest, let tensor = Self.healTensor(strokes) else {
+        throw ProjectError.missingEditData
+      }
+      healTensor = tensor
     }
     let (placed, added, failed): (Edit.Record, [String], Bool) = storeAccess.withLock { _ in
       var placed = record
@@ -2141,6 +2148,11 @@ final nonisolated class Project: Sendable {
             Edit.StoredLUT.prefix, ref.digest, ref.id, { Self.lut(from: $0, ref)?.digest },
             { store.write($0, tensor: tensor, codec: [.fpzip, .zip]) })
         }
+        if let ref = record.heal, let tensor = healTensor {
+          // Bytes, not numbers: zip alone (fpzip is for floating point).
+          placed.heal?.id = place(
+            Edit.StoredHeal.prefix, ref.digest, ref.id, { Self.heal(from: $0)?.digest }, { store.write($0, tensor: tensor, codec: [.zip]) })
+        }
       }
       if case .failure = result { return (record, added, true) }
       return (placed, added, false)
@@ -2168,6 +2180,7 @@ final nonisolated class Project: Sendable {
     if record.realNoise != nil { named.insert(.realNoise) }
     if record.referenceHistogram != nil { named.insert(.referenceHistogram) }
     if record.lut != nil { named.insert(.lut) }
+    if record.heal != nil { named.insert(.heal) }
     guard !named.isEmpty else { return Edit.LoadedData(blobs: Edit.Blobs(), missing: []) }
     return storeAccess.withLock { _ in
       var loaded = Edit.LoadedData(blobs: Edit.Blobs(), missing: named)
@@ -2184,6 +2197,10 @@ final nonisolated class Project: Sendable {
         if let ref = record.lut, let table = read(ref.tensorName).flatMap({ Self.lut(from: $0, ref) }), table.digest == ref.digest {
           loaded.blobs.lut = table
           loaded.missing.remove(.lut)
+        }
+        if let ref = record.heal, let strokes = read(ref.tensorName).flatMap(Self.heal(from:)), strokes.digest == ref.digest {
+          loaded.blobs.heal = strokes
+          loaded.missing.remove(.heal)
         }
       }
       return loaded
@@ -2247,6 +2264,24 @@ final nonisolated class Project: Sendable {
     var table = Edit.LUTTable(name: ref.name, size: size, values: [], domainMin: ref.domainMin, domainMax: ref.domainMax)
     table.data = data
     return table
+  }
+
+  /// Heal strokes' encoding (`Edit.HealStrokes.encoded`) as a `[bytes]` UInt8 tensor.
+  private static func healTensor(_ strokes: Edit.HealStrokes) -> Tensor<UInt8>? {
+    let bytes = strokes.encoded
+    guard !bytes.isEmpty else { return nil }
+    var tensor = Tensor<UInt8>(.CPU, .C(bytes.count))
+    tensor.withUnsafeMutableBytes { target in bytes.withUnsafeBytes { target.copyMemory(from: $0) } }
+    return tensor
+  }
+
+  /// The strokes a `[bytes]` tensor holds; nil for any other shape, or bytes that don't decode
+  /// (another version, or damaged: `HealStrokes(encoded:)` checks every value).
+  private static func heal(from stored: AnyTensor) -> Edit.HealStrokes? {
+    let tensor = Tensor<UInt8>(stored)
+    guard tensor.shape.count == 1, tensor.shape[0] > 0 else { return nil }
+    let data = tensor.withUnsafeBytes { Data($0.prefix(tensor.shape[0])) }
+    return Edit.HealStrokes(encoded: data)
   }
 
   private func writeTensor<Element: TensorNumeric>(_ tensor: Tensor<Element>, name: String) throws {

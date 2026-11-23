@@ -1,6 +1,6 @@
 # Editing images
 
-The **Edit** screen (below History in the sidebar) finishes an image without a model: a crop, film grain, color matching to a reference, a grade, a 3D LUT, halation, lens blur and a vignette. Its grain imitates a real camera's noise, and looks can be kept as `.grain.json` noise profiles. Editing is non-destructive: the screen always renders the image you opened with the current settings, and an edit saved to History remembers its settings, so you can open it again and change them.
+The **Edit** screen (below History in the sidebar) finishes an image without a model: a crop, spot healing, film grain, color matching to a reference, a grade, a 3D LUT, halation, lens blur and a vignette. Its grain imitates a real camera's noise, and looks can be kept as `.grain.json` noise profiles. Editing is non-destructive: the screen always renders the image you opened with the current settings, and an edit saved to History remembers its settings, so you can open it again and change them.
 
 Edit works on images, not videos.
 
@@ -18,8 +18,9 @@ The picker at the left of the bottom bar chooses what a drag on the image does:
 
 - **Move** drags the image around (when you're zoomed in).
 - **Crop** draws the crop over the whole image.
+- **Heal** paints over spots and marks with pixels from a source you pick.
 
-Crop and the other tools act in a single picture: choosing one while **Side by Side** or **Slider** is on switches the comparison to **Hold for Original**, and choosing Side by Side or Slider goes back to Move.
+Crop and Heal act in a single picture: choosing one while **Side by Side** or **Slider** is on switches the comparison to **Hold for Original**, and choosing Side by Side or Slider goes back to Move.
 
 ## Crop
 
@@ -37,6 +38,21 @@ Crops are in whole pixels, at least 16 on a side, anywhere in the image (not sna
 The crop goes on before the look, so the vignette centers on the cropped picture, the grain is sized to the cropped frame (as grain.py gives a cropped file), and the matches measure what's in the frame. Blur, smear and halation near the crop's edge read the edge's own pixels rather than what's beyond it. While Crop is chosen the look is drawn over the whole image, so its vignette is the whole image's until you leave Crop.
 
 The crop belongs to the image, not the look: opening another image starts with none, and profiles never hold one. The screen keeps the crop of the step it has open across a quit, saved or not.
+
+## Heal
+
+**Heal** takes out spots, blemishes, dust and small marks. You pick where it copies from, and it blends the copied texture into the tone around the mark, so there's no visible ring.
+
+1. Set the source: on the Mac, Option-click a clean patch of the same surface (the same cheek, the same wall). Or turn on **Set Source** in the Heal bar and click or tap there; it turns itself off once the source is set.
+2. Paint over the mark: click for a spot, or drag along a line. A crosshair shows where the brush is copying from. It follows the brush while you paint, and rests at the source between strokes.
+
+The source is **aligned**: the first stroke after you set it fixes the distance and direction from brush to source, and later strokes keep it until you set a new source. Working along a cheek then keeps sampling the skin beside each stroke. Painting before any source is set does nothing; the bar's hint says what to do next.
+
+The brush size is in the bottom bar (**Heal Brush Size**), as a radius in the image's own pixels up to 256, so the outline over the image grows and shrinks as you zoom. On the Mac the outline follows the pointer, hold Space and drag to move the image, and a double-click heals twice rather than zooming. Each stroke heals as you let go, in a few milliseconds.
+
+The Heal bar holds **Set Source**, the hint, how many spots there are and **Clear Heal**, which takes every stroke off. Each stroke is one step of **Undo** (⌘Z), named Heal, and Clear Heal is one too. The bottom bar's **Reset** resets the look only and leaves the strokes.
+
+Heal goes first, before the crop and the look. The strokes are in the whole image's pixels, so changing the crop later leaves them where they were. The original in a comparison is never healed: hold **Hold for Original** to see the marks you took out. The strokes belong to the image, as the crop does: opening another image starts with none, and the screen keeps the strokes of the step it has open across a quit, saved or not.
 
 ## The look
 
@@ -106,26 +122,26 @@ The bottom bar's comparison picks how you see the original:
 - **Side by Side** shows the original and the edit next to each other.
 - **Slider** shows one picture with a divider you drag across it. It shows the whole image only.
 
-With a crop, the original is cropped the same way, so the two line up.
+With a crop, the original is cropped the same way, so the two line up. The original is never healed, so it shows the spots Heal took out.
 
 Zoom with the − and + buttons, ⌘+ and ⌘−, a pinch, or the zoom menu (**Zoom to Fit**, **Zoom to Fill**, actual size); drag to move around, and double-click for actual size or to fit. At 100% and above the screen renders only what's visible, at full detail, so the grain you see is the grain you'll save. While you pinch or drag, the preview you had moves and scales with you, and parts you've already seen at that zoom show as they come into view; the rest renders sharp once you let go. When a render takes more than a moment, a small spinner shows in the preview's corner while the last preview stays up; changing a setting again stops a render that's under way.
 
 ## Saving
 
-- **Save to History** renders the image at full size with the crop and the look and saves it as a new step after the image it was opened from, with that step's settings. The new step is the crop's size; its input stays the whole image. It's a job in the [Queue](queue.md) on this device, after what's already waiting, and saves into the image's own project even if you open another before it runs. While it's waiting or running, saving the same look again is unavailable: it would make the same image.
+- **Save to History** renders the image at full size with the Heal strokes, the crop and the look and saves it as a new step after the image it was opened from, with that step's settings. The new step is the crop's size; its input stays the whole, unhealed image. It's a job in the [Queue](queue.md) on this device, after what's already waiting, and saves into the image's own project even if you open another before it runs. While it's waiting or running, saving the same look again is unavailable: it would make the same image.
 - **Add to History** is for an image opened from a file or Photos: it puts the image in the current project as an Imported [input entry](history.md#input-entries) and saves the edit after it.
-- **Export…** saves the edit at full size as a PNG, without the queue (cropped, even while Crop is chosen). For a step it carries the step's settings and the edit's, as History's exports do (unless Settings turns that off).
+- **Export…** saves the edit at full size as a PNG, without the queue (healed and cropped, even while Crop is chosen). For a step it carries the step's settings and the edit's, as History's exports do (unless Settings turns that off).
 
 A project records image sizes in steps of 64 pixels, as Draw Things does, so History lists an edit of a 1600×1200 image as 1600×1152.
 
 ### Opening an edit again
 
-A step saved from Edit records its look and its crop: the settings, the profile's name, grain data and real noise, the reference's measurements, and the LUT's table. Opening it in Edit goes back to the whole image it was made from with that look and crop, so you can change the settings or the crop rather than add grain over grain or crop a crop. The data is kept in the project, so the step can be opened again exactly even if the profile, reference or LUT file is gone; steps that share a profile or LUT share one copy. If the image it was made from has been deleted, the edit itself opens. An older Atelier opening a cropped edit shows the whole image with the look. If some of the step's data is gone from the project (its real noise, its reference's histograms or its LUT), only the setting that needs it is turned off, and the screen says which.
+A step saved from Edit records its look, its crop and its Heal strokes: the settings, the profile's name, grain data and real noise, the reference's measurements, and the LUT's table. Opening it in Edit goes back to the whole image it was made from with that look, crop and strokes, so you can change the settings, the crop or the strokes rather than add grain over grain or crop a crop. The data is kept in the project, so the step can be opened again exactly even if the profile, reference or LUT file is gone; steps that share a profile, LUT or set of strokes share one copy. If the image it was made from has been deleted, the edit itself opens. An older Atelier opening a cropped or healed edit shows the whole, unhealed image with the look. If some of the step's data is gone from the project (its real noise, its reference's histograms, its LUT or its Heal strokes), only the setting that needs it is turned off (Heal, for the strokes), and the screen says which.
 
 ## On iPad
 
-The inspector is a panel beside the image, as in the Video Editor. The **Hold for Original** segment is pressed and held with a finger; pinch to zoom. With Crop, one finger moves the crop's handles, and two fingers zoom and move the image together; a pinch never changes the crop. The profile library lives in Atelier's own storage; use **Open Profile…** and **Save Profile…** to move profiles to and from Files.
+The inspector is a panel beside the image, as in the Video Editor. The **Hold for Original** segment is pressed and held with a finger; pinch to zoom. With Crop, one finger moves the crop's handles, and two fingers zoom and move the image together; a pinch never changes the crop. With Heal, the Pencil or one finger paints, and two fingers zoom and move the image; a pinch never paints. iPad has no Option key: tap **Set Source**, then tap where to copy from. The profile library lives in Atelier's own storage; use **Open Profile…** and **Save Profile…** to move profiles to and from Files.
 
 ## Agents
 
-On the Mac, agents can give an image a look with `edit_image_look`, crop it with `crop_image`, list your profiles with `list_grain_profiles`, and measure a reference with `measure_reference`. See [Atelier for agents](../MCP.md).
+On the Mac, agents can give an image a look with `edit_image_look`, crop it with `crop_image`, heal spots with `heal_image`, list your profiles with `list_grain_profiles`, and measure a reference with `measure_reference`. See [Atelier for agents](../MCP.md).

@@ -61,7 +61,7 @@ final class AgentTools {
     }
 
     /// Whether answers name it by what it does (`label`) rather than a prompt.
-    var isLabelled: Bool { tool == "match_colors" || tool == "edit_image_look" || tool == "crop_image" }
+    var isLabelled: Bool { tool == "match_colors" || tool == "edit_image_look" || tool == "crop_image" || tool == "heal_image" }
 
     var status: String {
       if result != nil { return "done" }
@@ -105,7 +105,7 @@ final class AgentTools {
 
   /// Every tool, as tools/list gives them: the ones here, then the canvas edit tools
   /// (`AgentToolsCanvasEdit.swift`) and edit_image (`AgentToolsEditImage.swift`).
-  static let definitions: [[String: Any]] = baseDefinitions + canvasEditDefinitions + [editImageDefinition, cropImageDefinition]
+  static let definitions: [[String: Any]] = baseDefinitions + canvasEditDefinitions + [editImageDefinition, cropImageDefinition, healImageDefinition]
 
   private static let baseDefinitions: [[String: Any]] = [
     [
@@ -453,7 +453,7 @@ final class AgentTools {
       "name": "edit_image_look",
       "title": "Edit image look",
       "description":
-        "Gives an image a look on Atelier's Edit screen and saves it as a new history step after its source, like the screen's Save to History: film grain (grain.py's random grain and a profile's real noise), color matching to a reference or the step's original (Reinhard Lab and histogram), a grade (exposure, temperature, tint, contrast, saturation, vibrance), a 3D LUT, halation, lens blur and motion smear, and a vignette. Needs no model. Non-destructive: for a step this tool or the Edit screen made, it goes back to that step's source and starts from the look the step records; for any other step it starts from no change. Over that base go, in order: the profile (`profile` from list_grain_profiles, or `profile_path`), or with `match_reference` the profile Match Reference fits to the reference (grain.py --match: grain, size, colour noise, colour size, colour 0.6, its brightness curve, RGB statistics and real noise); the LUT (`lut`, a built-in, or `lut_path`, at strength 1); the reference (`reference_path` or `reference_history_step`, which sets options.match.target to reference); then `options`, where every key left out stays as the layers below set it. The seed is 7 unless the base or options say otherwise. Runs as a job in Atelier's Queue on this device, after what's queued there: by default it waits and returns the new history_step, source_step, the options used, the profile/reference/LUT names, match_report (with match_reference) and job_id. With background: true it returns a job_id at once for get_job, list_jobs and cancel_job. The same edit already waiting or running isn't queued twice: the call joins that job. The saved size snaps to multiples of 64. Leaves the Edit screen as the user has it. Not for videos.",
+        "Gives an image a look on Atelier's Edit screen and saves it as a new history step after its source, like the screen's Save to History: film grain (grain.py's random grain and a profile's real noise), color matching to a reference or the step's original (Reinhard Lab and histogram), a grade (exposure, temperature, tint, contrast, saturation, vibrance), a 3D LUT, halation, lens blur and motion smear, and a vignette. Needs no model. Non-destructive: for a step this tool or the Edit screen made, it goes back to that step's source and starts from the look the step records; for any other step it starts from no change. Over that base go, in order: the profile (`profile` from list_grain_profiles, or `profile_path`), or with `match_reference` the profile Match Reference fits to the reference (grain.py --match: grain, size, colour noise, colour size, colour 0.6, its brightness curve, RGB statistics and real noise); the LUT (`lut`, a built-in, or `lut_path`, at strength 1); the reference (`reference_path` or `reference_history_step`, which sets options.match.target to reference); then `options`, where every key left out stays as the layers below set it. The seed is 7 unless the base or options say otherwise. Runs as a job in Atelier's Queue on this device, after what's queued there: by default it waits and returns the new history_step, source_step, the options used, the profile/reference/LUT names, match_report (with match_reference) and job_id. With background: true it returns a job_id at once for get_job, list_jobs and cancel_job. The same edit already waiting or running isn't queued twice: the call joins that job. The saved size snaps to multiples of 64. A step's crop and Heal strokes (crop_image, heal_image, the Edit screen) are kept: the answer gives crop and heal_spots. Leaves the Edit screen as the user has it. Not for videos.",
       "inputSchema": [
         "type": "object",
         "properties": [
@@ -631,6 +631,7 @@ final class AgentTools {
     case "match_colors": return try await matchColors(arguments, progress: progress)
     case "edit_image_look": return try await editImageLook(arguments, progress: progress)
     case "crop_image": return try await cropImage(arguments, progress: progress)
+    case "heal_image": return try await healImage(arguments, progress: progress)
     case "list_grain_profiles": return try Self.textResult(json: listGrainProfiles())
     case "measure_reference": return try await measureReference(arguments)
     case "generate": return try await startGenerate(arguments, progress: progress)
@@ -2533,13 +2534,14 @@ final class AgentTools {
   /// that base (or no change), the profile (or Match Reference's), the LUT, the reference, then
   /// `options`. The Edit screen itself is left as it is.
   ///
-  /// The base keeps the step's crop (its record's), so a new look never silently drops it.
-  /// `crop_image` comes through here with `crop`: the change it makes to that crop, worked out
-  /// against the source's size.
+  /// The base keeps the step's crop and Heal strokes (its record's), so a new look never silently
+  /// drops them. `crop_image` comes through here with `crop`, `heal_image` with `heal`: the change
+  /// each makes, worked out against the source's size.
   func editImageLook(
-    _ arguments: [String: Any], crop cropChange: CropArguments.Change? = nil, progress: @escaping (Progress) -> Void
+    _ arguments: [String: Any], crop cropChange: CropArguments.Change? = nil, heal healChange: HealArguments.Change? = nil,
+    progress: @escaping (Progress) -> Void
   ) async throws -> [String: Any] {
-    let tool = cropChange == nil ? "edit_image_look" : "crop_image"
+    let tool = healChange != nil ? "heal_image" : cropChange != nil ? "crop_image" : "edit_image_look"
     if let background = arguments["background"], !Self.isBoolean(background) { throw ToolError("`background` must be true or false.") }
     let background = arguments["background"] as? Bool == true
     if let given = arguments["match_reference"], !Self.isBoolean(given) { throw ToolError("`match_reference` must be true or false.") }
@@ -2551,6 +2553,7 @@ final class AgentTools {
     let project = create.history.project
     var notes: [String] = []
     var crop: Edit.Crop?
+    var heal = Edit.HealStrokes.empty
 
     // The base: an edited step's own look, on its source.
     var source = given
@@ -2573,6 +2576,8 @@ final class AgentTools {
         let data = await project.read { $0.editData(for: record) }
         let lost = record.lost(data.missing)
         context = record.context(with: data.blobs)
+        // Its strokes, when they're still in the project (`lost` notes them when they're not).
+        heal = record.retouch(with: data.blobs).heal
         options = record.options(without: lost)
         if let note = lost.note("Step \(given.id.logicalTime)'s") { notes.append(note) }
         // A match to the original whose stored histograms are gone measures the original again.
@@ -2700,11 +2705,18 @@ final class AgentTools {
 
     // The crop, in the source's pixels: the base's, or crop_image's change to it, kept inside the
     // source (a record is read from a file; an agent's numbers are checked by `CropArguments`).
-    if crop != nil || cropChange != nil {
+    // heal_image's strokes, likewise in the source's pixels, checked by `HealArguments`.
+    var healOffsets: [[Double]] = []
+    if crop != nil || cropChange != nil || healChange != nil {
       guard let tensorId = source.imageTensorId, let picture = await project.read({ $0.image(tensorId: tensorId) }) else {
         throw ToolError("Step \(source.id.logicalTime)'s image couldn't be read.")
       }
       let width = picture.width, height = picture.height
+      if let healChange {
+        let made = try healChange.strokes(over: heal, width: width, height: height)
+        heal = made.strokes
+        healOffsets = made.offsets
+      }
       if let cropChange { crop = try cropChange.crop(over: crop, width: width, height: height) }
       crop = EditRetouch.effectiveCrop(crop, imageWidth: width, imageHeight: height).map { applied in
         // The ratio it's held to stays with it, for the screen's lock.
@@ -2717,14 +2729,15 @@ final class AgentTools {
 
     let edit = Edit.Job(
       project: project.name, sourceTensorId: source.tensorId, options: options, profileName: profileName,
-      referenceTensorId: referenceTensorId, referenceName: referenceName, context: context, retouch: Edit.Retouch(crop: crop))
+      referenceTensorId: referenceTensorId, referenceName: referenceName, context: context, retouch: Edit.Retouch(crop: crop, heal: heal))
     // Another call's job for the same edit: this call answers with it.
     if let existing = jobs.values.first(where: { $0.finishedAt == nil && $0.edit?.isSameEdit(as: edit) == true }) {
       return try await answer(existing, background: background, progress: progress)
     }
     let sourceStep = source.id.logicalTime
     let editedStep = given.id.logicalTime
-    let label = cropChange == nil ? "Edit look of step \(sourceStep)" : (crop == nil ? "Uncrop step \(sourceStep)" : "Crop step \(sourceStep)")
+    let label = healChange != nil ? (heal.isEmpty ? "Clear heal of step \(sourceStep)" : "Heal step \(sourceStep)")
+      : cropChange == nil ? "Edit look of step \(sourceStep)" : (crop == nil ? "Uncrop step \(sourceStep)" : "Crop step \(sourceStep)")
     return try await startJob(tool: tool, label: label, edit: edit, background: background, progress: progress) { [weak self] update in
       guard let self else { throw CancellationError() }
       update(Progress(step: 0, total: nil, message: "Waiting for the current run to finish", isQueued: true))
@@ -2738,6 +2751,12 @@ final class AgentTools {
       if editedStep != sourceStep { result["edited_step"] = editedStep }
       // The crop in the source's pixels, or null for none: coordinates are always the source's.
       result["crop"] = (saved.sidecar.edit?.crop ?? crop).map { Self.cropJSON($0) as Any } ?? NSNull()
+      // The strokes the step has, in the source's pixels (each its own offset).
+      result["heal_spots"] = saved.sidecar.edit?.heal?.count ?? heal.strokes.count
+      if healChange != nil {
+        result["spots"] = heal.strokes.count
+        result["offsets"] = healOffsets
+      }
       if let profileName { result["profile"] = profileName }
       if let referenceName { result["reference"] = referenceName }
       if let lut = options.lut.name { result["lut"] = lut }
@@ -2748,7 +2767,8 @@ final class AgentTools {
         allNotes.append("Saved into “\(project.name)”, the project the step is in; another project is open now.")
       }
       if !allNotes.isEmpty { result["notes"] = allNotes }
-      self.lastResult = cropChange == nil
+      self.lastResult = healChange != nil ? "\(heal.isEmpty ? "Cleared the heal of" : "Healed") step \(sourceStep) in \(project.name)"
+        : cropChange == nil
         ? "Edited the look of step \(sourceStep) in \(project.name)" : "\(crop == nil ? "Uncropped" : "Cropped") step \(sourceStep) in \(project.name)"
       var answer = try Self.textResult(json: result)
       answer["structuredContent"] = Self.tidy(result)

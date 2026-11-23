@@ -456,4 +456,106 @@ struct HealSolverTests {
     #expect(brush.radius == min(HealBrush.maxRadius, Float(width * width + height * height).squareRoot()))
     #expect(brush.shift == SIMD2(width, -height) && brush.feather == 1)
   }
+
+  // MARK: The screen
+
+  /// The Edit screen's healed pixels (`HealCanvas`): a stroke added heals only itself into what's
+  /// kept, and gives the same pixels as healing every stroke from the source; undoing one heals
+  /// the rest again from the source; none gives the source back.
+  @MainActor @Test func healCanvasAddsStrokesOneByOneAsAllAtOnce() async throws {
+    let width = 64, height = 48
+    let pixels = HealTests.image(width: width, height: height, HealTests.texture)
+    let source = try #require(ColorMatch.cgImage(rgba: pixels, width: width, height: height))
+    let decoded = try #require(ColorMatch.rgba(source))
+    let a = Edit.HealStroke(points: [SIMD2(20, 20), SIMD2(26, 22)], radius: 6, offset: SIMD2(14, 6))
+    let b = Edit.HealStroke(points: [SIMD2(44, 30)], radius: 5, offset: SIMD2(-10, -12))
+    var published = 0
+    let canvas = HealCanvas()
+    canvas.published = { published += 1 }
+    canvas.reset(source: source)
+    canvas.update(Edit.HealStrokes(strokes: [a]))
+    await canvas.settle()
+    canvas.update(Edit.HealStrokes(strokes: [a, b]))
+    await canvas.settle()
+    var expected = decoded
+    HealBrush.apply(a, to: &expected, width: width, height: height)
+    HealBrush.apply(b, to: &expected, width: width, height: height)
+    #expect(canvas.applied.strokes == [a, b] && canvas.pixels == expected && published == 2)
+    #expect(canvas.image.flatMap(ColorMatch.rgba) == expected)
+    canvas.update(Edit.HealStrokes(strokes: [b]))
+    await canvas.settle()
+    var onlyB = decoded
+    HealBrush.apply(b, to: &onlyB, width: width, height: height)
+    #expect(canvas.pixels == onlyB)
+    canvas.update(.empty)
+    await canvas.settle()
+    #expect(canvas.image == nil && canvas.pixels == nil && canvas.applied.isEmpty)
+  }
+
+  /// A pinch never paints: the stroke on its way is dropped, the drag pans until both gestures
+  /// end, and a cancelled gesture leaves nothing for the next touch (as `CropDrag`).
+  @MainActor @Test func aPinchNeverPaints() {
+    let drag = HealDrag()
+    #expect(drag.dragChanged(translation: .zero))
+    drag.begin(.paint)
+    drag.move(to: CGPoint(x: 10, y: 10), spacing: 1)
+    drag.move(to: CGPoint(x: 10.2, y: 10), spacing: 1)
+    drag.move(to: CGPoint(x: 14, y: 10), spacing: 1)
+    #expect(drag.points.count == 2)
+    drag.pinchChanged()
+    #expect(!drag.isActive && drag.points.isEmpty)
+    #expect(!drag.dragChanged(translation: CGSize(width: 5, height: 0)))
+    #expect(!drag.dragChanged(translation: CGSize(width: 12, height: 4)) && drag.pinchPan == CGSize(width: 12, height: 4))
+    drag.begin(.paint)
+    drag.move(to: CGPoint(x: 30, y: 30), spacing: 1)
+    #expect(drag.dragEnded() == nil)
+    drag.pinchEnded()
+    // The next touch paints again.
+    #expect(drag.dragChanged(translation: .zero))
+    drag.begin(.source)
+    drag.move(to: CGPoint(x: 3, y: 4), spacing: 1)
+    drag.move(to: CGPoint(x: 5, y: 6), spacing: 1)
+    let ended = drag.dragEnded()
+    #expect(ended?.mode == .source && ended?.points == [CGPoint(x: 5, y: 6)])
+    // Cancelled mid-pinch (no `onEnded`): reset leaves nothing set.
+    _ = drag.dragChanged(translation: .zero)
+    drag.pinchChanged()
+    drag.reset()
+    #expect(drag.dragChanged(translation: .zero) && !drag.pinched)
+  }
+
+  /// heal_image's arguments: each spot or stroke names its source; numbers are checked before
+  /// any becomes a stroke; the offset is source minus the first point.
+  @Test func healImageArguments() throws {
+    let change = try HealArguments.parse([
+      "spots": [["x": 20, "y": 30, "radius": 8, "source": [40, 30]]],
+      "strokes": [["points": [[5, 5], [9, 5]], "radius": 4, "source": [5, 20]]],
+    ])
+    let made = try change.strokes(over: Edit.HealStrokes(strokes: [Edit.HealStroke(points: [SIMD2(1, 1)], radius: 2, offset: .zero)]), width: 64, height: 48)
+    #expect(made.strokes.strokes.count == 3 && made.offsets == [[20, 0], [0, 15]])
+    #expect(made.strokes.strokes[1].offset == SIMD2(20, 0) && made.strokes.strokes[2].points == [SIMD2(5, 5), SIMD2(9, 5)])
+    var replace = change
+    replace.replace = true
+    #expect(try replace.strokes(over: made.strokes, width: 64, height: 48).strokes.strokes.count == 2)
+    #expect(try HealArguments.parse(["clear": true]).strokes(over: made.strokes, width: 64, height: 48).strokes.isEmpty)
+    func error(_ arguments: [String: Any], width: Int = 64, height: Int = 48) -> String? {
+      do {
+        _ = try HealArguments.parse(arguments).strokes(over: .empty, width: width, height: height)
+        return nil
+      } catch {
+        return error.localizedDescription
+      }
+    }
+    #expect(error(["spots": [["x": 1, "y": 1, "radius": 3]]])?.contains("spots[0] has no `source`") == true)
+    #expect(error(["strokes": [["points": [[1, 1]], "radius": 3, "source": [2]]]])?.contains("strokes[0].source") == true)
+    #expect(error(["spots": [["x": 1, "y": 1, "radius": 300, "source": [2, 2]]]])?.contains("256") == true)
+    #expect(error(["spots": [["x": 1, "y": 1, "radius": 0, "source": [2, 2]]]]) != nil)
+    #expect(error(["spots": [["x": "1", "y": 1, "radius": 3, "source": [2, 2]]]]) != nil)
+    #expect(error(["spots": [["x": 1, "y": 1, "radius": true, "source": [2, 2]]]]) != nil)
+    #expect(error(["spots": [["x": 100, "y": 1, "radius": 3, "source": [2, 2]]]])?.contains("64×48") == true)
+    #expect(error(["spots": [["x": 1, "y": 1, "radius": 3, "source": [2, 99]]]])?.contains("64×48") == true)
+    #expect(error(["clear": true, "spots": []]) != nil)
+    #expect(error(["spots": []]) != nil)
+    #expect(error([:]) != nil)
+  }
 }

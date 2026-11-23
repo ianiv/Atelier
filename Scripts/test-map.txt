@@ -32,7 +32,7 @@ Scripts/test-map.txt         | smoke |
 Sources/AtelierTests/Tags.swift | smoke |
 
 # Sources, one line per folder.
-Sources/Atelier/Agents/      | HostTests,CanvasEditArgumentsTests,AgentAccessTests,CropTests | --agent-canvas-check,--edit-screen-check,--edit-tools-check,--agent-net-check
+Sources/Atelier/Agents/      | HostTests,CanvasEditArgumentsTests,AgentAccessTests,CropTests,HealTests | --agent-canvas-check,--edit-screen-check,--edit-tools-check,--agent-net-check
 Sources/Atelier/App/         | HostTests,TemporaryFilesTests,ClipCacheTests,OrphanTests,ModelFolderTests,WaitUntilTests,ShareTests,SharePickerTests | --cleanup-check,--ux-check,--resize-bench,--tab-switch-bench,--model-folders-check
 Sources/Atelier/App/PortClaims.swift | PortClaimsTests,AgentAccessTests,PortOwnerTests | --agent-net-check,--remote-net-check,--remote-check,--remote-tailnet-check
 Sources/Atelier/App/PortOwner.swift | PortOwnerTests,PortClaimsTests | --agent-net-check,--remote-net-check

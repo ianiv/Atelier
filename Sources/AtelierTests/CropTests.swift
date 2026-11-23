@@ -252,14 +252,17 @@ struct CropTests {
     #expect(EditRetouch.effectiveCrop(Edit.Crop(x: 0, y: 0, width: 1000, height: 800), imageWidth: 1000, imageHeight: 800) == nil)
   }
 
-  @Test func applyingCrops() throws {
+  @Test func applyingCrops() async throws {
     let space = try #require(CGColorSpace(name: CGColorSpace.sRGB))
     let context = try #require(CGContext(data: nil, width: 64, height: 48, bitsPerComponent: 8, bytesPerRow: 0, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
     let source = try #require(context.makeImage())
-    #expect(EditRetouch.apply(.none, to: source) === source)
-    #expect(EditRetouch.apply(Edit.Retouch(crop: Edit.Crop(x: 0, y: 0, width: 64, height: 48)), to: source) === source)
-    let cropped = EditRetouch.apply(Edit.Retouch(crop: Edit.Crop(x: 8, y: 4, width: 32, height: 20)), to: source)
+    #expect(EditRetouch.cropped(nil, source) === source)
+    #expect(EditRetouch.cropped(Edit.Crop(x: 0, y: 0, width: 64, height: 48), source) === source)
+    let cropped = EditRetouch.cropped(Edit.Crop(x: 8, y: 4, width: 32, height: 20), source)
     #expect(cropped.width == 32 && cropped.height == 20)
+    // No strokes and no crop: the source itself, so the renderer's caches for it still serve.
+    #expect(try await EditRetouch.applied(.none, to: source) === source)
+    #expect(try await EditRetouch.applied(Edit.Retouch(crop: Edit.Crop(x: 8, y: 4, width: 32, height: 20)), to: source).width == 32)
   }
 
   @Test func viewportMapsBothWays() {

@@ -54,6 +54,7 @@ struct EditScreen: View {
       // The Hold segment is itself what's held: a stock segmented Picker can't say when one
       // segment is pressed and let go, so this is drawn as one.
       EditToolPicker()
+      HealBrushSizeMenu()
       EditCompareControl(mode: $edit.compareMode, holding: $holding, canHold: edit.hasSource)
       EditZoomControls(canvas: edit.canvas)
         .disabled(!edit.hasSource || edit.compareMode == .slider)
@@ -290,6 +291,12 @@ nonisolated struct EditViewport: Equatable {
     return CGRect(x: frame.minX + rect.minX * ppp, y: frame.minY + rect.minY * ppp, width: rect.width * ppp, height: rect.height * ppp)
   }
 
+  /// `point` in image pixels, in the pane's points.
+  func viewPoint(_ point: CGPoint) -> CGPoint {
+    let frame = imageFrame, ppp = pointsPerPixel
+    return CGPoint(x: frame.minX + point.x * ppp, y: frame.minY + point.y * ppp)
+  }
+
   /// The image pixel under `point` in the pane (not kept inside the image).
   func imagePoint(_ point: CGPoint) -> CGPoint {
     let frame = imageFrame, ppp = max(pointsPerPixel, 1e-6)
@@ -408,6 +415,7 @@ private struct EditPreview: View {
                 switch edit.tool {
                 case .move: EmptyView()
                 case .crop: CropBar()
+                case .heal: HealBar()
                 }
               }
           case .sideBySide:
@@ -472,9 +480,13 @@ private struct EditPane: View {
   var title: String?
   /// A Crop drag under way: only `CropOverlay` reads it.
   @State private var cropDrag = CropDrag()
+  /// A Heal touch under way: only `HealOverlay` reads it.
+  @State private var healDrag = HealDrag()
   #if os(macOS)
   /// Space is held: a drag moves the image whatever the tool, as on the Create canvas.
   @State private var spaceDown = false
+  /// Option is held: a Heal click sets the source.
+  @State private var optionDown = false
   @FocusState private var focused: Bool
   #endif
   /// This pane's render lanes (`EditModel.RenderLane`).
@@ -550,6 +562,9 @@ private struct EditPane: View {
           ProgressView().frame(width: geometry.size.width, height: geometry.size.height)
         }
         if edit.tool == .crop { CropOverlay(drag: cropDrag, viewport: viewport) }
+        if edit.tool == .heal {
+          HealOverlay(drag: healDrag, viewport: viewport, origin: CGPoint(x: edit.workingOrigin.x, y: edit.workingOrigin.y))
+        }
       }
       .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
       .clipped()
@@ -567,76 +582,110 @@ private struct EditPane: View {
         }
       }
       .contentShape(.rect)
-      .gesture(
-        DragGesture(minimumDistance: 1)
-          .onChanged { value in
-            if crops || cropDrag.isDragging || cropDrag.pinched {
-              // A pinch's drag (two fingers on iPad) pans the view with the zoom; else the crop.
-              if cropDrag.dragChanged(translation: value.translation) {
-                cropChanged(value, viewport: viewport)
-              } else {
-                applyPinch(canvas, size: geometry.size)
-              }
-              return
-            }
-            let start = gestureStart ?? (canvas.effectiveScale, canvas.offset)
-            gestureStart = start
-            canvas.scale = start.scale
-            canvas.offset = CGSize(width: start.offset.width + value.translation.width, height: start.offset.height + value.translation.height)
-          }
-          .onEnded { _ in
-            cropEnded()
-            // A pinch still going keeps the view it started from.
-            if !cropDrag.pinchActive { gestureStart = nil }
-          }
-          .simultaneously(
-            with: MagnifyGesture()
-              .onChanged { value in
-                let anchor = CGPoint(
-                  x: value.startLocation.x - geometry.size.width / 2, y: value.startLocation.y - geometry.size.height / 2)
-                if edit.tool == .crop {
-                  // Never the crop: the drag on its way is dropped, and the pinch zooms and pans.
-                  cropDrag.pinchChanged()
-                  cropDrag.pinchZoom = (value.magnification, anchor)
-                  applyPinch(canvas, size: geometry.size)
-                  return
-                }
-                let start = gestureStart ?? (canvas.effectiveScale, canvas.offset)
-                gestureStart = start
-                canvas.offset = start.offset
-                canvas.scale = start.scale
-                canvas.zoom(to: start.scale * value.magnification, around: anchor)
-              }
-              .onEnded { _ in
-                cropDrag.pinchEnded()
-                if !cropDrag.dragActive { gestureStart = nil }
-              })
-          // Moving: no window renders start until the gesture ends; what's up is drawn scaled
-          // and moved meanwhile.
-          .updating($moving) { _, moving, _ in moving = true })
       #if os(macOS)
-        .focusable(edit.tool == .crop)
+        // The brush outline follows the pointer.
+        .onContinuousHover { phase in
+          guard edit.tool == .heal else { return }
+          switch phase {
+          case .active(let location): healDrag.hover = location
+          case .ended: healDrag.hover = nil
+          }
+        }
+      #endif
+        .gesture(
+          // From the first point with Heal, so a click heals a spot (or sets the source).
+          DragGesture(minimumDistance: edit.tool == .heal ? 0 : 1)
+            .onChanged { value in
+              if crops || cropDrag.isDragging || cropDrag.pinched {
+                // A pinch's drag (two fingers on iPad) pans the view with the zoom; else the crop.
+                if cropDrag.dragChanged(translation: value.translation) {
+                  cropChanged(value, viewport: viewport)
+                } else {
+                  applyPinch(canvas, zoom: cropDrag.pinchZoom, pan: cropDrag.pinchPan)
+                }
+                return
+              }
+              if heals || healDrag.isActive || healDrag.pinched {
+                // As Crop: a pinch's drag pans the view with the zoom, never the brush.
+                if healDrag.dragChanged(translation: value.translation) {
+                  healChanged(value, viewport: viewport)
+                } else {
+                  applyPinch(canvas, zoom: healDrag.pinchZoom, pan: healDrag.pinchPan)
+                }
+                return
+              }
+              let start = gestureStart ?? (canvas.effectiveScale, canvas.offset)
+              gestureStart = start
+              canvas.scale = start.scale
+              canvas.offset = CGSize(width: start.offset.width + value.translation.width, height: start.offset.height + value.translation.height)
+            }
+            .onEnded { _ in
+              cropEnded()
+              healEnded()
+              // A pinch still going keeps the view it started from.
+              if !cropDrag.pinchActive, !healDrag.pinchActive { gestureStart = nil }
+            }
+            .simultaneously(
+              with: MagnifyGesture()
+                .onChanged { value in
+                  let anchor = CGPoint(
+                    x: value.startLocation.x - geometry.size.width / 2, y: value.startLocation.y - geometry.size.height / 2)
+                  if edit.tool == .crop {
+                    // Never the crop: the drag on its way is dropped, and the pinch zooms and pans.
+                    cropDrag.pinchChanged()
+                    cropDrag.pinchZoom = (value.magnification, anchor)
+                    applyPinch(canvas, zoom: cropDrag.pinchZoom, pan: cropDrag.pinchPan)
+                    return
+                  }
+                  if edit.tool == .heal {
+                    // Never a stroke: the one on its way is dropped, and the pinch zooms and pans.
+                    healDrag.pinchChanged()
+                    healDrag.pinchZoom = (value.magnification, anchor)
+                    applyPinch(canvas, zoom: healDrag.pinchZoom, pan: healDrag.pinchPan)
+                    return
+                  }
+                  let start = gestureStart ?? (canvas.effectiveScale, canvas.offset)
+                  gestureStart = start
+                  canvas.offset = start.offset
+                  canvas.scale = start.scale
+                  canvas.zoom(to: start.scale * value.magnification, around: anchor)
+                }
+                .onEnded { _ in
+                  cropDrag.pinchEnded()
+                  healDrag.pinchEnded()
+                  if !cropDrag.dragActive, !healDrag.dragActive { gestureStart = nil }
+                })
+            // Moving: no window renders start until the gesture ends; what's up is drawn scaled
+            // and moved meanwhile.
+            .updating($moving) { _, moving, _ in moving = true })
+      #if os(macOS)
+        .focusable(edit.tool != .move)
         .focusEffectDisabled()
         .focused($focused)
         .onKeyPress(.space, phases: .all) { press in
           spaceDown = press.phase != .up
           return .handled
         }
+        .onOptionKeyChanged { optionDown = $0 }
         // A Space let go after focus moved elsewhere never arrives here.
         .onChange(of: focused) { if !focused { spaceDown = false } }
       #endif
         .onTapGesture(count: 2) {
+          // With Heal each click is a spot healed: a double-click is two, not a zoom.
+          guard edit.tool != .heal else { return }
           if canvas.scale == nil { canvas.zoom(to: 1) } else { canvas.zoomToFit() }
         }
         .onChange(of: edit.tool) {
           cropDrag.cancel()
+          healDrag.cancel()
+          if edit.tool != .heal { healDrag.hover = nil }
           #if os(macOS)
-          // So Space pans before any crop drag has focused the pane.
-          if edit.tool == .crop { focused = true }
+          // So Space pans before any drag has focused the pane.
+          if edit.tool != .move { focused = true }
           #endif
         }
         #if os(macOS)
-        .onAppear { if edit.tool == .crop { focused = true } }
+        .onAppear { if edit.tool != .move { focused = true } }
         #endif
         .onChange(of: viewport.fitScale, initial: true) { canvas.fitScale = viewport.fitScale }
         .onChange(of: viewport.fillScale, initial: true) { canvas.fillScale = viewport.fillScale }
@@ -649,6 +698,7 @@ private struct EditPane: View {
             Task { @MainActor in
               guard !edit.isMovingView else { return }
               cropDrag.reset()
+              healDrag.reset()
               gestureStart = nil
             }
           }
@@ -677,6 +727,7 @@ private struct EditPane: View {
     .onDisappear {
       if moving { edit.isMovingView = false }
       cropDrag.reset()
+      healDrag.reset()
       gestureStart = nil
       renders.cancel()
       originalWindow.cancel()
@@ -691,6 +742,42 @@ private struct EditPane: View {
     #else
     edit.tool == .crop
     #endif
+  }
+
+  /// Whether a drag now heals (or sets the source): Heal is the tool and (on the Mac) Space isn't held.
+  private var heals: Bool {
+    #if os(macOS)
+    edit.tool == .heal && !spaceDown
+    #else
+    edit.tool == .heal
+    #endif
+  }
+
+  /// A Heal touch moved: its first event decides whether it sets the source (Set Source on, or
+  /// Option held on the Mac) or paints; the point goes in the source's pixels.
+  private func healChanged(_ value: DragGesture.Value, viewport: EditViewport) {
+    if !healDrag.isActive {
+      #if os(macOS)
+      focused = true
+      let sourcing = edit.isSettingHealSource || optionDown
+      #else
+      let sourcing = edit.isSettingHealSource
+      #endif
+      healDrag.begin(sourcing ? .source : .paint)
+    }
+    let point = viewport.imagePoint(value.location)
+    let origin = edit.workingOrigin
+    healDrag.move(to: CGPoint(x: point.x + Double(origin.x), y: point.y + Double(origin.y)), spacing: max(edit.healBrushSize / 8, 0.5))
+  }
+
+  /// A Heal touch let go: the source set where it ended, or one undo step, "Heal" (nothing with
+  /// no source set, or after a pinch).
+  private func healEnded() {
+    guard let done = healDrag.dragEnded(), let last = done.points.last else { return }
+    switch done.mode {
+    case .source: edit.setHealSource(at: last)
+    case .paint: edit.addHealStroke(points: done.points, undoManager: undoManager)
+    }
   }
 
   /// A Crop drag moved: the handle, the rectangle or a new one follows (`CropDrag`).
@@ -709,15 +796,14 @@ private struct EditPane: View {
     }
   }
 
-  /// A pinch with Crop: the view zoomed about where it began, and moved as far as the fingers'
-  /// centre has (`CropDrag.pinchPan`), from the view at the pinch's start.
-  private func applyPinch(_ canvas: CanvasState, size _: CGSize) {
+  /// A pinch with Crop or Heal: the view zoomed about where it began, and moved as far as the
+  /// fingers' centre has (`CropDrag.pinchPan`, `HealDrag.pinchPan`), from the view at the pinch's start.
+  private func applyPinch(_ canvas: CanvasState, zoom: (magnification: Double, anchor: CGPoint)?, pan: CGSize) {
     let start = gestureStart ?? (canvas.effectiveScale, canvas.offset)
     gestureStart = start
     canvas.offset = start.offset
     canvas.scale = start.scale
-    if let zoom = cropDrag.pinchZoom { canvas.zoom(to: start.scale * zoom.magnification, around: zoom.anchor) }
-    let pan = cropDrag.pinchPan
+    if let zoom { canvas.zoom(to: start.scale * zoom.magnification, around: zoom.anchor) }
     canvas.offset = CGSize(width: canvas.offset.width + pan.width, height: canvas.offset.height + pan.height)
   }
 

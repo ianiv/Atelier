@@ -797,7 +797,7 @@ extension AgentTools {
       Crops an image as the Edit screen's Crop tool does and saves the result as a new history \
       step after its source, like Save to History. Non-destructive, like edit_image_look: for a \
       step this tool, edit_image_look or the Edit screen made, it goes back to that step's source \
-      and keeps the look the step records, changing only the crop; for any other step the look is \
+      and keeps the look and Heal strokes the step records, changing only the crop; for any other step the look is \
       no change. Coordinates are always the source image's pixels from its top left, never the \
       cropped step's: call get_image on the source step (the source_step this tool returns) to see \
       what you're cropping. Pass `x`, `y`, `width` and `height` (inside the image, at least 16 \
@@ -839,6 +839,191 @@ extension AgentTools {
     var json: [String: Any] = ["x": crop.x, "y": crop.y, "width": crop.width, "height": crop.height]
     if let aspect = crop.aspect { json["aspect"] = aspect.label(swapped: crop.swapped) }
     return json
+  }
+}
+/// What `heal_image` is asked for, read from its arguments alone (`HealArgumentsTests` in
+/// `HealTests`): spots or strokes, each naming its own source point, or `clear`. Numbers come from
+/// an agent, so every one is checked here (finite, a radius in range) and against the image in
+/// `strokes(over:width:height:)` before any becomes a stroke.
+nonisolated enum HealArguments {
+  /// One spot or stroke: its points in the source's pixels (one for a spot), its radius, and
+  /// where it copies from; `name` says which in an error ("spots[2]").
+  struct Spot: Equatable, Sendable {
+    var points: [SIMD2<Double>]
+    var radius: Double
+    var source: SIMD2<Double>
+    var name: String
+  }
+
+  struct Change: Equatable, Sendable {
+    var spots: [Spot]
+    /// The new strokes take the place of the step's rather than going after them.
+    var replace: Bool
+    /// No strokes at all.
+    var clear: Bool
+  }
+
+  typealias ToolError = AgentTools.ToolError
+
+  /// The most points one stroke takes, and strokes one step keeps: far past any real retouch.
+  static let maxPoints = 10_000
+  static let maxStrokes = 2_000
+
+  static func parse(_ arguments: [String: Any]) throws -> Change {
+    func flag(_ key: String) throws -> Bool {
+      guard let value = arguments[key] else { return false }
+      guard AgentTools.isBoolean(value), let flag = value as? Bool else { throw ToolError("`\(key)` is true or false.") }
+      return flag
+    }
+    let clear = try flag("clear"), replace = try flag("replace")
+    let hasSpots = arguments["spots"] != nil, hasStrokes = arguments["strokes"] != nil
+    if clear {
+      guard !hasSpots, !hasStrokes, !replace else { throw ToolError("`clear` takes every stroke off: pass it alone, without `spots`, `strokes` or `replace`.") }
+      return Change(spots: [], replace: true, clear: true)
+    }
+    guard hasSpots || hasStrokes else { throw ToolError("Pass `spots` or `strokes` (each with its `source`), or `clear: true`.") }
+    func number(_ value: Any?) -> Double? {
+      guard let value, !AgentTools.isBoolean(value), value is NSNumber, let number = AgentTools.double(value), number.isFinite else { return nil }
+      return number
+    }
+    func pair(_ value: Any?) -> SIMD2<Double>? {
+      guard let array = value as? [Any], array.count == 2, let x = number(array[0]), let y = number(array[1]) else { return nil }
+      return SIMD2(x, y)
+    }
+    func list(_ key: String) throws -> [[String: Any]] {
+      guard let value = arguments[key] else { return [] }
+      guard let items = value as? [Any], let objects = items as? [[String: Any]] else { throw ToolError("`\(key)` is an array of objects.") }
+      return objects
+    }
+    func common(_ item: [String: Any], _ name: String) throws -> (radius: Double, source: SIMD2<Double>) {
+      guard item["source"] != nil else {
+        throw ToolError("\(name) has no `source`: every spot and stroke names the point it copies from, as [sx, sy] in the source's pixels.")
+      }
+      guard let source = pair(item["source"]) else { throw ToolError("\(name).source is [sx, sy]: two numbers, the source's pixels.") }
+      guard let radius = number(item["radius"]), radius > 0, radius <= Double(HealBrush.maxRadius) else {
+        throw ToolError("\(name).radius is a number of pixels above 0 and at most \(Int(HealBrush.maxRadius)).")
+      }
+      return (radius, source)
+    }
+    var spots: [Spot] = []
+    for (index, item) in try list("spots").enumerated() {
+      let name = "spots[\(index)]"
+      let (radius, source) = try common(item, name)
+      guard let x = number(item["x"]), let y = number(item["y"]) else { throw ToolError("\(name) needs `x` and `y`, numbers of the source's pixels.") }
+      spots.append(Spot(points: [SIMD2(x, y)], radius: radius, source: source, name: name))
+    }
+    for (index, item) in try list("strokes").enumerated() {
+      let name = "strokes[\(index)]"
+      let (radius, source) = try common(item, name)
+      guard let raw = item["points"] as? [Any], !raw.isEmpty, raw.count <= maxPoints else {
+        throw ToolError("\(name).points is an array of 1 to \(maxPoints) [x, y] pairs.")
+      }
+      var points: [SIMD2<Double>] = []
+      for (at, value) in raw.enumerated() {
+        guard let point = pair(value) else { throw ToolError("\(name).points[\(at)] is [x, y]: two numbers, the source's pixels.") }
+        points.append(point)
+      }
+      spots.append(Spot(points: points, radius: radius, source: source, name: name))
+    }
+    guard !spots.isEmpty else { throw ToolError("`spots` and `strokes` are empty: pass at least one, or `clear: true`.") }
+    return Change(spots: spots, replace: replace, clear: false)
+  }
+}
+
+nonisolated extension HealArguments.Change {
+  /// The step's strokes after this change, on a `width` × `height` source with `base` there now,
+  /// and the offsets the new strokes use (source minus each one's first point, as [dx, dy]). Every
+  /// point and source must be inside the image.
+  func strokes(over base: Edit.HealStrokes, width: Int, height: Int) throws -> (strokes: Edit.HealStrokes, offsets: [[Double]]) {
+    if clear { return (.empty, []) }
+    func inside(_ p: SIMD2<Double>) -> Bool { p.x >= -0.5 && p.y >= -0.5 && p.x <= Double(width) + 0.5 && p.y <= Double(height) + 0.5 }
+    var strokes = replace ? [] : base.strokes
+    var offsets: [[Double]] = []
+    for spot in spots {
+      guard spot.points.allSatisfy(inside) else {
+        throw AgentTools.ToolError("\(spot.name) goes outside the source image, which is \(width)×\(height) pixels.")
+      }
+      guard inside(spot.source) else {
+        throw AgentTools.ToolError("\(spot.name).source is outside the source image, which is \(width)×\(height) pixels.")
+      }
+      let first = spot.points[0]
+      let offset = spot.source - first
+      offsets.append([offset.x, offset.y])
+      strokes.append(Edit.HealStroke(
+        points: spot.points.map { SIMD2(Float($0.x), Float($0.y)) }, radius: Float(spot.radius), offset: SIMD2(Float(offset.x), Float(offset.y))))
+    }
+    guard strokes.count <= HealArguments.maxStrokes else {
+      throw AgentTools.ToolError("A step keeps at most \(HealArguments.maxStrokes) strokes; this would make \(strokes.count).")
+    }
+    return (Edit.HealStrokes(strokes: strokes), offsets)
+  }
+}
+
+/// `heal_image`: the Edit screen's Heal, saved as a step after the source as Save to History does,
+/// through `edit_image_look`'s job: the base is the step's record (its look, crop and strokes), so
+/// only the strokes change.
+extension AgentTools {
+  static let healImageDefinition: [String: Any] = [
+    "name": "heal_image",
+    "title": "Heal spots in an image",
+    "description": """
+      Removes spots, blemishes and small marks as the Edit screen's Heal tool does, and saves the \
+      result as a new history step after its source, like Save to History. Each spot or stroke \
+      copies texture from a source point you choose (`source`: [sx, sy], required on every one) \
+      and blends it in with the tone around the mark, so pick a clean patch of similar surface \
+      nearby (the same cheek, the same wall). The stored offset is source minus the spot's (or \
+      stroke's first) point. Non-destructive, like edit_image_look: for a step this tool, \
+      edit_image_look, crop_image or the Edit screen made, it goes back to that step's source and \
+      keeps its look, crop and strokes, adding these after them (`replace: true` instead of them, \
+      `clear: true` to take them all off). Coordinates are always the source image's pixels from \
+      its top left, never a cropped step's: call get_image on the source step (the source_step \
+      this tool returns) to find the marks. Radius is in pixels, at most 256. Runs as a job in \
+      the Queue on this device: by default it waits and returns history_step, source_step, spots \
+      (the step's stroke count), offsets (the new strokes', [dx, dy]), crop and job_id; with \
+      background: true it returns a job_id at once for get_job. Leaves the Edit screen as the \
+      user has it. Not for videos.
+      """,
+    "inputSchema": [
+      "type": "object",
+      "properties": [
+        "history_step": ["type": "integer", "description": "A history step from list_history or generate. Omit for the canvas image."],
+        "spots": [
+          "type": "array",
+          "description": "Round spots: {x, y, radius, source: [sx, sy]}, in the source's pixels.",
+          "items": [
+            "type": "object",
+            "properties": [
+              "x": ["type": "number"], "y": ["type": "number"], "radius": ["type": "number"],
+              "source": ["type": "array", "items": ["type": "number"], "minItems": 2, "maxItems": 2],
+            ],
+            "required": ["x", "y", "radius", "source"],
+          ],
+        ],
+        "strokes": [
+          "type": "array",
+          "description": "Brushed strokes: {points: [[x, y], …], radius, source: [sx, sy]}; the source goes with the first point.",
+          "items": [
+            "type": "object",
+            "properties": [
+              "points": ["type": "array", "items": ["type": "array", "items": ["type": "number"]]], "radius": ["type": "number"],
+              "source": ["type": "array", "items": ["type": "number"], "minItems": 2, "maxItems": 2],
+            ],
+            "required": ["points", "radius", "source"],
+          ],
+        ],
+        "replace": ["type": "boolean", "description": "Put these in place of the step's strokes rather than after them. Default false."],
+        "clear": ["type": "boolean", "description": "Take every stroke off: the source with the step's look and crop."],
+        "background": ["type": "boolean", "description": "Return a job_id at once instead of waiting. Default false."],
+      ],
+    ],
+  ]
+
+  /// heal_image: its arguments read, then `edit_image_look`'s path with only the strokes changed.
+  func healImage(_ arguments: [String: Any], progress: @escaping (Progress) -> Void) async throws -> [String: Any] {
+    let change = try HealArguments.parse(arguments)
+    var look: [String: Any] = [:]
+    for key in ["history_step", "background"] where arguments[key] != nil { look[key] = arguments[key] }
+    return try await editImageLook(look, heal: change, progress: progress)
   }
 }
 #endif
