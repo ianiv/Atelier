@@ -58,13 +58,23 @@ MiniMax H3 models (including FastH3 Omni and HyperFlow H3 Flash) always decode i
 
 ## Reference video (MiniMax H3 Ref2VA)
 
-MiniMax H3 Ref2VA models (FastH3 Omni and HyperFlow H3 Flash Ref2VA too) can follow a clip, its motion, camera or performance, as well as pictures. Open a video from History so it plays on the canvas, and switch to **Edit**: the canvas's badge says **Video 1**, and the clip is the reference video. Refer to it in the prompt as `<Video 1>`. The moodboard images are then Picture 1, Picture 2 and so on, since the canvas holds no picture.
+MiniMax H3 Ref2VA models (FastH3 Omni and HyperFlow H3 Flash Ref2VA too) can follow a clip, its motion, camera or performance, as well as pictures. Open a video from History so it plays on the canvas (one you made, or one [brought in from outside](#videos-from-outside)), and switch to **Edit**: the canvas's badge says **Video 1**, and the clip is the reference video. Refer to it in the prompt as `<Video 1>`. The moodboard images are then Picture 1, Picture 2 and so on, since the canvas holds no picture.
 
 - The clip is read from its start at the model's frame rate (24 fps for H3), one frame for each frame of the new video. A clip shorter than the new video holds its last frame; a longer one is cut off. Each frame is scaled to fill the output size (the inspector's width and height) and cropped about its center, so a clip of another shape loses its edges.
 - The new video is made from noise, with the clip only as its reference: **Strength** must be 100%, and **Length** at least 22 frames.
 - It can't go with an audio file. With one in the **Audio** box, or with the Strength or Length above, Generate is disabled and the status bar (and the badge, in orange) says why.
 - The new video follows the clip in History, but isn't recorded as made from it: **Use Settings** brings back its prompt and settings, not the clip.
 - The queue keeps which clip, not its frames: they're read when the job starts, so a clip deleted while the job waits stops it with a message.
+- A video from outside is read from its file the same way (the way Draw Things' command line reads `--video`), upright and in SDR.
+
+## Videos from outside
+
+Drop a video file on the Create canvas, or choose **Open Video…** or **Open Video from Photos…** (in the File menu and the canvas's menu), and it joins the project: the status bar says **Copying video…** while it's copied in, then it's the current step and plays on the canvas. With MiniMax H3 Ref2VA selected the canvas switches to **Edit**, so the video is the [reference video](#reference-video-minimax-h3-ref2va). Bringing in another video, or switching projects, while one is still copying stops that one; nothing of it is left behind.
+
+- History and the strip mark it **Imported**. Its first frame is its image, and it has no model or settings, so **Use Settings** is off.
+- The file is kept as it is in the project's media folder, beside the project file (see [Projects](history.md#projects)). On the same drive it's a clone, which takes no extra space until one of the two copies changes. Deleting the video from History removes the file too.
+- It plays with its sound, and **Copy Frame**, **Add Frame to Moodboard** and **Use This Frame as Input** take a frame from the file. **Save Video…**, drags and **Save to Photos** give the file itself (a `.mov` stays one).
+- **Export Video…** saves it as it is or upscaled. **Upscale…** and the **Video Editor** don't take an imported video.
 
 ## Audio
 
@@ -159,7 +169,7 @@ The upscale runs in the Queue like any other job. The result is a new video afte
 
 Then you choose where to save it. As it is, it exports right away. Upscaled, it's a job in the [Queue](queue.md#exports): it waits its turn after what's already queued, shows its progress in the status bar and the Queue, and writes the file when it's done. The video in History (or the timeline) is left as it is.
 
-To upscale a video from outside Atelier, drop its file on the Create canvas. The same sheet opens, without None, and the result is only the file you save: nothing is added to the project or the canvas. Atelier works from a copy of the file, so you can move the original, and HDR video comes out as SDR.
+To upscale a video from outside Atelier, [bring it in](#videos-from-outside) (drop it on the Create canvas) and choose **Export Video…** on it in History. HDR video comes out as SDR.
 
 ## On another device
 
