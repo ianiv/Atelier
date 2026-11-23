@@ -217,7 +217,7 @@ struct TriggerWordChips: View {
   @Environment(\.undoManager) private var undoManager
 
   var body: some View {
-    let json = TriggerWords.isJSON(prompt)
+    let json = TriggerWords.isJSON(prompt, format: model.layoutFormat)
     VStack(alignment: .leading, spacing: 2) {
       ChipFlow(spacing: 4) {
         ForEach(source.words, id: \.self) { word in

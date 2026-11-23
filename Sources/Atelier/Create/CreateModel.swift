@@ -920,7 +920,11 @@ final class CreateModel {
   func generationPrompts(loras: [String], model: String?, refiner: String?) -> (prompt: String, negativePrompt: String) {
     let styled = styledPrompts
     let sources = triggerWordSources(loras: loras, model: model, refiner: refiner)
-    return (TriggerWords.prompt(styled.prompt, sources: sources, disabled: disabledTriggerWords), styled.negativePrompt)
+    let format = LayoutPrompt.Format(version: model.flatMap { file in availableModels.first { $0.file == file }?.version })
+    return (
+      TriggerWords.prompt(styled.prompt, sources: sources, disabled: disabledTriggerWords, format: format),
+      styled.negativePrompt
+    )
   }
 
   /// Writes the style's tag boxes out as the full prompt and negative prompt in the plain prompt
@@ -956,7 +960,9 @@ final class CreateModel {
     }
     var refiner: String?
     if case .string(let file)? = dump["refinerModel"] { refiner = file }
-    let stripped = TriggerWords.strip(savedPrompt, sources: triggerWordSources(loras: loras, model: model, refiner: refiner))
+    let format = LayoutPrompt.Format(version: model.flatMap { file in availableModels.first { $0.file == file }?.version })
+    let stripped = TriggerWords.strip(
+      savedPrompt, sources: triggerWordSources(loras: loras, model: model, refiner: refiner), format: format)
     for (file, words) in stripped.disabled { disabledTriggerWords[file] = words.isEmpty ? nil : words }
     let savedPrompt = stripped.prompt
     for style in (styles?.allStyles ?? []) + remoteStyles.all.map(\.style) {

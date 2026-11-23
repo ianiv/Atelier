@@ -24,9 +24,12 @@ nonisolated enum TriggerWords {
   }
 
   /// A JSON prompt (Ideogram's or MOSS Image's layout): text put in front would break it, and its
-  /// caption is the place for the words.
-  static func isJSON(_ prompt: String) -> Bool {
-    guard let first = prompt.trimmingCharacters(in: .whitespacesAndNewlines).first else { return false }
+  /// caption is the place for the words. A FLUX.3 layout never counts: it's a caption then its box
+  /// list, which `LayoutPrompt` finds by searching for `[{`, so words in front still parse, even
+  /// when the caption is empty and the prompt is only the list. `format` is the model's layout
+  /// format, nil for a model that reads none.
+  static func isJSON(_ prompt: String, format: LayoutPrompt.Format?) -> Bool {
+    guard format != .flux3, let first = prompt.trimmingCharacters(in: .whitespacesAndNewlines).first else { return false }
     return first == "{" || first == "["
   }
 
@@ -51,8 +54,10 @@ nonisolated enum TriggerWords {
   /// The words a run puts in front of `prompt`, in LoRA then word order: those turned on, of
   /// LoRAs the engine applies, that the prompt doesn't have yet, each once. None for a JSON prompt.
   /// `disabled` holds each LoRA file's words turned off, lowercased.
-  static func added(to prompt: String, from sources: [Source], disabled: [String: Set<String>]) -> [String] {
-    guard !isJSON(prompt) else { return [] }
+  static func added(
+    to prompt: String, from sources: [Source], disabled: [String: Set<String>], format: LayoutPrompt.Format?
+  ) -> [String] {
+    guard !isJSON(prompt, format: format) else { return [] }
     var seen = Set<String>()
     var words: [String] = []
     for source in sources where source.applies {
@@ -67,30 +72,37 @@ nonisolated enum TriggerWords {
 
   /// The prompt a run sends: `added` in front of `prompt`, ", "-joined, as trigger words are
   /// usually written.
-  static func prompt(_ prompt: String, sources: [Source], disabled: [String: Set<String>]) -> String {
-    let words = added(to: prompt, from: sources, disabled: disabled)
+  static func prompt(
+    _ prompt: String, sources: [Source], disabled: [String: Set<String>], format: LayoutPrompt.Format?
+  ) -> String {
+    let words = added(to: prompt, from: sources, disabled: disabled, format: format)
     guard !words.isEmpty else { return prompt }
     let joined = words.joined(separator: ", ")
     return prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? joined : joined + ", " + prompt
   }
 
-  /// A saved prompt taken apart again: what `prompt(_:sources:disabled:)` put in front comes off
-  /// (any of the LoRAs' words, in any order and case, each followed by ", " or ending the prompt),
+  /// A saved prompt taken apart again: what `prompt(_:sources:disabled:format:)` put in front comes
+  /// off (any of the applied LoRAs' words, in any order and case, each followed by ", " or ending
+  /// the prompt; a skipped LoRA's words were never put in, so text matching them is the user's),
   /// and `disabled` says, for each LoRA the engine applies, which of its words were off: those
   /// neither taken off the front nor in what's left. Running the result again gives the same
   /// prompt. A JSON prompt never had words put in, so it comes back as it is, changing nothing.
-  static func strip(_ saved: String, sources: [Source]) -> (prompt: String, disabled: [String: Set<String>]) {
-    guard !isJSON(saved) else { return (saved, [:]) }
+  static func strip(
+    _ saved: String, sources: [Source], format: LayoutPrompt.Format?
+  ) -> (prompt: String, disabled: [String: Set<String>]) {
+    guard !isJSON(saved, format: format) else { return (saved, [:]) }
     // Longest first, so "red hat" comes off before "red".
-    let all = Set(sources.flatMap { $0.words.map { $0.lowercased() } }).sorted { $0.count > $1.count }
+    let all = Set(sources.filter(\.applies).flatMap { $0.words.map { $0.lowercased() } }).sorted { $0.count > $1.count }
     var rest = Substring(saved)
     var found = Set<String>()
     var removed = true
     while removed {
       removed = false
       for word in all {
-        guard rest.count >= word.count, rest.prefix(word.count).lowercased() == word else { continue }
-        let after = rest.dropFirst(word.count)
+        // Anchored and case-insensitive, rather than comparing the first `word.count` characters
+        // lowercased: lowercasing can change how many characters there are ("İ").
+        guard let match = rest.range(of: word, options: [.caseInsensitive, .anchored]) else { continue }
+        let after = rest[match.upperBound...]
         if after.isEmpty {
           rest = after
         } else if after.hasPrefix(", ") {
