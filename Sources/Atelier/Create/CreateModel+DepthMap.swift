@@ -4,10 +4,11 @@ import Foundation
 extension CreateModel {
   /// Whether Extract Depth Map can take the canvas: it shows a finished image saved in the
   /// project (an Imported one too), not a video, whose depth map isn't waiting or being made
-  /// already (a second would be the same image). Whether the model is in doesn't count: the
-  /// command offers to download it.
+  /// already (a second would be the same image), and with no colour paint showing on it: the
+  /// job reads the step's saved image, so paint not yet run into it wouldn't be in the map.
+  /// Whether the model is in doesn't count: the command offers to download it.
   var canExtractCanvasDepthMap: Bool {
-    guard let item = canvasImageStep else { return false }
+    guard let item = canvasImageStep, activePaint == nil else { return false }
     return queue.pendingDepthMap(depthMapJob(for: item)) == nil
   }
 

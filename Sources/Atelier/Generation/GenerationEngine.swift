@@ -1,5 +1,4 @@
 @preconcurrency import _MediaGenerationKit
-import Atomics
 @preconcurrency import AudioConverter
 import CoreGraphics
 @preconcurrency import DataModels
@@ -500,8 +499,13 @@ actor GenerationEngine {
     guard ImageGeneratorUtils.isDepthModelAvailable else { throw DepthMap.Failure.modelMissing }
     guard let tensor = ImageTensor.tensor(from: image) else { throw ProjectError.badImage }
     let width = image.width, height = image.height
-    // As the generator decides it (`useMFA` from `DeviceCapability.isMFAEnabled`, the setting).
-    let usesFlashAttention = DeviceCapability.isMFAEnabled.load(ordering: .acquiring) > 0
+    // As the generator decides it: the Metal Flash Attention setting, else the device's default
+    // (`ModelPreloader.updateUseMFA`, which sets `DeviceCapability.isMFAEnabled` from the same).
+    let mfa = PerformanceSetting.metalFlashAttention
+    let usesFlashAttention = (mfa.value ?? mfa.automaticValue) > 0
+    // Stop doesn't interrupt the estimate itself: `extractDepthMap` has no cancel hook (unlike the
+    // samplers' `shouldContinue`), and it's one short forward pass of a ViT, a second or two; the
+    // job checks for cancelling before and after it.
     return try await onEngineQueue { _ in
       let graph = DynamicGraph()
       let depth = graph.withNoGrad {

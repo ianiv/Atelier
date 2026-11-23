@@ -420,7 +420,7 @@ struct CanvasView: View {
       ColorMatchSheet(item: item)
     }
     .sheet(item: Bindable(model).depthModelSheetItem) { item in
-      DepthModelSheet(item: item)
+      DepthModelSheet(item: item, project: model.history.project.name)
     }
     .sheet(item: $droppedVideo) { video in
       VideoExportSheet(

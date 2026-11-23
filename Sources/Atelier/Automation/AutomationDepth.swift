@@ -9,6 +9,7 @@ extension Automation {
   /// queued twice; the result is a new step whose parent and input are the source, records
   /// `depth_map`, is what the canvas shows, has the source's size, and is grey (R = G = B) across
   /// a real range (not constant), with the floor at the bottom (near) lighter than the sky (far);
+  /// the command is unavailable while colour paint shows on the image (and back once it's hidden);
   /// Match Colors is unavailable for it. The same for an image brought in from outside (an
   /// Imported entry). Then the agent tool: `extract_depth_map` on a step waits and returns the new
   /// step, in the background returns a job a second call joins, and fails clearly for a missing
@@ -136,6 +137,16 @@ extension Automation {
           return nil
         }
         check(model.canExtractCanvasDepthMap, "\(what): Extract Depth Map is available for the image on the canvas")
+        // Colour paint showing on it isn't in the saved image the map is made from.
+        let paintBefore = model.canvasPaint, hiddenBefore = model.layersHidden
+        model.layersHidden = false
+        model.canvasPaint = CanvasPaint(
+          strokes: [.ellipse(in: CGRect(x: 20, y: 20, width: 80, height: 40), color: CanvasPaint.Color(red: 1, green: 0, blue: 0))])
+        check(!model.canExtractCanvasDepthMap, "\(what): unavailable while colour paint shows on the image")
+        model.layersHidden = true
+        check(model.canExtractCanvasDepthMap, "\(what): available again with the paint hidden")
+        model.canvasPaint = paintBefore
+        model.layersHidden = hiddenBefore
         // Held at first, so it can be seen waiting.
         model.setQueuePaused(true)
         model.extractCanvasDepthMap()

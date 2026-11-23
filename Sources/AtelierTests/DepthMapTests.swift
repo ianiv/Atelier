@@ -81,6 +81,21 @@ struct DepthMapTests {
     #expect(read.inputTensorId == 5)
   }
 
+  /// After the model download: queue only when nothing was stopped, the model is in, the sheet
+  /// still shows that image and its project is still the open one.
+  @Test func aFinishedDownloadQueuesOnlyForTheSameSheetAndProject() {
+    func outcome(stopped: Bool = false, installed: Bool = true, sheet: Int64? = 7, open: String = "P") -> DepthModelDownload.Outcome {
+      DepthModelDownload.outcome(stopped: stopped, installed: installed, sheetTensorId: sheet, tensorId: 7, openProject: open, project: "P")
+    }
+    #expect(outcome() == .queue)
+    #expect(outcome(stopped: true) == .nothing)
+    #expect(outcome(installed: false) == .nothing)
+    #expect(outcome(sheet: nil) == .nothing)
+    #expect(outcome(sheet: 8) == .nothing)
+    #expect(outcome(open: "Q") == .projectChanged)
+    #expect(outcome(stopped: true, open: "Q") == .nothing)
+  }
+
   @Test func theSameImageIsTheSameJob() throws {
     let job = DepthMap.Job(project: "P", sourceTensorId: 12)
     #expect(job.isSameJob(as: DepthMap.Job(project: "P", sourceTensorId: 12)))
