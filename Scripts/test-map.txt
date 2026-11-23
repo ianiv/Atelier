@@ -49,7 +49,7 @@ Sources/Atelier/Edit/        | GrainTests,EditPipelineTests,EditRenderCancelTest
 Sources/AtelierTests/Fixtures/grain-parity/ | GrainTests |
 Sources/Atelier/Generation/  | StrengthStepsTests,ReferenceVideoTests,ScheduleTests,ComfySamplerTests,ModelsLookupOrderTests,RefinerKickInTests,RefinerModelSwitchTests,PreviewDecoderTests,AutomationSamplerTests | --engine-check,--generate,--reuse
 Sources/Atelier/Generation/ReferenceVideo.swift | ReferenceVideoTests,RemoteReferenceVideoTests,MediaReferenceTests | --reference-video-check
-Sources/Atelier/History/     | HistoryGraphTests,ProjectCompactionTests,InputEntryTests,EntryTreeFuzzTests,PNGTextTests,JSONValueTests,ClipTests | --input-entries-check,--entries-freeze-check,--history-loras-check,--canvas-clip-check
+Sources/Atelier/History/     | ClipSoundTests,HistoryGraphTests,ProjectCompactionTests,InputEntryTests,EntryTreeFuzzTests,PNGTextTests,JSONValueTests,ClipTests | --input-entries-check,--entries-freeze-check,--history-loras-check,--canvas-clip-check
 Sources/Atelier/Inspector/   | SizePresetTests,PresetImportTests | --inspector-check
 Sources/Atelier/Library/     | DrawThingsImportTests,LoRACopiesTests,MOSSImportTests,ModelMoveTests,ModelFolderTests,OrphanTests,HuggingFaceLinkTests,SafetensorsMergeTests | --library-check,--model-folders-check,--model-move-check,--add-folder-check,--catalog-retry-check,--hf-link-check
 Sources/Atelier/Projects/    | ProjectMappingTests,MediaTests,MediaReferenceTests,MediaRecordTests,ProjectCompactionTests,EditProjectDataTests,ClipDeleteTests,InputEntryTests,EntryTreeFuzzTests,MaskMemoryTests,HistoryGraphTests | --project-check,--delete-project-check,--input-entries-check,--compact-check

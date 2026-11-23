@@ -561,6 +561,13 @@ final class TimelinePlayback {
     endWatcher?.cancel()
   }
 
+  /// For checks: whether the item has an enabled audio track, and whether the player is playing it
+  /// unmuted.
+  var sound: (attached: Bool, playing: Bool) {
+    let attached = player.currentItem?.tracks.contains { $0.isEnabled && $0.assetTrack?.mediaType == .audio } == true
+    return (attached, attached && player.timeControlStatus == .playing && !player.isMuted && player.volume > 0)
+  }
+
   /// Plays `composition` from where the playhead was (nil empties the player).
   func load(_ composition: TimelineComposition?) {
     generation += 1

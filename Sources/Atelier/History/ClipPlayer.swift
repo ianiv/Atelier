@@ -223,6 +223,13 @@ final class ClipPlayback {
 
   func isReady(for tensorId: Int64) -> Bool { isReady && loadedTensorId == tensorId }
 
+  /// For checks: whether the clip's sound is attached (its soundtrack read, an imported video's
+  /// audio track in the player) and whether it's going out now (playing, not muted).
+  var sound: (attached: Bool, playing: Bool) {
+    if let file { return file.sound }
+    return (soundtrack != nil, engineState == .running && audioClock && audioPlayer.isPlaying && !isMuted)
+  }
+
   /// Unloads the clip, so nothing plays until the next `load`.
   func reset() {
     pause()
