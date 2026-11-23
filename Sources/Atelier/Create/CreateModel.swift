@@ -3383,6 +3383,14 @@ final class CreateModel {
     else {
       throw ReferenceVideo.Failure.sourceMissing
     }
+    // An imported video's frames come from its file, which must be the one recorded.
+    if let media = clip.media {
+      guard let url = history.mediaURL(of: source), Self.fileSize(url) == media.bytes else { throw Media.Failure.missing }
+      let count = video.snapped(configuration.numFrames)
+      setRunMessage("Reading \(count) frames…", job)
+      return try await ReferenceVideo.fileFrames(
+        url: url, count: count, rate: video.framesPerSecond, width: configuration.width, height: configuration.height)
+    }
     let indices = ReferenceVideo.sourceIndices(
       count: video.snapped(configuration.numFrames), rate: video.framesPerSecond, sourceCount: clip.frames.count,
       sourceRate: clip.framesPerSecond)
@@ -3404,6 +3412,10 @@ final class CreateModel {
     // The clip is there (checked above), so a frame missing here didn't read or decode.
     guard read.count == tensorIds.count else { throw ReferenceVideo.Failure.unreadable }
     return read
+  }
+
+  private nonisolated static func fileSize(_ url: URL) -> Int64? {
+    (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value
   }
 
   nonisolated struct ImageUpscaleError: LocalizedError {

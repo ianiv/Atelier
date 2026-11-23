@@ -1,6 +1,7 @@
+import AVFoundation
 import CoreGraphics
-import Foundation
 @preconcurrency import Diffusion
+import Foundation
 @preconcurrency import NNC
 
 /// A clip from History that MiniMax H3 Ref2VA takes as its reference video, `<Video 1>` in the
@@ -88,6 +89,38 @@ nonisolated struct ReferenceVideo: Sendable {
     context.interpolationQuality = .high
     context.draw(image, in: coverRect(sourceWidth: image.width, sourceHeight: image.height, width: width, height: height))
     return context.makeImage()
+  }
+
+  /// An imported video's frames (`Media`), read from its file as the engine's CLI reads `--video`
+  /// (`loadInputVideoTensor`): `count` frames from the start at `rate`, each at the time it
+  /// starts with zero tolerance, upright and in SDR (`Media.generator`); a time past the end has
+  /// no image, which holds the frame before, and a first frame that doesn't read is a video that
+  /// doesn't. Each is prepared as `frame(_:width:height:)` does; one the file shows again (a
+  /// slower video) is the same image.
+  @concurrent static func fileFrames(url: URL, count: Int, rate: Double, width: Int, height: Int) async throws -> [CGImage] {
+    guard count > 0 else { return [] }
+    let generator = Media.generator(for: url)
+    var frames: [CGImage] = []
+    frames.reserveCapacity(count)
+    var last: (time: CMTime, frame: CGImage)?
+    for index in 0..<count {
+      try Task.checkCancellation()
+      let time = Media.time(ofFrame: index, framesPerSecond: rate)
+      if let image = try? await generator.image(at: time) {
+        if let last, image.actualTime == last.time {
+          frames.append(last.frame)
+          continue
+        }
+        guard let frame = frame(image.image, width: width, height: height) else { throw Failure.unreadable }
+        last = (image.actualTime, frame)
+        frames.append(frame)
+      } else if let last {
+        frames.append(last.frame)
+      } else {
+        throw Media.Failure.invalidVideo
+      }
+    }
+    return frames
   }
 
   /// Why a run can't take a reference video, or nil when it can. `numFrames` is the length the
