@@ -29,6 +29,14 @@ nonisolated enum Media {
     /// Whether `file` is a name this app writes, so a damaged or hostile project can't point
     /// outside its media folder.
     var isSafeFileName: Bool { Media.isSafeFileName(file) }
+
+    /// Whether it can stand for a video: a name this app writes, a size, a positive finite rate
+    /// and length, at least one frame. A project file is untrusted; one that isn't is ignored
+    /// (`ProjectMapping.Profile`).
+    var isValid: Bool {
+      isSafeFileName && width > 0 && height > 0 && frameCount >= 1 && bytes >= 0 && framesPerSecond.isFinite
+        && framesPerSecond > 0 && duration.isFinite && duration >= 0
+    }
   }
 
   /// A project's media folder.
@@ -118,6 +126,12 @@ nonisolated enum Media {
     } catch {
       throw FileManager.default.fileExists(atPath: url.path) ? Failure.invalidVideo : Failure.missing
     }
+  }
+
+  /// The files of deleted steps to remove: those no remaining step names (`named`), and only names
+  /// this app writes.
+  static func unnamed(deleted: Set<String>, named: Set<String>) -> [String] {
+    deleted.subtracting(named).filter(isSafeFileName).sorted()
   }
 
   /// The media files no step names, and copies left half done, to remove: everything in the

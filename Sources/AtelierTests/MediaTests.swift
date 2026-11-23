@@ -178,3 +178,31 @@ struct MediaReferenceTests {
     }
   }
 }
+
+/// Media records read from a project file, and which files a delete removes.
+@Suite(.tags(.smoke))
+struct MediaRecordTests {
+  func record(file: String = "\(UUID().uuidString).mov", width: Int = 640, height: Int = 360, rate: Double = 30, frames: Int = 360, duration: Double = 12) -> Media.Record {
+    Media.Record(file: file, bytes: 10, name: "v", width: width, height: height, framesPerSecond: rate, frameCount: frames, duration: duration, hasAudio: false)
+  }
+
+  @Test func aRecordThatIsntAVideoIsNone() {
+    #expect(record().isValid)
+    let bad = [
+      record(frames: 0), record(frames: -5), record(width: 0), record(height: -1), record(rate: 0), record(rate: -24),
+      record(rate: .nan), record(rate: .infinity), record(duration: .nan), record(file: "../x.mov"),
+    ]
+    for record in bad {
+      #expect(!record.isValid)
+      let profile = ProjectMapping.Profile(duration: 0, inputTensorId: nil, parentTensorId: 0, media: record)
+      #expect(ProjectMapping.Profile(profile.bytes)?.media == nil, "\(record) reads as no media")
+    }
+  }
+
+  @Test func aDeleteRemovesOnlyFilesNoStepNames() {
+    let kept = "\(UUID().uuidString).mov", gone = "\(UUID().uuidString).mp4"
+    #expect(Media.unnamed(deleted: [kept, gone], named: [kept]) == [gone])
+    #expect(Media.unnamed(deleted: [kept], named: [kept]).isEmpty)
+    #expect(Media.unnamed(deleted: ["../../x.mov"], named: []).isEmpty)
+  }
+}

@@ -154,7 +154,7 @@ struct CanvasView: View {
   @Environment(FileDialogs.self) private var fileDialogs
   @State private var saveError: String?
   @State private var isTargeted = false
-  /// A video dropped on the canvas, choosing how to upscale it.
+  /// Why a dropped item couldn't be read.
   @State private var videoError: String?
   @State private var deleteError: String?
   @Environment(\.undoManager) private var undoManager

@@ -388,11 +388,13 @@ struct HistoryView: View {
             .overlay(alignment: .topLeading) {
               if let reason = item.entryReason {
                 EntryBadge(reason: reason).padding(5)
-              } else if item.isImported {
-                ImportedBadge().padding(5)
               } else {
                 let stars = history.rating(of: item)
-                if stars > 0 { RatingBadge(stars: stars).padding(5) }
+                HStack(spacing: 4) {
+                  if item.isImported { ImportedBadge() }
+                  if stars > 0 { RatingBadge(stars: stars) }
+                }
+                .padding(5)
               }
             }
             .overlay(alignment: .bottomTrailing) {

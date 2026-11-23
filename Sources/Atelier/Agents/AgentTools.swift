@@ -2195,16 +2195,25 @@ final class AgentTools {
       after = try historyItem(arguments["after_step"], name: "after_step", canvas: false).tensorId
     }
     let item: HistoryItem
+    let project = create.history.project
+    let noted = create.statusNote == nil
+    if noted { create.statusNote = CreateModel.importingVideoNote }
+    defer { if create.statusNote == CreateModel.importingVideoNote { create.statusNote = nil } }
     do {
       item = try await create.history.importVideo(url, name: url.deletingPathExtension().lastPathComponent, after: after)
     } catch {
       throw ToolError("Couldn't import the video: \(error.localizedDescription)")
     }
-    create.show(item)
-    if create.videoModel?.takesReferences == true { create.canvasMode = .edit }
-    var structured: [String: Any] = ["history_step": item.id.logicalTime, "project": create.history.project.name]
+    var structured: [String: Any] = ["history_step": item.id.logicalTime, "project": project.name]
     structured.merge(Self.videoFields(item)) { _, new in new }
-    let text = "Imported “\(item.clip?.media?.name ?? url.lastPathComponent)” as history step \(item.id.logicalTime): \(item.clip.map(ClipBadge.length) ?? "")."
+    var text = "Imported “\(item.clip?.media?.name ?? url.lastPathComponent)” into “\(project.name)” as history step \(item.id.logicalTime): \(item.clip.map(ClipBadge.length) ?? "")."
+    // Another project opened meanwhile: the video is in the one it was brought into, not on screen.
+    if project === create.history.project {
+      create.show(item)
+      if create.videoModel?.takesReferences == true { create.canvasMode = .edit }
+    } else {
+      text += " “\(create.history.project.name)” is open now, so it isn't on the canvas."
+    }
     return ["content": [["type": "text", "text": text]], "structuredContent": structured]
   }
 
@@ -2280,13 +2289,22 @@ final class AgentTools {
       let png = try item.map { try HistoryStore.pngData(image, sidecar: $0.sidecar) } ?? ImageTensor.png(image)
       guard let png else { throw ToolError("Couldn't encode the image.") }
       content.append(["type": "image", "data": png.base64EncodedString(), "mimeType": "image/png"])
-      return ["content": content]
+      return getImageResult(content, item: item)
     }
     let maxSide = min(max(Self.int(arguments["max_size"]) ?? 1024, 256), 2048)
     if let preview = Self.jpeg(ImageLoader.fitted(image, maxSide: maxSide)) {
       content.append(["type": "image", "data": preview.base64EncodedString(), "mimeType": "image/jpeg"])
     }
-    return ["content": content]
+    return getImageResult(content, item: item)
+  }
+
+  /// get_image's answer: with a saved step, its history_step and, for a video, the fields
+  /// list_history gives (`videoFields`).
+  private func getImageResult(_ content: [[String: Any]], item: HistoryItem?) -> [String: Any] {
+    guard let item else { return ["content": content] }
+    var structured: [String: Any] = ["history_step": item.id.logicalTime, "video": item.isVideo]
+    structured.merge(Self.videoFields(item)) { _, new in new }
+    return ["content": content, "structuredContent": structured]
   }
 
   /// match_colors: queues Match Colors to Original as a job like generate's (waiting for it, or

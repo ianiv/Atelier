@@ -399,6 +399,10 @@ final class HistoryStore {
     guard !FileManager.default.fileExists(atPath: target.path) else {
       throw CocoaError(.fileWriteFileExists)
     }
+    // Its videos' folder would land on another one's.
+    guard !FileManager.default.fileExists(atPath: Media.folder(forProject: target).path) else {
+      throw RenameError.mediaFolderExists(Media.folder(forProject: target).lastPathComponent)
+    }
     let old = project.url
     // Close the workspace first so nothing writes while the files move.
     await project.close()
@@ -493,6 +497,16 @@ final class HistoryStore {
     projectNames = Self.scanProjectNames()
     if !projectNames.contains(project.name) { projectNames = (projectNames + [project.name]).sorted() }
     return trashed
+  }
+
+  enum RenameError: LocalizedError {
+    case mediaFolderExists(String)
+    var errorDescription: String? {
+      switch self {
+      case .mediaFolderExists(let folder):
+        "A folder named “\(folder)” is already in the Projects folder, where this project's videos would go. Move it away or choose another name."
+      }
+    }
   }
 
   enum DeleteError: LocalizedError {
@@ -988,7 +1002,6 @@ final class HistoryStore {
   /// Cancelling stops it before the step is saved, and leaves nothing behind.
   func importVideo(_ source: URL, name: String, moving: Bool = false, after parentTensorId: Int64? = nil) async throws -> HistoryItem {
     let project = project
-    let inspection = try await Media.inspect(source)
     let pathExtension = source.pathExtension.lowercased()
     let safeExtension = (1...8).contains(pathExtension.count) && pathExtension.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber) }
       ? pathExtension : "mov"
@@ -998,7 +1011,11 @@ final class HistoryStore {
     let target = project.mediaFolder.appending(path: file, directoryHint: .notDirectory)
     do {
       try Task.checkCancellation()
+      // The app's own copy is what's read from here on: the source may be readable only while
+      // its security scope is open (a file picked from Files or iCloud on iPad), which
+      // `copyMedia` holds for the copy alone.
       let bytes = try await Self.copyMedia(source, to: target, moving: moving)
+      let inspection = try await Media.inspect(target)
       try Task.checkCancellation()
       // As the engine's CLI reads a video: upright, SDR (`Media.generator`), at the file's size.
       let first = try await Media.frame(0, of: target, framesPerSecond: inspection.framesPerSecond)
@@ -1015,6 +1032,12 @@ final class HistoryStore {
       let item = try await project.append(
         tensor: tensor, model: "", prompt: name, negativePrompt: "", seed: 0, settings: settings, createdAt: Date(),
         duration: 0, reason: .imported, generated: true, after: parentTensorId, media: record)
+      // Stopped while it was being saved: the step goes again, so nothing is left behind unseen.
+      if Task.isCancelled {
+        _ = try? await project.delete(tensorId: item.tensorId)
+        if project === self.project { await reload() }
+        throw CancellationError()
+      }
       if project === self.project {
         await reload()
         setCurrent(tensorId: item.tensorId)
@@ -1063,7 +1086,7 @@ final class HistoryStore {
     guard !files.isEmpty else { return }
     let named = await project.read { project in Set(project.tree().items.values.compactMap { $0.clip?.media?.file }) }
     let folder = project.mediaFolder
-    for file in files.subtracting(named) where Media.isSafeFileName(file) {
+    for file in Media.unnamed(deleted: files, named: named) {
       Log.attempt(Log.project, "Removing a deleted video's file") {
         try FileManager.default.removeItem(at: folder.appending(path: file, directoryHint: .notDirectory))
       }
@@ -1451,7 +1474,7 @@ final class HistoryStore {
   /// One frame of a clip, full size; an imported video's from its file, upright.
   func frame(_ index: Int, of item: HistoryItem) async -> CGImage? {
     if let media = item.clip?.media {
-      guard (0..<media.frameCount).contains(index), let url = project.mediaURL(media) else { return nil }
+      guard index >= 0, index < media.frameCount, let url = project.mediaURL(media) else { return nil }
       return try? await Media.frame(index, of: url, framesPerSecond: media.framesPerSecond)
     }
     guard let frames = item.clip?.frames, frames.indices.contains(index) else { return nil }

@@ -201,7 +201,8 @@ nonisolated enum ProjectMapping {
       entryMask = lenient(CanvasMask.self, .entryMask)
       inputEntry = lenient(Bool.self, .inputEntry)
       scheduler = lenient(String.self, .scheduler)
-      media = lenient(Media.Record.self, .media)
+      // Read from a project file: a record that doesn't describe a real video is none.
+      media = lenient(Media.Record.self, .media).flatMap { $0.isValid ? $0 : nil }
     }
 
     init?(_ bytes: [UInt8]) {

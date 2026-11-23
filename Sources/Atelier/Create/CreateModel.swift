@@ -555,8 +555,6 @@ final class CreateModel {
   var videoPhotosOpen = false
   /// The video being copied into the project (`importVideo`), if any.
   @ObservationIgnored private var videoImport: (id: UUID, task: Task<Void, Never>)?
-  /// A video is being copied in (`importVideo`).
-  private(set) var isImportingVideo = false
   static let importingVideoNote = "Copying video…"
   /// Bumped to ask the prompt composer to take focus (⌘L).
   var focusPromptRequest = 0
@@ -841,7 +839,7 @@ final class CreateModel {
     // An imported video's frames are in its file: one comes onto the canvas as an image from
     // outside would, and the run saves it as its input.
     if let media = item.clip?.media {
-      guard (0..<media.frameCount).contains(index) else { return }
+      guard index >= 0, index < media.frameCount else { return }
       statusNote = nil
       pendingPlacement = nil
       Task {
@@ -1273,7 +1271,6 @@ final class CreateModel {
   func importVideo(_ url: URL, name: String, moving: Bool = false) {
     cancelVideoImport()
     statusNote = Self.importingVideoNote
-    isImportingVideo = true
     let history = history
     let id = UUID()
     let task = Task { [weak self] in
@@ -1304,7 +1301,6 @@ final class CreateModel {
   }
 
   private func finishVideoImport() {
-    isImportingVideo = false
     if statusNote == Self.importingVideoNote { statusNote = nil }
   }
 
