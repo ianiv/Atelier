@@ -812,14 +812,21 @@ final nonisolated class Project: Sendable {
     moodboard: [MoodboardTensor] = [], inputTensorId: Int64? = nil,
     after parentTensorId: Int64? = nil, refined: RefinedStep? = nil,
     colorMatch: ColorMatch.Record? = nil, edit: Edit.Record? = nil, editBlobs: Edit.Blobs = Edit.Blobs(),
-    depthMap: DepthMap.Record? = nil
+    depthMap: DepthMap.Record? = nil, media: Media.Record? = nil
   ) async throws -> HistoryItem {
     try await append(
       frames: [tensor], clip: nil, model: model, prompt: prompt, negativePrompt: negativePrompt,
       seed: seed, settings: settings, createdAt: createdAt, duration: duration, timings: timings,
       reason: reason, generated: generated, moodboard: moodboard, inputTensorId: inputTensorId,
-      after: parentTensorId, refined: refined, colorMatch: colorMatch, edit: edit.map { ($0, editBlobs) }, depthMap: depthMap)
+      after: parentTensorId, refined: refined, colorMatch: colorMatch, edit: edit.map { ($0, editBlobs) }, depthMap: depthMap,
+      media: media)
   }
+
+  /// This project's media folder (`Media`).
+  var mediaFolder: URL { Media.folder(forProject: url) }
+
+  /// The file an imported video's record names; nil for a name this app doesn't write.
+  func mediaURL(_ record: Media.Record) -> URL? { Media.url(of: record, inProject: url) }
 
   /// A moodboard image going into a step.
   struct MoodboardTensor: Sendable {
@@ -1077,7 +1084,7 @@ final nonisolated class Project: Sendable {
     duration: Double, timings: GenerationTimings?, reason: ProjectFormat.Reason, generated: Bool,
     moodboard: [MoodboardTensor], inputTensorId: Int64?,
     after parentTensorId: Int64?, refined: RefinedStep?, colorMatch: ColorMatch.Record?,
-    edit editToSave: (record: Edit.Record, blobs: Edit.Blobs)?, depthMap: DepthMap.Record?
+    edit editToSave: (record: Edit.Record, blobs: Edit.Blobs)?, depthMap: DepthMap.Record?, media: Media.Record? = nil
   ) async throws -> HistoryItem {
     // Each frame's thumbnails, a few frames at a time across the cores (a clip's frames
     // together are large, so each image is dropped once its thumbnails are made).
@@ -1208,7 +1215,8 @@ final nonisolated class Project: Sendable {
             depthMap: index == 0 ? depthMap : nil,
             layerCount: index == 0 ? layered.map { Int32($0.rows.count) } : nil,
             contentOffset: index == 0 ? layered.map { ($0.rows.last!.x, $0.rows.last!.y) } : nil,
-            canvasScale: index == 0 ? layered.map { $0.rows.last!.scaleFactorBy120 } : nil)
+            canvasScale: index == 0 ? layered.map { $0.rows.last!.scaleFactorBy120 } : nil,
+            media: index == 0 ? media : nil)
           let node = ProjectMapping.node(for: step, settings: settings)
           if index == 0 { appended = node }
           transaction.try(submit: TensorHistoryNodeChangeRequest.upsertRequest(node))
@@ -1271,7 +1279,8 @@ final nonisolated class Project: Sendable {
       clip: node.clipId >= 0
         ? ClipInfo(
           clipId: node.clipId, frames: tensorIds, framesPerSecond: clip?.framesPerSecond ?? 0,
-          audioId: audioId, inputAudioId: inputAudioId, previewOffset: moodboardPreview) : nil)
+          audioId: audioId, inputAudioId: inputAudioId, previewOffset: moodboardPreview)
+        : media.map { .media($0, tensorId: tensorIds[0], previewOffset: previewIds[0] &- tensorIds[0]) })
   }
 
   /// One layer row of a layered step (`TensorData`): x and y in canvas units (the source's
@@ -2448,6 +2457,8 @@ nonisolated struct ProjectTree: Sendable {
           weightedMoodboardCount: weightedMoods[id] ?? 0)
         if node.clipId >= 0 {
           clipListings[node.clipId] = (id, profile?.inputAudioId)
+        } else if let media = profile?.media {
+          items[id]?.clip = .media(media, tensorId: tensorId, previewOffset: node.previewId &- tensorId)
         }
       } else if withItems, !node.generated, profile?.inputEntry == true || entryKey != nil,
                 let reason = HistoryItem.EntryReason(node.reason)
@@ -2624,12 +2635,23 @@ nonisolated struct ClipInfo: Hashable, Sendable {
   var inputAudioId: Int64?
   /// What every frame's preview id adds to its tensor id (the moodboard's part, `pushHistory`).
   var previewOffset: Int64 = 0
+  /// A video brought in from outside (`Media`): its frames are in its file, not the project, and
+  /// `frames` holds only the first, the step's own image. `clipId` is -1: there's no clip row.
+  var media: Media.Record?
 
   /// Frame `index`'s thumbnail id.
   func previewId(_ index: Int) -> Int64 { frames[index] &+ previewOffset }
 
+  /// How many frames it has: an imported video's file's, else its steps'.
+  var frameCount: Int { media?.frameCount ?? frames.count }
+
   /// Seconds.
-  var duration: Double { framesPerSecond > 0 ? Double(frames.count) / framesPerSecond : 0 }
+  var duration: Double { framesPerSecond > 0 ? Double(frameCount) / framesPerSecond : 0 }
+
+  /// The clip an imported video's step stands for.
+  static func media(_ record: Media.Record, tensorId: Int64, previewOffset: Int64) -> ClipInfo {
+    ClipInfo(clipId: -1, frames: [tensorId], framesPerSecond: record.framesPerSecond, previewOffset: previewOffset, media: record)
+  }
 }
 
 nonisolated enum ProjectError: LocalizedError {
