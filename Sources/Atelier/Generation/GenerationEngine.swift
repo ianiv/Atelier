@@ -50,6 +50,9 @@ actor GenerationEngine {
     /// An audio file for video models that take one (`VideoModel.takesAudio`), kept by
     /// `AudioInputStore`.
     var audio: URL?
+    /// H3 Ref2VA: a History clip the run takes as its reference video (`<Video 1>`) in place of a
+    /// canvas image. Its frames are read when the job starts (`CreateModel.run`).
+    var referenceVideo: ReferenceVideo?
     /// Started from a timeline frame: where the result goes on the timeline.
     var placement: TimelinePlacement?
     /// Upscales a clip instead of generating (see `upscale(_:frames:progress:)`).
@@ -287,6 +290,11 @@ actor GenerationEngine {
     {
       return output
     }
+    // MGK takes no clip as an input: without the engine there's no reference video to send, and
+    // running without it would make another video than the one asked for.
+    if request.referenceVideo != nil {
+      throw MediaGenerationKitError.generationFailed("This model can't take a reference video here.")
+    }
     pipeline.configuration = request.configuration.base
     pipeline.configuration.seed = request.seed
     pipeline.configuration.batchCount = 1
@@ -357,8 +365,27 @@ actor GenerationEngine {
     let configuration = settings.engineConfiguration(template: template)
 
     // As MGK: the canvas is the image at the output size. Its transparency isn't a mask here:
-    // the video models that take sound refuse a mask.
-    let image = request.canvas.flatMap(ImageTensor.tensor(from:))
+    // the video models that take sound refuse a mask. A reference video takes the canvas's place:
+    // the engine reads a canvas of 22 frames or more as one (`referenceClipSamples`).
+    let image: Tensor<FloatType>?
+    if let reference = request.referenceVideo {
+      if let problem = ReferenceVideo.problem(
+        takesReferences: video.takesReferences, strength: settings.strength, numFrames: settings.numFrames,
+        hasAudio: request.audio != nil)
+      {
+        throw MediaGenerationKitError.generationFailed(problem)
+      }
+      // One per output frame (`CreateModel.run`, or a paired device's upload).
+      guard reference.frames.count == settings.numFrames,
+            let frames = ImageTensor.tensor(frames: reference.frames, width: settings.width, height: settings.height)
+      else {
+        throw MediaGenerationKitError.generationFailed(
+          "The reference video has \(reference.frames.count) frames, not the \(settings.numFrames) this run makes.")
+      }
+      image = frames
+    } else {
+      image = request.canvas.flatMap(ImageTensor.tensor(from:))
+    }
     var hints: [(ControlHintType, [(AnyTensor, Float)])] = []
     let shuffles: [(AnyTensor, Float)] = request.moodboard.compactMap { reference in
       ImageTensor.tensor(from: reference.image).map { ($0 as AnyTensor, reference.weight) }
@@ -776,12 +803,20 @@ actor GenerationEngine {
   /// Separately, the model preloader reuses a model compiled for other inputs
   /// (`ModelPreloader.retrieveUNet` doesn't compare them), so for the models it holds
   /// (`ModelPreloader.isEnabled`) "keep model in memory" is set to 0 and back when the canvas
-  /// presence or image sizes change between two runs of the same model.
+  /// presence or image sizes change between two runs of the same model. A reference video
+  /// counts as a canvas whose size includes its frame count.
+  ///
+  /// H3 Ref2VA needs no weights drop for a reference video: its denoiser has the same parameters
+  /// with or without one (the clip reaches it as encoded latents and text encoder images), so it
+  /// isn't in `versionsWithInputDependentWeights`.
   private func dropCachedModelsIfInputsChanged(_ request: Request) async {
     let images = [request.canvas].compactMap(\.self) + request.moodboard.map(\.image)
+    let reference = request.referenceVideo.map { video in
+      [video.frames.first?.width ?? 0, video.frames.first?.height ?? 0, video.frames.count]
+    }
     let inputs = (
-      model: request.model, canvas: request.canvas != nil,
-      sizes: images.map { [$0.width, $0.height] }
+      model: request.model, canvas: request.canvas != nil || reference != nil,
+      sizes: (reference.map { [$0] } ?? []) + images.map { [$0.width, $0.height] }
     )
     defer { lastImageInputs = inputs }
     let model = request.model

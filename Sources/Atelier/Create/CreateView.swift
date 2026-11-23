@@ -266,7 +266,10 @@ struct CanvasView: View {
             }
           }
         }
-        let isInput = model.effectiveCanvasMode == .edit && model.image != nil && model.canvasClip == nil
+        // H3 Ref2VA in Edit takes the clip playing there as its reference video.
+        let reference = model.referenceClip
+        let referenceProblem = model.referenceVideoProblem
+        let isInput = (model.effectiveCanvasMode == .edit && model.image != nil && model.canvasClip == nil) || reference != nil
         Rectangle()
           .strokeBorder(
             isInput || isTargeted ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary.opacity(0.6)),
@@ -278,13 +281,23 @@ struct CanvasView: View {
           Color.clear
             .frame(width: frameRect.width, height: frameRect.height)
             .overlay(alignment: .topLeading) {
-              Label("Input", systemImage: "square.and.pencil")
-                .font(.caption.weight(.medium))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .glassEffect(.regular.tint(.accentColor), in: .capsule)
-                .padding(8)
-                .help("Edit mode: what's inside the frame is sent to the model. Empty areas are filled in; with a mask, only the painted area changes.")
+              Group {
+                if reference != nil {
+                  Label("Video 1", systemImage: "film")
+                } else {
+                  Label("Input", systemImage: "square.and.pencil")
+                }
+              }
+              .font(.caption.weight(.medium))
+              .padding(.horizontal, 8)
+              .padding(.vertical, 4)
+              .glassEffect(.regular.tint(referenceProblem != nil ? .orange : .accentColor), in: .capsule)
+              .padding(8)
+              .help(
+                reference != nil
+                  ? referenceProblem
+                  ?? "Edit mode: this clip is the reference video, <Video 1> in the prompt; moodboard images are Picture 1 and on. It's read from its start at the model's frame rate, cropped to fill the frame, its last frame held if it's shorter than the new video."
+                  : "Edit mode: what's inside the frame is sent to the model. Empty areas are filled in; with a mask, only the painted area changes.")
             }
             .position(x: frameRect.midX, y: frameRect.midY)
             .allowsHitTesting(false)
@@ -1063,6 +1076,10 @@ struct StatusBar: View {
           Label(problem, systemImage: "info.circle")
             .foregroundStyle(.secondary)
             .lineLimit(2)
+        } else if let problem = model.referenceVideoProblem {
+          Label(problem, systemImage: "info.circle")
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
         } else if let problem = model.paintProblem {
           Label(problem, systemImage: "info.circle")
             .foregroundStyle(.secondary)
@@ -1460,7 +1477,7 @@ struct PromptComposer: View {
           Label("Generate", systemImage: model.isRunning ? "text.badge.plus" : "sparkles")
         }
         .labelStyle(.iconOnly)
-        .help(model.isRunning ? "Add to Queue (⌘↩)" : "Generate (⌘↩)")
+        .help(model.referenceVideoProblem ?? (model.isRunning ? "Add to Queue (⌘↩)" : "Generate (⌘↩)"))
         .buttonStyle(.glassProminent)
         .keyboardShortcut(.return, modifiers: .command)
         .disabled(!model.canPressGenerate)

@@ -450,7 +450,8 @@ struct MoodboardColumn: View {
   }
 
   /// How the selected video model reads an image: H3 FL2VA's last frame is the first image it
-  /// gets (with an empty canvas, the first two are the first and last frames), H3 Ref2VA calls the canvas (in Edit) Picture 1 and the moodboard images the ones after.
+  /// gets (with an empty canvas, the first two are the first and last frames), H3 Ref2VA calls the canvas (in Edit) Picture 1 and the moodboard images the ones after. A clip on the
+  /// canvas is no picture (it's `<Video 1>`, `CreateModel.referenceClip`), so they start at Picture 1.
   private func role(of item: MoodboardItem) -> String? {
     guard let video = model.videoModel else { return nil }
     let sent = model.moodboard.items.filter { $0.weight > 0 }

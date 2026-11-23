@@ -225,7 +225,7 @@ struct AudioClipChip: View {
   private var help: String {
     guard let video = model.videoModel else { return "An audio file for the video." }
     return video.takesReferences
-      ? "Audio for the video to follow: refer to it in the prompt as <Audio 1>."
+      ? "Audio for the video to follow: refer to it in the prompt as <Audio 1>. Not with a reference video (<Video 1>) on the canvas."
       : "The voice the avatar lip-syncs to. The clip keeps it as its sound."
   }
 
