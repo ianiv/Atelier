@@ -87,6 +87,29 @@ struct BicubicEnlargeTests {
     }
   }
 
+  /// ccv truncates the source position toward zero, so for an output at position -0.25 the base is
+  /// 0 and the fraction -0.25 (flooring would use base -1, fraction 0.75). Hand-computed from
+  /// `_ccv_init_cubic_coeffs`: weights 0.29296875, 0.83984375, -0.07421875, -0.05859375 on source
+  /// pixels 0, 0, 1, 2 (the first tap clamps), so 113.28 - 11.88 - 12.89 = 88.52 for 100, 160, 220.
+  @Test func theLeftEdgeFollowsCcvsTruncation() throws {
+    let source = try Self.image(width: 4, height: 1, [100, 160, 220, 250].map { [$0, $0, $0, 255] })
+    let result = try #require(BicubicEnlarge.resize(source, width: 8, height: 2))
+    let data = try Self.pixels(result)
+    #expect(abs(Int(data[0]) - 89) <= 1)
+  }
+
+  /// A 4×2 image to 8×2 scales to 8×4 and crops one row off the top and bottom, so the rows kept sit
+  /// at source y 0.25 and 0.75, not -0.25 and 0.25. By hand from ccv's coefficients, for rows of 0
+  /// and 200: 200 * (0.26171875 - 0.03515625) = 45.3 and 200 * (0.87890625 - 0.10546875) = 154.7.
+  @Test func coverCropsTheCenter() throws {
+    let source = try Self.image(
+      width: 4, height: 2, Array(repeating: [0, 0, 0, 255], count: 4) + Array(repeating: [200, 200, 200, 255], count: 4))
+    let result = try #require(BicubicEnlarge.resize(source, width: 8, height: 2))
+    let data = try Self.pixels(result)
+    #expect(abs(Int(data[0]) - 45) <= 1)
+    #expect(abs(Int(data[8 * 4]) - 155) <= 1)
+  }
+
   @Test func edgesAreClamped() throws {
     let source = try Self.image(width: 2, height: 1, [[10, 10, 10, 255], [250, 250, 250, 255]])
     let result = try #require(BicubicEnlarge.resize(source, width: 4, height: 2))

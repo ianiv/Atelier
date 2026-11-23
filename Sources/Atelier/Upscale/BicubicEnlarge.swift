@@ -17,26 +17,37 @@ nonisolated enum BicubicEnlarge {
     return 0
   }
 
-  /// One output coordinate's four source taps and their weights.
+  /// Four source indices and weights for each output along an axis, as flat arrays (four per
+  /// output), so the inner loops read no arrays of arrays.
   private struct Taps {
-    var first: Int
+    var indices: [Int32]
     var weights: [Float]
   }
 
-  /// The taps for each of `count` outputs along an axis, enlarged by
-  /// `scale` (source pixels per output pixel, below 1). Centers line up as
-  /// `source = (output + 0.5) * scale - 0.5`; taps off the edge repeat the edge pixel (clamping
-  /// happens when they are read, so weights still sum to 1).
-  private static func taps(count: Int, scale: Double) -> [Taps] {
-    (0..<count).map { index in
-      let center = (Double(index) + 0.5) * scale - 0.5
-      let base = Int(center.rounded(.down))
-      let fraction = center - Double(base)
-      var weights = (0..<4).map { Float(keys(fraction - Double($0 - 1))) }
-      let sum = weights.reduce(0, +)
-      if sum != 0 { weights = weights.map { $0 / sum } }
-      return Taps(first: base - 1, weights: weights)
+  /// The taps for each of `count` outputs along an axis of `sourceCount` pixels, enlarged by
+  /// `scale` (source pixels per output pixel, below 1), as ccv's `_ccv_init_cubic_coeffs` does:
+  /// the source position is `(output + 0.5) * scale - 0.5`, its integer part is truncated toward
+  /// zero (so between -0.5 and 0 the base is 0 and the fraction is negative, not floored to -1),
+  /// the weights are Keys' polynomials at that fraction (the last is what makes them sum to 1),
+  /// and taps off the edge repeat the edge pixel.
+  private static func taps(count: Int, scale: Double, sourceCount: Int) -> Taps {
+    let a: Float = -0.75
+    var indices = [Int32](repeating: 0, count: count * 4)
+    var weights = [Float](repeating: 0, count: count * 4)
+    for index in 0..<count {
+      let position = (Double(index) + 0.5) * scale - 0.5
+      let base = Int(position)
+      let x = Float(position) - Float(base)
+      for k in 0..<4 { indices[index * 4 + k] = Int32(min(max(base - 1 + k, 0), sourceCount - 1)) }
+      let w0 = ((a * (x + 1) - 5 * a) * (x + 1) + 8 * a) * (x + 1) - 4 * a
+      let w1 = ((a + 2) * x - (a + 3)) * x * x + 1
+      let w2 = ((a + 2) * (1 - x) - (a + 3)) * (1 - x) * (1 - x) + 1
+      weights[index * 4] = w0
+      weights[index * 4 + 1] = w1
+      weights[index * 4 + 2] = w2
+      weights[index * 4 + 3] = 1 - w0 - w1 - w2
     }
+    return Taps(indices: indices, weights: weights)
   }
 
   /// `image` covered to exactly `width`×`height` and center-cropped, as an sRGB 8-bit RGBA image
@@ -74,8 +85,8 @@ nonisolated enum BicubicEnlarge {
     }
     guard drawn else { return nil }
 
-    let horizontal = taps(count: scaledWidth, scale: Double(sourceWidth) / Double(scaledWidth))
-    let vertical = taps(count: scaledHeight, scale: Double(sourceHeight) / Double(scaledHeight))
+    let horizontal = taps(count: scaledWidth, scale: Double(sourceWidth) / Double(scaledWidth), sourceCount: sourceWidth)
+    let vertical = taps(count: scaledHeight, scale: Double(sourceHeight) / Double(scaledHeight), sourceCount: sourceHeight)
 
     // Pass 1: every source row to the scaled width.
     var wide = [Float](repeating: 0, count: scaledWidth * sourceHeight * 4)
@@ -86,12 +97,10 @@ nonisolated enum BicubicEnlarge {
         DispatchQueue.concurrentPerform(iterations: sourceHeight) { y in
           let row = y * sourceWidth * 4
           for x in 0..<scaledWidth {
-            let tap = horizontal[x]
             var r: Float = 0, g: Float = 0, b: Float = 0, a: Float = 0
             for k in 0..<4 {
-              let sx = min(max(tap.first + k, 0), sourceWidth - 1)
-              let w = tap.weights[k]
-              let i = row + sx * 4
+              let w = horizontal.weights[x * 4 + k]
+              let i = row + Int(horizontal.indices[x * 4 + k]) * 4
               r += w * Float(src[i])
               g += w * Float(src[i + 1])
               b += w * Float(src[i + 2])
@@ -116,13 +125,12 @@ nonisolated enum BicubicEnlarge {
         nonisolated(unsafe) let src = src
         nonisolated(unsafe) let out = out
         DispatchQueue.concurrentPerform(iterations: height) { y in
-          let tap = vertical[y + offsetY]
+          let tapBase = (y + offsetY) * 4
           for x in 0..<width {
             var sums: (Float, Float, Float, Float) = (0, 0, 0, 0)
             for k in 0..<4 {
-              let sy = min(max(tap.first + k, 0), sourceHeight - 1)
-              let w = tap.weights[k]
-              let i = (sy * scaledWidth + x + offsetX) * 4
+              let w = vertical.weights[tapBase + k]
+              let i = (Int(vertical.indices[tapBase + k]) * scaledWidth + x + offsetX) * 4
               sums.0 += w * src[i]
               sums.1 += w * src[i + 1]
               sums.2 += w * src[i + 2]
