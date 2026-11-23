@@ -8,7 +8,7 @@ import Testing
 @Suite(.tags(.smoke))
 struct HealTests {
   /// A `width` × `height` RGBA8 image of `value(x, y)` in red, green and blue.
-  private static func image(width: Int, height: Int, _ value: (Int, Int) -> Int) -> [UInt8] {
+  static func image(width: Int, height: Int, _ value: (Int, Int) -> Int) -> [UInt8] {
     var pixels = [UInt8](repeating: 255, count: width * height * 4)
     for y in 0..<height {
       for x in 0..<width {
@@ -23,7 +23,7 @@ struct HealTests {
   }
 
   /// Skin-like texture: a gentle slope plus fixed pseudo-random noise of about ±12 levels.
-  private static func texture(_ x: Int, _ y: Int) -> Int {
+  static func texture(_ x: Int, _ y: Int) -> Int {
     var h = UInt64(x &* 73_856_093 ^ y &* 19_349_663)
     h = (h ^ (h >> 13)) &* 0x5BD1_E995
     h ^= h >> 15
@@ -210,16 +210,81 @@ struct HealTests {
     #expect(pixels == original)
   }
 
-  /// A typical 60 px spot, timed for the record (no assertion: unit tests run unoptimized).
-  @Test func timesASixtyPixelStroke() {
-    let width = 512, height = 512
-    var pixels = Self.image(width: width, height: height, Self.texture)
-    let clock = ContinuousClock()
-    let elapsed = clock.measure {
-      HealBrush.apply(Edit.HealStroke(points: [SIMD2(200, 250), SIMD2(260, 260)], radius: 60, offset: SIMD2(0, -130)),
-                      to: &pixels, width: width, height: height)
+  @Test func destinationRunningOffTheEdgeHeals() {
+    // A spot in the corner, brushed with a disc reaching past both edges.
+    let width = 128, height = 128
+    var pixels = Self.image(width: width, height: height) { x, y in Self.texture(x, y) - (x * x + y * y < 100 ? 70 : 0) }
+    let region = HealBrush.apply(Edit.HealStroke(points: [SIMD2(2, 2)], radius: 18, offset: SIMD2(50, 50)), to: &pixels, width: width, height: height)
+    #expect(region == HealBrush.Region(x: 0, y: 0, width: 22, height: 22))
+    let healed = Self.stats(pixels, width: width, centre: SIMD2(4, 4), radius: 3)
+    let beside = Self.stats(pixels, width: width, centre: SIMD2(40, 40), radius: 6)
+    #expect(abs(healed.mean - beside.mean) < 6)
+  }
+
+  @Test func highContrastEdgeKeepsNoHalo() {
+    // A dark | light edge down the middle, a spot on it, and a source further down the same edge:
+    // the edge stays where it was, with no glow bleeding either side.
+    let width = 160, height = 200
+    func level(_ x: Int, _ y: Int) -> Int { (x < 80 ? 40 : 220) + Self.texture(x, y) - 170 }
+    var pixels = Self.image(width: width, height: height) { x, y in
+      level(x, y) + ((x - 80) * (x - 80) + (y - 60) * (y - 60) < 64 ? 60 : 0)
     }
-    print("HealTests: 60 px stroke (60 px drag) took \(elapsed)")
+    HealBrush.apply(Edit.HealStroke(points: [SIMD2(80, 60)], radius: 16, offset: SIMD2(0, 80)), to: &pixels, width: width, height: height)
+    var worst = 0
+    for y in 44..<77 {
+      for x in 64..<97 where abs(x - 80) >= 3 {
+        worst = max(worst, abs(Int(pixels[(y * width + x) * 4]) - level(x, y)))
+      }
+    }
+    // Texture differs between the spot and its source (±12 each), but no halo's tens of levels.
+    #expect(worst <= 32)
+  }
+
+  @Test func strokeCoveringItsWholeBoxCopiesTheSource() throws {
+    // No edge inside the image, so no correction: a straight (edge-clamped) copy.
+    let width = 32, height = 24
+    let original = HealTests.image(width: width, height: height, HealTests.texture)
+    var pixels = original
+    let region = try #require(HealBrush.apply(Edit.HealStroke(points: [SIMD2(16, 12)], radius: 100, offset: SIMD2(5, -3)),
+                                              to: &pixels, width: width, height: height))
+    #expect(region == HealBrush.Region(x: 0, y: 0, width: width, height: height))
+    for y in 0..<height {
+      for x in 0..<width {
+        let from = (min(max(y - 3, 0), height - 1) * width + min(x + 5, width - 1)) * 4
+        #expect(pixels[(y * width + x) * 4..<(y * width + x) * 4 + 4] == original[from..<from + 4])
+      }
+    }
+  }
+
+  @Test func nonFiniteStrokesDoNothing() {
+    let width = 32, height = 32
+    let original = HealTests.image(width: width, height: height, HealTests.texture)
+    for bad in [Float.nan, .infinity, -.infinity] {
+      for stroke in [Edit.HealStroke(points: [SIMD2(16, 16)], radius: bad, offset: SIMD2(5, 5)),
+                     Edit.HealStroke(points: [SIMD2(16, 16)], radius: 6, offset: SIMD2(bad, 5)),
+                     Edit.HealStroke(points: [SIMD2(16, 16)], radius: 6, offset: SIMD2(5, bad)),
+                     Edit.HealStroke(points: [SIMD2(bad, 16), SIMD2(16, bad)], radius: 6, offset: SIMD2(5, 5))]
+      {
+        var pixels = original
+        #expect(HealBrush.apply(stroke, to: &pixels, width: width, height: height) == nil)
+        #expect(pixels == original)
+      }
+      // A bad point is dropped and a bad feather falls back, the rest still heals.
+      var pixels = original
+      #expect(HealBrush.apply(Edit.HealStroke(points: [SIMD2(16, 16), SIMD2(bad, 3)], radius: 6, offset: SIMD2(5, 5), feather: bad),
+                              to: &pixels, width: width, height: height) != nil)
+    }
+  }
+
+  @Test func clippingKeepsTheVisiblePart() {
+    let paths = HealBrush.clip([SIMD2(-10, 5), SIMD2(10, 5), SIMD2(30, 5), SIMD2(30, 50), SIMD2(5, 50), SIMD2(5, 8)],
+                               low: SIMD2(0, 0), high: SIMD2(20, 20))
+    let want: [[SIMD2<Float>]] = [[SIMD2(0, 5), SIMD2(10, 5), SIMD2(20, 5)], [SIMD2(5, 20), SIMD2(5, 8)]]
+    #expect(paths.count == want.count)
+    for (path, expected) in zip(paths, want) {
+      #expect(path.count == expected.count && zip(path, expected).allSatisfy { (($0 - $1) * ($0 - $1)).sum() < 1e-6 })
+    }
+    #expect(HealBrush.clip([SIMD2(50, 50)], low: .zero, high: SIMD2(20, 20)).isEmpty)
   }
 
   // MARK: Resampling
@@ -261,5 +326,104 @@ struct HealTests {
     source = .point(SIMD2(1, 1))
     #expect(Edit.HealSource.stroke(points: [], radius: 8, source: &source) == nil)
     #expect(source == .point(SIMD2(1, 1)))
+  }
+}
+
+/// The heal's slower checks (a 200 px solve, a timed stroke), seconds unoptimized, so they run
+/// with the Edit folder's suites rather than in the smoke set.
+struct HealSolverTests {
+  @Test func largeMembraneMatchesTheExactAnswer() {
+    // A 200 px disc whose edge follows a discrete-harmonic quadratic (x² − y² + 2xy has a zero
+    // five-point Laplacian), so the exact fill is the same function, the converged answer.
+    let radius = 200, size = 2 * radius + 5
+    let centre = Float(size) / 2
+    func exact(_ x: Int, _ y: Int) -> Float {
+      let dx = Float(x) - centre, dy = Float(y) - centre
+      return (dx * dx - dy * dy + 2 * dx * dy) / Float(4 * radius)
+    }
+    var inside = [Bool](repeating: false, count: size * size)
+    for y in 0..<size {
+      for x in 0..<size {
+        let dx = Float(x) + 0.5 - centre, dy = Float(y) + 0.5 - centre
+        inside[y * size + x] = dx * dx + dy * dy < Float(radius * radius)
+      }
+    }
+    var states = [HealBrush.State](repeating: .outside, count: size * size)
+    var values = [SIMD4<Float>](repeating: .zero, count: size * size)
+    for y in 1..<(size - 1) {
+      for x in 1..<(size - 1) {
+        let index = y * size + x
+        if inside[index] {
+          states[index] = .unknown
+        } else if inside[index - 1] || inside[index + 1] || inside[index - size] || inside[index + size] {
+          states[index] = .fixed
+          values[index] = SIMD4(repeating: exact(x, y))
+        }
+      }
+    }
+    let solution = HealBrush.membrane(HealBrush.Grid(width: size, height: size, states: states, values: values))
+    var worst: Float = 0
+    for y in 0..<size {
+      for x in 0..<size where states[y * size + x] == .unknown { worst = max(worst, abs(solution[y * size + x].x - exact(x, y))) }
+    }
+    // The edge spans about ±70 levels; under half a level rounds to the same bytes almost everywhere.
+    #expect(worst < 0.5)
+  }
+
+  /// A typical 60 px spot, timed for the record (no assertion: unit tests run unoptimized).
+  @Test func timesASixtyPixelStroke() {
+    let width = 512, height = 512
+    var pixels = HealTests.image(width: width, height: height, HealTests.texture)
+    let clock = ContinuousClock()
+    let elapsed = clock.measure {
+      HealBrush.apply(Edit.HealStroke(points: [SIMD2(200, 250), SIMD2(260, 260)], radius: 60, offset: SIMD2(0, -130)),
+                      to: &pixels, width: width, height: height)
+    }
+    print("HealTests: 60 px stroke (60 px drag) took \(elapsed)")
+  }
+
+  @Test func longStrokeIsHealedInSmallPieces() throws {
+    // Corner to corner: each piece's box stays near the brush's size, not the image's.
+    let width = 400, height = 300
+    let stroke = Edit.HealStroke(points: [SIMD2(0, 0), SIMD2(400, 300)], radius: 10, offset: SIMD2(0, 30))
+    let brush = try #require(HealBrush.Brush(stroke, width: width, height: height))
+    let pieces = brush.pieces(width: width, height: height)
+    #expect(pieces.count >= 7)
+    for (piece, next) in zip(pieces, pieces.dropFirst()) { #expect(piece.last == next.first) }
+    for piece in pieces {
+      var low = piece[0], high = piece[0]
+      for centre in piece {
+        low = pointwiseMin(low, centre)
+        high = pointwiseMax(high, centre)
+      }
+      #expect(max(high.x - low.x, high.y - low.y) <= 65)
+    }
+    var pixels = HealTests.image(width: width, height: height, HealTests.texture)
+    let original = pixels
+    let region = try #require(HealBrush.apply(stroke, to: &pixels, width: width, height: height))
+    #expect(region == HealBrush.Region(x: 0, y: 0, width: width, height: height))
+    #expect(pixels != original)
+    // Far from the line nothing moves.
+    #expect(pixels[(250 * width + 20) * 4] == original[(250 * width + 20) * 4])
+  }
+
+  @Test func extremeStrokesAreClampedNotFatal() throws {
+    let width = 48, height = 40
+    let original = HealTests.image(width: width, height: height, HealTests.texture)
+    let extremes = [
+      Edit.HealStroke(points: [SIMD2(-1e30, 1e30), SIMD2(24, 20), SIMD2(.greatestFiniteMagnitude, -.greatestFiniteMagnitude)],
+                      radius: 1e30, offset: SIMD2(1e30, -1e30), feather: 1e9),
+      Edit.HealStroke(points: [SIMD2(20, 20)], radius: 8, offset: SIMD2(-.greatestFiniteMagnitude, 3), feather: -5),
+      Edit.HealStroke(points: (0..<200).map { SIMD2($0 % 2 == 0 ? -1e9 : 1e9, Float($0)) }, radius: 0.001, offset: SIMD2(4, 4)),
+    ]
+    for stroke in extremes {
+      var pixels = original
+      HealBrush.apply(stroke, to: &pixels, width: width, height: height)
+      for index in stride(from: 3, to: pixels.count, by: 4) { #expect(pixels[index] == 255) }
+    }
+    // The radius stops at the cap; the offset at the image's size.
+    let brush = try #require(HealBrush.Brush(extremes[0], width: width, height: height))
+    #expect(brush.radius == min(HealBrush.maxRadius, Float(width * width + height * height).squareRoot()))
+    #expect(brush.shift == SIMD2(width, -height) && brush.feather == 1)
   }
 }

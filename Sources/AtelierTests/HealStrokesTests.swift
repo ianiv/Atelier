@@ -10,8 +10,7 @@ struct HealStrokesTests {
     Edit.HealStrokes(strokes: (0..<count).map { index in
       Edit.HealStroke(
         points: (0..<points).map { SIMD2(Float(index) * 3.25 + Float($0), Float($0) * 0.5 - 7) },
-        radius: 8 + Float(index % 5), offset: SIMD2(Float(index) - 40.5, 12.25), feather: 0.25 + Float(index % 3) / 10,
-        band: UInt8(index % 2))
+        radius: 8 + Float(index % 5), offset: SIMD2(Float(index) - 40.5, 12.25), feather: 0.25 + Float(index % 3) / 10)
     })
   }
 
@@ -65,6 +64,19 @@ struct HealStrokesTests {
     #expect(Edit.HealStrokes(encoded: Data()) == nil)
     data.append(0)
     #expect(Edit.HealStrokes(encoded: data) == nil)
+    // Bands don't exist yet, and nothing non-finite is let in.
+    #expect(Edit.HealStrokes(encoded: Edit.HealStrokes(strokes: [Edit.HealStroke(points: [SIMD2(1, 1)], radius: 2, offset: .zero, band: 1)]).encoded) == nil)
+    for bad in [Float.nan, .infinity, -.infinity] {
+      for stroke in [Edit.HealStroke(points: [SIMD2(1, 1)], radius: bad, offset: .zero),
+                     Edit.HealStroke(points: [SIMD2(1, 1)], radius: 2, offset: .zero, feather: bad),
+                     Edit.HealStroke(points: [SIMD2(1, 1)], radius: 2, offset: SIMD2(bad, 0)),
+                     Edit.HealStroke(points: [SIMD2(1, 1)], radius: 2, offset: SIMD2(0, bad)),
+                     Edit.HealStroke(points: [SIMD2(1, 1), SIMD2(bad, 2)], radius: 2, offset: .zero),
+                     Edit.HealStroke(points: [SIMD2(1, bad)], radius: 2, offset: .zero)]
+      {
+        #expect(Edit.HealStrokes(encoded: Edit.HealStrokes(strokes: [stroke]).encoded) == nil)
+      }
+    }
     // A point count running past the end isn't trusted.
     var huge = Edit.HealStrokes(strokes: [Edit.HealStroke(points: [SIMD2(1, 1)], radius: 2, offset: .zero)]).encoded
     huge.replaceSubrange(6..<10, with: [0xFF, 0xFF, 0xFF, 0x7F])

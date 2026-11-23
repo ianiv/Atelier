@@ -59,6 +59,12 @@ nonisolated enum HealBrush {
       }
       self.pixels = pixels
     }
+
+    /// Tightly packed RGBA8 `rgba` holding exactly `region`.
+    init(packed rgba: UnsafeBufferPointer<UInt8>, region: Region) {
+      self.region = region
+      pixels = (0..<region.count).map { SIMD4(Float(rgba[$0 * 4]), Float(rgba[$0 * 4 + 1]), Float(rgba[$0 * 4 + 2]), 0) }
+    }
   }
 
   /// A stroke's footprint in its region: `coverage` 0–1 for the soft edge, and `inside` (the
@@ -99,10 +105,12 @@ nonisolated enum HealBrush {
     resample(stroke.points, spacing: stroke.radius / 4)
   }
 
-  /// The stroke's box grown by 2 px for the correction's edge, inside a `width` × `height` image;
-  /// nil when it misses the image or has no area.
+  /// The stroke's whole box grown by 2 px for the correction's edge, inside a `width` × `height`
+  /// image; nil when it misses the image or has no area. A long stroke is healed in pieces
+  /// (`Brush.pieces`), each in its own part of this box.
   static func region(of stroke: Edit.HealStroke, width: Int, height: Int) -> Region? {
-    region(centres: centres(of: stroke), radius: stroke.radius, width: width, height: height)
+    guard let brush = Brush(stroke, width: width, height: height) else { return nil }
+    return region(centres: brush.centres, radius: brush.radius, width: width, height: height)
   }
 
   private static func region(centres: [SIMD2<Float>], radius: Float, width: Int, height: Int) -> Region? {
@@ -165,36 +173,193 @@ nonisolated enum HealBrush {
 
   // MARK: Applying
 
+  /// The largest radius applied, in image pixels. A piece's box is what a solve allocates (about
+  /// 150 bytes a pixel across its buffers), so this keeps the largest solve near 300 MB (a
+  /// 1,500 px square piece) whatever a record or an agent asks for; spots are a few dozen pixels.
+  static let maxRadius: Float = 256
+  /// The most disc centres one stroke is brushed with; past it they're spaced further apart. Only
+  /// a nonsensical stroke (thousands of image-wide segments) gets near it.
+  static let maxCentres = 1 << 20
+
+  /// A stroke made safe for an image: finite, its offset within the image's size, its radius
+  /// within `maxRadius` and the diagonal, its feather 0…1, and its path clipped to where its discs
+  /// can reach the image, so no value from a corrupt record or an agent can overflow an Int or a
+  /// byte or make work for pixels that aren't there. Nil when nothing usable is left (a
+  /// non-finite radius or offset, no radius, no finite points, or a path that misses the image).
+  struct Brush: Sendable {
+    /// The resampled path's parts that reach the image, in order.
+    var runs: [[SIMD2<Float>]]
+    var radius: Float
+    var feather: Float
+    var shift: SIMD2<Int>
+    /// Between centres: a quarter of the radius, unless `maxCentres` spreads them.
+    var spacing: Float
+
+    var centres: [SIMD2<Float>] { runs.flatMap(\.self) }
+
+    init?(_ stroke: Edit.HealStroke, width: Int, height: Int) {
+      guard width > 0, height > 0, stroke.radius.isFinite, stroke.radius > 0,
+            stroke.offset.x.isFinite, stroke.offset.y.isFinite
+      else { return nil }
+      let size = SIMD2(Float(width), Float(height))
+      let diagonal = (size * size).sum().squareRoot()
+      radius = min(stroke.radius, diagonal, HealBrush.maxRadius)
+      feather = stroke.feather.isFinite ? min(max(stroke.feather, 0), 1) : Edit.HealStroke.defaultFeather
+      let offset = pointwiseMin(pointwiseMax(stroke.offset, -size), size)
+      shift = SIMD2(Int(offset.x.rounded()), Int(offset.y.rounded()))
+      // Points far beyond any image are pulled in (which barely turns their segments) so the
+      // clipping below works in ordinary Float ranges.
+      let far = SIMD2<Float>(repeating: 1e7)
+      let points = stroke.points.compactMap { point -> SIMD2<Float>? in
+        guard point.x.isFinite, point.y.isFinite else { return nil }
+        return pointwiseMin(pointwiseMax(point, -far), far)
+      }
+      guard !points.isEmpty else { return nil }
+      let paths = HealBrush.clip(points, low: SIMD2(repeating: -radius - 1), high: size + radius + 1)
+      let length = paths.reduce(Float(0)) { total, path in
+        zip(path, path.dropFirst()).reduce(total) { $0 + (($1.1 - $1.0) * ($1.1 - $1.0)).sum().squareRoot() }
+      }
+      let spacing = max(radius / 4, length / Float(HealBrush.maxCentres), 0.25)
+      guard !paths.isEmpty else { return nil }
+      self.spacing = spacing
+      runs = paths.map { HealBrush.resample($0, spacing: spacing) }
+    }
+
+    /// The centres in consecutive pieces of about `max(4 × radius, 64)` px of path (measured
+    /// faster than 2× or 3×, whose extra solves cost more than their smaller boxes save), each sharing
+    /// its first centre with the last of the piece before, and none with a disc off the image. A
+    /// piece is solved on its own box, so a long drag costs about its own area (a corner-to-corner
+    /// stroke's one box would be the whole image); pieces applied in order compose as overlapping
+    /// dabs do, and where one meets the last the correction carries on, as the healed pixels it
+    /// meets are its own source plus nearly the same correction.
+    func pieces(width: Int, height: Int) -> [[SIMD2<Float>]] {
+      let step = max(Int(max(4 * radius, 64) / spacing), 1)
+      let low = SIMD2(repeating: -radius), high = SIMD2(Float(width), Float(height)) + radius
+      var pieces: [[SIMD2<Float>]] = []
+      var run: [SIMD2<Float>] = []
+      func finish() {
+        guard !run.isEmpty else { return }
+        var start = 0
+        while true {
+          let end = min(start + step, run.count - 1)
+          pieces.append(Array(run[start...end]))
+          if end == run.count - 1 { break }
+          start = end
+        }
+        run.removeAll(keepingCapacity: true)
+      }
+      for path in runs {
+        for centre in path {
+          if centre.x > low.x, centre.y > low.y, centre.x < high.x, centre.y < high.y {
+            run.append(centre)
+          } else {
+            finish()
+          }
+        }
+        finish()
+      }
+      return pieces
+    }
+  }
+
+  /// The polyline's parts inside the box `low`–`high` (Liang–Barsky per segment), as separate
+  /// paths where it leaves and comes back. Clipping keeps every segment's direction, so the
+  /// part of the stroke on the image is brushed exactly as given.
+  static func clip(_ points: [SIMD2<Float>], low: SIMD2<Float>, high: SIMD2<Float>) -> [[SIMD2<Float>]] {
+    func inside(_ p: SIMD2<Float>) -> Bool { p.x >= low.x && p.y >= low.y && p.x <= high.x && p.y <= high.y }
+    guard points.count > 1 else { return points.filter(inside).map { [$0] } }
+    var paths: [[SIMD2<Float>]] = []
+    var path: [SIMD2<Float>] = []
+    for (p, q) in zip(points, points.dropFirst()) {
+      let d = q - p
+      var t0: Float = 0, t1: Float = 1
+      var visible = true
+      for (delta, start, lower, upper) in [(d.x, p.x, low.x, high.x), (d.y, p.y, low.y, high.y)] {
+        if delta == 0 {
+          if start < lower || start > upper { visible = false }
+          continue
+        }
+        var a = (lower - start) / delta, b = (upper - start) / delta
+        if a > b { swap(&a, &b) }
+        t0 = max(t0, a)
+        t1 = min(t1, b)
+      }
+      guard visible, t0 <= t1 else {
+        if !path.isEmpty { paths.append(path) }
+        path = []
+        continue
+      }
+      let entry = t0 == 0 ? p : p + d * t0
+      let exit = t1 == 1 ? q : p + d * t1
+      if path.last != entry {
+        if !path.isEmpty { paths.append(path) }
+        path = [entry]
+      }
+      path.append(exit)
+      if t1 < 1 {
+        paths.append(path)
+        path = []
+      }
+    }
+    if !path.isEmpty { paths.append(path) }
+    return paths
+  }
+
   /// Heals `stroke` into tightly packed RGBA8 `pixels` (`width` × `height`, straight alpha, which
-  /// is kept), returning the region it changed (nil for none). The source is read before anything
-  /// is written, so where it overlaps the stroke's own area it's the pre-stroke pixels: a stroke
-  /// never feeds on itself.
+  /// is kept), returning the region it changed (nil for none). Every piece's source is read
+  /// before anything is written, so where it overlaps the stroke's own area it's the pre-stroke
+  /// pixels: a stroke never feeds on itself.
   @discardableResult
   static func apply(_ stroke: Edit.HealStroke, to pixels: inout [UInt8], width: Int, height: Int) -> Region? {
-    guard pixels.count >= width * height * 4 else { return nil }
-    let centres = centres(of: stroke)
-    guard let region = region(centres: centres, radius: stroke.radius, width: width, height: height) else { return nil }
-    let mask = mask(centres: centres, radius: stroke.radius, feather: stroke.feather, in: region)
-    let shift = SIMD2(Int(stroke.offset.x.rounded()), Int(stroke.offset.y.rounded()))
-    let (destination, source) = pixels.withUnsafeBufferPointer {
-      (HealSurface(rgba: $0, width: width, height: height, region: region),
-       HealSurface(rgba: $0, width: width, height: height, region: region, shift: shift))
+    guard width > 0, height > 0, pixels.count >= width * height * 4, let brush = Brush(stroke, width: width, height: height) else { return nil }
+    let pieces = brush.pieces(width: width, height: height).compactMap { centres -> (Region, [SIMD2<Float>])? in
+      region(centres: centres, radius: brush.radius, width: width, height: height).map { ($0, centres) }
     }
-    let healed = heal(destination: destination, source: source, mask: mask)
-    pixels.withUnsafeMutableBufferPointer { out in
+    // The sources as bytes (a quarter of a surface's size), all taken before the first write.
+    let sources = pixels.withUnsafeBufferPointer { rgba in
+      pieces.map { region, _ in snapshot(rgba, width: width, height: height, region: region, shift: brush.shift) }
+    }
+    var changed: Region?
+    for ((region, centres), sourceBytes) in zip(pieces, sources) {
+      let mask = mask(centres: centres, radius: brush.radius, feather: brush.feather, in: region)
+      let destination = pixels.withUnsafeBufferPointer { HealSurface(rgba: $0, width: width, height: height, region: region) }
+      let source = sourceBytes.withUnsafeBufferPointer { HealSurface(packed: $0, region: region) }
+      let healed = heal(destination: destination, source: source, mask: mask)
+      pixels.withUnsafeMutableBufferPointer { out in
+        for row in 0..<region.height {
+          for column in 0..<region.width {
+            let index = row * region.width + column
+            guard mask.coverage[index] > 0 else { continue }
+            let value = healed.pixels[index]
+            let at = ((region.y + row) * width + region.x + column) * 4
+            out[at] = byte(value.x)
+            out[at + 1] = byte(value.y)
+            out[at + 2] = byte(value.z)
+          }
+        }
+      }
+      changed = changed.map { $0.union(region) } ?? region
+    }
+    return changed
+  }
+
+  /// `region` of `rgba` moved by `shift`, edge-clamped, as its own tightly packed RGBA8.
+  private static func snapshot(_ rgba: UnsafeBufferPointer<UInt8>, width: Int, height: Int, region: Region, shift: SIMD2<Int>) -> [UInt8] {
+    var out = [UInt8](repeating: 0, count: region.count * 4)
+    out.withUnsafeMutableBufferPointer { out in
       for row in 0..<region.height {
+        let y = min(max(region.y + row + shift.y, 0), height - 1)
         for column in 0..<region.width {
-          let index = row * region.width + column
-          guard mask.coverage[index] > 0 else { continue }
-          let value = healed.pixels[index]
-          let at = ((region.y + row) * width + region.x + column) * 4
-          out[at] = byte(value.x)
-          out[at + 1] = byte(value.y)
-          out[at + 2] = byte(value.z)
+          let x = min(max(region.x + column + shift.x, 0), width - 1)
+          let from = (y * width + x) * 4, to = (row * region.width + column) * 4
+          out[to] = rgba[from]
+          out[to + 1] = rgba[from + 1]
+          out[to + 2] = rgba[from + 2]
+          out[to + 3] = rgba[from + 3]
         }
       }
     }
-    return region
+    return out
   }
 
   /// Heals the strokes in order (each on the result of the ones before it), returning the region
@@ -244,8 +409,9 @@ nonisolated enum HealBrush {
     return out
   }
 
+  /// Rounded and clipped; NaN (which no sanitised stroke makes) goes to 0 rather than trapping.
   private static func byte(_ value: Float) -> UInt8 {
-    UInt8(min(max(value.rounded(), 0), 255))
+    value.isNaN ? 0 : UInt8(min(max(value.rounded(), 0), 255))
   }
 
   // MARK: Membrane
@@ -268,6 +434,11 @@ nonisolated enum HealBrush {
     var values: [SIMD4<Float>]
   }
 
+  // The solver's constants (`sweeps`, `omega`, the coarsest level's size and sweep count,
+  // `tolerance`) decide the pixels a saved step renders to: a stroke is stored as data and healed
+  // again whenever the step is opened or saved. Changing any of them changes saved steps, so it
+  // must bump `Edit.HealStrokes.version` (and keep the old solver for the old version).
+
   /// Relaxation sweeps on the full-size level, after the coarser level's answer; each coarser
   /// level gets twice as many (up to 8×), as it has a quarter of the cells, and the coarsest is
   /// small enough to sweep until it settles. With `omega` this lands within half a level of the
@@ -276,6 +447,10 @@ nonisolated enum HealBrush {
   static let sweeps = 24
   /// The over-relaxation factor, tuned on that disc (1.5 and 1.92 both did worse in 24 sweeps).
   static let omega: Float = 1.85
+  /// Halving stops once a side is this small or smaller.
+  static let coarsestSize = 12
+  /// The coarsest level's sweeps stop once no cell moves more than this.
+  static let coarsestTolerance: Float = 1e-3
 
   /// The harmonic fill of `grid`: unknown cells end at the average of their neighbours, fixed
   /// ones keep their values. Solved coarse to fine: the grid is halved until it's small (a coarse
@@ -286,7 +461,7 @@ nonisolated enum HealBrush {
   static func membrane(_ grid: Grid) -> [SIMD4<Float>] {
     guard grid.states.contains(.fixed) else { return [SIMD4<Float>](repeating: .zero, count: grid.states.count) }
     var levels = [grid]
-    while let last = levels.last, min(last.width, last.height) > 12, levels.count < 10 {
+    while let last = levels.last, min(last.width, last.height) > coarsestSize, levels.count < 10 {
       levels.append(restrict(last))
     }
     let coarsest = levels[levels.count - 1]
@@ -299,7 +474,7 @@ nonisolated enum HealBrush {
     mean /= max(fixedCount, 1)
     var solution = coarsest.values
     for index in solution.indices where coarsest.states[index] == .unknown { solution[index] = mean }
-    relax(coarsest, &solution, sweeps: 4 * (coarsest.width + coarsest.height) + 50, tolerance: 1e-3)
+    relax(coarsest, &solution, sweeps: 4 * (coarsest.width + coarsest.height) + 50, tolerance: coarsestTolerance)
     for level in stride(from: levels.count - 2, through: 0, by: -1) {
       solution = prolong(solution, from: levels[level + 1], to: levels[level])
       relax(levels[level], &solution, sweeps: sweeps << min(level, 3), tolerance: 0)
@@ -380,12 +555,15 @@ nonisolated enum HealBrush {
     for index in grid.states.indices where grid.states[index] == .unknown {
       let x = index % width, y = index / width
       var found = 0
-      for (ok, other) in [(x > 0, index - 1), (x + 1 < width, index + 1), (y > 0, index - width), (y + 1 < grid.height, index + width)]
-        where ok && grid.states[other] != .outside
-      {
+      func take(_ other: Int) {
+        guard grid.states[other] != .outside else { return }
         neighbours.append(Int32(other))
         found += 1
       }
+      if x > 0 { take(index - 1) }
+      if x + 1 < width { take(index + 1) }
+      if y > 0 { take(index - width) }
+      if y + 1 < grid.height { take(index + width) }
       // A lone cell with no neighbours in the problem keeps its starting value.
       guard found > 0 else { continue }
       for _ in found..<4 { neighbours.append(Int32(index)) }

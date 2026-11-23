@@ -19,7 +19,7 @@ nonisolated extension Edit {
     var feather: Float
     /// Reserved for frequency separation: 0 heals both bands (all there is today); later values
     /// name the low (colour) or high (texture) band. Kept in the encoding so adding the Band
-    /// picker changes no format.
+    /// picker changes no layout, only `HealStrokes.version`; until then decoding refuses others.
     var band: UInt8
 
     static let defaultFeather: Float = 0.25
@@ -42,7 +42,9 @@ nonisolated extension Edit {
 
     static let empty = HealStrokes(strokes: [])
     /// The encoding's version; `init?(encoded:)` refuses any other, so an older app reading a
-    /// newer project leaves Heal off rather than misreading it.
+    /// newer project leaves Heal off rather than misreading it. Bump it when bands arrive (band
+    /// values other than 0) and whenever `HealBrush`'s solver constants change the pixels a
+    /// stroke heals to.
     static let version: UInt16 = 1
 
     init(strokes: [HealStroke]) { self.strokes = strokes }
@@ -72,7 +74,8 @@ nonisolated extension Edit {
       return data
     }
 
-    /// Nil for another version, or data that's cut short or runs on.
+    /// Nil for another version, data that's cut short or runs on, a value that isn't finite, or a
+    /// band other than 0 (no bands exist yet; HealBrush checks values again before using them).
     init?(encoded data: Data) {
       var reader = Reader(bytes: [UInt8](data))
       guard let version: UInt16 = reader.integer(), version == Self.version, let count: UInt32 = reader.integer() else { return nil }
@@ -80,12 +83,13 @@ nonisolated extension Edit {
       for _ in 0..<count {
         guard let n: UInt32 = reader.integer(), let radius = reader.float(), let feather = reader.float(),
               let dx = reader.float(), let dy = reader.float(), let band: UInt8 = reader.integer(),
+              band == 0, radius.isFinite, feather.isFinite, dx.isFinite, dy.isFinite,
               reader.remaining >= Int(n) * 8
         else { return nil }
         var points: [SIMD2<Float>] = []
         points.reserveCapacity(Int(n))
         for _ in 0..<n {
-          guard let x = reader.float(), let y = reader.float() else { return nil }
+          guard let x = reader.float(), let y = reader.float(), x.isFinite, y.isFinite else { return nil }
           points.append(SIMD2(x, y))
         }
         strokes.append(HealStroke(points: points, radius: radius, offset: SIMD2(dx, dy), feather: feather, band: band))
