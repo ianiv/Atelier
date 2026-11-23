@@ -13,7 +13,9 @@ extension Automation {
   /// `screenRequest()` names the clip and sends no canvas image; generate's `reference_video`
   /// refuses what the screen refuses; the queued job comes back from a saved queue with its clip
   /// in its own project only; and a run with the reference reads its frames when it starts and
-  /// makes 22 frames after the clip. Steps default to 2.
+  /// makes 22 frames after the clip, the engine given the clip as a 22-frame tensor. Steps default
+  /// to 2. `--probe-no-pictures` then runs once more with an empty moodboard and logs what
+  /// happens (the distilled Ref2VA models need a picture), as no PASS or FAIL.
   static func referenceVideoCheck(_ model: CreateModel, presets: PresetStore) {
     let args = CommandLine.arguments
     func value(_ name: String) -> String? {
@@ -242,7 +244,23 @@ extension Automation {
         check(parent?.tensorId == clip.tensorId, "it follows the clip (parent \(parent.map { "\($0.tensorId)" } ?? "none"))")
         check(made.inputTensorId == nil, "the result records no input image")
       }
+      let shape = await model.engine.lastVideoImageShape
+      check(shape == [ReferenceVideo.minimumFrames, 256, 256, 3], "the engine got the clip as a 22-frame tensor (\(shape.map { "\($0)" } ?? "none"))")
       model.moodboard.removeAll()
+      if args.contains("--probe-no-pictures") {
+        // Only the reference video: what the model makes of it is logged, not judged.
+        _ = await wait(seconds: 10) { !model.isRunning }
+        if model.canvasClip?.tensorId != clip.tensorId { model.use(clip, restoreInput: false) }
+        _ = await wait(seconds: 10) { model.canvasClip?.tensorId == clip.tensorId }
+        model.settings = settings
+        model.canvasMode = .edit
+        known = knownJobs()
+        model.generate()
+        let probe = await queuedJob(after: known)
+        let probed = await result(of: probe?.id)
+        let status = model.queue.recent.first { $0.id == probe?.id }?.status
+        log("probe, no pictures: \(probed.map { "made \($0.clip?.frames.count ?? 0) frames" } ?? "no result") (status \(status.map { "\($0)" } ?? "none"), error \(model.errorMessage ?? "none"))")
+      }
       finish()
     }
   }

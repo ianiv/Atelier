@@ -60,7 +60,7 @@ MiniMax H3 models (including FastH3 Omni and HyperFlow H3 Flash) always decode i
 
 MiniMax H3 Ref2VA models (FastH3 Omni and HyperFlow H3 Flash Ref2VA too) can follow a clip, its motion, camera or performance, as well as pictures. Open a video from History so it plays on the canvas, and switch to **Edit**: the canvas's badge says **Video 1**, and the clip is the reference video. Refer to it in the prompt as `<Video 1>`. The moodboard images are then Picture 1, Picture 2 and so on, since the canvas holds no picture.
 
-- The clip is read from its start at the model's frame rate (24 fps for H3), one frame for each frame of the new video. A clip shorter than the new video holds its last frame; a longer one is cut off. Each frame is scaled to fill the frame on the canvas and cropped about its center, so a clip of another shape loses its edges.
+- The clip is read from its start at the model's frame rate (24 fps for H3), one frame for each frame of the new video. A clip shorter than the new video holds its last frame; a longer one is cut off. Each frame is scaled to fill the output size (the inspector's width and height) and cropped about its center, so a clip of another shape loses its edges.
 - The new video is made from noise, with the clip only as its reference: **Strength** must be 100%, and **Length** at least 22 frames.
 - It can't go with an audio file. With one in the **Audio** box, or with the Strength or Length above, Generate is disabled and the status bar (and the badge, in orange) says why.
 - The new video follows the clip in History, but isn't recorded as made from it: **Use Settings** brings back its prompt and settings, not the clip.
