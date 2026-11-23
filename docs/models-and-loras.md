@@ -125,7 +125,7 @@ Converting a LoRA to 8-bit in Draw Things deletes the original file and leaves t
 ### Importing a LoRA
 
 1. Click **Import…**, choose **Choose Files…** and pick `.safetensors` LoRA files, or drop them on the list. **From Hugging Face Link…** downloads one first; see [Importing from a Hugging Face link](#importing-from-a-hugging-face-link).
-2. For each file, check the name, add its **trigger words** (the words it was trained on, which you add to your prompt to bring it in), and leave **Model family** on **Detect automatically** unless detection picks the wrong one.
+2. For each file, check the name, add its **trigger words** (the words it was trained on, which bring it in; separate several with commas, and Create puts them in front of the prompt for you, see [LoRAs](creating-images.md#loras)), and leave **Model family** on **Detect automatically** unless detection picks the wrong one.
 3. Optionally change the file's **scale factor**, the number after its trigger words (see below).
 4. Import. The LoRA is converted, saved in the folder chosen in **Add To** and registered in that folder's `custom_lora.json`. It's usable right away; no relaunch needed.
 
@@ -151,7 +151,7 @@ LoRAs trained with the [MOSS Image Edit trainer](https://github.com/Chenkin-x/Mo
 
 ### Managing LoRAs
 
-Select a LoRA to rename it or change its trigger words, then click **Save** (or **Revert**). **Reveal in Finder** (on iPad, **Show in Files**, which opens its folder) shows its file, and **Move to Trash** deletes the file and removes it from `custom_lora.json`. **Move To** moves its file to another models folder, with its `custom_lora.json` entry when that's in the same folder, the same way as [moving a model](#moving-between-folders).
+Select a LoRA to rename it or change its trigger words (commas separate them; each becomes a toggle under the LoRA in Create), then click **Save** (or **Revert**). **Reveal in Finder** (on iPad, **Show in Files**, which opens its folder) shows its file, and **Move to Trash** deletes the file and removes it from `custom_lora.json`. **Move To** moves its file to another models folder, with its `custom_lora.json` entry when that's in the same folder, the same way as [moving a model](#moving-between-folders).
 
 To use a LoRA, add it in the inspector's LoRAs section in Create; see [Creating images](creating-images.md#loras).
 

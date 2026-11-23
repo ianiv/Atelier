@@ -84,6 +84,69 @@ final class CreateModel {
     runTarget == .local ? library.loras : serverCatalog?.loras ?? []
   }
 
+  /// This device's LoRA library (set by it), where trigger words come from on this device. Weak:
+  /// the library holds this model too.
+  @ObservationIgnored weak var library: ModelLibrary?
+
+  /// The trigger words turned off, by LoRA file, lowercased. A word is on unless it's here, so a
+  /// LoRA's words start on. Kept in `SessionState`, not in presets: they're about the prompt.
+  var disabledTriggerWords: [String: Set<String>] = [:]
+
+  /// Each of `loras`' trigger words (`TriggerWords`), with whether the engine applies the LoRA
+  /// with `model` and `refiner` (files), as the LoRA editor's warning tells it
+  /// (`ModelLibrary.loraFamilies`). A LoRA nothing here lists has none.
+  func triggerWordSources(loras: [String], model: String?, refiner: String?) -> [TriggerWords.Source] {
+    let catalog = library.map(availableLoRAs(in:)) ?? []
+    let version = { (file: String?) in file.flatMap { file in self.availableModels.first { $0.file == file }?.version } }
+    let compatible = ModelLibrary.loraFamilies(forModel: version(model), refiner: version(refiner))
+    var seen = Set<String>()
+    return loras.compactMap { file in
+      guard seen.insert(file).inserted, let lora = catalog.first(where: { $0.file == file }) else { return nil }
+      let words = TriggerWords.words(fromPrefix: lora.prefix)
+      return words.isEmpty ? nil : TriggerWords.Source(file: file, words: words, applies: compatible.contains(lora.family))
+    }
+  }
+
+  /// The selected LoRAs' trigger words, as the Create screen's settings use them.
+  var screenTriggerWordSources: [TriggerWords.Source] {
+    triggerWordSources(
+      loras: (settings?.loras ?? []).compactMap(\.file), model: selectedModel, refiner: settings?.refinerModel)
+  }
+
+  /// Turns one trigger word on or off, as one undo step.
+  func setTriggerWord(_ word: String, of file: String, on: Bool, undoManager: UndoManager?) {
+    setTriggerWords([(file, word, on)], undoManager: undoManager, actionName: on ? "Turn On Trigger Word" : "Turn Off Trigger Word")
+  }
+
+  /// Turns trigger words on or off together, as one undo step (an agent's set_create_screen).
+  func setTriggerWords(_ changes: [(file: String, word: String, on: Bool)], undoManager: UndoManager?, actionName: String) {
+    let before = disabledTriggerWords
+    for change in changes {
+      var words = disabledTriggerWords[change.file] ?? []
+      if change.on { words.remove(change.word.lowercased()) } else { words.insert(change.word.lowercased()) }
+      disabledTriggerWords[change.file] = words.isEmpty ? nil : words
+    }
+    guard disabledTriggerWords != before else { return }
+    registerTriggerWordsUndo(restoring: before, undoManager, actionName: actionName)
+  }
+
+  /// Whether a trigger word of `file` is on.
+  func isTriggerWordOn(_ word: String, of file: String) -> Bool {
+    !(disabledTriggerWords[file]?.contains(word.lowercased()) ?? false)
+  }
+
+  /// Undo puts `snapshot` back, and registers the redo the same way.
+  private func registerTriggerWordsUndo(restoring snapshot: [String: Set<String>], _ undoManager: UndoManager?, actionName: String) {
+    guard let undoManager else { return }
+    undoManager.registerUndo(withTarget: self) { target in
+      MainActor.assumeIsolated {
+        target.registerTriggerWordsUndo(restoring: target.disabledTriggerWords, undoManager, actionName: actionName)
+        target.disabledTriggerWords = snapshot
+      }
+    }
+    undoManager.setActionName(actionName)
+  }
+
   /// The name of the selected server; nil on this device.
   var runTargetServerName: String? {
     guard case .remote(let id) = runTarget else { return nil }
@@ -845,6 +908,21 @@ final class CreateModel {
     return style.apply(values, negativePrompt: negativePrompt)
   }
 
+  /// What a run from the Create screen sends: `styledPrompts` with the selected LoRAs' trigger
+  /// words turned on put in front (`TriggerWords.prompt`). History records this, the prompt
+  /// actually used; restoring a step takes the words back off (`restorePrompts`).
+  var generationPrompts: (prompt: String, negativePrompt: String) {
+    generationPrompts(loras: (settings?.loras ?? []).compactMap(\.file), model: selectedModel, refiner: settings?.refinerModel)
+  }
+
+  /// `generationPrompts` for other LoRAs and model than the screen's: an agent's run from the
+  /// screen with settings of its own.
+  func generationPrompts(loras: [String], model: String?, refiner: String?) -> (prompt: String, negativePrompt: String) {
+    let styled = styledPrompts
+    let sources = triggerWordSources(loras: loras, model: model, refiner: refiner)
+    return (TriggerWords.prompt(styled.prompt, sources: sources, disabled: disabledTriggerWords), styled.negativePrompt)
+  }
+
   /// Writes the style's tag boxes out as the full prompt and negative prompt in the plain prompt
   /// box, and drops the style, so the whole prompt can be edited. One way: the style isn't put
   /// back, since the edited text no longer fits its template, but Undo right after brings it back.
@@ -863,10 +941,24 @@ final class CreateModel {
     negativePrompt = styled.negativePrompt
   }
 
-  /// Puts a saved image's prompts on the Create screen. A prompt one of the styles wrote comes
-  /// back as its subject with that style selected; any other clears the style, so the prompt
-  /// isn't styled twice.
-  private func restorePrompts(_ savedPrompt: String, _ savedNegative: String) {
+  /// Puts a saved image's prompts on the Create screen. The trigger words a run put in front of
+  /// the prompt come off first, back into their toggles (`TriggerWords.strip`, for the LoRAs in
+  /// `settings`, the saved dump, and its `model`), so the next run doesn't add them twice. Then a
+  /// prompt one of the styles wrote comes back as its subject with that style selected; any other
+  /// clears the style, so the prompt isn't styled twice.
+  func restorePrompts(_ savedPrompt: String, _ savedNegative: String, settings dump: [String: JSONValue], model: String?) {
+    var loras: [String] = []
+    if case .array(let entries)? = dump["loras"] {
+      loras = entries.compactMap { entry in
+        guard case .object(let fields) = entry, case .string(let file)? = fields["file"] else { return nil }
+        return file
+      }
+    }
+    var refiner: String?
+    if case .string(let file)? = dump["refinerModel"] { refiner = file }
+    let stripped = TriggerWords.strip(savedPrompt, sources: triggerWordSources(loras: loras, model: model, refiner: refiner))
+    for (file, words) in stripped.disabled { disabledTriggerWords[file] = words.isEmpty ? nil : words }
+    let savedPrompt = stripped.prompt
     for style in (styles?.allStyles ?? []) + remoteStyles.all.map(\.style) {
       if let matched = style.match(prompt: savedPrompt, negativePrompt: savedNegative) {
         prompt = matched.values[Style.subject] ?? ""
@@ -1156,7 +1248,7 @@ final class CreateModel {
   /// plus the prompts. The Random checkbox stays as it is.
   func loadCanvasImageSettings(undoManager: UndoManager?) {
     guard let loaded = canvasImageSettings else { return }
-    restorePrompts(loaded.prompt, loaded.negativePrompt)
+    restorePrompts(loaded.prompt, loaded.negativePrompt, settings: loaded.pasted.dump, model: loaded.pasted.model)
     errorMessage = nil
     statusNote = nil
     paste(loaded.pasted, undoManager: undoManager)
@@ -1196,6 +1288,7 @@ final class CreateModel {
       restored = session
       prompt = session.prompt
       negativePrompt = session.negativePrompt
+      disabledTriggerWords = session.disabledTriggerWords?.mapValues(Set.init) ?? [:]
       if let seed = session.seed { self.seed = seed }
       if let project = session.imageProject,
          session.imageTensorId != nil || session.imageStep != nil
@@ -1326,7 +1419,8 @@ final class CreateModel {
       imageProject: imageStep?.project,
       imageStep: imageStep.flatMap { history.tree.step(tensorId: $0.tensorId) },
       imageTensorId: imageStep?.tensorId,
-      runTarget: runTarget
+      runTarget: runTarget,
+      disabledTriggerWords: disabledTriggerWords.isEmpty ? nil : disabledTriggerWords.mapValues { $0.sorted() }
     ).save()
   }
 
@@ -1353,7 +1447,7 @@ final class CreateModel {
     restoreCount += 1
     if newSeed { rerunUndoManager = undoManager }
     let sidecar = item.sidecar
-    restorePrompts(sidecar.prompt, sidecar.negativePrompt)
+    restorePrompts(sidecar.prompt, sidecar.negativePrompt, settings: sidecar.configuration, model: sidecar.model)
     errorMessage = nil
     if newSeed {
       rollSeed()
@@ -1795,7 +1889,7 @@ final class CreateModel {
     guard let model = selectedModel, let settings else { return nil }
     // Each job snapshots the settings, canvas and moodboard, so edits made after queuing it apply
     // to the next one.
-    let styled = styledPrompts
+    let styled = generationPrompts
     var base = GenerationEngine.Request(
       model: model, prompt: styled.prompt, negativePrompt: styled.negativePrompt, seed: seed,
       configuration: settings)
@@ -3205,7 +3299,7 @@ final class CreateModel {
   /// leaving the model, seed and other settings alone.
   func showWithPrompt(_ item: HistoryItem, undoManager: UndoManager?) {
     let sidecar = item.sidecar
-    restorePrompts(sidecar.prompt, sidecar.negativePrompt)
+    restorePrompts(sidecar.prompt, sidecar.negativePrompt, settings: sidecar.configuration, model: sidecar.model)
     if let descriptor = SettingsRegistry.byID["size"] {
       set(
         descriptor,
@@ -3967,7 +4061,7 @@ extension CreateModel {
   func entryInput(_ reason: HistoryItem.EntryReason) -> HistoryStore.EntryInput? {
     guard history.isLoaded else { return nil }
     let canvas = entryCanvas()
-    let styled = styledPrompts
+    let styled = generationPrompts
     return HistoryStore.EntryInput(
       reason: reason, parent: history.currentTensorId, canvas: canvas.canvas, canvasImage: canvas.image,
       mask: canvas.image != nil ? activeMask : nil, moodboard: moodboard.items, model: selectedModel ?? "",

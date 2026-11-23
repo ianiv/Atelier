@@ -39,7 +39,7 @@ Sources/Atelier/App/PortOwner.swift | PortOwnerTests,PortClaimsTests | --agent-n
 Sources/Atelier/Automation/  | HostTests,AutomationSamplerTests | --generate
 Sources/Atelier/Automation/AutomationAgentNet.swift | AgentAccessTests | --agent-net-check
 Sources/Atelier/Automation/AutomationTestCertificate.swift | AgentAccessTests | --agent-net-check
-Sources/Atelier/Create/      | CanvasDropTests,CanvasPaintTests,CanvasRefineTests,ColorMatchTests,MaskMemoryTests,CanvasUndoTests,MoodboardWriterTests,MoodboardTests,SizePresetTests,MaskMorphologyTests,FrameSelectionTests,FaceFinderTests,CanvasEditTests | --edit-input-check,--refine-check,--paint-check,--color-match-check,--create-delete-check,--canvas-clip-check
+Sources/Atelier/Create/      | CanvasDropTests,CanvasPaintTests,CanvasRefineTests,ColorMatchTests,MaskMemoryTests,CanvasUndoTests,MoodboardWriterTests,MoodboardTests,SizePresetTests,MaskMorphologyTests,FrameSelectionTests,FaceFinderTests,CanvasEditTests,TriggerWordsTests | --edit-input-check,--refine-check,--paint-check,--color-match-check,--create-delete-check,--canvas-clip-check
 Sources/Atelier/Create/AutoMask/ | AutoMaskTests,MaskMemoryTests,SAMFolderTests,FaceFinderTests | --automask-check
 Sources/Atelier/Edit/        | GrainTests,EditPipelineTests,EditRenderCancelTests,EditRenderLaneTests,EditRenderLoopTests,LUTTests,EditJobTests,EditProjectDataTests,EditModelTests | --edit-screen-check,--grain-reference,--edit-render-bench,--edit-ui-bench
 Sources/AtelierTests/Fixtures/grain-parity/ | GrainTests |

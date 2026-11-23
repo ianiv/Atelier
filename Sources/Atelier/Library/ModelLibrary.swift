@@ -153,6 +153,20 @@ final class ModelLibrary {
   /// The models folder each downloaded model's file is in (the first that has it).
   private(set) var folders: [String: URL] = [:]
   private(set) var loras: [LoRA] = []
+  #if os(macOS)
+    /// Lists a LoRA that has no file or custom_lora.json entry, until the next reread: scripted
+    /// checks use one to test what a LoRA's details drive (trigger words) without a download.
+    func listForChecks(_ lora: LoRA) {
+      guard Automation.isRequested else { return }
+      loras.removeAll { $0.file == lora.file }
+      loras.append(lora)
+    }
+
+    func unlistForChecks(_ file: String) {
+      guard Automation.isRequested else { return }
+      loras.removeAll { $0.file == file }
+    }
+  #endif
   private(set) var downloads: [String: Download] = [:]
   /// Downloads started by picking a preset, by model file: the preset applies when they finish.
   private(set) var presetDownloads: [String: PresetDownload] = [:]
@@ -199,6 +213,7 @@ final class ModelLibrary {
 
   init(create: CreateModel) {
     self.create = create
+    create.library = self
     create.onModelsReloaded = { [weak self] in
       guard let self else { return }
       Task { await self.reloadLoRAs() }

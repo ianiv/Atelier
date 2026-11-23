@@ -74,6 +74,8 @@ struct LoRAEditor: View {
   var body: some View {
     let items = items
     let compatible = compatibleFamilies
+    let triggerSources = model.screenTriggerWordSources
+    let prompt = model.styledPrompts.prompt
     VStack(alignment: .leading, spacing: 6) {
       if items.isEmpty {
         Text("No LoRAs").foregroundStyle(.secondary)
@@ -168,6 +170,9 @@ struct LoRAEditor: View {
             .multilineTextAlignment(.trailing)
             .frame(width: 52)
           }
+          if let source = triggerSources.first(where: { $0.file == item.file }) {
+            TriggerWordChips(source: source, prompt: prompt)
+          }
         }
       }
       Button("Add LoRA…", systemImage: "plus") { picking = true }
@@ -198,6 +203,101 @@ struct LoRAEditor: View {
 
   private func name(_ file: String) -> String {
     model.availableLoRAs(in: library).first { $0.file == file }?.name ?? file
+  }
+}
+
+/// A LoRA's trigger words under its row, each a toggle: the ones on go in front of the prompt a run
+/// sends (`CreateModel.generationPrompts`). Disabled where they wouldn't be added: a JSON prompt,
+/// which text in front would break, or a LoRA the engine skips with this model (its row says so).
+struct TriggerWordChips: View {
+  let source: TriggerWords.Source
+  /// The styled prompt, before any words go in.
+  let prompt: String
+  @Environment(CreateModel.self) private var model
+  @Environment(\.undoManager) private var undoManager
+
+  var body: some View {
+    let json = TriggerWords.isJSON(prompt)
+    VStack(alignment: .leading, spacing: 2) {
+      ChipFlow(spacing: 4) {
+        ForEach(source.words, id: \.self) { word in
+          let on = model.isTriggerWordOn(word, of: source.file)
+          Toggle(
+            isOn: Binding(
+              get: { on },
+              set: { model.setTriggerWord(word, of: source.file, on: $0, undoManager: undoManager) })
+          ) {
+            // The checkmark or plus says it's a switch, and which way it's set, beyond the tint.
+            Label(word, systemImage: on ? "checkmark" : "plus")
+          }
+          .toggleStyle(.button)
+          .labelStyle(.titleAndIcon)
+          .controlSize(.small)
+          .help(help(word, on: on))
+          .accessibilityLabel("Trigger word \(word)")
+        }
+      }
+      .disabled(json || !source.applies)
+      if json {
+        Text("Not added to a JSON prompt; put them in the caption.")
+          .font(.caption).foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+  }
+
+  private func help(_ word: String, on: Bool) -> String {
+    if !on { return "Off: “\(word)” isn't added to the prompt. Click to add it." }
+    if TriggerWords.contains(prompt, word: word) { return "On, but the prompt already has “\(word)”, so it isn't added again." }
+    return "On: “\(word)” goes in front of the prompt. Click to leave it out."
+  }
+}
+
+/// Lays chips out in rows, wrapping to the width it's given.
+struct ChipFlow: Layout {
+  var spacing: CGFloat
+
+  func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache _: inout ()) -> CGSize {
+    let rows = rows(width: proposal.width ?? .infinity, subviews: subviews)
+    let width = rows.map(\.width).max() ?? 0
+    let height = rows.map(\.height).reduce(0, +) + spacing * CGFloat(max(rows.count - 1, 0))
+    return CGSize(width: proposal.width.map { min($0, width) } ?? width, height: height)
+  }
+
+  func placeSubviews(in bounds: CGRect, proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()) {
+    var y = bounds.minY
+    for row in rows(width: bounds.width, subviews: subviews) {
+      var x = bounds.minX
+      for index in row.indices {
+        let size = subviews[index].sizeThatFits(.unspecified)
+        subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+        x += size.width + spacing
+      }
+      y += row.height + spacing
+    }
+  }
+
+  private struct Row {
+    var indices: [Int] = []
+    var width: CGFloat = 0
+    var height: CGFloat = 0
+  }
+
+  private func rows(width: CGFloat, subviews: Subviews) -> [Row] {
+    var rows: [Row] = []
+    var row = Row()
+    for index in subviews.indices {
+      let size = subviews[index].sizeThatFits(.unspecified)
+      if !row.indices.isEmpty, row.width + spacing + size.width > width {
+        rows.append(row)
+        row = Row()
+      }
+      row.width += (row.indices.isEmpty ? 0 : spacing) + size.width
+      row.height = max(row.height, size.height)
+      row.indices.append(index)
+    }
+    if !row.indices.isEmpty { rows.append(row) }
+    return rows
   }
 }
 

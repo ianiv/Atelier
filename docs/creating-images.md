@@ -104,7 +104,11 @@ From the same menu:
 
 ### LoRAs
 
-In the LoRAs section, click **Add LoRA…** to pick one. The list only offers LoRAs made for the selected model's family; turn on **Show LoRAs for other models** to see the rest. A LoRA that doesn't match the current model is marked and skipped. Many LoRAs need their trigger words in the prompt; you'll find them in the LoRAs section of the sidebar. A new LoRA starts at weight 1 with a slider from −1.5 to 2.5, unless its entry in `custom_lora.json` gives another weight and range (as Draw Things' LoRA Config Editor script sets them); then it uses those. Click a LoRA's name to pick a different one; its weight is kept unless you hadn't changed it from the old LoRA's default.
+In the LoRAs section, click **Add LoRA…** to pick one. The list only offers LoRAs made for the selected model's family; turn on **Show LoRAs for other models** to see the rest. A LoRA that doesn't match the current model is marked and skipped. A new LoRA starts at weight 1 with a slider from −1.5 to 2.5, unless its entry in `custom_lora.json` gives another weight and range (as Draw Things' LoRA Config Editor script sets them); then it uses those. Click a LoRA's name to pick a different one; its weight is kept unless you hadn't changed it from the old LoRA's default.
+
+Many LoRAs need their trigger words in the prompt. When a LoRA has trigger words (set in the LoRAs section of the sidebar; commas separate them), they're listed under its slider, each a toggle that starts on. Generate puts the ones turned on in front of the prompt, separated by commas, after any [style](styles.md) has written it; the prompt box stays as you typed it. A word the prompt already has isn't added again, and a LoRA that doesn't match the model adds none. A JSON prompt (Ideogram 4's or MOSS Image's layout) gets none either, since text in front would break it; the toggles are dimmed, so put the words in its caption yourself. A FLUX.3 layout prompt gets them in front of its caption. Turning a word on or off can be undone, and the choices are remembered across launches but not saved in presets.
+
+History records the prompt as it was sent, trigger words included. Opening a step's settings again takes them back off the prompt and sets each word's toggle the way that run had it.
 
 ## Presets
 

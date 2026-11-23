@@ -147,7 +147,7 @@ final class AgentTools {
       "name": "get_create_screen",
       "title": "Get Create screen",
       "description":
-        "Returns what's on Atelier's Create screen right now: the selected model, prompt, negative prompt, the selected style (Generate writes the prompt into its template; styled_prompt is the result), seed and whether it's random, the image count, every inspector setting as Draw Things configuration JSON, the settings that differ from the model's defaults, how many reference images there are and `moodboard` (each one's position, id, size, weight and the Picture number a prompt calls it by, as get_moodboard lists them), and `canvas`: the canvas image (its history step and size), the frame (output size), the region of the image it shows (source pixels, from the top left), its zoom and offset, the canvas mode, the mask summary and Merge into Image. The user may have changed any of it since your last call.",
+        "Returns what's on Atelier's Create screen right now: the selected model, prompt, negative prompt, the selected style (Generate writes the prompt into its template; styled_prompt is the result), `trigger_words` (the selected LoRAs' trigger words, each {lora, word, on}: Generate puts the ones turned on in front of the prompt), seed and whether it's random, the image count, every inspector setting as Draw Things configuration JSON, the settings that differ from the model's defaults, how many reference images there are and `moodboard` (each one's position, id, size, weight and the Picture number a prompt calls it by, as get_moodboard lists them), and `canvas`: the canvas image (its history step and size), the frame (output size), the region of the image it shows (source pixels, from the top left), its zoom and offset, the canvas mode, the mask summary and Merge into Image. The user may have changed any of it since your last call.",
       "inputSchema": ["type": "object", "properties": [String: Any]()],
       "annotations": ["readOnlyHint": true],
     ],
@@ -184,6 +184,19 @@ final class AgentTools {
           "count": ["type": "integer", "description": "How many images each press of Generate makes: 1, 2, 3, 4, 6, 8, 12 or 16."],
           "layout_editor": ["type": "boolean", "description": "Open (true) or close (false) the Layout editor, which draws a layout prompt's boxes on the canvas. Only for models that take layout prompts (FLUX.3, Ideogram 4, MOSS Image). While it's open, a new layout prompt moves the boxes on screen."],
           "canvas_mode": ["type": "string", "enum": ["generate", "edit"], "description": "The canvas's Generate / Edit switch: Edit sends the canvas (and its mask) to the model. set_canvas_image switches to Edit."],
+          "trigger_words": [
+            "type": "array",
+            "description": "Turn the selected LoRAs' trigger words on or off (get_create_screen lists them). Generate puts the ones turned on in front of the prompt, except words the prompt already has, JSON prompts (Ideogram 4, MOSS Image layouts) and LoRAs for another model family. Applied after `settings`, so a LoRA added there can be included.",
+            "items": [
+              "type": "object",
+              "properties": [
+                "lora": ["type": "string", "description": "The LoRA's file or name."],
+                "word": ["type": "string"],
+                "on": ["type": "boolean"],
+              ],
+              "required": ["lora", "word", "on"],
+            ],
+          ],
           "merge_into_image": ["type": "boolean", "description": "Merge into Image: an Edit run on part of the image, past its edges or with a mask puts its result back into the whole image (true, the default) instead of saving just the frame."],
         ],
       ],
@@ -675,8 +688,6 @@ final class AgentTools {
     if arguments["use_canvas"] as? Bool == true { return try await generateFromCanvas(arguments, progress: progress) }
     // Without a prompt, use_app_settings generates the Create screen as it is.
     let fromScreen = arguments["use_app_settings"] as? Bool == true && arguments["prompt"] == nil
-    // The screen's prompt as Generate sends it: written into the selected style.
-    let prompt = fromScreen ? create.styledPrompts.prompt : arguments["prompt"] as? String ?? ""
     // An empty prompt is fine, as it is for Generate, but one left out is more likely a mistake.
     guard fromScreen || arguments["prompt"] is String else {
       throw ToolError("`prompt` is required (it can be empty).")
@@ -688,6 +699,12 @@ final class AgentTools {
     let sizeGiven = layered.sizeGiven
     var notes = layered.notes
     let video = VideoModel(model: model, loras: configuration.loras.compactMap(\.file))
+    // The screen's prompt as Generate sends it: written into the selected style, with the trigger
+    // words turned on for the LoRAs this run uses. A prompt the agent gives goes as it is.
+    let screenPrompts = fromScreen
+      ? create.generationPrompts(loras: configuration.loras.compactMap(\.file), model: model, refiner: configuration.refinerModel)
+      : nil
+    let prompt = screenPrompts?.prompt ?? arguments["prompt"] as? String ?? ""
 
     let seed: UInt32
     if let value = Self.int(arguments["seed"]) {
@@ -699,7 +716,7 @@ final class AgentTools {
       seed = UInt32.random(in: 0...UInt32.max)
     }
 
-    let negativePrompt = arguments["negative_prompt"] as? String ?? (fromScreen ? create.styledPrompts.negativePrompt : "")
+    let negativePrompt = arguments["negative_prompt"] as? String ?? screenPrompts?.negativePrompt ?? ""
     var request = GenerationEngine.Request(
       model: model, prompt: prompt, negativePrompt: negativePrompt,
       seed: seed, configuration: configuration)
@@ -1182,6 +1199,7 @@ final class AgentTools {
       "negative_prompt": create.negativePrompt,
       "style": create.style?.name ?? NSNull(),
       "styled_prompt": create.style == nil ? NSNull() : create.styledPrompts.prompt,
+      "trigger_words": triggerWordsState(),
       "style_tags": create.style.map { style in
         Dictionary(uniqueKeysWithValues: style.tags.map { ($0, $0 == Style.subject ? create.prompt : create.styleValues[$0] ?? "") })
       } ?? NSNull(),
@@ -1197,6 +1215,44 @@ final class AgentTools {
       "canvas": canvasState(),
       "busy": create.workUnderway ?? NSNull(),
     ]
+  }
+
+  /// The selected LoRAs' trigger words and whether each is on: what Generate puts in front of the
+  /// prompt (unless the prompt has the word already, it's a JSON prompt, or the LoRA is for another
+  /// model family).
+  private func triggerWordsState() -> [[String: Any]] {
+    create.screenTriggerWordSources.flatMap { source in
+      source.words.map { word -> [String: Any] in
+        ["lora": source.file, "word": word, "on": create.isTriggerWordOn(word, of: source.file)]
+      }
+    }
+  }
+
+  /// set_create_screen's `trigger_words`: each `{lora, word, on}` turns a selected LoRA's word on
+  /// or off. `lora` is the file or the name; a word the LoRA doesn't have is left out with a note.
+  private func setTriggerWords(_ entries: [Any], notes: inout [String]) throws {
+    let sources = create.screenTriggerWordSources
+    let names = Dictionary(
+      (create.library.map(create.availableLoRAs(in:)) ?? []).map { ($0.file, $0.name) }, uniquingKeysWith: { first, _ in first })
+    var changes: [(file: String, word: String, on: Bool)] = []
+    for entry in entries {
+      guard let entry = entry as? [String: Any], let lora = entry["lora"] as? String, let word = entry["word"] as? String,
+            let on = entry["on"] as? Bool
+      else { throw ToolError("Each `trigger_words` entry is {\"lora\": file or name, \"word\": text, \"on\": true or false}.") }
+      guard
+        let source = sources.first(where: { $0.file == lora })
+          ?? sources.first(where: { names[$0.file]?.caseInsensitiveCompare(lora) == .orderedSame })
+      else {
+        notes.append("\(lora) isn't a selected LoRA with trigger words, so its “\(word)” was ignored.")
+        continue
+      }
+      guard let match = source.words.first(where: { $0.caseInsensitiveCompare(word) == .orderedSame }) else {
+        notes.append("\(source.file) has no trigger word “\(word)” (it has \(source.words.joined(separator: ", "))).")
+        continue
+      }
+      changes.append((source.file, match, on))
+    }
+    Self.asOneUndoStep { create.setTriggerWords(changes, undoManager: $0, actionName: "Agent Trigger Words") }
   }
 
   private func setCreateScreen(_ arguments: [String: Any]) async throws -> [String: Any] {
@@ -1284,6 +1340,10 @@ final class AgentTools {
       }
     }
 
+    if let entries = arguments["trigger_words"] {
+      guard let entries = entries as? [Any] else { throw ToolError("`trigger_words` is an array of {lora, word, on}.") }
+      try setTriggerWords(entries, notes: &notes)
+    }
     if let prompt = arguments["prompt"] as? String {
       // With the Layout editor open, the boxes glide to the new layout instead of jumping.
       withAnimation(create.layout == nil ? nil : .smooth(duration: 0.8)) { create.prompt = prompt }
