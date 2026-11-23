@@ -19,6 +19,10 @@ Planned work that isn't built yet. Items marked **User request** or **User-repor
   - **Keep original texture:** the model's low band (light, colour, mood) under the original's high band, so pores, grain, hair and sharpness survive the VAE round trip, with less identity drift.
   - **Keep original color:** the original's low band under the model's high band, for refine / add-detail passes: new detail without colour or exposure drift (what Match Colors… corrects today, more exactly).
 
+## Accessibility
+
+- **Turn off the playing video preview.** **User request.** While a video generates, the canvas plays the run's step preview as a fast loop (`FlipBook` over `canvasPreviewFrames` in `CreateView`, at the model's frame rate). The frames are only a few rough latent-frame previews, which change completely every step, so they flicker and flash, and that can be harmful to people sensitive to fast motion or flashing images. Add a setting (Settings ▸ General, e.g. **Play Video Previews**) that, when off, shows the preview's first frame as a still image instead (as image runs do), and also follow the system's Reduce Motion (`accessibilityReduceMotion`) as its default. The status bar's preview thumbnail already shows a still (`livePreview`). Finished clips are unaffected: they don't autoplay on the canvas.
+
 ## Samplers
 
 - **DPM++ 2M Trailing breaks on MiniMax H3 Image.** At 768 px, 8 steps (seed 1234, 2026-11-21), the result shows smeared mosaic bricks; DDIM Trailing and DPM++ 2M Karras are fine. Check whether 0.19.0 (before the Scheduler work, 5d91b6f) does the same, then find the cause (likely its schedule vs the trained sigma grid, as with LCM).
