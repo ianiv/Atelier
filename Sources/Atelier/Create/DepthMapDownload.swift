@@ -158,8 +158,14 @@ struct DepthModelSheet: View {
         .disabled(download.isFinishing)
         Button(download.isInstalled ? "Extract" : "Download and Extract") {
           note = nil
-          if download.isInstalled { return finished(stopped: false) }
-          download.start { stopped in finished(stopped: stopped) }
+          if download.isInstalled {
+            note = Self.finished(model: model, item: item, project: project, installed: true, stopped: false)
+            return
+          }
+          // What the download's end needs, captured now: it may come after this view is gone.
+          download.start { [model, item, project, note = $note, download] stopped in
+            note.wrappedValue = Self.finished(model: model, item: item, project: project, installed: download.isInstalled, stopped: stopped)
+          }
         }
         .keyboardShortcut(.defaultAction)
         .disabled(download.isDownloading || (!download.isInstalled && download.destination == nil))
@@ -171,12 +177,16 @@ struct DepthModelSheet: View {
     .onAppear { download.refresh() }
   }
 
-  /// Queues the depth map once the model is in, unless the download was stopped, the sheet moved
-  /// on to another image, or the open project isn't the image's any more (its step ids would name
-  /// another project's steps).
-  private func finished(stopped: Bool) {
+  /// Queues the depth map of `item`, a step of `project`, once the model is in, unless the
+  /// download was stopped, the sheet moved on to another image, or the open project isn't the
+  /// image's any more (its step ids would name another project's steps). Returns the note to show
+  /// when it didn't queue for that last reason. Static, on what it's handed, so a download ending
+  /// after the sheet closed reads no view.
+  @MainActor private static func finished(
+    model: CreateModel, item: HistoryItem, project: String, installed: Bool, stopped: Bool
+  ) -> String? {
     switch DepthModelDownload.outcome(
-      stopped: stopped, installed: download.isInstalled, sheetTensorId: model.depthModelSheetItem?.tensorId,
+      stopped: stopped, installed: installed, sheetTensorId: model.depthModelSheetItem?.tensorId,
       tensorId: item.tensorId, openProject: model.history.project.name, project: project)
     {
     case .queue:
@@ -186,10 +196,11 @@ struct DepthModelSheet: View {
         model.errorMessage = error.localizedDescription
       }
       model.depthModelSheetItem = nil
+      return nil
     case .projectChanged:
-      note = "Another project is open now, so the depth map wasn't made. The model is in: choose Extract Depth Map again."
+      return "Another project is open now, so the depth map wasn't made. The model is in: choose Extract Depth Map again."
     case .nothing:
-      break
+      return nil
     }
   }
 }
