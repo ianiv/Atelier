@@ -198,6 +198,39 @@ struct CropTests {
     #expect(!drag.pinched && !drag.isDragging)
   }
 
+  /// A touch cancelled with no `onEnded` (a system interruption) leaves nothing set: the pane's
+  /// `moving` going back calls `reset`, and the next touch crops.
+  @MainActor @Test func aCancelledGestureResets() {
+    let viewport = EditViewport(imageWidth: 1000, imageHeight: 800, viewSize: CGSize(width: 500, height: 400), displayScale: 1)
+    let crop = Edit.Crop(x: 100, y: 100, width: 400, height: 300)
+    let drag = CropDrag()
+    let corner = CGPoint(x: viewport.viewRect(crop.rect).maxX, y: viewport.viewRect(crop.rect).maxY)
+    _ = drag.dragChanged(translation: CGSize(width: 10, height: 0))
+    drag.changed(from: corner, to: CGPoint(x: corner.x + 10, y: corner.y), crop: crop, image: (1000, 800), viewport: viewport)
+    drag.pinchChanged()
+    _ = drag.dragChanged(translation: CGSize(width: 40, height: 0))
+    // Cancelled: neither gesture's onEnded comes.
+    drag.reset()
+    #expect(!drag.dragActive && !drag.pinchActive && !drag.pinched && !drag.isDragging && drag.draft == nil && drag.pinchPan == .zero)
+    #expect(drag.pinchZoom == nil)
+    #expect(drag.dragChanged(translation: CGSize(width: 10, height: 0)))
+    drag.changed(from: corner, to: CGPoint(x: corner.x + 10, y: corner.y), crop: crop, image: (1000, 800), viewport: viewport)
+    #expect(drag.dragEnded(crop: crop, image: (1000, 800)) != nil)
+  }
+
+  /// Original of 4000×3072 (125:96, no whole multiple under 64) follows the width pixel by pixel,
+  /// not in 125 px steps.
+  @Test func originalOfALargeRatioTakesFineSteps() {
+    let parts = Edit.CropAspect.original.wholeParts(imageWidth: 4000, imageHeight: 3072, swapped: false)
+    #expect(parts == (125, 96))
+    for width in [1000.0, 1001, 1050, 1099] {
+      let crop = Edit.Crop(
+        rect: CGRect(x: 0, y: 0, width: width, height: width * 3072 / 4000), imageWidth: 4000, imageHeight: 3072, aspect: .original)
+      #expect(crop?.width == Int(width), "\(width)")
+      #expect(crop.map { abs(Double($0.height) - width * 3072 / 4000) <= 0.5 } == true, "\(width)")
+    }
+  }
+
   @Test func heldCropOfTheWholeImageAndOfACrop() {
     let square = EditModel.held(nil, to: .square, swapped: false, width: 1200, height: 900)
     #expect(square == Edit.Crop(x: 150, y: 0, width: 900, height: 900, aspect: .square))

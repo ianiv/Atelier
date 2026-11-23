@@ -134,6 +134,16 @@ final class CropDrag {
     start = nil
     draft = nil
   }
+
+  /// The pane's gestures are over, ended or cancelled: SwiftUI calls no `onEnded` for a cancelled
+  /// gesture (a system interruption, the pane going away mid-touch), so the pane calls this when
+  /// its `moving` state goes back, and nothing is left set for the next touch.
+  func reset() {
+    cancel()
+    dragActive = false
+    pinchActive = false
+    endTouch()
+  }
 }
 
 /// The Crop tool's drawing over the whole image: outside the crop dimmed, its border, eight

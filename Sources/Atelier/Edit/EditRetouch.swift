@@ -37,8 +37,8 @@ extension Edit {
     ///
     /// Held to a ratio (`aspect`), the size is made exact rather than each side rounded on its
     /// own (which gave 801×1001 for 4:5): a whole multiple of the ratio's parts when they're small
-    /// enough to have one in the image (every preset, and Original of most images), else the width
-    /// rounded and the height from it. `anchor` is the part of `rect` that stays put while the
+    /// (every preset, and Original of an image whose sides reduce to 64 or less), else the width
+    /// rounded and the height from it, so a large Original ratio doesn't move in coarse steps. `anchor` is the part of `rect` that stays put while the
     /// size settles (0 its left or top, 1 its right or bottom): the corner opposite a dragged one,
     /// the centre for a ratio chosen.
     init?(
@@ -79,7 +79,7 @@ extension Edit {
       let wanted = width.isFinite ? min(max(width, 0), Double(imageWidth)) : Double(imageWidth)
       let most = min(imageWidth / pw, imageHeight / ph)
       let least = (minimumSide + min(pw, ph) - 1) / min(pw, ph)
-      if most >= least, max(pw, ph) <= 64 || most >= 16 {
+      if most >= least, max(pw, ph) <= 64 {
         // Whole multiples: the ratio exactly.
         let k = min(max(Int((wanted / Double(pw)).rounded()), least), most)
         return (k * pw, k * ph)

@@ -641,7 +641,18 @@ private struct EditPane: View {
         .onChange(of: viewport.fitScale, initial: true) { canvas.fitScale = viewport.fitScale }
         .onChange(of: viewport.fillScale, initial: true) { canvas.fillScale = viewport.fillScale }
         .onChange(of: targets, initial: true) { _, targets in schedule(targets) }
-        .onChange(of: moving) { _, moving in edit.isMovingView = moving }
+        .onChange(of: moving) { _, moving in
+          edit.isMovingView = moving
+          // Ended or cancelled (no `onEnded` for a cancelled gesture): nothing stays set. On the
+          // next turn, so a gesture that did end commits its crop in `onEnded` first.
+          if !moving {
+            Task { @MainActor in
+              guard !edit.isMovingView else { return }
+              cropDrag.reset()
+              gestureStart = nil
+            }
+          }
+        }
         // The gesture's end: the view as it's left.
         .onChange(of: edit.isMovingView) { _, moving in if !moving { schedule(targets) } }
         // Back after going away (which cancelled its lanes) with the same keys: onChange won't
@@ -665,6 +676,8 @@ private struct EditPane: View {
     .onChange(of: renders.window.isBusy, initial: true) { _, busy in mark(.window, busy) }
     .onDisappear {
       if moving { edit.isMovingView = false }
+      cropDrag.reset()
+      gestureStart = nil
       renders.cancel()
       originalWindow.cancel()
       edit.endRenders(pane: paneID)
