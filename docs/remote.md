@@ -37,6 +37,8 @@ If the connection drops or you quit, the job carries on at the server. Atelier p
 
 A [Scheduler](creating-images.md#scheduler) other than Sampler's Own needs a server whose Atelier lists the "scheduler" feature; an older server refuses the job and says so, rather than run it on the sampler's own schedule. The same goes for the [ComfyUI samplers](creating-images.md#comfyui-samplers) (the "comfy-samplers" feature), which an older server would run as DPM++ 2M Karras.
 
+A [reference video](video.md#reference-video-minimax-h3-ref2va) needs a server whose Atelier lists the "reference-video" feature: with an older one Generate stays off while the clip is the reference, and a job sent anyway is refused rather than run without the clip. Its frames are sent as images, one per frame of the new video (a held frame only once), so a long clip takes a while to upload.
+
 Inpainting with a mask needs a server whose Atelier lists the "mask" feature, which means an Atelier at least as new as this one. With an older server the Brush and Eraser are disabled, and Generate stays off while a mask is painted inside the frame; Clear Mask and Invert Mask still work.
 
 Upscale and Export use what's on the server: FlashVSR+ or ReCaVSR has to be downloaded there (and ReCaVSR's 8-bit copy made or imported there, for 8-bit; a server with only an imported copy offers 8-bit alone), and this device doesn't need it. An iPad server never offers ReCaVSR, since it doesn't run on iPad, and a server running an Atelier from before ReCaVSR doesn't offer it either; an iPad uses ReCaVSR only through a Mac that has it. The server holds all of an upscale's frames in memory at once, so very long timelines need a server with memory to spare.

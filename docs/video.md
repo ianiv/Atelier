@@ -8,7 +8,7 @@ Pick a video model in Create and the same screen makes videos: the prompt, inspe
 | --- | --- | --- |
 | LTX-2, LTX-2.3 | The prompt; in Edit mode, the canvas as the first frame | Makes its own soundtrack |
 | MiniMax H3 (FL2VA) | The canvas as the first frame and the first moodboard image as the last (with an empty canvas, the first two moodboard images) | Makes its own soundtrack |
-| MiniMax H3 (Ref2VA), FastH3 Omni | The canvas and moodboard images as references, and an audio file | Makes its own soundtrack, following the audio you give it |
+| MiniMax H3 (Ref2VA), FastH3 Omni | The canvas and moodboard images as references, a clip from History as a [reference video](#reference-video-minimax-h3-ref2va), and an audio file | Makes its own soundtrack, following the audio you give it |
 | Wan 2.1, Wan 2.2, SkyReels, Hunyuan Video | The prompt (T2V models); the canvas as the first frame (I2V models) | None |
 | Stable Video Diffusion | An image to animate | None |
 | LongCat Video Avatar | An image and a voice to lip-sync to | Keeps the voice you give it |
@@ -55,6 +55,16 @@ MiniMax H3 models (including FastH3 Omni and HyperFlow H3 Flash) always decode i
 - **First frame.** With a model that takes one, put an image on the canvas and switch to **Edit**, as you would to edit an image. The video starts from what's inside the frame.
 - **Last frame (MiniMax H3 FL2VA).** The moodboard column is titled **Last Frame**: the first image on it is where the video ends. With nothing on the canvas, or in Generate mode (which leaves the canvas out), it's titled **First & Last Frame**: its first image is where the video starts and its second where it ends (one image alone is only the start).
 - **References (MiniMax H3 Ref2VA).** The column is titled **References**, and each image says which picture it is. In Edit mode the canvas is Picture 1 and the moodboard images follow. Refer to them in the prompt as `<Picture 1>`, `<Picture 2>` and so on. The distilled Ref2VA models (FastH3 Omni, Pika H3 Flex and HyperFlow H3 Flash Ref2VA) need at least one reference image, referred to in the prompt; without one they don't make a video.
+
+## Reference video (MiniMax H3 Ref2VA)
+
+MiniMax H3 Ref2VA models (FastH3 Omni and HyperFlow H3 Flash Ref2VA too) can follow a clip, its motion, camera or performance, as well as pictures. Open a video from History so it plays on the canvas, and switch to **Edit**: the canvas's badge says **Video 1**, and the clip is the reference video. Refer to it in the prompt as `<Video 1>`. The moodboard images are then Picture 1, Picture 2 and so on, since the canvas holds no picture.
+
+- The clip is read from its start at the model's frame rate (24 fps for H3), one frame for each frame of the new video. A clip shorter than the new video holds its last frame; a longer one is cut off. Each frame is scaled to fill the frame on the canvas and cropped about its center, so a clip of another shape loses its edges.
+- The new video is made from noise, with the clip only as its reference: **Strength** must be 100%, and **Length** at least 22 frames.
+- It can't go with an audio file. With one in the **Audio** box, or with the Strength or Length above, Generate is disabled and the status bar (and the badge, in orange) says why.
+- The new video follows the clip in History, but isn't recorded as made from it: **Use Settings** brings back its prompt and settings, not the clip.
+- The queue keeps which clip, not its frames: they're read when the job starts, so a clip deleted while the job waits stops it with a message.
 
 ## Audio
 
@@ -153,7 +163,7 @@ To upscale a video from outside Atelier, drop its file on the Create canvas. The
 
 ## On another device
 
-Videos, upscales and exports can run on a [paired server](remote.md), chosen with **Run on** in the inspector. A video sends its reference images and audio file and brings back every frame, the soundtrack and the frame rate, and is saved like one made here. **Upscale…** uses the server's FlashVSR+, ReCaVSR or Apple Super Resolution rather than this device's: a clip made on that server doesn't need its frames sent back while the server still has them, for up to 7 days. **Export Video…** with an upscale sends the frames there and encodes the file on this device. Upscales and exports aren't picked up again after a quit.
+Videos, upscales and exports can run on a [paired server](remote.md), chosen with **Run on** in the inspector. A video sends its reference images, reference video (its frames, as prepared here) and audio file and brings back every frame, the soundtrack and the frame rate, and is saved like one made here. **Upscale…** uses the server's FlashVSR+, ReCaVSR or Apple Super Resolution rather than this device's: a clip made on that server doesn't need its frames sent back while the server still has them, for up to 7 days. **Export Video…** with an upscale sends the frames there and encodes the file on this device. Upscales and exports aren't picked up again after a quit.
 
 ## Files
 
