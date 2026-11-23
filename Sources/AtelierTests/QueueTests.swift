@@ -90,6 +90,20 @@ struct SavedQueueTests {
     }
   }
 
+  /// A reference video's clip is a step of the project it was queued in: elsewhere the job would
+  /// run without it, so it's dropped. A queue saved before reference videos reads as before.
+  @Test func aReferenceVideoOnlyComesBackInItsOwnProject() throws {
+    try withTestFolder { folder in
+      let withReference = entry().replacingOccurrences(of: #""moodboardWeights":[]"#, with: #""moodboardWeights":[],"referenceTensorId":42"#)
+      #expect(withReference.contains("referenceTensorId"))
+      try write([withReference, entry()], to: folder)
+      #expect(SavedQueue.load(project: "Other", from: folder).count == 1, "only the job without one")
+      try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+      try write([withReference, entry()], to: folder)
+      #expect(SavedQueue.load(project: "P", from: folder).count == 2)
+    }
+  }
+
   /// A Match Colors to Original job names its own project, so it comes back whichever project is
   /// open, with its step, options and the step after which it saves.
   @Test func aColorMatchComesBackInAnyProject() throws {

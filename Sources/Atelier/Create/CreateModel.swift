@@ -316,6 +316,10 @@ final class CreateModel {
       }
       request.moodboard = clientJobs.moodboard(of: record)
       request.placement = sameProject ? record.placement : nil
+      // Its frames are at the server already: this only says the job had one.
+      request.referenceVideo = record.referenceTensorId.map {
+        ReferenceVideo(sourceTensorId: sameProject ? $0 : nil, project: sameProject ? record.project : nil)
+      }
       queue.appendResumed(request, id: record.jobID, server: record.serverID)
     }
     runNext()
