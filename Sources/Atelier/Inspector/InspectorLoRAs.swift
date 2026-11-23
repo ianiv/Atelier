@@ -221,11 +221,11 @@ struct TriggerWordChips: View {
     VStack(alignment: .leading, spacing: 2) {
       ChipFlow(spacing: 4) {
         ForEach(source.words, id: \.self) { word in
-          let on = model.isTriggerWordOn(word, of: source.file)
+          let on = model.isTriggerWordOn(word, of: source)
           Toggle(
             isOn: Binding(
               get: { on },
-              set: { model.setTriggerWord(word, of: source.file, on: $0, undoManager: undoManager) })
+              set: { model.setTriggerWord(word, of: source, on: $0, undoManager: undoManager) })
           ) {
             // The checkmark or plus says it's a switch, and which way it's set, beyond the tint.
             Label(word, systemImage: on ? "checkmark" : "plus")

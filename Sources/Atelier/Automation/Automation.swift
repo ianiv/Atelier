@@ -1156,8 +1156,8 @@ enum Automation {
   /// LoRA entry for another as the LoRA row's picker does (order, mode, weight rule, one undo step
   /// named "Change LoRAs"; SKIP without two compatible downloaded LoRAs). It also checks trigger
   /// words with a LoRA listed for the run only (no file; SKIP when the model's family has no
-  /// `ModelVersion`): its prefix's words go in front of the generation prompt and `screenRequest`,
-  /// turning one off leaves it out (one undo step), a JSON prompt gets none, and restoring a saved
+  /// `ModelVersion`): only its prefix's first word starts on, in front of the generation prompt and
+  /// `screenRequest`, turning the second on adds it (one undo step), a JSON prompt gets none, and restoring a saved
   /// prompt takes them back off into the toggles. Snapshots trigger-words.png and trigger-words-off.png show the chips.
   /// The second form, run after a relaunch, checks the custom layout was restored.
   private static func inspectorCheck(
@@ -1363,43 +1363,44 @@ enum Automation {
             ModelLibrary.LoRA(
               name: "Trigger Check", file: file, prefix: "tcheckword, Second Word", version: version, size: 1,
               registry: URL(filePath: "/"), weight: nil))
-          let styleBefore = model.styleID, promptBefore = model.prompt, disabledBefore = model.disabledTriggerWords
+          let styleBefore = model.styleID, promptBefore = model.prompt, choicesBefore = model.triggerWordChoices
           model.styleID = nil
-          model.disabledTriggerWords = [:]
+          model.triggerWordChoices = [:]
           model.prompt = "a lighthouse"
           model.set(lorasSetting, to: .array([.object(["file": .string(file), "weight": .number(1), "mode": .string("all")])]), undoManager: nil)
           let sources = model.screenTriggerWordSources
           check(sources == [TriggerWords.Source(file: file, words: ["tcheckword", "Second Word"], applies: true)], "the LoRA's prefix gives its trigger words (\(sources))")
-          check(model.generationPrompts.prompt == "tcheckword, Second Word, a lighthouse", "trigger words go in front of the prompt (“\(model.generationPrompts.prompt)”)")
+          guard let source = sources.first else { return finish() }
+          check(model.generationPrompts.prompt == "tcheckword, a lighthouse", "only the first trigger word starts on, in front of the prompt (“\(model.generationPrompts.prompt)”)")
           check(model.screenRequest()?.prompt == model.generationPrompts.prompt, "Generate's request sends that prompt")
           check(model.prompt == "a lighthouse", "the prompt box stays as typed")
-          await shot("trigger-words.png")
+          await shot("trigger-words-off.png")
           let wordUndo = UndoManager()
           wordUndo.groupsByEvent = false
           wordUndo.beginUndoGrouping()
-          model.setTriggerWord("Second Word", of: file, on: false, undoManager: wordUndo)
+          model.setTriggerWord("Second Word", of: source, on: true, undoManager: wordUndo)
           wordUndo.endUndoGrouping()
-          check(model.generationPrompts.prompt == "tcheckword, a lighthouse", "a word turned off is left out (“\(model.generationPrompts.prompt)”)")
-          check(wordUndo.undoActionName == "Turn Off Trigger Word", "its undo action is named “\(wordUndo.undoActionName)”")
+          check(model.generationPrompts.prompt == "tcheckword, Second Word, a lighthouse", "a word turned on is added (“\(model.generationPrompts.prompt)”)")
+          check(wordUndo.undoActionName == "Turn On Trigger Word", "its undo action is named “\(wordUndo.undoActionName)”")
           wordUndo.undo()
-          check(model.isTriggerWordOn("Second Word", of: file), "undo turned it back on")
+          check(!model.isTriggerWordOn("Second Word", of: source) && model.triggerWordChoices.isEmpty, "undo turned it back off, to the default")
           wordUndo.redo()
-          check(!model.isTriggerWordOn("Second Word", of: file), "redo turned it off again")
-          await shot("trigger-words-off.png")
+          check(model.isTriggerWordOn("Second Word", of: source), "redo turned it on again")
+          await shot("trigger-words.png")
           model.prompt = "Tcheckword on a cliff"
-          check(model.generationPrompts.prompt == "Tcheckword on a cliff", "a word the prompt already has isn't added again")
+          check(model.generationPrompts.prompt == "Second Word, Tcheckword on a cliff", "a word the prompt already has isn't added again (“\(model.generationPrompts.prompt)”)")
           model.prompt = "{\"caption\": \"a lighthouse\"}"
           check(model.generationPrompts.prompt == model.prompt, "a JSON prompt gets no trigger words")
-          // Restoring a saved step: the words come back off, into the toggles.
-          model.disabledTriggerWords = [:]
+          // Restoring a saved step: the words come back off, into the toggles, even against the default.
+          model.triggerWordChoices = [:]
           let dump = JSONValue.fields(of: model.settings!)
-          model.restorePrompts("tcheckword, a harbor", "", settings: dump, model: model.selectedModel)
+          model.restorePrompts("Second Word, a harbor", "", settings: dump, model: model.selectedModel)
           check(model.prompt == "a harbor", "restoring takes the words off the prompt (“\(model.prompt)”)")
-          check(model.isTriggerWordOn("tcheckword", of: file) && !model.isTriggerWordOn("Second Word", of: file), "and sets the toggles as the run had them")
-          check(model.generationPrompts.prompt == "tcheckword, a harbor", "so running it again sends the same prompt")
+          check(!model.isTriggerWordOn("tcheckword", of: source) && model.isTriggerWordOn("Second Word", of: source), "and sets the toggles as the run had them")
+          check(model.generationPrompts.prompt == "Second Word, a harbor", "so running it again sends the same prompt")
           library.unlistForChecks(file)
           check(model.screenTriggerWordSources.isEmpty, "a LoRA the library doesn't list has no trigger words")
-          model.disabledTriggerWords = disabledBefore
+          model.triggerWordChoices = choicesBefore
           model.prompt = promptBefore
           model.styleID = styleBefore
           model.resetToModelDefaults(undoManager: nil)

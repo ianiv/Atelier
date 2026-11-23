@@ -16,9 +16,9 @@ nonisolated struct SessionState: Codable {
   var imageTensorId: Int64?
   /// Where new jobs were set to run (Run on); nil in sessions saved before there was a choice.
   var runTarget: JobTarget?
-  /// The trigger words turned off, by LoRA file (`CreateModel.disabledTriggerWords`); nil in
-  /// sessions saved before there were any, which still decode.
-  var disabledTriggerWords: [String: [String]]?
+  /// The trigger words turned on, by LoRA file, for LoRAs whose words were set
+  /// (`CreateModel.triggerWordChoices`); nil in sessions saved before there were any, which still decode.
+  var triggerWordChoices: [String: [String]]?
 
   private static let key = "sessionState"
   static var isEnabled: Bool { !Automation.isRequested }

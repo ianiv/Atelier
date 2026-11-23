@@ -88,9 +88,10 @@ final class CreateModel {
   /// the library holds this model too.
   @ObservationIgnored weak var library: ModelLibrary?
 
-  /// The trigger words turned off, by LoRA file, lowercased. A word is on unless it's here, so a
-  /// LoRA's words start on. Kept in `SessionState`, not in presets: they're about the prompt.
-  var disabledTriggerWords: [String: Set<String>] = [:]
+  /// The trigger words turned on, lowercased, for each LoRA file whose words have been set (by the
+  /// user, an agent or restoring a step). A LoRA not here has just its first word on
+  /// (`TriggerWords.enabled`). Kept in `SessionState`, not in presets: they're about the prompt.
+  var triggerWordChoices: [String: Set<String>] = [:]
 
   /// Each of `loras`' trigger words (`TriggerWords`), with whether the engine applies the LoRA
   /// with `model` and `refiner` (files), as the LoRA editor's warning tells it
@@ -114,25 +115,26 @@ final class CreateModel {
   }
 
   /// Turns one trigger word on or off, as one undo step.
-  func setTriggerWord(_ word: String, of file: String, on: Bool, undoManager: UndoManager?) {
-    setTriggerWords([(file, word, on)], undoManager: undoManager, actionName: on ? "Turn On Trigger Word" : "Turn Off Trigger Word")
+  func setTriggerWord(_ word: String, of source: TriggerWords.Source, on: Bool, undoManager: UndoManager?) {
+    setTriggerWords([(source, word, on)], undoManager: undoManager, actionName: on ? "Turn On Trigger Word" : "Turn Off Trigger Word")
   }
 
   /// Turns trigger words on or off together, as one undo step (an agent's set_create_screen).
-  func setTriggerWords(_ changes: [(file: String, word: String, on: Bool)], undoManager: UndoManager?, actionName: String) {
-    let before = disabledTriggerWords
+  func setTriggerWords(_ changes: [(source: TriggerWords.Source, word: String, on: Bool)], undoManager: UndoManager?, actionName: String) {
+    let before = triggerWordChoices
     for change in changes {
-      var words = disabledTriggerWords[change.file] ?? []
-      if change.on { words.remove(change.word.lowercased()) } else { words.insert(change.word.lowercased()) }
-      disabledTriggerWords[change.file] = words.isEmpty ? nil : words
+      // The first change to a LoRA starts from its default, which becomes explicit.
+      var words = TriggerWords.enabled(change.source, choices: triggerWordChoices)
+      if change.on { words.insert(change.word.lowercased()) } else { words.remove(change.word.lowercased()) }
+      triggerWordChoices[change.source.file] = words
     }
-    guard disabledTriggerWords != before else { return }
+    guard triggerWordChoices != before else { return }
     registerTriggerWordsUndo(restoring: before, undoManager, actionName: actionName)
   }
 
-  /// Whether a trigger word of `file` is on.
-  func isTriggerWordOn(_ word: String, of file: String) -> Bool {
-    !(disabledTriggerWords[file]?.contains(word.lowercased()) ?? false)
+  /// Whether a trigger word of `source` is on.
+  func isTriggerWordOn(_ word: String, of source: TriggerWords.Source) -> Bool {
+    TriggerWords.isOn(word, of: source, choices: triggerWordChoices)
   }
 
   /// Undo puts `snapshot` back, and registers the redo the same way.
@@ -140,8 +142,8 @@ final class CreateModel {
     guard let undoManager else { return }
     undoManager.registerUndo(withTarget: self) { target in
       MainActor.assumeIsolated {
-        target.registerTriggerWordsUndo(restoring: target.disabledTriggerWords, undoManager, actionName: actionName)
-        target.disabledTriggerWords = snapshot
+        target.registerTriggerWordsUndo(restoring: target.triggerWordChoices, undoManager, actionName: actionName)
+        target.triggerWordChoices = snapshot
       }
     }
     undoManager.setActionName(actionName)
@@ -922,7 +924,7 @@ final class CreateModel {
     let sources = triggerWordSources(loras: loras, model: model, refiner: refiner)
     let format = LayoutPrompt.Format(version: model.flatMap { file in availableModels.first { $0.file == file }?.version })
     return (
-      TriggerWords.prompt(styled.prompt, sources: sources, disabled: disabledTriggerWords, format: format),
+      TriggerWords.prompt(styled.prompt, sources: sources, choices: triggerWordChoices, format: format),
       styled.negativePrompt
     )
   }
@@ -963,7 +965,7 @@ final class CreateModel {
     let format = LayoutPrompt.Format(version: model.flatMap { file in availableModels.first { $0.file == file }?.version })
     let stripped = TriggerWords.strip(
       savedPrompt, sources: triggerWordSources(loras: loras, model: model, refiner: refiner), format: format)
-    for (file, words) in stripped.disabled { disabledTriggerWords[file] = words.isEmpty ? nil : words }
+    for (file, words) in stripped.choices { triggerWordChoices[file] = words }
     let savedPrompt = stripped.prompt
     for style in (styles?.allStyles ?? []) + remoteStyles.all.map(\.style) {
       if let matched = style.match(prompt: savedPrompt, negativePrompt: savedNegative) {
@@ -1294,7 +1296,7 @@ final class CreateModel {
       restored = session
       prompt = session.prompt
       negativePrompt = session.negativePrompt
-      disabledTriggerWords = session.disabledTriggerWords?.mapValues(Set.init) ?? [:]
+      triggerWordChoices = session.triggerWordChoices?.mapValues(Set.init) ?? [:]
       if let seed = session.seed { self.seed = seed }
       if let project = session.imageProject,
          session.imageTensorId != nil || session.imageStep != nil
@@ -1426,7 +1428,7 @@ final class CreateModel {
       imageStep: imageStep.flatMap { history.tree.step(tensorId: $0.tensorId) },
       imageTensorId: imageStep?.tensorId,
       runTarget: runTarget,
-      disabledTriggerWords: disabledTriggerWords.isEmpty ? nil : disabledTriggerWords.mapValues { $0.sorted() }
+      triggerWordChoices: triggerWordChoices.isEmpty ? nil : triggerWordChoices.mapValues { $0.sorted() }
     ).save()
   }
 

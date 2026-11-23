@@ -147,7 +147,7 @@ final class AgentTools {
       "name": "get_create_screen",
       "title": "Get Create screen",
       "description":
-        "Returns what's on Atelier's Create screen right now: the selected model, prompt, negative prompt, the selected style (Generate writes the prompt into its template; styled_prompt is the result), `trigger_words` (the selected LoRAs' trigger words, each {lora, word, on}: Generate puts the ones turned on in front of the prompt), seed and whether it's random, the image count, every inspector setting as Draw Things configuration JSON, the settings that differ from the model's defaults, how many reference images there are and `moodboard` (each one's position, id, size, weight and the Picture number a prompt calls it by, as get_moodboard lists them), and `canvas`: the canvas image (its history step and size), the frame (output size), the region of the image it shows (source pixels, from the top left), its zoom and offset, the canvas mode, the mask summary and Merge into Image. The user may have changed any of it since your last call.",
+        "Returns what's on Atelier's Create screen right now: the selected model, prompt, negative prompt, the selected style (Generate writes the prompt into its template; styled_prompt is the result), `trigger_words` (the selected LoRAs' trigger words, each {lora, word, on}: Generate puts the ones turned on in front of the prompt; until changed, only each LoRA's first word is on), seed and whether it's random, the image count, every inspector setting as Draw Things configuration JSON, the settings that differ from the model's defaults, how many reference images there are and `moodboard` (each one's position, id, size, weight and the Picture number a prompt calls it by, as get_moodboard lists them), and `canvas`: the canvas image (its history step and size), the frame (output size), the region of the image it shows (source pixels, from the top left), its zoom and offset, the canvas mode, the mask summary and Merge into Image. The user may have changed any of it since your last call.",
       "inputSchema": ["type": "object", "properties": [String: Any]()],
       "annotations": ["readOnlyHint": true],
     ],
@@ -1223,7 +1223,7 @@ final class AgentTools {
   private func triggerWordsState() -> [[String: Any]] {
     create.screenTriggerWordSources.flatMap { source in
       source.words.map { word -> [String: Any] in
-        ["lora": source.file, "word": word, "on": create.isTriggerWordOn(word, of: source.file)]
+        ["lora": source.file, "word": word, "on": create.isTriggerWordOn(word, of: source)]
       }
     }
   }
@@ -1234,7 +1234,7 @@ final class AgentTools {
     let sources = create.screenTriggerWordSources
     let names = Dictionary(
       (create.library.map(create.availableLoRAs(in:)) ?? []).map { ($0.file, $0.name) }, uniquingKeysWith: { first, _ in first })
-    var changes: [(file: String, word: String, on: Bool)] = []
+    var changes: [(source: TriggerWords.Source, word: String, on: Bool)] = []
     for entry in entries {
       guard let entry = entry as? [String: Any], let lora = entry["lora"] as? String, let word = entry["word"] as? String,
             let on = entry["on"] as? Bool
@@ -1250,7 +1250,7 @@ final class AgentTools {
         notes.append("\(source.file) has no trigger word “\(word)” (it has \(source.words.joined(separator: ", "))).")
         continue
       }
-      changes.append((source.file, match, on))
+      changes.append((source, match, on))
     }
     Self.asOneUndoStep { create.setTriggerWords(changes, undoManager: $0, actionName: "Agent Trigger Words") }
   }

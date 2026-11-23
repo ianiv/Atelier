@@ -151,7 +151,7 @@ LoRAs trained with the [MOSS Image Edit trainer](https://github.com/Chenkin-x/Mo
 
 ### Managing LoRAs
 
-Select a LoRA to rename it or change its trigger words (commas separate them; each becomes a toggle under the LoRA in Create), then click **Save** (or **Revert**). **Reveal in Finder** (on iPad, **Show in Files**, which opens its folder) shows its file, and **Move to Trash** deletes the file and removes it from `custom_lora.json`. **Move To** moves its file to another models folder, with its `custom_lora.json` entry when that's in the same folder, the same way as [moving a model](#moving-between-folders).
+Select a LoRA to rename it or change its trigger words (commas separate them; each becomes a toggle under the LoRA in Create, where the first starts on, so put the main one first), then click **Save** (or **Revert**). **Reveal in Finder** (on iPad, **Show in Files**, which opens its folder) shows its file, and **Move to Trash** deletes the file and removes it from `custom_lora.json`. **Move To** moves its file to another models folder, with its `custom_lora.json` entry when that's in the same folder, the same way as [moving a model](#moving-between-folders).
 
 To use a LoRA, add it in the inspector's LoRAs section in Create; see [Creating images](creating-images.md#loras).
 
