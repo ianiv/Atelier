@@ -1059,6 +1059,11 @@ struct EditRenderLaneTests {
     #expect(target.stands(for: ObjectIdentifier(old), width: 1200, height: 800))
     #expect(target.stands(for: ObjectIdentifier(new), width: 1200, height: 800))
     #expect(!target.stands(for: ObjectIdentifier(new), width: 800, height: 600))
+    // The same size elsewhere in the source (a crop moved, or undone to another place) can't.
+    let cropped = EditRenderTarget(
+      source: ObjectIdentifier(old), width: 300, height: 200, sourceWidth: 1200, sourceHeight: 800, sourceX: 40, sourceY: 10)
+    #expect(cropped.stands(for: ObjectIdentifier(new), width: 1200, height: 800, origin: (40, 10)))
+    #expect(!cropped.stands(for: ObjectIdentifier(new), width: 1200, height: 800, origin: (0, 10)))
     // A target that doesn't say its image's size stands only for its own.
     let bare = EditRenderTarget(source: ObjectIdentifier(old), width: 300, height: 200)
     #expect(bare.stands(for: ObjectIdentifier(old), width: 0, height: 0) && !bare.stands(for: ObjectIdentifier(new), width: 0, height: 0))

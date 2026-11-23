@@ -34,9 +34,34 @@ extension Edit {
     /// nil for a rectangle that isn't finite or leaves less than `minimumSide` on a side. What the
     /// overlay's drags, the MCP tool and a decoded record all go through, so nothing outside the
     /// image (or a NaN from a bad file) reaches `CGImage.cropping`.
-    init?(rect: CGRect, imageWidth: Int, imageHeight: Int, aspect: CropAspect? = nil, swapped: Bool = false) {
+    ///
+    /// Held to a ratio (`aspect`), the size is made exact rather than each side rounded on its
+    /// own (which gave 801×1001 for 4:5): a whole multiple of the ratio's parts when they're small
+    /// enough to have one in the image (every preset, and Original of most images), else the width
+    /// rounded and the height from it. `anchor` is the part of `rect` that stays put while the
+    /// size settles (0 its left or top, 1 its right or bottom): the corner opposite a dragged one,
+    /// the centre for a ratio chosen.
+    init?(
+      rect: CGRect, imageWidth: Int, imageHeight: Int, aspect: CropAspect? = nil, swapped: Bool = false,
+      anchor: CGPoint = CGPoint(x: 0.5, y: 0.5)
+    ) {
       let values = [rect.minX, rect.minY, rect.maxX, rect.maxY]
       guard imageWidth >= Self.minimumSide, imageHeight >= Self.minimumSide, values.allSatisfy(\.isFinite) else { return nil }
+      if let aspect {
+        guard let size = Self.heldSize(
+          width: rect.width, height: rect.height, parts: aspect.wholeParts(imageWidth: imageWidth, imageHeight: imageHeight, swapped: swapped),
+          imageWidth: imageWidth, imageHeight: imageHeight)
+        else { return nil }
+        // Placed by the anchor, in whole pixels, inside the image; clamped as Doubles first.
+        func place(_ start: Double, _ length: Double, _ side: Int, _ anchor: Double, _ limit: Int) -> Int {
+          let wanted = start + min(max(anchor, 0), 1) * (length - Double(side))
+          return Int(min(max(wanted.rounded(), 0), Double(limit - side)))
+        }
+        self.init(
+          x: place(rect.minX, rect.width, size.width, anchor.x, imageWidth), y: place(rect.minY, rect.height, size.height, anchor.y, imageHeight),
+          width: size.width, height: size.height, aspect: aspect, swapped: swapped)
+        return
+      }
       // Clamped as Doubles before any Int conversion: a huge value would trap there.
       let w = Double(imageWidth), h = Double(imageHeight)
       let x0 = min(max(rect.minX, 0), w).rounded(), y0 = min(max(rect.minY, 0), h).rounded()
@@ -46,6 +71,31 @@ extension Edit {
     }
 
     var rect: CGRect { CGRect(x: x, y: y, width: width, height: height) }
+
+    /// The whole-pixel size nearest `width` × `height` held to `parts` (width to height) inside
+    /// the image, at least `minimumSide` a side; nil when none fits.
+    static func heldSize(width: Double, height _: Double, parts: (width: Int, height: Int), imageWidth: Int, imageHeight: Int) -> (width: Int, height: Int)? {
+      let (pw, ph) = (max(parts.width, 1), max(parts.height, 1))
+      let wanted = width.isFinite ? min(max(width, 0), Double(imageWidth)) : Double(imageWidth)
+      let most = min(imageWidth / pw, imageHeight / ph)
+      let least = (minimumSide + min(pw, ph) - 1) / min(pw, ph)
+      if most >= least, max(pw, ph) <= 64 || most >= 16 {
+        // Whole multiples: the ratio exactly.
+        let k = min(max(Int((wanted / Double(pw)).rounded()), least), most)
+        return (k * pw, k * ph)
+      }
+      // Parts too large for a multiple to fit (Original of an image whose sides share no factor):
+      // the width rounded, the height from it.
+      let ratio = Double(pw) / Double(ph)
+      var w = min(max(Int(wanted.rounded()), minimumSide), imageWidth)
+      var h = Int((Double(w) / ratio).rounded())
+      if h > imageHeight {
+        h = imageHeight
+        w = min(Int((Double(h) * ratio).rounded()), imageWidth)
+      }
+      guard w >= minimumSide, h >= minimumSide else { return nil }
+      return (w, h)
+    }
 
     /// This crop, made whole and kept inside a `width` × `height` image (`init(rect:…)`): nil
     /// when nothing of it is left. A record from a file, or one saved from a larger image, goes
@@ -114,6 +164,18 @@ extension Edit {
 
     /// Whether Orientation can turn it: not 1:1, which is the same either way.
     var canSwap: Bool { self != .square }
+
+    /// The ratio's parts as whole numbers, width first, turned when `swapped`: Original's are the
+    /// image's sides over their greatest common factor.
+    func wholeParts(imageWidth: Int, imageHeight: Int, swapped: Bool) -> (width: Int, height: Int) {
+      var (w, h) = parts ?? {
+        func gcd(_ a: Int, _ b: Int) -> Int { b == 0 ? max(a, 1) : gcd(b, a % b) }
+        let common = gcd(max(imageWidth, 1), max(imageHeight, 1))
+        return (max(imageWidth, 1) / common, max(imageHeight, 1) / common)
+      }()
+      if swapped { swap(&w, &h) }
+      return (w, h)
+    }
 
     /// Width over height for a `width` × `height` image, turned on its side when `swapped`.
     func ratio(imageWidth: Int, imageHeight: Int, swapped: Bool) -> Double {

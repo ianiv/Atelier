@@ -2,6 +2,11 @@ import SwiftUI
 
 /// A drag of the Crop tool under way, written by the pane's gesture and read only by the
 /// overlay: the pane's body never reads it, so a drag redraws the rectangle, not the pane.
+///
+/// It also keeps a pinch apart from the crop. The pane's drag runs alongside its pinch, so on
+/// iPad a two-finger pinch reaches the drag too: once a pinch starts, the drag on its way is
+/// dropped and every drag event is a pan of the view (`pinchPan`) until both gestures have
+/// ended, and nothing is committed (`dragEnded`).
 @MainActor
 @Observable
 final class CropDrag {
@@ -12,6 +17,18 @@ final class CropDrag {
   /// What the drag started from: the handle (nil for a new rectangle drawn outside) and the
   /// rectangle it held.
   @ObservationIgnored private var start: (handle: CropGeometry.Handle?, rect: CGRect)?
+  /// The part of the draft that stays put while its size is made whole (`Edit.Crop.init(rect:…)`).
+  @ObservationIgnored private var anchor = CGPoint(x: 0.5, y: 0.5)
+
+  /// The gestures in play: the drag's and the pinch's, each between its first change and its end.
+  @ObservationIgnored private(set) var dragActive = false
+  @ObservationIgnored private(set) var pinchActive = false
+  /// A pinch began during this touch: no crop is edited until both gestures end.
+  @ObservationIgnored private(set) var pinched = false
+  /// Since the pinch began, how far the drag (the fingers' centre on iPad) has moved, in points:
+  /// what two fingers pan the view by while they zoom it.
+  @ObservationIgnored private(set) var pinchPan = CGSize.zero
+  @ObservationIgnored private var panBase: CGSize?
 
   /// How near a handle, in points, a drag starts on it: a finger's reach on iPad.
   #if os(macOS)
@@ -22,9 +39,61 @@ final class CropDrag {
 
   var isDragging: Bool { start != nil }
 
+  /// The drag moved by `translation`: false when it's a pinch's (a pan, `pinchPan` updated), true
+  /// when it edits the crop and the caller goes on to `changed`.
+  func dragChanged(translation: CGSize) -> Bool {
+    dragActive = true
+    lastTranslation = translation
+    guard pinched else { return true }
+    let base = panBase ?? translation
+    panBase = base
+    pinchPan = CGSize(width: translation.width - base.width, height: translation.height - base.height)
+    return false
+  }
+
+  /// A pinch changed: the first change drops the crop drag on its way (its draft too).
+  func pinchChanged() {
+    pinchActive = true
+    guard !pinched else { return }
+    cancel()
+    pinched = true
+    panBase = dragActive ? lastTranslation : nil
+    pinchPan = .zero
+  }
+
+  @ObservationIgnored private var lastTranslation = CGSize.zero
+  /// The pinch's last magnification and where it began (from the pane's centre), so a drag event
+  /// can put the zoom and the pan together again (`EditPane.applyPinch`).
+  @ObservationIgnored var pinchZoom: (magnification: Double, anchor: CGPoint)?
+
+  /// The pinch ended; the touch is over once the drag has too.
+  func pinchEnded() {
+    pinchActive = false
+    if !dragActive { endTouch() }
+  }
+
+  /// The drag let go: the crop it made, or nil when it made none or a pinch took the touch.
+  func dragEnded(crop: Edit.Crop?, image: (width: Int, height: Int)) -> Edit.Crop? {
+    dragActive = false
+    defer { if !pinchActive { endTouch() } }
+    guard !pinched, isDragging else {
+      cancel()
+      return nil
+    }
+    return ended(crop: crop, image: image)
+  }
+
+  private func endTouch() {
+    pinched = false
+    pinchZoom = nil
+    panBase = nil
+    pinchPan = .zero
+  }
+
   /// The drag has moved to `location` from `startLocation` (both in the pane's points). `crop`
   /// is the crop there is (nil: the whole image, which a handle drag starts from).
   func changed(from startLocation: CGPoint, to location: CGPoint, crop: Edit.Crop?, image: (width: Int, height: Int), viewport: EditViewport) {
+    guard !pinched else { return }
     let bounds = CGSize(width: image.width, height: image.height)
     let current = crop?.rect ?? CGRect(origin: .zero, size: bounds)
     if start == nil {
@@ -37,9 +106,14 @@ final class CropDrag {
       let ppp = max(viewport.pointsPerPixel, 1e-6)
       let delta = CGSize(width: (location.x - startLocation.x) / ppp, height: (location.y - startLocation.y) / ppp)
       draft = CropGeometry.drag(handle, from: start.rect, by: delta, ratio: ratio, bounds: bounds, minimum: minimum)
+      // The side opposite the one dragged stays; an edge's cross axis keeps its centre.
+      let (sx, sy) = handle.sides
+      anchor = CGPoint(x: sx < 0 ? 1 : sx > 0 ? 0 : 0.5, y: sy < 0 ? 1 : sy > 0 ? 0 : 0.5)
     } else {
       draft = CropGeometry.drawn(
         from: viewport.imagePoint(startLocation), to: viewport.imagePoint(location), ratio: ratio, bounds: bounds, minimum: minimum)
+      // Drawn from where the drag began.
+      anchor = CGPoint(x: location.x < startLocation.x ? 1 : 0, y: location.y < startLocation.y ? 1 : 0)
     }
   }
 
@@ -51,10 +125,11 @@ final class CropDrag {
       draft = nil
     }
     guard let draft else { return nil }
-    return Edit.Crop(rect: draft, imageWidth: image.width, imageHeight: image.height, aspect: crop?.aspect, swapped: crop?.swapped ?? false)
+    return Edit.Crop(
+      rect: draft, imageWidth: image.width, imageHeight: image.height, aspect: crop?.aspect, swapped: crop?.swapped ?? false, anchor: anchor)
   }
 
-  /// The drag was cancelled (another tool, the pane went away).
+  /// The drag was cancelled (another tool, the pane went away, a pinch).
   func cancel() {
     start = nil
     draft = nil

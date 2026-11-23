@@ -187,18 +187,23 @@ nonisolated struct EditRenderTarget: Hashable, Sendable {
   var window: EditPipeline.Window?
   /// A zoomed view (`EditRenderer.zoomed`), the edit's window lane.
   var zoomed: EditPipeline.Zoomed?
-  /// The size of the image it's of (0 when not given): a fitted render of one image can stand in
-  /// for the next of the same size (`stands(for:width:height:)`).
+  /// The size of the image it's of (0 when not given), and where that image sits in its source
+  /// (a crop's origin): a fitted render of one working image can stand in for the next of the same
+  /// size at the same place (`stands(for:width:height:origin:)`).
   var sourceWidth = 0
   var sourceHeight = 0
+  var sourceX = 0
+  var sourceY = 0
 
   /// Whether a fitted render of this target can stay up for the image `source`, `width` ×
-  /// `height`, until that one's render lands: one of it, or of the working image it replaced when
-  /// the size is the same (a Heal stroke: the picture barely changes). A new size (a crop) can't:
-  /// drawn in the new frame it would be stretched. Panes are made anew for a new source, so this
-  /// never shows another image's render.
-  func stands(for source: ObjectIdentifier, width: Int, height: Int) -> Bool {
-    self.source == source || (sourceWidth > 0 && sourceWidth == width && sourceHeight == height)
+  /// `height` at `origin` in its source, until that one's render lands: one of it, or of the
+  /// working image it replaced when it's the same part of the source (a Heal stroke: the picture
+  /// barely changes). Another size (a crop) can't: drawn in the new frame it would be stretched;
+  /// nor can a crop of the same size moved elsewhere, or undone to another place, which would
+  /// show the wrong part of the picture. Panes are made anew for a new source, so this never
+  /// shows another image's render.
+  func stands(for source: ObjectIdentifier, width: Int, height: Int, origin: (x: Int, y: Int) = (0, 0)) -> Bool {
+    self.source == source || (sourceWidth > 0 && sourceWidth == width && sourceHeight == height && sourceX == origin.x && sourceY == origin.y)
   }
 }
 
@@ -264,10 +269,13 @@ final class EditPaneRenders {
   }
 
   /// The edit's targets for `image` in `viewport`.
-  static func targets(_ image: CGImage, _ viewport: EditViewport) -> Targets {
+  /// `origin`: where `image` sits in its source (`EditModel.workingOrigin`).
+  static func targets(_ image: CGImage, _ viewport: EditViewport, origin: (x: Int, y: Int) = (0, 0)) -> Targets {
     let fit = viewport.fitPixels
     return Targets(
-      fitted: .init(source: ObjectIdentifier(image), width: fit.width, height: fit.height, sourceWidth: image.width, sourceHeight: image.height),
+      fitted: .init(
+        source: ObjectIdentifier(image), width: fit.width, height: fit.height, sourceWidth: image.width, sourceHeight: image.height,
+        sourceX: origin.x, sourceY: origin.y),
       window: viewport.zoomed.map { .init(source: ObjectIdentifier(image), zoomed: $0) })
   }
 

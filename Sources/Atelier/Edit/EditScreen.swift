@@ -495,7 +495,7 @@ private struct EditPane: View {
   /// The fitted preview, only if it's of this pane's source: never another image's stretched
   /// into this one's frame.
   private var fitted: CGImage? {
-    renders.fitted.shown.flatMap { $0.key.target.stands(for: ObjectIdentifier(image), width: image.width, height: image.height) ? $0.output : nil }
+    renders.fitted.shown.flatMap { $0.key.target.stands(for: ObjectIdentifier(image), width: image.width, height: image.height, origin: edit.workingOrigin) ? $0.output : nil }
   }
   private var failure: String? { renders.fitted.failure }
 
@@ -513,7 +513,7 @@ private struct EditPane: View {
       let window = viewport.window(grid: showsOriginal ? 512 : 64)
       let targets = showsOriginal
         ? EditPaneRenders.Targets(fitted: nil, window: window.map { .init(source: ObjectIdentifier(original), window: $0) })
-        : EditPaneRenders.targets(image, viewport)
+        : EditPaneRenders.targets(image, viewport, origin: edit.workingOrigin)
       ZStack(alignment: .topLeading) {
         if showsOriginal {
           // The fitted copy, and zoomed past it the part in view at the zoom (the window lane's
@@ -570,8 +570,13 @@ private struct EditPane: View {
       .gesture(
         DragGesture(minimumDistance: 1)
           .onChanged { value in
-            if crops || cropDrag.isDragging {
-              cropChanged(value, viewport: viewport)
+            if crops || cropDrag.isDragging || cropDrag.pinched {
+              // A pinch's drag (two fingers on iPad) pans the view with the zoom; else the crop.
+              if cropDrag.dragChanged(translation: value.translation) {
+                cropChanged(value, viewport: viewport)
+              } else {
+                applyPinch(canvas, size: geometry.size)
+              }
               return
             }
             let start = gestureStart ?? (canvas.effectiveScale, canvas.offset)
@@ -580,21 +585,32 @@ private struct EditPane: View {
             canvas.offset = CGSize(width: start.offset.width + value.translation.width, height: start.offset.height + value.translation.height)
           }
           .onEnded { _ in
-            gestureStart = nil
             cropEnded()
+            // A pinch still going keeps the view it started from.
+            if !cropDrag.pinchActive { gestureStart = nil }
           }
           .simultaneously(
             with: MagnifyGesture()
               .onChanged { value in
-                let start = gestureStart ?? (canvas.effectiveScale, canvas.offset)
-                gestureStart = start
                 let anchor = CGPoint(
                   x: value.startLocation.x - geometry.size.width / 2, y: value.startLocation.y - geometry.size.height / 2)
+                if edit.tool == .crop {
+                  // Never the crop: the drag on its way is dropped, and the pinch zooms and pans.
+                  cropDrag.pinchChanged()
+                  cropDrag.pinchZoom = (value.magnification, anchor)
+                  applyPinch(canvas, size: geometry.size)
+                  return
+                }
+                let start = gestureStart ?? (canvas.effectiveScale, canvas.offset)
+                gestureStart = start
                 canvas.offset = start.offset
                 canvas.scale = start.scale
                 canvas.zoom(to: start.scale * value.magnification, around: anchor)
               }
-              .onEnded { _ in gestureStart = nil })
+              .onEnded { _ in
+                cropDrag.pinchEnded()
+                if !cropDrag.dragActive { gestureStart = nil }
+              })
           // Moving: no window renders start until the gesture ends; what's up is drawn scaled
           // and moved meanwhile.
           .updating($moving) { _, moving, _ in moving = true })
@@ -612,7 +628,16 @@ private struct EditPane: View {
         .onTapGesture(count: 2) {
           if canvas.scale == nil { canvas.zoom(to: 1) } else { canvas.zoomToFit() }
         }
-        .onChange(of: edit.tool) { cropDrag.cancel() }
+        .onChange(of: edit.tool) {
+          cropDrag.cancel()
+          #if os(macOS)
+          // So Space pans before any crop drag has focused the pane.
+          if edit.tool == .crop { focused = true }
+          #endif
+        }
+        #if os(macOS)
+        .onAppear { if edit.tool == .crop { focused = true } }
+        #endif
         .onChange(of: viewport.fitScale, initial: true) { canvas.fitScale = viewport.fitScale }
         .onChange(of: viewport.fillScale, initial: true) { canvas.fillScale = viewport.fillScale }
         .onChange(of: targets, initial: true) { _, targets in schedule(targets) }
@@ -664,12 +689,23 @@ private struct EditPane: View {
       from: value.startLocation, to: value.location, crop: edit.retouch.crop, image: (image.width, image.height), viewport: viewport)
   }
 
-  /// A Crop drag let go: one undo step, "Crop".
+  /// A Crop drag let go: one undo step, "Crop"; nothing after a pinch.
   private func cropEnded() {
-    guard cropDrag.isDragging else { return }
-    if let crop = cropDrag.ended(crop: edit.retouch.crop, image: (image.width, image.height)) {
+    if let crop = cropDrag.dragEnded(crop: edit.retouch.crop, image: (image.width, image.height)) {
       edit.setCrop(crop, undoManager: undoManager)
     }
+  }
+
+  /// A pinch with Crop: the view zoomed about where it began, and moved as far as the fingers'
+  /// centre has (`CropDrag.pinchPan`), from the view at the pinch's start.
+  private func applyPinch(_ canvas: CanvasState, size _: CGSize) {
+    let start = gestureStart ?? (canvas.effectiveScale, canvas.offset)
+    gestureStart = start
+    canvas.offset = start.offset
+    canvas.scale = start.scale
+    if let zoom = cropDrag.pinchZoom { canvas.zoom(to: start.scale * zoom.magnification, around: zoom.anchor) }
+    let pan = cropDrag.pinchPan
+    canvas.offset = CGSize(width: canvas.offset.width + pan.width, height: canvas.offset.height + pan.height)
   }
 
   /// Whether a window lane's result of `look`, up at `serial`, is still the newest picture: not
@@ -837,9 +873,10 @@ private struct EditSliderPane: View {
       let fit = viewport.fitPixels
       // The target only, as `EditPane` works out: the look goes with it when it schedules.
       let target = EditRenderTarget(
-        source: ObjectIdentifier(image), width: fit.width, height: fit.height, sourceWidth: image.width, sourceHeight: image.height)
+        source: ObjectIdentifier(image), width: fit.width, height: fit.height, sourceWidth: image.width, sourceHeight: image.height,
+        sourceX: edit.workingOrigin.x, sourceY: edit.workingOrigin.y)
       SliderComparison(
-        matched: loop.shown.flatMap { $0.key.target.stands(for: ObjectIdentifier(image), width: image.width, height: image.height) ? $0.output : nil },
+        matched: loop.shown.flatMap { $0.key.target.stands(for: ObjectIdentifier(image), width: image.width, height: image.height, origin: edit.workingOrigin) ? $0.output : nil },
         original: edit.originalPreview ?? original, matchedNote: "Rendering…",
         shape: CGSize(width: image.width, height: image.height), matchedTitle: "Edited")
         .onChange(of: target, initial: true) { _, target in schedule(target) }

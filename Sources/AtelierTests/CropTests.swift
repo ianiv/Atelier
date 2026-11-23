@@ -114,6 +114,90 @@ struct CropTests {
     #expect(Edit.CropAspect.allCases.map(\.title) == ["Original", "1:1", "4:5", "2:3", "3:4", "9:16", "16:9"])
   }
 
+  /// Every preset, either way up, on images whose sides don't divide: whole pixels at the ratio
+  /// exactly, inside the image, as large as fits when it's the largest asked for.
+  @Test func heldRatiosAreExactOnOddSizes() {
+    for (width, height) in [(1001, 1001), (999, 777), (1201, 901), (37, 1000), (4001, 3)] {
+      for aspect in Edit.CropAspect.allCases {
+        for swapped in [false, true] {
+          let parts = aspect.wholeParts(imageWidth: width, imageHeight: height, swapped: swapped)
+          let ratio = aspect.ratio(imageWidth: width, imageHeight: height, swapped: swapped)
+          let bounds = CGSize(width: width, height: height)
+          let crop = Edit.Crop(
+            rect: CropGeometry.largest(ratio: ratio, in: bounds), imageWidth: width, imageHeight: height, aspect: aspect, swapped: swapped)
+          let label = "\(aspect) \(swapped ? "swapped" : "") on \(width)×\(height)"
+          guard height >= Edit.Crop.minimumSide else {
+            #expect(crop == nil, "\(label)")
+            continue
+          }
+          guard let crop else {
+            // Only a ratio that can't be 16 a side here.
+            #expect(Double(min(width, height)) < 16 * max(ratio, 1 / ratio), "\(label)")
+            continue
+          }
+          #expect(crop.x >= 0 && crop.y >= 0 && crop.x + crop.width <= width && crop.y + crop.height <= height, "\(label)")
+          #expect(crop.width >= 16 && crop.height >= 16, "\(label)")
+          if max(parts.width, parts.height) <= 64 {
+            #expect(crop.width * parts.height == crop.height * parts.width, "\(label): \(crop.width)×\(crop.height)")
+            // The largest: one more step of the ratio wouldn't fit.
+            #expect(crop.width + parts.width > width || crop.height + parts.height > height, "\(label)")
+          } else {
+            #expect(abs(Double(crop.width) / Double(crop.height) - ratio) < 2 / Double(crop.height), "\(label)")
+          }
+        }
+      }
+    }
+    // The reviewer's cases: 4:5 and 1:1 on 1001×1001.
+    let r45 = Edit.Crop(rect: CGRect(x: 0, y: 0, width: 800.8, height: 1001), imageWidth: 1001, imageHeight: 1001, aspect: .r4x5)
+    #expect(r45?.width == 800 && r45?.height == 1000)
+    let square = Edit.Crop(rect: CGRect(x: 0.4, y: 0.6, width: 999.6, height: 999.2), imageWidth: 1001, imageHeight: 1001, aspect: .square)
+    #expect(square.map { $0.width == $0.height } == true)
+    // Holding is idempotent: a held crop made whole again doesn't move.
+    if let r45 { #expect(r45.clamped(imageWidth: 1001, imageHeight: 1001) == r45) }
+  }
+
+  /// The anchor keeps the corner opposite the one dragged.
+  @Test func heldCropKeepsItsAnchor() {
+    let rect = CGRect(x: 100.3, y: 50.2, width: 400.7, height: 500.1)
+    let fromBottomRight = Edit.Crop(rect: rect, imageWidth: 2000, imageHeight: 2000, aspect: .r4x5, anchor: CGPoint(x: 0, y: 0))
+    #expect(fromBottomRight?.x == 100 && fromBottomRight?.y == 50)
+    let fromTopLeft = Edit.Crop(rect: rect, imageWidth: 2000, imageHeight: 2000, aspect: .r4x5, anchor: CGPoint(x: 1, y: 1))
+    #expect(fromTopLeft.map { abs(Double($0.x + $0.width) - rect.maxX) <= 1 && abs(Double($0.y + $0.height) - rect.maxY) <= 1 } == true)
+  }
+
+  /// A pinch during a Crop drag (two fingers on iPad) never edits the crop: the drag is dropped,
+  /// its later events pan, and letting go commits nothing, until both gestures have ended.
+  @MainActor @Test func aPinchNeverEditsTheCrop() {
+    let viewport = EditViewport(imageWidth: 1000, imageHeight: 800, viewSize: CGSize(width: 500, height: 400), displayScale: 1)
+    let crop = Edit.Crop(x: 100, y: 100, width: 400, height: 300)
+    let drag = CropDrag()
+    let start = viewport.viewRect(crop.rect)
+    let corner = CGPoint(x: start.maxX, y: start.maxY)
+    #expect(drag.dragChanged(translation: CGSize(width: 10, height: 0)))
+    drag.changed(from: corner, to: CGPoint(x: corner.x + 10, y: corner.y), crop: crop, image: (1000, 800), viewport: viewport)
+    #expect(drag.draft != nil)
+    drag.pinchChanged()
+    #expect(drag.draft == nil && !drag.isDragging && drag.pinched)
+    // The drag goes on, now a pan from where the pinch began.
+    #expect(!drag.dragChanged(translation: CGSize(width: 30, height: 5)))
+    #expect(drag.pinchPan == CGSize(width: 20, height: 5))
+    drag.changed(from: corner, to: CGPoint(x: corner.x + 30, y: corner.y), crop: crop, image: (1000, 800), viewport: viewport)
+    #expect(drag.draft == nil)
+    // Letting go of either first commits nothing.
+    #expect(drag.dragEnded(crop: crop, image: (1000, 800)) == nil)
+    #expect(drag.pinched)
+    drag.pinchEnded()
+    #expect(!drag.pinched && drag.pinchPan == .zero)
+    // The next touch crops again.
+    #expect(drag.dragChanged(translation: CGSize(width: 10, height: 0)))
+    drag.changed(from: corner, to: CGPoint(x: corner.x + 10, y: corner.y), crop: crop, image: (1000, 800), viewport: viewport)
+    #expect(drag.dragEnded(crop: crop, image: (1000, 800)) != nil)
+    // A pinch alone (the Mac's trackpad) leaves nothing behind.
+    drag.pinchChanged()
+    drag.pinchEnded()
+    #expect(!drag.pinched && !drag.isDragging)
+  }
+
   @Test func heldCropOfTheWholeImageAndOfACrop() {
     let square = EditModel.held(nil, to: .square, swapped: false, width: 1200, height: 900)
     #expect(square == Edit.Crop(x: 150, y: 0, width: 900, height: 900, aspect: .square))

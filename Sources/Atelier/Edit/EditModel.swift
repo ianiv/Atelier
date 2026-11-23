@@ -64,6 +64,9 @@ final class EditModel {
   /// The comparison's original: the source with the crop the panes show, so Side by Side and the
   /// Slider stay pixel for pixel over the edit. (Heal, when it comes, isn't on it.)
   private(set) var workingOriginal: CGImage?
+  /// Where `workingImage` sits in the source: the applied crop's origin, (0, 0) uncropped. A
+  /// fitted render stands in only for a working image at the same place (`EditRenderTarget.stands`).
+  private(set) var workingOrigin: (x: Int, y: Int) = (0, 0)
   /// Reading a step or file.
   private(set) var isLoading = false
 
@@ -76,7 +79,17 @@ final class EditModel {
     didSet {
       guard tool != oldValue else { return }
       if tool.needsSinglePane, compareMode != .hold { compareMode = .hold }
-      if tool == .crop { canvas.zoomToFit() }
+      // The whole image fitted the first time for an image; coming back, the zoom Crop was left
+      // at (the image it shows is the same whole image again).
+      if oldValue == .crop { cropView = (canvas.scale, canvas.offset) }
+      if tool == .crop {
+        if let cropView {
+          canvas.scale = cropView.scale
+          canvas.offset = cropView.offset
+        } else {
+          canvas.zoomToFit()
+        }
+      }
       updateWorking()
     }
   }
@@ -160,6 +173,8 @@ final class EditModel {
     return Edit.Crop(rect: rect, imageWidth: width, imageHeight: height, aspect: aspect, swapped: swapped)
   }
 
+  /// The zoom Crop was last left at for this image, which coming back to Crop restores.
+  @ObservationIgnored private var cropView: (scale: Double?, offset: CGSize)?
   /// The undo manager the retouch's steps went on, so they're dropped when another image opens.
   @ObservationIgnored private weak var retouchUndoManager: UndoManager?
   /// What `workingImage` was made from, so the same retouch doesn't make a new image (and new
@@ -183,6 +198,8 @@ final class EditModel {
     if let workingKey, workingKey.source == ObjectIdentifier(image), workingKey.shown == shown, workingImage != nil { return }
     workingKey = (ObjectIdentifier(image), shown)
     let working = EditRetouch.apply(shown, to: image)
+    let crop = EditRetouch.effectiveCrop(shown.crop, imageWidth: image.width, imageHeight: image.height)
+    workingOrigin = (crop?.x ?? 0, crop?.y ?? 0)
     if let old = workingImage, old !== working, old !== image {
       let renderer = renderer
       Task { await renderer.forget(old) }
@@ -611,6 +628,7 @@ final class EditModel {
     self.item = item
     self.image = image
     retouch = .none
+    cropView = nil
     sourcePreview = nil
     workingKey = nil
     workingImage = nil

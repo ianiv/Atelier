@@ -23,7 +23,7 @@ Crop and the other tools act in a single picture: choosing one while **Side by S
 
 ## Crop
 
-With **Crop** chosen the screen shows the whole image fitted, with the crop rectangle over it and the part outside it dimmed. Drag a corner or an edge to resize it, drag inside to move it, or drag outside it to draw a new one; a grid of thirds shows while you drag. Pinch to zoom, and on the Mac hold Space and drag to move the image. Choosing another tool applies the crop: the screen then shows the cropped picture with the look.
+With **Crop** chosen the screen shows the whole image fitted, with the crop rectangle over it and the part outside it dimmed. Drag a corner or an edge to resize it, drag inside to move it, or drag outside it to draw a new one; a grid of thirds shows while you drag. Pinch to zoom, and on the Mac hold Space and drag to move the image. Coming back to Crop keeps the zoom you left it at. Choosing another tool applies the crop: the screen then shows the cropped picture with the look.
 
 The bar over the bottom of the image holds:
 
@@ -124,7 +124,7 @@ A step saved from Edit records its look and its crop: the settings, the profile'
 
 ## On iPad
 
-The inspector is a panel beside the image, as in the Video Editor. The **Hold for Original** segment is pressed and held with a finger; pinch to zoom. With Crop, one finger moves the crop's handles; choose Move to drag the image. The profile library lives in Atelier's own storage; use **Open Profile…** and **Save Profile…** to move profiles to and from Files.
+The inspector is a panel beside the image, as in the Video Editor. The **Hold for Original** segment is pressed and held with a finger; pinch to zoom. With Crop, one finger moves the crop's handles, and two fingers zoom and move the image together; a pinch never changes the crop. The profile library lives in Atelier's own storage; use **Open Profile…** and **Save Profile…** to move profiles to and from Files.
 
 ## Agents
 
