@@ -1,5 +1,7 @@
 import CoreGraphics
 import Foundation
+@preconcurrency import Diffusion
+@preconcurrency import NNC
 
 /// A clip from History that MiniMax H3 Ref2VA takes as its reference video, `<Video 1>` in the
 /// prompt, with the moodboard images as Picture 1, 2, … The engine reads a canvas tensor of 22 or
@@ -17,11 +19,32 @@ nonisolated struct ReferenceVideo: Sendable {
   var sourceTensorId: Int64?
   /// The project `sourceTensorId` belongs to.
   var project: String?
-  /// One per output frame at the output size, in order; empty until the job starts.
+  /// One per output frame at the output size, in order; empty until the job starts, and again
+  /// once they're in `tensor`.
   var frames: [CGImage] = []
+  /// The frames as the engine takes them (`ImageTensor.tensor(frames:width:height:)`), made in
+  /// their place for a run on this device so the images and the tensor aren't both kept through
+  /// it (`withTensor`).
+  var tensor: Tensor<FloatType>?
 
   /// The shortest clip the engine takes as a reference rather than a first frame (17 + 5).
   static let minimumFrames = 22
+  /// The most frames a paired device may send: 17 × 60 + 5, about 43 s at H3's 24 fps, far past
+  /// the clips it makes. Bounds what an untrusted request can make this device decode.
+  static let maximumFrames = 17 * 60 + 5
+
+  /// This reference with `frames` turned into `tensor` at `width`×`height`, the images let go.
+  /// Nil when there are none or they won't draw.
+  func withTensor(width: Int, height: Int) -> ReferenceVideo? {
+    guard let tensor = ImageTensor.tensor(frames: frames, width: width, height: height) else { return nil }
+    var made = self
+    made.frames = []
+    made.tensor = tensor
+    return made
+  }
+
+  /// How many frames it holds, in either form.
+  var frameCount: Int { tensor?.shape.first ?? frames.count }
 
   /// Which source frame each of `count` output frames at `rate` shows, for a clip of
   /// `sourceCount` frames at `sourceRate`: the one on screen at that time, as
@@ -89,8 +112,16 @@ nonisolated struct ReferenceVideo: Sendable {
   }
 
   enum Failure: LocalizedError {
+    /// The clip is gone from the project (deleted while the job waited, or another project).
     case sourceMissing
+    /// The clip is there, but some of its frames didn't read or decode.
+    case unreadable
 
-    var errorDescription: String? { "The reference video is no longer in this project." }
+    var errorDescription: String? {
+      switch self {
+      case .sourceMissing: "The reference video is no longer in this project."
+      case .unreadable: "The reference video's frames couldn't be read."
+      }
+    }
   }
 }

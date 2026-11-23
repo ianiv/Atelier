@@ -2519,8 +2519,17 @@ final class CreateModel {
         }
         // A reference video's frames are read now, not when it was queued. A paired device's job
         // brings them, and one resumed at its server has them there.
-        if let reference = request.referenceVideo, reference.frames.isEmpty, job.remoteDevice == nil, !job.resumesRemoteJob {
+        if let reference = request.referenceVideo, reference.frameCount == 0, job.remoteDevice == nil, !job.resumesRemoteJob {
           request.referenceVideo?.frames = try await referenceFrames(reference, configuration: request.configuration, job: job)
+          // On this device the engine takes them as one tensor: made now, the images let go, so
+          // the two aren't both kept through the run. A server gets them as images.
+          if !(backend is RemoteBackend), let reference = request.referenceVideo {
+            let (width, height) = (request.configuration.width, request.configuration.height)
+            guard let made = await Task.detached(operation: { reference.withTensor(width: width, height: height) }).value else {
+              throw ReferenceVideo.Failure.unreadable
+            }
+            request.referenceVideo = made
+          }
         }
         var output: GenerationEngine.Output
         if let imageUpscale = request.imageUpscale, let image = request.canvas {
@@ -2544,6 +2553,7 @@ final class CreateModel {
         }
         // The frames aren't needed past the run, and a long clip's are hundreds of megabytes.
         request.referenceVideo?.frames = []
+        request.referenceVideo?.tensor = nil
         // A paired device's job goes back to it, not into the project.
         if job.remoteDevice != nil {
           status = .ranForDevice
@@ -3305,7 +3315,8 @@ final class CreateModel {
       }
     }
     let read = frames.compactMap(\.self)
-    guard read.count == tensorIds.count else { throw ProjectError.badImage }
+    // The clip is there (checked above), so a frame missing here didn't read or decode.
+    guard read.count == tensorIds.count else { throw ReferenceVideo.Failure.unreadable }
     return read
   }
 

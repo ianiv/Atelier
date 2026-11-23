@@ -101,6 +101,9 @@ actor GenerationEngine {
   }
 
   private var pipeline: MediaGenerationPipeline?
+  /// The shape of the image tensor the last video run gave the engine (its canvas, or a reference
+  /// video's frames), for `--reference-video-check` to see what the engine got.
+  private(set) var lastVideoImageShape: [Int]?
   /// The model and image inputs (canvas, then moodboard sizes) of the last run, see
   /// `dropCachedModelsIfInputsChanged`.
   private var lastImageInputs: (model: String, canvas: Bool, sizes: [[Int]])?
@@ -375,14 +378,14 @@ actor GenerationEngine {
       {
         throw MediaGenerationKitError.generationFailed(problem)
       }
-      // One per output frame (`CreateModel.run`, or a paired device's upload).
-      guard reference.frames.count == settings.numFrames,
-            let frames = ImageTensor.tensor(frames: reference.frames, width: settings.width, height: settings.height)
-      else {
+      // One per output frame at the output size (`CreateModel.run`, or a paired device's upload),
+      // usually made into the tensor already (`ReferenceVideo.withTensor`).
+      let tensor = reference.tensor ?? reference.withTensor(width: settings.width, height: settings.height)?.tensor
+      guard let tensor, tensor.shape == [settings.numFrames, settings.height, settings.width, 3] else {
         throw MediaGenerationKitError.generationFailed(
-          "The reference video has \(reference.frames.count) frames, not the \(settings.numFrames) this run makes.")
+          "The reference video has \(reference.frameCount) frames, not the \(settings.numFrames) this run makes.")
       }
-      image = frames
+      image = tensor
     } else {
       image = request.canvas.flatMap(ImageTensor.tensor(from:))
     }
@@ -410,6 +413,7 @@ actor GenerationEngine {
     let negativePrompt = request.negativePrompt
     progress(.state(.preparing))
     let engineHints = hints
+    lastVideoImageShape = image.map { Array($0.shape) }
     // The scheduler isn't part of `GenerationConfiguration`; it rides on this call's copy of the
     // generator, as MGK's own local path does (`MediaGenerationExecutionUtilities.generate`).
     let generator = {
@@ -812,7 +816,8 @@ actor GenerationEngine {
   private func dropCachedModelsIfInputsChanged(_ request: Request) async {
     let images = [request.canvas].compactMap(\.self) + request.moodboard.map(\.image)
     let reference = request.referenceVideo.map { video in
-      [video.frames.first?.width ?? 0, video.frames.first?.height ?? 0, video.frames.count]
+      video.tensor.map { [$0.shape[2], $0.shape[1], $0.shape[0]] }
+        ?? [video.frames.first?.width ?? 0, video.frames.first?.height ?? 0, video.frames.count]
     }
     let inputs = (
       model: request.model, canvas: request.canvas != nil || reference != nil,

@@ -1,6 +1,7 @@
 @preconcurrency import _MediaGenerationKit
 import CoreGraphics
 import Foundation
+import ImageIO
 import Network
 import Observation
 import Synchronization
@@ -710,13 +711,15 @@ final class RemoteServer {
       SettingsRegistry.apply(dump: request.settings, to: &configuration)
       // A reference video has one frame per output frame, so a list of any other length is
       // refused before anything is decoded.
+      // Bounded too, as the decoded frames are kept until the tensor is made.
       if let frames = request.referenceVideo?.count {
         let length = configuration.videoModel.map { $0.snapped(configuration.numFrames) }
-        guard frames == length else {
+        guard frames == length, frames <= ReferenceVideo.maximumFrames else {
           throw RemoteError.server("The reference video doesn't match the length of the video to make.")
         }
       }
-      let inputs = try await Self.inputs(of: request, device: device, store: store)
+      let inputs = try await Self.inputs(
+        of: request, device: device, store: store, outputSize: (configuration.width, configuration.height))
       // Cancelled while the model's settings loaded.
       if await store.latestEvent(of: job, device: device)?.state.isFinal ?? true { return }
       var engineRequest = GenerationEngine.Request(
@@ -728,7 +731,13 @@ final class RemoteServer {
       engineRequest.moodboard = inputs.moodboard
       engineRequest.audio = inputs.audio
       engineRequest.upscale = request.upscale
-      if let frames = inputs.referenceVideo { engineRequest.referenceVideo = ReferenceVideo(frames: frames) }
+      // Made into the engine's tensor now, so the queued job holds that rather than the images.
+      if let frames = inputs.referenceVideo {
+        guard let reference = ReferenceVideo(frames: frames).withTensor(width: configuration.width, height: configuration.height) else {
+          throw RemoteError.server("The reference video's frames couldn't be read.")
+        }
+        engineRequest.referenceVideo = reference
+      }
       let queueID = create.runForDevice(
         engineRequest, frames: inputs.frames, device: name,
         progress: { [weak self] progress in self?.note(progress, job: job) },
@@ -755,8 +764,9 @@ final class RemoteServer {
 
   /// A job's images and audio, from its uploads. The audio gets a copy the queue owns, as a job
   /// queued on this machine does (`AudioClip.snapshot`).
+  /// `outputSize` is the run's: the reference video's frames were prepared at it.
   @concurrent private static func inputs(
-    of request: RemoteJobRequest, device: UUID, store: RemoteJobStore
+    of request: RemoteJobRequest, device: UUID, store: RemoteJobStore, outputSize: (width: Int, height: Int)
   ) async throws -> Inputs {
     func image(_ hash: String) async throws -> CGImage {
       guard let url = await store.blobURL(device: device, hash: hash), let image = ImageLoader.image(at: url) else {
@@ -806,7 +816,19 @@ final class RemoteServer {
         if let frame = decoded[hash] {
           frames.append(frame)
         } else {
+          // The client prepared each at the output size (`ReferenceVideo.frame`): the size is read
+          // from the file's header first, so no other size is ever decoded.
+          let url = await store.blobURL(device: device, hash: hash)
+          let size = url.flatMap { CGImageSourceCreateWithURL($0 as CFURL, nil) }
+            .flatMap { CGImageSourceCopyPropertiesAtIndex($0, 0, nil) as? [CFString: Any] }
+            .map { ($0[kCGImagePropertyPixelWidth] as? Int, $0[kCGImagePropertyPixelHeight] as? Int) }
+          guard let size, size.0 == outputSize.width, size.1 == outputSize.height else {
+            throw RemoteError.server("The reference video's frames aren't the size of the video to make.")
+          }
           let frame = try await image(hash)
+          guard frame.width == outputSize.width, frame.height == outputSize.height else {
+            throw RemoteError.server("The reference video's frames aren't the size of the video to make.")
+          }
           decoded[hash] = frame
           frames.append(frame)
         }
