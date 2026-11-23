@@ -52,7 +52,8 @@ import SwiftUI
 /// (AutomationTabSwitch.swift). `--edit-render-bench` times the Edit screen's renders
 /// (AutomationEdit.swift), and `--edit-ui-bench` its main thread while it's driven
 /// (AutomationEditUI.swift). `--edit-tools-check` checks the Edit screen's tools, Crop and
-/// `crop_image` (AutomationEditTools.swift).
+/// `crop_image` (AutomationEditTools.swift). `--reference-video-check` runs H3 Ref2VA with a
+/// clip as its reference video (AutomationReferenceVideo.swift).
 @MainActor
 enum Automation {
   /// `--sampler`'s names: `SamplerType`'s case names, spelled out because the type describes
@@ -98,7 +99,7 @@ enum Automation {
       "--model-folders-check", "--styles-check", "--cleanup-check", "--engine-check", "--playback-check",
       "--remote-check", "--remote-net-check", "--remote-shots", "--remote-url-check", "--remote-tailnet-check",
       "--catalog-retry-check", "--model-move-check", "--add-folder-check", "--hf-link-check", "--color-match-check", "--depth-check", "--canvas-clip-check",
-      "--create-delete-check",
+      "--create-delete-check", "--reference-video-check",
       "--history-loras-check",
       "--input-entries-check", "--entries-freeze-check", "--tab-switch-bench", "--delete-project-check", "--compact-check",
       "--paint-check", "--edit-screen-check", "--edit-tools-check", "--grain-reference", "--edit-render-bench", "--edit-ui-bench",
@@ -211,6 +212,10 @@ enum Automation {
     }
     if args.contains("--history-loras-check") {
       historyLoRAsCheck(model, navigation: navigation, layouts: layouts, presets: presets, library: library)
+      return
+    }
+    if args.contains("--reference-video-check") {
+      referenceVideoCheck(model, presets: presets)
       return
     }
     if args.contains("--canvas-clip-check") {
