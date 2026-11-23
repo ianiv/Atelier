@@ -155,7 +155,6 @@ struct CanvasView: View {
   @State private var saveError: String?
   @State private var isTargeted = false
   /// A video dropped on the canvas, choosing how to upscale it.
-  @State private var droppedVideo: DroppedVideo?
   @State private var videoError: String?
   @State private var deleteError: String?
   @Environment(\.undoManager) private var undoManager
@@ -434,14 +433,6 @@ struct CanvasView: View {
     }
     .sheet(item: Bindable(model).depthModelSheetItem) { item in
       DepthModelSheet(item: item, project: model.history.project.name)
-    }
-    .sheet(item: $droppedVideo) { video in
-      VideoExportSheet(
-        width: video.composition.width, height: video.composition.height,
-        frameCount: video.composition.frameCount, name: video.name
-      ) { upscale in
-        if let upscale { queueUpscaledExport(video, upscale) }
-      }
     }
     // The canvas's image as it is now: a run that finishes while it's open shows its result here.
     .sheet(isPresented: Bindable(model).viewingCanvasImage) {
@@ -856,8 +847,8 @@ struct CanvasView: View {
     }
   }
 
-  /// Puts a dropped image on the canvas, or reads a dropped video and offers to upscale it. The
-  /// video doesn't join the project.
+  /// Puts a dropped image on the canvas, or brings a dropped video into the project
+  /// (`CreateModel.importVideo`), which Export Video… can then upscale.
   private func open(dropped provider: NSItemProvider) {
     Task {
       do {
@@ -865,26 +856,12 @@ struct CanvasView: View {
         case .image(let image):
           model.setCanvasImage(image.image, metadata: image.metadata)
         case .video(let url, let name):
-          droppedVideo = DroppedVideo(name: name, composition: try await TimelineComposition.make(file: url))
+          model.importVideo(url, name: name, moving: true)
         case nil: break
         }
       } catch {
         videoError = error.localizedDescription
       }
-    }
-  }
-
-  /// Asks where to save the dropped video upscaled, then queues the export.
-  private func queueUpscaledExport(_ video: DroppedVideo, _ upscale: TimelineUpscale) {
-    let create = model
-    fileDialogs.save = FileDialogs.Save(
-      // An empty file holds the place until the export replaces it.
-      file: ExportedFile(type: .mpeg4Movie) { Data() }, name: "\(video.name) \(upscale.scale)x.mp4"
-    ) { result in
-      guard case .success(let url) = result else { return }
-      create.queue(
-        TimelineExportJob(
-          composition: video.composition, upscale: upscale, title: video.name, destination: url))
     }
   }
 
@@ -941,6 +918,8 @@ struct CanvasContentItems: View {
   var body: some View {
     Button("Open Image…") { model.imageImport = .canvas }
     Button("Open from Photos…") { model.photosImport = .canvas }
+    Button("Open Video…") { model.videoOpen = true }
+    Button("Open Video from Photos…") { model.videoPhotosOpen = true }
     Button("Paste Image") { model.pasteImage() }
     Button("New Sketch") { model.newSketch() }
     Button("Load Settings from \(noun)", action: loadSettings)
@@ -1283,6 +1262,10 @@ struct RecentStrip: View {
       .overlay(alignment: .topLeading) {
         if let reason = item.entryReason {
           EntryBadge(reason: reason)
+            .scaleEffect(0.8, anchor: .topLeading)
+            .padding(1)
+        } else if item.isImported {
+          ImportedBadge()
             .scaleEffect(0.8, anchor: .topLeading)
             .padding(1)
         } else if item.isVideo {

@@ -388,6 +388,8 @@ struct HistoryView: View {
             .overlay(alignment: .topLeading) {
               if let reason = item.entryReason {
                 EntryBadge(reason: reason).padding(5)
+              } else if item.isImported {
+                ImportedBadge().padding(5)
               } else {
                 let stars = history.rating(of: item)
                 if stars > 0 { RatingBadge(stars: stars).padding(5) }
@@ -1063,7 +1065,7 @@ struct HistoryDetail: View {
           StarRating(stars: history.rating(of: item)) { history.setRating($0, for: [item]) }
         }
         .disabled(item.isEntry)
-        if !create.models.contains(where: { $0.file == sidecar.model }) {
+        if !item.isImported, !create.models.contains(where: { $0.file == sidecar.model }) {
           Label("\(sidecar.model) isn't downloaded.", systemImage: "exclamationmark.triangle")
             .font(.caption).foregroundStyle(.secondary)
         }
@@ -1107,7 +1109,7 @@ struct HistoryDetail: View {
           }
         }
         Section("Settings") {
-          LabeledContent("Model", value: modelName(sidecar.model))
+          LabeledContent("Model", value: item.isImported ? "None (imported video)" : modelName(sidecar.model))
           LabeledContent("LoRAs") {
             let loras = HistoryLoRA.rows(of: sidecar.configuration, installed: library.loras)
             if loras.isEmpty {
@@ -1659,7 +1661,7 @@ struct HistoryGraphRow: View {
           .lineLimit(2)
         Text(
           [
-            modelName(sidecar.model),
+            item.isImported ? "Imported" : modelName(sidecar.model),
             item.clip.map { "Video, " + $0.duration.formatted(.number.precision(.fractionLength(1))) + " s" },
             sidecar.createdAt.formatted(date: .abbreviated, time: .shortened),
           ].compactMap(\.self).joined(separator: " · "))
@@ -1719,6 +1721,19 @@ struct HistoryGraphRow: View {
 
   private func modelName(_ file: String) -> String {
     create.models.first { $0.file == file }?.name ?? file
+  }
+}
+
+/// The badge on an imported video's tile (`HistoryItem.isImported`).
+struct ImportedBadge: View {
+  var body: some View {
+    Text("Imported")
+      .font(.system(size: 9, weight: .semibold))
+      .padding(.horizontal, 4)
+      .padding(.vertical, 1)
+      .background(.black.opacity(0.6), in: .capsule)
+      .foregroundStyle(.white)
+      .help("A video brought in from outside: its file is kept with the project")
   }
 }
 

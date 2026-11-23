@@ -548,6 +548,16 @@ final class CreateModel {
   enum ImageImportTarget {
     case canvas, moodboard
   }
+
+  /// Set to show the Open panel for a video (Open Video…).
+  var videoOpen = false
+  /// Set to show the photo picker for a video (Open Video from Photos…).
+  var videoPhotosOpen = false
+  /// The video being copied into the project (`importVideo`), if any.
+  @ObservationIgnored private var videoImport: (id: UUID, task: Task<Void, Never>)?
+  /// A video is being copied in (`importVideo`).
+  private(set) var isImportingVideo = false
+  static let importingVideoNote = "Copying video…"
   /// Bumped to ask the prompt composer to take focus (⌘L).
   var focusPromptRequest = 0
   /// Set to ask before forgetting the recent prompts (Image ▸ Clear Prompt History…).
@@ -1240,6 +1250,60 @@ final class CreateModel {
     }
   }
 
+  /// Brings a video into the project (`HistoryStore.importVideo`, which keeps it as a file beside
+  /// the project), in the background with a note in the status bar. Once in, it's the current
+  /// step and plays on the canvas; with H3 Ref2VA it's the reference video, in Edit. A newer
+  /// import, or another project, stops one still copying. `moving` moves the app's own copy (a
+  /// drop's, a photo's) in rather than copying it again.
+  func importVideo(_ url: URL, name: String, moving: Bool = false) {
+    cancelVideoImport()
+    statusNote = Self.importingVideoNote
+    isImportingVideo = true
+    let history = history
+    let id = UUID()
+    let task = Task { [weak self] in
+      defer { if moving { try? FileManager.default.removeItem(at: url) } }
+      do {
+        let item = try await history.importVideo(url, name: name, moving: moving, after: history.currentTensorId)
+        guard let self, !Task.isCancelled, self.videoImport?.id == id else { return }
+        self.videoImport = nil
+        self.finishVideoImport()
+        self.show(item)
+        if self.videoModel?.takesReferences == true { self.canvasMode = .edit }
+      } catch {
+        // Stopped by a newer import or another project: that one's note stays.
+        guard let self, !Task.isCancelled, self.videoImport?.id == id else { return }
+        self.videoImport = nil
+        self.finishVideoImport()
+        self.errorMessage = "Couldn't bring in the video: \(error.localizedDescription)"
+      }
+    }
+    videoImport = (id, task)
+  }
+
+  /// Stops a video still being copied in; it leaves nothing in the project.
+  func cancelVideoImport() {
+    videoImport?.task.cancel()
+    videoImport = nil
+    finishVideoImport()
+  }
+
+  private func finishVideoImport() {
+    isImportingVideo = false
+    if statusNote == Self.importingVideoNote { statusNote = nil }
+  }
+
+  /// Waits for the video being copied in, for scripted checks.
+  func videoImportFinished() async {
+    await videoImport?.task.value
+  }
+
+  /// A video picked in the Open panel.
+  func importVideos(_ urls: [URL]) {
+    guard let url = urls.first else { return }
+    importVideo(url, name: url.deletingPathExtension().lastPathComponent)
+  }
+
   /// Images picked from the photo library: one for the canvas, any number for the moodboard.
   func importPhotos(_ photos: [Data], failed: Int, into target: ImageImportTarget) {
     var failed = failed
@@ -1329,7 +1393,11 @@ final class CreateModel {
     defer {
       moodboard.reportFailure = { [weak self] in self?.errorMessage = $0 }
       moodboard.onChange = { [weak self] in self?.moodboardDidChange() }
-      history.willSwitchProject = { [weak self] in await self?.flushEntries() }
+      history.willSwitchProject = { [weak self] in
+        // A video still being copied in belongs to the project it was brought into.
+        self?.cancelVideoImport()
+        await self?.flushEntries()
+      }
       history.isIdle = { [weak self] in self?.queue.isEmpty ?? true }
     }
     if let session = SessionState.load() {
@@ -1477,7 +1545,8 @@ final class CreateModel {
   /// it up: the last pick wins, its settings waiting in `pendingSettings` for its model's load
   /// (`use`), so a second clip picked while the first one's model loads isn't dropped.
   func canUse(_ item: HistoryItem) -> Bool {
-    !item.isEntry && !isRunning && !waitsForEntries && !item.sidecar.configuration.isEmpty
+    // An imported video has no settings to use.
+    !item.isEntry && !item.isImported && !isRunning && !waitsForEntries && !item.sidecar.configuration.isEmpty
       && availableModels.contains { $0.file == item.sidecar.model }
   }
 

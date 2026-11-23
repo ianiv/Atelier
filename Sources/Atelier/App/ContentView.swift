@@ -157,6 +157,20 @@ struct ContentView: View {
           create.importPhotos(photos, failed: failed, into: target)
         }
       }
+      // Open Video… and Open Video from Photos…: the video joins the project.
+      .onChange(of: create.videoOpen, initial: true) {
+        guard create.videoOpen else { return }
+        create.videoOpen = false
+        fileDialogs.open = FileDialogs.Open(types: [.movie]) { urls in create.importVideos(urls) }
+      }
+      .onChange(of: create.videoPhotosOpen, initial: true) {
+        guard create.videoPhotosOpen else { return }
+        create.videoPhotosOpen = false
+        fileDialogs.photos = FileDialogs.Photos(videos: true) { _, _ in } videoCompletion: { videos, failed in
+          if let video = videos.first { create.importVideo(video, name: "Video from Photos", moving: true) }
+          if failed > 0 { create.errorMessage = "Couldn't load the video." }
+        }
+      }
       .fileDialogs(fileDialogs)
     #if os(iOS)
       .onChange(of: create.isRunning, initial: true) {
