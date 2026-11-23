@@ -169,13 +169,22 @@ final class CreateModel {
     if let selectedModel, !availableModels.contains(where: { $0.file == selectedModel }) {
       return "\(name) doesn't have this model."
     }
-    return runTargetMaskProblem
+    return runTargetMaskProblem ?? runTargetReferenceVideoProblem
   }
 
   /// Generate would send a mask to a server too old to use one (`runTargetTakesMasks`).
   var runTargetMaskProblem: String? {
     guard !runTargetTakesMasks, let name = runTargetServerName, screenFrameHasPaint else { return nil }
     return "\(name) can't take masks: its Atelier is older. Clear the mask or run on this device."
+  }
+
+  /// Generate would send a reference video to a server too old to take one
+  /// (`RemoteProtocol.referenceVideoFeature`), which would make the video without it.
+  var runTargetReferenceVideoProblem: String? {
+    guard let name = runTargetServerName, referenceClip != nil,
+          serverCatalog?.features.contains(RemoteProtocol.referenceVideoFeature) != true
+    else { return nil }
+    return "\(name) can't take a reference video: its Atelier is older. Put an image on the canvas or run on this device."
   }
 
   /// This device, as Run on and the Queue call it.

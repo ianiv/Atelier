@@ -18,7 +18,7 @@ nonisolated enum RemoteProtocol {
   static let maxDeviceNameLength = 64
   /// What this copy can do beyond version 1, listed in its catalog so a client can tell an older
   /// server (which lists none) apart without refusing it outright.
-  static let features = [maskFeature, schedulerFeature, comfySamplersFeature]
+  static let features = [maskFeature, schedulerFeature, comfySamplersFeature, referenceVideoFeature]
   /// Runs a job's inpainting mask (`RemoteJobRequest.mask`). A server without it would ignore the
   /// mask and regenerate the whole frame.
   static let maskFeature = "mask"
@@ -28,6 +28,9 @@ nonisolated enum RemoteProtocol {
   /// Runs the ComfyUI samplers (DPM++ 2M SDE, Res Multistep, Heun, ER-SDE). A server without them
   /// reads their raw values as DPM++ 2M Karras and would run that instead.
   static let comfySamplersFeature = "comfy-samplers"
+  /// Runs H3 Ref2VA with a reference video (`RemoteJobRequest.referenceVideo`). A server without
+  /// it would ignore the frames and make a video without its reference.
+  static let referenceVideoFeature = "reference-video"
 }
 
 nonisolated struct RemoteModelInfo: Codable, Hashable, Sendable {
@@ -89,6 +92,10 @@ nonisolated struct RemoteJobRequest: Codable, Hashable, Sendable {
   var upscale: ClipUpscale?
   var frames: [String] = []
   var sourceClip: UUID?
+  /// H3 Ref2VA's reference video (`GenerationEngine.Request.referenceVideo`): one PNG per output
+  /// frame, prepared at the output size; a frame held past the clip's end is the same upload.
+  /// Absent from older clients.
+  var referenceVideo: [String]?
 }
 
 nonisolated enum RemoteJobState: String, Codable, Sendable {

@@ -368,6 +368,37 @@ struct RemoteClientJobsTests {
   }
 }
 
+/// A job's reference video as it travels (`RemoteJobRequest.referenceVideo`) and as a sent job
+/// keeps it (`RemoteClientJob.referenceTensorId`).
+@Suite(.tags(.smoke))
+struct RemoteReferenceVideoTests {
+  @Test func aRequestFromAnOlderClientHasNoReferenceVideo() throws {
+    let old = #"{"model":"m.ckpt","prompt":"p","negativePrompt":"","seed":1,"settings":{},"canvasIsImported":false,"moodboard":[],"frames":[]}"#
+    let request = try JSONDecoder().decode(RemoteJobRequest.self, from: Data(old.utf8))
+    #expect(request.referenceVideo == nil)
+  }
+
+  @Test func aReferenceVideoRoundTrips() throws {
+    var request = RemoteJobRequest(model: "m.ckpt", prompt: "p", negativePrompt: "", seed: 1, settings: [:])
+    request.referenceVideo = ["a", "b", "b"]
+    let decoded = try JSONDecoder().decode(RemoteJobRequest.self, from: JSONEncoder().encode(request))
+    #expect(decoded == request)
+    #expect(decoded.referenceVideo == ["a", "b", "b"])
+  }
+
+  @Test func aKeptJobKeepsItsReferenceClip() throws {
+    var record = RemoteClientJob(jobID: UUID(), serverID: UUID(), project: "P", model: "m", prompt: "", negativePrompt: "", seed: 0, settings: [:])
+    let older = try JSONDecoder().decode(RemoteClientJob.self, from: JSONEncoder().encode(record))
+    #expect(older.referenceTensorId == nil)
+    record.referenceTensorId = 7
+    #expect(try JSONDecoder().decode(RemoteClientJob.self, from: JSONEncoder().encode(record)).referenceTensorId == 7)
+  }
+
+  @Test func serversSayTheyTakeReferenceVideos() {
+    #expect(RemoteProtocol.features.contains(RemoteProtocol.referenceVideoFeature))
+  }
+}
+
 struct RemoteTraitsTests {
   /// A community model this device's ModelZoo has never heard of, as a server describes it.
   @Test func aClientLearnsAModelsTraitsFromItsServer() throws {
