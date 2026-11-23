@@ -140,6 +140,8 @@ nonisolated struct ReferenceVideo: Sendable {
     guard !indices.isEmpty else { throw Failure.tooShort }
     let generator = Media.generator(for: url)
     let sourceRate = sourceRate.isFinite && sourceRate > 0 ? sourceRate : rate
+    // The file's own length, not the record's: past it the generator gives the last frame again.
+    let duration = (try? await AVURLAsset(url: url).load(.duration).seconds) ?? .infinity
     var frames: [CGImage] = []
     frames.reserveCapacity(indices.count)
     var last: (index: Int, frame: CGImage)?
@@ -150,13 +152,18 @@ nonisolated struct ReferenceVideo: Sendable {
         frames.append(last.frame)
         continue
       }
-      let time = CMTime(seconds: (Double(index) + 0.5) / sourceRate, preferredTimescale: 600_000)
-      guard let image = try? await generator.image(at: time) else {
+      let seconds = (Double(index) + 0.5) / sourceRate
+      if seconds >= duration, !frames.isEmpty { break }
+      guard let image = try? await generator.image(at: CMTime(seconds: seconds, preferredTimescale: 600_000)) else {
         if frames.isEmpty { throw Media.Failure.invalidVideo }
         break
       }
-      // Past the file's end the generator gives its last frame again: the clip has ended.
-      if let lastTime, image.actualTime <= lastTime { break }
+      // A variable frame rate can put two slots on one frame of the file: the same image again.
+      if let lastTime, let previous = last?.frame, image.actualTime == lastTime {
+        last = (index, previous)
+        frames.append(previous)
+        continue
+      }
       lastTime = image.actualTime
       guard let frame = frame(image.image) else { throw Failure.unreadable }
       last = (index, frame)
