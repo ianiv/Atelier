@@ -55,6 +55,9 @@ extension Automation {
   ///   share one tensor; heal and crop save together with the strokes where they were;
   /// - `heal_image` adds spots with their offsets, refuses a spot without a source or with a
   ///   radius past 256, and `crop_image` and `edit_image_look` keep a step's strokes;
+  /// - steps sharing strokes share their `edit_heal_<id>` tensor through Compact Project…, a step
+  ///   whose tensor is gone opens with the missing-data note and Heal off, deleting one of the
+  ///   steps keeps the tensor and deleting the last removes it;
   /// - opening another image drops the strokes and the source.
   ///
   ///   Atelier --edit-tools-check --project NAME [--quit]
@@ -532,6 +535,7 @@ extension Automation {
     }
 
     await agentHealChecks(model, edit: edit, presets: presets, source: source, saved: saved, check: check)
+    await healStorageChecks(model, edit: edit, source: source, check: check)
 
     if let other = testImage(width: 320, height: 240) { edit.open(image: other, name: "Edit tools heal check") }
     check(edit.retouch.heal.isEmpty && edit.healSource == nil, "another image opens with no strokes and no source")
@@ -577,6 +581,63 @@ extension Automation {
       noSource.error?.contains("spots[0]") == true && noSource.error?.contains("source") == true && tooBig.error?.contains("256") == true
         && outside.error?.contains("640×480") == true,
       "heal_image refuses a spot without a source, a radius past 256, or a source outside the image")
+  }
+  /// Heal strokes in the project's store as History deletes and compacts it: strokes of their own
+  /// (an offset no other check uses), saved on three steps with three looks.
+  private static func healStorageChecks(_ model: CreateModel, edit: EditModel, source: HistoryItem, check: (Bool, String) -> Void) async {
+    edit.tool = .heal
+    await edit.open(source)
+    edit.setHealSource(at: CGPoint(x: 403, y: 291))
+    edit.addHealStroke(points: [CGPoint(x: 440, y: 240)], undoManager: nil)
+    await edit.settleHeal()
+    var steps: [HistoryItem] = []
+    for amount in [0.1, 0.2, 0.3] {
+      edit.options.vignette.amount = amount
+      guard let id = try? edit.save(), let step = await finished(id, in: model) else {
+        check(false, "a step with shared strokes didn't save")
+        return
+      }
+      steps.append(step)
+    }
+    guard let name = steps[0].sidecar.edit?.heal?.tensorName, steps.allSatisfy({ $0.sidecar.edit?.heal?.tensorName == name }) else {
+      check(false, "the three steps don't share one heal tensor")
+      return
+    }
+    func stored() async -> Bool { await model.history.project.read { $0.contents().tensorNames }.contains(name) }
+
+    do {
+      _ = try await model.compactProject()
+      let record = model.history.item(tensorId: steps[1].tensorId)?.sidecar.edit
+      var data: Edit.LoadedData?
+      if let record { data = await model.history.project.read { $0.editData(for: record) } }
+      let kept = await stored()
+      check(
+        kept && data?.missing.isEmpty == true && data?.blobs.heal?.digest == record?.heal?.digest,
+        "Compact Project keeps the shared heal tensor \(name), read back whole")
+    } catch {
+      check(false, "Compact Project failed: \(error.localizedDescription)")
+    }
+
+    // A step whose tensor is gone: the note, and Heal off (the look as it was).
+    if var broken = model.history.item(tensorId: steps[0].tensorId) {
+      broken.sidecar.edit?.heal?.id = Edit.blobIds.upperBound
+      await edit.open(broken)
+      check(
+        edit.retouch.heal.isEmpty && edit.missingDataNote?.contains("so Heal is off") == true && edit.options.vignette.amount == 0.1,
+        "a step whose heal strokes are gone opens with Heal off and says so (“\(edit.missingDataNote ?? "no note")”)")
+    }
+    await edit.open(source)
+
+    do {
+      try await model.history.delete([steps[0]].compactMap { model.history.item(tensorId: $0.tensorId) })
+      let afterOne = await stored()
+      check(afterOne, "deleting one of the steps sharing strokes keeps \(name)")
+      try await model.history.delete(steps.dropFirst().compactMap { model.history.item(tensorId: $0.tensorId) })
+      let afterAll = await stored()
+      check(!afterAll, "deleting the last step naming them removes \(name)")
+    } catch {
+      check(false, "deleting the healed steps failed: \(error.localizedDescription)")
+    }
   }
 }
 #endif

@@ -287,6 +287,9 @@ final class EditModel {
     await healCanvas.settle()
   }
 
+  /// The step opened records a crop or strokes (`restore`): taking them off is kept across a quit.
+  @ObservationIgnored private var recordedRetouch = false
+
   /// The source's healed pixels, kept from stroke to stroke (`HealCanvas`).
   @ObservationIgnored private let healCanvas = HealCanvas()
 
@@ -362,11 +365,15 @@ final class EditModel {
     Task { await renderer.forget(image) }
   }
 
-  /// Keeps the open step's crop and strokes for the next launch (D10), or forgets them with none.
+  /// Keeps the open step's crop and strokes for the next launch (D10), saved or not; when they've
+  /// been taken off a step that recorded some, that they're off (`EditRetouchSession.cleared`), so
+  /// the record's don't come back. Forgets them when there's nothing either way.
   private func saveRetouchSession() {
     guard SessionState.isEnabled else { return }
-    if case .step(let project, let tensorId) = source, !retouch.isIdentity {
-      EditRetouchSession(project: project, tensorId: tensorId, crop: retouch.crop, heal: retouch.heal).save()
+    if case .step(let project, let tensorId) = source,
+       let kept = EditRetouchSession.keeping(project: project, tensorId: tensorId, retouch: retouch, recorded: recordedRetouch)
+    {
+      kept.save()
     } else {
       EditRetouchSession.clear()
     }
@@ -727,8 +734,9 @@ final class EditModel {
     await open(item)
     // The crop and strokes on the screen at the quit, saved or not (D10).
     if let retouch, case .step(let project, let tensorId) = source, retouch.project == project, retouch.tensorId == tensorId {
-      setCrop(retouch.crop, undoManager: nil)
-      setHeal(retouch.heal ?? .empty, undoManager: nil)
+      let kept = retouch.retouch
+      setCrop(kept.crop, undoManager: nil)
+      setHeal(kept.heal, undoManager: nil)
     }
   }
 
@@ -778,6 +786,7 @@ final class EditModel {
     self.item = item
     self.image = image
     retouch = .none
+    recordedRetouch = false
     healCanvas.reset(source: image)
     appliedHeal = .empty
     healSource = nil
@@ -818,6 +827,7 @@ final class EditModel {
     // strokes are checked where they're applied (`HealBrush.Brush`).
     if let image { retouch.crop = record.crop?.clamped(imageWidth: image.width, imageHeight: image.height) }
     retouch.heal = record.retouch(with: data.blobs).heal
+    recordedRetouch = record.crop != nil || record.heal != nil
     healCanvas.update(retouch.heal)
     updateWorking()
   }

@@ -325,6 +325,25 @@ struct EditJobTests {
     #expect(try JSONDecoder().decode(EditRetouchSession.self, from: unreadable).heal == nil)
   }
 
+  /// Taking a saved step's crop or strokes off without saving is kept across a quit as an explicit
+  /// "cleared" file, so the record's don't come back; nothing at all on a step that recorded none
+  /// writes no file.
+  @Test func clearingARecordedRetouchIsKept() throws {
+    #expect(EditRetouchSession.keeping(project: "P", tensorId: 4, retouch: .none, recorded: false) == nil)
+    let cleared = try #require(EditRetouchSession.keeping(project: "P", tensorId: 4, retouch: .none, recorded: true))
+    #expect(cleared.cleared && cleared.retouch == .none)
+    let read = try JSONDecoder().decode(EditRetouchSession.self, from: JSONEncoder().encode(cleared))
+    #expect(read.cleared && read.retouch == .none)
+    let kept = try #require(EditRetouchSession.keeping(project: "P", tensorId: 4, retouch: Edit.Retouch(heal: Self.strokes), recorded: true))
+    #expect(!kept.cleared && kept.retouch == Edit.Retouch(heal: Self.strokes))
+    // A crop taken off, strokes kept: the strokes come back, no crop.
+    let healOnly = try #require(EditRetouchSession.keeping(project: "P", tensorId: 4, retouch: Edit.Retouch(heal: Self.strokes), recorded: false))
+    #expect(healOnly.retouch.crop == nil && !healOnly.cleared)
+    // A file from before `cleared` with a crop keeps its crop.
+    let old = try JSONDecoder().decode(EditRetouchSession.self, from: Data(#"{"project":"P","tensorId":4,"crop":{"x":1,"y":2,"width":30,"height":40}}"#.utf8))
+    #expect(!old.cleared && old.retouch.crop?.width == 30)
+  }
+
   /// grain.py's `box_sizes`, worked by hand: sigma 3 has ideal width √37 ≈ 6.08, so 5 and 7, with
   /// m = round(−36 / −24) = round(1.5) = 2 (half to even) passes of 5.
   @Test func boxSizesMatchGrainPy() {

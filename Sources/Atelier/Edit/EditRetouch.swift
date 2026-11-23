@@ -287,6 +287,9 @@ final class HealCanvas {
   private var source: CGImage?
   private var target = Edit.HealStrokes.empty
   private var task: Task<Void, Never>?
+  /// Counts the runs, each numbered as it starts: a run cancelled by `reset` may still be
+  /// finishing when the next one starts, and must neither publish nor clear the new one's `task`.
+  private var generation = 0
   /// Called with each new healed picture and its pixels before it replaces `image`, so the caller
   /// can hand the pixels to the renderer first (`EditRenderer.prime`).
   var prime: @MainActor (CGImage, [UInt8]) async -> Void = { _, _ in }
@@ -297,6 +300,7 @@ final class HealCanvas {
   func reset(source: CGImage?) {
     task?.cancel()
     task = nil
+    generation += 1
     self.source = source
     applied = .empty
     target = .empty
@@ -308,7 +312,9 @@ final class HealCanvas {
   func update(_ strokes: Edit.HealStrokes) {
     target = strokes
     guard task == nil, strokes != applied else { return }
-    task = Task { [weak self] in await self?.run() }
+    generation += 1
+    let run = generation
+    task = Task { [weak self] in await self?.run(run) }
   }
 
   /// Waits for the healing under way, for checks and benches.
@@ -316,12 +322,13 @@ final class HealCanvas {
     while let task { await task.value }
   }
 
-  private func run() async {
-    defer { task = nil }
-    while let source, target != applied, !Task.isCancelled {
+  private func run(_ run: Int) async {
+    func current() -> Bool { generation == run && !Task.isCancelled }
+    defer { if generation == run { task = nil } }
+    while let source, target != applied, current() {
       let goal = target, from = applied, kept = pixels
       let made = await Self.heal(source: source, pixels: kept, applied: from, target: goal)
-      guard !Task.isCancelled, self.source === source else { return }
+      guard current(), self.source === source else { return }
       guard let made else {
         // The source couldn't be read: leave it unhealed rather than trying again and again.
         applied = goal
@@ -331,7 +338,7 @@ final class HealCanvas {
         return
       }
       if let image = made.image, let pixels = made.pixels { await prime(image, pixels) }
-      guard !Task.isCancelled, self.source === source else { return }
+      guard current(), self.source === source else { return }
       applied = goal
       image = made.image
       pixels = made.pixels

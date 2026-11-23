@@ -763,7 +763,8 @@ private struct EditPane: View {
       #else
       let sourcing = edit.isSettingHealSource
       #endif
-      healDrag.begin(sourcing ? .source : .paint)
+      // Painting needs a source: with none the touch does nothing, and nothing is drawn.
+      if sourcing { healDrag.begin(.source) } else if edit.healSource != nil { healDrag.begin(.paint) }
     }
     let point = viewport.imagePoint(value.location)
     let origin = edit.workingOrigin

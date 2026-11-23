@@ -492,6 +492,40 @@ struct HealSolverTests {
     #expect(canvas.image == nil && canvas.pixels == nil && canvas.applied.isEmpty)
   }
 
+  /// A run cancelled by a new source may still be finishing when the next starts: it neither
+  /// publishes nor drops the new run, so `settle` waits for the new one and only it publishes.
+  @MainActor @Test func aResetDuringARunLeavesTheNextRunInCharge() async throws {
+    let width = 512, height = 512
+    let first = try #require(ColorMatch.cgImage(rgba: HealTests.image(width: width, height: height, HealTests.texture), width: width, height: height))
+    let second = try #require(ColorMatch.cgImage(rgba: HealTests.image(width: width, height: height) { HealTests.texture($0 + 7, $1) }, width: width, height: height))
+    var longStrokes: [Edit.HealStroke] = []
+    for i in 0..<12 {
+      let x = Float(40 + i * 30)
+      let points: [SIMD2<Float>] = [SIMD2(x, 100), SIMD2(x + 20, 400)]
+      longStrokes.append(Edit.HealStroke(points: points, radius: 40, offset: SIMD2<Float>(10, 0)))
+    }
+    let long = Edit.HealStrokes(strokes: longStrokes)
+    let one = Edit.HealStrokes(strokes: [Edit.HealStroke(points: [SIMD2(200, 200)], radius: 10, offset: SIMD2(30, 0))])
+    var published: [Edit.HealStrokes] = []
+    let canvas = HealCanvas()
+    canvas.reset(source: first)
+    canvas.published = { published.append(canvas.applied) }
+    canvas.update(long)
+    // Under way, then a new source and a run for it.
+    await Task.yield()
+    canvas.reset(source: second)
+    canvas.update(one)
+    #expect(canvas.isBusy)
+    await canvas.settle()
+    #expect(!canvas.isBusy && canvas.applied == one && published == [one])
+    var expected = try #require(ColorMatch.rgba(second))
+    HealBrush.apply(one.strokes[0], to: &expected, width: width, height: height)
+    #expect(canvas.pixels == expected)
+    // Nothing more arrives from the first run.
+    try await Task.sleep(for: .milliseconds(200))
+    #expect(published == [one] && canvas.applied == one)
+  }
+
   /// A pinch never paints: the stroke on its way is dropped, the drag pans until both gestures
   /// end, and a cancelled gesture leaves nothing for the next touch (as `CropDrag`).
   @MainActor @Test func aPinchNeverPaints() {
