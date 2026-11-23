@@ -14,11 +14,12 @@ import Observation
 /// Agents (`edit_image_look`) and scripted checks drive it through the calls the screen makes:
 /// `open(_:)`, `open(image:name:)`, `options`, `applyProfile(_:)`, `setReference(image:name:tensorId:)`,
 /// `matchReference()`, `loadLUT(from:)`, `save()`, `addToHistory()`, `exportPNG()`, `exportLUT(name:)`,
-/// and for the tools `tool`, `setCrop(_:actionName:undoManager:)`, `setCropAspect(_:undoManager:)`.
+/// and for the tools `tool`, `setCrop(_:actionName:undoManager:)`, `setCropAspect(_:undoManager:)`,
+/// `setHealSource(at:)`, `addHealStroke(points:undoManager:)`, `clearHeal(undoManager:)`.
 ///
-/// The retouch (`Edit.Retouch`: the crop now, Heal strokes later) is per image and goes on the
-/// source before the look: the panes render `workingImage`, the source with it, as they rendered
-/// the source before, so the renderer's caches need no change.
+/// The retouch (`Edit.Retouch`: Heal strokes, then the crop) is per image and goes on the source
+/// before the look: the panes render `workingImage`, the source with it, as they rendered the
+/// source before, so the renderer's caches need no change.
 @MainActor
 @Observable
 final class EditModel {
@@ -61,8 +62,9 @@ final class EditModel {
   /// while Crop is the tool, which shows the whole image with the crop drawn over it. One instance
   /// per retouch, as `image` is per source, for the renderer's caches.
   private(set) var workingImage: CGImage?
-  /// The comparison's original: the source with the crop the panes show, so Side by Side and the
-  /// Slider stay pixel for pixel over the edit. (Heal, when it comes, isn't on it.)
+  /// The comparison's original: the source with the crop the panes show but not the Heal strokes,
+  /// so Side by Side, the Slider and Hold for Original show the marks the strokes took out, pixel
+  /// for pixel over the edit.
   private(set) var workingOriginal: CGImage?
   /// Where `workingImage` sits in the source: the applied crop's origin, (0, 0) uncropped. A
   /// fitted render stands in only for a working image at the same place (`EditRenderTarget.stands`).
@@ -79,6 +81,8 @@ final class EditModel {
     didSet {
       guard tool != oldValue else { return }
       if tool.needsSinglePane, compareMode != .hold { compareMode = .hold }
+      // Set Source is the Heal tool's: armed and left, it would catch the next tool's click.
+      if oldValue == .heal { isSettingHealSource = false }
       // The whole image fitted the first time for an image; coming back, the zoom Crop was left
       // at (the image it shows is the same whole image again).
       if oldValue == .crop { cropView = (canvas.scale, canvas.offset) }
@@ -94,8 +98,9 @@ final class EditModel {
     }
   }
 
-  /// What's done to the source's pixels before the look: the crop. Per image: cleared when
-  /// another opens, brought back from a saved step's record. Changed through `setCrop`.
+  /// What's done to the source's pixels before the look: Heal strokes, then the crop. Per image:
+  /// cleared when another opens, brought back from a saved step's record. Changed through
+  /// `setCrop` and `setHeal`.
   private(set) var retouch = Edit.Retouch.none
 
   /// The crop that applies to the source: nil for none, or one taking the whole image.
@@ -173,59 +178,202 @@ final class EditModel {
     return Edit.Crop(rect: rect, imageWidth: width, imageHeight: height, aspect: aspect, swapped: swapped)
   }
 
+  // MARK: Heal
+
+  /// The heal brush's radius in image pixels (D7: a 32 px spot is 32 px of the photo at any zoom;
+  /// the outline scales with the zoom), apart from Create's two brush sizes. Remembered. Up to
+  /// `HealBrush.maxRadius`, the most a stroke is applied with.
+  var healBrushSize: Double {
+    didSet {
+      let kept = Self.keptHealBrushSize(healBrushSize)
+      if kept != healBrushSize { healBrushSize = kept }
+      if SessionState.isEnabled { UserDefaults.standard.set(healBrushSize, forKey: Self.healBrushSizeKey) }
+    }
+  }
+
+  /// The Heal Brush Size menu's choices.
+  static let healBrushSizes: [Double] = [4, 8, 16, 32, 64, 128, 256]
+
+  nonisolated static func keptHealBrushSize(_ size: Double) -> Double {
+    size.isFinite ? min(max(size, 1), Double(HealBrush.maxRadius)) : 32
+  }
+
+  /// Where the next stroke copies from (Aligned, `Edit.HealSource`): set by Option-click or Set
+  /// Source, fixed as an offset by the first stroke after. The session's and this image's, never
+  /// saved: only each stroke's offset is. Nil until one is set: painting then does nothing.
+  private(set) var healSource: Edit.HealSource?
+  /// Where the source crosshair rests while no stroke is being painted: the point set, or after a
+  /// stroke its last point plus the offset (where the next stroke from there would copy from).
+  private(set) var healSourceRest: SIMD2<Float>?
+  /// The Heal bar's Set Source toggle: the next click or tap on the image sets the source rather
+  /// than painting, and turns it off.
+  var isSettingHealSource = false
+
+  /// The strokes healed into `workingImage` so far: `retouch.heal` once healing has caught up.
+  private(set) var appliedHeal = Edit.HealStrokes.empty
+
+  /// Strokes are being healed into the picture.
+  var isHealing: Bool { appliedHeal != retouch.heal }
+
+  /// Strokes added but not healed in yet, which the overlay outlines meanwhile.
+  var unappliedHealStrokes: ArraySlice<Edit.HealStroke> {
+    let strokes = retouch.heal.strokes
+    guard strokes.count > appliedHeal.strokes.count, strokes.starts(with: appliedHeal.strokes) else { return [] }
+    return strokes[appliedHeal.strokes.count...]
+  }
+
+  /// The source point (Option-click, or a click with Set Source on), in image pixels, kept on the
+  /// image; Set Source goes off.
+  func setHealSource(at point: CGPoint) {
+    guard let image, point.x.isFinite, point.y.isFinite else { return }
+    let kept = SIMD2(Float(min(max(point.x, 0), Double(image.width))), Float(min(max(point.y, 0), Double(image.height))))
+    healSource = .point(kept)
+    healSourceRest = kept
+    isSettingHealSource = false
+  }
+
+  /// A stroke painted through `points` (image pixels) at the brush size, from the source: one
+  /// undo step, "Heal". False, and nothing done, with no source set (or no image, or no point):
+  /// painting before a source is set does nothing.
+  @discardableResult
+  func addHealStroke(points: [CGPoint], undoManager: UndoManager?) -> Bool {
+    guard let image else { return false }
+    let radius = Float(Self.keptHealBrushSize(healBrushSize))
+    // Kept within a brush's reach of the image: further out a point touches nothing, and an
+    // untrusted value never reaches the stroke's encoding.
+    let reach = Double(radius)
+    let kept = points.compactMap { point -> SIMD2<Float>? in
+      guard point.x.isFinite, point.y.isFinite else { return nil }
+      return SIMD2(
+        Float(min(max(point.x, -reach), Double(image.width) + reach)), Float(min(max(point.y, -reach), Double(image.height) + reach)))
+    }
+    var source = healSource
+    guard let stroke = Edit.HealSource.stroke(points: kept, radius: radius, source: &source), let last = kept.last else { return false }
+    healSource = source
+    healSourceRest = last + stroke.offset
+    var strokes = retouch.heal
+    strokes.strokes.append(stroke)
+    setHeal(strokes, actionName: "Heal", undoManager: undoManager)
+    return true
+  }
+
+  /// Clear Heal: no strokes (D6: Reset is the look's alone), one undo step, "Clear Heal".
+  func clearHeal(undoManager: UndoManager?) {
+    guard !retouch.heal.isEmpty else { return }
+    setHeal(.empty, actionName: "Clear Heal", undoManager: undoManager)
+  }
+
+  /// Sets the strokes, one undo step named `actionName` on `undoManager` (the window's, D12), and
+  /// heals them into the picture off the main actor (only the new ones when they follow on).
+  func setHeal(_ strokes: Edit.HealStrokes, actionName: String = "Heal", undoManager: UndoManager?) {
+    guard let image, strokes != retouch.heal else { return }
+    let old = retouch.heal
+    retouch.heal = strokes
+    if let undoManager {
+      retouchUndoManager = undoManager
+      let source = ObjectIdentifier(image)
+      undoManager.registerUndo(withTarget: self) { model in
+        guard model.image.map(ObjectIdentifier.init) == source else { return }
+        model.setHeal(old, actionName: actionName, undoManager: undoManager)
+      }
+      undoManager.setActionName(actionName)
+    }
+    saveRetouchSession()
+    healCanvas.update(strokes)
+  }
+
+  /// Waits until the strokes are healed into the picture (checks and benches).
+  func settleHeal() async {
+    await healCanvas.settle()
+  }
+
+  /// The step opened records a crop or strokes (`restore`): taking them off is kept across a quit.
+  @ObservationIgnored private var recordedRetouch = false
+
+  /// The source's healed pixels, kept from stroke to stroke (`HealCanvas`).
+  @ObservationIgnored private let healCanvas = HealCanvas()
+
+  /// The healing caught up: the new healed picture goes up.
+  private func healPublished() {
+    appliedHeal = healCanvas.applied
+    updateWorking()
+  }
+
   /// The zoom Crop was last left at for this image, which coming back to Crop restores.
   @ObservationIgnored private var cropView: (scale: Double?, offset: CGSize)?
   /// The undo manager the retouch's steps went on, so they're dropped when another image opens.
   @ObservationIgnored private weak var retouchUndoManager: UndoManager?
-  /// What `workingImage` was made from, so the same retouch doesn't make a new image (and new
-  /// cache entries) each time.
-  @ObservationIgnored private var workingKey: (source: ObjectIdentifier, shown: Edit.Retouch)?
+  /// What `workingImage` and `workingOriginal` were made from, so the same retouch doesn't make a
+  /// new image (and new cache entries) each time.
+  private struct WorkingKey: Equatable {
+    var source: ObjectIdentifier
+    /// The healed picture (the source with no strokes).
+    var healed: ObjectIdentifier
+    var crop: Edit.Crop?
+  }
+
+  @ObservationIgnored private var workingKey: WorkingKey?
+  @ObservationIgnored private var originalKey: WorkingKey?
   /// The source fitted once, for the original's side while it isn't cropped.
   @ObservationIgnored private var sourcePreview: CGImage?
 
   /// Makes `workingImage` and `workingOriginal` again for the source, retouch and tool, if they
-  /// changed. A cropped image replaced is let go by the renderer; the source's own entry stays,
-  /// as going back into Crop shows it again.
+  /// changed: the working image is the healed picture cropped (whole while Crop is the tool), the
+  /// original the source cropped the same way, unhealed. An image replaced is let go by the
+  /// renderer; the source's own entry stays, as going back into Crop shows it again.
   private func updateWorking() {
     guard let image else {
       workingKey = nil
+      originalKey = nil
       workingImage = nil
       workingOriginal = nil
       return
     }
-    var shown = retouch
-    if tool == .crop { shown.crop = nil }
-    if let workingKey, workingKey.source == ObjectIdentifier(image), workingKey.shown == shown, workingImage != nil { return }
-    workingKey = (ObjectIdentifier(image), shown)
-    let working = EditRetouch.apply(shown, to: image)
-    let crop = EditRetouch.effectiveCrop(shown.crop, imageWidth: image.width, imageHeight: image.height)
-    workingOrigin = (crop?.x ?? 0, crop?.y ?? 0)
-    if let old = workingImage, old !== working, old !== image {
-      let renderer = renderer
-      Task { await renderer.forget(old) }
+    let crop = tool == .crop ? nil : effectiveCrop
+    let healed = healCanvas.image ?? image
+    let key = WorkingKey(source: ObjectIdentifier(image), healed: ObjectIdentifier(healed), crop: crop?.renderKey)
+    if key != workingKey || workingImage == nil {
+      workingKey = key
+      let working = EditRetouch.cropped(crop, healed)
+      workingOrigin = (crop?.x ?? 0, crop?.y ?? 0)
+      if let old = workingImage, old !== working, old !== image { forget(old) }
+      workingImage = working
     }
-    workingImage = working
-    // No heal yet: the original is the same picture. With Heal it's the source with the crop alone.
-    workingOriginal = working
-    if working === image, let sourcePreview {
+    let originalKey = WorkingKey(source: ObjectIdentifier(image), healed: ObjectIdentifier(image), crop: crop?.renderKey)
+    guard originalKey != self.originalKey || workingOriginal == nil else { return }
+    self.originalKey = originalKey
+    let original = EditRetouch.cropped(crop, image)
+    if let old = workingOriginal, old !== original, old !== image, old !== workingImage { forget(old) }
+    workingOriginal = original
+    if original === image, let sourcePreview {
       originalPreview = sourcePreview
     } else {
       originalPreview = nil
       Task {
-        let fitted = await Self.fitted(working)
-        if self.workingOriginal === working {
+        let fitted = await Self.fitted(original)
+        if self.workingOriginal === original {
           originalPreview = fitted
-          if working === image { sourcePreview = fitted }
+          if original === image { sourcePreview = fitted }
         }
       }
     }
   }
 
-  /// Keeps the open step's crop for the next launch (D10), or forgets it with no crop.
+  /// Lets the renderer drop what it kept for `image`.
+  private func forget(_ image: CGImage) {
+    let renderer = renderer
+    Task { await renderer.forget(image) }
+  }
+
+  /// Keeps the open step's crop and strokes for the next launch (D10), saved or not; when they've
+  /// been taken off a step that recorded some, that they're off (`EditRetouchSession.cleared`), so
+  /// the record's don't come back. Forgets them when there's nothing either way.
   private func saveRetouchSession() {
     guard SessionState.isEnabled else { return }
-    if case .step(let project, let tensorId) = source, let crop = retouch.crop {
-      EditRetouchSession(project: project, tensorId: tensorId, crop: crop).save()
+    if case .step(let project, let tensorId) = source,
+       let kept = EditRetouchSession.keeping(project: project, tensorId: tensorId, retouch: retouch, recorded: recordedRetouch)
+    {
+      kept.save()
     } else {
       EditRetouchSession.clear()
     }
@@ -377,6 +525,8 @@ final class EditModel {
 
   init() {
     storedOptions = Self.rememberedOptions()
+    let size = SessionState.isEnabled ? UserDefaults.standard.double(forKey: Self.healBrushSizeKey) : 0
+    healBrushSize = size > 0 ? Self.keptHealBrushSize(size) : 32
     compareMode = SessionState.isEnabled
       ? UserDefaults.standard.string(forKey: Self.compareModeKey).flatMap(Compare.Mode.init) ?? .hold : .hold
     // A scripted run keeps its profiles out of the user's library.
@@ -388,6 +538,12 @@ final class EditModel {
       AppLifecycle.onResignActive { [weak self] in self?.flushRemembered() }
       AppLifecycle.onWillTerminate { [weak self] in self?.flushRemembered() }
     }
+    healCanvas.prime = { [weak self] image, pixels in
+      // Only a picture the panes will render as it is: a cropped one is a new image anyway.
+      guard let self, tool == .crop || effectiveCrop == nil else { return }
+      await renderer.prime(image, rgba: pixels)
+    }
+    healCanvas.published = { [weak self] in self?.healPublished() }
   }
 
   var hasSource: Bool { image != nil }
@@ -576,9 +732,11 @@ final class EditModel {
     // Read before opening, which writes the file for what it opens.
     let retouch = EditRetouchSession.load()
     await open(item)
-    // The crop on the screen at the quit, saved or not (D10).
+    // The crop and strokes on the screen at the quit, saved or not (D10).
     if let retouch, case .step(let project, let tensorId) = source, retouch.project == project, retouch.tensorId == tensorId {
-      setCrop(retouch.crop, undoManager: nil)
+      let kept = retouch.retouch
+      setCrop(kept.crop, undoManager: nil)
+      setHeal(kept.heal, undoManager: nil)
     }
   }
 
@@ -628,10 +786,18 @@ final class EditModel {
     self.item = item
     self.image = image
     retouch = .none
+    recordedRetouch = false
+    healCanvas.reset(source: image)
+    appliedHeal = .empty
+    healSource = nil
+    healSourceRest = nil
+    isSettingHealSource = false
     cropView = nil
     sourcePreview = nil
     workingKey = nil
+    originalKey = nil
     workingImage = nil
+    workingOriginal = nil
     canvas.zoomToFit()
     updateWorking()
   }
@@ -657,8 +823,12 @@ final class EditModel {
     }
     lut = context.lut
     fileLUT = builtInLUTName == nil ? lut : nil
-    // The crop it was saved with, kept inside this image: a record is read from a file.
+    // The crop it was saved with, kept inside this image: a record is read from a file. The
+    // strokes are checked where they're applied (`HealBrush.Brush`).
     if let image { retouch.crop = record.crop?.clamped(imageWidth: image.width, imageHeight: image.height) }
+    retouch.heal = record.retouch(with: data.blobs).heal
+    recordedRetouch = record.crop != nil || record.heal != nil
+    healCanvas.update(retouch.heal)
     updateWorking()
   }
 
@@ -873,7 +1043,7 @@ final class EditModel {
       project: project, sourceTensorId: tensorId, options: options, profileName: profile?.name,
       referenceTensorId: options.match.target == .reference ? target?.tensorId : nil,
       referenceName: options.match.target == .reference ? target?.name : nil, context: context,
-      retouch: Edit.Retouch(crop: effectiveCrop))
+      retouch: Edit.Retouch(crop: effectiveCrop, heal: retouch.heal))
   }
 
   /// Save to History: queues the edit to render at full size and save as a new step after the
@@ -929,7 +1099,7 @@ final class EditModel {
     let options = options, context = context, item = item
     let job = AppSettings.embedsSettings ? pendingJob : nil
     // The crop applied even while Crop is the tool: what Save to History would save.
-    let rendered = try await renderer.full(source: EditRetouch.apply(retouch, to: image), options: options, context: context)
+    let rendered = try await renderer.full(source: try await retouched(image), options: options, context: context)
     var sidecar: HistoryStore.Sidecar?
     if let item, let job {
       sidecar = item.sidecar
@@ -968,8 +1138,16 @@ final class EditModel {
     guard let image else { throw EditError.noImage }
     isExporting = true
     defer { isExporting = false }
-    let table = try await renderer.bakeLUT(source: EditRetouch.apply(retouch, to: image), options: options, context: context, name: name)
+    let table = try await renderer.bakeLUT(source: try await retouched(image), options: options, context: context, name: name)
     return Data(CubeLUT.text(of: table).utf8)
+  }
+
+  /// The source with the whole retouch, whatever the tool: the screen's healed picture when it
+  /// has every stroke, else healed again from the source.
+  private func retouched(_ image: CGImage) async throws -> CGImage {
+    let retouch = retouch
+    if healCanvas.applied == retouch.heal { return EditRetouch.cropped(retouch.crop, healCanvas.image ?? image) }
+    return try await EditRetouch.applied(retouch, to: image)
   }
 
   /// The file name exports start from.
@@ -999,6 +1177,7 @@ final class EditModel {
 
   private nonisolated static let optionsKey = "editOptions"
   private static let compareModeKey = "editCompareMode"
+  static let healBrushSizeKey = "editHealBrushSize"
 
   /// The look last used; grain.py's default look the first time, and in scripted runs.
   nonisolated static func rememberedOptions(_ defaults: UserDefaults = .standard) -> EditOptions {

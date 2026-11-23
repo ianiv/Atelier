@@ -138,7 +138,7 @@ struct EditJobTests {
     let read = try #require(ProjectMapping.Profile(profile.bytes))
     #expect(read.edit == record)
     let text = String(decoding: profile.bytes, as: UTF8.self)
-    #expect(text.contains(#""edit":"#) && text.contains(#""real_noise":"#) && text.contains(#""version":2"#))
+    #expect(text.contains(#""edit":"#) && text.contains(#""real_noise":"#) && text.contains(#""version":\#(Edit.Record.currentVersion)"#))
     #expect(!text.contains(#""data":"#) && profile.bytes.count < 4_000)
     #expect(record.tensorNames == ["edit_noise_3000000001", "edit_histogram_3000000003", "edit_lut_3000000002"])
     // A step without one reads as none.
@@ -222,7 +222,7 @@ struct EditJobTests {
     var profile = ProjectMapping.Profile(duration: 1, inputTensorId: 12, parentTensorId: 12)
     profile.edit = job.record
     let read = try #require(ProjectMapping.Profile(profile.bytes))
-    #expect(read.edit?.crop == crop && read.edit?.version == 2)
+    #expect(read.edit?.crop == crop && read.edit?.version == Edit.Record.currentVersion)
     #expect(profile.bytes.count < 4_000)
     let queued = try JSONDecoder().decode(Edit.Job.self, from: JSONEncoder().encode(job))
     #expect(queued.retouch.crop == crop)
@@ -249,6 +249,99 @@ struct EditJobTests {
     #expect(a.isSameEdit(as: b))
     b.retouch = Edit.Retouch(crop: Edit.Crop(x: 1, y: 0, width: 100, height: 100))
     #expect(!a.isSameEdit(as: b))
+  }
+
+  static let strokes = Edit.HealStrokes(strokes: [
+    Edit.HealStroke(points: [SIMD2(10, 12), SIMD2(14, 12)], radius: 6, offset: SIMD2(-8, 3)),
+    Edit.HealStroke(points: [SIMD2(30, 30)], radius: 4, offset: SIMD2(5, 5)),
+  ])
+
+  /// Heal strokes go in the store, never in `profile_data`: the record names them by digest and
+  /// count, the job carries them until it's saved (in the queue's JSON), and only strokes whose
+  /// digest is the record's are taken back.
+  @Test func recordNamesItsStrokesAndTheJobCarriesThem() throws {
+    var job = Self.job()
+    job.retouch = Edit.Retouch(crop: Edit.Crop(x: 0, y: 0, width: 40, height: 40), heal: Self.strokes)
+    #expect(job.record.heal?.digest == Self.strokes.digest && job.record.heal?.count == 2 && job.record.heal?.id == nil)
+    #expect(job.blobs.heal == Self.strokes && job.retouch.heal == Self.strokes)
+    var profile = ProjectMapping.Profile(duration: 1, inputTensorId: 12, parentTensorId: 12)
+    profile.edit = job.record
+    let read = try #require(ProjectMapping.Profile(profile.bytes))
+    #expect(read.edit?.heal == job.record.heal)
+    #expect(read.edit?.retouch(with: Edit.Blobs()).heal.isEmpty == true)
+    let queued = try JSONDecoder().decode(Edit.Job.self, from: JSONEncoder().encode(job))
+    #expect(queued.retouch == job.retouch)
+    // Other strokes under the record's name are refused.
+    var other = Self.strokes
+    other.strokes[0].radius = 7
+    #expect(job.record.retouch(with: Edit.Blobs(heal: other)).heal.isEmpty)
+    // A saved record's tensor is in its names; clearing the strokes takes it out.
+    var saved = job.record
+    saved.heal?.id = 3_000_000_100
+    #expect(saved.tensorNames.contains("edit_heal_3000000100"))
+    job.retouch = Edit.Retouch()
+    #expect(job.record.heal == nil && job.blobs.heal == nil)
+    // A record from before Heal reads with none; strokes of the wrong shape are none, not a lost record.
+    var object = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(Self.record())) as? [String: Any])
+    object.removeValue(forKey: "heal")
+    #expect(try JSONDecoder().decode(Edit.Record.self, from: JSONSerialization.data(withJSONObject: object)).heal == nil)
+    object["heal"] = ["digest": 3]
+    let bad = try JSONDecoder().decode(Edit.Record.self, from: JSONSerialization.data(withJSONObject: object))
+    #expect(bad.heal == nil && bad.sourceTensorId == 12)
+  }
+
+  @Test func sameEditComparesTheStrokes() {
+    var a = Self.job(project: "P", source: 1)
+    var b = a
+    a.retouch = Edit.Retouch(heal: Self.strokes)
+    #expect(!a.isSameEdit(as: b))
+    b.retouch = Edit.Retouch(heal: Self.strokes)
+    // Where they're stored doesn't change the image.
+    b.record.heal?.id = 3_000_000_001
+    #expect(a.isSameEdit(as: b))
+    var fewer = Self.strokes
+    fewer.strokes.removeLast()
+    b.retouch = Edit.Retouch(heal: fewer)
+    #expect(!a.isSameEdit(as: b))
+  }
+
+  @Test func missingStrokesTurnHealOff() {
+    #expect(Edit.MissingData.heal.note("This edit's") == "This edit's heal strokes data is missing from the project, so Heal is off.")
+    // Strokes aren't a look setting: the look renders as it was.
+    #expect(Self.record().options(without: .heal) == Self.record().options)
+  }
+
+  /// The crop and strokes kept across a quit (D10): either alone, and a file from before Heal.
+  @Test func retouchSessionKeepsStrokes() throws {
+    let both = EditRetouchSession(project: "P", tensorId: 4, crop: Edit.Crop(x: 1, y: 2, width: 30, height: 40), heal: Self.strokes)
+    #expect(try JSONDecoder().decode(EditRetouchSession.self, from: JSONEncoder().encode(both)) == both)
+    let healOnly = EditRetouchSession(project: "P", tensorId: 4, crop: nil, heal: Self.strokes)
+    #expect(try JSONDecoder().decode(EditRetouchSession.self, from: JSONEncoder().encode(healOnly)) == healOnly)
+    #expect(EditRetouchSession(project: "P", tensorId: 4, crop: nil, heal: .empty).heal == nil)
+    let old = Data(#"{"project":"P","tensorId":4,"crop":{"x":1,"y":2,"width":30,"height":40}}"#.utf8)
+    let read = try JSONDecoder().decode(EditRetouchSession.self, from: old)
+    #expect(read.crop?.width == 30 && read.heal == nil)
+    let unreadable = Data(#"{"project":"P","tensorId":4,"heal":"AAAA"}"#.utf8)
+    #expect(try JSONDecoder().decode(EditRetouchSession.self, from: unreadable).heal == nil)
+  }
+
+  /// Taking a saved step's crop or strokes off without saving is kept across a quit as an explicit
+  /// "cleared" file, so the record's don't come back; nothing at all on a step that recorded none
+  /// writes no file.
+  @Test func clearingARecordedRetouchIsKept() throws {
+    #expect(EditRetouchSession.keeping(project: "P", tensorId: 4, retouch: .none, recorded: false) == nil)
+    let cleared = try #require(EditRetouchSession.keeping(project: "P", tensorId: 4, retouch: .none, recorded: true))
+    #expect(cleared.cleared && cleared.retouch == .none)
+    let read = try JSONDecoder().decode(EditRetouchSession.self, from: JSONEncoder().encode(cleared))
+    #expect(read.cleared && read.retouch == .none)
+    let kept = try #require(EditRetouchSession.keeping(project: "P", tensorId: 4, retouch: Edit.Retouch(heal: Self.strokes), recorded: true))
+    #expect(!kept.cleared && kept.retouch == Edit.Retouch(heal: Self.strokes))
+    // A crop taken off, strokes kept: the strokes come back, no crop.
+    let healOnly = try #require(EditRetouchSession.keeping(project: "P", tensorId: 4, retouch: Edit.Retouch(heal: Self.strokes), recorded: false))
+    #expect(healOnly.retouch.crop == nil && !healOnly.cleared)
+    // A file from before `cleared` with a crop keeps its crop.
+    let old = try JSONDecoder().decode(EditRetouchSession.self, from: Data(#"{"project":"P","tensorId":4,"crop":{"x":1,"y":2,"width":30,"height":40}}"#.utf8))
+    #expect(!old.cleared && old.retouch.crop?.width == 30)
   }
 
   /// grain.py's `box_sizes`, worked by hand: sigma 3 has ideal width √37 ≈ 6.08, so 5 and 7, with
@@ -407,6 +500,44 @@ struct EditProjectDataTests {
     #expect(afterSecond.count == 3 && afterSecond.count { $0.hasPrefix(Edit.StoredLUT.prefix) } == 1)
     _ = try await project.delete(tensorId: edits[2])
     #expect(Self.editData(project).isEmpty)
+    await project.close()
+  }
+
+  /// Heal strokes: one `edit_heal_` tensor for the same strokes, read back exactly, missing on
+  /// their own (the rest of the data still there), and gone with the last step naming them.
+  @Test func strokesAreStoredOnceReadBackAndGoWithTheLastStep() async throws {
+    let folder = try Self.folder()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let project = Project(url: folder.appending(path: "Heal.sqlite3"))
+    let source = try await Self.append(project, after: nil)
+    func job(_ strokes: Edit.HealStrokes, vignette: Double) -> Edit.Job {
+      var options = EditOptions.grainDefaults
+      options.vignette.amount = vignette
+      var job = Edit.Job(project: "Heal", sourceTensorId: source.tensorId, options: options, context: EditJobTests.context())
+      job.retouch = Edit.Retouch(heal: strokes)
+      return job
+    }
+    var other = EditJobTests.strokes
+    other.strokes.removeLast()
+    let e1 = try await Self.append(project, after: source.tensorId, job(EditJobTests.strokes, vignette: 0.1))
+    let e2 = try await Self.append(project, after: e1.tensorId, job(EditJobTests.strokes, vignette: 0.2))
+    let e3 = try await Self.append(project, after: e2.tensorId, job(other, vignette: 0.3))
+    #expect(Self.editData(project).count { $0.hasPrefix(Edit.StoredHeal.prefix) } == 2)
+    let items = await project.read { $0.items() }
+    let records = [e1, e2, e3].compactMap { step in items.first { $0.tensorId == step.tensorId }?.sidecar.edit }
+    #expect(records.count == 3 && records[0].heal?.id != nil && records[0].heal?.id == records[1].heal?.id && records[2].heal?.id != records[0].heal?.id)
+    let loaded = project.editData(for: records[0])
+    #expect(loaded.missing.isEmpty && records[0].retouch(with: loaded.blobs).heal == EditJobTests.strokes)
+    // Gone (or not what it names): Heal alone is lost.
+    var gone = records[0]
+    gone.heal?.digest = "00"
+    let missing = project.editData(for: gone)
+    #expect(missing.missing == .heal && missing.blobs.lut != nil && gone.retouch(with: missing.blobs).heal.isEmpty)
+    _ = try await project.delete(tensorId: e1.tensorId)
+    #expect(Self.editData(project).count { $0.hasPrefix(Edit.StoredHeal.prefix) } == 2)
+    _ = try await project.delete(tensorId: e2.tensorId)
+    let left = Self.editData(project).filter { $0.hasPrefix(Edit.StoredHeal.prefix) }
+    #expect(left == [records[2].heal?.tensorName].compactMap(\.self))
     await project.close()
   }
 

@@ -215,7 +215,8 @@ final class AgentServer {
     shift; after one made with paint, pass original_history_step (the source) and \
     unchanged_only true. To finish an image without a model (film grain, a grade, a LUT, \
     matching a reference photo's colors and grain), use edit_image_look, with \
-    list_grain_profiles and measure_reference. Coordinates are always the image's own pixels from its top left.
+    list_grain_profiles and measure_reference; crop_image crops and heal_image removes spots and \
+    blemishes, copying from a source point you pick beside each. Coordinates are always the image's own pixels from its top left.
     """
 
   /// `defaults` and `secrets` are where the settings, token and certificate are kept: the user's,

@@ -10,6 +10,8 @@
 		C3C3C3C3C0A6000000000001 /* CropTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3C3C3C3C0A6000000000002 /* CropTests.swift */; };
 		C3C3C3C3C0A5000000000001 /* AutomationEditTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3C3C3C3C0A5000000000002 /* AutomationEditTools.swift */; };
 		C3C3C3C3C0A4000000000001 /* CropBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3C3C3C3C0A4000000000002 /* CropBar.swift */; };
+		D4E4D4E4C0A4000000000003 /* HealOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E4D4E4C0A4000000000004 /* HealOverlay.swift */; };
+		D4E4D4E4C0A4000000000001 /* HealBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E4D4E4C0A4000000000002 /* HealBar.swift */; };
 		C3C3C3C3C0A3000000000001 /* CropOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3C3C3C3C0A3000000000002 /* CropOverlay.swift */; };
 		C3C3C3C3C0A2000000000001 /* EditTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3C3C3C3C0A2000000000002 /* EditTools.swift */; };
 		C3C3C3C3C0A1000000000001 /* EditRetouch.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3C3C3C3C0A1000000000002 /* EditRetouch.swift */; };
@@ -335,6 +337,8 @@
 		C3C3C3C3C0A6000000000002 /* CropTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CropTests.swift; sourceTree = "<group>"; };
 		C3C3C3C3C0A5000000000002 /* AutomationEditTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationEditTools.swift; sourceTree = "<group>"; };
 		C3C3C3C3C0A4000000000002 /* CropBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CropBar.swift; sourceTree = "<group>"; };
+		D4E4D4E4C0A4000000000004 /* HealOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealOverlay.swift; sourceTree = "<group>"; };
+		D4E4D4E4C0A4000000000002 /* HealBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealBar.swift; sourceTree = "<group>"; };
 		C3C3C3C3C0A3000000000002 /* CropOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CropOverlay.swift; sourceTree = "<group>"; };
 		C3C3C3C3C0A2000000000002 /* EditTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditTools.swift; sourceTree = "<group>"; };
 		C3C3C3C3C0A1000000000002 /* EditRetouch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditRetouch.swift; sourceTree = "<group>"; };
@@ -1111,6 +1115,8 @@
 				ED17ED17000000000000000E /* EditScreen.swift */,
 				ED17ED170000000000005100 /* EditRenderLoop.swift */,
 				C3C3C3C3C0A4000000000002 /* CropBar.swift */,
+				D4E4D4E4C0A4000000000004 /* HealOverlay.swift */,
+				D4E4D4E4C0A4000000000002 /* HealBar.swift */,
 				C3C3C3C3C0A3000000000002 /* CropOverlay.swift */,
 				C3C3C3C3C0A2000000000002 /* EditTools.swift */,
 				C3C3C3C3C0A1000000000002 /* EditRetouch.swift */,
@@ -1321,6 +1327,8 @@
 				ED17ED17000000000000000F /* EditScreen.swift in Sources */,
 				ED17ED170000000000005101 /* EditRenderLoop.swift in Sources */,
 				C3C3C3C3C0A4000000000001 /* CropBar.swift in Sources */,
+				D4E4D4E4C0A4000000000003 /* HealOverlay.swift in Sources */,
+				D4E4D4E4C0A4000000000001 /* HealBar.swift in Sources */,
 				C3C3C3C3C0A3000000000001 /* CropOverlay.swift in Sources */,
 				C3C3C3C3C0A2000000000001 /* EditTools.swift in Sources */,
 				C3C3C3C3C0A1000000000001 /* EditRetouch.swift in Sources */,

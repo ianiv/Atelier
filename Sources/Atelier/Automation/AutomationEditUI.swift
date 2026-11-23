@@ -17,7 +17,10 @@ extension Automation {
   /// is chosen and zoomed to 100% (the first frame zoomed draws the original's side); Halation is
   /// dragged again there; then, in one pane, pinches from fit to
   /// 37%, 50%, 71% and 100% (those past fit) and 1 s of pan at 100% and back, marked as moving as
-  /// the pane's gestures mark them. Each line gives the main thread's stalls over 12 ms (how many, their
+  /// the pane's gestures mark them; then Heal: a source set and ten strokes (32 px brush, a short
+  /// drag each) a second apart, timed from each stroke to its pixels healed in and to the fitted
+  /// preview's render done (a line of their own, "heal strokes"), then Clear Heal.
+  /// Each line gives the main thread's stalls over 12 ms (how many, their
   /// total and the worst, from a background thread timing a hop to the main queue every
   /// couple of milliseconds, `MainStallMonitor`), how long the phase took to go idle, the renders started and stopped
   /// on their way (`EditRenderCounts`), and the screen's views' body evaluations
@@ -161,6 +164,31 @@ extension Automation {
       await phase("pan 1 s at 100%", ticks: 62) { await moving(62) { _ in edit.canvas.offset.width -= 20 } }
       await phase("pan back", ticks: 62) { await moving(62) { _ in edit.canvas.offset.width += 20 } }
       await phase("fit again") { edit.canvas.zoomToFit() }
+
+      // Heal strokes as the pane adds them when a drag ends, on the fitted preview.
+      let healBrushBefore = edit.healBrushSize
+      edit.tool = .heal
+      edit.healBrushSize = 32
+      edit.setHealSource(at: CGPoint(x: Double(image.width) * 0.1, y: Double(image.height) * 0.1))
+      var healed: [Double] = [], shown: [Double] = []
+      await phase("heal 10 strokes", ticks: 10) {
+        for index in 0..<10 {
+          let x = Double(image.width) * (0.3 + 0.05 * Double(index)), y = Double(image.height) * 0.5
+          let start = clock.now
+          edit.addHealStroke(points: (0..<5).map { CGPoint(x: x + Double($0) * 10, y: y) }, undoManager: nil)
+          await edit.settleHeal()
+          healed.append(milliseconds(clock.now - start))
+          await idle()
+          shown.append(milliseconds(clock.now - start) - 150)
+        }
+      }
+      func summary(_ times: [Double]) -> String {
+        String(format: "avg %.0f ms, worst %.0f ms", times.reduce(0, +) / Double(max(times.count, 1)), times.max() ?? 0)
+      }
+      log("  heal strokes: healed in \(summary(healed)); fitted preview rendered \(summary(shown))")
+      await phase("clear heal") { edit.clearHeal(undoManager: nil) }
+      edit.tool = .move
+      edit.healBrushSize = healBrushBefore
       monitor.stop()
 
       edit.options = optionsBefore

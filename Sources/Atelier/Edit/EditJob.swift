@@ -44,14 +44,19 @@ nonisolated enum Edit {
         project: project,
         record: Record(
           options: options, sourceTensorId: sourceTensorId, profileName: profileName, referenceTensorId: referenceTensorId,
-          referenceName: referenceName, context: context, crop: retouch.crop),
-        blobs: Blobs(context))
+          referenceName: referenceName, context: context, crop: retouch.crop, heal: retouch.heal.isEmpty ? nil : StoredHeal(retouch.heal)),
+        blobs: Blobs(context, heal: retouch.heal))
     }
 
-    /// What's done to the source before the look (`EditRetouch.apply`): the record's crop.
+    /// What's done to the source before the look (`EditRetouch.applied`): the record's crop and
+    /// the strokes it names, which the job carries until the step is saved.
     var retouch: Retouch {
-      get { Retouch(crop: record.crop) }
-      set { record.crop = newValue.crop }
+      get { record.retouch(with: blobs) }
+      set {
+        record.crop = newValue.crop
+        record.heal = newValue.heal.isEmpty ? nil : StoredHeal(newValue.heal)
+        blobs.heal = newValue.heal.isEmpty ? nil : newValue.heal
+      }
     }
 
     /// The source step's image tensor, which stays the same when steps are renumbered.
@@ -95,15 +100,19 @@ nonisolated enum Edit {
     var realNoise: GrainProfile.RealNoise?
     var referenceHistogram: HistogramTable?
     var lut: LUTTable?
+    /// The Heal strokes (`Record.heal`): past `profile_data`'s comfortable ~10 KB with a few dozen
+    /// spots, so in the store with the rest.
+    var heal: HealStrokes?
 
-    init(realNoise: GrainProfile.RealNoise? = nil, referenceHistogram: HistogramTable? = nil, lut: LUTTable? = nil) {
+    init(realNoise: GrainProfile.RealNoise? = nil, referenceHistogram: HistogramTable? = nil, lut: LUTTable? = nil, heal: HealStrokes? = nil) {
       self.realNoise = realNoise
       self.referenceHistogram = referenceHistogram
       self.lut = lut
+      self.heal = heal
     }
 
-    init(_ context: EditPipeline.Context) {
-      self.init(realNoise: context.realNoise, referenceHistogram: context.referenceHistogram, lut: context.lut)
+    init(_ context: EditPipeline.Context, heal: HealStrokes = .empty) {
+      self.init(realNoise: context.realNoise, referenceHistogram: context.referenceHistogram, lut: context.lut, heal: heal.isEmpty ? nil : heal)
     }
   }
 
@@ -115,6 +124,7 @@ nonisolated enum Edit {
     static let realNoise = MissingData(rawValue: 1)
     static let referenceHistogram = MissingData(rawValue: 2)
     static let lut = MissingData(rawValue: 4)
+    static let heal = MissingData(rawValue: 8)
 
     /// "`owner` real noise and LUT data is missing from the project, so Real Noise and the LUT
     /// are off." Nil when nothing is.
@@ -123,6 +133,7 @@ nonisolated enum Edit {
         contains(.realNoise) ? ("real noise", "Real Noise") : nil,
         contains(.referenceHistogram) ? ("reference histogram", "the histogram match") : nil,
         contains(.lut) ? ("LUT", "the LUT") : nil,
+        contains(.heal) ? ("heal strokes", "Heal") : nil,
       ].compactMap(\.self)
       guard !parts.isEmpty else { return nil }
       func list(_ items: [String]) -> String {
@@ -154,8 +165,9 @@ nonisolated enum Edit {
   struct Record: Codable, Hashable, Sendable {
     /// The layout this version writes. A record of a later version reads as well as it can.
     /// 2 added `crop`; a version 1 record has none, and an older Atelier reading a version 2 one
-    /// ignores it (shows the source uncropped with the look).
-    static let currentVersion = 2
+    /// ignores it (shows the source uncropped with the look). 3 added `heal`, which an older
+    /// Atelier ignores the same way (the source unhealed).
+    static let currentVersion = 3
 
     var version = Record.currentVersion
     var options: EditOptions
@@ -182,12 +194,16 @@ nonisolated enum Edit {
     var lut: StoredLUT?
     /// The crop, in the source's pixels (the retouch's, `Retouch.crop`): a few numbers, so inline.
     var crop: Crop?
+    /// The Heal strokes (`Retouch.heal`), in the source's pixels: in the store (`edit_heal_<id>`),
+    /// never inline, as a few dozen spots pass what `profile_data` keeps comfortably.
+    var heal: StoredHeal?
 
     init(
       options: EditOptions, sourceTensorId: Int64, profileName: String? = nil, referenceTensorId: Int64? = nil,
-      referenceName: String? = nil, context: EditPipeline.Context = .empty, crop: Crop? = nil
+      referenceName: String? = nil, context: EditPipeline.Context = .empty, crop: Crop? = nil, heal: StoredHeal? = nil
     ) {
       self.crop = crop
+      self.heal = heal
       self.options = options
       self.sourceTensorId = sourceTensorId
       self.profileName = profileName
@@ -215,6 +231,13 @@ nonisolated enum Edit {
         digests: EditPipeline.Context.Digests(
           realNoise: noise == nil ? nil : realNoise?.digest, referenceHistogram: histogram == nil ? nil : referenceHistogram?.digest,
           lut: table == nil ? nil : lut?.digest))
+    }
+
+    /// The retouch, with the strokes the record names from `blobs` (none when they're not there or
+    /// not what its digest says: the step then opens unhealed, `MissingData.heal`).
+    func retouch(with blobs: Blobs) -> Retouch {
+      let strokes = heal.flatMap { stored in blobs.heal.flatMap { $0.digest == stored.digest ? $0 : nil } }
+      return Retouch(crop: crop, heal: strokes ?? .empty)
     }
 
     /// Of `missing`, the data whose settings can't render as saved. A match to the original
@@ -247,17 +270,19 @@ nonisolated enum Edit {
       key.referenceHistogram?.id = nil
       key.lut?.id = nil
       key.crop = crop?.renderKey
+      key.heal?.id = nil
       return key
     }
 
     /// The tensors it names in the project's store.
     var tensorNames: [String] {
-      [realNoise.flatMap(\.tensorName), referenceHistogram.flatMap(\.tensorName), lut.flatMap(\.tensorName)].compactMap(\.self)
+      [realNoise.flatMap(\.tensorName), referenceHistogram.flatMap(\.tensorName), lut.flatMap(\.tensorName), heal.flatMap(\.tensorName)]
+        .compactMap(\.self)
     }
 
     private enum CodingKeys: String, CodingKey {
       case version, options, sourceTensorId, profileName, referenceTensorId, referenceName, refWidth, curve, refStats
-      case referenceLab, realNoise, referenceHistogram, lut, crop
+      case referenceLab, realNoise, referenceHistogram, lut, crop, heal
     }
 
     init(from decoder: Decoder) throws {
@@ -277,6 +302,7 @@ nonisolated enum Edit {
       referenceHistogram = lenient(StoredHistogram.self, .referenceHistogram)
       lut = lenient(StoredLUT.self, .lut)
       crop = lenient(Crop.self, .crop)
+      heal = lenient(StoredHeal.self, .heal)
     }
   }
 

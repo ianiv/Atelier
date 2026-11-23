@@ -725,6 +725,14 @@ actor EditRenderer {
     return EditPipeline.bakeLUT(options: options, context: context, stats: stats, size: size, name: name)
   }
 
+  /// Takes `rgba` as `image`'s pixels (tightly packed sRGB RGBA8, straight alpha: what it would
+  /// read them as), so a picture just made from pixels at hand (the Edit screen's healed image,
+  /// `HealCanvas`) isn't read back out of the image. Nothing when it's kept already.
+  func prime(_ image: CGImage, rgba: [UInt8]) {
+    guard rgba.count == image.width * image.height * 4, !rgba.isEmpty, sources[ObjectIdentifier(image)] == nil else { return }
+    _ = keep(SourceEntry(image: image, rgba: rgba))
+  }
+
   /// Drops everything kept for `source`.
   func forget(_ source: CGImage) {
     let id = ObjectIdentifier(source)
