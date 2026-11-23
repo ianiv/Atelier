@@ -400,10 +400,30 @@ final class AgentTools {
       ],
     ],
     [
+      "name": "import_video",
+      "title": "Import video",
+      "description": """
+        Brings a video file on this Mac into the current Atelier project, as dropping it on the \
+        canvas does: the file is copied (cloned on the same drive) into the project's media \
+        folder and one Imported step, its first frame, stands for it, after `after_step` \
+        (default the current step). It becomes the current step. MiniMax H3 Ref2VA can then \
+        take it as generate's reference_video. Returns history_step, frames, \
+        frames_per_second, width, height and has_audio. Only for agents on this Mac.
+        """,
+      "inputSchema": [
+        "type": "object",
+        "required": ["path"],
+        "properties": [
+          "path": ["type": "string", "description": "A video file (MOV, MP4, M4V)."],
+          "after_step": ["type": "integer", "description": "The history step it follows. Default the current step."],
+        ],
+      ],
+    ],
+    [
       "name": "list_history",
       "title": "List history",
       "description":
-        "Lists the newest images and videos in the current Atelier project, newest first: history step, prompt (shortened), model, seed, size, star rating, whether it's a video, and has_mask (it remembers a mask: set_canvas_image brings it back, set_canvas_mask from_history_step applies it, get_canvas_mask history_step shows it). Includes what the user generated themselves, and input entries (kind \"input\", with a reason: imported, moodboard, cleared, mask or draw): the canvas and moodboard as they were before runs, which aren't runs themselves and have no settings of their own. Use get_image to look at one.",
+        "Lists the newest images and videos in the current Atelier project, newest first: history step, prompt (shortened), model, seed, size, star rating, whether it's a video, and has_mask (it remembers a mask: set_canvas_image brings it back, set_canvas_mask from_history_step applies it, get_canvas_mask history_step shows it). Includes what the user generated themselves, and input entries (kind \"input\", with a reason: imported, moodboard, cleared, mask or draw): the canvas and moodboard as they were before runs, which aren't runs themselves and have no settings of their own. A video says how long it is (frames, frames_per_second, has_audio); one brought in from outside (import_video) is imported: true, with its source_name, and has no model or settings. Use get_image to look at one.",
       "inputSchema": [
         "type": "object",
         "properties": [
@@ -652,6 +672,7 @@ final class AgentTools {
     case "grow_canvas_mask": return try await growCanvasMask(arguments)
     case "set_canvas_frame": return try await setCanvasFrame(arguments)
     case "list_history": return try Self.textResult(json: listHistory(arguments))
+    case "import_video": return try await importVideo(arguments)
     case "get_image": return try await getImage(arguments)
     case "match_colors": return try await matchColors(arguments, progress: progress)
     case "extract_depth_map": return try await extractDepthMap(arguments, progress: progress)
@@ -2134,7 +2155,7 @@ final class AgentTools {
           "has_mask": item.entryMask?.mayHavePaint == true, "moodboard": item.entryMoodboard.count,
         ]
       }
-      return [
+      var entry: [String: Any] = [
         "kind": item.isVideo ? "video" : "image",
         "history_step": item.id.logicalTime, "prompt": Self.shortened(sidecar.prompt),
         "model": sidecar.model, "seed": Int(sidecar.seed), "width": sidecar.width, "height": sidecar.height,
@@ -2142,7 +2163,49 @@ final class AgentTools {
         "has_mask": create.hasMask(item),
         "on_canvas": create.imageItem == item || create.canvasClip == item,
       ]
+      entry.merge(Self.videoFields(item)) { _, new in new }
+      return entry
     }
+  }
+
+  /// A video's length and sound, and for an imported one its own size and name.
+  static func videoFields(_ item: HistoryItem) -> [String: Any] {
+    guard let clip = item.clip else { return [:] }
+    var fields: [String: Any] = [
+      "frames": clip.frameCount, "frames_per_second": clip.framesPerSecond,
+      "has_audio": clip.audioId != nil || clip.media?.hasAudio == true, "imported": clip.media != nil,
+    ]
+    if let media = clip.media {
+      fields["source_name"] = media.name
+      fields["width"] = media.width
+      fields["height"] = media.height
+    }
+    return fields
+  }
+
+  /// import_video: a video file on this Mac into the project (`CreateModel.importVideo`'s path,
+  /// waited for here).
+  private func importVideo(_ arguments: [String: Any]) async throws -> [String: Any] {
+    guard !ToolContext.current.isRemote else { throw ToolError(AgentPathGuard.fileMessage) }
+    guard let path = arguments["path"] as? String, !path.isEmpty else { throw ToolError("`path` is a video file's path.") }
+    let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+    guard FileManager.default.fileExists(atPath: url.path) else { throw ToolError("No file at \(url.path).") }
+    var after = create.history.currentTensorId
+    if arguments["after_step"] != nil {
+      after = try historyItem(arguments["after_step"], name: "after_step", canvas: false).tensorId
+    }
+    let item: HistoryItem
+    do {
+      item = try await create.history.importVideo(url, name: url.deletingPathExtension().lastPathComponent, after: after)
+    } catch {
+      throw ToolError("Couldn't import the video: \(error.localizedDescription)")
+    }
+    create.show(item)
+    if create.videoModel?.takesReferences == true { create.canvasMode = .edit }
+    var structured: [String: Any] = ["history_step": item.id.logicalTime, "project": create.history.project.name]
+    structured.merge(Self.videoFields(item)) { _, new in new }
+    let text = "Imported “\(item.clip?.media?.name ?? url.lastPathComponent)” as history step \(item.id.logicalTime): \(item.clip.map(ClipBadge.length) ?? "")."
+    return ["content": [["type": "text", "text": text]], "structuredContent": structured]
   }
 
   private func getImage(_ arguments: [String: Any]) async throws -> [String: Any] {
@@ -2183,6 +2246,9 @@ final class AgentTools {
     if let item, let reason = item.entryReason {
       text =
         "History step \(item.id.logicalTime) in “\(create.history.project.name)” is an input entry (\(reason.rawValue)): the canvas as it was before a run, \(image.width)×\(image.height), with \(item.entryMoodboard.count) moodboard image\(item.entryMoodboard.count == 1 ? "" : "s"). It isn't a run, so it has no prompt or settings."
+    } else if let item, let media = item.clip?.media, let clip = item.clip {
+      text =
+        "History step \(item.id.logicalTime) in “\(create.history.project.name)” is an imported video, “\(media.name)” (\(media.width)×\(media.height), \(ClipBadge.length(clip))): this is its first frame. It was brought in from outside, so it has no model or settings; MiniMax H3 Ref2VA can take it as generate's reference_video."
     } else if let item {
       let sidecar = item.sidecar
       text =
