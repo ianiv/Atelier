@@ -2707,6 +2707,40 @@ nonisolated enum ImageTensor {
     return tensor
   }
 
+  /// Frames as one `[n, height, width, 3]` tensor in [-1, 1], as the engine takes a clip
+  /// (`ReferenceVideo`), each drawn at `width`×`height`. One frame's pixels are converted at a
+  /// time, so the only large buffer is the tensor itself.
+  static func tensor(frames: [CGImage], width: Int, height: Int) -> Tensor<FloatType>? {
+    guard !frames.isEmpty, width > 0, height > 0 else { return nil }
+    var rgba = [UInt8](repeating: 0, count: width * height * 4)
+    var tensor = Tensor<FloatType>(.CPU, .NHWC(frames.count, height, width, 3))
+    let frameSize = width * height * 3
+    for (index, frame) in frames.enumerated() {
+      let drawn = rgba.withUnsafeMutableBytes { raw -> Bool in
+        guard
+          let context = CGContext(
+            data: raw.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+        else { return false }
+        // The buffer still holds the frame before, which a transparent pixel would show.
+        context.clear(CGRect(x: 0, y: 0, width: width, height: height))
+        context.draw(frame, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return true
+      }
+      guard drawn else { return nil }
+      tensor.withUnsafeMutableBytes { raw in
+        let values = raw.bindMemory(to: FloatType.self)
+        let start = index * frameSize
+        for pixel in 0..<(width * height) {
+          for c in 0..<3 {
+            values[start + pixel * 3 + c] = FloatType(Float(rgba[pixel * 4 + c]) / 127.5 - 1)
+          }
+        }
+      }
+    }
+    return tensor
+  }
+
   static func jpeg(_ image: CGImage, quality: Double) -> [UInt8]? {
     encode(image, type: .jpeg, properties: [kCGImageDestinationLossyCompressionQuality: quality])
   }
