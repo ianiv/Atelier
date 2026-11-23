@@ -365,7 +365,7 @@ struct CanvasView: View {
         // The Select tool's own controls, over the canvas while it's the tool: outside the
         // canvas's gestures, so a click on them doesn't mark the image.
         // At the bottom: the moodboard sits at the top right.
-        .toolBar {
+        .toolBarOverlay {
           if model.canvasTool == .select {
             AutoMaskBar()
           } else if Self.layerBarShows(for: model.canvasTool) {

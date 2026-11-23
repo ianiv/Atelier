@@ -5,6 +5,8 @@ import SwiftUI
 /// fingers always move and zoom, as in Draw Things; on the Mac a drag paints with Brush or Eraser
 /// and Space-drag moves. Select picks what to mask by clicking and dragging a box
 /// (`AutoMaskSession`).
+/// `nonisolated`: the default MainActor isolation would otherwise block its Hashable/CaseIterable
+/// conformances to `ScreenTool`.
 nonisolated enum CanvasTool: String, ScreenTool {
   /// Brush and Eraser work on the layer the Mask | Color switch picks (`CanvasLayer`).
   case move, brush, eraser, select

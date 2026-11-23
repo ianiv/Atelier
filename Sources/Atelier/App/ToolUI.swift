@@ -5,6 +5,8 @@ import SwiftUI
 // bottom of the image, every control always there (disabled when it can't act).
 
 /// A tool in a screen's segmented picker: anything done by dragging on the image.
+/// `nonisolated`, as its tools must be: the default MainActor isolation would otherwise block their
+/// Hashable/CaseIterable conformances.
 nonisolated protocol ScreenTool: Hashable, Identifiable, CaseIterable where AllCases: RandomAccessCollection {
   var title: String { get }
   var systemImage: String { get }
@@ -50,6 +52,10 @@ struct ToolPicker<Tool: ScreenTool>: View {
 /// callout font; one row when it fits, else `second` on a row of its own (an iPad in portrait, a
 /// narrow window). `footer` goes under the rows at the panel's width, not fixed-size, so a long
 /// message wraps instead of widening the bar.
+///
+/// The `second:` group decides the split by its type (anything but `EmptyView`), not by what it
+/// shows, so pass one only when it always has controls; it also keeps to the rule that controls
+/// don't appear and disappear.
 struct ToolBarPanel<First: View, Second: View, Footer: View>: View {
   let help: String?
   let first: First
@@ -157,7 +163,7 @@ struct BrushSizeMenu: View {
 extension View {
   /// Puts a tool's bar over the bottom of the image (8 pt up, 16 pt in), outside the image's
   /// gestures, so a click on the bar never reaches the tool.
-  func toolBar<Bar: View>(@ViewBuilder _ bar: () -> Bar) -> some View {
+  func toolBarOverlay<Bar: View>(@ViewBuilder _ bar: () -> Bar) -> some View {
     overlay(alignment: .bottom) {
       bar().padding(.bottom, 8).padding(.horizontal, 16)
     }
