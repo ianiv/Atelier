@@ -407,6 +407,36 @@ struct HealSolverTests {
     #expect(pixels[(250 * width + 20) * 4] == original[(250 * width + 20) * 4])
   }
 
+  @Test func piecesMatchOneSolve() throws {
+    // A 520 px scratch, 70 levels dark, healed in pieces and in one solve over its whole box.
+    let width = 600, height = 200
+    let original = HealTests.image(width: width, height: height) { x, y in
+      HealTests.texture(x, y) - (x >= 40 && x < 560 && abs(y - 100) <= 3 ? 70 : 0)
+    }
+    let stroke = Edit.HealStroke(points: [SIMD2(40, 100), SIMD2(560, 100)], radius: 10, offset: SIMD2(0, 40))
+    #expect(try #require(HealBrush.Brush(stroke, width: width, height: height)).pieces(width: width, height: height).count > 1)
+    var pieced = original
+    let region = try #require(HealBrush.apply(stroke, to: &pieced, width: width, height: height))
+    let mask = HealBrush.mask(of: stroke, in: region)
+    let healed = original.withUnsafeBufferPointer {
+      HealBrush.heal(destination: HealBrush.HealSurface(rgba: $0, width: width, height: height, region: region),
+                     source: HealBrush.HealSurface(rgba: $0, width: width, height: height, region: region, shift: SIMD2(0, 40)),
+                     mask: mask)
+    }
+    var worst = 0, total = 0, count = 0
+    for row in 0..<region.height {
+      for column in 0..<region.width where mask.coverage[row * region.width + column] > 0 {
+        let single = Int(min(max(healed.pixels[row * region.width + column].x.rounded(), 0), 255))
+        let difference = abs(Int(pieced[((region.y + row) * width + region.x + column) * 4]) - single)
+        worst = max(worst, difference)
+        total += difference
+        count += 1
+      }
+    }
+    #expect(worst <= 8)
+    #expect(Double(total) / Double(count) < 1)
+  }
+
   @Test func extremeStrokesAreClampedNotFatal() throws {
     let width = 48, height = 40
     let original = HealTests.image(width: width, height: height, HealTests.texture)
