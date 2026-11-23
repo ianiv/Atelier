@@ -234,9 +234,9 @@ final class TimelineStore {
     if selectedId == id { selectedId = timelines.first?.id }
   }
 
-  /// An entry playing the whole clip.
+  /// An entry playing the whole clip; none for an imported video (`HistoryItem.notInVideoEditor`).
   static func entry(for item: HistoryItem) -> Timeline.Entry? {
-    guard let clip = item.clip, !clip.frames.isEmpty else { return nil }
+    guard let clip = item.clip, clip.media == nil, !clip.frames.isEmpty else { return nil }
     return Timeline.Entry(clip: item.tensorId, start: 0, end: clip.frames.count)
   }
 
@@ -277,7 +277,7 @@ final class TimelineStore {
   /// clip goes at the end.
   func place(_ item: HistoryItem, at placement: TimelinePlacement) {
     load()
-    guard placement.project == loadedProject, let clip = item.clip,
+    guard placement.project == loadedProject, let clip = item.clip, clip.media == nil,
           var timeline = timelines.first(where: { $0.id == placement.timeline }),
           !timeline.entries.contains(where: { $0.placement == placement.id })
     else { return }

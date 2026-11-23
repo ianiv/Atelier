@@ -192,8 +192,8 @@ struct HistoryView: View {
       .focusedSceneValue(\.showHistoryImageFullSize, fullSizeItem.map { item in { viewingImage = item.tensorId } })
       .sheet(item: $exportingVideo) { item in
         VideoExportSheet(
-          width: item.sidecar.width, height: item.sidecar.height,
-          frameCount: item.clip?.frames.count ?? 0
+          width: item.clip?.media?.width ?? item.sidecar.width, height: item.clip?.media?.height ?? item.sidecar.height,
+          frameCount: item.clip?.frameCount ?? 0
         ) { upscale in
           if let upscale {
             queueUpscaledExport(item, upscale)
@@ -632,7 +632,11 @@ struct HistoryView: View {
       if item.isVideo {
         Divider()
         Button("Add to Timeline") { addToTimeline([item]) }
+          .disabled(item.isImported)
+          .help(item.isImported ? HistoryItem.notInVideoEditor : "")
         Button("Upscale…") { upscaling = item }
+          .disabled(item.isImported)
+          .help(item.isImported ? HistoryItem.notUpscaled : "")
       }
       Divider()
       ratingMenu(items)
@@ -762,7 +766,7 @@ struct HistoryView: View {
     Task {
       // A folder of its own: the file keeps its name, and removing it can't hit a later preview.
       let file = TemporaryFiles.newFolder(in: .quickLook).appendingPathComponent(history.fileName(for: item))
-        .appendingPathExtension(item.isVideo ? "mp4" : "png")
+        .appendingPathExtension(item.isVideo ? item.videoExtension : "png")
       if item.isVideo {
         guard (try? await history.exportVideo(item, to: file)) != nil else { return }
       } else {
@@ -845,7 +849,7 @@ struct HistoryView: View {
           (
             item,
             Self.unusedURL(
-              in: folder, name: history.fileName(for: item), extension: item.isVideo ? "mp4" : "png")
+              in: folder, name: history.fileName(for: item), extension: item.isVideo ? item.videoExtension : "png")
           )
         }
         Task {
@@ -1083,9 +1087,13 @@ struct HistoryDetail: View {
         if item.isVideo {
           ButtonRow {
             Button("Add to Timeline") { timelines.append([item], undoManager: undoManager) }
-              .help("Add the video to the end of the timeline open in the Video Editor")
+              .disabled(item.isImported)
+              .help(item.isImported ? HistoryItem.notInVideoEditor : "Add the video to the end of the timeline open in the Video Editor")
             Button("Upscale…", action: upscale)
-              .help("Make a sharper, larger copy of the video with FlashVSR+, ReCaVSR or Apple Super Resolution")
+              .disabled(item.isImported)
+              .help(
+                item.isImported
+                  ? HistoryItem.notUpscaled : "Make a sharper, larger copy of the video with FlashVSR+, ReCaVSR or Apple Super Resolution")
           }
         }
       }
@@ -1243,8 +1251,8 @@ struct ClipBadge: View {
   static func length(_ clip: ClipInfo) -> String {
     let seconds = clip.duration.formatted(.number.precision(.fractionLength(1)))
     let fps = clip.framesPerSecond.formatted(.number.precision(.fractionLength(0...2)))
-    return "\(seconds) seconds, \(clip.frames.count) frames at \(fps) fps"
-      + (clip.audioId != nil ? ", with sound" : "")
+    return "\(seconds) seconds, \(clip.frameCount) frames at \(fps) fps"
+      + (clip.audioId != nil || clip.media?.hasAudio == true ? ", with sound" : "")
   }
 }
 

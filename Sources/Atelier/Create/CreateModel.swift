@@ -838,6 +838,21 @@ final class CreateModel {
   /// frame is a step of its own, so the run follows it (from the last frame, it extends the
   /// clip; from any other, it branches there).
   func useFrame(_ index: Int, of item: HistoryItem) {
+    // An imported video's frames are in its file: one comes onto the canvas as an image from
+    // outside would, and the run saves it as its input.
+    if let media = item.clip?.media {
+      guard (0..<media.frameCount).contains(index) else { return }
+      statusNote = nil
+      pendingPlacement = nil
+      Task {
+        guard let frame = await whileLoadingCanvasImage({ await history.frame(index, of: item) }) else {
+          return canvasImageDidNotLoad("The video's frame couldn't be read from its file.")
+        }
+        setCanvasImage(frame)
+        canvasMode = .edit
+      }
+      return
+    }
     guard let frames = item.clip?.frames, frames.indices.contains(index) else { return }
     let tensorId = frames[index]
     let projectName = history.project.name
@@ -3319,6 +3334,8 @@ final class CreateModel {
     guard let source = history.item(tensorId: upscale.sourceTensorId), let clip = source.clip else {
       throw UpscaleError.sourceMissing
     }
+    // Its frames aren't project steps; Export Video… upscales it.
+    if clip.media != nil { throw ImageUpscaleError(message: HistoryItem.notUpscaled) }
     var output: GenerationEngine.Output
     // A clip made on this server may still be there, which saves sending its frames back.
     let remote = backend as? RemoteBackend

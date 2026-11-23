@@ -71,6 +71,7 @@ nonisolated struct ExportedFile: Transferable {
     DataRepresentation(exportedContentType: .png) { try await $0.data() }
     DataRepresentation(exportedContentType: .json) { try await $0.data() }
     DataRepresentation(exportedContentType: .mpeg4Movie) { try await $0.data() }
+    DataRepresentation(exportedContentType: .quickTimeMovie) { try await $0.data() }
     DataRepresentation(exportedContentType: .markdownText) { try await $0.data() }
     DataRepresentation(exportedContentType: .html) { try await $0.data() }
     DataRepresentation(exportedContentType: .cubeLUT) { try await $0.data() }

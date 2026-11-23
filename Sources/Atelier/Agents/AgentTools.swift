@@ -935,7 +935,7 @@ final class AgentTools {
     if !ToolContext.current.isRemote {
       let file = try Self.outputURL(
         arguments["save_to"] as? String, name: "\(saved.name) \(item.id.logicalTime)-\(item.sidecar.seed)",
-        extension: item.isVideo ? "mp4" : "png")
+        extension: item.isVideo ? item.videoExtension : "png")
       if item.isVideo {
         try await create.history.exportVideo(item, to: file)
       } else {
@@ -970,7 +970,7 @@ final class AgentTools {
     if let url { structured["path"] = url.path }
     if let timings = item.sidecar.timings { structured["timings"] = timings.json }
     if let clip = item.clip {
-      structured["frames"] = clip.frames.count
+      structured["frames"] = clip.frameCount
       structured["frames_per_second"] = clip.framesPerSecond
       structured["has_audio"] = clip.audioId != nil
     }
@@ -1279,7 +1279,7 @@ final class AgentTools {
       "busy": create.workUnderway ?? NSNull(),
       // The clip on the canvas Generate sends as H3 Ref2VA's reference video.
       "reference_video": create.referenceClip.map {
-        ["history_step": $0.id.logicalTime, "frames": $0.clip?.frames.count ?? 0] as [String: Any]
+        ["history_step": $0.id.logicalTime, "frames": $0.clip?.frameCount ?? 0] as [String: Any]
       } ?? NSNull(),
     ]
   }

@@ -542,8 +542,10 @@ final class TimelinePlayback {
   /// Goes up when the player's video changes, so a frame of the old one isn't shown.
   @ObservationIgnored private var generation = 0
 
-  init() {
-    Self.latest = self
+  /// `registers` makes it `latest`, for `--playback-check`: not an imported video's player
+  /// (`ClipPlayback`).
+  init(registers: Bool = true) {
+    if registers { Self.latest = self }
     player.actionAtItemEnd = .pause
     timeObserver = player.addPeriodicTimeObserver(
       forInterval: CMTime(value: 1, timescale: 30), queue: .main
@@ -827,7 +829,8 @@ private struct TimelineBin: View {
   @Environment(Navigation.self) private var navigation
 
   var body: some View {
-    let videos = history.items.filter(\.isVideo)
+    // An imported video isn't made of project steps (`HistoryItem.notInVideoEditor`).
+    let videos = history.items.filter { $0.isVideo && !$0.isImported }
     ScrollView {
       if videos.isEmpty {
         ContentUnavailableView(

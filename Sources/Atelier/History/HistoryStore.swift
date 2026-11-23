@@ -43,6 +43,18 @@ nonisolated struct HistoryItem: Identifiable, Hashable, Sendable {
   /// A video brought in from outside (`Media`): its frames are in its file, it has no settings
   /// to use, and the Video Editor and Upscale… don't take it.
   var isImported: Bool { clip?.media != nil }
+  /// The extension of its video file (`HistoryStore.videoFile(for:)`): an imported video's own
+  /// (a `.mov` stays one), else MP4.
+  var videoExtension: String {
+    clip?.media.map { ($0.file as NSString).pathExtension.lowercased() } ?? "mp4"
+  }
+  /// Why an imported video is left out of the Video Editor: its frames aren't project steps,
+  /// which timelines are made of.
+  static let notInVideoEditor = "An imported video can't go in the Video Editor: it isn't made of project steps."
+  /// Why Upscale… is off for one: Export Video… upscales it.
+  static let notUpscaled = "An imported video is upscaled with Export Video…, which saves the result as a file."
+  /// The type of its video file.
+  var videoType: UTType { videoExtension == "mov" ? .quickTimeMovie : .mpeg4Movie }
   var isEntry: Bool { entryReason != nil }
   /// The tensor holding the item's image: its own, or an entry's canvas (nil when it's empty).
   var imageTensorId: Int64? { isEntry ? canvasTensorId : tensorId }
@@ -1391,7 +1403,7 @@ final class HistoryStore {
       defer { withExtendedLifetime(access) {} }
       let file: (data: Data?, video: URL?, extension: String)
       if item.isVideo {
-        file = (nil, try await videoFile(for: item), "mp4")
+        file = (nil, try await videoFile(for: item), item.videoExtension)
       } else {
         var image = image
         if AppSettings.exportsFullDetail, let full = await fullDetailImage(tensorId: item.tensorId, in: project) {
@@ -1428,15 +1440,20 @@ final class HistoryStore {
 
   // MARK: - Clips
 
-  /// A clip's frames, decoded from the project's tensors.
+  /// A clip's frames, decoded from the project's tensors. None for an imported video, whose
+  /// frames aren't in the project (`frame(_:of:)` decodes one from its file).
   func frames(of item: HistoryItem) async -> [CGImage] {
-    guard let clip = item.clip else { return [] }
+    guard let clip = item.clip, clip.media == nil else { return [] }
     let project = project
     return await project.read { project in clip.frames.compactMap { project.image(tensorId: $0) } }
   }
 
-  /// One frame of a clip, full size.
+  /// One frame of a clip, full size; an imported video's from its file, upright.
   func frame(_ index: Int, of item: HistoryItem) async -> CGImage? {
+    if let media = item.clip?.media {
+      guard (0..<media.frameCount).contains(index), let url = project.mediaURL(media) else { return nil }
+      return try? await Media.frame(index, of: url, framesPerSecond: media.framesPerSecond)
+    }
     guard let frames = item.clip?.frames, frames.indices.contains(index) else { return nil }
     return await image(tensorId: frames[index], in: project.name)
   }
@@ -1457,9 +1474,14 @@ final class HistoryStore {
   }
 
   /// The clip as an MP4 with its soundtrack and settings, written once into the caches folder
-  /// and reused by the player, exports, drags and the output folder.
+  /// and reused by the player, exports, drags and the output folder. An imported video's is its
+  /// own file, in the project's media folder (of its type, `HistoryItem.videoExtension`).
   func videoFile(for item: HistoryItem) async throws -> URL {
-    try await videoFile(for: item, frames: nil)
+    if let media = item.clip?.media {
+      guard let url = project.mediaURL(media), FileManager.default.fileExists(atPath: url.path) else { throw Media.Failure.missing }
+      return url
+    }
+    return try await videoFile(for: item, frames: nil)
   }
 
   /// `frames`, when given, supplies the clip's images instead of reading them from the project.
@@ -1624,6 +1646,7 @@ final class HistoryStore {
     }
     if item.isVideo {
       export.video = { [self] in try await videoFile(for: item) }
+      export.videoExtension = item.videoExtension
     }
     return export
   }
@@ -1901,6 +1924,8 @@ nonisolated struct PNGExport: Transferable, Identifiable {
   var data: @Sendable () async throws -> Data
   /// Set for a clip: its video file.
   var video: (@Sendable () async throws -> URL)?
+  /// The video file's extension (`HistoryItem.videoExtension`).
+  var videoExtension = "mp4"
   /// Set when it's shared rather than dragged: its file then goes in the Shares area, kept
   /// longer (`TemporaryFiles.shareLifetime`).
   var isShared = false
@@ -1910,16 +1935,22 @@ nonisolated struct PNGExport: Transferable, Identifiable {
     isShared ? TemporaryFiles.newShareFolder() : TemporaryFiles.newDragFolder()
   }
 
+  /// A copy of the clip's video file, named like the export, in a new folder.
+  private func videoFile() async throws -> SentTransferredFile {
+    let file = folder.appendingPathComponent(name).appendingPathExtension(videoExtension)
+    guard let video else { throw ClipVideoError.noFrames }
+    try FileManager.default.copyItem(at: try await video(), to: file)
+    return SentTransferredFile(file)
+  }
+
   static var transferRepresentation: some TransferRepresentation {
-    FileRepresentation(exportedContentType: .mpeg4Movie) { export in
-      let folder = export.folder
-      let file = folder.appendingPathComponent(export.name).appendingPathExtension("mp4")
-      guard let video = export.video else { throw ClipVideoError.noFrames }
-      try FileManager.default.copyItem(at: try await video(), to: file)
-      return SentTransferredFile(file)
-    }
-    .exportingCondition { $0.video != nil }
-    .suggestedFileName { $0.name + ".mp4" }
+    FileRepresentation(exportedContentType: .mpeg4Movie) { try await $0.videoFile() }
+      .exportingCondition { $0.video != nil && $0.videoExtension != "mov" }
+      .suggestedFileName { $0.name + "." + $0.videoExtension }
+    // An imported QuickTime movie goes as it is.
+    FileRepresentation(exportedContentType: .quickTimeMovie) { try await $0.videoFile() }
+      .exportingCondition { $0.video != nil && $0.videoExtension == "mov" }
+      .suggestedFileName { $0.name + ".mov" }
     FileRepresentation(exportedContentType: .png) { export in
       let folder = export.folder
       let file = folder.appendingPathComponent(export.name).appendingPathExtension("png")

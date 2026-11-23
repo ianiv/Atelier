@@ -146,6 +146,10 @@ private struct ClipTransport: View {
 /// clock (an `AVAudioPlayerNode` looping it), so the picture follows the sound; a silent clip
 /// runs on the system clock. A frame that isn't decoded in time is skipped: the one before it
 /// stays up.
+///
+/// An imported video (`ClipInfo.media`) plays from its file instead, through the Video Editor's
+/// player (`TimelinePlayback`, on `TimelineComposition.make(file:)`), looping, with its sound: its
+/// frames aren't in the project.
 @MainActor
 @Observable
 final class ClipPlayback {
@@ -153,17 +157,30 @@ final class ClipPlayback {
   /// The clip loaded, by first-frame tensor id, so a view can tell its own clip from the one a
   /// shared playback held before.
   private(set) var loadedTensorId: Int64?
-  private(set) var isPlaying = false
+  private var projectPlaying = false
+  var isPlaying: Bool { file?.isPlaying ?? projectPlaying }
   /// Seconds into the clip, kept current while it plays.
-  private(set) var time: Double = 0
+  private var projectTime: Double = 0
+  var time: Double {
+    get { file?.time ?? projectTime }
+    set { projectTime = newValue }
+  }
   private(set) var framesPerSecond: Double = 24
   /// The frame on screen, nil until the clip's first one is decoded.
-  private(set) var frame: CGImage?
+  private var projectFrame: CGImage?
+  var frame: CGImage? { file?.frame ?? projectFrame }
   /// The clip's first frame couldn't be read.
   private(set) var failed = false
   var isMuted = false {
-    didSet { if engineState == .running { audioPlayer.volume = isMuted ? 0 : 1 } }
+    didSet {
+      if engineState == .running { audioPlayer.volume = isMuted ? 0 : 1 }
+      file?.isMuted = isMuted
+    }
   }
+  /// An imported video's player, while one is loaded.
+  private var file: TimelinePlayback?
+  /// How many frames the clip has (an imported video's file's).
+  @ObservationIgnored private var frameCount = 0
 
   /// The tensor of the frame on screen, for `--canvas-clip-check`.
   @ObservationIgnored private(set) var shownFrameTensorId: Int64?
@@ -222,22 +239,27 @@ final class ClipPlayback {
       audioQueue.async { engine.stop() }
     }
     project = nil
+    file?.load(nil)
+    file = nil
     frameIds = []
+    frameCount = 0
     duration = 0
-    frame = nil
+    projectFrame = nil
     shownIndex = nil
     shownFrameTensorId = nil
     failed = false
     isReady = false
-    time = 0
+    projectTime = 0
     loadedTensorId = nil
   }
 
   func load(_ clip: ClipInfo, tensorId: Int64, project: Project, audioSampleRate: Int, play: Bool) {
     reset()
     guard !clip.frames.isEmpty else { return }
+    if let media = clip.media { return loadFile(media, tensorId: tensorId, project: project, play: play) }
     self.project = project
     frameIds = clip.frames
+    frameCount = clip.frames.count
     framesPerSecond = clip.framesPerSecond > 0 ? clip.framesPerSecond : 24
     duration = Double(clip.frames.count) / framesPerSecond
     isReady = true
@@ -265,15 +287,45 @@ final class ClipPlayback {
     if play { self.play() }
   }
 
+  /// Plays an imported video from its file (`Media`).
+  private func loadFile(_ media: Media.Record, tensorId: Int64, project: Project, play: Bool) {
+    framesPerSecond = media.framesPerSecond > 0 ? media.framesPerSecond : 30
+    frameCount = max(media.frameCount, 1)
+    duration = Double(frameCount) / framesPerSecond
+    isReady = true
+    loadedTensorId = tensorId
+    let player = TimelinePlayback(registers: false)
+    player.isLooping = true
+    player.isMuted = isMuted
+    file = player
+    let current = generation
+    guard let url = project.mediaURL(media) else {
+      failed = true
+      return
+    }
+    Task { [weak self] in
+      let composition = FileManager.default.fileExists(atPath: url.path) ? try? await TimelineComposition.make(file: url) : nil
+      guard let self, current == self.generation else { return }
+      guard let composition else {
+        self.failed = true
+        return
+      }
+      player.load(composition)
+      if play { player.play() }
+    }
+  }
+
   func play() {
     guard isReady else { return }
-    isPlaying = true
+    if let file { return file.play() }
+    projectPlaying = true
     startClock(at: time)
   }
 
   func pause() {
-    if isPlaying { time = clockTime }
-    isPlaying = false
+    if let file { return file.pause() }
+    if projectPlaying { projectTime = clockTime }
+    projectPlaying = false
     if engineState == .running { audioPlayer.stop() }
   }
 
@@ -283,6 +335,10 @@ final class ClipPlayback {
 
   func seek(to seconds: Double) {
     guard isReady else { return }
+    if let file {
+      // As below: the end is the start again, so stay on the last frame.
+      return file.seek(to: min(max(seconds, 0), max(duration - 1 / framesPerSecond, 0)))
+    }
     // The slider's end is the clip's end, which is its start again; stay on the last frame.
     time = min(max(seconds, 0), max(duration - 1 / framesPerSecond, 0))
     if isPlaying { startClock(at: time) }
@@ -292,11 +348,12 @@ final class ClipPlayback {
   /// Pauses and moves `frames` frames from the one on screen, stopping at the clip's ends (as
   /// the Video Editor's frame steps do).
   func step(_ frames: Int) {
-    guard isReady, !frameIds.isEmpty else { return }
+    guard isReady, frameCount > 0 else { return }
     pause()
     // From the playhead's frame, not the one up now: a step back waits for its frame to decode,
     // and a second step made meanwhile goes on from the first.
-    let index = min(max(index(at: time) + frames, 0), frameIds.count - 1)
+    let index = min(max(index(at: time) + frames, 0), frameCount - 1)
+    if let file { return file.seek(to: Double(index) / framesPerSecond + 0.0001) }
     time = Double(index) / framesPerSecond
     show(index: index)
   }
@@ -312,6 +369,7 @@ final class ClipPlayback {
 
   /// Moves the picture along while playing: `ClipFrames` calls this for each frame of the display.
   func displayDidTick() {
+    if let file { return file.displayDidTick() }
     guard isPlaying else { return }
     time = clockTime
     show(index: index(at: time))
@@ -375,7 +433,9 @@ final class ClipPlayback {
 
   private func index(at seconds: Double) -> Int {
     // A hair over, so a frame's own start time (index / rate) isn't rounded into the frame before.
-    min(max(Int((seconds * framesPerSecond + 1e-6).rounded(.down)), 0), max(frameIds.count - 1, 0))
+    let position = seconds * framesPerSecond + 1e-6
+    guard position.isFinite else { return 0 }
+    return min(max(Int(min(position, Double(Int32.max)).rounded(.down)), 0), max(frameCount - 1, 0))
   }
 
   // MARK: Frames
@@ -384,7 +444,7 @@ final class ClipPlayback {
   /// keeps the frames after it decoding.
   private func show(index: Int) {
     if index != shownIndex, let image = decoded[index] {
-      frame = image
+      projectFrame = image
       shownIndex = index
       shownFrameTensorId = frameIds[index]
     }
@@ -413,7 +473,7 @@ final class ClipPlayback {
         self.decoding[next] = nil
         if let image {
           self.decoded[next] = image
-        } else if next == 0, self.frame == nil, !Task.isCancelled {
+        } else if next == 0, self.projectFrame == nil, !Task.isCancelled {
           self.failed = true
           return
         }
@@ -476,7 +536,7 @@ struct ClipFrameMenu: View {
   @Environment(FileDialogs.self) private var fileDialogs
 
   var body: some View {
-    let count = item.clip?.frames.count ?? 0
+    let count = item.clip?.frameCount ?? 0
     // Until this clip loads, the playback's time belongs to no frame of it (or to another clip).
     let frameKnown = playback.isReady(for: item.tensorId)
     Button("Save Video…") { ClipActions.save(item, history: history, dialogs: fileDialogs) }
@@ -518,7 +578,7 @@ struct CanvasClipMenu: View {
   @Environment(FileDialogs.self) private var fileDialogs
 
   var body: some View {
-    let count = item.clip?.frames.count ?? 0
+    let count = item.clip?.frameCount ?? 0
     // The canvas's playback is shared: until this clip loads it may hold another one's time.
     let frameKnown = playback.isReady(for: item.tensorId)
     Button("Copy Frame") {
@@ -576,13 +636,14 @@ struct FlipBook: View {
 /// Saving a clip, from the canvas and History.
 @MainActor
 enum ClipActions {
-  /// Asks where to save the clip as an MP4 carrying its settings.
+  /// Asks where to save the clip as an MP4 carrying its settings (an imported video as its own
+  /// file).
   static func save(_ item: HistoryItem, history: HistoryStore, dialogs: FileDialogs) {
     dialogs.save = FileDialogs.Save(
-      file: ExportedFile(type: .mpeg4Movie) {
+      file: ExportedFile(type: item.videoType) {
         try Data(contentsOf: try await history.videoFile(for: item))
       },
-      name: history.fileName(for: item) + ".mp4")
+      name: history.fileName(for: item) + "." + item.videoExtension)
   }
 
   static func saveToPhotos(_ item: HistoryItem, history: HistoryStore, model: CreateModel) {
