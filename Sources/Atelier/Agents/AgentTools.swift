@@ -117,7 +117,7 @@ final class AgentTools {
       "name": "list_models",
       "title": "List models",
       "description":
-        "Lists the models downloaded in Atelier (file, name, family), which one is selected in the app, and whether each takes reference images (edit models, FLUX.2, Qwen Image 2.1). Video models say so, with their frame rate, the inputs they take (first_frame: input_image; last_frame: the first reference image; references; audio) and whether they make sound.",
+        "Lists the models downloaded in Atelier (file, name, family), which one is selected in the app, and whether each takes reference images (edit models, FLUX.2, Qwen Image 2.1). Video models say so, with their frame rate, the inputs they take (first_frame: input_image; last_frame: the first reference image; references; reference_video: a clip from History, generate's reference_video; audio) and whether they make sound.",
       "inputSchema": ["type": "object", "properties": [String: Any]()],
       "annotations": ["readOnlyHint": true],
     ],
@@ -152,7 +152,7 @@ final class AgentTools {
       "name": "get_create_screen",
       "title": "Get Create screen",
       "description":
-        "Returns what's on Atelier's Create screen right now: the selected model, prompt, negative prompt, the selected style (Generate writes the prompt into its template; styled_prompt is the result), `trigger_words` (the selected LoRAs' trigger words, each {lora, word, on}: Generate puts the ones turned on in front of the prompt; until changed, only each LoRA's first word is on), seed and whether it's random, the image count, every inspector setting as Draw Things configuration JSON, the settings that differ from the model's defaults, how many reference images there are and `moodboard` (each one's position, id, size, weight and the Picture number a prompt calls it by, as get_moodboard lists them), and `canvas`: the canvas image (its history step and size), the frame (output size), the region of the image it shows (source pixels, from the top left), its zoom and offset, the canvas mode, the mask summary and Merge into Image. The user may have changed any of it since your last call.",
+        "Returns what's on Atelier's Create screen right now: the selected model, prompt, negative prompt, the selected style (Generate writes the prompt into its template; styled_prompt is the result), `trigger_words` (the selected LoRAs' trigger words, each {lora, word, on}: Generate puts the ones turned on in front of the prompt; until changed, only each LoRA's first word is on), seed and whether it's random, the image count, every inspector setting as Draw Things configuration JSON, the settings that differ from the model's defaults, how many reference images there are and `moodboard` (each one's position, id, size, weight and the Picture number a prompt calls it by, as get_moodboard lists them), and `canvas`: the canvas image (its history step and size), the frame (output size), the region of the image it shows (source pixels, from the top left), its zoom and offset, the canvas mode, the mask summary and Merge into Image, and `reference_video` (H3 Ref2VA in Edit mode with a clip on the canvas: its history_step and frames, the reference video Generate sends as <Video 1>; null otherwise). The user may have changed any of it since your last call.",
       "inputSchema": ["type": "object", "properties": [String: Any]()],
       "annotations": ["readOnlyHint": true],
     ],
@@ -527,7 +527,9 @@ final class AgentTools {
         Settings start from the model's recommended settings and default preset, then `preset`, \
         then `settings`, then the explicit fields. With `input_image` the run edits that image \
         (image to image), or for video models starts from it as the first frame; \
-        `reference_images` go to models that take references (see list_models). With \
+        `reference_images` go to models that take references (see list_models). MiniMax H3 \
+        Ref2VA takes a clip from History as `reference_video` (<Video 1> in the prompt, the \
+        reference images then Picture 1 and on). With \
         use_app_settings and no prompt, it generates what's on the Create screen: its model, \
         prompt, negative prompt, settings and (unless Random is on) seed. With use_canvas too, \
         it runs exactly what the Generate button would, canvas included: the region the frame \
@@ -565,6 +567,11 @@ final class AgentTools {
           "num_frames": ["type": "integer", "description": "Video models: how many frames, snapped to the counts the model takes."],
           "seconds": ["type": "number", "description": "Video models: how long, instead of num_frames."],
           "audio": ["type": "string", "description": "Video models that take audio (see list_models): path to an audio file."],
+          "reference_video": [
+            "type": "object", "required": ["history_step"],
+            "properties": ["history_step": ["type": "integer", "description": "A video step of the current project (see list_history)."]],
+            "description": "MiniMax H3 Ref2VA only: a clip from History as the reference video, <Video 1> in the prompt. Read from its start at the model's frame rate, cropped to fill the output size, its last frame held if it's shorter. Needs strength 1 and num_frames of 22 or more; not with input_image or audio.",
+          ],
           "save_to": ["type": "string", "description": "Where to write the PNG or MP4: a file path, or a folder. Defaults to a temporary folder."],
           "include_image": ["type": "boolean", "description": "Return the image inline (scaled to 1024 px on the long side). Default true."],
           "use_canvas": ["type": "boolean", "description": "With use_app_settings: run exactly what the Generate button would, taking the canvas image, the region the frame shows (set_canvas_region), its mask (set_canvas_mask), the moodboard and Merge into Image. Takes no prompt, settings or input_image: change those with set_create_screen and set_canvas_image first. Returns the result (the merged whole image when it merges) and the step it followed. For the same edit without touching the Create screen, use edit_image."],
@@ -677,7 +684,7 @@ final class AgentTools {
         entry["makes_audio"] = video.makesAudio
         entry["video_inputs"] =
           (video.takesLastFrame ? ["first_frame", "last_frame"] : ["first_frame"])
-          + (video.takesReferences ? ["references"] : []) + (video.takesAudio ? ["audio"] : [])
+          + (video.takesReferences ? ["references", "reference_video"] : []) + (video.takesAudio ? ["audio"] : [])
       }
       return entry
     }
@@ -787,12 +794,44 @@ final class AgentTools {
       }
       request.audio = url
     }
+    if let value = arguments["reference_video"] {
+      request.referenceVideo = try referenceVideo(value, video: video, configuration: configuration, request: request)
+    }
 
     let summary = String(prompt.prefix(60))
     let (item, savedIn) = try await run(request, summary: summary, progress: progress)
     return try await result(
       of: item, in: savedIn, model: model, configuration: configuration, seed: seed, summary: summary, notes: notes,
       arguments: arguments)
+  }
+
+  /// generate's `reference_video` (`{"history_step": N}`): a clip of the current project for H3
+  /// Ref2VA, refused with the reason the Create screen gives (`ReferenceVideo.problem`), in the
+  /// arguments' own words. Its frames are read when the job starts (`CreateModel.run`).
+  private func referenceVideo(
+    _ value: Any, video: VideoModel?, configuration: PipelineConfiguration, request: GenerationEngine.Request
+  ) throws -> ReferenceVideo {
+    guard let object = value as? [String: Any], object["history_step"] != nil else {
+      throw ToolError("`reference_video` is {\"history_step\": N}, a video step (see list_history).")
+    }
+    guard let video, video.takesReferences else {
+      throw ToolError("\(request.model) doesn't take a reference video: only MiniMax H3 Ref2VA does. See list_models' video_inputs.")
+    }
+    if request.canvas != nil {
+      throw ToolError("reference_video takes input_image's place: leave out input_image (reference_images are Picture 1 and on).")
+    }
+    if request.audio != nil { throw ToolError("reference_video can't go with `audio`.") }
+    if !(configuration.strength >= 1) {
+      throw ToolError("reference_video needs strength 1: the video is made from noise, with the clip as its reference.")
+    }
+    if configuration.numFrames < ReferenceVideo.minimumFrames {
+      throw ToolError("reference_video needs num_frames of \(ReferenceVideo.minimumFrames) or more (this run makes \(configuration.numFrames)).")
+    }
+    let item = try historyItem(object["history_step"], name: "reference_video.history_step", canvas: false)
+    guard item.isVideo else {
+      throw ToolError("History step \(item.id.logicalTime) is an image, not a video. See list_history.")
+    }
+    return ReferenceVideo(sourceTensorId: item.tensorId, project: create.history.project.name)
   }
 
   /// The settings a run starts from, layered as Create layers them: the model's recommended
@@ -955,7 +994,7 @@ final class AgentTools {
     // user sees it.
     let screenFields = [
       "prompt", "negative_prompt", "model", "preset", "settings", "width", "height", "steps", "guidance_scale",
-      "strength", "reference_images", "num_frames", "seconds", "audio",
+      "strength", "reference_images", "num_frames", "seconds", "audio", "reference_video",
     ]
     let extra = screenFields.filter { arguments[$0] != nil }
     if !extra.isEmpty {
@@ -993,6 +1032,8 @@ final class AgentTools {
     if let problem = create.runTargetProblem {
       throw ToolError(problem + (create.runTargetMaskProblem != nil ? " (set_canvas_mask with clear: true clears it)" : ""))
     }
+    // As Generate is disabled for it: a reference video the settings can't take.
+    if let problem = create.referenceVideoProblem { throw ToolError(problem + " Change it with set_create_screen.") }
     // What History doesn't have yet goes in first, as Generate does, so the run follows it.
     await create.recordEntriesBeforeRun()
     guard var request = create.screenRequest(), let model = create.selectedModel else {
@@ -1002,7 +1043,7 @@ final class AgentTools {
     create.rememberCanvasMask()
     // The request's own canvas, not what the canvas shows: while a run's preview covers it, Generate
     // still takes the image beneath.
-    guard request.canvas != nil else {
+    guard request.canvas != nil || request.referenceVideo != nil else {
       if !create.canvasShowsImage { try canvasImage() }
       throw ToolError(
         create.canvasMode == .generate
@@ -1236,6 +1277,10 @@ final class AgentTools {
       "canvas_has_image": create.image != nil,
       "canvas": canvasState(),
       "busy": create.workUnderway ?? NSNull(),
+      // The clip on the canvas Generate sends as H3 Ref2VA's reference video.
+      "reference_video": create.referenceClip.map {
+        ["history_step": $0.id.logicalTime, "frames": $0.clip?.frames.count ?? 0] as [String: Any]
+      } ?? NSNull(),
     ]
   }
 
@@ -1481,7 +1526,8 @@ final class AgentTools {
   @discardableResult
   func canvasImage() throws -> CGImage {
     if create.canvasClip != nil {
-      throw ToolError("The canvas plays a video. Put an image on it with set_canvas_image first.")
+      throw ToolError(
+        "The canvas plays a video. Put an image on it with set_canvas_image first. (MiniMax H3 Ref2VA takes a clip as generate's reference_video.)")
     }
     guard create.canvasShowsImage, let image = create.image else {
       throw ToolError(
