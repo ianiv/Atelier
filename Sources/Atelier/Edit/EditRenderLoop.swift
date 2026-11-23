@@ -187,6 +187,19 @@ nonisolated struct EditRenderTarget: Hashable, Sendable {
   var window: EditPipeline.Window?
   /// A zoomed view (`EditRenderer.zoomed`), the edit's window lane.
   var zoomed: EditPipeline.Zoomed?
+  /// The size of the image it's of (0 when not given): a fitted render of one image can stand in
+  /// for the next of the same size (`stands(for:width:height:)`).
+  var sourceWidth = 0
+  var sourceHeight = 0
+
+  /// Whether a fitted render of this target can stay up for the image `source`, `width` ×
+  /// `height`, until that one's render lands: one of it, or of the working image it replaced when
+  /// the size is the same (a Heal stroke: the picture barely changes). A new size (a crop) can't:
+  /// drawn in the new frame it would be stretched. Panes are made anew for a new source, so this
+  /// never shows another image's render.
+  func stands(for source: ObjectIdentifier, width: Int, height: Int) -> Bool {
+    self.source == source || (sourceWidth > 0 && sourceWidth == width && sourceHeight == height)
+  }
 }
 
 /// The look an Edit preview render shows: the options and the context version they render with.
@@ -254,7 +267,7 @@ final class EditPaneRenders {
   static func targets(_ image: CGImage, _ viewport: EditViewport) -> Targets {
     let fit = viewport.fitPixels
     return Targets(
-      fitted: .init(source: ObjectIdentifier(image), width: fit.width, height: fit.height),
+      fitted: .init(source: ObjectIdentifier(image), width: fit.width, height: fit.height, sourceWidth: image.width, sourceHeight: image.height),
       window: viewport.zoomed.map { .init(source: ObjectIdentifier(image), zoomed: $0) })
   }
 

@@ -53,6 +53,7 @@ struct EditScreen: View {
     return HStack(spacing: 12) {
       // The Hold segment is itself what's held: a stock segmented Picker can't say when one
       // segment is pressed and let go, so this is drawn as one.
+      EditToolPicker()
       EditCompareControl(mode: $edit.compareMode, holding: $holding, canHold: edit.hasSource)
       EditZoomControls(canvas: edit.canvas)
         .disabled(!edit.hasSource || edit.compareMode == .slider)
@@ -283,6 +284,18 @@ nonisolated struct EditViewport: Equatable {
       width: width, height: height)
   }
 
+  /// `rect` in image pixels, in the pane's points.
+  func viewRect(_ rect: CGRect) -> CGRect {
+    let frame = imageFrame, ppp = pointsPerPixel
+    return CGRect(x: frame.minX + rect.minX * ppp, y: frame.minY + rect.minY * ppp, width: rect.width * ppp, height: rect.height * ppp)
+  }
+
+  /// The image pixel under `point` in the pane (not kept inside the image).
+  func imagePoint(_ point: CGPoint) -> CGPoint {
+    let frame = imageFrame, ppp = max(pointsPerPixel, 1e-6)
+    return CGPoint(x: (point.x - frame.minX) / ppp, y: (point.y - frame.minY) / ppp)
+  }
+
   /// The fitted preview's size in pixels: the image at the fit scale, never above its own size.
   var fitPixels: (width: Int, height: Int) {
     let scale = min(1, fitScale)
@@ -384,24 +397,34 @@ private struct EditPreview: View {
   var body: some View {
     let _ = EditViewCounts.note("EditPreview")
     Group {
-      if let image = edit.image {
+      if let source = edit.image, let image = edit.workingImage {
+        let original = edit.workingOriginal ?? image
         Group {
           switch edit.compareMode {
           case .hold:
-            EditPane(image: image, showsOriginal: holding)
+            EditPane(image: image, original: original, showsOriginal: holding)
+              // The tool's own bar (Crop's), over the bottom of the image.
+              .toolBarOverlay {
+                switch edit.tool {
+                case .move: EmptyView()
+                case .crop: CropBar()
+                }
+              }
           case .sideBySide:
             HStack(spacing: 1) {
-              EditPane(image: image, showsOriginal: true, title: "Original")
-              EditPane(image: image, showsOriginal: false, title: "Edited")
+              EditPane(image: image, original: original, showsOriginal: true, title: "Original")
+              EditPane(image: image, original: original, showsOriginal: false, title: "Edited")
             }
           case .slider:
-            EditSliderPane(image: image)
+            EditSliderPane(image: image, original: original)
               .padding(16)
           }
         }
         // New panes for a new source: their renders are of the old one, and drawn in the new
-        // one's frame they'd show the old image stretched until the first render lands.
-        .id(ObjectIdentifier(image))
+        // one's frame they'd show the old image stretched until the first render lands. Keyed on
+        // the source, not the working image, so a crop applied keeps the panes (no spinner
+        // flash): their fitted render stands in while the size is the same (`fitted`).
+        .id(ObjectIdentifier(source))
       } else {
         ContentUnavailableView {
           Label(edit.isLoading ? "Opening…" : "No image to edit", systemImage: Edit.symbol)
@@ -440,9 +463,20 @@ private struct EditPreview: View {
 private struct EditPane: View {
   @Environment(EditModel.self) private var edit
   @Environment(\.displayScale) private var displayScale
+  @Environment(\.undoManager) private var undoManager
+  /// The working image (`EditModel.workingImage`), which the edit renders.
   let image: CGImage
+  /// The comparison's original (`EditModel.workingOriginal`), the same size.
+  let original: CGImage
   let showsOriginal: Bool
   var title: String?
+  /// A Crop drag under way: only `CropOverlay` reads it.
+  @State private var cropDrag = CropDrag()
+  #if os(macOS)
+  /// Space is held: a drag moves the image whatever the tool, as on the Create canvas.
+  @State private var spaceDown = false
+  @FocusState private var focused: Bool
+  #endif
   /// This pane's render lanes (`EditModel.RenderLane`).
   @State private var paneID = UUID()
   @State private var renders = EditPaneRenders.forScreen()
@@ -460,7 +494,9 @@ private struct EditPane: View {
 
   /// The fitted preview, only if it's of this pane's source: never another image's stretched
   /// into this one's frame.
-  private var fitted: CGImage? { renders.fitted.shown.flatMap { $0.key.target.source == ObjectIdentifier(image) ? $0.output : nil } }
+  private var fitted: CGImage? {
+    renders.fitted.shown.flatMap { $0.key.target.stands(for: ObjectIdentifier(image), width: image.width, height: image.height) ? $0.output : nil }
+  }
   private var failure: String? { renders.fitted.failure }
 
   var body: some View {
@@ -476,14 +512,14 @@ private struct EditPane: View {
       // costs the main thread a moment to put up, so a pan should need few.
       let window = viewport.window(grid: showsOriginal ? 512 : 64)
       let targets = showsOriginal
-        ? EditPaneRenders.Targets(fitted: nil, window: window.map { .init(source: ObjectIdentifier(image), window: $0) })
+        ? EditPaneRenders.Targets(fitted: nil, window: window.map { .init(source: ObjectIdentifier(original), window: $0) })
         : EditPaneRenders.targets(image, viewport)
       ZStack(alignment: .topLeading) {
         if showsOriginal {
           // The fitted copy, and zoomed past it the part in view at the zoom (the window lane's
           // `originalWindow`) laid over it, as the edit is drawn: drawing the whole source
           // zoomed in held up the main thread while it got the image ready to draw.
-          Image(decorative: edit.originalPreview ?? image, scale: 1)
+          Image(decorative: edit.originalPreview ?? original, scale: 1)
             .resizable()
             .interpolation(viewport.pointsPerPixel > 2 ? .none : .high)
             .frame(width: frame.width, height: frame.height)
@@ -513,6 +549,7 @@ private struct EditPane: View {
         if !showsOriginal, fitted == nil {
           ProgressView().frame(width: geometry.size.width, height: geometry.size.height)
         }
+        if edit.tool == .crop { CropOverlay(drag: cropDrag, viewport: viewport) }
       }
       .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
       .clipped()
@@ -533,12 +570,19 @@ private struct EditPane: View {
       .gesture(
         DragGesture(minimumDistance: 1)
           .onChanged { value in
+            if crops || cropDrag.isDragging {
+              cropChanged(value, viewport: viewport)
+              return
+            }
             let start = gestureStart ?? (canvas.effectiveScale, canvas.offset)
             gestureStart = start
             canvas.scale = start.scale
             canvas.offset = CGSize(width: start.offset.width + value.translation.width, height: start.offset.height + value.translation.height)
           }
-          .onEnded { _ in gestureStart = nil }
+          .onEnded { _ in
+            gestureStart = nil
+            cropEnded()
+          }
           .simultaneously(
             with: MagnifyGesture()
               .onChanged { value in
@@ -554,21 +598,33 @@ private struct EditPane: View {
           // Moving: no window renders start until the gesture ends; what's up is drawn scaled
           // and moved meanwhile.
           .updating($moving) { _, moving, _ in moving = true })
-      .onTapGesture(count: 2) {
-        if canvas.scale == nil { canvas.zoom(to: 1) } else { canvas.zoomToFit() }
-      }
-      .onChange(of: viewport.fitScale, initial: true) { canvas.fitScale = viewport.fitScale }
-      .onChange(of: viewport.fillScale, initial: true) { canvas.fillScale = viewport.fillScale }
-      .onChange(of: targets, initial: true) { _, targets in schedule(targets) }
-      .onChange(of: moving) { _, moving in edit.isMovingView = moving }
-      // The gesture's end: the view as it's left.
-      .onChange(of: edit.isMovingView) { _, moving in if !moving { schedule(targets) } }
-      // Back after going away (which cancelled its lanes) with the same keys: onChange won't
-      // fire, so ask again; asking for what's shown or rendering does nothing.
-      .onAppear { schedule(targets) }
-      .background {
-        if !showsOriginal { EditLookChanges { schedule(targets) } }
-      }
+      #if os(macOS)
+        .focusable(edit.tool == .crop)
+        .focusEffectDisabled()
+        .focused($focused)
+        .onKeyPress(.space, phases: .all) { press in
+          spaceDown = press.phase != .up
+          return .handled
+        }
+        // A Space let go after focus moved elsewhere never arrives here.
+        .onChange(of: focused) { if !focused { spaceDown = false } }
+      #endif
+        .onTapGesture(count: 2) {
+          if canvas.scale == nil { canvas.zoom(to: 1) } else { canvas.zoomToFit() }
+        }
+        .onChange(of: edit.tool) { cropDrag.cancel() }
+        .onChange(of: viewport.fitScale, initial: true) { canvas.fitScale = viewport.fitScale }
+        .onChange(of: viewport.fillScale, initial: true) { canvas.fillScale = viewport.fillScale }
+        .onChange(of: targets, initial: true) { _, targets in schedule(targets) }
+        .onChange(of: moving) { _, moving in edit.isMovingView = moving }
+        // The gesture's end: the view as it's left.
+        .onChange(of: edit.isMovingView) { _, moving in if !moving { schedule(targets) } }
+        // Back after going away (which cancelled its lanes) with the same keys: onChange won't
+        // fire, so ask again; asking for what's shown or rendering does nothing.
+        .onAppear { schedule(targets) }
+        .background {
+          if !showsOriginal { EditLookChanges { schedule(targets) } }
+        }
     }
     .accessibilityElement()
     .accessibilityLabel(showsOriginal ? "Original image" : "Edited image")
@@ -590,6 +646,32 @@ private struct EditPane: View {
     }
   }
 
+  /// Whether a drag now moves the crop: Crop is the tool and (on the Mac) Space isn't held.
+  private var crops: Bool {
+    #if os(macOS)
+    edit.tool == .crop && !spaceDown
+    #else
+    edit.tool == .crop
+    #endif
+  }
+
+  /// A Crop drag moved: the handle, the rectangle or a new one follows (`CropDrag`).
+  private func cropChanged(_ value: DragGesture.Value, viewport: EditViewport) {
+    #if os(macOS)
+    focused = true
+    #endif
+    cropDrag.changed(
+      from: value.startLocation, to: value.location, crop: edit.retouch.crop, image: (image.width, image.height), viewport: viewport)
+  }
+
+  /// A Crop drag let go: one undo step, "Crop".
+  private func cropEnded() {
+    guard cropDrag.isDragging else { return }
+    if let crop = cropDrag.ended(crop: edit.retouch.crop, image: (image.width, image.height)) {
+      edit.setCrop(crop, undoManager: undoManager)
+    }
+  }
+
   /// Whether a window lane's result of `look`, up at `serial`, is still the newest picture: not
   /// when the fitted preview has since gone up with another look (zoomed out, the look changed,
   /// zoomed back in: the old window would cover the newer fitted preview until its render lands).
@@ -602,7 +684,7 @@ private struct EditPane: View {
 
   /// A window lane's render, drawn where its window or zoomed view is; nothing for another source.
   @ViewBuilder private func zoomedLayer(_ target: EditRenderTarget, _ output: CGImage, _ viewport: EditViewport) -> some View {
-    if target.source == ObjectIdentifier(image),
+    if target.source == ObjectIdentifier(showsOriginal ? original : image),
        let rect = target.zoomed.map({ viewport.frame(of: $0) }) ?? target.window.map({ viewport.frame(of: $0) })
     {
       Image(decorative: output, scale: 1)
@@ -623,7 +705,8 @@ private struct EditPane: View {
       // Moving, what's up stays (drawn scaled and moved) until the gesture ends.
       if edit.isMovingView { return }
       if let target = targets.window, let window = target.window {
-        originalWindow.request(.init(target: target, look: Self.originalLook)) { try await EditOriginal.window(image, window) }
+        let original = original
+        originalWindow.request(.init(target: target, look: Self.originalLook)) { try await EditOriginal.window(original, window) }
       } else {
         originalWindow.cancel()
       }
@@ -742,6 +825,7 @@ private struct EditSliderPane: View {
   @Environment(EditModel.self) private var edit
   @Environment(\.displayScale) private var displayScale
   let image: CGImage
+  let original: CGImage
   @State private var paneID = UUID()
   @State private var loop = EditPaneRenders.sliderLoop()
 
@@ -752,10 +836,11 @@ private struct EditSliderPane: View {
         viewSize: CGSize(width: geometry.size.width, height: max(1, geometry.size.height - 22)), displayScale: displayScale)
       let fit = viewport.fitPixels
       // The target only, as `EditPane` works out: the look goes with it when it schedules.
-      let target = EditRenderTarget(source: ObjectIdentifier(image), width: fit.width, height: fit.height)
+      let target = EditRenderTarget(
+        source: ObjectIdentifier(image), width: fit.width, height: fit.height, sourceWidth: image.width, sourceHeight: image.height)
       SliderComparison(
-        matched: loop.shown.flatMap { $0.key.target.source == ObjectIdentifier(image) ? $0.output : nil },
-        original: edit.originalPreview ?? image, matchedNote: "Rendering…",
+        matched: loop.shown.flatMap { $0.key.target.stands(for: ObjectIdentifier(image), width: image.width, height: image.height) ? $0.output : nil },
+        original: edit.originalPreview ?? original, matchedNote: "Rendering…",
         shape: CGSize(width: image.width, height: image.height), matchedTitle: "Edited")
         .onChange(of: target, initial: true) { _, target in schedule(target) }
         // As `EditPane`: back after going away, ask again.

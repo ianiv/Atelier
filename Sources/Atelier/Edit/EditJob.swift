@@ -37,14 +37,21 @@ nonisolated enum Edit {
     /// measurements and the digests of its large data, the job the data itself.
     init(
       project: String, sourceTensorId: Int64, options: EditOptions, profileName: String? = nil,
-      referenceTensorId: Int64? = nil, referenceName: String? = nil, context: EditPipeline.Context = .empty
+      referenceTensorId: Int64? = nil, referenceName: String? = nil, context: EditPipeline.Context = .empty,
+      retouch: Retouch = .none
     ) {
       self.init(
         project: project,
         record: Record(
           options: options, sourceTensorId: sourceTensorId, profileName: profileName, referenceTensorId: referenceTensorId,
-          referenceName: referenceName, context: context),
+          referenceName: referenceName, context: context, crop: retouch.crop),
         blobs: Blobs(context))
+    }
+
+    /// What's done to the source before the look (`EditRetouch.apply`): the record's crop.
+    var retouch: Retouch {
+      get { Retouch(crop: record.crop) }
+      set { record.crop = newValue.crop }
     }
 
     /// The source step's image tensor, which stays the same when steps are renumbered.
@@ -146,7 +153,9 @@ nonisolated enum Edit {
   /// later version still reads; only a record without its source step fails.
   struct Record: Codable, Hashable, Sendable {
     /// The layout this version writes. A record of a later version reads as well as it can.
-    static let currentVersion = 1
+    /// 2 added `crop`; a version 1 record has none, and an older Atelier reading a version 2 one
+    /// ignores it (shows the source uncropped with the look).
+    static let currentVersion = 2
 
     var version = Record.currentVersion
     var options: EditOptions
@@ -171,11 +180,14 @@ nonisolated enum Edit {
     var referenceHistogram: StoredHistogram?
     /// The LUT's table, for `EditOptions.lut`.
     var lut: StoredLUT?
+    /// The crop, in the source's pixels (the retouch's, `Retouch.crop`): a few numbers, so inline.
+    var crop: Crop?
 
     init(
       options: EditOptions, sourceTensorId: Int64, profileName: String? = nil, referenceTensorId: Int64? = nil,
-      referenceName: String? = nil, context: EditPipeline.Context = .empty
+      referenceName: String? = nil, context: EditPipeline.Context = .empty, crop: Crop? = nil
     ) {
+      self.crop = crop
       self.options = options
       self.sourceTensorId = sourceTensorId
       self.profileName = profileName
@@ -234,6 +246,7 @@ nonisolated enum Edit {
       key.realNoise?.id = nil
       key.referenceHistogram?.id = nil
       key.lut?.id = nil
+      key.crop = crop?.renderKey
       return key
     }
 
@@ -244,7 +257,7 @@ nonisolated enum Edit {
 
     private enum CodingKeys: String, CodingKey {
       case version, options, sourceTensorId, profileName, referenceTensorId, referenceName, refWidth, curve, refStats
-      case referenceLab, realNoise, referenceHistogram, lut
+      case referenceLab, realNoise, referenceHistogram, lut, crop
     }
 
     init(from decoder: Decoder) throws {
@@ -263,6 +276,7 @@ nonisolated enum Edit {
       realNoise = lenient(StoredNoise.self, .realNoise)
       referenceHistogram = lenient(StoredHistogram.self, .referenceHistogram)
       lut = lenient(StoredLUT.self, .lut)
+      crop = lenient(Crop.self, .crop)
     }
   }
 
