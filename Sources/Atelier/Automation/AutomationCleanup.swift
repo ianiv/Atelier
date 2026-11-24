@@ -131,7 +131,7 @@ extension Automation {
           model: "", prompt: "", negativePrompt: "", seed: 0, configuration: settings)
         request.audio = audio
         let queue = JobQueue()
-        queue.append([request], currentTensorId: nil)
+        queue.append([request], currentTensorId: nil, project: "Cleanup Check")
         let job = queue.startNext()
         if let job { queue.finishRunning(.cancelled, id: job.id) }
         check(fileManager.fileExists(atPath: audio.path), "a finished job's audio stays for Run Again")

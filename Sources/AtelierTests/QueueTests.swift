@@ -2,7 +2,8 @@
 import Foundation
 import Testing
 
-/// `SavedQueue.load` on a saved queue's files. MGK's `Configuration` has no public initializer and
+/// `SavedQueue.load` on a saved queue's files. Each entry names its own project, whose ids it keeps
+/// whichever project is open at load; a project that's gone loses its entries (`projectExists`). MGK's `Configuration` has no public initializer and
 /// comes only from a loaded model, so a `GenerationEngine.Request` can't be made here and `save`
 /// isn't run; `--queue-check` covers the two together with a real model.
 @Suite(.tags(.smoke))
@@ -32,20 +33,20 @@ struct SavedQueueTests {
   }
 
   @Test func nothingSavedIsNoJobs() {
-    withTestFolder { folder in #expect(SavedQueue.load(project: "P", from: folder).isEmpty) }
+    withTestFolder { folder in #expect(SavedQueue.load(from: folder, projectExists: { _ in true }).isEmpty) }
   }
 
   @Test func aBrokenIndexIsNoJobs() throws {
     try withTestFolder { folder in
       try "not json".write(to: folder.appending(path: "index.json"), atomically: true, encoding: .utf8)
-      #expect(SavedQueue.load(project: "P", from: folder).isEmpty)
+      #expect(SavedQueue.load(from: folder, projectExists: { _ in true }).isEmpty)
     }
   }
 
   @Test func jobsComeBackInOrderWithModelAndSettings() throws {
     try withTestFolder { folder in
       try write([entry(model: "one.ckpt"), entry(model: "two.ckpt")], to: folder)
-      let jobs = SavedQueue.load(project: "P", from: folder)
+      let jobs = SavedQueue.load(from: folder, projectExists: { _ in true })
       #expect(jobs.map(\.model) == ["one.ckpt", "two.ckpt"])
       #expect(jobs.first?.settings["steps"] != nil)
     }
@@ -54,7 +55,7 @@ struct SavedQueueTests {
   @Test func aQueueSavedWithoutTargetsRunsLocally() throws {
     try withTestFolder { folder in
       try write([entry()], to: folder)
-      #expect(SavedQueue.load(project: "P", from: folder).map(\.target) == [.local])
+      #expect(SavedQueue.load(from: folder, projectExists: { _ in true }).map(\.target) == [.local])
     }
   }
 
@@ -64,7 +65,7 @@ struct SavedQueueTests {
       let data = try JSONEncoder().encode(JobTarget.remote(serverID: server))
       let target = try #require(String(data: data, encoding: .utf8))
       try write([entry(target: target)], to: folder)
-      #expect(SavedQueue.load(project: "P", from: folder).map(\.target) == [.remote(serverID: server)])
+      #expect(SavedQueue.load(from: folder, projectExists: { _ in true }).map(\.target) == [.remote(serverID: server)])
     }
   }
 
@@ -73,34 +74,63 @@ struct SavedQueueTests {
       let kept = UUID()
       try png(at: folder.appending(path: "\(kept)-canvas.png"))
       try write([entry(kept, hasCanvas: true), entry(hasCanvas: true)], to: folder)
-      #expect(SavedQueue.load(project: "P", from: folder).count == 1)
+      #expect(SavedQueue.load(from: folder, projectExists: { _ in true }).count == 1)
     }
   }
 
-  @Test func anUpscaleOnlyComesBackInItsOwnProject() throws {
+  /// An upscale's source clip is a step of its own project, which it reads whichever is open.
+  @Test func anUpscaleComesBackForItsOwnProject() throws {
     try withTestFolder { folder in
       let upscale = #"{"method":"system","scale":2,"sourceTensorId":1}"#
       try write([entry(upscale: upscale)], to: folder)
-      #expect(SavedQueue.load(project: "Other", from: folder).isEmpty)
+      let jobs = SavedQueue.load(from: folder, projectExists: { _ in true })
+      #expect(jobs.count == 1 && jobs.first?.project == "P")
       // Loading forgets what was saved.
       #expect(!FileManager.default.fileExists(atPath: folder.path))
-      try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-      try write([entry(upscale: upscale)], to: folder)
-      #expect(SavedQueue.load(project: "P", from: folder).count == 1)
     }
   }
 
-  /// A reference video's clip is a step of the project it was queued in: elsewhere the job would
-  /// run without it, so it's dropped. A queue saved before reference videos reads as before.
-  @Test func aReferenceVideoOnlyComesBackInItsOwnProject() throws {
+  /// A reference video's clip is a step of the project it was queued in: the job comes back for
+  /// that project, its clip with it.
+  @Test func aReferenceVideoComesBackForItsOwnProject() throws {
     try withTestFolder { folder in
       let withReference = entry().replacingOccurrences(of: #""moodboardWeights":[]"#, with: #""moodboardWeights":[],"referenceTensorId":42"#)
       #expect(withReference.contains("referenceTensorId"))
       try write([withReference, entry()], to: folder)
-      #expect(SavedQueue.load(project: "Other", from: folder).count == 1, "only the job without one")
-      try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-      try write([withReference, entry()], to: folder)
-      #expect(SavedQueue.load(project: "P", from: folder).count == 2)
+      #expect(SavedQueue.load(from: folder, projectExists: { _ in true }).count == 2)
+    }
+  }
+
+  /// Each entry keeps its own project and the step it follows there, whichever project is open.
+  @Test func eachJobKeepsItsOwnProjectAndSteps() throws {
+    try withTestFolder { folder in
+      try write([entry(model: "a.ckpt", project: "A"), entry(model: "b.ckpt", project: "B")], to: folder)
+      let jobs = SavedQueue.load(from: folder, projectExists: { _ in true })
+      #expect(jobs.map(\.project) == ["A", "B"])
+      #expect(jobs.allSatisfy { $0.parentTensorId == 9 })
+    }
+  }
+
+  /// A job whose project is gone (deleted or renamed outside Atelier since) is dropped, and the
+  /// rest come back; so is one whose project name couldn't be a project's.
+  @Test func aJobWhoseProjectIsGoneIsDropped() throws {
+    try withTestFolder { folder in
+      try write([entry(model: "a.ckpt", project: "A"), entry(model: "b.ckpt", project: "Gone"), entry(model: "c.ckpt", project: "../x")], to: folder)
+      let jobs = SavedQueue.load(from: folder, projectExists: { $0 != "Gone" })
+      #expect(jobs.map(\.model) == ["a.ckpt"])
+    }
+  }
+
+  /// A job saved on a line keeps it and the step that line had reached; one saved before lines
+  /// were kept has none, and comes back as before.
+  @Test func aLineComesBackWithItsTip() throws {
+    try withTestFolder { folder in
+      let line = UUID()
+      let onLine = entry().replacingOccurrences(of: #""parentTensorId":9"#, with: #""line":"\#(line.uuidString)","lineTip":7"#)
+      try write([onLine, entry()], to: folder)
+      let jobs = SavedQueue.load(from: folder, projectExists: { _ in true })
+      #expect(jobs.first?.line?.id == line && jobs.first?.line?.tip == 7 && jobs.first?.parentTensorId == nil)
+      #expect(jobs.last?.line == nil)
     }
   }
 
@@ -112,7 +142,7 @@ struct SavedQueueTests {
         project: "P", sourceTensorId: 12, options: .init(tint: 0.75, saturation: 0.5, brightness: 0.4, contrast: 0.2, unchangedOnly: true))
       let json = try #require(String(data: JSONEncoder().encode(match), encoding: .utf8))
       try write([entry(colorMatch: json)], to: folder)
-      let jobs = SavedQueue.load(project: "Other", from: folder)
+      let jobs = SavedQueue.load(from: folder, projectExists: { _ in true })
       #expect(jobs.count == 1)
       #expect(jobs.first?.colorMatch == match)
     }
@@ -137,7 +167,7 @@ struct SavedQueueTests {
       let on = #"{"project":"P","sourceTensorId":12,"strength":0.75,"luminance":true,"record":{"strength":0.75,"luminance":true,"originalTensorId":3}}"#
       let off = #"{"project":"P","sourceTensorId":13,"strength":1,"luminance":false}"#
       try write([entry(colorMatch: on), entry(colorMatch: off)], to: folder)
-      let jobs = SavedQueue.load(project: "Other", from: folder)
+      let jobs = SavedQueue.load(from: folder, projectExists: { _ in true })
       #expect(jobs.count == 2)
       #expect(
         jobs.first?.colorMatch
@@ -155,11 +185,11 @@ struct SavedQueueTests {
       let edit = EditJobTests.job(project: "P")
       let json = try #require(String(data: JSONEncoder().encode(edit), encoding: .utf8))
       try write([entry(model: "a.ckpt"), entry(edit: json)], to: folder)
-      let jobs = SavedQueue.load(project: "Other", from: folder)
+      let jobs = SavedQueue.load(from: folder, projectExists: { _ in true })
       #expect(jobs.count == 2)
       #expect(jobs.last?.edit == edit && jobs.last?.edit?.context == EditJobTests.context())
-      // Its step follows it to its project; a generation's doesn't.
-      #expect(jobs.last?.parentTensorId == 9 && jobs.first?.parentTensorId == nil)
+      // Every job's step follows it to its own project.
+      #expect(jobs.last?.parentTensorId == 9 && jobs.first?.parentTensorId == 9)
     }
   }
 
@@ -168,7 +198,7 @@ struct SavedQueueTests {
   @Test func anUnreadableEditDropsOnlyItsJob() throws {
     try withTestFolder { folder in
       try write([entry(model: "a.ckpt"), entry(edit: #"{"project":"P"}"#), entry(model: "b.ckpt")], to: folder)
-      let jobs = SavedQueue.load(project: "P", from: folder)
+      let jobs = SavedQueue.load(from: folder, projectExists: { _ in true })
       #expect(jobs.map(\.model) == ["a.ckpt", "b.ckpt"] && jobs.allSatisfy { $0.edit == nil })
     }
   }

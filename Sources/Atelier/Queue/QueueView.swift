@@ -88,12 +88,8 @@ struct QueueView: View {
         create.history.setCurrent(tensorId: tensorId)
         navigation.section = .history
       }
-      // A colour match or edit saves into its own project, which may not be the one open.
-      .disabled(
-        create.history.item(tensorId: tensorId) == nil
-          || job.request?.colorMatch.map { $0.project != create.history.project.name } == true
-          || job.request?.edit.map { $0.project != create.history.project.name } == true
-          || job.request?.depthMap.map { $0.project != create.history.project.name } == true)
+      // Every job saves into its own project, which may not be the one open.
+      .disabled(job.project != create.history.project.name || create.history.item(tensorId: tensorId) == nil)
       Button("Run Again") { create.retry(job.id) }
       Button("Remove from List") { queue.removeRecent(job.id) }
     case .exported(let url):
@@ -225,13 +221,17 @@ struct QueueRow: View {
     .padding(.vertical, 2)
   }
 
+  /// Whether the job is for the project that's open (`JobQueue.Job.project`): its steps are only
+  /// listed then.
+  private var inOpenProject: Bool { job.project == create.history.project.name }
+
   private var preview: some View {
     ZStack {
       Color.quaternaryLabel
       if let match = job.request?.colorMatch {
         // Its steps are in its own project, which may not be the one open.
         let tensorId = if case .finished(let tensorId) = job.status { tensorId } else { match.sourceTensorId }
-        if match.project == create.history.project.name, let item = create.history.item(tensorId: tensorId) {
+        if inOpenProject, let item = create.history.item(tensorId: tensorId) {
           Thumbnail(item: item)
         } else {
           Image(systemName: "eyedropper.halffull").foregroundStyle(.secondary).accessibilityHidden(true)
@@ -239,7 +239,7 @@ struct QueueRow: View {
       } else if let edit = job.request?.edit {
         // As a colour match: its steps are in its own project.
         let tensorId = if case .finished(let tensorId) = job.status { tensorId } else { edit.sourceTensorId }
-        if edit.project == create.history.project.name, let item = create.history.item(tensorId: tensorId) {
+        if inOpenProject, let item = create.history.item(tensorId: tensorId) {
           Thumbnail(item: item)
         } else {
           Image(systemName: Edit.symbol).foregroundStyle(.secondary).accessibilityHidden(true)
@@ -247,12 +247,12 @@ struct QueueRow: View {
       } else if let depth = job.request?.depthMap {
         // As a colour match: its steps are in its own project.
         let tensorId = if case .finished(let tensorId) = job.status { tensorId } else { depth.sourceTensorId }
-        if depth.project == create.history.project.name, let item = create.history.item(tensorId: tensorId) {
+        if inOpenProject, let item = create.history.item(tensorId: tensorId) {
           Thumbnail(item: item)
         } else {
           Image(systemName: DepthMap.symbol).foregroundStyle(.secondary).accessibilityHidden(true)
         }
-      } else if case .finished(let tensorId) = job.status, let item = create.history.item(tensorId: tensorId) {
+      } else if case .finished(let tensorId) = job.status, inOpenProject, let item = create.history.item(tensorId: tensorId) {
         Thumbnail(item: item)
       } else if job.status == .running, let image = create.runProgress(of: job)?.preview {
         Image(decorative: image, scale: 1).resizable().aspectRatio(contentMode: .fill)
@@ -300,31 +300,26 @@ struct QueueRow: View {
   }
 
   /// Where it runs, the size and how it's made, then how long it took. A colour match names no
-  /// model, seed or steps: it uses none of them.
+  /// model, seed or steps: it uses none of them. Any job of a project that isn't open names it.
   private func caption(_ request: GenerationEngine.Request, configuration: PipelineConfiguration, video: VideoModel?) -> String {
     let took = job.elapsed.map { "took \(GenerationTime.text($0))" }
     let size = "\(configuration.width)×\(configuration.height)"
+    // Its project, when it isn't the one open.
+    let elsewhere = job.project.flatMap { $0 == create.history.project.name ? nil : "in “\($0)”" }
     if let match = request.colorMatch {
-      var parts = [create.runLocationName(of: job), size, Self.colorText(match.options), Self.lightnessText(match.options)]
-      if let unchanged = Self.unchangedText(match) { parts.append(unchanged) }
-      // Its project, when it isn't the one open.
-      if match.project != create.history.project.name { parts.insert("in “\(match.project)”", at: 1) }
-      return (parts + [took]).compactMap(\.self).joined(separator: " · ")
+      return [create.runLocationName(of: job), elsewhere, size, Self.colorText(match.options), Self.lightnessText(match.options), Self.unchangedText(match), took]
+        .compactMap(\.self).joined(separator: " · ")
     }
     // An edit, too, uses no model, seed or steps.
-    if let edit = request.edit {
-      var parts: [String?] = [create.runLocationName(of: job), size]
-      if edit.project != create.history.project.name { parts.insert("in “\(edit.project)”", at: 1) }
-      return (parts + [took]).compactMap(\.self).joined(separator: " · ")
+    if request.edit != nil {
+      return [create.runLocationName(of: job), elsewhere, size, took].compactMap(\.self).joined(separator: " · ")
     }
     // A depth map runs the depth model, not the step's: no seed or steps either.
-    if let depth = request.depthMap {
-      var parts: [String?] = [create.runLocationName(of: job), size, "Depth Anything v2"]
-      if depth.project != create.history.project.name { parts.insert("in “\(depth.project)”", at: 1) }
-      return (parts + [took]).compactMap(\.self).joined(separator: " · ")
+    if request.depthMap != nil {
+      return [create.runLocationName(of: job), elsewhere, size, "Depth Anything v2", took].compactMap(\.self).joined(separator: " · ")
     }
     return [
-      create.runLocationName(of: job), modelName(request.model), size,
+      create.runLocationName(of: job), elsewhere, modelName(request.model), size,
       video.map { length($0, configuration) }, "seed \(request.seed)",
       "\(configuration.steps) steps", took,
     ].compactMap(\.self).joined(separator: " · ")

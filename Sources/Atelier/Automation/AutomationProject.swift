@@ -528,8 +528,9 @@ extension Automation {
   /// an import into it still running when the delete came (as an agent's `import_video`), which
   /// either stops because the project closed or finished first and went to the Trash with it, and
   /// put nothing into the project opened in its place; another project's media folder stays. Its
-  /// cached clip videos go (another project's stay), a queued Match Colors job for it is cancelled
-  /// (a SKIP line when there are no settings to queue one with), the canvas image isn't taken for a
+  /// cached clip videos go (another project's stay), its queued jobs (a Match Colors job and a
+  /// generation) are counted for the confirmation and cancelled while another project's queued
+  /// job stays (a SKIP line when there are no settings to queue them with), the canvas image isn't taken for a
   /// step of a later project of the same name, and thumbnails aren't either. Last, a rename that
   /// another project opens under (`<name>-r`, made and deleted here) throws and renames neither.
   ///
@@ -623,10 +624,22 @@ extension Automation {
           model: first.sidecar.model, prompt: first.sidecar.prompt, negativePrompt: "", seed: first.sidecar.seed,
           configuration: settings)
         request.colorMatch = ColorMatch.Job(project: name, sourceTensorId: first.tensorId, options: ColorMatch.Options())
-        model.queue.append([request], currentTensorId: history.currentTensorId)
-        check(model.colorMatchJobs(in: name).count == 1, "a Match Colors job for “\(name)” waits")
+        model.queue.append([request], currentTensorId: history.currentTensorId, project: name)
+        // A generation for it, and one for the project that opens in its place, which must stay.
+        var generation = request
+        generation.colorMatch = nil
+        model.queue.append([generation], currentTensorId: history.currentTensorId, project: name)
+        model.queue.append([generation], currentTensorId: nil, project: sibling)
+        check(
+          model.jobs(in: name).count == 2 && model.jobs(in: name).contains { $0.request?.colorMatch != nil },
+          "a Match Colors job and a generation for “\(name)” wait")
+        check(
+          ProjectDeletion.jobsMessage(project: name, running: 0, waiting: model.jobs(in: name).count)
+            == "2 jobs for “\(name)” are waiting. Deleting the project cancels them."
+            && ProjectDeletion.confirmTitle(jobCount: model.jobs(in: name).count) == "Cancel Jobs and Delete",
+          "the confirmation counts them and its button says they go")
       } else {
-        print("SKIP the Match Colors job: no settings to queue it with")
+        print("SKIP the queued jobs: no settings to queue them with")
         fflush(stdout)
       }
 
@@ -705,10 +718,15 @@ extension Automation {
         check(!deleted.isOpen, "the project that was open is closed")
         check(!ownClips.contains(where: { exists($0) }), "its cached clip videos are gone")
         check(exists(siblingClip), "another project's cached clip video stays")
-        check(model.colorMatchJobs(in: name).isEmpty, "its Match Colors job is cancelled")
+        check(model.jobs(in: name).isEmpty, "its jobs are cancelled")
+        if model.settings != nil {
+          check(model.jobs(in: sibling).count == 1, "another project's job still waits")
+        }
       } catch {
         check(false, "delete “\(name)”: \(error.localizedDescription)")
       }
+      // It was only there to stay: it isn't run.
+      for job in model.jobs(in: sibling) { model.cancel(job.id) }
       model.setQueuePaused(false)
       try? fileManager.removeItem(at: siblingClip)
 
@@ -789,7 +807,7 @@ extension Automation {
   }
 
   /// A test image with distinct values in every channel; `seed` varies the blue channel.
-  private static func gradient(width: Int, height: Int, seed: Int = 0) -> CGImage? {
+  static func gradient(width: Int, height: Int, seed: Int = 0) -> CGImage? {
     var bytes = [UInt8](repeating: 255, count: width * height * 4)
     for y in 0..<height {
       for x in 0..<width {

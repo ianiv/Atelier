@@ -53,8 +53,10 @@ final class JobQueue {
     /// and the current step stays where it is (`CreateModel.run`); it's on no line, following the
     /// step its request names.
     var detached = false
-    /// The project a detached job was queued in, which its result is saved into whichever
-    /// project is open when it ends: the step it follows is named by an id of that project's.
+    /// The project the job reads from and saves into, whichever project is open when it runs or
+    /// ends: every step and tensor id it holds is one of that project's. Set for every job that
+    /// touches a project (`append` requires it); nil only for a paired device's job and a style
+    /// thumbnail, which save nowhere. Kept current by `renameProject`.
     var project: String?
     /// Jobs queued one after another, while you didn't pick another step, form a line: each
     /// follows the line's latest result when it starts, whatever order they end up running in.
@@ -110,6 +112,14 @@ final class JobQueue {
   /// The line jobs were last queued on, and each line's latest step.
   private var lastLine: UUID?
   private var lineTips: [UUID: Int64?] = [:]
+  /// Each line's project: a line never continues into another project, since its tip is a step
+  /// of its own.
+  private var lineProject: [UUID: String?] = [:]
+  /// The project `expectedCurrent` is a step of.
+  private var expectedProject: String?
+  /// Whether a project's jobs may be queued: not one being deleted (`HistoryStore.isBeingDeleted`),
+  /// whose file would go from under them. Set by `CreateModel`.
+  @ObservationIgnored var acceptsProject: (String) -> Bool = { _ in true }
 
   private static let recentLimit = 100
 
@@ -141,19 +151,62 @@ final class JobQueue {
     ((running.map { [$0] } ?? []) + waiting).first { $0.request?.depthMap?.isSameJob(as: job) == true }
   }
 
-  /// Waiting jobs that name their own project (Match Colors to Original, Edit, Extract Depth Map,
-  /// and detached jobs) follow one that was renamed.
+  /// Every job of the project renamed from `old` follows it to `name`: waiting, running (here
+  /// and on servers) and recent ones (their rows, Show in History, Run Again), with the project
+  /// their request names inside (Match Colors, Edit, Extract Depth Map, a timeline placement, a
+  /// reference video), and the lines and inputs kept for it.
   func renameProject(from old: String, to name: String) {
-    for index in waiting.indices {
-      if waiting[index].project == old { waiting[index].project = name }
-      guard case .generation(var request) = waiting[index].work,
-            request.colorMatch?.project == old || request.edit?.project == old || request.depthMap?.project == old
-      else { continue }
+    guard old != name else { return }
+    func relabel(_ job: inout Job) {
+      guard job.project == old else { return }
+      job.project = name
+      guard case .generation(var request) = job.work else { return }
       if request.colorMatch?.project == old { request.colorMatch?.project = name }
       if request.edit?.project == old { request.edit?.project = name }
       if request.depthMap?.project == old { request.depthMap?.project = name }
-      waiting[index].work = .generation(request)
+      if request.placement?.project == old { request.placement?.project = name }
+      if request.referenceVideo?.project == old { request.referenceVideo?.project = name }
+      job.work = .generation(request)
     }
+    for index in waiting.indices { relabel(&waiting[index]) }
+    if running != nil { relabel(&running!) }
+    for index in runningRemote.indices { relabel(&runningRemote[index]) }
+    for index in recent.indices { relabel(&recent[index]) }
+    for (line, project) in lineProject where project == old { lineProject[line] = name }
+    if expectedProject == old { expectedProject = name }
+    let prefix = Self.inputKey(project: old, canvas: "")
+    for (key, value) in savedInputs where key.hasPrefix(prefix) {
+      savedInputs[key] = nil
+      savedInputs[Self.inputKey(project: name, canvas: String(key.dropFirst(prefix.count)))] = value
+    }
+  }
+
+  /// The project job `id` reads from and saves into now (`Job.project`), renamed or not: a run
+  /// holds a copy of its job from when it started, which a rename since doesn't reach.
+  func projectName(of id: UUID) -> String? {
+    if running?.id == id { return running?.project }
+    if let job = runningRemote.first(where: { $0.id == id }) ?? waiting.first(where: { $0.id == id })
+      ?? recent.first(where: { $0.id == id })
+    {
+      return job.project
+    }
+    return nil
+  }
+
+  /// The jobs yet to end (running here or on a server, or waiting) that read from and save into
+  /// the project called `name`, of every kind, exports included.
+  func jobs(in name: String) -> [Job] {
+    unfinished.filter { $0.project == name }
+  }
+
+  /// `savedInputs`' key: an input step is one of its own project's.
+  private static func inputKey(project: String?, canvas: String) -> String {
+    "\(project ?? "")\u{0}\(canvas)"
+  }
+
+  /// The step a waiting job on a line follows when it starts, as the line stands now.
+  func lineTip(of job: Job) -> Int64?? {
+    job.line.flatMap { lineTips[$0] }
   }
 
   /// Records what a running Match Colors to Original job saved, so its row can say so whichever
@@ -172,14 +225,18 @@ final class JobQueue {
   }
 
   /// Adds jobs at the end. Ones without a step to follow go on the line being queued, or start
-  /// a new line after the current step when you picked another step since. Returns their ids.
-  /// `detached` jobs (`Job.detached`) are apart from the lines: they neither join one nor change
-  /// what the next jobs queued follow. `project` is the one they save into (`Job.project`).
+  /// a new line after the current step when you picked another step since, or the line being
+  /// queued is another project's. Returns their ids. `detached` jobs (`Job.detached`) are apart
+  /// from the lines: they neither join one nor change what the next jobs queued follow.
+  /// `project` is the one they read from and save into (`Job.project`), and `currentTensorId`
+  /// that project's current step; nil only for a style thumbnail. None are added, and no ids
+  /// returned, for a project being deleted (`acceptsProject`).
   @discardableResult
   func append(
     _ requests: [GenerationEngine.Request], currentTensorId: Int64?, target: JobTarget = .local,
-    fromAgent: Bool = false, styleThumbnail: String? = nil, detached: Bool = false, project: String? = nil
+    fromAgent: Bool = false, styleThumbnail: String? = nil, detached: Bool = false, project: String?
   ) -> [UUID] {
+    if let project, !acceptsProject(project) { return [] }
     // Match Colors to Original, Edit and Extract Depth Map jobs read and save their own project's
     // steps, which only this device has: they always run here.
     func runsOn(_ request: GenerationEngine.Request) -> JobTarget {
@@ -194,18 +251,34 @@ final class JobQueue {
       }
       return waiting.suffix(requests.count).map(\.id)
     }
+    // Jobs that each name the step they follow join no line, and leave the lines as they are: they
+    // may be another project's than the open one, whose current step `currentTensorId` is.
+    guard requests.contains(where: { $0.parentTensorId == nil }) else {
+      for request in requests {
+        var job = Job(request: request, target: runsOn(request), fromAgent: fromAgent)
+        job.styleThumbnail = styleThumbnail
+        job.project = project
+        waiting.append(job)
+      }
+      return waiting.suffix(requests.count).map(\.id)
+    }
     let line: UUID
-    if let lastLine, !isEmpty, currentTensorId == expectedCurrent {
+    if let lastLine, !isEmpty, currentTensorId == expectedCurrent, project == expectedProject,
+       lineProject[lastLine] == .some(project)
+    {
       line = lastLine
     } else {
       line = UUID()
       lineTips[line] = currentTensorId
+      lineProject[line] = project
       lastLine = line
     }
     expectedCurrent = currentTensorId
+    expectedProject = project
     for request in requests {
       var job = Job(request: request, target: runsOn(request), fromAgent: fromAgent)
       job.styleThumbnail = styleThumbnail
+      job.project = project
       if request.parentTensorId == nil { job.line = line }
       waiting.append(job)
     }
@@ -221,21 +294,26 @@ final class JobQueue {
     return job.id
   }
 
-  /// Adds a job sent to a server before this launch, unless it's already here.
-  func appendResumed(_ request: GenerationEngine.Request, id: UUID, server: UUID) {
+  /// Adds a job sent to a server before this launch, unless it's already here. `project` is the
+  /// one it was queued in, which its result is saved into.
+  func appendResumed(_ request: GenerationEngine.Request, id: UUID, server: UUID, project: String) {
     guard running?.id != id, !runningRemote.contains(where: { $0.id == id }),
           !waiting.contains(where: { $0.id == id }), !recent.contains(where: { $0.id == id })
     else { return }
     var job = Job(request: request, target: .remote(serverID: server))
     job.id = id
     job.resumesRemoteJob = true
+    job.project = project
     waiting.append(job)
   }
 
-  /// Adds an export at the end; returns its id.
+  /// Adds an export of a timeline of `project` at the end; returns its id, nil for a project
+  /// being deleted (`acceptsProject`). It reads that project's clips (their cached videos).
   @discardableResult
-  func append(_ export: TimelineExportJob, target: JobTarget = .local) -> UUID {
-    let job = Job(work: .export(export), target: target)
+  func append(_ export: TimelineExportJob, target: JobTarget = .local, project: String) -> UUID? {
+    guard acceptsProject(project) else { return nil }
+    var job = Job(work: .export(export), target: target)
+    job.project = project
     waiting.append(job)
     return job.id
   }
@@ -273,7 +351,7 @@ final class JobQueue {
     if case .generation(var request) = job.work {
       if let line = job.line, let tip = lineTips[line] { request.parentTensorId = tip }
       if request.canvas != nil, request.canvasTensorId == nil, let key = request.canvasKey {
-        request.canvasTensorId = savedInputs[key]
+        request.canvasTensorId = savedInputs[Self.inputKey(project: job.project, canvas: key)]
       }
       job.work = .generation(request)
     }
@@ -290,8 +368,8 @@ final class JobQueue {
     if running?.id == id { running?.timings = timings }
   }
 
-  /// `inOpenProject` false: the result was saved into a project that isn't open (a Match Colors
-  /// to Original job's own), so it's no step to follow here.
+  /// `inOpenProject` false: the result was saved into its project while another was open. It's
+  /// still its line's latest step (the line is that project's), but not the current step here.
   func finishRunning(
     _ status: Job.Status, id: UUID, inputTensorId: Int64? = nil, tipTensorId: Int64? = nil, inOpenProject: Bool = true
   ) {
@@ -304,16 +382,16 @@ final class JobQueue {
     job.status = status
     job.finishedAt = Date()
     // A detached job's result isn't made current, and no line follows it.
-    if case .finished(let tensorId) = status, inOpenProject, !job.detached {
-      // Saving a result makes it the current step.
+    if case .finished(let tensorId) = status, !job.detached {
       let tip = tipTensorId ?? tensorId
-      expectedCurrent = tip
+      // Saving a result into the open project makes it the current step.
+      if inOpenProject, expectedProject == job.project { expectedCurrent = tip }
       if let line = job.line { lineTips[line] = tip }
     }
     if let inputTensorId, let request = job.request, request.canvasTensorId == nil,
        let key = request.canvasKey
     {
-      savedInputs[key] = inputTensorId
+      savedInputs[Self.inputKey(project: job.project, canvas: key)] = inputTensorId
     }
     forgetIfEmpty()
     record(job)
@@ -323,6 +401,7 @@ final class JobQueue {
     guard isEmpty else { return }
     savedInputs = [:]
     lineTips = [:]
+    lineProject = [:]
     lastLine = nil
   }
 

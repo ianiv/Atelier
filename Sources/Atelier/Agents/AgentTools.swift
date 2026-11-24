@@ -2409,7 +2409,8 @@ final class AgentTools {
     ) { [weak self] update in
       guard let self else { throw CancellationError() }
       update(Progress(step: 0, total: nil, message: "Waiting for the current run to finish", isQueued: true))
-      let saved = try await self.create.matchColors(forAgent: item, options: options, original: original?.tensorId) { step, message in
+      // Named as it's called now: a rename while the job waited moved it.
+      let (saved, project) = try await self.create.matchColors(forAgent: item, options: options, original: original?.tensorId) { step, message in
         update(Progress(step: step, total: 1_000, message: message))
       }
       // What the saved step records.
@@ -2467,7 +2468,6 @@ final class AgentTools {
       throw ToolError(
         "The depth model (Depth Anything v2, \(DepthMap.modelFile), 670 MB) isn't in a models folder. Ask the user to choose Extract Depth Map in Atelier's canvas menu once, which downloads it, then call this again.")
     }
-    let project = create.history.project.name
     let depth = create.depthMapJob(for: item)
     // Another call's job for the same image: this call answers with it.
     if let existing = jobs.values.first(where: { $0.finishedAt == nil && $0.depthMap?.isSameJob(as: depth) == true }) {
@@ -2480,7 +2480,8 @@ final class AgentTools {
     ) { [weak self] update in
       guard let self else { throw CancellationError() }
       update(Progress(step: 0, total: nil, message: "Waiting for the current run to finish", isQueued: true))
-      let saved = try await self.create.depthMap(forAgent: item) { step, message in
+      // Named as it's called now: a rename while the job waited moved it.
+      let (saved, project) = try await self.create.depthMap(forAgent: item) { step, message in
         update(Progress(step: step, total: 1_000, message: message))
       }
       var result: [String: Any] = [
@@ -2989,11 +2990,12 @@ final class AgentTools {
     return try await startJob(tool: tool, label: label, edit: edit, background: background, progress: progress) { [weak self] update in
       guard let self else { throw CancellationError() }
       update(Progress(step: 0, total: nil, message: "Waiting for the current run to finish", isQueued: true))
-      let saved = try await self.create.edit(forAgent: edit, item: source) { step, message in
+      // Named as it's called now: a rename while the job waited moved it.
+      let (saved, savedIn) = try await self.create.edit(forAgent: edit, item: source) { step, message in
         update(Progress(step: step, total: 1_000, message: message))
       }
       var result: [String: Any] = [
-        "project": project.name, "history_step": saved.id.logicalTime, "source_step": sourceStep,
+        "project": savedIn, "history_step": saved.id.logicalTime, "source_step": sourceStep,
         "options": Self.lookJSON(saved.sidecar.edit?.options ?? options), "width": saved.sidecar.width, "height": saved.sidecar.height,
       ]
       if editedStep != sourceStep { result["edited_step"] = editedStep }
@@ -3011,13 +3013,13 @@ final class AgentTools {
       if let report { result["match_report"] = report }
       if let savedProfile { result["saved_profile"] = savedProfile }
       var allNotes = notes
-      if project.name != self.create.history.project.name {
-        allNotes.append("Saved into “\(project.name)”, the project the step is in; another project is open now.")
+      if savedIn != self.create.history.project.name {
+        allNotes.append("Saved into “\(savedIn)”, the project the step is in; another project is open now.")
       }
       if !allNotes.isEmpty { result["notes"] = allNotes }
-      self.lastResult = healChange != nil ? "\(heal.isEmpty ? "Cleared the heal of" : "Healed") step \(sourceStep) in \(project.name)"
+      self.lastResult = healChange != nil ? "\(heal.isEmpty ? "Cleared the heal of" : "Healed") step \(sourceStep) in \(savedIn)"
         : cropChange == nil
-        ? "Edited the look of step \(sourceStep) in \(project.name)" : "\(crop == nil ? "Uncropped" : "Cropped") step \(sourceStep) in \(project.name)"
+        ? "Edited the look of step \(sourceStep) in \(savedIn)" : "\(crop == nil ? "Uncropped" : "Cropped") step \(sourceStep) in \(savedIn)"
       var answer = try Self.textResult(json: result)
       answer["structuredContent"] = Self.tidy(result)
       return answer

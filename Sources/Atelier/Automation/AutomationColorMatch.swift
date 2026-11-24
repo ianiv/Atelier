@@ -312,7 +312,7 @@ extension Automation {
 
       // Matching the result again goes back to the same original, so there's nothing left to take out.
       do {
-        let again = try await model.matchColors(forAgent: result, options: ColorMatch.Options()) { _, _ in }
+        let again = try await model.matchColors(forAgent: result, options: ColorMatch.Options()) { _, _ in }.item
         let shift = again.sidecar.colorMatch?.shift ?? ColorMatch.Shift(l: 99, a: 99, b: 99)
         check(
           again.sidecar.colorMatch?.originalTensorId == originalTensorId && abs(shift.b) < 0.3 && abs(shift.a) < 0.3,
@@ -443,7 +443,7 @@ extension Automation {
         ColorMatch.stats(rgba: pixels, where: background).mean - ColorMatch.stats(rgba: originalPixels, where: background).mean
       }
       do {
-        let saved = try await model.matchColors(forAgent: pasted, options: ColorMatch.Options(unchangedOnly: true)) { _, _ in }
+        let saved = try await model.matchColors(forAgent: pasted, options: ColorMatch.Options(unchangedOnly: true)) { _, _ in }.item
         let record = saved.sidecar.colorMatch
         let counted = record?.counted ?? -1
         check(
@@ -461,7 +461,7 @@ extension Automation {
         } else {
           check(false, "the match from the unchanged areas can be read back")
         }
-        let whole = try await model.matchColors(forAgent: pasted, options: ColorMatch.Options()) { _, _ in }
+        let whole = try await model.matchColors(forAgent: pasted, options: ColorMatch.Options()) { _, _ in }.item
         if let image = await history.image(tensorId: whole.tensorId, in: projectName), let pixels = ColorMatch.rgba(image) {
           let off = backgroundOff(pixels)
           check(
@@ -471,7 +471,7 @@ extension Automation {
           check(false, "the whole-image match of the same edit can be read back")
         }
         // Tint alone: the colors' mean goes to the original's, their spread stays the edit's.
-        let tinted = try await model.matchColors(forAgent: pasted, options: ColorMatch.Options(saturation: 0)) { _, _ in }
+        let tinted = try await model.matchColors(forAgent: pasted, options: ColorMatch.Options(saturation: 0)) { _, _ in }.item
         if let image = await history.image(tensorId: tinted.tensorId, in: projectName), let pixels = ColorMatch.rgba(image) {
           let made = ColorMatch.stats(rgba: ColorMatch.downsampled(pixels, width: image.width, height: image.height))
           let before = ColorMatch.stats(rgba: ColorMatch.downsampled(pastedPixels, width: original.width, height: original.height))

@@ -126,6 +126,44 @@ nonisolated struct RemoteClientJobs: Sendable {
     clipRecords().last { $0.tensorId == tensorId && $0.project == project && $0.server == server }?.job
   }
 
+  /// The project renamed from `old` is `name` now: its jobs' records and clips follow it, so a
+  /// result collected later saves into it (`CreateModel.recoverRemoteJobs`).
+  func renameProject(from old: String, to name: String) {
+    let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+    for file in files where file.pathExtension == "json" {
+      guard var record = (try? Data(contentsOf: file)).flatMap({ try? JSONDecoder().decode(RemoteClientJob.self, from: $0) }),
+            record.project == old
+      else { continue }
+      record.project = name
+      Log.attempt(Log.remote, "Relabelling a remote job's project") {
+        try JSONEncoder().encode(record).write(to: file, options: .atomic)
+      }
+    }
+    let records = clipRecords()
+    guard records.contains(where: { $0.project == old }) else { return }
+    writeClipRecords(records.map { record in
+      var record = record
+      if record.project == old { record.project = name }
+      return record
+    })
+  }
+
+  /// Forgets the jobs and clips of the project called `name`, which is being deleted: a result
+  /// collected later would have nowhere to go.
+  func remove(project name: String) {
+    for record in all() where record.project == name { remove(record.jobID) }
+    let records = clipRecords()
+    guard records.contains(where: { $0.project == name }) else { return }
+    writeClipRecords(records.filter { $0.project != name })
+  }
+
+  private func writeClipRecords(_ records: [ClipRecord]) {
+    Log.attempt(Log.remote, "Remembering a clip's server") {
+      try FileManager.default.createDirectory(at: clipIndex.deletingLastPathComponent(), withIntermediateDirectories: true)
+      try JSONEncoder().encode(records).write(to: clipIndex, options: .atomic)
+    }
+  }
+
   func remove(_ job: UUID) {
     let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
     for file in files where file.lastPathComponent.hasPrefix(job.uuidString) {

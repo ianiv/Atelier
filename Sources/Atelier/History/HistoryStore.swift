@@ -206,6 +206,16 @@ final class HistoryStore {
   /// Whether nothing is running or waiting that could write to the project (`CreateModel`: the
   /// queue is empty), for cleaning up after deletes.
   @ObservationIgnored var isIdle: () -> Bool = { true }
+  /// Runs a rename's close and move with no result being saved meanwhile
+  /// (`CreateModel.oneSaveAtATime`): a save mid-transaction would write to the file as it moves.
+  @ObservationIgnored var whileNotSaving: ((@escaping @MainActor () async throws -> Void) async throws -> Void)?
+  /// The current project was renamed from the first name to the second, its files moved: what's
+  /// queued for it follows at once (`CreateModel.projectRenamed`), before a job can look it up by
+  /// the old name.
+  @ObservationIgnored var didRenameProject: ((String, String) -> Void)?
+
+  /// Whether the project called `name` is being deleted (`delete`): no job may be queued for it.
+  func isBeingDeleted(_ name: String) -> Bool { deletingNames.contains(name) }
   /// The clean-up waiting for the app to be idle after a delete (`cleanUpWhenIdle`).
   @ObservationIgnored private var idleCleanUp: Task<Void, Never>?
   /// The current project's free space, when opening it found enough to offer Compact Project…
@@ -396,17 +406,17 @@ final class HistoryStore {
     return name
   }
 
-  static func isValidName(_ name: String) -> Bool {
+  nonisolated static func isValidName(_ name: String) -> Bool {
     let trimmed = name.trimmingCharacters(in: .whitespaces)
     return !trimmed.isEmpty && !trimmed.contains("/") && !trimmed.hasPrefix(".")
   }
 
   /// Renames the current project's file (and its -wal/-shm and media folder). What's waiting to
   /// be written into it goes first, and a video being copied in stops (`willSwitchProject`): it
-  /// would land at the old path. Returns the names it went from and to, for the caller to move
-  /// what's queued for it (`CreateModel.projectRenamed`); anything short of that rename throws,
-  /// so a caller never relabels another project's jobs. The same name again renames nothing and
-  /// returns it twice.
+  /// would land at the old path. The files move with no result being saved (`whileNotSaving`),
+  /// and what's queued for the project follows as they do (`didRenameProject`). Returns the names
+  /// it went from and to; anything short of that rename throws, so no other project's jobs are
+  /// relabelled. The same name again renames nothing and returns it twice.
   @discardableResult
   func renameCurrent(to name: String) async throws -> (from: String, to: String) {
     let name = name.trimmingCharacters(in: .whitespaces)
@@ -424,26 +434,31 @@ final class HistoryStore {
     }
     let renaming = project
     await willSwitchProject?()
-    // A switch (yours, an agent's, a delete's) or another rename came meanwhile: renaming now
-    // would rename whichever project is open instead.
-    guard project === renaming, renaming.isOpen else { throw RenameError.projectChanged }
-    guard !deletingNames.contains(name) else { throw RenameError.beingDeleted(name) }
-    guard !FileManager.default.fileExists(atPath: target.path) else { throw CocoaError(.fileWriteFileExists) }
-    let oldName = project.name
-    let old = project.url
-    // Close the workspace first so nothing writes while the files move.
-    await project.close()
-    try FileManager.default.moveItem(at: old, to: target)
-    for suffix in ["-wal", "-shm", Media.suffix] {
-      let side = URL(fileURLWithPath: old.path + suffix)
-      if FileManager.default.fileExists(atPath: side.path) {
-        Log.attempt(Log.project, "Renaming a project's \(suffix) file") {
-          try FileManager.default.moveItem(at: side, to: URL(fileURLWithPath: target.path + suffix))
+    let oldName = renaming.name
+    // After any save in progress, and with none starting until the files have moved: a job saving
+    // into this project then finds it under its new name (`CreateModel.project(for:)`).
+    try await (whileNotSaving ?? { try await $0() }) { [self] in
+      // A switch (yours, an agent's, a delete's) or another rename came meanwhile: renaming now
+      // would rename whichever project is open instead.
+      guard project === renaming, renaming.isOpen else { throw RenameError.projectChanged }
+      guard !deletingNames.contains(name) else { throw RenameError.beingDeleted(name) }
+      guard !FileManager.default.fileExists(atPath: target.path) else { throw CocoaError(.fileWriteFileExists) }
+      let old = project.url
+      // Close the workspace first so nothing writes while the files move.
+      await project.close()
+      try FileManager.default.moveItem(at: old, to: target)
+      for suffix in ["-wal", "-shm", Media.suffix] {
+        let side = URL(fileURLWithPath: old.path + suffix)
+        if FileManager.default.fileExists(atPath: side.path) {
+          Log.attempt(Log.project, "Renaming a project's \(suffix) file") {
+            try FileManager.default.moveItem(at: side, to: URL(fileURLWithPath: target.path + suffix))
+          }
         }
       }
+      project = Project(url: target)
+      if SessionState.isEnabled { UserDefaults.standard.set(name, forKey: Self.currentProjectKey) }
+      didRenameProject?(oldName, name)
     }
-    project = Project(url: target)
-    if SessionState.isEnabled { UserDefaults.standard.set(name, forKey: Self.currentProjectKey) }
     await reload()
     return (oldName, name)
   }
@@ -1150,9 +1165,10 @@ final class HistoryStore {
     ImageTensor.tensor(from: image)
   }
 
-  /// The file an imported video's step names, in its project.
-  func mediaURL(of item: HistoryItem) -> URL? {
-    item.clip?.media.flatMap { project.mediaURL($0) }
+  /// The file an imported video's step names, in its project (by default the current one).
+  func mediaURL(of item: HistoryItem, in project: Project? = nil) -> URL? {
+    let project = project ?? self.project
+    return item.clip?.media.flatMap { project.mediaURL($0) }
   }
 
   /// Removes the media files of deleted `items` that no step of `project` names anymore.
@@ -1351,6 +1367,14 @@ final class HistoryStore {
     byTensor[tensorId]
   }
 
+  /// The step whose image is `tensorId` in `project`: the loaded list's for the current one, else
+  /// read from its file, for a job of a project that isn't open (`JobQueue.Job.project`).
+  func item(tensorId: Int64, in project: Project) async -> HistoryItem? {
+    if project === self.project { return byTensor[tensorId] }
+    let tree = await project.read { $0.tree() }
+    return tree.step(tensorId: tensorId).flatMap { tree.items[$0] }
+  }
+
   /// The video whose frame is the image `tensorId`, any frame (History lists a video by its first).
   func clipItem(frame tensorId: Int64) -> HistoryItem? {
     tree.clipItem(frame: tensorId).flatMap { tree.items[$0] }
@@ -1477,8 +1501,12 @@ final class HistoryStore {
   /// that's the current project); empty for most steps.
   func detailLayers(tensorId: Int64, in projectName: String) async -> [Project.DetailLayer] {
     guard projectName == project.name else { return [] }
-    let project = project
-    return await project.read { $0.detailLayers(tensorId: tensorId) }
+    return await detailLayers(tensorId: tensorId, in: project)
+  }
+
+  /// The step's detail layers in `project`, open or not (a job's own, `JobQueue.Job.project`).
+  func detailLayers(tensorId: Int64, in project: Project) async -> [Project.DetailLayer] {
+    await project.read { $0.detailLayers(tensorId: tensorId) }
   }
 
   /// The full-resolution image `tensorId` in `projectName` (when that's the current project).
@@ -1540,9 +1568,10 @@ final class HistoryStore {
 
   /// A clip's frames, decoded from the project's tensors. None for an imported video, whose
   /// frames aren't in the project (`frame(_:of:)` decodes one from its file).
-  func frames(of item: HistoryItem) async -> [CGImage] {
+  /// `project` is the clip's own when that isn't the current one (a job's, `JobQueue.Job.project`).
+  func frames(of item: HistoryItem, in project: Project? = nil) async -> [CGImage] {
     guard let clip = item.clip, clip.media == nil else { return [] }
-    let project = project
+    let project = project ?? self.project
     return await project.read { project in clip.frames.compactMap { project.image(tensorId: $0) } }
   }
 
@@ -1557,9 +1586,9 @@ final class HistoryStore {
   }
 
   /// A clip's soundtrack and its sample rate (the model's).
-  func audio(of item: HistoryItem) async -> (samples: Tensor<Float>, sampleRate: Int)? {
+  func audio(of item: HistoryItem, in project: Project? = nil) async -> (samples: Tensor<Float>, sampleRate: Int)? {
     guard let audioId = item.clip?.audioId else { return nil }
-    let project = project
+    let project = project ?? self.project
     let samples = await project.read { $0.audio(id: audioId) }
     return samples.map { ($0, RemoteModelTraits.audioSampleRate(of: item.sidecar.model)) }
   }

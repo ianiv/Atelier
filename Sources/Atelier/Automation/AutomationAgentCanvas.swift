@@ -1065,21 +1065,21 @@ extension Automation {
         // Long enough to still be running when Generate is pressed.
         arguments["steps"] = max(runSteps, 12)
         let started = try await call("edit_image", arguments)
-        for _ in 0..<2400 where !model.foregroundRunIsDetached { try? await Task.sleep(for: .milliseconds(25)) }
-        let editInFront = model.foregroundRunIsDetached
+        for _ in 0..<2400 where !model.foregroundRunIsOffCanvas { try? await Task.sleep(for: .milliseconds(25)) }
+        let editInFront = model.foregroundRunIsOffCanvas
         if let shown = model.history.item(tensorId: item.tensorId) { model.show(shown) }
         for _ in 0..<200 where !(model.canvasShowsImage && model.imageItem?.tensorId == item.tensorId) {
           try? await Task.sleep(for: .milliseconds(10))
         }
         let followsAfterLooking = model.canvasFollowsRun
         let finishedBefore = Set(model.queue.recent.map(\.id))
-        let editStillRunning = model.foregroundRunIsDetached
+        let editStillRunning = model.foregroundRunIsOffCanvas
         model.generate()
         // The user's run: on the canvas whenever it has a preview to show.
         var sawOwnRun = false, previews = 0, previewsOffCanvas = 0, followedAtStart: Bool?
         for _ in 0..<6000 {
           try? await Task.sleep(for: .milliseconds(20))
-          if model.foregroundJobID != nil, !model.foregroundRunIsDetached {
+          if model.foregroundJobID != nil, !model.foregroundRunIsOffCanvas {
             sawOwnRun = true
             if followedAtStart == nil { followedAtStart = model.canvasFollowsRun }
             if model.livePreview != nil {
@@ -1116,7 +1116,7 @@ extension Automation {
         model.settings?.steps = max(runSteps, 12)
         let finishedBefore = Set(model.queue.recent.map(\.id))
         model.generate()
-        for _ in 0..<2400 where !(model.foregroundJobID != nil && !model.foregroundRunIsDetached) {
+        for _ in 0..<2400 where !(model.foregroundJobID != nil && !model.foregroundRunIsOffCanvas) {
           try? await Task.sleep(for: .milliseconds(25))
         }
         let firstID = model.foregroundJobID
@@ -1125,7 +1125,7 @@ extension Automation {
         arguments["background"] = true
         let started = try await call("edit_image", arguments)
         model.generate()
-        let firstInFront = firstID != nil && model.foregroundJobID == firstID && !model.foregroundRunIsDetached
+        let firstInFront = firstID != nil && model.foregroundJobID == firstID && !model.foregroundRunIsOffCanvas
         if let shown = model.history.item(tensorId: item.tensorId) { model.show(shown) }
         for _ in 0..<200 where !(model.canvasShowsImage && model.imageItem?.tensorId == item.tensorId) {
           try? await Task.sleep(for: .milliseconds(10))
@@ -1134,8 +1134,8 @@ extension Automation {
         var sawEdit = false, secondFollowedAtStart: Bool?, covered = 0
         for _ in 0..<9000 {
           try? await Task.sleep(for: .milliseconds(20))
-          if model.foregroundRunIsDetached { sawEdit = true }
-          if let id = model.foregroundJobID, id != firstID, !model.foregroundRunIsDetached {
+          if model.foregroundRunIsOffCanvas { sawEdit = true }
+          if let id = model.foregroundJobID, id != firstID, !model.foregroundRunIsOffCanvas {
             if secondFollowedAtStart == nil { secondFollowedAtStart = model.canvasFollowsRun }
             if !(model.canvasShowsImage && model.imageItem?.tensorId == item.tensorId) { covered += 1 }
           }
@@ -1172,7 +1172,7 @@ extension Automation {
         let oldName = model.history.project.name
         let newName = model.history.availableName("\(oldName) renamed")
         model.generate()
-        for _ in 0..<2400 where !(model.foregroundJobID != nil && !model.foregroundRunIsDetached) {
+        for _ in 0..<2400 where !(model.foregroundJobID != nil && !model.foregroundRunIsOffCanvas) {
           try? await Task.sleep(for: .milliseconds(25))
         }
         if let stepsBefore { model.settings?.steps = stepsBefore }
@@ -1198,8 +1198,8 @@ extension Automation {
         answers = [edit, generate]
         for _ in 0..<2400 where model.queue.waiting.count < waitingBefore + 2 { try? await Task.sleep(for: .milliseconds(25)) }
         let bothWaiting = model.queue.waiting.contains { $0.detached } && model.queue.waiting.contains { $0.fromAgent && !$0.detached }
-        let renamedTo = try await model.history.renameCurrent(to: newName)
-        model.projectRenamed(from: renamedTo.from, to: renamedTo.to)
+        // What's queued for it follows as the files move (`HistoryStore.didRenameProject`).
+        try await model.history.renameCurrent(to: newName)
         for (name, task) in [("edit_image", edit), ("generate", generate)] {
           do {
             let answer = try await task.value
@@ -1213,8 +1213,7 @@ extension Automation {
           }
         }
         await idle()
-        let renamedBack = try await model.history.renameCurrent(to: oldName)
-        model.projectRenamed(from: renamedBack.from, to: renamedBack.to)
+        try await model.history.renameCurrent(to: oldName)
       } catch {
         check(false, "a rename while agent runs wait (\(error.localizedDescription))")
         for answer in answers { _ = try? await answer.value }

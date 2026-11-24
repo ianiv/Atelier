@@ -4,6 +4,8 @@ import Foundation
 /// The waiting jobs (and the one running) kept across a quit, in
 /// ~/Library/Application Support/Atelier/Queue/: index.json plus each job's canvas and moodboard
 /// images as PNG. They come back paused. Agents' jobs aren't kept: nobody waits for them anymore.
+/// Each entry names its own project (`JobQueue.Job.project`), so it comes back into that project
+/// with its step ids, whichever project is open at the next launch.
 nonisolated enum SavedQueue {
   fileprivate struct Entry: Codable {
     var id: UUID
@@ -13,9 +15,13 @@ nonisolated enum SavedQueue {
     var seed: UInt32
     /// Every setting, in the history sidecar's dump format.
     var settings: [String: JSONValue]
-    /// The project the step ids below belong to.
+    /// The project the job reads from and saves into, which the step ids below belong to.
     var project: String
     var parentTensorId: Int64?
+    /// The line it was on (`JobQueue.Job.line`), when it followed one, and that line's latest step
+    /// then: jobs of a line come back on one, after that step. Nil in queues saved before.
+    var line: UUID?
+    var lineTip: Int64?
     var hasCanvas: Bool
     var canvasTensorId: Int64?
     var canvasIsImported: Bool
@@ -37,7 +43,7 @@ nonisolated enum SavedQueue {
     /// The mask the canvas image remembers (`Request.canvasSourceMask`).
     var canvasSourceMask: CanvasSourceMask?
     /// A Match Colors to Original job: the step and its project, which it reads from and saves
-    /// into whichever project is open.
+    /// into.
     var colorMatch: ColorMatch.Job?
     /// An Edit screen job (`Edit.Job`): as `colorMatch`, it names its project. It carries the
     /// profile's real noise, the reference's histograms and the LUT it renders with in its
@@ -69,18 +75,19 @@ nonisolated enum SavedQueue {
     fileprivate var mask: Data?
     fileprivate var mergeSource: CGImage?
     fileprivate var moodboard: [GenerationEngine.Reference]
-    fileprivate var sameProject: Bool
 
     var target: JobTarget { entry.target ?? .local }
     var colorMatch: ColorMatch.Job? { entry.colorMatch }
     var edit: Edit.Job? { entry.edit }
     var depthMap: DepthMap.Job? { entry.depthMap }
+    /// The project it reads from and saves into.
+    var project: String { entry.project }
+    /// The line it was on, and that line's latest step (`Entry.line`); nil for a job naming its
+    /// own step, and for queues saved before lines were kept.
+    var line: (id: UUID, tip: Int64?)? { entry.line.map { ($0, entry.lineTip) } }
 
-    /// The step it follows: kept in the same project, and by a job naming its own project (Match
-    /// Colors, Edit) in any.
-    var parentTensorId: Int64? {
-      sameProject || entry.colorMatch != nil || entry.edit != nil || entry.depthMap != nil ? entry.parentTensorId : nil
-    }
+    /// The step it follows, one of its own project's.
+    var parentTensorId: Int64? { entry.parentTensorId }
 
     /// The job's request, with `configuration` (the model's defaults with `settings` applied).
     func request(configuration: PipelineConfiguration) -> GenerationEngine.Request {
@@ -90,31 +97,24 @@ nonisolated enum SavedQueue {
       request.parentTensorId = parentTensorId
       request.canvas = canvas
       if canvas != nil {
-        request.canvasTensorId = sameProject ? entry.canvasTensorId : nil
+        request.canvasTensorId = entry.canvasTensorId
         request.canvasIsImported = entry.canvasIsImported
         request.mask = mask
         if let record = entry.merge, let mergeSource {
-          request.merge = RefineMerge(record: record, source: mergeSource, sameProject: sameProject)
+          request.merge = RefineMerge(record: record, source: mergeSource, sameProject: true)
           // With paint the input was the painted frame, saved anew (`RefineInputs.make`).
           request.canvasTensorId = request.merge?.painted == true ? nil : request.merge?.sourceTensorId
         }
-        request.canvasSourceMask = entry.canvasSourceMask.map { mask in
-          var mask = mask
-          if !sameProject { mask.tensorId = nil }
-          return mask
-        }
+        request.canvasSourceMask = entry.canvasSourceMask
       }
       request.moodboard = moodboard
       request.audio = entry.audio.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
-      request.placement = sameProject ? entry.placement : nil
+      request.placement = entry.placement
       request.upscale = entry.upscale
       request.imageUpscale = entry.imageUpscale
-      // It names its own project, so its step follows it there whichever project this is
-      // (`parentTensorId`).
       request.colorMatch = entry.colorMatch
       request.edit = entry.edit
       request.depthMap = entry.depthMap
-      // Kept only in its own project (`load`).
       request.referenceVideo = entry.referenceTensorId.map { ReferenceVideo(sourceTensorId: $0, project: entry.project) }
       return request
     }
@@ -124,23 +124,26 @@ nonisolated enum SavedQueue {
     URL.applicationSupportDirectory.appending(path: "Atelier/Queue", directoryHint: .isDirectory)
   }
 
-  static func save(_ jobs: [JobQueue.Job], project: String, in folder: URL = folder) {
+  /// Keeps `jobs`, each with its own project. `lineTip` is the step a job on a line would follow
+  /// now (`JobQueue.lineTip(of:)`), so its line comes back after it.
+  static func save(_ jobs: [JobQueue.Job], lineTip: (JobQueue.Job) -> Int64?? = { _ in nil }, in folder: URL = folder) {
     let manager = FileManager.default
     try? manager.removeItem(at: folder)
     // Exports write where a save panel allowed for this session only, so they aren't kept, and
     // agent, paired device and style thumbnail jobs answer a caller that's gone after a quit.
     // A job for a server isn't kept here either: bringing it back would run it on this device.
     // Once sent, `RemoteClientJobs` keeps it. A detached job (an agent's, or one run again from
-    // Recent) isn't kept: an entry doesn't say it's off the canvas, or which project it's for.
+    // Recent) isn't kept: an entry doesn't say it's off the canvas. A job without a project
+    // saves nowhere (`JobQueue.Job.project`).
     let jobs = jobs.filter {
       !$0.fromAgent && !$0.detached && $0.remoteDevice == nil && $0.styleThumbnail == nil && $0.request != nil
-        && $0.target == .local
+        && $0.target == .local && $0.project != nil
     }
     guard !jobs.isEmpty, (try? manager.createDirectory(at: folder, withIntermediateDirectories: true)) != nil
     else { return }
     var entries: [Entry] = []
     for job in jobs {
-      guard let request = job.request else { continue }
+      guard let request = job.request, let project = job.project else { continue }
       var settings = request.configuration
       settings.seed = request.seed
       if let canvas = request.canvas {
@@ -179,6 +182,10 @@ nonisolated enum SavedQueue {
           target: job.target, hasMask: request.mask != nil, merge: mergeRecord,
           canvasSourceMask: request.canvasSourceMask, colorMatch: request.colorMatch, edit: request.edit,
           depthMap: request.depthMap, referenceTensorId: request.referenceVideo?.sourceTensorId))
+      if let line = job.line, request.parentTensorId == nil, let tip = lineTip(job) {
+        entries[entries.count - 1].line = line
+        entries[entries.count - 1].lineTip = tip
+      }
     }
     if let data = try? JSONEncoder().encode(entries) {
       Log.attempt(Log.queue, "Saving the queue") {
@@ -187,17 +194,22 @@ nonisolated enum SavedQueue {
     }
   }
 
-  /// The saved jobs, then forgets them. Step ids only carry over in the same project.
-  static func load(project: String, from folder: URL = folder) -> [Job] {
+  /// The saved jobs, then forgets them. Each keeps its own project and its step ids; one whose
+  /// project is gone (deleted or renamed outside Atelier since, `projectExists`) is dropped,
+  /// since its ids name nothing anywhere else.
+  static func load(
+    from folder: URL = folder,
+    projectExists: (String) -> Bool = { FileManager.default.fileExists(atPath: HistoryStore.url(for: $0).path) }
+  ) -> [Job] {
     guard let data = try? Data(contentsOf: folder.appending(path: "index.json")),
           let entries = (try? JSONDecoder().decode([LenientEntry].self, from: data))?.compactMap(\.entry)
     else { return [] }
     let jobs = entries.compactMap { entry -> Job? in
-      // An upscale's source clip is a step of its own project. A Match Colors job names its
-      // project, so it comes back in any.
-      if entry.upscale != nil, entry.project != project { return nil }
-      // So is a reference video's clip: without it the job would make another video.
-      if entry.referenceTensorId != nil, entry.project != project { return nil }
+      // A name read from the file: one that couldn't be a project's names none.
+      guard HistoryStore.isValidName(entry.project), projectExists(entry.project) else {
+        Log.queue.notice("Dropped a saved job: its project “\(entry.project, privacy: .private)” is gone")
+        return nil
+      }
       var canvas: CGImage?
       if entry.hasCanvas {
         canvas = ImageLoader.image(at: folder.appending(path: "\(entry.id)-canvas.png"))
@@ -213,7 +225,7 @@ nonisolated enum SavedQueue {
       }
       return Job(
         model: entry.model, settings: entry.settings, entry: entry, canvas: canvas, mask: mask,
-        mergeSource: mergeSource, moodboard: moodboard, sameProject: entry.project == project)
+        mergeSource: mergeSource, moodboard: moodboard)
     }
     try? FileManager.default.removeItem(at: folder)
     return jobs

@@ -1,6 +1,6 @@
 # Running jobs on another device
 
-Any copy of Atelier can run jobs for your other devices. Send a video from an iPad to the Mac on your desk, and the Mac does the work while the iPad stays free. Results come back into the project on the device you sent them from, in the same place a local run would put them. Nothing is synced: your project stays on the device you're working on, and the other device is a borrowed engine.
+Any copy of Atelier can run jobs for your other devices. Send a video from an iPad to the Mac on your desk, and the Mac does the work while the iPad stays free. Results come back into the project on the device you sent them from, in the same place a local run would put them: the project the job was queued in, even if you've opened another since. Nothing is synced: your project stays on the device you're working on, and the other device is a borrowed engine.
 
 ## Setting it up
 
