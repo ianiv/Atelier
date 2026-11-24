@@ -20,9 +20,12 @@ extension Automation {
   ///    project, and nothing comes back under the old name.
   /// 5. Deleting `<name>-c` (current, with `<name>-cz` after it) while one of its jobs runs and
   ///    one waits: both are counted and cancelled, nothing is written after its files go, and a
-  ///    job of `<name>-b` queued with them still finishes into `<name>-b`.
+  ///    job of `<name>-b` queued with them still finishes into `<name>-b`; the cancelled jobs add
+  ///    no step to any other project.
   /// 6. A saved queue with jobs of two projects, loaded with a third open, brings both back for
   ///    their own projects.
+  /// 7. Stop pressed once a run's output is in, while its save waits, still saves it (a SKIP line
+  ///    when the run reports no decoding to time it by).
   ///
   ///   Atelier --project-pin-check --project project-pin-<random> [--model M] [--quit]
   ///
@@ -294,6 +297,8 @@ extension Automation {
       let counts = (model.jobs(in: doomed).count, model.jobs(in: doomed).count { $0.status == .waiting })
       check(counts == (2, 1), "one of “\(doomed)”'s jobs runs and one waits (\(counts))")
       let doomedURL = HistoryStore.url(for: doomed)
+      // What the other projects hold before: the cancelled jobs must add nothing to any of them.
+      let before = await (steps(of: name).count, steps(of: other).count, steps(of: last).count)
       do {
         let trashed = try await model.deleteProject(doomed)
         check(model.jobs(in: doomed).isEmpty, "the delete cancelled its jobs (left: \(model.jobs(in: doomed).map(\.status.description)))")
@@ -317,6 +322,10 @@ extension Automation {
       _ = await wait(until: { queue.isEmpty })
       let otherSteps = await steps(of: other)
       check(finishedTensor(otherJob).map { otherSteps[$0] != nil } == true, "“\(other)”'s job still finished, into “\(other)”")
+      let after = await (steps(of: name).count, steps(of: other).count, steps(of: last).count)
+      check(
+        after.0 == before.0 && after.1 == before.1 + 1 && after.2 == before.2,
+        "the cancelled jobs added no steps elsewhere (before \(before), after \(after))")
       check(history.project.name == last, "“\(last)” opened in its place (got “\(history.project.name)”)")
 
       // 6. A saved queue of two projects' jobs, loaded with a third open.
@@ -341,6 +350,30 @@ extension Automation {
       try? fileManager.removeItem(at: folder)
       model.setQueuePaused(false)
 
+      // 7. Stop once the output is here, before it's saved: it's still saved. Saves are held
+      // (`oneSaveAtATime`) so the run waits there; Stop comes once decoding has been reported.
+      let hold = SaveHold()
+      let held = Task { @MainActor in try? await model.oneSaveAtATime { while !hold.released { try? await Task.sleep(for: .milliseconds(20)) } } }
+      let stoppedID = await generate().first
+      let decoded = await wait(until: { model.phase == .running("Finishing…") || queue.isEmpty }, seconds: 300)
+      if decoded, model.phase == .running("Finishing…") {
+        try? await Task.sleep(for: .seconds(2))
+        model.cancel()
+        hold.released = true
+        _ = await held.value
+        _ = await wait(until: { queue.isEmpty })
+        let stopped = finishedTensor(stoppedID)
+        check(
+          stopped.map { history.item(tensorId: $0) != nil } == true,
+          "Stop after the output arrived still saves it (\(queue.recent.first { $0.id == stoppedID }?.status.description ?? "no job"))")
+      } else {
+        hold.released = true
+        _ = await held.value
+        _ = await wait(until: { queue.isEmpty })
+        print("SKIP Stop after the output arrived: the run never reported decoding, so it can't be timed")
+        fflush(stdout)
+      }
+
       // Cleaning up: all but the one now open.
       for project in [name, other] {
         do {
@@ -354,7 +387,12 @@ extension Automation {
   }
 }
 
-fileprivate extension JobQueue.Job.Status {
+/// Holds `projectPinCheck`'s saves until released.
+@MainActor fileprivate final class SaveHold {
+  var released = false
+}
+
+extension JobQueue.Job.Status {
   /// For check messages.
   var description: String {
     switch self {

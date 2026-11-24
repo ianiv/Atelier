@@ -199,6 +199,12 @@ final class JobQueue {
     for index in recent.indices { forget(&recent[index]) }
   }
 
+  /// Whether job `id`'s project was deleted (`forgetProject`).
+  func isProjectDeleted(_ id: UUID) -> Bool {
+    if running?.id == id { return running?.projectDeleted == true }
+    return (runningRemote.first { $0.id == id } ?? waiting.first { $0.id == id } ?? recent.first { $0.id == id })?.projectDeleted == true
+  }
+
   /// The project job `id` reads from and saves into now (`Job.project`), renamed or not: a run
   /// holds a copy of its job from when it started, which a rename since doesn't reach.
   func projectName(of id: UUID) -> String? {

@@ -2734,9 +2734,8 @@ final class CreateModel {
         let history = history
         // The mask painted on the source stays with the result, moved as the image grew.
         let keptMask = mergedOrigin.flatMap { origin in request.merge?.canvasMask?.translated(by: origin) }
-        // Stopped (or its project deleted) by now: nothing is saved. The save itself runs as a task of
-        // its own (`oneSaveAtATime`), which a cancel doesn't reach.
-        try Task.checkCancellation()
+        // A Stop once the output is here still saves it, as it always has; a delete's cancel doesn't
+        // (`project(for:)` refuses the job inside the save).
         let (item, savedInto) = try await oneSaveAtATime {
           // Found again now: a rename since it started closed the project it would have saved into
           // (`renameCurrent`), and the job follows it to the new name.
@@ -2853,11 +2852,12 @@ final class CreateModel {
   /// starts and again right before it saves, so a rename between the two is followed and a
   /// delete stops it.
   func project(for job: JobQueue.Job) throws -> Project {
-    guard let name = queue.projectName(of: job.id) ?? job.project else { throw JobProjectError.missing("") }
     // Its project was deleted (`deleteProject`), which cancelled it: a run that gets as far as
     // reading or saving before it stops ends cancelled too, rather than writing into the file as
-    // it goes, or into a later project of the same name.
-    if cancelledForDelete.contains(job.id) { throw CancellationError() }
+    // it goes, or into a later project of the same name. Asked before the name is looked up, which
+    // after the delete may be a new project's.
+    if cancelledForDelete.contains(job.id) || queue.isProjectDeleted(job.id) { throw CancellationError() }
+    guard let name = queue.projectName(of: job.id) ?? job.project else { throw JobProjectError.missing("") }
     guard !history.isBeingDeleted(name), let project = history.project(named: name), project.isOpen else {
       throw JobProjectError.missing(name)
     }
