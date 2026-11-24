@@ -44,7 +44,8 @@ import SwiftUI
 /// canvas tools (AutomationAgentCanvas.swift). `--automask-check` selects with Vision and SAM
 /// into the canvas mask (AutomationAutoMask.swift). `--paint-check` paints colours on the canvas
 /// and runs from them (AutomationPaint.swift). `--queue-check` runs the queue
-/// (AutomationQueue.swift). `--color-match-check` matches an edit's colors to its original
+/// (AutomationQueue.swift), and `--project-pin-check` runs jobs into their own project while
+/// another is open, renamed or deleted (AutomationProjectPin.swift). `--color-match-check` matches an edit's colors to its original
 /// (AutomationColorMatch.swift). `--depth-check` extracts depth maps from the canvas menu and
 /// the agent tool (AutomationDepth.swift). `--input-entries-check` records and restores input entries, and
 /// `--entries-freeze-check` clicks through the strip after moodboard, Clear and Generate-mode runs
@@ -102,7 +103,7 @@ enum Automation {
       "--catalog-retry-check", "--model-move-check", "--library-batch-check", "--add-folder-check", "--hf-link-check", "--color-match-check", "--depth-check", "--canvas-clip-check",
       "--create-delete-check", "--reference-video-check", "--reference-video-run",
       "--history-loras-check",
-      "--input-entries-check", "--entries-freeze-check", "--tab-switch-bench", "--delete-project-check", "--compact-check",
+      "--input-entries-check", "--entries-freeze-check", "--tab-switch-bench", "--delete-project-check", "--compact-check", "--project-pin-check",
       "--paint-check", "--edit-screen-check", "--edit-tools-check", "--grain-reference", "--edit-render-bench", "--edit-ui-bench",
     ]
     // The unit tests run inside the app. Like a scripted run, that leaves the user's data alone: no
@@ -189,6 +190,10 @@ enum Automation {
     }
     if args.contains("--project-check") {
       projectCheck(model)
+      return
+    }
+    if args.contains("--project-pin-check") {
+      projectPinCheck(model)
       return
     }
     if args.contains("--delete-project-check") {

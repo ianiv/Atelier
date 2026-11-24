@@ -1420,7 +1420,8 @@ struct ProjectMenu: View {
       titleVisibility: .visible,
       presenting: deleting
     ) { name in
-      Button("Delete Project", role: .destructive) { delete(name) }
+      // Read live: a job queued while the dialog is open is cancelled too (`deleteProject`).
+      Button(ProjectDeletion.confirmTitle(jobCount: create.jobs(in: name).count), role: .destructive) { delete(name) }
       Button("Cancel", role: .cancel) {}
     } message: { name in
       Text(deleteMessage(name))
@@ -1435,8 +1436,8 @@ struct ProjectMenu: View {
       message: { Text(error?.message ?? "") })
   }
 
-  /// What deleting `name` does: where its files go, which project opens in its place, and what
-  /// becomes of jobs in the queue.
+  /// What deleting `name` does: where its files go, which project opens in its place, and that
+  /// its jobs in the queue are cancelled. Other projects' jobs carry on into their own.
   private func deleteMessage(_ name: String) -> String {
     let isCurrent = name == history.project.name
     let count = isCurrent ? history.items.count(where: { !$0.isEntry }) : 0
@@ -1446,19 +1447,16 @@ struct ProjectMenu: View {
     #else
       var parts = ["The project\(contents) is deleted. This can't be undone."]
     #endif
-    guard isCurrent else { return parts.joined() }
-    let next = history.projectToOpen(afterDeleting: name)
-    parts.append(
-      history.projectNames.contains(next) ? "“\(next)” opens in its place." : "A new project, “\(next)”, opens in its place.")
-    // Generations save into whichever project is open; Match Colors and Edit jobs only into their own.
-    let queue = create.queue
-    let jobs = (queue.running.map { [$0] } ?? []) + queue.runningRemote + queue.waiting
-    if jobs.contains(where: { $0.request.map { $0.colorMatch == nil && $0.edit == nil && $0.depthMap == nil } == true && $0.remoteDevice == nil && $0.styleThumbnail == nil }) {
-      parts.append("Jobs in the queue save into “\(next)” instead.")
+    if isCurrent {
+      let next = history.projectToOpen(afterDeleting: name)
+      parts.append(
+        history.projectNames.contains(next) ? "“\(next)” opens in its place." : "A new project, “\(next)”, opens in its place.")
     }
-    if !create.colorMatchJobs(in: name).isEmpty { parts.append("Its Match Colors jobs are cancelled.") }
-    if !create.editJobs(in: name).isEmpty { parts.append("Its Edit jobs are cancelled.") }
-    if !create.depthMapJobs(in: name).isEmpty { parts.append("Its Extract Depth Map jobs are cancelled.") }
+    let jobs = create.jobs(in: name)
+    let waiting = jobs.count { $0.status == .waiting }
+    if let sentence = ProjectDeletion.jobsMessage(project: name, running: jobs.count - waiting, waiting: waiting) {
+      parts.append(sentence)
+    }
     return parts.joined(separator: " ")
   }
 
@@ -1490,8 +1488,8 @@ struct ProjectMenu: View {
         await history.open(history.availableName(name))
       case .rename:
         do {
-          let renamed = try await history.renameCurrent(to: name)
-          create.projectRenamed(from: renamed.from, to: renamed.to)
+          // What's queued for it follows as the files move (`HistoryStore.didRenameProject`).
+          try await history.renameCurrent(to: name)
         } catch {
           self.error = ("Couldn't rename the project", error.localizedDescription)
         }

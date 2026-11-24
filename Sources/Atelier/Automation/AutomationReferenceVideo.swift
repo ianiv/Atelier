@@ -216,14 +216,15 @@ extension Automation {
       check(queued?.request?.referenceVideo?.sourceTensorId == clip.tensorId, "the queued job keeps the clip, not its frames")
       if let queued {
         let folder = URL.temporaryDirectory.appending(path: "Atelier-ReferenceVideoCheck-\(UUID().uuidString)", directoryHint: .isDirectory)
-        SavedQueue.save([queued], project: model.history.project.name, in: folder)
-        let restored = await model.savedRequests(SavedQueue.load(project: model.history.project.name, from: folder))
+        SavedQueue.save([queued], in: folder)
+        let restored = await model.savedRequests(SavedQueue.load(from: folder)).map(\.request)
         check(
           restored.count == 1 && restored.first?.referenceVideo?.sourceTensorId == clip.tensorId
             && restored.first?.referenceVideo?.project == model.history.project.name,
           "a saved queue brings the job back with its clip")
-        SavedQueue.save([queued], project: model.history.project.name, in: folder)
-        check(SavedQueue.load(project: "Another Project", from: folder).isEmpty, "but not in another project")
+        // For its own project, whichever is open; one that's gone takes it with it.
+        SavedQueue.save([queued], in: folder)
+        check(SavedQueue.load(from: folder, projectExists: { _ in false }).isEmpty, "but not once its project is gone")
         try? FileManager.default.removeItem(at: folder)
       }
 

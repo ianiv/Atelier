@@ -27,20 +27,21 @@ extension CreateModel {
     }
   }
 
-  func depthMapJob(for item: HistoryItem) -> DepthMap.Job {
-    DepthMap.Job(project: history.project.name, sourceTensorId: item.tensorId)
+  /// `project` is `item`'s, by default the current one.
+  func depthMapJob(for item: HistoryItem, in project: String? = nil) -> DepthMap.Job {
+    DepthMap.Job(project: project ?? history.project.name, sourceTensorId: item.tensorId)
   }
 
-  /// Queues the depth map of `item`, a step of the current project with an image (an Imported
-  /// entry's too). It runs on this device whatever Run on says (the source step is only in this
-  /// device's project), in turn with the other jobs, and saves into that project even if another
-  /// is open by then, as Match Colors to Original does (`queueColorMatch`). Returns the job's id:
-  /// the one already waiting or running for the same image when there is one.
+  /// Queues the depth map of `item`, a step with an image (an Imported entry's too) of `project`,
+  /// by default the current one. It runs on this device whatever Run on says (the source step is
+  /// only in this device's project), in turn with the other jobs, and saves into that project
+  /// even if another is open by then, as every job does (`JobQueue.Job.project`). Returns the
+  /// job's id: the one already waiting or running for the same image when there is one.
   @discardableResult
-  func queueDepthMap(_ item: HistoryItem, fromAgent: Bool = false) throws -> UUID {
+  func queueDepthMap(_ item: HistoryItem, in project: String? = nil, fromAgent: Bool = false) throws -> UUID {
     guard !item.isVideo, item.hasImage else { throw DepthMap.Failure.video }
     guard DepthMap.isModelInstalled else { throw DepthMap.Failure.modelMissing }
-    let job = depthMapJob(for: item)
+    let job = depthMapJob(for: item, in: project)
     if let pending = queue.pendingDepthMap(job) { return pending.id }
     guard var configuration = settings else { throw DepthMap.Failure.noSettings }
     // The step's settings, as Match Colors carries them; the size is the image's own.
@@ -51,7 +52,9 @@ extension CreateModel {
     request.parentTensorId = HistoryStore.tip(of: item)
     request.depthMap = job
     statusNote = nil
-    let id = queue.append([request], currentTensorId: history.currentTensorId, target: .local, fromAgent: fromAgent)[0]
+    guard let id = queue.append(
+      [request], currentTensorId: history.currentTensorId, target: .local, fromAgent: fromAgent, project: job.project).first
+    else { throw JobProjectError.beingDeleted(job.project) }
     runNext()
     return id
   }
@@ -59,7 +62,7 @@ extension CreateModel {
   /// Queues a depth map for an agent (`extract_depth_map`), or joins the one already waiting or
   /// running for the image, and returns the step it saved, as `matchColors(forAgent:)` does.
   /// Cancelling the caller cancels the job, unless it joined one someone else queued.
-  func depthMap(forAgent item: HistoryItem, progress: @escaping (Int, String) -> Void) async throws -> HistoryItem {
+  func depthMap(forAgent item: HistoryItem, progress: @escaping (Int, String) -> Void) async throws -> (item: HistoryItem, project: String) {
     let pending = queue.pendingDepthMap(depthMapJob(for: item))?.id
     let id = try queueDepthMap(item, fromAgent: true)
     let joined = id == pending
@@ -71,19 +74,18 @@ extension CreateModel {
     }
   }
 
-  /// Waits for Extract Depth Map job `id` to end, and returns the step it saved, read from its project.
-  private func depthMapResult(of id: UUID, project name: String, progress: (Int, String) -> Void) async throws -> HistoryItem {
+  /// Waits for Extract Depth Map job `id` to end, and returns the step it saved, read from its
+  /// project, with that project's name now.
+  private func depthMapResult(of id: UUID, project name: String, progress: (Int, String) -> Void) async throws -> (item: HistoryItem, project: String) {
     var reported: (Int, String)?
     while true {
       if let job = queue.recent.first(where: { $0.id == id }) {
         switch job.status {
         case .finished(let tensorId):
-          let name = job.request?.depthMap?.project ?? name
+          let name = job.project ?? name
           guard let project = history.project(named: name) else { throw DepthMap.Failure.projectMissing(name) }
-          if project === history.project, let item = history.item(tensorId: tensorId) { return item }
-          let tree = await project.read { $0.tree() }
-          guard let item = tree.step(tensorId: tensorId).flatMap({ tree.items[$0] }) else { throw DepthMap.Failure.stepMissing(name) }
-          return item
+          guard let item = await history.item(tensorId: tensorId, in: project) else { throw DepthMap.Failure.stepMissing(name) }
+          return (item, name)
         case .failed(let message): throw DepthMap.Failure.failed(message)
         default: throw CancellationError()
         }
@@ -116,16 +118,15 @@ extension CreateModel {
       var inputTensorId: Int64?
       var inOpenProject = true
       do {
-        guard let project = history.project(named: depth.project), project.isOpen else {
-          throw DepthMap.Failure.projectMissing(depth.project)
-        }
+        // Its own project's (`JobQueue.Job.project`), whichever is open.
+        let project = try self.project(for: job)
         let item: HistoryItem
         if project === history.project, let listed = history.item(tensorId: depth.sourceTensorId) {
           item = listed
         } else {
           let tree = await project.read { $0.tree() }
           guard let found = tree.step(tensorId: depth.sourceTensorId).flatMap({ tree.items[$0] }) else {
-            throw DepthMap.Failure.stepMissing(depth.project)
+            throw DepthMap.Failure.stepMissing(project.name)
           }
           item = found
         }
@@ -150,26 +151,28 @@ extension CreateModel {
         request.canvasIsImported = false
         request.parentTensorId = HistoryStore.tip(of: item)
         request.moodboard = []
-        let followsRun = { self.canvasFollowsRun && job.id == self.foregroundJobID && project === self.history.project }
+        let followsRun = { self.canvasFollowsRun && job.id == self.foregroundJobID && self.jobProjectIsOpen(job) }
         let history = history
-        let saved = try await oneSaveAtATime {
-          // A rename since it started closed the project it read from (`renameCurrent`): saving
-          // there would write to a closed file.
-          guard history.project(named: depth.project) === project, project.isOpen else {
-            throw DepthMap.Failure.projectMissing(depth.project)
-          }
-          return try await history.save(
+        // Stopped (or its project deleted) by now: nothing is saved. The save itself runs as a task of
+        // its own (`oneSaveAtATime`), which a cancel doesn't reach.
+        try Task.checkCancellation()
+        let (saved, into) = try await oneSaveAtATime {
+          // Found again now: a rename since it started closed the project it read from
+          // (`renameCurrent`), and the job follows it to the new name.
+          let into = try self.project(for: job)
+          let saved = try await history.save(
             output, request: request, startedAt: startedAt, finishedAt: Date(),
-            into: project, makeCurrent: followsRun)
+            into: into, makeCurrent: followsRun)
+          return (saved, into)
         }
         setRunStep(1_000, job)
-        if project === history.project { landSavedImage(made, tensorId: saved.tensorId, onCanvas: followsRun()) }
-        if let failure = await history.writeToOutputFolder(saved, image: made, in: project) { errorMessage = failure }
+        if into === history.project { landSavedImage(made, tensorId: saved.tensorId, onCanvas: followsRun()) }
+        if let failure = await history.writeToOutputFolder(saved, image: made, in: into) { errorMessage = failure }
         saveSession()
         FinishedNotice.post(prompt: "Depth map", seconds: Date().timeIntervalSince(startedAt), title: "Depth map made")
         status = .finished(tensorId: saved.tensorId)
         inputTensorId = saved.inputTensorId
-        inOpenProject = project === history.project
+        inOpenProject = into === history.project
       } catch is CancellationError {
       } catch {
         errorMessage = error.localizedDescription

@@ -276,8 +276,10 @@ extension Automation {
       // (e) A queued masked job survives the queue being saved.
       if let request = model.screenRequest() {
         let folder = FileManager.default.temporaryDirectory.appending(path: "atelier-refine-check-\(UUID().uuidString)")
-        SavedQueue.save([JobQueue.Job(request: request)], project: model.history.project.name, in: folder)
-        let restored = await model.savedRequests(SavedQueue.load(project: model.history.project.name, from: folder))
+        var job = JobQueue.Job(request: request)
+        job.project = model.history.project.name
+        SavedQueue.save([job], in: folder)
+        let restored = await model.savedRequests(SavedQueue.load(from: folder)).map(\.request)
         let back = restored.first
         check(
           back?.mask == request.mask && back?.merge?.record == request.merge?.record

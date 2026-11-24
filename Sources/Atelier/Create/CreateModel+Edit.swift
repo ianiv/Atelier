@@ -32,7 +32,9 @@ extension CreateModel {
     request.parentTensorId = HistoryStore.tip(of: item)
     request.edit = job
     statusNote = nil
-    let id = queue.append([request], currentTensorId: history.currentTensorId, target: .local, fromAgent: fromAgent)[0]
+    guard let id = queue.append(
+      [request], currentTensorId: history.currentTensorId, target: .local, fromAgent: fromAgent, project: job.project).first
+    else { throw JobProjectError.beingDeleted(job.project) }
     runNext()
     return id
   }
@@ -43,7 +45,7 @@ extension CreateModel {
   /// job, unless it joined one someone else queued (the Edit screen's Save to History).
   func edit(
     forAgent edit: Edit.Job, item: HistoryItem, progress: @escaping (Int, String) -> Void
-  ) async throws -> HistoryItem {
+  ) async throws -> (item: HistoryItem, project: String) {
     let pending = queue.pendingEdit(edit)?.id
     let id = try queueEdit(edit, item: item, fromAgent: true)
     let joined = id == pending
@@ -54,18 +56,18 @@ extension CreateModel {
     }
   }
 
-  /// Waits for Edit job `id` to end, and returns the step it saved, read from `project`.
-  private func editResult(of id: UUID, project name: String, progress: (Int, String) -> Void) async throws -> HistoryItem {
+  /// Waits for Edit job `id` to end, and returns the step it saved, read from its project (`name`
+  /// when it was queued), with that project's name now.
+  private func editResult(of id: UUID, project name: String, progress: (Int, String) -> Void) async throws -> (item: HistoryItem, project: String) {
     var reported: (Int, String)?
     while true {
       if let job = queue.recent.first(where: { $0.id == id }) {
         switch job.status {
         case .finished(let tensorId):
-          guard let project = history.project(named: job.request?.edit?.project ?? name) else { throw EditJobError.projectMissing(name) }
-          if project === history.project, let item = history.item(tensorId: tensorId) { return item }
-          let tree = await project.read { $0.tree() }
-          guard let item = tree.step(tensorId: tensorId).flatMap({ tree.items[$0] }) else { throw EditJobError.stepMissing(name) }
-          return item
+          let name = job.project ?? name
+          guard let project = history.project(named: name) else { throw EditJobError.projectMissing(name) }
+          guard let item = await history.item(tensorId: tensorId, in: project) else { throw EditJobError.stepMissing(name) }
+          return (item, name)
         case .failed(let message): throw EditJobError.failed(message)
         default: throw CancellationError()
         }
@@ -98,16 +100,15 @@ extension CreateModel {
       var inputTensorId: Int64?
       var inOpenProject = true
       do {
-        guard let project = history.project(named: edit.project), project.isOpen else {
-          throw EditJobError.projectMissing(edit.project)
-        }
+        // Its own project's (`JobQueue.Job.project`), whichever is open.
+        let project = try self.project(for: job)
         let item: HistoryItem
         if project === history.project, let listed = history.item(tensorId: edit.sourceTensorId) {
           item = listed
         } else {
           let tree = await project.read { $0.tree() }
           guard let found = tree.step(tensorId: edit.sourceTensorId).flatMap({ tree.items[$0] }) else {
-            throw EditJobError.stepMissing(edit.project)
+            throw EditJobError.stepMissing(project.name)
           }
           item = found
         }
@@ -137,30 +138,32 @@ extension CreateModel {
         request.canvasIsImported = false
         request.parentTensorId = HistoryStore.tip(of: item)
         request.moodboard = []
-        let followsRun = { self.canvasFollowsRun && job.id == self.foregroundJobID && project === self.history.project }
+        let followsRun = { self.canvasFollowsRun && job.id == self.foregroundJobID && self.jobProjectIsOpen(job) }
         let history = history
-        let saved = try await oneSaveAtATime {
-          // A rename since it started closed the project it read from (`renameCurrent`): saving
-          // there would write to a closed file.
-          guard history.project(named: edit.project) === project, project.isOpen else {
-            throw EditJobError.projectMissing(edit.project)
-          }
-          return try await history.save(
+        // Stopped (or its project deleted) by now: nothing is saved. The save itself runs as a task of
+        // its own (`oneSaveAtATime`), which a cancel doesn't reach.
+        try Task.checkCancellation()
+        let (saved, into) = try await oneSaveAtATime {
+          // Found again now: a rename since it started closed the project it read from
+          // (`renameCurrent`), and the job follows it to the new name.
+          let into = try self.project(for: job)
+          let saved = try await history.save(
             GenerationEngine.Output(frames: [tensor]), request: request, startedAt: startedAt, finishedAt: Date(),
-            into: project, makeCurrent: followsRun)
+            into: into, makeCurrent: followsRun)
+          return (saved, into)
         }
         // The saved step's record names where its data went in the project.
         if let record = saved.sidecar.edit { queue.setEditRecord(record, id: job.id) }
         setRunStep(1_000, job)
-        if project === history.project { landSavedImage(rendered, tensorId: saved.tensorId, onCanvas: followsRun()) }
-        if let failure = await history.writeToOutputFolder(saved, image: rendered, in: project) { errorMessage = failure }
+        if into === history.project { landSavedImage(rendered, tensorId: saved.tensorId, onCanvas: followsRun()) }
+        if let failure = await history.writeToOutputFolder(saved, image: rendered, in: into) { errorMessage = failure }
         saveSession()
         FinishedNotice.post(
           prompt: edit.profileName.map { "Edit with “\($0)”" } ?? "Edit", seconds: Date().timeIntervalSince(startedAt),
           title: "Edit saved")
         status = .finished(tensorId: saved.tensorId)
         inputTensorId = saved.inputTensorId
-        inOpenProject = project === history.project
+        inOpenProject = into === history.project
       } catch is CancellationError {
       } catch {
         errorMessage = error.localizedDescription

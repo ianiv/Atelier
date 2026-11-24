@@ -32,7 +32,6 @@ Planned work that isn't built yet. Items marked **User request** or **User-repor
 
 ## Known failures
 
-- **Jobs that finish after a project switch can use the wrong project.** **User-reported bug.** A job that finishes after the user switches projects can save into, or read from, the wrong project: step and tensor ids repeat across project files, so an id captured in one project can name a different step in the one open now. Needs one fix across the app (every path that captures a step id and acts on it later), not per feature. Extract Depth Map's download-then-queue path is one instance; it guards itself for now by not queueing when the open project changed during the download (`DepthModelDownload.outcome`).
 
 - **Edit runs don't record their input.** `--edit-input-check` fails 5 checks (z_image_turbo, 2 steps): the first Edit run doesn't record its input, iterating in place and Rerun don't link to the first result, Use Settings on the second step leaves Generate mode instead of putting the first result on the canvas in Edit, and Use Settings with its input deleted shows no note. Fails the same way without the 2026-11-21 fixes.
 - **Clip playback falls behind.** `--canvas-clip-check` "the picture keeps up" showed 4 of 48 frames in 2 s on a copy of the HyperFlow project, with and without the 2026-11-21 fixes. The screen was locked during those runs, which may be the cause; rerun unlocked before investigating.
@@ -41,7 +40,6 @@ Planned work that isn't built yet. Items marked **User request** or **User-repor
 ## Tests and checks
 
 - **`--edit-input-check` leaves its test prompt in the prompt history.** Like `--agent-canvas-check` did, it should put the recent prompts back.
-- **Unit tests for off-canvas jobs in the queue.** Run Again keeping a job off the canvas and in its project, renaming a project with such a job waiting, and leaving these jobs out of the saved queue.
 
 ## Upstream
 

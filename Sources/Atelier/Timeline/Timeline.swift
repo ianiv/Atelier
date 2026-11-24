@@ -277,10 +277,32 @@ final class TimelineStore {
   /// clip goes at the end.
   func place(_ item: HistoryItem, at placement: TimelinePlacement) {
     load()
-    guard placement.project == loadedProject, let clip = item.clip, clip.media == nil,
+    guard placement.project == loadedProject, let placed = Self.placing(item, at: placement, in: timelines) else { return }
+    timelines = placed
+    save()
+  }
+
+  /// `place(_:at:)` for a clip saved into `project` while it isn't the open one (its job's own,
+  /// `JobQueue.Job.project`): written into that project's timelines in its file. Loaded timelines
+  /// of that name are read again when it opens, so they don't write the old ones over it.
+  func place(_ item: HistoryItem, at placement: TimelinePlacement, in project: Project) {
+    if project === history.project { return place(item, at: placement) }
+    guard placement.project == project.name else { return }
+    let stored = project.timelinesJSON.flatMap { Self.decode($0) } ?? []
+    guard let placed = Self.placing(item, at: placement, in: stored),
+          let json = try? JSONEncoder().encode(placed)
+    else { return }
+    project.timelinesJSON = String(decoding: json, as: UTF8.self)
+    if loadedProject == project.name { loadedProject = nil }
+  }
+
+  /// `timelines` with `item` put where `placement` asks; nil when it can't go in (no such
+  /// timeline, already placed, not a generated clip).
+  private static func placing(_ item: HistoryItem, at placement: TimelinePlacement, in timelines: [Timeline]) -> [Timeline]? {
+    guard let clip = item.clip, clip.media == nil,
           var timeline = timelines.first(where: { $0.id == placement.timeline }),
           !timeline.entries.contains(where: { $0.placement == placement.id })
-    else { return }
+    else { return nil }
     // The clip's first frame repeats the one it started from, and a bridge's last frame the next
     // entry's first: both are trimmed so the joins don't stutter.
     var entry = Timeline.Entry(
@@ -297,8 +319,9 @@ final class TimelineStore {
     } else {
       timeline.entries.append(entry)
     }
-    guard let index = timelines.firstIndex(where: { $0.id == timeline.id }) else { return }
+    guard let index = timelines.firstIndex(where: { $0.id == timeline.id }) else { return nil }
+    var timelines = timelines
     timelines[index] = timeline
-    save()
+    return timelines
   }
 }

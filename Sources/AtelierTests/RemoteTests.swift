@@ -366,6 +366,43 @@ struct RemoteClientJobsTests {
       #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty, "its images go too")
     }
   }
+
+  func record(_ project: String) -> RemoteClientJob {
+    RemoteClientJob(jobID: UUID(), serverID: UUID(), project: project, model: "m", prompt: "", negativePrompt: "", seed: 0, settings: [:])
+  }
+
+  /// A rename relabels the project's sent jobs and the clips they made; others stay.
+  @Test func aRenameRelabelsJobsAndClips() throws {
+    try withTestFolder { folder in
+      let jobs = RemoteClientJobs(folder: folder.appending(path: "ClientJobs", directoryHint: .isDirectory))
+      try FileManager.default.createDirectory(at: jobs.folder, withIntermediateDirectories: true)
+      let a = record("A"), b = record("B")
+      for job in [a, b] { try JSONEncoder().encode(job).write(to: jobs.folder.appending(path: "\(job.jobID.uuidString).json")) }
+      let server = UUID()
+      jobs.rememberClip(tensorId: 5, project: "A", server: server, job: a.jobID)
+      jobs.rememberClip(tensorId: 6, project: "B", server: server, job: b.jobID)
+      jobs.renameProject(from: "A", to: "A2")
+      #expect(Set(jobs.all().map(\.project)) == ["A2", "B"])
+      #expect(jobs.clip(tensorId: 5, project: "A2", server: server) == a.jobID && jobs.clip(tensorId: 5, project: "A", server: server) == nil)
+      #expect(jobs.clip(tensorId: 6, project: "B", server: server) == b.jobID)
+    }
+  }
+
+  /// Deleting a project forgets its sent jobs and clips; others stay.
+  @Test func removingAProjectForgetsOnlyItsJobsAndClips() throws {
+    try withTestFolder { folder in
+      let jobs = RemoteClientJobs(folder: folder.appending(path: "ClientJobs", directoryHint: .isDirectory))
+      try FileManager.default.createDirectory(at: jobs.folder, withIntermediateDirectories: true)
+      let a = record("A"), b = record("B")
+      for job in [a, b] { try JSONEncoder().encode(job).write(to: jobs.folder.appending(path: "\(job.jobID.uuidString).json")) }
+      let server = UUID()
+      jobs.rememberClip(tensorId: 5, project: "A", server: server, job: a.jobID)
+      jobs.rememberClip(tensorId: 6, project: "B", server: server, job: b.jobID)
+      jobs.remove(project: "A")
+      #expect(jobs.all() == [b])
+      #expect(jobs.clip(tensorId: 5, project: "A", server: server) == nil && jobs.clip(tensorId: 6, project: "B", server: server) == b.jobID)
+    }
+  }
 }
 
 /// A job's reference video as it travels (`RemoteJobRequest.referenceVideo`) and as a sent job

@@ -131,8 +131,8 @@ extension Automation {
 
       // Saving and restoring keeps the waiting jobs.
       let folder = FileManager.default.temporaryDirectory.appending(path: "atelier-queue-check-\(UUID())")
-      SavedQueue.save(queue.waiting, project: model.history.project.name, in: folder)
-      let restored = await model.savedRequests(SavedQueue.load(project: model.history.project.name, from: folder))
+      SavedQueue.save(queue.waiting, lineTip: queue.lineTip(of:), in: folder)
+      let restored = await model.savedRequests(SavedQueue.load(from: folder)).map(\.request)
       let original = queue.waiting.compactMap(\.request)
       check(
         restored.count == original.count
