@@ -822,7 +822,7 @@ final class RemoteServer {
           let header = url.flatMap { CGImageSourceCreateWithURL($0 as CFURL, nil) }
             .flatMap { CGImageSourceCopyPropertiesAtIndex($0, 0, nil) as? [CFString: Any] }
           guard let width = header?[kCGImagePropertyPixelWidth] as? Int, let height = header?[kCGImagePropertyPixelHeight] as? Int,
-                width > 0, height > 0, width % 32 == 0, height % 32 == 0, width * height <= ReferenceVideo.maximumCanvasPixels,
+                ReferenceVideo.isCanvasSize(width: width, height: height),
                 frameSize.map({ $0 == (width, height) }) ?? true
           else {
             throw RemoteError.server("The reference video's frames aren't the size of a clip's canvas.")

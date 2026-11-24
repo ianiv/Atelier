@@ -1,6 +1,7 @@
 @testable import Atelier
 import CoreGraphics
 import Foundation
+@preconcurrency import LocalImageGenerator
 import Testing
 
 /// How a History clip becomes H3 Ref2VA's reference video (`ReferenceVideo`), following
@@ -67,9 +68,49 @@ struct ReferenceVideoTests {
     #expect(size(1080, 1920) == [768, 1344])
     #expect(size(512, 512) == [768, 768])
     #expect(size(64, 32) == [1440, 704])
-    // Beyond 4:1 it's held at 4:1.
+    // Beyond 4:1 (refused before it comes to this) it's held at 4:1.
     #expect(size(4000, 500) == [2016, 512])
     #expect(size(0, 0) == [768, 768])
+  }
+
+  /// Atelier sizes the frames and the engine takes them as they are, so the two rules must agree,
+  /// and a canvas put on a canvas again must stay the same, over every shape a clip can have.
+  @Test func atelierAndTheEngineAgreeOnEveryCanvas() {
+    var sizes: [(Int, Int)] = []
+    for width in stride(from: 64, through: 4096, by: 37) {
+      for height in stride(from: 64, through: 4096, by: 41) where ReferenceVideo.isTakenShape(width: width, height: height) {
+        sizes.append((width, height))
+      }
+    }
+    // Sizes the rule itself makes, rounding past the cap included.
+    sizes += [(1376, 768), (1344, 768), (768, 1376), (1440, 704), (2016, 512), (1152, 768), (1248, 768)]
+    for (width, height) in sizes {
+      let atelier = ReferenceVideo.canvasSize(width: width, height: height)
+      let engine = LocalImageGenerator.minimaxH3CanvasSize(width: width, height: height)
+      #expect(atelier.width == engine.width && atelier.height == engine.height, "\(width)×\(height)")
+      #expect(ReferenceVideo.isCanvasSize(width: atelier.width, height: atelier.height), "\(width)×\(height) → \(atelier)")
+      #expect(
+        ReferenceVideo.isCanvasSize(width: width, height: height)
+          == LocalImageGenerator.isMiniMaxH3CanvasSize(width: width, height: height))
+      let again = ReferenceVideo.canvasSize(width: atelier.width, height: atelier.height)
+      #expect(again.width == atelier.width && again.height == atelier.height, "\(width)×\(height): \(atelier) → \(again)")
+    }
+    // 1376×768 is one of its own canvases (rounding past the cap): left as it is.
+    let kept = ReferenceVideo.canvasSize(width: 1376, height: 768)
+    #expect(kept.width == 1376 && kept.height == 768)
+    // A small clip is still put on the full canvas, as MiniMax's pipeline does.
+    let small = ReferenceVideo.canvasSize(width: 256, height: 256)
+    #expect(small.width == 768 && small.height == 768)
+  }
+
+  @Test func aClipBeyondOneToFourIsRefused() {
+    #expect(ReferenceVideo.isTakenShape(width: 4000, height: 1000))
+    #expect(!ReferenceVideo.isTakenShape(width: 4001, height: 1000))
+    #expect(!ReferenceVideo.isTakenShape(width: 100, height: 401))
+    let refused = ReferenceVideo.problem(
+      takesReferences: true, strength: 1, numFrames: 22, hasAudio: false, clipFrames: 100, clipSize: (2000, 400))
+    #expect(refused?.contains("1:4") == true)
+    #expect(ReferenceVideo.problem(takesReferences: true, strength: 1, numFrames: 22, hasAudio: false, clipFrames: 100, clipSize: (1920, 1080)) == nil)
   }
 
   @Test func aFrameIsMadeAtItsCanvasSize() throws {

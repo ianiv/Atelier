@@ -96,8 +96,12 @@ nonisolated struct ReferenceVideo: Sendable {
   /// MiniMax H3's canvas for a clip of `width`×`height`, as diffusers' `resolve_canvas_size`
   /// makes it with the released checkpoint's settings (and the engine's `minimaxH3CanvasSize`):
   /// the short edge at 768, the area capped at 768 × 1344, each side rounded to the nearest
-  /// multiple of 32 (half to even, as Python rounds), at least 32; the ratio held to 1:4–4:1.
+  /// multiple of 32 (half to even, as Python rounds), at least 32; the ratio held to 1:4–4:1
+  /// (a clip outside that is refused first, `problem`). A size already on such a canvas
+  /// (`isCanvasSize`) stays as it is, as the engine leaves it: rounding can put a canvas past the
+  /// cap, and putting it on a canvas again would shrink it.
   static func canvasSize(width: Int, height: Int) -> (width: Int, height: Int) {
+    if isCanvasSize(width: width, height: height) { return (width, height) }
     let shortEdge = 768.0, maxPixels = 768.0 * 1344, multiple = 32.0
     let ratio = min(max(Double(max(width, 1)) / Double(max(height, 1)), 1.0 / 4), 4)
     var canvas = ratio >= 1 ? (width: shortEdge * ratio, height: shortEdge) : (width: shortEdge, height: shortEdge / ratio)
@@ -110,9 +114,24 @@ nonisolated struct ReferenceVideo: Sendable {
     return (rounded(canvas.width), rounded(canvas.height))
   }
 
-  /// The most pixels a clip's canvas has (`canvasSize`, rounding included), for checking frames a
-  /// paired device sends.
-  static let maximumCanvasPixels = 800 * 1376
+  /// Whether `width`×`height` is one of `canvasSize`'s canvases, as the engine's
+  /// `isMiniMaxH3CanvasSize` decides: sides multiples of 32, the ratio within 1:4–4:1, and either
+  /// the short edge at 768 with the area at most the cap, or the area at the cap, within what
+  /// rounding each side to 32 can add or take. Also what a paired device's frames must be.
+  static func isCanvasSize(width: Int, height: Int) -> Bool {
+    guard width > 0, height > 0, width % 32 == 0, height % 32 == 0, width * 4 >= height, height * 4 >= width
+    else { return false }
+    let maxPixels = 768 * 1344
+    let area = width * height
+    let slack = 16 * (width + height) + 256
+    return (min(width, height) == 768 && area <= maxPixels + slack) || abs(area - maxPixels) <= slack
+  }
+
+  /// Whether a clip of `width`×`height` is a shape MiniMax H3 takes: 1:4 to 4:1, as diffusers'
+  /// `resolve_canvas_size` requires (it refuses others rather than squash them).
+  static func isTakenShape(width: Int, height: Int) -> Bool {
+    width > 0 && height > 0 && width * 4 >= height && height * 4 >= width
+  }
 
   /// `image` resized onto its clip's canvas (`canvasSize`), opaque, with high-quality
   /// interpolation, as MiniMax's pipeline resizes each frame (no crop).
@@ -179,7 +198,10 @@ nonisolated struct ReferenceVideo: Sendable {
   /// has at 24 fps. The CLI refuses the same (`--video` with `--audio`, or with a strength below 1
   /// or under 22 frames): the clip is a reference for a video made from noise, and the engine reads
   /// a shorter one as a first frame. `takesReferences` is the model's `VideoModel.takesReferences`.
-  static func problem(takesReferences: Bool, strength: Float, numFrames: Int, hasAudio: Bool, clipFrames: Int? = nil) -> String? {
+  static func problem(
+    takesReferences: Bool, strength: Float, numFrames: Int, hasAudio: Bool, clipFrames: Int? = nil,
+    clipSize: (width: Int, height: Int)? = nil
+  ) -> String? {
     guard takesReferences else {
       return "Only MiniMax H3 Ref2VA takes a video as a reference."
     }
@@ -191,6 +213,9 @@ nonisolated struct ReferenceVideo: Sendable {
     }
     if numFrames < minimumFrames {
       return "A reference video needs a Length of at least \(minimumFrames) frames."
+    }
+    if let clipSize, !isTakenShape(width: clipSize.width, height: clipSize.height) {
+      return Failure.badShape.errorDescription
     }
     if let clipFrames, clipFrames < minimumFrames {
       return "The clip is too short to be a reference video: it needs \(minimumFrames) frames at 24 fps, about a second."
@@ -205,12 +230,15 @@ nonisolated struct ReferenceVideo: Sendable {
     case unreadable
     /// The clip has fewer than `minimumFrames` frames at 24 fps.
     case tooShort
+    /// The clip is wider than 4:1 or taller than 1:4.
+    case badShape
 
     var errorDescription: String? {
       switch self {
       case .sourceMissing: "The reference video is no longer in this project."
       case .unreadable: "The reference video's frames couldn't be read."
       case .tooShort: "The reference video is too short: it needs 22 frames at 24 fps, about a second."
+      case .badShape: "The clip's shape is outside the 1:4 to 4:1 MiniMax H3 takes, so it can't be a reference video."
       }
     }
   }

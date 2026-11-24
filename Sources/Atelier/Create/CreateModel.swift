@@ -820,10 +820,16 @@ final class CreateModel {
   /// Why Generate can't take the reference video on the canvas as the settings are now
   /// (`ReferenceVideo.problem`); nil without one.
   var referenceVideoProblem: String? {
-    guard let clip = referenceClip?.clip, let settings, let video = videoModel else { return nil }
+    guard let item = referenceClip, let clip = item.clip, let settings, let video = videoModel else { return nil }
     return ReferenceVideo.problem(
       takesReferences: video.takesReferences, strength: settings.strength, numFrames: video.snapped(settings.numFrames),
-      hasAudio: audio.url != nil, clipFrames: Self.referenceFrames(of: clip, rate: video.framesPerSecond))
+      hasAudio: audio.url != nil, clipFrames: Self.referenceFrames(of: clip, rate: video.framesPerSecond),
+      clipSize: Self.clipSize(of: item))
+  }
+
+  /// A clip's frame size: an imported video's own, a generated one's from its settings.
+  nonisolated static func clipSize(of item: HistoryItem) -> (width: Int, height: Int) {
+    item.clip?.media.map { ($0.width, $0.height) } ?? (item.sidecar.width, item.sidecar.height)
   }
 
   /// How many frames `clip` has at the model's `rate` (`ReferenceVideo.resampled`), up to the
@@ -3386,6 +3392,8 @@ final class CreateModel {
     else {
       throw ReferenceVideo.Failure.sourceMissing
     }
+    let size = Self.clipSize(of: source)
+    guard ReferenceVideo.isTakenShape(width: size.width, height: size.height) else { throw ReferenceVideo.Failure.badShape }
     // An imported video's frames come from its file, which must be the one recorded.
     if let media = clip.media {
       guard let url = history.mediaURL(of: source), Self.fileSize(url) == media.bytes else { throw Media.Failure.missing }

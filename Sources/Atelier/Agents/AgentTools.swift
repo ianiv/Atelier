@@ -590,7 +590,7 @@ final class AgentTools {
           "reference_video": [
             "type": "object", "required": ["history_step"],
             "properties": ["history_step": ["type": "integer", "description": "A video step of the current project (see list_history)."]],
-            "description": "MiniMax H3 Ref2VA only: a clip from History as the reference video, <Video 1> in the prompt. Read from its start at the model's 24 fps, up to the video's length and snapped down to 17n+5 frames (a shorter clip is a shorter reference, never padded), at its own aspect ratio with a 768-pixel short edge. Needs strength 1 and num_frames of 22 or more; not with input_image or audio.",
+            "description": "MiniMax H3 Ref2VA only: a clip from History as the reference video, <Video 1> in the prompt. Read from its start at the model's 24 fps, up to the video's length and snapped down to 17n+5 frames (a shorter clip is a shorter reference, never padded), at its own aspect ratio on MiniMax's canvas (a 768-pixel short edge, smaller past 1.75:1 to stay within 768 × 1344 pixels); a clip under 22 frames at 24 fps or beyond 1:4 / 4:1 is refused. Needs strength 1 and num_frames of 22 or more; not with input_image or audio.",
           ],
           "save_to": ["type": "string", "description": "Where to write the PNG or MP4: a file path, or a folder. Defaults to a temporary folder."],
           "include_image": ["type": "boolean", "description": "Return the image inline (scaled to 1024 px on the long side). Default true."],
@@ -855,6 +855,10 @@ final class AgentTools {
     // As the Create screen refuses it (`ReferenceVideo.problem`): no shorter than a whole reference.
     if CreateModel.referenceFrames(of: clip, rate: video.framesPerSecond) < ReferenceVideo.minimumFrames {
       throw ToolError("History step \(item.id.logicalTime) is too short to be a reference_video: it needs \(ReferenceVideo.minimumFrames) frames at 24 fps, about a second.")
+    }
+    let size = CreateModel.clipSize(of: item)
+    if !ReferenceVideo.isTakenShape(width: size.width, height: size.height) {
+      throw ToolError("History step \(item.id.logicalTime) is \(size.width)×\(size.height), outside the 1:4 to 4:1 MiniMax H3 takes, so it can't be a reference_video.")
     }
     return ReferenceVideo(sourceTensorId: item.tensorId, project: create.history.project.name)
   }
