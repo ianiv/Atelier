@@ -91,6 +91,11 @@ nonisolated enum AppSettings {
     UserDefaults.standard.object(forKey: notifiesKey) as? Bool ?? true
   }
 
+  /// Whether the canvas plays a video run's step preview (off by default: it shows the first
+  /// frame). The preview's few rough frames change completely every step, so playing them
+  /// flickers and flashes. Set by the play/stop control over the preview, and kept for every run.
+  static let playsVideoPreviewsKey = "playVideoPreviews"
+
   /// The default output folder; a project can name its own (`ProjectOutput`).
   static let outputFolderKey = "outputFolder"
   static var outputFolder: String {

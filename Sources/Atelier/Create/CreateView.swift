@@ -170,6 +170,10 @@ struct CanvasView: View {
   @State private var paintLayerSource: (image: CGImage, paint: CanvasPaint)?
   /// The Select tool's drag: where it began and is now, in image pixels.
   @State private var selectDrag: (start: CGPoint, end: CGPoint)?
+  /// Whether a video run's preview plays (`AppSettings.playsVideoPreviewsKey`).
+  @AppStorage(AppSettings.playsVideoPreviewsKey) private var playsVideoPreviews = false
+  /// The pointer is over the frame, so a playing preview shows its control (as a clip does).
+  @State private var hoveringFrame = false
   #if os(macOS)
     /// Space is held: a drag moves the image whatever the tool.
     @State private var spaceDown = false
@@ -221,8 +225,9 @@ struct CanvasView: View {
             width: Double(image.width) * zoom * points, height: Double(image.height) * zoom * points)
           let frames = model.canvasPreviewFrames
           let picture = Group {
-            // A video run's preview plays its frames.
-            if frames.count > 1 {
+            // A video run's preview plays its frames, if it's been set to; otherwise its first
+            // frame (the canvas image) is a still.
+            if playsVideoPreviews, frames.count > 1 {
               FlipBook(frames: frames, framesPerSecond: model.videoModel?.framesPerSecond ?? 12)
             } else {
               Image(decorative: image, scale: 1)
@@ -252,6 +257,19 @@ struct CanvasView: View {
             .opacity(0.45)
           picture
             .mask { Rectangle().frame(width: frameRect.width, height: frameRect.height).position(x: frameRect.midX, y: frameRect.midY) }
+          if frames.count > 1 {
+            // Play/stop over the bottom of the frame, shown as a clip's transport is: while
+            // stopped, while the pointer is over the frame, and always on iPad.
+            Color.clear
+              .frame(width: frameRect.width, height: frameRect.height)
+              .overlay(alignment: .bottom) {
+                if hoveringFrame || !playsVideoPreviews || ClipPlayer.alwaysShowsControls {
+                  VideoPreviewTransport(isPlaying: $playsVideoPreviews)
+                    .padding(8)
+                }
+              }
+              .position(x: frameRect.midX, y: frameRect.midY)
+          }
           if model.canvasShowsImage {
             maskOverlay(imageSize: CGSize(width: image.width, height: image.height), scale: zoom * points)
               .frame(width: size.width, height: size.height)
@@ -319,6 +337,13 @@ struct CanvasView: View {
             .allowsHitTesting(false)
         }
       }
+      .onContinuousHover { phase in
+        if case .active(let location) = phase {
+          hoveringFrame = frameRect.contains(location)
+        } else {
+          hoveringFrame = false
+        }
+      }
       .frame(width: geometry.size.width, height: geometry.size.height)
       .clipped()
       .contentShape(.rect)
@@ -377,8 +402,11 @@ struct CanvasView: View {
         // The Select tool's own controls, over the canvas while it's the tool: outside the
         // canvas's gestures, so a click on them doesn't mark the image.
         // At the bottom: the moodboard sits at the top right.
+        // Hidden while a video run's preview is up: its play/stop control takes the same spot.
         .toolBarOverlay {
-          if model.canvasTool == .select {
+          if model.canvasClip == nil, model.canvasPreviewFrames.count > 1 {
+            EmptyView()
+          } else if model.canvasTool == .select {
             AutoMaskBar()
           } else if Self.layerBarShows(for: model.canvasTool) {
             if model.canvasLayer == .color {

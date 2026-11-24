@@ -68,10 +68,12 @@ struct ClipPlayer: View {
     .onDisappear { playback.pause() }
   }
 
+  /// Shared with the canvas's video preview control (`VideoPreviewTransport`), so both show the
+  /// same way.
   #if os(iOS)
-    private static let alwaysShowsControls = true
+    static let alwaysShowsControls = true
   #else
-    private static let alwaysShowsControls = false
+    static let alwaysShowsControls = false
   #endif
 }
 
@@ -131,11 +133,37 @@ private struct ClipTransport: View {
       }
       .touchTarget()
     }
-    .labelStyle(.iconOnly)
-    .buttonStyle(.borderless)
-    .padding(.horizontal, 10)
-    .padding(.vertical, 6)
-    .glassEffect(in: .capsule)
+    .transportStyle()
+  }
+}
+
+/// Play/stop for a video run's step preview on the canvas, in the clip transport's look. The
+/// preview's rough frames change completely every step, so playing them flickers and flashes;
+/// stopped, the canvas shows the first frame as a still.
+struct VideoPreviewTransport: View {
+  @Binding var isPlaying: Bool
+
+  var body: some View {
+    Button(
+      isPlaying ? "Stop Video Preview" : "Play Video Preview",
+      systemImage: isPlaying ? "stop.fill" : "play.fill"
+    ) {
+      isPlaying.toggle()
+    }
+    .touchTarget()
+    .help(isPlaying ? "Stop the preview and show its first frame" : "Play the preview's frames as they form")
+    .transportStyle()
+  }
+}
+
+private extension View {
+  /// The clip transport's look: icon-only borderless buttons on a glass capsule.
+  func transportStyle() -> some View {
+    labelStyle(.iconOnly)
+      .buttonStyle(.borderless)
+      .padding(.horizontal, 10)
+      .padding(.vertical, 6)
+      .glassEffect(in: .capsule)
   }
 }
 
