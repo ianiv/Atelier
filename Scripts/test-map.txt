@@ -41,6 +41,7 @@ Sources/Atelier/Automation/  | HostTests,AutomationSamplerTests | --generate
 Sources/Atelier/Automation/AutomationAgentNet.swift | AgentAccessTests | --agent-net-check
 Sources/Atelier/Automation/AutomationEditTools.swift | CropTests,EditJobTests | --edit-tools-check
 Sources/Atelier/Automation/AutomationReferenceVideo.swift | ReferenceVideoTests,SavedQueueTests | --reference-video-check
+Sources/Atelier/Automation/AutomationLibraryBatch.swift | LibraryBatchTests,ModelMoveTests | --library-batch-check
 Sources/Atelier/Automation/AutomationMedia.swift | MediaTests,MediaReferenceTests | --reference-video-check,--reference-video-run
 Sources/Atelier/Automation/AutomationTestCertificate.swift | AgentAccessTests | --agent-net-check
 Sources/Atelier/Create/      | CanvasDropTests,CanvasPaintTests,CanvasRefineTests,ColorMatchTests,MaskMemoryTests,CanvasUndoTests,MoodboardWriterTests,MoodboardTests,SizePresetTests,MaskMorphologyTests,FrameSelectionTests,FaceFinderTests,CanvasEditTests,TriggerWordsTests,DepthMapTests | --edit-input-check,--refine-check,--paint-check,--color-match-check,--depth-check,--create-delete-check,--canvas-clip-check,--reference-video-check
@@ -51,7 +52,7 @@ Sources/Atelier/Generation/  | StrengthStepsTests,ReferenceVideoTests,ScheduleTe
 Sources/Atelier/Generation/ReferenceVideo.swift | ReferenceVideoTests,RemoteReferenceVideoTests,MediaReferenceTests | --reference-video-check
 Sources/Atelier/History/     | ClipSoundTests,HistoryGraphTests,ProjectCompactionTests,InputEntryTests,EntryTreeFuzzTests,PNGTextTests,JSONValueTests,ClipTests | --input-entries-check,--entries-freeze-check,--history-loras-check,--canvas-clip-check
 Sources/Atelier/Inspector/   | SizePresetTests,PresetImportTests | --inspector-check
-Sources/Atelier/Library/     | DrawThingsImportTests,LoRACopiesTests,MOSSImportTests,ModelMoveTests,ModelFolderTests,OrphanTests,HuggingFaceLinkTests,SafetensorsMergeTests | --library-check,--model-folders-check,--model-move-check,--add-folder-check,--catalog-retry-check,--hf-link-check
+Sources/Atelier/Library/     | DrawThingsImportTests,LoRACopiesTests,MOSSImportTests,ModelMoveTests,LibraryBatchTests,ModelFolderTests,OrphanTests,HuggingFaceLinkTests,SafetensorsMergeTests | --library-check,--model-folders-check,--model-move-check,--library-batch-check,--add-folder-check,--catalog-retry-check,--hf-link-check
 Sources/Atelier/Projects/    | ProjectMappingTests,MediaTests,MediaReferenceTests,MediaRecordTests,ProjectCompactionTests,EditProjectDataTests,ClipDeleteTests,InputEntryTests,EntryTreeFuzzTests,MaskMemoryTests,HistoryGraphTests | --project-check,--delete-project-check,--input-entries-check,--compact-check
 Sources/Atelier/Queue/       | SavedQueueTests | --queue-check
 Sources/Atelier/Remote/      | RemoteFramingTests,RemoteReferenceVideoTests,RemotePairingTests,RemoteFilterTests,RemoteStoreTests,RemoteClientJobsTests,RemoteTraitsTests,RemoteClipTests,RemoteTailnetTests,RemoteStyleLibraryTests | --remote-check,--remote-net-check,--remote-url-check,--remote-tailnet-check,--remote-shots
