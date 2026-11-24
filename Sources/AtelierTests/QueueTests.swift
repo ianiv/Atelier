@@ -193,6 +193,26 @@ struct SavedQueueTests {
     }
   }
 
+  /// A queue saved before every job named its project stamped each entry with the project open
+  /// at the quit: a job naming its own inside (Match Colors, Edit, Extract Depth Map) comes back
+  /// for that one, checked like any other; one naming two that disagree is dropped.
+  @Test func anOldEntryComesBackForTheProjectItsJobNames() throws {
+    try withTestFolder { folder in
+      let match = #"{"project":"Own","sourceTensorId":12,"strength":1,"luminance":false}"#
+      let depth = #"{"project":"Third","sourceTensorId":12}"#
+      let disagreeing = entry(project: "Open", colorMatch: match).replacingOccurrences(
+        of: #""moodboardWeights":[]"#, with: #""moodboardWeights":[],"depthMap":\#(depth)"#)
+      try write([entry(model: "own.ckpt", project: "Open", colorMatch: match), disagreeing], to: folder)
+      var asked: [String] = []
+      let jobs = SavedQueue.load(from: folder, projectExists: { asked.append($0); return true })
+      #expect(jobs.map(\.project) == ["Own"] && jobs.first?.model == "own.ckpt")
+      #expect(asked == ["Own"], "its own project is the one checked")
+      try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+      try write([entry(project: "Open", colorMatch: match)], to: folder)
+      #expect(SavedQueue.load(from: folder, projectExists: { $0 == "Open" }).isEmpty, "dropped when its own project is gone")
+    }
+  }
+
   /// An entry that doesn't read (an edit of a later version's shape, say) is dropped alone, not
   /// run as a generation, and the rest of the queue comes back.
   @Test func anUnreadableEditDropsOnlyItsJob() throws {

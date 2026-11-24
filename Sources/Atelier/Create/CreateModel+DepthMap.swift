@@ -153,6 +153,9 @@ extension CreateModel {
         request.moodboard = []
         let followsRun = { self.canvasFollowsRun && job.id == self.foregroundJobID && self.jobProjectIsOpen(job) }
         let history = history
+        // Stopped (or its project deleted) by now: nothing is saved. The save itself runs as a task of
+        // its own (`oneSaveAtATime`), which a cancel doesn't reach.
+        try Task.checkCancellation()
         let (saved, into) = try await oneSaveAtATime {
           // Found again now: a rename since it started closed the project it read from
           // (`renameCurrent`), and the job follows it to the new name.

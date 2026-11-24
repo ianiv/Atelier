@@ -300,6 +300,9 @@ extension Automation {
         check(
           doomedIDs.allSatisfy { id in queue.recent.first { $0.id == id }?.status == .cancelled },
           "both are cancelled in Recent (\(doomedIDs.map { id in queue.recent.first { $0.id == id }?.status.description ?? "not in Recent" }))")
+        check(
+          doomedIDs.allSatisfy { id in queue.recent.first { $0.id == id }.map { $0.project == nil && $0.projectDeleted } == true },
+          "and name the deleted project no more")
         var reappeared: Set<String> = []
         let watchUntil = Date().addingTimeInterval(1.5)
         repeat {

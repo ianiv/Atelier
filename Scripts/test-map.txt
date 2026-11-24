@@ -54,7 +54,7 @@ Sources/Atelier/History/     | ProjectDeletionTests,ClipSoundTests,HistoryGraphT
 Sources/Atelier/Inspector/   | SizePresetTests,PresetImportTests | --inspector-check
 Sources/Atelier/Library/     | DrawThingsImportTests,LoRACopiesTests,MOSSImportTests,ModelMoveTests,LibraryBatchTests,ModelFolderTests,OrphanTests,HuggingFaceLinkTests,SafetensorsMergeTests | --library-check,--model-folders-check,--model-move-check,--library-batch-check,--add-folder-check,--catalog-retry-check,--hf-link-check
 Sources/Atelier/Projects/    | ProjectMappingTests,MediaTests,MediaReferenceTests,MediaRecordTests,ProjectCompactionTests,ProjectFilesTests,EditProjectDataTests,ClipDeleteTests,InputEntryTests,EntryTreeFuzzTests,MaskMemoryTests,HistoryGraphTests | --project-check,--delete-project-check,--input-entries-check,--compact-check,--project-pin-check
-Sources/Atelier/Queue/       | SavedQueueTests | --queue-check,--project-pin-check,--delete-project-check
+Sources/Atelier/Queue/       | SavedQueueTests,JobQueueTests | --queue-check,--project-pin-check,--delete-project-check
 Sources/Atelier/Remote/      | RemoteFramingTests,RemoteReferenceVideoTests,RemotePairingTests,RemoteFilterTests,RemoteStoreTests,RemoteClientJobsTests,RemoteTraitsTests,RemoteClipTests,RemoteTailnetTests,RemoteStyleLibraryTests | --remote-check,--remote-net-check,--remote-url-check,--remote-tailnet-check,--remote-shots
 Sources/Atelier/Styles/      | StyleTests,StyleLibraryStoreTests,RemoteStyleLibraryTests | --styles-check
 Sources/Atelier/Timeline/    | TimelineLayoutTests,ClipTests | --timeline-check,--timeline-export-check,--playback-check

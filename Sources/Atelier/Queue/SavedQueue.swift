@@ -205,6 +205,16 @@ nonisolated enum SavedQueue {
           let entries = (try? JSONDecoder().decode([LenientEntry].self, from: data))?.compactMap(\.entry)
     else { return [] }
     let jobs = entries.compactMap { entry -> Job? in
+      var entry = entry
+      // A job naming its own project inside (Match Colors, Edit, Extract Depth Map) is that
+      // project's: a queue saved before every job had one stamped each entry with the project
+      // open at the quit, which may be another. Two such names that disagree say nothing reliable.
+      let inner = Set([entry.colorMatch?.project, entry.edit?.project, entry.depthMap?.project].compactMap(\.self))
+      guard inner.count <= 1 else {
+        Log.queue.notice("Dropped a saved job: it names more than one project")
+        return nil
+      }
+      if let own = inner.first { entry.project = own }
       // A name read from the file: one that couldn't be a project's names none.
       guard HistoryStore.isValidName(entry.project), projectExists(entry.project) else {
         Log.queue.notice("Dropped a saved job: its project “\(entry.project, privacy: .private)” is gone")

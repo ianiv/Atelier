@@ -1427,7 +1427,10 @@ final class CreateModel {
         try await oneSaveAtATime(work)
       }
       history.didRenameProject = { [weak self] old, name in self?.projectRenamed(from: old, to: name) }
-      queue.acceptsProject = { [weak history] name in history?.isBeingDeleted(name) != true }
+      queue.acceptsProject = { [weak self] name in
+        guard let self else { return true }
+        return !history.isBeingDeleted(name) && !deletingProjects.contains(name)
+      }
     }
     if let session = SessionState.load() {
       restored = session
@@ -2319,13 +2322,20 @@ final class CreateModel {
   ) async throws -> (item: HistoryItem, project: Project) {
     // It follows what History has, as Generate's runs do (`recordEntriesBeforeRun`, which an
     // agent's run from the screen has done before taking it).
-    if !detached { await flushEntries() }
+    // The project and its step as the call found them: a switch while the entries are written
+    // mustn't send the job into the project opened meanwhile.
+    let name = project ?? history.project.name
+    var current = history.currentTensorId
+    if !detached {
+      await flushEntries()
+      // Written into the same project, the entries may have moved its current step on.
+      if history.project.name == name { current = history.currentTensorId }
+    }
     // A model only the selected server has runs there; any other runs on this device, as agents
     // choose among this device's models.
     let target = target ?? (models.contains(where: { $0.file == request.model }) ? JobTarget.local : runTarget)
-    let name = project ?? history.project.name
     guard let id = queue.append(
-      [request], currentTensorId: history.currentTensorId, target: target, fromAgent: true, detached: detached,
+      [request], currentTensorId: current, target: target, fromAgent: true, detached: detached,
       project: name).first
     else { throw JobProjectError.beingDeleted(name) }
     return try await withTaskCancellationHandler {
@@ -2724,6 +2734,9 @@ final class CreateModel {
         let history = history
         // The mask painted on the source stays with the result, moved as the image grew.
         let keptMask = mergedOrigin.flatMap { origin in request.merge?.canvasMask?.translated(by: origin) }
+        // Stopped (or its project deleted) by now: nothing is saved. The save itself runs as a task of
+        // its own (`oneSaveAtATime`), which a cancel doesn't reach.
+        try Task.checkCancellation()
         let (item, savedInto) = try await oneSaveAtATime {
           // Found again now: a rename since it started closed the project it would have saved into
           // (`renameCurrent`), and the job follows it to the new name.
@@ -2841,9 +2854,10 @@ final class CreateModel {
   /// delete stops it.
   func project(for job: JobQueue.Job) throws -> Project {
     guard let name = queue.projectName(of: job.id) ?? job.project else { throw JobProjectError.missing("") }
-    // Its project is being deleted (`deleteProject`), which cancelled it: a run that got as far as
-    // saving before it stopped ends cancelled too, rather than writing into the file as it goes.
-    if cancellingForDelete.contains(name) { throw CancellationError() }
+    // Its project was deleted (`deleteProject`), which cancelled it: a run that gets as far as
+    // reading or saving before it stops ends cancelled too, rather than writing into the file as
+    // it goes, or into a later project of the same name.
+    if cancelledForDelete.contains(job.id) { throw CancellationError() }
     guard !history.isBeingDeleted(name), let project = history.project(named: name), project.isOpen else {
       throw JobProjectError.missing(name)
     }
@@ -2854,8 +2868,11 @@ final class CreateModel {
   /// Projects with a job running or waiting, by name, held open while they do (`project(for:)`):
   /// let go, each would shut down and checkpoint between one job and the next.
   @ObservationIgnored private var pinnedProjects: [String: Project] = [:]
-  /// Projects whose jobs `deleteProject` is cancelling: none of them may read or save any more.
-  @ObservationIgnored private var cancellingForDelete: Set<String> = []
+  /// Running jobs `deleteProject` cancelled, until they end (`finish`): none may read or save any
+  /// more, however long it takes them to stop (a video's decode, a server's transfer).
+  @ObservationIgnored private var cancelledForDelete: Set<UUID> = []
+  /// Projects `deleteProject` is deleting: nothing more may be queued for them (`acceptsProject`).
+  @ObservationIgnored private var deletingProjects: Set<String> = []
 
   /// Lets go of the projects no job yet to end is for.
   private func releasePinnedProjects() {
@@ -2872,7 +2889,7 @@ final class CreateModel {
   /// project that isn't open (its result is a step of that project, not this screen's). A paired
   /// device's job and a style thumbnail, which have no project, are as before.
   func isOffCanvas(_ job: JobQueue.Job) -> Bool {
-    job.detached || (job.project != nil && !jobProjectIsOpen(job))
+    job.detached || cancelledForDelete.contains(job.id) || (job.project != nil && !jobProjectIsOpen(job))
   }
 
   /// Ends the running job and starts the next.
@@ -2883,6 +2900,7 @@ final class CreateModel {
     // Whether it showed on the canvas, asked before it leaves the running jobs.
     let offCanvas = isOffCanvas(job)
     queue.finishRunning(status, id: job.id, inputTensorId: inputTensorId, tipTensorId: tipTensorId, inOpenProject: inOpenProject)
+    cancelledForDelete.remove(job.id)
     releasePinnedProjects()
     timingRecorders[job.id] = nil
     remoteRuns[job.id] = nil
@@ -3301,6 +3319,9 @@ final class CreateModel {
         request.colorMatch?.record = record
         let followsRun = { self.canvasFollowsRun && job.id == self.foregroundJobID && self.jobProjectIsOpen(job) }
         let history = history
+        // Stopped (or its project deleted) by now: nothing is saved. The save itself runs as a task of
+        // its own (`oneSaveAtATime`), which a cancel doesn't reach.
+        try Task.checkCancellation()
         let (saved, into) = try await oneSaveAtATime {
           // Found again now: a rename since it started closed the project it read from
           // (`renameCurrent`), and the job follows it to the new name.
@@ -3756,9 +3777,12 @@ final class CreateModel {
   /// stopping following the run (`canvasFollowsRun`): another project is opening, and the run's
   /// previews show again if its own opens again.
   private func uncoverCanvas() {
-    guard previewCoversCanvas, imageIsPreview, let before = canvasBeforePreview else { return }
+    let before = canvasBeforePreview
+    let covered = previewCoversCanvas && imageIsPreview
+    // Whatever was kept beneath a preview is the project going's, shown or not.
     canvasBeforePreview = nil
     previewCoversCanvas = false
+    guard covered, let before else { return }
     image = before.image
     imageIsPreview = before.isPreview
     canvasIsImported = before.isImported
@@ -3831,6 +3855,10 @@ final class CreateModel {
 
   /// Queues a finished, failed or cancelled job again, same settings and seed.
   func retry(_ id: UUID) {
+    if queue.recent.first(where: { $0.id == id })?.projectDeleted == true {
+      statusNote = "Its project was deleted, so it wasn't queued again."
+      return
+    }
     // A match already waiting or running for the same step and settings would make the same image.
     if let match = queue.recent.first(where: { $0.id == id })?.request?.colorMatch, queue.pendingColorMatch(match) != nil {
       statusNote = "Colors are already being matched for that image with those settings, so it wasn't queued again."
@@ -4164,9 +4192,10 @@ extension CreateModel {
   /// Returns the trashed project file (`HistoryStore.delete`).
   @discardableResult
   func deleteProject(_ name: String) async throws -> URL? {
-    cancellingForDelete.insert(name)
-    defer { cancellingForDelete.remove(name) }
+    deletingProjects.insert(name)
+    defer { deletingProjects.remove(name) }
     let running = jobs(in: name).map(\.id).filter { runTasks[$0] != nil }
+    cancelledForDelete.formUnion(running)
     for job in jobs(in: name) { cancel(job.id) }
     // A stopped run ends at its next await (`finish` lets go of its task); one that doesn't within
     // a few seconds finds the project closed (`Project.isOpen`) or gone (`project(for:)`) when it
@@ -4177,6 +4206,7 @@ extension CreateModel {
     }
     // Queued while it waited (the confirmation reads the queue live; this is the backstop), right
     // before the name is taken off the queue's list (`HistoryStore.delete`, `acceptsProject`).
+    cancelledForDelete.formUnion(jobs(in: name).map(\.id).filter { runTasks[$0] != nil })
     for job in jobs(in: name) { cancel(job.id) }
     clientJobs.remove(project: name)
     releasePinnedProjects()
@@ -4184,7 +4214,10 @@ extension CreateModel {
     defer {
       if let step = imageStep, step.project == name, step.project != history.project.name { imageStep = nil }
     }
-    return try await history.delete(name)
+    let trashed = try await history.delete(name)
+    // What's still listed of it (Recent, a run that hasn't stopped yet) names it no more.
+    queue.forgetProject(name)
+    return trashed
   }
 
   /// The canvas shows its step's own image, loaded: what mask tools may change

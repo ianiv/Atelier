@@ -58,6 +58,9 @@ final class JobQueue {
     /// touches a project (`append` requires it); nil only for a paired device's job and a style
     /// thumbnail, which save nowhere. Kept current by `renameProject`.
     var project: String?
+    /// Its project was deleted (`forgetProject`): it names none any more, and isn't run again, so
+    /// a later project of the same name never gets it.
+    var projectDeleted = false
     /// Jobs queued one after another, while you didn't pick another step, form a line: each
     /// follows the line's latest result when it starts, whatever order they end up running in.
     var line: UUID?
@@ -179,6 +182,21 @@ final class JobQueue {
       savedInputs[key] = nil
       savedInputs[Self.inputKey(project: name, canvas: String(key.dropFirst(prefix.count)))] = value
     }
+  }
+
+  /// The project called `name` was deleted: its jobs still listed (recent ones, and a running one
+  /// that hasn't stopped yet) name it no more, so Show in History, Run Again and the project's
+  /// counts never reach a later project of the same name.
+  func forgetProject(_ name: String) {
+    func forget(_ job: inout Job) {
+      guard job.project == name else { return }
+      job.project = nil
+      job.projectDeleted = true
+    }
+    for index in waiting.indices { forget(&waiting[index]) }
+    if running != nil { forget(&running!) }
+    for index in runningRemote.indices { forget(&runningRemote[index]) }
+    for index in recent.indices { forget(&recent[index]) }
   }
 
   /// The project job `id` reads from and saves into now (`Job.project`), renamed or not: a run
@@ -444,7 +462,8 @@ final class JobQueue {
   /// Queues a finished, failed or cancelled job again with the same settings and seed, after the
   /// same step.
   func retry(_ id: UUID) {
-    guard let job = recent.first(where: { $0.id == id }) else { return }
+    // Its project was deleted: run again, it would have nowhere to go.
+    guard let job = recent.first(where: { $0.id == id }), !job.projectDeleted else { return }
     var again = Job(work: job.work, target: job.target)
     // Run again off the canvas and into its own project, as it ran. It answers no caller now,
     // but stays a job that isn't kept across a quit (`SavedQueue.save`): brought back it would
