@@ -212,11 +212,10 @@ extension ModelLibrary {
   }
 
   /// Which multi-selection commands fit at least one selected model: each is enabled when one
-  /// does. Download Missing File is offered only when one has a hidden refiner, as for one model.
+  /// does. Every command is always in the menu, disabled when it fits none.
   nonisolated struct ModelSelectionKinds: Equatable, Sendable {
     var canDownload = false
     var canCancelDownload = false
-    var offersMissingFile = false
     var canDownloadMissing = false
     var canReveal = false
     var canMove = false
@@ -226,7 +225,6 @@ extension ModelLibrary {
       for state in states {
         if !state.downloaded, !state.imported, !state.downloading { canDownload = true }
         if state.downloading { canCancelDownload = true }
-        if state.downloaded, state.hasHiddenRefiner { offersMissingFile = true }
         if state.downloaded, state.missingRefiner, !state.downloading { canDownloadMissing = true }
         if state.downloaded { canReveal = true }
         if state.canMove { canMove = true }

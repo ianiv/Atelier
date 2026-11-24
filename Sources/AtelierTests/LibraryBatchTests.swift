@@ -23,7 +23,7 @@ struct LibraryBatchTests {
     let onlyDownloaded = Library.ModelSelectionKinds([downloaded, downloaded])
     #expect(!onlyDownloaded.canDownload && !onlyDownloaded.canCancelDownload)
     #expect(onlyDownloaded.canReveal && onlyDownloaded.canMove && onlyDownloaded.canTrash)
-    #expect(!onlyDownloaded.offersMissingFile)
+    #expect(!onlyDownloaded.canDownloadMissing)
 
     let mixed = Library.ModelSelectionKinds([available, downloading, missingFile])
     #expect(mixed.canDownload && mixed.canCancelDownload && mixed.canTrash)
@@ -33,11 +33,11 @@ struct LibraryBatchTests {
     #expect(!Library.ModelSelectionKinds([missingFile]).canDownload)
 
     let withRefiner = Library.ModelSelectionKinds([refiner, available])
-    #expect(withRefiner.offersMissingFile && withRefiner.canDownloadMissing)
+    #expect(withRefiner.canDownloadMissing)
     var refinerDownloading = refiner
     refinerDownloading.downloading = true
     let busy = Library.ModelSelectionKinds([refinerDownloading])
-    #expect(busy.offersMissingFile && !busy.canDownloadMissing)
+    #expect(!busy.canDownloadMissing)
   }
 
   @Test func aModelInUseIsSkippedWithItsReason() {

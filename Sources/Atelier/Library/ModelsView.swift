@@ -369,8 +369,8 @@ struct ModelsView: View {
     }
   }
 
-  /// The context menu for several rows: the same commands whatever they are, each enabled when
-  /// it fits one of them, acting on those it fits.
+  /// The context menu for several rows: the same commands whatever they are, always there, each
+  /// enabled when it fits one of them and acting on those it fits.
   @ViewBuilder
   private func multipleMenu(_ files: Set<String>) -> some View {
     let models = models(ModelLibrary.visibleSelection(files, visible: tableRows.map(\.id)))
@@ -385,14 +385,12 @@ struct ModelsView: View {
       for model in models where library.downloads[model.file] != nil { library.cancelDownload(model.file) }
     }
     .disabled(!kinds.canCancelDownload)
-    if kinds.offersMissingFile {
-      Button("Download Missing File") {
-        for model in models where library.missingHiddenRefiner(of: model) != nil && library.downloads[model.file] == nil {
-          library.download(model)
-        }
+    Button("Download Missing File") {
+      for model in models where library.missingHiddenRefiner(of: model) != nil && library.downloads[model.file] == nil {
+        library.download(model)
       }
-      .disabled(!kinds.canDownloadMissing)
     }
+    .disabled(!kinds.canDownloadMissing)
     Button(Finder.revealTitle) { library.reveal(models.filter(\.isDownloaded).map(\.file)) }
       .disabled(!LibrarySelectionSummary.canReveal(models.filter(\.isDownloaded).map { library.folders[$0.file] }))
     MoveToFolderMenu(
@@ -401,10 +399,8 @@ struct ModelsView: View {
     ) {
       pendingMove = library.planMoves(models, to: $0)
     }
-    if files.contains(ModelRow.h3ImageID) {
-      // Its install is a guided sheet, for that row alone.
-      Button("Install…") {}.disabled(true)
-    }
+    // The MiniMax H3 Image install is a guided sheet, for that row alone.
+    Button("Install…") {}.disabled(true)
     Divider()
     Button("Move to Trash", role: .destructive) { pendingTrash = library.planTrash(models) }
       .disabled(!kinds.canTrash)
