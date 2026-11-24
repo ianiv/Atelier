@@ -82,6 +82,8 @@ struct LoRAsView: View {
     #endif
   }
 
+  /// The LoRAs of `files` the list shows, in its order: a context menu's rows, like the
+  /// selection, never reach a hidden one.
   private func loras(_ files: Set<String>) -> [ModelLibrary.LoRA] {
     tableRows.map(\.lora).filter { files.contains($0.file) }
   }

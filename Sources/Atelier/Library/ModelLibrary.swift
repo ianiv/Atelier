@@ -1269,24 +1269,33 @@ final class ModelLibrary {
   }
 
   /// Removes the custom.json entries of `files` in every models folder, keeping every other entry
-  /// as written, one write per folder, and drops them from the running engine's model list.
+  /// as written, one write per folder, and drops them from the running engine's model list. A
+  /// folder whose custom.json can't be read or written doesn't stop the others; the error names
+  /// each such file, and the engine's list loses the entries anyway, since their files are gone.
   func unregisterModels(_ files: Set<String>) throws {
     guard !files.isEmpty else { return }
+    var failures: [String] = []
     for directory in directories where !Set(Self.readCustomModels(in: directory)).isDisjoint(with: files) {
       backUpModelRegistryOnce(in: directory)
       let url = directory.appendingPathComponent("custom.json")
-      if let data = try? Data(contentsOf: url),
-         let entries = try JSONSerialization.jsonObject(with: data) as? [[String: Any]]
-      {
+      do {
+        guard let entries = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [[String: Any]] else {
+          throw MoveFailure.unreadableRegistry(url.path)
+        }
         try JSONSerialization.data(
           withJSONObject: Self.removingEntries(files, from: entries), options: [.prettyPrinted, .withoutEscapingSlashes]
         ).write(to: url, options: .atomic)
+      } catch {
+        failures.append("\(url.path): \(error.localizedDescription)")
       }
     }
     ModelZoo.availableSpecifications.removeAll { files.contains($0.file) }
     for file in files {
       ModelZoo.fallbackMapping[file] = nil
       if Self.overriddenFiles.remove(file) != nil { ModelZoo.overrideMapping[file] = nil }
+    }
+    if !failures.isEmpty {
+      throw CocoaError(.fileWriteUnknown, userInfo: [NSLocalizedDescriptionKey: "Couldn't update " + failures.joined(separator: "; ")])
     }
   }
 

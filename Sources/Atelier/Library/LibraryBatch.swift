@@ -31,7 +31,8 @@ extension ModelLibrary {
     var isRegistered: Bool
     /// Its file is missing: only its entry goes ("Remove from Library").
     var entryOnly: Bool
-    /// Files that go with it: an import's own VAE and encoders, a hidden refiner.
+    /// Files that go with it: an import's own VAE and encoders, a hidden refiner. As planned:
+    /// `trash(_:)` works the import's out again from what actually went.
     var companions: [String] = []
     /// A LoRA's models folder whose custom_lora.json lists it.
     var registry: URL?
@@ -268,29 +269,31 @@ extension ModelLibrary {
   /// An import's own companions go when nothing outside the batch names them, so a model and its
   /// 8-bit copy, trashed together, take the VAE the import wrote.
   func planTrash(_ models: [MediaGenerationResolvedModel]) -> TrashBatch? {
-    let batchFiles = Set(models.map(\.file))
-    var items: [TrashItem] = []
+    var going: [MediaGenerationResolvedModel] = []
     var skipped: [BatchSkip] = []
-    var bytes: Int64 = 0
-    var taken = Set<String>()
     for model in models where model.isDownloaded || isCustom(model) {
       if let reason = Self.trashSkipReason(
         downloading: downloads[model.file] != nil, moving: moving != nil, queued: create.queue.uses(model.file),
         loading: create.isLoadingModel && create.selectedModel == model.file)
       {
         skipped.append(BatchSkip(name: model.name, file: model.file, reason: reason))
-        continue
+      } else {
+        going.append(model)
       }
-      let registered = isCustom(model)
-      let companions = ((registered ? Self.importedCompanions(of: model.file, excluding: batchFiles) : [])
-        + Self.hiddenCompanions(of: model.file)).filter { !batchFiles.contains($0) && taken.insert($0).inserted }
-      items.append(
-        TrashItem(
-          name: model.name, file: model.file, isRegistered: registered, entryOnly: !model.isDownloaded,
-          companions: companions))
-      bytes += (sizes[model.file] ?? 0) + companions.reduce(0) { $0 + (Self.size(of: $1, in: directories) ?? 0) }
     }
-    guard !items.isEmpty else { return nil }
+    guard !going.isEmpty else { return nil }
+    // Only what goes counts: a skipped 8-bit copy still names the VAE, so it stays.
+    let goingFiles = Set(going.map(\.file))
+    var taken = Set<String>()
+    var bytes: Int64 = 0
+    let items = going.map { model in
+      let registered = isCustom(model)
+      let companions = ((registered ? Self.importedCompanions(of: model.file, excluding: goingFiles) : [])
+        + Self.hiddenCompanions(of: model.file)).filter { !goingFiles.contains($0) && taken.insert($0).inserted }
+      bytes += (sizes[model.file] ?? 0) + companions.reduce(0) { $0 + (Self.size(of: $1, in: directories) ?? 0) }
+      return TrashItem(
+        name: model.name, file: model.file, isRegistered: registered, entryOnly: !model.isDownloaded, companions: companions)
+    }
     return TrashBatch(kind: .model, items: items, skipped: skipped, bytes: bytes)
   }
 
@@ -317,13 +320,15 @@ extension ModelLibrary {
     errorMessage = nil
     var result = TrashResult()
     var unregister = Set<String>()
+    var failedNames = Set<String>()
+    // Each model's own file, with its hidden refiner, which is its alone.
     for item in batch.items {
       if let model = catalog.first(where: { $0.file == item.file }), !canDelete(model) {
         result.failed.append(BatchFailure(name: item.name, message: "it's in use now"))
         continue
       }
       do {
-        for file in [item.file] + item.companions {
+        for file in [item.file] + Self.hiddenCompanions(of: item.file) {
           for url in Self.files(of: file, in: directories) {
             result.trashedURLs.append(try Self.moveToTrash(url))
           }
@@ -332,8 +337,26 @@ extension ModelLibrary {
         if item.isRegistered { unregister.insert(item.file) }
       } catch {
         result.failed.append(BatchFailure(name: item.name, message: error.localizedDescription))
-        // Its own file went before a companion failed: the entry goes with it.
+        failedNames.insert(item.name)
+        // Its own file went before its refiner failed: the entry goes with it.
         if item.isRegistered, Self.folder(of: item.file, in: directories) == nil { unregister.insert(item.file) }
+      }
+    }
+    // Then the files imports wrote, worked out against what actually went: one an 8-bit copy
+    // still names, because it was in use or couldn't go, stays.
+    let went = Set(result.trashed)
+    var taken = Set<String>()
+    for item in batch.items where item.isRegistered && went.contains(item.file) {
+      for file in Self.importedCompanions(of: item.file, excluding: went) where !went.contains(file) && taken.insert(file).inserted {
+        do {
+          for url in Self.files(of: file, in: directories) {
+            result.trashedURLs.append(try Self.moveToTrash(url))
+          }
+        } catch {
+          if failedNames.insert(item.name).inserted {
+            result.failed.append(BatchFailure(name: item.name, message: error.localizedDescription))
+          }
+        }
       }
     }
     do {
@@ -368,7 +391,10 @@ extension ModelLibrary {
       backUpLoRARegistryOnce(in: registry)
       let url = registry.appendingPathComponent("custom_lora.json")
       do {
-        guard let data = try? Data(contentsOf: url), let entries = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { continue }
+        guard FileManager.default.fileExists(atPath: url.path) else { continue }
+        guard let entries = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [[String: Any]] else {
+          throw MoveFailure.unreadableRegistry(url.path)
+        }
         try JSONSerialization.data(
           withJSONObject: Self.removingEntries(files, from: entries), options: [.prettyPrinted, .withoutEscapingSlashes]
         ).write(to: url, options: .atomic)

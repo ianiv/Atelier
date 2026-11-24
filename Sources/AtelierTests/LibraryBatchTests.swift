@@ -147,6 +147,9 @@ struct LibraryBatchTests {
     #expect(
       Library.importedCompanions(of: model.file, specification: model, others: others, excluding: [model.file, copy.file])
         == ["batch_vae_f16.ckpt"])
+    // The copy skipped (in a queued job) or failing at run time isn't in what goes: it still
+    // names the VAE, so the VAE stays.
+    #expect(Library.importedCompanions(of: model.file, specification: model, others: others, excluding: [model.file]).isEmpty)
     // A copy has no `_f16.ckpt` stem, so nothing is its own.
     #expect(Library.importedCompanions(of: copy.file, specification: copy, others: others, excluding: [model.file, copy.file]).isEmpty)
   }

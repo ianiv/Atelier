@@ -71,8 +71,10 @@ struct LibrarySelectionSummary: View {
       LabeledContent("Size on disk", value: ModelsView.bytes(summary.bytes))
       Text("Not counting shared text encoders and VAEs.")
         .font(.caption).foregroundStyle(.secondary)
-      if summary.downloaded != count {
-        LabeledContent("Downloaded", value: "\(summary.downloaded) of \(count)")
+      // The MiniMax H3 Image row counts once its install has finished.
+      let downloadedCount = summary.downloaded + (includesH3Image && library.h3ImageInstalled ? 1 : 0)
+      if downloadedCount != count {
+        LabeledContent("Downloaded", value: "\(downloadedCount) of \(count)")
       }
       folderRows(summary)
       if let family = summary.family { LabeledContent("Family", value: family) }

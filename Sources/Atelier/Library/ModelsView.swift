@@ -373,7 +373,7 @@ struct ModelsView: View {
   /// it fits one of them, acting on those it fits.
   @ViewBuilder
   private func multipleMenu(_ files: Set<String>) -> some View {
-    let models = models(files)
+    let models = models(ModelLibrary.visibleSelection(files, visible: tableRows.map(\.id)))
     let kinds = library.selectionKinds(models)
     Button("Download") {
       for model in models where !model.isDownloaded && !library.isCustom(model) && library.downloads[model.file] == nil {
