@@ -1486,12 +1486,12 @@ struct ProjectMenu: View {
     Task {
       switch kind {
       case .new:
-        await history.open(history.projectNames.contains(name) ? history.availableName(name) : name)
+        // A name that's taken, or still being deleted, gets a number (`availableName`).
+        await history.open(history.availableName(name))
       case .rename:
         do {
-          let old = history.project.name
-          try await history.renameCurrent(to: name)
-          create.projectRenamed(from: old, to: history.project.name)
+          let renamed = try await history.renameCurrent(to: name)
+          create.projectRenamed(from: renamed.from, to: renamed.to)
         } catch {
           self.error = ("Couldn't rename the project", error.localizedDescription)
         }

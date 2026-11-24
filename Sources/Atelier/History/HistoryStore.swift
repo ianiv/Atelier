@@ -403,12 +403,17 @@ final class HistoryStore {
 
   /// Renames the current project's file (and its -wal/-shm and media folder). What's waiting to
   /// be written into it goes first, and a video being copied in stops (`willSwitchProject`): it
-  /// would land at the old path.
-  func renameCurrent(to name: String) async throws {
+  /// would land at the old path. Returns the names it went from and to, for the caller to move
+  /// what's queued for it (`CreateModel.projectRenamed`); anything short of that rename throws,
+  /// so a caller never relabels another project's jobs. The same name again renames nothing and
+  /// returns it twice.
+  @discardableResult
+  func renameCurrent(to name: String) async throws -> (from: String, to: String) {
     let name = name.trimmingCharacters(in: .whitespaces)
-    guard Self.isValidName(name), name != project.name else { return }
+    guard Self.isValidName(name) else { throw RenameError.invalidName(name) }
+    guard name != project.name else { return (name, name) }
     // Its files are still going to the Trash.
-    guard !deletingNames.contains(name) else { throw CocoaError(.fileWriteFileExists) }
+    guard !deletingNames.contains(name) else { throw RenameError.beingDeleted(name) }
     let target = Self.url(for: name)
     guard !FileManager.default.fileExists(atPath: target.path) else {
       throw CocoaError(.fileWriteFileExists)
@@ -417,9 +422,14 @@ final class HistoryStore {
     guard !FileManager.default.fileExists(atPath: Media.folder(forProject: target).path) else {
       throw RenameError.mediaFolderExists(Media.folder(forProject: target).lastPathComponent)
     }
+    let renaming = project
     await willSwitchProject?()
-    // Another rename or a switch came meanwhile.
-    guard name != project.name, !deletingNames.contains(name), !FileManager.default.fileExists(atPath: target.path) else { return }
+    // A switch (yours, an agent's, a delete's) or another rename came meanwhile: renaming now
+    // would rename whichever project is open instead.
+    guard project === renaming, renaming.isOpen else { throw RenameError.projectChanged }
+    guard !deletingNames.contains(name) else { throw RenameError.beingDeleted(name) }
+    guard !FileManager.default.fileExists(atPath: target.path) else { throw CocoaError(.fileWriteFileExists) }
+    let oldName = project.name
     let old = project.url
     // Close the workspace first so nothing writes while the files move.
     await project.close()
@@ -435,6 +445,7 @@ final class HistoryStore {
     project = Project(url: target)
     if SessionState.isEnabled { UserDefaults.standard.set(name, forKey: Self.currentProjectKey) }
     await reload()
+    return (oldName, name)
   }
 
   /// Turns down Compact Project… for the current project, for good: it isn't offered again when
@@ -539,8 +550,14 @@ final class HistoryStore {
 
   enum RenameError: LocalizedError {
     case mediaFolderExists(String)
+    case invalidName(String)
+    case beingDeleted(String)
+    case projectChanged
     var errorDescription: String? {
       switch self {
+      case .invalidName(let name): "“\(name)” can't be a project's name."
+      case .beingDeleted(let name): "“\(name)” is being deleted. Choose another name, or try again once it's gone."
+      case .projectChanged: "Another project opened while this one was being renamed. Nothing was renamed."
       case .mediaFolderExists(let folder):
         "A folder named “\(folder)” is already in the Projects folder, where this project's videos would go. Move it away or choose another name."
       }
@@ -1086,7 +1103,11 @@ final class HistoryStore {
       try? FileManager.default.removeItem(at: target)
       try? FileManager.default.removeItem(at: Self.partialURL(target))
       // A deleted project's media folder this made again, or that the delete couldn't take.
-      if !project.isOpen { ProjectFiles.removeEmptyMediaFolder(ofProject: project.url) }
+      if !project.isOpen {
+        ProjectFiles.removeEmptyMediaFolder(ofProject: project.url)
+        // Whatever failed (a write refused, `ProjectError.closed`), that's why.
+        throw ImportError.projectClosed
+      }
       throw error
     }
   }
