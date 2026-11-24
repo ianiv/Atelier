@@ -241,7 +241,7 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
   struct Match: Codable, Hashable, Sendable {
     /// What the Reinhard and histogram matches move toward.
     enum Target: String, Codable, Hashable, Sendable, CaseIterable {
-      /// The reference image picked in Look (a file, a History step, a moodboard image).
+      /// The reference image picked in Profile (a file, a History step, a moodboard image).
       case reference
       /// The image the step was made from (`CreateModel.originalImage`), as Match Colors… uses.
       case original

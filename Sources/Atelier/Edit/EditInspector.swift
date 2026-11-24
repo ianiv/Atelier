@@ -1,7 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The Edit screen's inspector: Look, Match, Grade, LUT, Halation, Lens, Vignette and Grain, in
+/// The Edit screen's inspector: the Look checkbox, then Profile, Match, Grade, LUT, Halation, Lens, Vignette and Grain, in
 /// pipeline order but for Lens, listed after Halation though the renderer applies its smear and
 /// blur first (`EditPipeline`). Every control is always there; one that can't do anything yet (no image, no
 /// reference to match, no LUT, no real noise in the profile) is disabled, with a line saying why
@@ -17,7 +17,9 @@ import UniformTypeIdentifiers
 /// on and off, its settings kept (`EditOptions.off`); while it's off its controls are disabled,
 /// not hidden, so a slider never moves with nothing changing on screen. Above them all, the Look
 /// checkbox (`EditLookSwitch`) turns the whole look off and on, leaving the stages' checkboxes
-/// as they are (`EditOptions.lookOff`).
+/// as they are (`EditOptions.lookOff`). That's the one exception: with the look off, the
+/// sections stay usable (so their checkboxes and settings can be set for when it's back on)
+/// though nothing they change shows.
 struct EditInspector: View {
   @Environment(EditModel.self) private var edit
   @Environment(CreateModel.self) private var create
@@ -121,7 +123,7 @@ struct EditInspector: View {
 
 // MARK: - Look
 
-/// The Look section: the profile and the reference. It reads none of the look's settings, so a
+/// The Profile section: the grain profile and the reference. It reads none of the look's settings, so a
 /// slider moving leaves it alone.
 private struct EditLookSection: View {
   @Environment(EditModel.self) private var edit
@@ -133,7 +135,7 @@ private struct EditLookSection: View {
   var body: some View {
     let _ = EditViewCounts.note("EditInspector Look")
     InspectorGroup {
-      Text("Look").help("A grain profile to start from, and a reference image to match to.")
+      Text("Profile").help("A grain profile to start from, and a reference image to match to.")
     } content: {
       InspectorRow {
         Text("Profile").layoutPriority(1).help(EditInspector.profileHelp)
