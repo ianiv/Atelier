@@ -498,10 +498,11 @@ final class AgentTools {
           "history_step": ["type": "integer", "description": "A history step from list_history or generate. Omit for the canvas image."],
           "options": [
             "type": "object",
-            "description": "The look, partial: sections and keys left out are no change from the base. Sections and keys (ranges): match {target: reference|original, tint, saturation, brightness, contrast (0–1, how far each Lab statistic moves to the target's, as match_colors), colour (≥0, grain.py's RGB mean and spread match to the profile's reference; needs a profile)}; histogram {amount 0–1, space: luma|rgb} (CDF match to the target); grade {exposure (stops), temperature −100–100, tint (grain.py's green − / magenta +, about −30–30), contrast, saturation, vibrance (−1–1)}; lut {strength 0–1}; halation {amount 0–1, threshold 0–1 (default 0.8), radius 1–200 px (20), warmth 0–1 (0.6)}; lens {motion px (smears above 1), angle degrees, blur px (grain.py's default 3; none below 0.3)}; vignette {amount −1–1, size 0–1, softness 0–1}; grain {lum (grain.py's default 9), size (1), chroma (3), csize (1), real (needs a profile with real noise), seed (7)}. grain also takes grain.py's other flat names, blur, motion, angle, colour, tint and expo, so a grain.py settings dict can go in as it is. Matching to a target needs a reference (or target original with an original).",
+            "description": "The look, partial: sections and keys left out are no change from the base. Sections and keys (ranges): match {target: reference|original, tint, saturation, brightness, contrast (0–1, how far each Lab statistic moves to the target's, as match_colors), colour (≥0, grain.py's RGB mean and spread match to the profile's reference; needs a profile)}; histogram {amount 0–1, space: luma|rgb} (CDF match to the target); grade {exposure (stops), temperature −100–100, tint (grain.py's green − / magenta +, about −30–30), contrast, saturation, vibrance (−1–1)}; lut {strength 0–1}; halation {amount 0–1, threshold 0–1 (default 0.8), radius 1–200 px (20), warmth 0–1 (0.6)}; lens {motion px (smears above 1), angle degrees, blur px (grain.py's default 3; none below 0.3)}; vignette {amount −1–1, size 0–1, softness 0–1}; grain {lum (grain.py's default 9), size (1), chroma (3), csize (1), real (needs a profile with real noise), seed (7)}. grain also takes grain.py's other flat names, blur, motion, angle, colour, tint and expo, so a grain.py settings dict can go in as it is. Matching to a target needs a reference (or target original with an original). off: an array of stages to turn off (lens, match, grade, lut, halation, vignette, grain; match covers match and histogram): their settings are kept in the saved step but don't render, as the Edit screen's section checkboxes do; it replaces the base's (a step saved with grain off starts with grain off), and [] turns every stage on. What a stage that's off needs (a reference, a profile) isn't asked for.",
             "properties": [
               "match": ["type": "object"], "histogram": ["type": "object"], "grade": ["type": "object"], "lut": ["type": "object"],
               "halation": ["type": "object"], "lens": ["type": "object"], "vignette": ["type": "object"], "grain": ["type": "object"],
+              "off": ["type": "array", "items": ["type": "string", "enum": EditOptions.Stage.allCases.map(\.rawValue)]],
             ],
           ],
           "profile": ["type": "string", "description": "A grain profile from list_grain_profiles: its settings and grain data. Not with match_reference."],
@@ -2601,10 +2602,28 @@ final class AgentTools {
   ]
 
   /// `options` checked key by key (a wrong name or value is an error, not ignored as decoding
-  /// would), grain.py's flat names moved to their sections, and laid over `base`.
+  /// would), grain.py's flat names moved to their sections, and laid over `base`. `off`, beside
+  /// the sections, is the stages to turn off (`EditOptions.Stage`'s names), replacing the base's:
+  /// `[]` turns every stage on.
   nonisolated static func lookOptions(_ value: Any?, over base: EditOptions) throws -> EditOptions {
     guard let value else { return base }
-    guard var sections = value as? [String: Any] else { throw ToolError("`options` is an object of sections: \(lookKeys.keys.sorted().joined(separator: ", ")).") }
+    let sectionNames = (lookKeys.keys.sorted() + ["off"]).joined(separator: ", ")
+    guard var sections = value as? [String: Any] else { throw ToolError("`options` is an object of sections: \(sectionNames).") }
+    let stageNames = EditOptions.Stage.allCases.map(\.rawValue)
+    var off: Set<EditOptions.Stage>?
+    if let given = sections.removeValue(forKey: "off") {
+      guard let names = given as? [Any], names.allSatisfy({ $0 is String }) else {
+        throw ToolError("`options.off` is an array of stage names: \(stageNames.joined(separator: ", ")).")
+      }
+      var stages = Set<EditOptions.Stage>()
+      for case let name as String in names {
+        guard let stage = EditOptions.Stage(rawValue: name) else {
+          throw ToolError("`options.off` has `\(name)`, which isn't a stage. Stages: \(stageNames.joined(separator: ", ")).")
+        }
+        stages.insert(stage)
+      }
+      off = stages
+    }
     if var grain = sections["grain"] as? [String: Any] {
       for (alias, target) in grainPyAliases {
         guard let moved = grain.removeValue(forKey: alias) else { continue }
@@ -2619,7 +2638,7 @@ final class AgentTools {
     }
     for (name, section) in sections {
       guard let keys = lookKeys[name] else {
-        throw ToolError("`options.\(name)` isn't a section. Sections: \(lookKeys.keys.sorted().joined(separator: ", ")).")
+        throw ToolError("`options.\(name)` isn't a section. Sections: \(sectionNames).")
       }
       guard let section = section as? [String: Any] else { throw ToolError("`options.\(name)` is an object.") }
       for (key, value) in section {
@@ -2651,7 +2670,9 @@ final class AgentTools {
       }
     }
     let data = try JSONSerialization.data(withJSONObject: sections)
-    return try EditOptions.decoded(from: data, over: base)
+    var options = try EditOptions.decoded(from: data, over: base)
+    if let off { options.off = off }
+    return options
   }
 
   /// A look's options as JSON, for answers.
@@ -2858,8 +2879,11 @@ final class AgentTools {
     }
     options = try Self.lookOptions(arguments["options"], over: options).snapped
 
-    // The match target's measurements: the original's, measured now, or none.
-    let needsTarget = options.match.matchesLab || !options.histogram.isIdentity
+    // The match target's measurements: the original's, measured now, or none. What a stage
+    // that's off needs isn't asked for: it doesn't render, and the screen measures the
+    // original again when the step opens.
+    let active = options.rendered
+    let needsTarget = active.match.matchesLab || !active.histogram.isIdentity
     if options.match.target != measuredTarget {
       context.referenceLab = nil
       context.referenceHistogram = nil
@@ -2881,13 +2905,13 @@ final class AgentTools {
     if needsTarget, context.referenceLab == nil {
       throw ToolError("options.match tint/saturation/brightness/contrast and options.histogram need a reference to match to: pass reference_path or reference_history_step, or set options.match.target to original.")
     }
-    if options.match.colour > 0, context.refStats == nil {
+    if active.match.colour > 0, context.refStats == nil {
       throw ToolError("options.match.colour matches the profile's reference colors: it needs `profile`, `profile_path` or `match_reference`.")
     }
-    if options.grain.real > 0, context.realNoise == nil {
+    if active.grain.real > 0, context.realNoise == nil {
       throw ToolError("options.grain.real adds the profile's real noise: it needs a profile with real noise (`profile`, `profile_path` or `match_reference`).")
     }
-    if options.lut.name != nil, context.lut == nil {
+    if active.lut.name != nil, context.lut == nil {
       throw ToolError("The look names a LUT whose table isn't loaded; pass `lut` or `lut_path`.")
     }
 

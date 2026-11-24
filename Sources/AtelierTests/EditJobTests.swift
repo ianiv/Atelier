@@ -300,6 +300,24 @@ struct EditJobTests {
     #expect(!job.isSameEdit(as: Self.job(project: "P", source: 1, options: Self.look)))
   }
 
+  /// The agent's `options.off`: stage names replacing the base's, checked.
+  @MainActor @Test func agentOptionsTakeOff() throws {
+    let base = Self.look.setting(.lens, on: false)
+    let kept = try AgentTools.lookOptions(["grain": ["lum": 5]], over: base)
+    #expect(kept.off == [.lens] && kept.grain.lum == 5)
+    let replaced = try AgentTools.lookOptions(["off": ["grain", "halation"]], over: base)
+    #expect(replaced.off == [.grain, .halation] && replaced.lens == base.lens)
+    #expect(try AgentTools.lookOptions(["off": [String]()], over: base).off.isEmpty)
+    #expect(throws: AgentTools.ToolError.self) { try AgentTools.lookOptions(["off": ["sharpen"]], over: base) }
+    #expect(throws: AgentTools.ToolError.self) { try AgentTools.lookOptions(["off": "grain"], over: base) }
+    #expect(throws: AgentTools.ToolError.self) { try AgentTools.lookOptions(["off": [3]], over: base) }
+    do {
+      _ = try AgentTools.lookOptions(["off": ["sharpen"]], over: base)
+    } catch {
+      #expect(error.localizedDescription.contains("sharpen") && error.localizedDescription.contains("halation"))
+    }
+  }
+
   /// A crop goes in the record inline (a few numbers), round trips through `profile_data`, and
   /// makes another image; a record from before crops reads with none.
   @Test func recordKeepsItsCrop() throws {
