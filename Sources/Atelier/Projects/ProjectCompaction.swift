@@ -249,13 +249,39 @@ nonisolated enum ProjectCompaction {
   static func scheduleCleanUp(at url: URL, whileOpen: Bool) {
     let started = generation.withLock { $0 }
     queue.async {
-      let outcome = cleanUp(at: url) {
-        generation.withLock { $0 } != started || (!whileOpen && isOpen(url))
-      }
-      if let outcome {
-        Log.project.info(
-          "Cleaned up \(url.lastPathComponent, privacy: .public): \(format(outcome.bytesBefore), privacy: .public) → \(format(outcome.bytesAfter), privacy: .public)")
-      }
+      work(on: url) { cleanUpScheduled(at: url, started: started, whileOpen: whileOpen) }
+    }
+  }
+
+  private static func cleanUpScheduled(at url: URL, started: Int, whileOpen: Bool) {
+    // A deleted project's stops too: its connection would bring back a -wal and -shm at the old
+    // path (`HistoryStore.delete`).
+    let outcome = cleanUp(at: url) {
+      generation.withLock { $0 } != started || (!whileOpen && isOpen(url)) || !FileManager.default.fileExists(atPath: url.path)
+    }
+    if let outcome {
+      Log.project.info(
+        "Cleaned up \(url.lastPathComponent, privacy: .public): \(format(outcome.bytesBefore), privacy: .public) → \(format(outcome.bytesAfter), privacy: .public)")
+    }
+  }
+
+  /// The file the queue is working on now (a clean-up or a compaction), by path.
+  private static let working = Mutex<String?>(nil)
+
+  /// Runs `body` on the queue as the work on `url` (`working`).
+  private static func work(on url: URL, _ body: () -> Void) {
+    working.withLock { $0 = url.path }
+    defer { working.withLock { $0 = nil } }
+    body()
+  }
+
+  /// Waits, up to `timeout`, while the queue works on `url` (a deleted project's): a clean-up whose
+  /// file is gone stops at its next transaction, and one queued for it finds nothing to open. Not
+  /// for the rest of the queue, other projects' work that may take minutes.
+  static func finishCleanUps(at url: URL, timeout: TimeInterval = 5) async {
+    let deadline = Date().addingTimeInterval(timeout)
+    while working.withLock({ $0 == url.path }), Date() < deadline {
+      try? await Task.sleep(for: .milliseconds(20))
     }
   }
 
@@ -317,7 +343,7 @@ nonisolated enum ProjectCompaction {
     generation.withLock { $0 += 1 }
     return try await withCheckedThrowingContinuation { continuation in
       queue.async(qos: .userInitiated) {
-        continuation.resume(with: Result { try compactNow(at: url) })
+        work(on: url) { continuation.resume(with: Result { try compactNow(at: url) }) }
       }
     }
   }

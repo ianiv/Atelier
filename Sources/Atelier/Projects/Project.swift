@@ -104,6 +104,9 @@ final nonisolated class Project: Sendable {
       return wasClosed
     }
     guard !wasClosed else { return }
+    // A tensor write already past its check (`withWritableStore`) finishes before the files can
+    // move; any later one finds the project closed.
+    storeAccess.withLock { _ in }
     await withCheckedContinuation { continuation in
       workspace.shutdown(flags: [.truncate]) { continuation.resume() }
     }
@@ -913,7 +916,7 @@ final nonisolated class Project: Sendable {
         return appended
       }
     }
-    throw ProjectError.writeFailed
+    throw writeFailure
   }
 
   /// `appendEntry`, or nil, writing nothing, when a moodboard tensor it would share was let go
@@ -1071,7 +1074,7 @@ final nonisolated class Project: Sendable {
     }
     guard succeeded, let appended, appended.key != 0 else {
       removeTensors(written)
-      throw ProjectError.writeFailed
+      throw writeFailure
     }
     // As `append`: the new step is the newest.
     setCurrentStep(nil)
@@ -1265,7 +1268,7 @@ final nonisolated class Project: Sendable {
     }
     guard succeeded, let node = appended else {
       removeTensors(written)
-      throw ProjectError.writeFailed
+      throw writeFailure
     }
     // A delete of the last other step using the same data can decide to remove it between the
     // check above and this step's commit: put back what's gone.
@@ -1566,7 +1569,7 @@ final nonisolated class Project: Sendable {
         outcome = (Array(Set(names).subtracting(used)), parentTensorId)
       } completionHandler: { continuation.resume(returning: $0) }
     }
-    guard succeeded else { throw ProjectError.writeFailed }
+    guard succeeded else { throw writeFailure }
     guard let outcome else { return nil }
     removeTensors(outcome.tensorNames)
     return DeletedRun(parentTensorId: outcome.parentTensorId)
@@ -1780,7 +1783,7 @@ final nonisolated class Project: Sendable {
         outcome = (names.filter { !used.contains($0) }, parentTensorId)
       } completionHandler: { continuation.resume(returning: $0) }
     }
-    guard succeeded else { throw ProjectError.writeFailed }
+    guard succeeded else { throw writeFailure }
     guard let outcome else { return nil }
     removeTensors(outcome.tensorNames)
     return outcome.parentTensorId
@@ -2132,8 +2135,7 @@ final nonisolated class Project: Sendable {
     let (placed, added, failed): (Edit.Record, [String], Bool) = storeAccess.withLock { _ in
       var placed = record
       var added: [String] = []
-      // Default flags would truncate the file on close; Draw Things opens it with none.
-      let result = graph.openStore(url.path, flags: []) { store in
+      let opened = withWritableStore { store in
         /// The id for data of `digest`: the recorded one, or the first in the band from the
         /// digest whose tensor is missing or holds the same data; written when missing.
         func place(_ prefix: String, _ digest: String, _ recorded: Int64?, _ stored: (AnyTensor) -> String?, _ write: (String) -> Void)
@@ -2172,11 +2174,11 @@ final nonisolated class Project: Sendable {
             Edit.StoredHeal.prefix, ref.digest, ref.id, { Self.heal(from: $0)?.digest }, { store.write($0, tensor: tensor, codec: [.zip]) })
         }
       }
-      if case .failure = result { return (record, added, true) }
+      if !opened { return (record, added, true) }
       return (placed, added, false)
     }
     written += added
-    if failed { throw ProjectError.writeFailed }
+    if failed { throw writeFailure }
     record = placed
     return record
   }
@@ -2310,25 +2312,40 @@ final nonisolated class Project: Sendable {
   private func writeTensors<Element: TensorNumeric>(_ tensors: [(name: String, tensor: Tensor<Element>)])
     throws
   {
-    let failed = storeAccess.withLock { _ in
-      // Default flags would truncate the file on close; Draw Things opens it with none.
-      let result = graph.openStore(url.path, flags: []) { store in
+    let written = storeAccess.withLock { _ in
+      withWritableStore { store in
         for (name, tensor) in tensors { store.write(name, tensor: tensor, codec: [.fpzip, .zip]) }
       }
-      if case .failure = result { return true }
-      return false
     }
-    if failed { throw ProjectError.writeFailed }
+    if !written { throw writeFailure }
   }
 
   private func removeTensors(_ names: [String]) {
     guard !names.isEmpty else { return }
     storeAccess.withLock { _ in
-      _ = graph.openStore(url.path, flags: []) { store in
+      _ = withWritableStore { store in
         for name in names { store.remove(name) }
       }
     }
   }
+
+  /// Opens the tensor store by path to write, the caller holding `storeAccess`: only while the
+  /// project is open and its file is there. The store opens the path whatever is there, so a
+  /// write after a delete moved the file (an import or a job that was mid-save, or tidying up
+  /// after a failed save, `removeTensors`) would make a new, empty project file at the old path.
+  /// `close` waits on the same lock, so a write that passed the check is done before files move.
+  /// False when it didn't open.
+  private func withWritableStore(_ body: (DynamicGraph.Store) -> Void) -> Bool {
+    guard isOpen, FileManager.default.fileExists(atPath: url.path) else { return false }
+    // Default flags would truncate the file on close; Draw Things opens it with none.
+    let result = graph.openStore(url.path, flags: []) { body($0) }
+    if case .failure = result { return false }
+    return true
+  }
+
+  /// A failed write's error: `closed` when the project closed meanwhile (a delete, a rename), which
+  /// is why it failed, rather than a write that couldn't be made.
+  private var writeFailure: ProjectError { isOpen ? .writeFailed : .closed }
 }
 
 /// A project's steps and how they connect. A step's parent is the step whose image it recorded
@@ -2657,6 +2674,8 @@ nonisolated struct ClipInfo: Hashable, Sendable {
 nonisolated enum ProjectError: LocalizedError {
   case badImage
   case writeFailed
+  /// It closed (renamed or deleted) while something was being saved into it (`Project.writeFailure`).
+  case closed
   /// An edited step's real noise, histograms or LUT aren't in the project, or aren't what it
   /// recorded (`Project.editContext(for:)`).
   case missingEditData
@@ -2665,6 +2684,7 @@ nonisolated enum ProjectError: LocalizedError {
     switch self {
     case .badImage: "The image couldn't be converted."
     case .writeFailed: "The project file couldn't be written."
+    case .closed: "The project was renamed or deleted while this was being saved into it."
     case .missingEditData: "The edit's grain, reference or LUT data is missing from the project."
     }
   }

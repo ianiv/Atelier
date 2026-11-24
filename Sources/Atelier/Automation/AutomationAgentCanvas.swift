@@ -1198,8 +1198,8 @@ extension Automation {
         answers = [edit, generate]
         for _ in 0..<2400 where model.queue.waiting.count < waitingBefore + 2 { try? await Task.sleep(for: .milliseconds(25)) }
         let bothWaiting = model.queue.waiting.contains { $0.detached } && model.queue.waiting.contains { $0.fromAgent && !$0.detached }
-        try await model.history.renameCurrent(to: newName)
-        model.projectRenamed(from: oldName, to: model.history.project.name)
+        let renamedTo = try await model.history.renameCurrent(to: newName)
+        model.projectRenamed(from: renamedTo.from, to: renamedTo.to)
         for (name, task) in [("edit_image", edit), ("generate", generate)] {
           do {
             let answer = try await task.value
@@ -1213,9 +1213,8 @@ extension Automation {
           }
         }
         await idle()
-        let renamed = model.history.project.name
-        try await model.history.renameCurrent(to: oldName)
-        model.projectRenamed(from: renamed, to: model.history.project.name)
+        let renamedBack = try await model.history.renameCurrent(to: oldName)
+        model.projectRenamed(from: renamedBack.from, to: renamedBack.to)
       } catch {
         check(false, "a rename while agent runs wait (\(error.localizedDescription))")
         for answer in answers { _ = try? await answer.value }

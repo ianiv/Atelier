@@ -327,7 +327,7 @@ extension Automation {
   }
 
   /// A movie of a colored square moving across a changing background, `frames` long.
-  private static func writeMovie(to url: URL, width: Int, height: Int, frames: Int, framesPerSecond: Int32) async throws {
+  static func writeMovie(to url: URL, width: Int, height: Int, frames: Int, framesPerSecond: Int32) async throws {
     try? FileManager.default.removeItem(at: url)
     let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
     let input = AVAssetWriterInput(

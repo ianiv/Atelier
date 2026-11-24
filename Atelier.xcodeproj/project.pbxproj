@@ -37,6 +37,7 @@
 		D1A0D1A0D1A0D1A0D1A0D1A2 /* AutomationHistoryLoRAs.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A0D1A0D1A0D1A0D1A0D1A1 /* AutomationHistoryLoRAs.swift */; };
 		B7A1F0C2B3D4A59687786200 /* ProjectMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A1F0C2B3D4A59687786300 /* ProjectMappingTests.swift */; };
 		0052093D8FFD473C03A83673 /* ProjectCompactionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0BCBDD7530CBD8D16DF5600 /* ProjectCompactionTests.swift */; };
+		845E857FA0EA84FA8D809795 /* ProjectFilesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A9C4B54EA6F58E899501DB /* ProjectFilesTests.swift */; };
 		B7A1F0C2B3D4A59687786201 /* StyleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A1F0C2B3D4A59687786301 /* StyleTests.swift */; };
 		B7A1F0C2B3D4A59687786202 /* HistoryGraphTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A1F0C2B3D4A59687786302 /* HistoryGraphTests.swift */; };
 		A9C3E5F70B1D2E3F40516276 /* ModelMoveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9C3E5F70B1D2E3F40516275 /* ModelMoveTests.swift */; };
@@ -197,6 +198,7 @@
 		FE932A5C887AE92B9E804707 /* ProjectMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020B954C3465D02C24F95C3C /* ProjectMapping.swift */; };
 		7E1C0A0100000000000B0302 /* Media.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E1C0A0100000000000B0301 /* Media.swift */; };
 		A931266D4F41EFBBDA557F82 /* ProjectCompaction.swift in Sources */ = {isa = PBXBuildFile; fileRef = D71E1C844BC5F711F95A1277 /* ProjectCompaction.swift */; };
+		3896BAFA55A2EBD29FBC5680 /* ProjectFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F103CAFAFFBCC7B2BF4A54D /* ProjectFiles.swift */; };
 		FF243F91D335A8164439E59D /* thumbnail_history_query_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68D101B87E1B72C4F34DD0A7 /* thumbnail_history_query_generated.swift */; };
 		FFE2FD5F9913FFBEA7557E98 /* tensor_data_generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0963659342F5DFDDA1ED7457 /* tensor_data_generated.swift */; };
 		16E53F5DAD3A2F11B88D6688 /* InspectorLayoutMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49496157639E36AC0F00C6CB /* InspectorLayoutMenu.swift */; };
@@ -382,6 +384,7 @@
 		D1A0D1A0D1A0D1A0D1A0D1A1 /* AutomationHistoryLoRAs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationHistoryLoRAs.swift; sourceTree = "<group>"; };
 		B7A1F0C2B3D4A59687786300 /* ProjectMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectMappingTests.swift; sourceTree = "<group>"; };
 		C0BCBDD7530CBD8D16DF5600 /* ProjectCompactionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectCompactionTests.swift; sourceTree = "<group>"; };
+		F1A9C4B54EA6F58E899501DB /* ProjectFilesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectFilesTests.swift; sourceTree = "<group>"; };
 		B7A1F0C2B3D4A59687786301 /* StyleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StyleTests.swift; sourceTree = "<group>"; };
 		B7A1F0C2B3D4A59687786302 /* HistoryGraphTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryGraphTests.swift; sourceTree = "<group>"; };
 		A9C3E5F70B1D2E3F40516275 /* ModelMoveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelMoveTests.swift; sourceTree = "<group>"; };
@@ -427,6 +430,7 @@
 		020B954C3465D02C24F95C3C /* ProjectMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectMapping.swift; sourceTree = "<group>"; };
 		7E1C0A0100000000000B0301 /* Media.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Media.swift; sourceTree = "<group>"; };
 		D71E1C844BC5F711F95A1277 /* ProjectCompaction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectCompaction.swift; sourceTree = "<group>"; };
+		2F103CAFAFFBCC7B2BF4A54D /* ProjectFiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectFiles.swift; sourceTree = "<group>"; };
 		0963659342F5DFDDA1ED7457 /* tensor_data_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = tensor_data_generated.swift; sourceTree = "<group>"; };
 		0E1AFD9107C52D1BC04226C6 /* thumbnail_history_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = thumbnail_history_generated.swift; sourceTree = "<group>"; };
 		0F36F20BC6CFD5D7F32C3D2D /* tensor_history_data_model_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = tensor_history_data_model_generated.swift; sourceTree = "<group>"; };
@@ -972,6 +976,7 @@
 				020B954C3465D02C24F95C3C /* ProjectMapping.swift */,
 				7E1C0A0100000000000B0301 /* Media.swift */,
 				D71E1C844BC5F711F95A1277 /* ProjectCompaction.swift */,
+				2F103CAFAFFBCC7B2BF4A54D /* ProjectFiles.swift */,
 			);
 			path = Projects;
 			sourceTree = "<group>";
@@ -1090,6 +1095,7 @@
 				C11DDE1E7E57000000000002 /* ClipDeleteTests.swift */,
 				B7A1F0C2B3D4A59687786300 /* ProjectMappingTests.swift */,
 				C0BCBDD7530CBD8D16DF5600 /* ProjectCompactionTests.swift */,
+				F1A9C4B54EA6F58E899501DB /* ProjectFilesTests.swift */,
 				B7A1F0C2B3D4A59687786301 /* StyleTests.swift */,
 				B7A1F0C2B3D4A59687786302 /* HistoryGraphTests.swift */,
 				D70A11000000000000000008 /* DrawThingsImportTests.swift */,
@@ -1534,6 +1540,7 @@
 				FE932A5C887AE92B9E804707 /* ProjectMapping.swift in Sources */,
 				7E1C0A0100000000000B0302 /* Media.swift in Sources */,
 				A931266D4F41EFBBDA557F82 /* ProjectCompaction.swift in Sources */,
+				3896BAFA55A2EBD29FBC5680 /* ProjectFiles.swift in Sources */,
 				40471B00219ACFE544559125 /* SessionState.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1F3 /* FileDialogs.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1F1 /* MacPlatform.swift in Sources */,
@@ -1636,6 +1643,7 @@
 				ED17ED17000000000000002D /* LUTTests.swift in Sources */,
 				B7A1F0C2B3D4A59687786200 /* ProjectMappingTests.swift in Sources */,
 				0052093D8FFD473C03A83673 /* ProjectCompactionTests.swift in Sources */,
+				845E857FA0EA84FA8D809795 /* ProjectFilesTests.swift in Sources */,
 				B7A1F0C2B3D4A59687786201 /* StyleTests.swift in Sources */,
 				B7A1F0C2B3D4A59687786202 /* HistoryGraphTests.swift in Sources */,
 				D70A11000000000000000007 /* DrawThingsImportTests.swift in Sources */,
