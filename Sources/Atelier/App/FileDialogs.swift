@@ -33,9 +33,14 @@ final class FileDialogs {
   /// to read the library.
   struct Photos {
     var multiple = false
+    /// Videos rather than photos, which go to `videoCompletion`.
+    var videos = false
     /// The picked photos' files as they are in the library, in the order they were picked, and how
     /// many couldn't be loaded; not called on cancel.
     var completion: @MainActor ([Data], _ failed: Int) -> Void
+    /// The picked videos, each a copy of its own in the temporary exports (`CanvasDrop.Movie`), to
+    /// move or remove, and how many couldn't be loaded; not called on cancel.
+    var videoCompletion: @MainActor ([URL], _ failed: Int) -> Void = { _, _ in }
   }
 
   var photos: Photos? {
@@ -66,6 +71,7 @@ nonisolated struct ExportedFile: Transferable {
     DataRepresentation(exportedContentType: .png) { try await $0.data() }
     DataRepresentation(exportedContentType: .json) { try await $0.data() }
     DataRepresentation(exportedContentType: .mpeg4Movie) { try await $0.data() }
+    DataRepresentation(exportedContentType: .quickTimeMovie) { try await $0.data() }
     DataRepresentation(exportedContentType: .markdownText) { try await $0.data() }
     DataRepresentation(exportedContentType: .html) { try await $0.data() }
     DataRepresentation(exportedContentType: .cubeLUT) { try await $0.data() }
@@ -137,7 +143,7 @@ private struct FileDialogsModifier: ViewModifier {
         selection: $pickedPhotos,
         maxSelectionCount: dialogs.photos?.multiple == true ? nil : 1,
         selectionBehavior: .ordered,
-        matching: .images,
+        matching: dialogs.photos?.videos == true ? .videos : .images,
         preferredItemEncoding: .current
       )
       .onChange(of: pickedPhotos) {
@@ -145,6 +151,14 @@ private struct FileDialogsModifier: ViewModifier {
         let items = pickedPhotos
         pickedPhotos = []
         Task {
+          if request.videos {
+            var videos: [URL] = []
+            for item in items {
+              if let movie = try? await item.loadTransferable(type: CanvasDrop.Movie.self) { videos.append(movie.file) }
+            }
+            request.videoCompletion(videos, items.count - videos.count)
+            return
+          }
           var photos: [Data] = []
           for item in items {
             if let data = try? await item.loadTransferable(type: Data.self) { photos.append(data) }

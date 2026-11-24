@@ -105,10 +105,11 @@ nonisolated struct TimelineExportJob: Sendable {
 
 nonisolated extension TimelineComposition {
   /// A History video as a composition of its own (the whole clip, its sound), so it exports
-  /// the way a timeline does.
+  /// the way a timeline does; an imported video's from its file (`make(file:)`).
   @MainActor
   static func make(clip item: HistoryItem, history: HistoryStore) async throws -> TimelineComposition {
     guard let clip = item.clip else { throw ClipVideoError.noFrames }
+    if clip.media != nil { return try await make(file: try await history.videoFile(for: item)) }
     var timeline = Timeline(name: history.fileName(for: item))
     timeline.entries = [Timeline.Entry(clip: item.tensorId, start: 0, end: clip.frames.count)]
     let layout = TimelineLayout(timeline) { $0 == item.tensorId ? item : nil }

@@ -246,19 +246,20 @@ nonisolated struct DroppedImage: Transferable {
   }
 }
 
-/// What the canvas takes: an image goes on it, a video opens Export Video to upscale it.
+/// What the canvas takes: an image goes on it, a video joins the project (`Media`).
 ///
 /// Read from the item provider because a Transferable alone gets a file named for its type
 /// ("MPEG-4 movie.mp4"); only the provider knows the video's name.
 nonisolated enum CanvasDrop {
   case image(DroppedImage)
-  /// A copy of the file, under the temporary exports, so the job doesn't depend on the original;
-  /// it stays until the app quits, for Export Again.
+  /// A copy of the file, under the temporary exports, so nothing depends on the original; it's
+  /// moved into the project's media folder.
   case video(URL, name: String)
 
   static let types: [UTType] = [.image, .movie]
 
-  private struct Movie: Transferable {
+  /// A video's file, copied as it arrives (a drop, a photo picked).
+  struct Movie: Transferable {
     var file: URL
 
     static var transferRepresentation: some TransferRepresentation {
@@ -450,7 +451,8 @@ struct MoodboardColumn: View {
   }
 
   /// How the selected video model reads an image: H3 FL2VA's last frame is the first image it
-  /// gets (with an empty canvas, the first two are the first and last frames), H3 Ref2VA calls the canvas (in Edit) Picture 1 and the moodboard images the ones after.
+  /// gets (with an empty canvas, the first two are the first and last frames), H3 Ref2VA calls the canvas (in Edit) Picture 1 and the moodboard images the ones after. A clip on the
+  /// canvas is no picture (it's `<Video 1>`, `CreateModel.referenceClip`), so they start at Picture 1.
   private func role(of item: MoodboardItem) -> String? {
     guard let video = model.videoModel else { return nil }
     let sent = model.moodboard.items.filter { $0.weight > 0 }

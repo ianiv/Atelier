@@ -6,7 +6,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/liuliu/ccv.git",
       "state" : {
-        "revision" : "710baf94e5a9cb289bd992bc428b994433bb4ce3"
+        "revision" : "aa1174828ceb0c0dad481397560ef0f4bf60b4f1"
       }
     },
     {
@@ -22,7 +22,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ianiv/draw-things-community",
       "state" : {
-        "revision" : "7d107b19a03041c2338285da20e3db06d65090d4"
+        "revision" : "da454481a30f9fda42288dff0de15ce71e7c6f52"
       }
     },
     {
@@ -47,7 +47,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/liuliu/s4nnc.git",
       "state" : {
-        "revision" : "25e473a212d673ffebe0382da46d38927862eccb"
+        "revision" : "857de0f68341587c7000ca734f77899b0c4a6c9e"
       }
     },
     {

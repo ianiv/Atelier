@@ -309,6 +309,20 @@ nonisolated struct RemoteBackend: GenerationBackend {
       blobs.append(blob)
       remote.audio = RemoteJobRequest.Audio(hash: blob.hash, fileExtension: audio.pathExtension)
     }
+    if let reference = request.referenceVideo {
+      // A held frame is the same image each time (`CreateModel.referenceFrames`): encoded and
+      // uploaded once.
+      var hashes: [ObjectIdentifier: String] = [:]
+      var uploaded: Set<String> = []
+      remote.referenceVideo = try reference.frames.map { frame in
+        if let hash = hashes[ObjectIdentifier(frame)] { return hash }
+        guard let png = ImageTensor.png(frame) else { throw ProjectError.badImage }
+        let blob = RemoteBlob(png)
+        if uploaded.insert(blob.hash).inserted { blobs.append(blob) }
+        hashes[ObjectIdentifier(frame)] = blob.hash
+        return blob.hash
+      }
+    }
     return Prepared(request: remote, blobs: blobs)
   }
 
@@ -339,6 +353,13 @@ nonisolated struct RemoteBackend: GenerationBackend {
       let title = String(describing: request.configuration.sampler)
       throw RemoteError.server(
         "This server's Atelier is too old to use \(title). Update Atelier there, pick another sampler, or run on this device.")
+    }
+    // And one that predates reference videos would make a video without the clip.
+    if request.referenceVideo != nil,
+       try await !catalog().features.contains(RemoteProtocol.referenceVideoFeature)
+    {
+      throw RemoteError.server(
+        "This server's Atelier is too old to take a reference video. Update Atelier there, or run on this device.")
     }
     let prepared = try await Self.prepare(request)
     let total = prepared.blobs.reduce(0) { $0 + $1.data.count }

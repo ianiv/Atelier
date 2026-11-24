@@ -29,6 +29,9 @@ nonisolated struct RemoteClientJob: Codable, Hashable, Sendable {
   var merge: RefineMerge.Record? = nil
   /// The mask the canvas image remembers (`Request.canvasSourceMask`).
   var canvasSourceMask: CanvasSourceMask? = nil
+  /// The clip sent as H3 Ref2VA's reference video (`Request.referenceVideo`); its frames went to
+  /// the server, so only which clip is kept.
+  var referenceTensorId: Int64? = nil
 }
 
 nonisolated struct RemoteClientJobs: Sendable {
@@ -51,7 +54,7 @@ nonisolated struct RemoteClientJobs: Sendable {
       parentTensorId: request.parentTensorId, hasCanvas: request.canvas != nil, canvasTensorId: request.canvasTensorId,
       canvasIsImported: request.canvasIsImported, moodboardWeights: request.moodboard.map(\.weight),
       placement: request.placement, hasMask: request.mask != nil, merge: request.merge?.record,
-      canvasSourceMask: request.canvasSourceMask)
+      canvasSourceMask: request.canvasSourceMask, referenceTensorId: request.referenceVideo?.sourceTensorId)
     Log.attempt(Log.remote, "Keeping a remote job") {
       try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
       if let canvas = request.canvas { try ImageTensor.png(canvas)?.write(to: url(job, "-canvas.png")) }

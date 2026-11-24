@@ -163,6 +163,14 @@ struct AtelierApp: App {
           navigation.section = .create
           create.photosImport = .canvas
         }
+        Button("Open Video…") {
+          navigation.section = .create
+          create.videoOpen = true
+        }
+        Button("Open Video from Photos…") {
+          navigation.section = .create
+          create.videoPhotosOpen = true
+        }
         Button("Paste Image") {
           navigation.section = .create
           create.pasteImage()

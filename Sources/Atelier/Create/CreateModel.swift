@@ -169,13 +169,22 @@ final class CreateModel {
     if let selectedModel, !availableModels.contains(where: { $0.file == selectedModel }) {
       return "\(name) doesn't have this model."
     }
-    return runTargetMaskProblem
+    return runTargetMaskProblem ?? runTargetReferenceVideoProblem
   }
 
   /// Generate would send a mask to a server too old to use one (`runTargetTakesMasks`).
   var runTargetMaskProblem: String? {
     guard !runTargetTakesMasks, let name = runTargetServerName, screenFrameHasPaint else { return nil }
     return "\(name) can't take masks: its Atelier is older. Clear the mask or run on this device."
+  }
+
+  /// Generate would send a reference video to a server too old to take one
+  /// (`RemoteProtocol.referenceVideoFeature`), which would make the video without it.
+  var runTargetReferenceVideoProblem: String? {
+    guard let name = runTargetServerName, referenceClip != nil,
+          serverCatalog?.features.contains(RemoteProtocol.referenceVideoFeature) != true
+    else { return nil }
+    return "\(name) can't take a reference video: its Atelier is older. Put an image on the canvas or run on this device."
   }
 
   /// This device, as Run on and the Queue call it.
@@ -307,6 +316,10 @@ final class CreateModel {
       }
       request.moodboard = clientJobs.moodboard(of: record)
       request.placement = sameProject ? record.placement : nil
+      // Its frames are at the server already: this only says the job had one.
+      request.referenceVideo = record.referenceTensorId.map {
+        ReferenceVideo(sourceTensorId: sameProject ? $0 : nil, project: sameProject ? record.project : nil)
+      }
       queue.appendResumed(request, id: record.jobID, server: record.serverID)
     }
     runNext()
@@ -535,6 +548,14 @@ final class CreateModel {
   enum ImageImportTarget {
     case canvas, moodboard
   }
+
+  /// Set to show the Open panel for a video (Open Video…).
+  var videoOpen = false
+  /// Set to show the photo picker for a video (Open Video from Photos…).
+  var videoPhotosOpen = false
+  /// The video being copied into the project (`importVideo`), if any.
+  @ObservationIgnored private var videoImport: (id: UUID, task: Task<Void, Never>)?
+  static let importingVideoNote = "Copying video…"
   /// Bumped to ask the prompt composer to take focus (⌘L).
   var focusPromptRequest = 0
   /// Set to ask before forgetting the recent prompts (Image ▸ Clear Prompt History…).
@@ -789,6 +810,36 @@ final class CreateModel {
     showsFrame ? nil : imageItem.flatMap { $0.isVideo ? $0 : nil }
   }
 
+  /// The clip on the canvas that H3 Ref2VA takes as its reference video (`<Video 1>`), in Edit
+  /// mode: the clip playing there is the input, as an image would be.
+  var referenceClip: HistoryItem? {
+    guard videoModel?.takesReferences == true, effectiveCanvasMode == .edit else { return nil }
+    return canvasClip
+  }
+
+  /// Why Generate can't take the reference video on the canvas as the settings are now
+  /// (`ReferenceVideo.problem`); nil without one.
+  var referenceVideoProblem: String? {
+    guard let item = referenceClip, let clip = item.clip, let settings, let video = videoModel else { return nil }
+    return ReferenceVideo.problem(
+      takesReferences: video.takesReferences, strength: settings.strength, numFrames: video.snapped(settings.numFrames),
+      hasAudio: audio.url != nil, clipFrames: Self.referenceFrames(of: clip, rate: video.framesPerSecond),
+      clipSize: Self.clipSize(of: item))
+  }
+
+  /// A clip's frame size: an imported video's own, a generated one's from its settings.
+  nonisolated static func clipSize(of item: HistoryItem) -> (width: Int, height: Int) {
+    item.clip?.media.map { ($0.width, $0.height) } ?? (item.sidecar.width, item.sidecar.height)
+  }
+
+  /// How many frames `clip` has at the model's `rate` (`ReferenceVideo.resampled`), up to the
+  /// minimum a reference needs: whether it's long enough to be one.
+  nonisolated static func referenceFrames(of clip: ClipInfo, rate: Double) -> Int {
+    ReferenceVideo.resampled(
+      sourceCount: clip.frameCount, sourceRate: clip.framesPerSecond, rate: rate, limit: ReferenceVideo.minimumFrames
+    ).count
+  }
+
   /// The selected model, when it makes video.
   var videoModel: VideoModel? {
     guard let selectedModel else { return nil }
@@ -799,6 +850,21 @@ final class CreateModel {
   /// frame is a step of its own, so the run follows it (from the last frame, it extends the
   /// clip; from any other, it branches there).
   func useFrame(_ index: Int, of item: HistoryItem) {
+    // An imported video's frames are in its file: one comes onto the canvas as an image from
+    // outside would, and the run saves it as its input.
+    if let media = item.clip?.media {
+      guard index >= 0, index < media.frameCount else { return }
+      statusNote = nil
+      pendingPlacement = nil
+      Task {
+        guard let frame = await whileLoadingCanvasImage({ await history.frame(index, of: item) }) else {
+          return canvasImageDidNotLoad("The video's frame couldn't be read from its file.")
+        }
+        setCanvasImage(frame)
+        canvasMode = .edit
+      }
+      return
+    }
     guard let frames = item.clip?.frames, frames.indices.contains(index) else { return }
     let tensorId = frames[index]
     let projectName = history.project.name
@@ -876,7 +942,7 @@ final class CreateModel {
   /// Generate works while a job runs: it queues the next one. An empty prompt is fine: a model can
   /// run on no text at all, and an edit or a video may need none.
   var canGenerate: Bool {
-    !isLoadingModel && selectedModel != nil && settings != nil && runTargetProblem == nil
+    !isLoadingModel && selectedModel != nil && settings != nil && runTargetProblem == nil && referenceVideoProblem == nil
   }
 
   var style: Style? { styles?.style(id: styleID) ?? remoteStyles.style(id: styleID) }
@@ -1211,6 +1277,58 @@ final class CreateModel {
     }
   }
 
+  /// Brings a video into the project (`HistoryStore.importVideo`, which keeps it as a file beside
+  /// the project), in the background with a note in the status bar. Once in, it's the current
+  /// step and plays on the canvas; with H3 Ref2VA it's the reference video, in Edit. A newer
+  /// import, or another project, stops one still copying. `moving` moves the app's own copy (a
+  /// drop's, a photo's) in rather than copying it again.
+  func importVideo(_ url: URL, name: String, moving: Bool = false) {
+    cancelVideoImport()
+    statusNote = Self.importingVideoNote
+    let history = history
+    let id = UUID()
+    let task = Task { [weak self] in
+      defer { if moving { try? FileManager.default.removeItem(at: url) } }
+      do {
+        let item = try await history.importVideo(url, name: name, moving: moving, after: history.currentTensorId)
+        guard let self, !Task.isCancelled, self.videoImport?.id == id else { return }
+        self.videoImport = nil
+        self.finishVideoImport()
+        self.show(item)
+        if self.videoModel?.takesReferences == true { self.canvasMode = .edit }
+      } catch {
+        // Stopped by a newer import or another project: that one's note stays.
+        guard let self, !Task.isCancelled, self.videoImport?.id == id else { return }
+        self.videoImport = nil
+        self.finishVideoImport()
+        self.errorMessage = "Couldn't bring in the video: \(error.localizedDescription)"
+      }
+    }
+    videoImport = (id, task)
+  }
+
+  /// Stops a video still being copied in; it leaves nothing in the project.
+  func cancelVideoImport() {
+    videoImport?.task.cancel()
+    videoImport = nil
+    finishVideoImport()
+  }
+
+  private func finishVideoImport() {
+    if statusNote == Self.importingVideoNote { statusNote = nil }
+  }
+
+  /// Waits for the video being copied in, for scripted checks.
+  func videoImportFinished() async {
+    await videoImport?.task.value
+  }
+
+  /// A video picked in the Open panel.
+  func importVideos(_ urls: [URL]) {
+    guard let url = urls.first else { return }
+    importVideo(url, name: url.deletingPathExtension().lastPathComponent)
+  }
+
   /// Images picked from the photo library: one for the canvas, any number for the moodboard.
   func importPhotos(_ photos: [Data], failed: Int, into target: ImageImportTarget) {
     var failed = failed
@@ -1300,7 +1418,11 @@ final class CreateModel {
     defer {
       moodboard.reportFailure = { [weak self] in self?.errorMessage = $0 }
       moodboard.onChange = { [weak self] in self?.moodboardDidChange() }
-      history.willSwitchProject = { [weak self] in await self?.flushEntries() }
+      history.willSwitchProject = { [weak self] in
+        // A video still being copied in belongs to the project it was brought into.
+        self?.cancelVideoImport()
+        await self?.flushEntries()
+      }
       history.isIdle = { [weak self] in self?.queue.isEmpty ?? true }
     }
     if let session = SessionState.load() {
@@ -1448,7 +1570,8 @@ final class CreateModel {
   /// it up: the last pick wins, its settings waiting in `pendingSettings` for its model's load
   /// (`use`), so a second clip picked while the first one's model loads isn't dropped.
   func canUse(_ item: HistoryItem) -> Bool {
-    !item.isEntry && !isRunning && !waitsForEntries && !item.sidecar.configuration.isEmpty
+    // An imported video has no settings to use.
+    !item.isEntry && !item.isImported && !isRunning && !waitsForEntries && !item.sidecar.configuration.isEmpty
       && availableModels.contains { $0.file == item.sidecar.model }
   }
 
@@ -1946,6 +2069,11 @@ final class CreateModel {
       }
     } else {
       base.moodboard = references
+      // H3 Ref2VA in Edit takes the clip on the canvas as its reference video, and the moodboard
+      // as Picture 1 and on. The frames are read when the job starts.
+      if let clip = referenceClip {
+        base.referenceVideo = ReferenceVideo(sourceTensorId: clip.tensorId, project: history.project.name)
+      }
     }
     // H3 FL2VA reads only one moodboard image, as the last frame after the canvas's first
     // (`LocalImageGenerator.generate`'s `prefix(1)`). With nothing on the canvas, the moodboard's
@@ -2456,6 +2584,8 @@ final class CreateModel {
     // An upscale's output still needs its soundtrack from the source clip here.
     let keepsRemoteJob = job.target != .local && job.styleThumbnail == nil && !job.fromAgent && request.upscale == nil
     let task = Task {
+      // Gets its reference video's frames once it starts.
+      var request = request
       var status = JobQueue.Job.Status.cancelled
       var inputTensorId: Int64?
       var tipTensorId: Int64?
@@ -2481,6 +2611,19 @@ final class CreateModel {
             self.deviceCallbacks[job.id]?.progress(progress)
           }
         }
+        // A reference video's frames are read now, not when it was queued. A paired device's job
+        // brings them, and one resumed at its server has them there.
+        if let reference = request.referenceVideo, reference.frameCount == 0, job.remoteDevice == nil, !job.resumesRemoteJob {
+          request.referenceVideo?.frames = try await referenceFrames(reference, configuration: request.configuration, job: job)
+          // On this device the engine takes them as one tensor: made now, the images let go, so
+          // the two aren't both kept through the run. A server gets them as images.
+          if !(backend is RemoteBackend), let reference = request.referenceVideo {
+            guard let made = await Task.detached(operation: { reference.withTensor() }).value else {
+              throw ReferenceVideo.Failure.unreadable
+            }
+            request.referenceVideo = made
+          }
+        }
         var output: GenerationEngine.Output
         if let imageUpscale = request.imageUpscale, let image = request.canvas {
           setRunMessage("Upscaling…", job)
@@ -2501,6 +2644,9 @@ final class CreateModel {
         } else {
           output = try await backend.generate(request, progress: progress)
         }
+        // The frames aren't needed past the run, and a long clip's are hundreds of megabytes.
+        request.referenceVideo?.frames = []
+        request.referenceVideo?.tensor = nil
         // A paired device's job goes back to it, not into the project.
         if job.remoteDevice != nil {
           status = .ranForDevice
@@ -3197,6 +3343,8 @@ final class CreateModel {
     guard let source = history.item(tensorId: upscale.sourceTensorId), let clip = source.clip else {
       throw UpscaleError.sourceMissing
     }
+    // Its frames aren't project steps; Export Video… upscales it.
+    if clip.media != nil { throw ImageUpscaleError(message: HistoryItem.notUpscaled) }
     var output: GenerationEngine.Output
     // A clip made on this server may still be there, which saves sending its frames back.
     let remote = backend as? RemoteBackend
@@ -3230,6 +3378,63 @@ final class CreateModel {
       output.audioSampleRate = rate
     }
     return output
+  }
+
+  /// A reference video's frames for a run of `configuration` (`ReferenceVideo`): one per output
+  /// frame at the output size, taken from the clip at the model's frame rate. Each source frame is
+  /// read and prepared once, however many output frames show it.
+  private func referenceFrames(
+    _ reference: ReferenceVideo, configuration: PipelineConfiguration, job: JobQueue.Job
+  ) async throws -> [CGImage] {
+    guard let video = configuration.videoModel else { return [] }
+    guard reference.project == history.project.name, let id = reference.sourceTensorId,
+          let source = history.item(tensorId: id), let clip = source.clip, !clip.frames.isEmpty
+    else {
+      throw ReferenceVideo.Failure.sourceMissing
+    }
+    let size = Self.clipSize(of: source)
+    guard ReferenceVideo.isTakenShape(width: size.width, height: size.height) else { throw ReferenceVideo.Failure.badShape }
+    // An imported video's frames come from its file, which must be the one recorded.
+    if let media = clip.media {
+      guard let url = history.mediaURL(of: source), Self.fileSize(url) == media.bytes else { throw Media.Failure.missing }
+      setRunMessage("Reading the video's frames…", job)
+      let frames = try await ReferenceVideo.fileFrames(
+        url: url, sourceCount: media.frameCount, sourceRate: media.framesPerSecond, numFrames: video.snapped(configuration.numFrames),
+        rate: video.framesPerSecond)
+      Self.logReference(frames)
+      return frames
+    }
+    let indices = ReferenceVideo.sourceIndices(
+      numFrames: video.snapped(configuration.numFrames), rate: video.framesPerSecond, sourceCount: clip.frames.count,
+      sourceRate: clip.framesPerSecond)
+    guard !indices.isEmpty else { throw ReferenceVideo.Failure.tooShort }
+    let tensorIds = indices.map { clip.frames[$0] }
+    setRunMessage("Reading \(Set(tensorIds).count) frames…", job)
+    let project = history.project
+    let frames = await project.read { project in
+      var prepared: [Int64: CGImage] = [:]
+      return tensorIds.map { id -> CGImage? in
+        if let frame = prepared[id] { return frame }
+        let frame = project.image(tensorId: id).flatMap(ReferenceVideo.frame)
+        prepared[id] = frame
+        return frame
+      }
+    }
+    let read = frames.compactMap(\.self)
+    // The clip is there (checked above), so a frame missing here didn't read or decode.
+    guard read.count == tensorIds.count else { throw ReferenceVideo.Failure.unreadable }
+    Self.logReference(read)
+    return read
+  }
+
+  /// Says what a run's reference video is: its frame count and canvas size.
+  private nonisolated static func logReference(_ frames: [CGImage]) {
+    Log.engine.info(
+      "Reference video: \(frames.count, privacy: .public) frames at \(frames.first?.width ?? 0, privacy: .public)×\(frames.first?.height ?? 0, privacy: .public)")
+  }
+
+  private nonisolated static func fileSize(_ url: URL) -> Int64? {
+    (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value
   }
 
   nonisolated struct ImageUpscaleError: LocalizedError {

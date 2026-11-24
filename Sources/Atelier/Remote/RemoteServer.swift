@@ -1,6 +1,7 @@
 @preconcurrency import _MediaGenerationKit
 import CoreGraphics
 import Foundation
+import ImageIO
 import Network
 import Observation
 import Synchronization
@@ -708,6 +709,15 @@ final class RemoteServer {
         ? try await RemoteBackend.blankConfiguration(for: request.model)
         : try await defaults(for: request.model)
       SettingsRegistry.apply(dump: request.settings, to: &configuration)
+      // A reference video is 17 n + 5 frames, no more than the video to make, so a list of any
+      // other length is refused before anything is decoded. Bounded too, as the decoded frames are
+      // kept until the tensor is made.
+      if let frames = request.referenceVideo?.count {
+        let length = configuration.videoModel.map { $0.snapped(configuration.numFrames) } ?? 0
+        guard ReferenceVideo.isLength(frames), frames <= length, frames <= ReferenceVideo.maximumFrames else {
+          throw RemoteError.server("The reference video doesn't fit the length of the video to make.")
+        }
+      }
       let inputs = try await Self.inputs(of: request, device: device, store: store)
       // Cancelled while the model's settings loaded.
       if await store.latestEvent(of: job, device: device)?.state.isFinal ?? true { return }
@@ -720,6 +730,13 @@ final class RemoteServer {
       engineRequest.moodboard = inputs.moodboard
       engineRequest.audio = inputs.audio
       engineRequest.upscale = request.upscale
+      // Made into the engine's tensor now, so the queued job holds that rather than the images.
+      if let frames = inputs.referenceVideo {
+        guard let reference = ReferenceVideo(frames: frames).withTensor() else {
+          throw RemoteError.server("The reference video's frames couldn't be read.")
+        }
+        engineRequest.referenceVideo = reference
+      }
       let queueID = create.runForDevice(
         engineRequest, frames: inputs.frames, device: name,
         progress: { [weak self] progress in self?.note(progress, job: job) },
@@ -741,6 +758,7 @@ final class RemoteServer {
     var moodboard: [GenerationEngine.Reference] = []
     var audio: URL?
     var frames: [CGImage] = []
+    var referenceVideo: [CGImage]?
   }
 
   /// A job's images and audio, from its uploads. The audio gets a copy the queue owns, as a job
@@ -786,6 +804,39 @@ final class RemoteServer {
       }
     } else {
       for hash in request.frames { inputs.frames.append(try await image(hash)) }
+    }
+    if let hashes = request.referenceVideo {
+      // A held frame comes as the same upload each time: decoded once.
+      var decoded: [String: CGImage] = [:]
+      var frameSize: (Int, Int)?
+      var frames: [CGImage] = []
+      frames.reserveCapacity(hashes.count)
+      for hash in hashes {
+        if let frame = decoded[hash] {
+          frames.append(frame)
+        } else {
+          // The client put each on its clip's canvas (`ReferenceVideo.frame`): all one size, a
+          // multiple of 32, no larger than a canvas is. The size is read from the file's header
+          // first, so no other size is ever decoded.
+          let url = await store.blobURL(device: device, hash: hash)
+          let header = url.flatMap { CGImageSourceCreateWithURL($0 as CFURL, nil) }
+            .flatMap { CGImageSourceCopyPropertiesAtIndex($0, 0, nil) as? [CFString: Any] }
+          guard let width = header?[kCGImagePropertyPixelWidth] as? Int, let height = header?[kCGImagePropertyPixelHeight] as? Int,
+                ReferenceVideo.isCanvasSize(width: width, height: height),
+                frameSize.map({ $0 == (width, height) }) ?? true
+          else {
+            throw RemoteError.server("The reference video's frames aren't the size of a clip's canvas.")
+          }
+          frameSize = (width, height)
+          let frame = try await image(hash)
+          guard frame.width == width, frame.height == height else {
+            throw RemoteError.server("The reference video's frames aren't the size of a clip's canvas.")
+          }
+          decoded[hash] = frame
+          frames.append(frame)
+        }
+      }
+      inputs.referenceVideo = frames
     }
     return inputs
   }

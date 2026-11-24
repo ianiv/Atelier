@@ -192,8 +192,8 @@ struct HistoryView: View {
       .focusedSceneValue(\.showHistoryImageFullSize, fullSizeItem.map { item in { viewingImage = item.tensorId } })
       .sheet(item: $exportingVideo) { item in
         VideoExportSheet(
-          width: item.sidecar.width, height: item.sidecar.height,
-          frameCount: item.clip?.frames.count ?? 0
+          width: item.clip?.media?.width ?? item.sidecar.width, height: item.clip?.media?.height ?? item.sidecar.height,
+          frameCount: item.clip?.frameCount ?? 0
         ) { upscale in
           if let upscale {
             queueUpscaledExport(item, upscale)
@@ -390,7 +390,11 @@ struct HistoryView: View {
                 EntryBadge(reason: reason).padding(5)
               } else {
                 let stars = history.rating(of: item)
-                if stars > 0 { RatingBadge(stars: stars).padding(5) }
+                HStack(spacing: 4) {
+                  if item.isImported { ImportedBadge() }
+                  if stars > 0 { RatingBadge(stars: stars) }
+                }
+                .padding(5)
               }
             }
             .overlay(alignment: .bottomTrailing) {
@@ -630,7 +634,11 @@ struct HistoryView: View {
       if item.isVideo {
         Divider()
         Button("Add to Timeline") { addToTimeline([item]) }
+          .disabled(item.isImported)
+          .help(item.isImported ? HistoryItem.notInVideoEditor : "")
         Button("Upscale…") { upscaling = item }
+          .disabled(item.isImported)
+          .help(item.isImported ? HistoryItem.notUpscaled : "")
       }
       Divider()
       ratingMenu(items)
@@ -760,7 +768,7 @@ struct HistoryView: View {
     Task {
       // A folder of its own: the file keeps its name, and removing it can't hit a later preview.
       let file = TemporaryFiles.newFolder(in: .quickLook).appendingPathComponent(history.fileName(for: item))
-        .appendingPathExtension(item.isVideo ? "mp4" : "png")
+        .appendingPathExtension(item.isVideo ? item.videoExtension : "png")
       if item.isVideo {
         guard (try? await history.exportVideo(item, to: file)) != nil else { return }
       } else {
@@ -843,7 +851,7 @@ struct HistoryView: View {
           (
             item,
             Self.unusedURL(
-              in: folder, name: history.fileName(for: item), extension: item.isVideo ? "mp4" : "png")
+              in: folder, name: history.fileName(for: item), extension: item.isVideo ? item.videoExtension : "png")
           )
         }
         Task {
@@ -1063,7 +1071,7 @@ struct HistoryDetail: View {
           StarRating(stars: history.rating(of: item)) { history.setRating($0, for: [item]) }
         }
         .disabled(item.isEntry)
-        if !create.models.contains(where: { $0.file == sidecar.model }) {
+        if !item.isImported, !create.models.contains(where: { $0.file == sidecar.model }) {
           Label("\(sidecar.model) isn't downloaded.", systemImage: "exclamationmark.triangle")
             .font(.caption).foregroundStyle(.secondary)
         }
@@ -1081,9 +1089,13 @@ struct HistoryDetail: View {
         if item.isVideo {
           ButtonRow {
             Button("Add to Timeline") { timelines.append([item], undoManager: undoManager) }
-              .help("Add the video to the end of the timeline open in the Video Editor")
+              .disabled(item.isImported)
+              .help(item.isImported ? HistoryItem.notInVideoEditor : "Add the video to the end of the timeline open in the Video Editor")
             Button("Upscale…", action: upscale)
-              .help("Make a sharper, larger copy of the video with FlashVSR+, ReCaVSR or Apple Super Resolution")
+              .disabled(item.isImported)
+              .help(
+                item.isImported
+                  ? HistoryItem.notUpscaled : "Make a sharper, larger copy of the video with FlashVSR+, ReCaVSR or Apple Super Resolution")
           }
         }
       }
@@ -1107,7 +1119,7 @@ struct HistoryDetail: View {
           }
         }
         Section("Settings") {
-          LabeledContent("Model", value: modelName(sidecar.model))
+          LabeledContent("Model", value: item.isImported ? "None (imported video)" : modelName(sidecar.model))
           LabeledContent("LoRAs") {
             let loras = HistoryLoRA.rows(of: sidecar.configuration, installed: library.loras)
             if loras.isEmpty {
@@ -1241,8 +1253,8 @@ struct ClipBadge: View {
   static func length(_ clip: ClipInfo) -> String {
     let seconds = clip.duration.formatted(.number.precision(.fractionLength(1)))
     let fps = clip.framesPerSecond.formatted(.number.precision(.fractionLength(0...2)))
-    return "\(seconds) seconds, \(clip.frames.count) frames at \(fps) fps"
-      + (clip.audioId != nil ? ", with sound" : "")
+    return "\(seconds) seconds, \(clip.frameCount) frames at \(fps) fps"
+      + (clip.audioId != nil || clip.media?.hasAudio == true ? ", with sound" : "")
   }
 }
 
@@ -1659,7 +1671,7 @@ struct HistoryGraphRow: View {
           .lineLimit(2)
         Text(
           [
-            modelName(sidecar.model),
+            item.isImported ? "Imported" : modelName(sidecar.model),
             item.clip.map { "Video, " + $0.duration.formatted(.number.precision(.fractionLength(1))) + " s" },
             sidecar.createdAt.formatted(date: .abbreviated, time: .shortened),
           ].compactMap(\.self).joined(separator: " · "))
@@ -1719,6 +1731,19 @@ struct HistoryGraphRow: View {
 
   private func modelName(_ file: String) -> String {
     create.models.first { $0.file == file }?.name ?? file
+  }
+}
+
+/// The badge on an imported video's tile (`HistoryItem.isImported`).
+struct ImportedBadge: View {
+  var body: some View {
+    Text("Imported")
+      .font(.system(size: 9, weight: .semibold))
+      .padding(.horizontal, 4)
+      .padding(.vertical, 1)
+      .background(.black.opacity(0.6), in: .capsule)
+      .foregroundStyle(.white)
+      .help("A video brought in from outside: its file is kept with the project")
   }
 }
 

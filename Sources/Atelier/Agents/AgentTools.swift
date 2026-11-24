@@ -117,7 +117,7 @@ final class AgentTools {
       "name": "list_models",
       "title": "List models",
       "description":
-        "Lists the models downloaded in Atelier (file, name, family), which one is selected in the app, and whether each takes reference images (edit models, FLUX.2, Qwen Image 2.1). Video models say so, with their frame rate, the inputs they take (first_frame: input_image; last_frame: the first reference image; references; audio) and whether they make sound.",
+        "Lists the models downloaded in Atelier (file, name, family), which one is selected in the app, and whether each takes reference images (edit models, FLUX.2, Qwen Image 2.1). Video models say so, with their frame rate, the inputs they take (first_frame: input_image; last_frame: the first reference image; references; reference_video: a clip from History, generate's reference_video; audio) and whether they make sound.",
       "inputSchema": ["type": "object", "properties": [String: Any]()],
       "annotations": ["readOnlyHint": true],
     ],
@@ -152,7 +152,7 @@ final class AgentTools {
       "name": "get_create_screen",
       "title": "Get Create screen",
       "description":
-        "Returns what's on Atelier's Create screen right now: the selected model, prompt, negative prompt, the selected style (Generate writes the prompt into its template; styled_prompt is the result), `trigger_words` (the selected LoRAs' trigger words, each {lora, word, on}: Generate puts the ones turned on in front of the prompt; until changed, only each LoRA's first word is on), seed and whether it's random, the image count, every inspector setting as Draw Things configuration JSON, the settings that differ from the model's defaults, how many reference images there are and `moodboard` (each one's position, id, size, weight and the Picture number a prompt calls it by, as get_moodboard lists them), and `canvas`: the canvas image (its history step and size), the frame (output size), the region of the image it shows (source pixels, from the top left), its zoom and offset, the canvas mode, the mask summary and Merge into Image. The user may have changed any of it since your last call.",
+        "Returns what's on Atelier's Create screen right now: the selected model, prompt, negative prompt, the selected style (Generate writes the prompt into its template; styled_prompt is the result), `trigger_words` (the selected LoRAs' trigger words, each {lora, word, on}: Generate puts the ones turned on in front of the prompt; until changed, only each LoRA's first word is on), seed and whether it's random, the image count, every inspector setting as Draw Things configuration JSON, the settings that differ from the model's defaults, how many reference images there are and `moodboard` (each one's position, id, size, weight and the Picture number a prompt calls it by, as get_moodboard lists them), and `canvas`: the canvas image (its history step and size), the frame (output size), the region of the image it shows (source pixels, from the top left), its zoom and offset, the canvas mode, the mask summary and Merge into Image, and, at the top level beside `canvas`, `reference_video` (H3 Ref2VA in Edit mode with a clip on the canvas: its history_step and frames, the reference video Generate sends as <Video 1>; null otherwise). The user may have changed any of it since your last call.",
       "inputSchema": ["type": "object", "properties": [String: Any]()],
       "annotations": ["readOnlyHint": true],
     ],
@@ -400,10 +400,30 @@ final class AgentTools {
       ],
     ],
     [
+      "name": "import_video",
+      "title": "Import video",
+      "description": """
+        Brings a video file on this Mac into the current Atelier project, as dropping it on the \
+        canvas does: the file is copied (cloned on the same drive) into the project's media \
+        folder and one Imported step, its first frame, stands for it, after `after_step` \
+        (default the current step). It becomes the current step. MiniMax H3 Ref2VA can then \
+        take it as generate's reference_video. Returns history_step, frames, \
+        frames_per_second, width, height and has_audio. Only for agents on this Mac.
+        """,
+      "inputSchema": [
+        "type": "object",
+        "required": ["path"],
+        "properties": [
+          "path": ["type": "string", "description": "A video file (MOV, MP4, M4V)."],
+          "after_step": ["type": "integer", "description": "The history step it follows. Default the current step."],
+        ],
+      ],
+    ],
+    [
       "name": "list_history",
       "title": "List history",
       "description":
-        "Lists the newest images and videos in the current Atelier project, newest first: history step, prompt (shortened), model, seed, size, star rating, whether it's a video, and has_mask (it remembers a mask: set_canvas_image brings it back, set_canvas_mask from_history_step applies it, get_canvas_mask history_step shows it). Includes what the user generated themselves, and input entries (kind \"input\", with a reason: imported, moodboard, cleared, mask or draw): the canvas and moodboard as they were before runs, which aren't runs themselves and have no settings of their own. Use get_image to look at one.",
+        "Lists the newest images and videos in the current Atelier project, newest first: history step, prompt (shortened), model, seed, size, star rating, whether it's a video, and has_mask (it remembers a mask: set_canvas_image brings it back, set_canvas_mask from_history_step applies it, get_canvas_mask history_step shows it). Includes what the user generated themselves, and input entries (kind \"input\", with a reason: imported, moodboard, cleared, mask or draw): the canvas and moodboard as they were before runs, which aren't runs themselves and have no settings of their own. A video says how long it is (frames, frames_per_second, has_audio); one brought in from outside (import_video) is imported: true, with its source_name, and has no model or settings. Use get_image to look at one.",
       "inputSchema": [
         "type": "object",
         "properties": [
@@ -527,7 +547,9 @@ final class AgentTools {
         Settings start from the model's recommended settings and default preset, then `preset`, \
         then `settings`, then the explicit fields. With `input_image` the run edits that image \
         (image to image), or for video models starts from it as the first frame; \
-        `reference_images` go to models that take references (see list_models). With \
+        `reference_images` go to models that take references (see list_models). MiniMax H3 \
+        Ref2VA takes a clip from History as `reference_video` (<Video 1> in the prompt, the \
+        reference images then Picture 1 and on). With \
         use_app_settings and no prompt, it generates what's on the Create screen: its model, \
         prompt, negative prompt, settings and (unless Random is on) seed. With use_canvas too, \
         it runs exactly what the Generate button would, canvas included: the region the frame \
@@ -565,6 +587,11 @@ final class AgentTools {
           "num_frames": ["type": "integer", "description": "Video models: how many frames, snapped to the counts the model takes."],
           "seconds": ["type": "number", "description": "Video models: how long, instead of num_frames."],
           "audio": ["type": "string", "description": "Video models that take audio (see list_models): path to an audio file."],
+          "reference_video": [
+            "type": "object", "required": ["history_step"],
+            "properties": ["history_step": ["type": "integer", "description": "A video step of the current project (see list_history)."]],
+            "description": "MiniMax H3 Ref2VA only: a clip from History as the reference video, <Video 1> in the prompt. Read from its start at the model's 24 fps, up to the video's length and snapped down to 17n+5 frames (a shorter clip is a shorter reference, never padded), at its own aspect ratio on MiniMax's canvas (a 768-pixel short edge, smaller past 1.75:1 to stay within 768 × 1344 pixels); a clip under 22 frames at 24 fps or beyond 1:4 / 4:1 is refused. Needs strength 1 and num_frames of 22 or more; not with input_image or audio.",
+          ],
           "save_to": ["type": "string", "description": "Where to write the PNG or MP4: a file path, or a folder. Defaults to a temporary folder."],
           "include_image": ["type": "boolean", "description": "Return the image inline (scaled to 1024 px on the long side). Default true."],
           "use_canvas": ["type": "boolean", "description": "With use_app_settings: run exactly what the Generate button would, taking the canvas image, the region the frame shows (set_canvas_region), its mask (set_canvas_mask), the moodboard and Merge into Image. Takes no prompt, settings or input_image: change those with set_create_screen and set_canvas_image first. Returns the result (the merged whole image when it merges) and the step it followed. For the same edit without touching the Create screen, use edit_image."],
@@ -645,6 +672,7 @@ final class AgentTools {
     case "grow_canvas_mask": return try await growCanvasMask(arguments)
     case "set_canvas_frame": return try await setCanvasFrame(arguments)
     case "list_history": return try Self.textResult(json: listHistory(arguments))
+    case "import_video": return try await importVideo(arguments)
     case "get_image": return try await getImage(arguments)
     case "match_colors": return try await matchColors(arguments, progress: progress)
     case "extract_depth_map": return try await extractDepthMap(arguments, progress: progress)
@@ -677,7 +705,7 @@ final class AgentTools {
         entry["makes_audio"] = video.makesAudio
         entry["video_inputs"] =
           (video.takesLastFrame ? ["first_frame", "last_frame"] : ["first_frame"])
-          + (video.takesReferences ? ["references"] : []) + (video.takesAudio ? ["audio"] : [])
+          + (video.takesReferences ? ["references", "reference_video"] : []) + (video.takesAudio ? ["audio"] : [])
       }
       return entry
     }
@@ -787,12 +815,52 @@ final class AgentTools {
       }
       request.audio = url
     }
+    if let value = arguments["reference_video"] {
+      request.referenceVideo = try referenceVideo(value, video: video, configuration: configuration, request: request)
+    }
 
     let summary = String(prompt.prefix(60))
     let (item, savedIn) = try await run(request, summary: summary, progress: progress)
     return try await result(
       of: item, in: savedIn, model: model, configuration: configuration, seed: seed, summary: summary, notes: notes,
       arguments: arguments)
+  }
+
+  /// generate's `reference_video` (`{"history_step": N}`): a clip of the current project for H3
+  /// Ref2VA, refused with the reason the Create screen gives (`ReferenceVideo.problem`), in the
+  /// arguments' own words. Its frames are read when the job starts (`CreateModel.run`).
+  private func referenceVideo(
+    _ value: Any, video: VideoModel?, configuration: PipelineConfiguration, request: GenerationEngine.Request
+  ) throws -> ReferenceVideo {
+    guard let object = value as? [String: Any], object["history_step"] != nil else {
+      throw ToolError("`reference_video` is {\"history_step\": N}, a video step (see list_history).")
+    }
+    guard let video, video.takesReferences else {
+      throw ToolError("\(request.model) doesn't take a reference video: only MiniMax H3 Ref2VA does. See list_models' video_inputs.")
+    }
+    if request.canvas != nil {
+      throw ToolError("reference_video takes input_image's place: leave out input_image (reference_images are Picture 1 and on).")
+    }
+    if request.audio != nil { throw ToolError("reference_video can't go with `audio`.") }
+    if !(configuration.strength >= 1) {
+      throw ToolError("reference_video needs strength 1: the video is made from noise, with the clip as its reference.")
+    }
+    if configuration.numFrames < ReferenceVideo.minimumFrames {
+      throw ToolError("reference_video needs num_frames of \(ReferenceVideo.minimumFrames) or more (this run makes \(configuration.numFrames)).")
+    }
+    let item = try historyItem(object["history_step"], name: "reference_video.history_step", canvas: false)
+    guard let clip = item.clip else {
+      throw ToolError("History step \(item.id.logicalTime) is an image, not a video. See list_history.")
+    }
+    // As the Create screen refuses it (`ReferenceVideo.problem`): no shorter than a whole reference.
+    if CreateModel.referenceFrames(of: clip, rate: video.framesPerSecond) < ReferenceVideo.minimumFrames {
+      throw ToolError("History step \(item.id.logicalTime) is too short to be a reference_video: it needs \(ReferenceVideo.minimumFrames) frames at 24 fps, about a second.")
+    }
+    let size = CreateModel.clipSize(of: item)
+    if !ReferenceVideo.isTakenShape(width: size.width, height: size.height) {
+      throw ToolError("History step \(item.id.logicalTime) is \(size.width)×\(size.height), outside the 1:4 to 4:1 MiniMax H3 takes, so it can't be a reference_video.")
+    }
+    return ReferenceVideo(sourceTensorId: item.tensorId, project: create.history.project.name)
   }
 
   /// The settings a run starts from, layered as Create layers them: the model's recommended
@@ -896,7 +964,7 @@ final class AgentTools {
     if !ToolContext.current.isRemote {
       let file = try Self.outputURL(
         arguments["save_to"] as? String, name: "\(saved.name) \(item.id.logicalTime)-\(item.sidecar.seed)",
-        extension: item.isVideo ? "mp4" : "png")
+        extension: item.isVideo ? item.videoExtension : "png")
       if item.isVideo {
         try await create.history.exportVideo(item, to: file)
       } else {
@@ -931,7 +999,7 @@ final class AgentTools {
     if let url { structured["path"] = url.path }
     if let timings = item.sidecar.timings { structured["timings"] = timings.json }
     if let clip = item.clip {
-      structured["frames"] = clip.frames.count
+      structured["frames"] = clip.frameCount
       structured["frames_per_second"] = clip.framesPerSecond
       structured["has_audio"] = clip.audioId != nil
     }
@@ -955,7 +1023,7 @@ final class AgentTools {
     // user sees it.
     let screenFields = [
       "prompt", "negative_prompt", "model", "preset", "settings", "width", "height", "steps", "guidance_scale",
-      "strength", "reference_images", "num_frames", "seconds", "audio",
+      "strength", "reference_images", "num_frames", "seconds", "audio", "reference_video",
     ]
     let extra = screenFields.filter { arguments[$0] != nil }
     if !extra.isEmpty {
@@ -993,6 +1061,8 @@ final class AgentTools {
     if let problem = create.runTargetProblem {
       throw ToolError(problem + (create.runTargetMaskProblem != nil ? " (set_canvas_mask with clear: true clears it)" : ""))
     }
+    // As Generate is disabled for it: a reference video the settings can't take.
+    if let problem = create.referenceVideoProblem { throw ToolError(problem + " Change it with set_create_screen.") }
     // What History doesn't have yet goes in first, as Generate does, so the run follows it.
     await create.recordEntriesBeforeRun()
     guard var request = create.screenRequest(), let model = create.selectedModel else {
@@ -1002,7 +1072,7 @@ final class AgentTools {
     create.rememberCanvasMask()
     // The request's own canvas, not what the canvas shows: while a run's preview covers it, Generate
     // still takes the image beneath.
-    guard request.canvas != nil else {
+    guard request.canvas != nil || request.referenceVideo != nil else {
       if !create.canvasShowsImage { try canvasImage() }
       throw ToolError(
         create.canvasMode == .generate
@@ -1236,6 +1306,10 @@ final class AgentTools {
       "canvas_has_image": create.image != nil,
       "canvas": canvasState(),
       "busy": create.workUnderway ?? NSNull(),
+      // The clip on the canvas Generate sends as H3 Ref2VA's reference video.
+      "reference_video": create.referenceClip.map {
+        ["history_step": $0.id.logicalTime, "frames": $0.clip?.frameCount ?? 0] as [String: Any]
+      } ?? NSNull(),
     ]
   }
 
@@ -1481,7 +1555,8 @@ final class AgentTools {
   @discardableResult
   func canvasImage() throws -> CGImage {
     if create.canvasClip != nil {
-      throw ToolError("The canvas plays a video. Put an image on it with set_canvas_image first.")
+      throw ToolError(
+        "The canvas plays a video. Put an image on it with set_canvas_image first. (MiniMax H3 Ref2VA takes a clip as generate's reference_video.)")
     }
     guard create.canvasShowsImage, let image = create.image else {
       throw ToolError(
@@ -2088,7 +2163,7 @@ final class AgentTools {
           "has_mask": item.entryMask?.mayHavePaint == true, "moodboard": item.entryMoodboard.count,
         ]
       }
-      return [
+      var entry: [String: Any] = [
         "kind": item.isVideo ? "video" : "image",
         "history_step": item.id.logicalTime, "prompt": Self.shortened(sidecar.prompt),
         "model": sidecar.model, "seed": Int(sidecar.seed), "width": sidecar.width, "height": sidecar.height,
@@ -2096,7 +2171,58 @@ final class AgentTools {
         "has_mask": create.hasMask(item),
         "on_canvas": create.imageItem == item || create.canvasClip == item,
       ]
+      entry.merge(Self.videoFields(item)) { _, new in new }
+      return entry
     }
+  }
+
+  /// A video's length and sound, and for an imported one its own size and name.
+  static func videoFields(_ item: HistoryItem) -> [String: Any] {
+    guard let clip = item.clip else { return [:] }
+    var fields: [String: Any] = [
+      "frames": clip.frameCount, "frames_per_second": clip.framesPerSecond,
+      "has_audio": clip.audioId != nil || clip.media?.hasAudio == true, "imported": clip.media != nil,
+    ]
+    if let media = clip.media {
+      fields["source_name"] = media.name
+      fields["width"] = media.width
+      fields["height"] = media.height
+    }
+    return fields
+  }
+
+  /// import_video: a video file on this Mac into the project (`CreateModel.importVideo`'s path,
+  /// waited for here).
+  private func importVideo(_ arguments: [String: Any]) async throws -> [String: Any] {
+    guard !ToolContext.current.isRemote else { throw ToolError(AgentPathGuard.fileMessage) }
+    guard let path = arguments["path"] as? String, !path.isEmpty else { throw ToolError("`path` is a video file's path.") }
+    let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+    guard FileManager.default.fileExists(atPath: url.path) else { throw ToolError("No file at \(url.path).") }
+    var after = create.history.currentTensorId
+    if arguments["after_step"] != nil {
+      after = try historyItem(arguments["after_step"], name: "after_step", canvas: false).tensorId
+    }
+    let item: HistoryItem
+    let project = create.history.project
+    let noted = create.statusNote == nil
+    if noted { create.statusNote = CreateModel.importingVideoNote }
+    defer { if create.statusNote == CreateModel.importingVideoNote { create.statusNote = nil } }
+    do {
+      item = try await create.history.importVideo(url, name: url.deletingPathExtension().lastPathComponent, after: after)
+    } catch {
+      throw ToolError("Couldn't import the video: \(error.localizedDescription)")
+    }
+    var structured: [String: Any] = ["history_step": item.id.logicalTime, "project": project.name]
+    structured.merge(Self.videoFields(item)) { _, new in new }
+    var text = "Imported “\(item.clip?.media?.name ?? url.lastPathComponent)” into “\(project.name)” as history step \(item.id.logicalTime): \(item.clip.map(ClipBadge.length) ?? "")."
+    // Another project opened meanwhile: the video is in the one it was brought into, not on screen.
+    if project === create.history.project {
+      create.show(item)
+      if create.videoModel?.takesReferences == true { create.canvasMode = .edit }
+    } else {
+      text += " “\(create.history.project.name)” is open now, so it isn't on the canvas."
+    }
+    return ["content": [["type": "text", "text": text]], "structuredContent": structured]
   }
 
   private func getImage(_ arguments: [String: Any]) async throws -> [String: Any] {
@@ -2137,6 +2263,9 @@ final class AgentTools {
     if let item, let reason = item.entryReason {
       text =
         "History step \(item.id.logicalTime) in “\(create.history.project.name)” is an input entry (\(reason.rawValue)): the canvas as it was before a run, \(image.width)×\(image.height), with \(item.entryMoodboard.count) moodboard image\(item.entryMoodboard.count == 1 ? "" : "s"). It isn't a run, so it has no prompt or settings."
+    } else if let item, let media = item.clip?.media, let clip = item.clip {
+      text =
+        "History step \(item.id.logicalTime) in “\(create.history.project.name)” is an imported video, “\(media.name)” (\(media.width)×\(media.height), \(ClipBadge.length(clip))): this is its first frame. It was brought in from outside, so it has no model or settings; MiniMax H3 Ref2VA can take it as generate's reference_video."
     } else if let item {
       let sidecar = item.sidecar
       text =
@@ -2168,13 +2297,22 @@ final class AgentTools {
       let png = try item.map { try HistoryStore.pngData(image, sidecar: $0.sidecar) } ?? ImageTensor.png(image)
       guard let png else { throw ToolError("Couldn't encode the image.") }
       content.append(["type": "image", "data": png.base64EncodedString(), "mimeType": "image/png"])
-      return ["content": content]
+      return getImageResult(content, item: item)
     }
     let maxSide = min(max(Self.int(arguments["max_size"]) ?? 1024, 256), 2048)
     if let preview = Self.jpeg(ImageLoader.fitted(image, maxSide: maxSide)) {
       content.append(["type": "image", "data": preview.base64EncodedString(), "mimeType": "image/jpeg"])
     }
-    return ["content": content]
+    return getImageResult(content, item: item)
+  }
+
+  /// get_image's answer: with a saved step, its history_step and, for a video, the fields
+  /// list_history gives (`videoFields`).
+  private func getImageResult(_ content: [[String: Any]], item: HistoryItem?) -> [String: Any] {
+    guard let item else { return ["content": content] }
+    var structured: [String: Any] = ["history_step": item.id.logicalTime, "video": item.isVideo]
+    structured.merge(Self.videoFields(item)) { _, new in new }
+    return ["content": content, "structuredContent": structured]
   }
 
   /// match_colors: queues Match Colors to Original as a job like generate's (waiting for it, or

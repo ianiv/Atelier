@@ -154,8 +154,7 @@ struct CanvasView: View {
   @Environment(FileDialogs.self) private var fileDialogs
   @State private var saveError: String?
   @State private var isTargeted = false
-  /// A video dropped on the canvas, choosing how to upscale it.
-  @State private var droppedVideo: DroppedVideo?
+  /// Why a dropped item couldn't be read.
   @State private var videoError: String?
   @State private var deleteError: String?
   @Environment(\.undoManager) private var undoManager
@@ -266,7 +265,10 @@ struct CanvasView: View {
             }
           }
         }
-        let isInput = model.effectiveCanvasMode == .edit && model.image != nil && model.canvasClip == nil
+        // H3 Ref2VA in Edit takes the clip playing there as its reference video.
+        let reference = model.referenceClip
+        let referenceProblem = model.referenceVideoProblem
+        let isInput = (model.effectiveCanvasMode == .edit && model.image != nil && model.canvasClip == nil) || reference != nil
         Rectangle()
           .strokeBorder(
             isInput || isTargeted ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary.opacity(0.6)),
@@ -278,13 +280,23 @@ struct CanvasView: View {
           Color.clear
             .frame(width: frameRect.width, height: frameRect.height)
             .overlay(alignment: .topLeading) {
-              Label("Input", systemImage: "square.and.pencil")
-                .font(.caption.weight(.medium))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .glassEffect(.regular.tint(.accentColor), in: .capsule)
-                .padding(8)
-                .help("Edit mode: what's inside the frame is sent to the model. Empty areas are filled in; with a mask, only the painted area changes.")
+              Group {
+                if reference != nil {
+                  Label("Video 1", systemImage: "film")
+                } else {
+                  Label("Input", systemImage: "square.and.pencil")
+                }
+              }
+              .font(.caption.weight(.medium))
+              .padding(.horizontal, 8)
+              .padding(.vertical, 4)
+              .glassEffect(.regular.tint(referenceProblem != nil ? .orange : .accentColor), in: .capsule)
+              .padding(8)
+              .help(
+                reference != nil
+                  ? referenceProblem
+                  ?? "Edit mode: this clip is the reference video, <Video 1> in the prompt; moodboard images are Picture 1 and on. It's read from its start at 24 fps, up to the new video's length, at its own shape on MiniMax's canvas (a 768-pixel short edge, smaller for very wide clips); a shorter clip is a shorter reference."
+                  : "Edit mode: what's inside the frame is sent to the model. Empty areas are filled in; with a mask, only the painted area changes.")
             }
             .position(x: frameRect.midX, y: frameRect.midY)
             .allowsHitTesting(false)
@@ -421,14 +433,6 @@ struct CanvasView: View {
     }
     .sheet(item: Bindable(model).depthModelSheetItem) { item in
       DepthModelSheet(item: item, project: model.history.project.name)
-    }
-    .sheet(item: $droppedVideo) { video in
-      VideoExportSheet(
-        width: video.composition.width, height: video.composition.height,
-        frameCount: video.composition.frameCount, name: video.name
-      ) { upscale in
-        if let upscale { queueUpscaledExport(video, upscale) }
-      }
     }
     // The canvas's image as it is now: a run that finishes while it's open shows its result here.
     .sheet(isPresented: Bindable(model).viewingCanvasImage) {
@@ -843,8 +847,8 @@ struct CanvasView: View {
     }
   }
 
-  /// Puts a dropped image on the canvas, or reads a dropped video and offers to upscale it. The
-  /// video doesn't join the project.
+  /// Puts a dropped image on the canvas, or brings a dropped video into the project
+  /// (`CreateModel.importVideo`), which Export Video… can then upscale.
   private func open(dropped provider: NSItemProvider) {
     Task {
       do {
@@ -852,26 +856,12 @@ struct CanvasView: View {
         case .image(let image):
           model.setCanvasImage(image.image, metadata: image.metadata)
         case .video(let url, let name):
-          droppedVideo = DroppedVideo(name: name, composition: try await TimelineComposition.make(file: url))
+          model.importVideo(url, name: name, moving: true)
         case nil: break
         }
       } catch {
         videoError = error.localizedDescription
       }
-    }
-  }
-
-  /// Asks where to save the dropped video upscaled, then queues the export.
-  private func queueUpscaledExport(_ video: DroppedVideo, _ upscale: TimelineUpscale) {
-    let create = model
-    fileDialogs.save = FileDialogs.Save(
-      // An empty file holds the place until the export replaces it.
-      file: ExportedFile(type: .mpeg4Movie) { Data() }, name: "\(video.name) \(upscale.scale)x.mp4"
-    ) { result in
-      guard case .success(let url) = result else { return }
-      create.queue(
-        TimelineExportJob(
-          composition: video.composition, upscale: upscale, title: video.name, destination: url))
     }
   }
 
@@ -928,6 +918,8 @@ struct CanvasContentItems: View {
   var body: some View {
     Button("Open Image…") { model.imageImport = .canvas }
     Button("Open from Photos…") { model.photosImport = .canvas }
+    Button("Open Video…") { model.videoOpen = true }
+    Button("Open Video from Photos…") { model.videoPhotosOpen = true }
     Button("Paste Image") { model.pasteImage() }
     Button("New Sketch") { model.newSketch() }
     Button("Load Settings from \(noun)", action: loadSettings)
@@ -1060,6 +1052,10 @@ struct StatusBar: View {
             .foregroundStyle(.red)
             .lineLimit(2)
         } else if let problem = model.runTargetMaskProblem {
+          Label(problem, systemImage: "info.circle")
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+        } else if let problem = model.referenceVideoProblem {
           Label(problem, systemImage: "info.circle")
             .foregroundStyle(.secondary)
             .lineLimit(2)
@@ -1268,6 +1264,10 @@ struct RecentStrip: View {
           EntryBadge(reason: reason)
             .scaleEffect(0.8, anchor: .topLeading)
             .padding(1)
+        } else if item.isImported {
+          ImportedBadge()
+            .scaleEffect(0.8, anchor: .topLeading)
+            .padding(1)
         } else if item.isVideo {
           Image(systemName: "film")
             .font(.system(size: 8, weight: .semibold))
@@ -1460,7 +1460,7 @@ struct PromptComposer: View {
           Label("Generate", systemImage: model.isRunning ? "text.badge.plus" : "sparkles")
         }
         .labelStyle(.iconOnly)
-        .help(model.isRunning ? "Add to Queue (⌘↩)" : "Generate (⌘↩)")
+        .help(model.referenceVideoProblem ?? (model.isRunning ? "Add to Queue (⌘↩)" : "Generate (⌘↩)"))
         .buttonStyle(.glassProminent)
         .keyboardShortcut(.return, modifiers: .command)
         .disabled(!model.canPressGenerate)

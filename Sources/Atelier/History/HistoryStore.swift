@@ -40,6 +40,21 @@ nonisolated struct HistoryItem: Identifiable, Hashable, Sendable {
   var entryMoodboard: [EntryMood] = []
 
   var isVideo: Bool { clip != nil }
+  /// A video brought in from outside (`Media`): its frames are in its file, it has no settings
+  /// to use, and the Video Editor and Upscale… don't take it.
+  var isImported: Bool { clip?.media != nil }
+  /// The extension of its video file (`HistoryStore.videoFile(for:)`): an imported video's own
+  /// (a `.mov` stays one), else MP4.
+  var videoExtension: String {
+    clip?.media.map { ($0.file as NSString).pathExtension.lowercased() } ?? "mp4"
+  }
+  /// Why an imported video is left out of the Video Editor: its frames aren't project steps,
+  /// which timelines are made of.
+  static let notInVideoEditor = "An imported video can't go in the Video Editor: it isn't made of project steps."
+  /// Why Upscale… is off for one: Export Video… upscales it.
+  static let notUpscaled = "An imported video is upscaled with Export Video…, which saves the result as a file."
+  /// The type of its video file.
+  var videoType: UTType { videoExtension == "mov" ? .quickTimeMovie : .mpeg4Movie }
   var isEntry: Bool { entryReason != nil }
   /// The tensor holding the item's image: its own, or an entry's canvas (nil when it's empty).
   var imageTensorId: Int64? { isEntry ? canvasTensorId : tensorId }
@@ -245,6 +260,7 @@ final class HistoryStore {
     }
     guard project === self.project else { return }
     if readsMasks {
+      cleanUpMedia(in: project)
       compactionOffer = free.flatMap { ProjectCompaction.offersCompaction($0) ? CompactionOffer(project: project.name, stats: $0) : nil }
     }
     self.output = output
@@ -375,7 +391,7 @@ final class HistoryStore {
     return !trimmed.isEmpty && !trimmed.contains("/") && !trimmed.hasPrefix(".")
   }
 
-  /// Renames the current project's file (and its -wal/-shm).
+  /// Renames the current project's file (and its -wal/-shm and media folder).
   func renameCurrent(to name: String) async throws {
     let name = name.trimmingCharacters(in: .whitespaces)
     guard Self.isValidName(name), name != project.name else { return }
@@ -383,11 +399,15 @@ final class HistoryStore {
     guard !FileManager.default.fileExists(atPath: target.path) else {
       throw CocoaError(.fileWriteFileExists)
     }
+    // Its videos' folder would land on another one's.
+    guard !FileManager.default.fileExists(atPath: Media.folder(forProject: target).path) else {
+      throw RenameError.mediaFolderExists(Media.folder(forProject: target).lastPathComponent)
+    }
     let old = project.url
     // Close the workspace first so nothing writes while the files move.
     await project.close()
     try FileManager.default.moveItem(at: old, to: target)
-    for suffix in ["-wal", "-shm"] {
+    for suffix in ["-wal", "-shm", Media.suffix] {
       let side = URL(fileURLWithPath: old.path + suffix)
       if FileManager.default.fileExists(atPath: side.path) {
         Log.attempt(Log.project, "Renaming a project's \(suffix) file") {
@@ -479,6 +499,16 @@ final class HistoryStore {
     return trashed
   }
 
+  enum RenameError: LocalizedError {
+    case mediaFolderExists(String)
+    var errorDescription: String? {
+      switch self {
+      case .mediaFolderExists(let folder):
+        "A folder named “\(folder)” is already in the Projects folder, where this project's videos would go. Move it away or choose another name."
+      }
+    }
+  }
+
   enum DeleteError: LocalizedError {
     case stillOpen(String)
     var errorDescription: String? {
@@ -488,7 +518,7 @@ final class HistoryStore {
     }
   }
 
-  /// Moves a project file and its -wal/-shm to the Trash. On iPad they're removed instead: the
+  /// Moves a project file and its -wal/-shm and media folder to the Trash. On iPad they're removed instead: the
   /// Trash is the Mac's (Files' Recently Deleted only takes what's deleted in Files), and the
   /// confirmation says it can't be undone. On the Mac a failure leaves the files where they are
   /// rather than removing them outright.
@@ -506,7 +536,7 @@ final class HistoryStore {
     }
     // The database first: when it can't move, nothing else has.
     let trashed = fileManager.fileExists(atPath: url.path) ? try discard(url) : nil
-    for suffix in ["-wal", "-shm"] {
+    for suffix in ["-wal", "-shm", Media.suffix] {
       let side = URL(fileURLWithPath: url.path + suffix)
       guard fileManager.fileExists(atPath: side.path) else { continue }
       Log.attempt(Log.project, "Deleting a project's \(suffix) file") { _ = try discard(side) }
@@ -923,7 +953,8 @@ final class HistoryStore {
     let project = project
     do {
       for item in items {
-        if let clip = item.clip {
+        // An imported video is one step; its file goes once no step names it (below).
+        if let clip = item.clip, clip.media == nil {
           let parent = try await project.deleteClip(frames: clip.frames)
           Self.removeClipFiles(project: project.name, clipId: clip.clipId, tensorId: item.tensorId)
           if let current = currentTensorId, clip.frames.contains(current) { currentTensorId = parent }
@@ -942,6 +973,7 @@ final class HistoryStore {
     project.setCurrentStep(nil)
     await reload()
     recordCurrent()
+    await removeMediaFiles(of: items, in: project)
     // A later image could be given a deleted one's tensor: don't let it inherit the mask either.
     let gone = await project.read { $0.pruneStoredMasks(keeping: $0.tree(items: false)) }
     if project === self.project { for tensorId in gone { storedMasks[tensorId] = nil } }
@@ -956,6 +988,136 @@ final class HistoryStore {
     let kept = ratings.filter { byTensor[$0.key] != nil }
     if kept.count != ratings.count { ratings = kept; project.ratings = kept }
     cleanUpWhenIdle()
+  }
+
+  // MARK: - Imported videos
+
+  /// Videos being copied in now, by their file's name, which `cleanUpMedia` leaves alone.
+  private var mediaInFlight: Set<String> = []
+
+  /// Brings a video file into the current project (`Media`): copies it into the media folder
+  /// (a clone on the same APFS volume), then saves its first frame as a step after
+  /// `parentTensorId` (the newest when nil) that stands for it, and makes that step current.
+  /// `moving` moves the file in instead: a copy of the app's own (a drop's), not the user's.
+  /// Cancelling stops it before the step is saved, and leaves nothing behind.
+  func importVideo(_ source: URL, name: String, moving: Bool = false, after parentTensorId: Int64? = nil) async throws -> HistoryItem {
+    let project = project
+    let pathExtension = source.pathExtension.lowercased()
+    let safeExtension = (1...8).contains(pathExtension.count) && pathExtension.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber) }
+      ? pathExtension : "mov"
+    let file = "\(UUID().uuidString).\(safeExtension)"
+    mediaInFlight.insert(file)
+    defer { mediaInFlight.remove(file) }
+    let target = project.mediaFolder.appending(path: file, directoryHint: .notDirectory)
+    do {
+      try Task.checkCancellation()
+      // The app's own copy is what's read from here on: the source may be readable only while
+      // its security scope is open (a file picked from Files or iCloud on iPad), which
+      // `copyMedia` holds for the copy alone.
+      let bytes = try await Self.copyMedia(source, to: target, moving: moving)
+      let inspection = try await Media.inspect(target)
+      try Task.checkCancellation()
+      // As the engine's CLI reads a video: upright, SDR (`Media.generator`), at the file's size.
+      let first = try await Media.frame(0, of: target, framesPerSecond: inspection.framesPerSecond)
+      guard let tensor = await Self.tensor(of: first) else { throw Media.Failure.invalidVideo }
+      try Task.checkCancellation()
+      let record = Media.Record(
+        file: file, bytes: bytes, name: name, width: inspection.width, height: inspection.height,
+        framesPerSecond: inspection.framesPerSecond, frameCount: inspection.frameCount, duration: inspection.duration,
+        hasAudio: inspection.hasAudio)
+      let settings: [String: JSONValue] = [
+        "width": .number(Double(inspection.width)), "height": .number(Double(inspection.height)),
+        "numFrames": .number(Double(inspection.frameCount)),
+      ]
+      let item = try await project.append(
+        tensor: tensor, model: "", prompt: name, negativePrompt: "", seed: 0, settings: settings, createdAt: Date(),
+        duration: 0, reason: .imported, generated: true, after: parentTensorId, media: record)
+      // Stopped while it was being saved: the step goes again, so nothing is left behind unseen.
+      if Task.isCancelled {
+        _ = try? await project.delete(tensorId: item.tensorId)
+        if project === self.project { await reload() }
+        throw CancellationError()
+      }
+      if project === self.project {
+        await reload()
+        setCurrent(tensorId: item.tensorId)
+      }
+      return item
+    } catch {
+      try? FileManager.default.removeItem(at: target)
+      try? FileManager.default.removeItem(at: Self.partialURL(target))
+      throw error
+    }
+  }
+
+  private nonisolated static func partialURL(_ target: URL) -> URL { target.appendingPathExtension(Media.partialExtension) }
+
+  /// Copies (or moves) `source` to `target` by way of a `.partial` file, so a half-copied file
+  /// never has a name a step could name. Returns its size.
+  @concurrent private nonisolated static func copyMedia(_ source: URL, to target: URL, moving: Bool) async throws -> Int64 {
+    let fileManager = FileManager.default
+    try fileManager.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+    let partial = partialURL(target)
+    try? fileManager.removeItem(at: partial)
+    let access = source.startAccessingSecurityScopedResource()
+    defer { if access { source.stopAccessingSecurityScopedResource() } }
+    if moving {
+      try fileManager.moveItem(at: source, to: partial)
+    } else {
+      // A clone on the same APFS volume, a copy across volumes.
+      try fileManager.copyItem(at: source, to: partial)
+    }
+    try fileManager.moveItem(at: partial, to: target)
+    return (try? fileManager.attributesOfItem(atPath: target.path)[.size] as? NSNumber)?.int64Value ?? 0
+  }
+
+  @concurrent private nonisolated static func tensor(of image: CGImage) async -> Tensor<FloatType>? {
+    ImageTensor.tensor(from: image)
+  }
+
+  /// The file an imported video's step names, in its project.
+  func mediaURL(of item: HistoryItem) -> URL? {
+    item.clip?.media.flatMap { project.mediaURL($0) }
+  }
+
+  /// Removes the media files of deleted `items` that no step of `project` names anymore.
+  private func removeMediaFiles(of items: [HistoryItem], in project: Project) async {
+    let files = Set(items.compactMap { $0.clip?.media?.file })
+    guard !files.isEmpty else { return }
+    let named = await project.read { project in Set(project.tree().items.values.compactMap { $0.clip?.media?.file }) }
+    let folder = project.mediaFolder
+    for file in Media.unnamed(deleted: files, named: named) {
+      Log.attempt(Log.project, "Removing a deleted video's file") {
+        try FileManager.default.removeItem(at: folder.appending(path: file, directoryHint: .notDirectory))
+      }
+    }
+  }
+
+  /// Removes what the media folder holds that no step names (`Media.orphans`): left by a crash
+  /// mid-import, or by a delete that couldn't remove its file. Once per opening. The folder is
+  /// listed first, then the imports under way read, then the steps: a file listed is either an
+  /// import's still under way or one whose step was saved before it stopped being one.
+  private func cleanUpMedia(in project: Project) {
+    let folder = project.mediaFolder
+    Task { [weak self] in
+      let files = await Self.mediaFiles(in: folder)
+      guard !files.isEmpty, let self else { return }
+      let inFlight = self.mediaInFlight
+      let named = await project.read { project in Set(project.tree().items.values.compactMap { $0.clip?.media?.file }) }
+      await Self.remove(Media.orphans(files: files, referenced: named, inFlight: inFlight), in: folder)
+    }
+  }
+
+  @concurrent private nonisolated static func mediaFiles(in folder: URL) async -> [String] {
+    (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+  }
+
+  @concurrent private nonisolated static func remove(_ files: [String], in folder: URL) async {
+    for file in files {
+      Log.attempt(Log.project, "Removing a media file no step names") {
+        try FileManager.default.removeItem(at: folder.appending(path: file, directoryHint: .notDirectory))
+      }
+    }
   }
 
   // MARK: - Masks
@@ -1264,7 +1426,7 @@ final class HistoryStore {
       defer { withExtendedLifetime(access) {} }
       let file: (data: Data?, video: URL?, extension: String)
       if item.isVideo {
-        file = (nil, try await videoFile(for: item), "mp4")
+        file = (nil, try await videoFile(for: item), item.videoExtension)
       } else {
         var image = image
         if AppSettings.exportsFullDetail, let full = await fullDetailImage(tensorId: item.tensorId, in: project) {
@@ -1301,15 +1463,20 @@ final class HistoryStore {
 
   // MARK: - Clips
 
-  /// A clip's frames, decoded from the project's tensors.
+  /// A clip's frames, decoded from the project's tensors. None for an imported video, whose
+  /// frames aren't in the project (`frame(_:of:)` decodes one from its file).
   func frames(of item: HistoryItem) async -> [CGImage] {
-    guard let clip = item.clip else { return [] }
+    guard let clip = item.clip, clip.media == nil else { return [] }
     let project = project
     return await project.read { project in clip.frames.compactMap { project.image(tensorId: $0) } }
   }
 
-  /// One frame of a clip, full size.
+  /// One frame of a clip, full size; an imported video's from its file, upright.
   func frame(_ index: Int, of item: HistoryItem) async -> CGImage? {
+    if let media = item.clip?.media {
+      guard index >= 0, index < media.frameCount, let url = project.mediaURL(media) else { return nil }
+      return try? await Media.frame(index, of: url, framesPerSecond: media.framesPerSecond)
+    }
     guard let frames = item.clip?.frames, frames.indices.contains(index) else { return nil }
     return await image(tensorId: frames[index], in: project.name)
   }
@@ -1330,9 +1497,14 @@ final class HistoryStore {
   }
 
   /// The clip as an MP4 with its soundtrack and settings, written once into the caches folder
-  /// and reused by the player, exports, drags and the output folder.
+  /// and reused by the player, exports, drags and the output folder. An imported video's is its
+  /// own file, in the project's media folder (of its type, `HistoryItem.videoExtension`).
   func videoFile(for item: HistoryItem) async throws -> URL {
-    try await videoFile(for: item, frames: nil)
+    if let media = item.clip?.media {
+      guard let url = project.mediaURL(media), FileManager.default.fileExists(atPath: url.path) else { throw Media.Failure.missing }
+      return url
+    }
+    return try await videoFile(for: item, frames: nil)
   }
 
   /// `frames`, when given, supplies the clip's images instead of reading them from the project.
@@ -1497,6 +1669,7 @@ final class HistoryStore {
     }
     if item.isVideo {
       export.video = { [self] in try await videoFile(for: item) }
+      export.videoExtension = item.videoExtension
     }
     return export
   }
@@ -1774,6 +1947,8 @@ nonisolated struct PNGExport: Transferable, Identifiable {
   var data: @Sendable () async throws -> Data
   /// Set for a clip: its video file.
   var video: (@Sendable () async throws -> URL)?
+  /// The video file's extension (`HistoryItem.videoExtension`).
+  var videoExtension = "mp4"
   /// Set when it's shared rather than dragged: its file then goes in the Shares area, kept
   /// longer (`TemporaryFiles.shareLifetime`).
   var isShared = false
@@ -1783,16 +1958,22 @@ nonisolated struct PNGExport: Transferable, Identifiable {
     isShared ? TemporaryFiles.newShareFolder() : TemporaryFiles.newDragFolder()
   }
 
+  /// A copy of the clip's video file, named like the export, in a new folder.
+  private func videoFile() async throws -> SentTransferredFile {
+    let file = folder.appendingPathComponent(name).appendingPathExtension(videoExtension)
+    guard let video else { throw ClipVideoError.noFrames }
+    try FileManager.default.copyItem(at: try await video(), to: file)
+    return SentTransferredFile(file)
+  }
+
   static var transferRepresentation: some TransferRepresentation {
-    FileRepresentation(exportedContentType: .mpeg4Movie) { export in
-      let folder = export.folder
-      let file = folder.appendingPathComponent(export.name).appendingPathExtension("mp4")
-      guard let video = export.video else { throw ClipVideoError.noFrames }
-      try FileManager.default.copyItem(at: try await video(), to: file)
-      return SentTransferredFile(file)
-    }
-    .exportingCondition { $0.video != nil }
-    .suggestedFileName { $0.name + ".mp4" }
+    FileRepresentation(exportedContentType: .mpeg4Movie) { try await $0.videoFile() }
+      .exportingCondition { $0.video != nil && $0.videoExtension != "mov" }
+      .suggestedFileName { $0.name + "." + $0.videoExtension }
+    // An imported QuickTime movie goes as it is.
+    FileRepresentation(exportedContentType: .quickTimeMovie) { try await $0.videoFile() }
+      .exportingCondition { $0.video != nil && $0.videoExtension == "mov" }
+      .suggestedFileName { $0.name + ".mov" }
     FileRepresentation(exportedContentType: .png) { export in
       let folder = export.folder
       let file = folder.appendingPathComponent(export.name).appendingPathExtension("png")

@@ -47,6 +47,9 @@ nonisolated enum SavedQueue {
     var edit: Edit.Job?
     /// An Extract Depth Map job (`DepthMap.Job`): as `colorMatch`, it names its project.
     var depthMap: DepthMap.Job?
+    /// H3 Ref2VA's reference video: the clip, a step of `project` (`Request.referenceVideo`). Its
+    /// frames are read when the job starts.
+    var referenceTensorId: Int64?
   }
 
   /// An entry, or nil for one that doesn't read (written by a later version, say), so one entry
@@ -111,6 +114,8 @@ nonisolated enum SavedQueue {
       request.colorMatch = entry.colorMatch
       request.edit = entry.edit
       request.depthMap = entry.depthMap
+      // Kept only in its own project (`load`).
+      request.referenceVideo = entry.referenceTensorId.map { ReferenceVideo(sourceTensorId: $0, project: entry.project) }
       return request
     }
   }
@@ -173,7 +178,7 @@ nonisolated enum SavedQueue {
           placement: request.placement, upscale: request.upscale, imageUpscale: request.imageUpscale,
           target: job.target, hasMask: request.mask != nil, merge: mergeRecord,
           canvasSourceMask: request.canvasSourceMask, colorMatch: request.colorMatch, edit: request.edit,
-          depthMap: request.depthMap))
+          depthMap: request.depthMap, referenceTensorId: request.referenceVideo?.sourceTensorId))
     }
     if let data = try? JSONEncoder().encode(entries) {
       Log.attempt(Log.queue, "Saving the queue") {
@@ -191,6 +196,8 @@ nonisolated enum SavedQueue {
       // An upscale's source clip is a step of its own project. A Match Colors job names its
       // project, so it comes back in any.
       if entry.upscale != nil, entry.project != project { return nil }
+      // So is a reference video's clip: without it the job would make another video.
+      if entry.referenceTensorId != nil, entry.project != project { return nil }
       var canvas: CGImage?
       if entry.hasCanvas {
         canvas = ImageLoader.image(at: folder.appending(path: "\(entry.id)-canvas.png"))

@@ -64,6 +64,9 @@ nonisolated enum ProjectMapping {
     var entryMask: CanvasMask?
     /// Written by `Project.appendEntry` (`Profile.inputEntry`).
     var isEntry = false
+    /// A video brought in from outside, kept as a file beside the project (`Media`). Kept in
+    /// `profile_data`.
+    var media: Media.Record?
   }
 
   /// `profile_data`: Draw Things' `GenerationProfile` as snake-case JSON (timings and duration),
@@ -86,8 +89,9 @@ nonisolated enum ProjectMapping {
   /// which the image's own step is listed by (see `ProjectTree`). Ids are in a band no tensor uses.
   /// It also adds `entry_mask`, the canvas mask as it was, kept as strokes rather than as the
   /// layer's `binary_mask`: the layer rows are the canvas step's own, shared, and a mask on them
-  /// would change how that image composites wherever it's read by tensor. Draw Things decodes the
-  /// profile with Codable, which skips the extra keys.
+  /// would change how that image composites wherever it's read by tensor. A video brought in from
+  /// outside adds `media` (`Media.Record`): its file in the project's media folder, whose first
+  /// frame the step is. Draw Things decodes the profile with Codable, which skips the extra keys.
   struct Profile: Codable {
     var timings: [Timing] = []
     var duration: Double
@@ -116,6 +120,9 @@ nonisolated enum ProjectMapping {
     /// when not the sampler's own. Draw Things' schema has no field for it, and its configuration
     /// would run the step on the sampler's own schedule.
     var scheduler: String?
+    /// A video kept as a file in the project's media folder (`Media.Record`): this step is its
+    /// first frame and stands for it.
+    var media: Media.Record?
 
     /// The band entry keys come from: above the audio tensors' (`Project.append`), so a key is
     /// never a tensor's id.
@@ -149,8 +156,9 @@ nonisolated enum ProjectMapping {
       duration: Double, inputTensorId: Int64?, parentTensorId: Int64?, inputAudioId: Int64? = nil,
       timings: [Timing] = [], refine: RefineRecord? = nil, colorMatch: ColorMatch.Record? = nil,
       edit: Edit.Record? = nil, depthMap: DepthMap.Record? = nil, entryKey: Int64? = nil, entryMask: CanvasMask? = nil,
-      inputEntry: Bool? = nil, scheduler: String? = nil
+      inputEntry: Bool? = nil, scheduler: String? = nil, media: Media.Record? = nil
     ) {
+      self.media = media
       self.timings = timings
       self.duration = duration
       self.inputTensorId = inputTensorId
@@ -168,7 +176,7 @@ nonisolated enum ProjectMapping {
 
     private enum CodingKeys: String, CodingKey {
       case timings, duration, inputTensorId, parentTensorId, inputAudioId, refineRect, refineScale, refineOffset
-      case refineMask, colorMatch, edit, depthMap, entryKey, entryMask, inputEntry, scheduler
+      case refineMask, colorMatch, edit, depthMap, entryKey, entryMask, inputEntry, scheduler, media
     }
 
     /// Lenient past `duration`: a key that doesn't read (written by a later version, say) is left
@@ -193,6 +201,8 @@ nonisolated enum ProjectMapping {
       entryMask = lenient(CanvasMask.self, .entryMask)
       inputEntry = lenient(Bool.self, .inputEntry)
       scheduler = lenient(String.self, .scheduler)
+      // Read from a project file: a record that doesn't describe a real video is none.
+      media = lenient(Media.Record.self, .media).flatMap { $0.isValid ? $0 : nil }
     }
 
     init?(_ bytes: [UInt8]) {
@@ -280,7 +290,7 @@ nonisolated enum ProjectMapping {
         timings: step.timings?.profileTimings ?? [], refine: step.refine,
         colorMatch: step.colorMatch, edit: step.edit, depthMap: step.depthMap, entryKey: step.entryKey, entryMask: step.entryMask,
         inputEntry: step.isEntry ? true : nil,
-        scheduler: d.string("scheduler").flatMap { $0 == defaultScheduler ? nil : $0 }
+        scheduler: d.string("scheduler").flatMap { $0 == defaultScheduler ? nil : $0 }, media: step.media
       ).bytes,
       teaCacheStart: i32("teaCacheStart", 5), teaCacheEnd: i32("teaCacheEnd", -1),
       teaCacheThreshold: d.float("teaCacheThreshold", 0.06), teaCache: d.bool("teaCache", false),

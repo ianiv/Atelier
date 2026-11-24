@@ -254,14 +254,6 @@ struct VideoExportSheet: View {
   }
 }
 
-/// A video dropped on the canvas, ready for `VideoExportSheet`.
-struct DroppedVideo: Identifiable {
-  let id = UUID()
-  /// The file's name, without its extension.
-  let name: String
-  let composition: TimelineComposition
-}
-
 /// Method, FlashVSR+ variant, ReCaVSR weights and scale for upscaling a `width`×`height` video,
 /// with the size it makes, a Download button for the chosen model when it isn't there yet,
 /// ReCaVSR's Make 8-bit Copy and Import 8-bit Copy…, and why it can't, if it can't. Every
