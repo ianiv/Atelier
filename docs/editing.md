@@ -48,7 +48,7 @@ The crop belongs to the image, not the look: opening another image starts with n
 
 The source is **aligned**: the first stroke after you set it fixes the distance and direction from brush to source, and later strokes keep it until you set a new source. Working along a cheek then keeps sampling the skin beside each stroke. Painting before any source is set does nothing; the bar's hint says what to do next.
 
-The brush size is in the bottom bar (**Heal Brush Size**), as a radius in the image's own pixels up to 256, so the outline over the image grows and shrinks as you zoom. On the Mac the outline follows the pointer, hold Space and drag to move the image, and a double-click heals twice rather than zooming. Each stroke heals as you let go, in a few milliseconds.
+The brush size is in the bottom bar (**Heal Brush Size**), as a radius in the image's own pixels up to 256, so the outline over the image grows and shrinks as you zoom. On the Mac the outline follows the pointer, hold Space and drag to move the image, and a double-click heals twice rather than zooming. Each stroke heals as you let go, in a few milliseconds. Grain hides the marks and what each stroke did: turn the **Grain** section off while you heal (its settings are kept) and back on when you're done.
 
 The Heal bar holds **Set Source**, the hint, how many spots there are and **Clear Heal**, which takes every stroke off. Each stroke is one step of **Undo** (⌘Z), named Heal, and Clear Heal is one too. The bottom bar's **Reset** resets the look only and leaves the strokes.
 
@@ -57,6 +57,8 @@ Heal goes first, before the crop and the look. The strokes are in the whole imag
 ## The look
 
 The look is applied in this order: lens smear and blur, the matches, the grade, the LUT, halation, the vignette, then the grain. The inspector lists its sections in that order too, except **Lens**, which sits between **Halation** and **Vignette** even though its smear and blur are applied first. Every control is always there; one that can't do anything yet (Match Reference without a reference, Real Noise without a profile that has real noise) is unavailable, with a line saying what it needs.
+
+Each section but Look has a checkbox before its title that turns that part of the look on and off: **Match** (the color match, histogram and Profile Colour together), **Grade**, **LUT**, **Halation**, **Lens**, **Vignette** and **Grain**. A section that's off keeps its settings, with its controls unavailable until you turn it back on, so you can switch the grain off while you heal and bring it back exactly as it was. **Save to History** and **Export…** use only the sections that are on, and so does **Export LUT…** (which stays available with the LUT off, for the match and grade). The checkboxes are saved with the edit and with the screen's look, and opening the step again brings them back with the settings of the sections that were off. **Reset** turns every section back on. Profiles don't carry the checkboxes: picking one leaves them as they are, and **Save Profile…** saves every setting as it's set, including those of a section that's off.
 
 ### Look
 
@@ -136,7 +138,7 @@ A project records image sizes in steps of 64 pixels, as Draw Things does, so His
 
 ### Opening an edit again
 
-A step saved from Edit records its look, its crop and its Heal strokes: the settings, the profile's name, grain data and real noise, the reference's measurements, and the LUT's table. Opening it in Edit goes back to the whole image it was made from with that look, crop and strokes, so you can change the settings, the crop or the strokes rather than add grain over grain or crop a crop. The data is kept in the project, so the step can be opened again exactly even if the profile, reference or LUT file is gone; steps that share a profile, LUT or set of strokes share one copy. If the image it was made from has been deleted, the edit itself opens. An older Atelier opening a cropped or healed edit shows the whole, unhealed image with the look. If some of the step's data is gone from the project (its real noise, its reference's histograms, its LUT or its Heal strokes), only the setting that needs it is turned off (Heal, for the strokes), and the screen says which.
+A step saved from Edit records its look, its crop and its Heal strokes: the settings, the profile's name, grain data and real noise, the reference's measurements, and the LUT's table. Opening it in Edit goes back to the whole image it was made from with that look, crop and strokes, so you can change the settings, the crop or the strokes rather than add grain over grain or crop a crop. The data is kept in the project, so the step can be opened again exactly even if the profile, reference or LUT file is gone; steps that share a profile, LUT or set of strokes share one copy. If the image it was made from has been deleted, the edit itself opens. An older Atelier opening a cropped or healed edit shows the whole, unhealed image with the look, and one opening an edit with a section turned off shows that section on (the saved image is right either way). If some of the step's data is gone from the project (its real noise, its reference's histograms, its LUT or its Heal strokes), only the setting that needs it is turned off (Heal, for the strokes), and the screen says which.
 
 ## On iPad
 
@@ -144,4 +146,4 @@ The inspector is a panel beside the image, as in the Video Editor. The **Hold fo
 
 ## Agents
 
-On the Mac, agents can give an image a look with `edit_image_look`, crop it with `crop_image`, heal spots with `heal_image`, list your profiles with `list_grain_profiles`, and measure a reference with `measure_reference`. See [Atelier for agents](../MCP.md).
+On the Mac, agents can give an image a look with `edit_image_look`, crop it with `crop_image`, heal spots with `heal_image`, list your profiles with `list_grain_profiles`, and measure a reference with `measure_reference`. `edit_image_look` turns sections off with `options.off`, as the checkboxes do. See [Atelier for agents](../MCP.md).
