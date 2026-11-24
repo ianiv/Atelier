@@ -301,25 +301,40 @@ private struct EditLookSections: View {
   }
 }
 
-/// A settings section's header: the checkbox that turns its stage on and off, then its title,
-/// as the Create inspector's feature sections have them. The checkbox reads `isOn`, the stage
-/// as the section has it, not `options`, so it doesn't tie the section to the whole look.
+/// A settings section's header: the checkbox that turns its stage on and off, with the title as
+/// its label, as the Create inspector's feature sections have them. Clicking the title flips it,
+/// as a checkbox's label does; on iPad, where it's a switch, tapping the title does too. One
+/// control, named by the title. The checkbox reads `isOn`, the stage as the section has it, not
+/// `options`, so it doesn't tie the section to the whole look.
 private struct EditStageHeader: View {
   @Environment(EditModel.self) private var edit
   let stage: EditOptions.Stage
   let isOn: Bool
-  /// The title's tooltip.
+  /// What the section does, the header's tooltip.
   let help: String
 
   var body: some View {
-    HStack(spacing: 6) {
-      Toggle(stage.title, isOn: Binding(get: { isOn }, set: { edit.setStage(stage, on: $0) }))
+    let binding = Binding(get: { isOn }, set: { edit.setStage(stage, on: $0) })
+    let tooltip = "\(help) Turning it off keeps its settings."
+    #if os(macOS)
+      Toggle(isOn: binding) { Text(stage.title) }
         .checkboxToggleStyle()
-        .labelsHidden()
-        .help("Use \(stage.title). Turning it off keeps its settings.")
-        .accessibilityLabel("Use \(stage.title)")
-      Text(stage.title).help(help)
-    }
+        .help(tooltip)
+    #else
+      // A switch's label doesn't flip it, and the switch goes before the title as the Mac's
+      // checkbox does: the title is a tap target of its own, hidden from VoiceOver, which
+      // reads the switch by the title.
+      HStack(spacing: 6) {
+        Toggle(stage.title, isOn: binding)
+          .checkboxToggleStyle()
+          .labelsHidden()
+        Text(stage.title)
+          .contentShape(Rectangle())
+          .onTapGesture { binding.wrappedValue.toggle() }
+          .accessibilityHidden(true)
+      }
+      .help(tooltip)
+    #endif
   }
 }
 
