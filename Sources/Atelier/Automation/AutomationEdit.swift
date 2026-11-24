@@ -19,6 +19,10 @@ extension Automation {
   ///   brings back the stages off and their settings; turned back on, Save queues a new job;
   ///   edit_image_look on that step keeps them off unless `options.off` says otherwise (`[]`
   ///   turns them on, the grain saved with it), and refuses a stage name that isn't one;
+  /// - with the Look checkbox off (Grain off too), the saved step is the image's own pixels and
+  ///   records the look off with the stages and settings; Reset turns it on; reopening brings
+  ///   it back; edit_image_look's `look_off: false` turns it on with Grain still off, and a
+  ///   `look_off` that isn't a boolean is refused;
   /// - Export LUT… of a grade, loaded back as a LUT over no change, renders within a few levels
   ///   of the grade itself;
   /// - Export PNG's metadata records the look at the start, though the look changes while it
@@ -412,8 +416,8 @@ extension Automation {
     let tools = AgentTools(create: model, presets: presets, grainProfiles: edit.profiles)
     // The saved step on the canvas, which a call without history_step edits: a step number is
     // shared by every edit of the source (a branch each), so it could name another of them.
-    func call(_ arguments: [String: Any]) async -> (record: Edit.Record?, error: String?) {
-      model.show(saved)
+    func call(_ arguments: [String: Any], on step: HistoryItem? = nil) async -> (record: Edit.Record?, error: String?) {
+      model.show(step ?? saved)
       let before = Set(model.history.items.map(\.tensorId))
       do {
         let answer = try await tools.call("edit_image_look", arguments: arguments) { _ in }
@@ -438,6 +442,33 @@ extension Automation {
       "edit_image_look with options.off [] turns them on with the grain saved\(on.error.map { ": \($0)" } ?? "")")
     let bad = await call(["options": ["off": ["sharpen"]]])
     check(bad.error?.contains("off") == true && bad.error?.contains("sharpen") == true, "an unknown stage in options.off is refused (\(bad.error ?? "no error"))")
+
+    // The whole look off: the image without it, the stages' checkboxes kept.
+    edit.options = look
+    edit.setStage(.grain, on: false)
+    edit.setLook(on: false)
+    let lookOff = edit.options
+    check(lookOff.lookOff && lookOff.off == [.grain] && edit.renderedOptions.isIdentity, "the Look checkbox off renders no look and keeps Grain off")
+    guard let lookOffID = try? edit.save(), let plain = await waitFor(lookOffID) else { return check(false, "Save to History with the look off didn't save a step") }
+    check(
+      plain.sidecar.edit?.options.lookOff == true && plain.sidecar.edit?.options.off == [.grain] && plain.sidecar.edit?.options.grade == look.grade,
+      "the step saved with the look off records it, the stages off and the settings")
+    let plainImage = await model.history.project.read { $0.image(tensorId: plain.imageTensorId ?? plain.tensorId) }
+    if let same = difference(plainImage, image) {
+      check(same.largest <= 1, String(format: "with the look off the saved pixels are the image's own (%.3f levels on average, %d at most)", same.mean, same.largest))
+    } else {
+      check(false, "the look-off step's pixels couldn't be compared")
+    }
+    edit.reset()
+    check(!edit.options.lookOff, "Reset turns the look back on")
+    await edit.open(plain)
+    check(edit.options == lookOff, "opening that step brings back the look off with its stages and settings")
+    let lookOn = await call(["options": ["look_off": false]], on: plain)
+    check(
+      lookOn.error == nil && lookOn.record?.options.lookOff == false && lookOn.record?.options.off == [.grain],
+      "edit_image_look with options.look_off false turns the look on, Grain still off\(lookOn.error.map { ": \($0)" } ?? "")")
+    let badLook = await call(["options": ["look_off": "yes"]], on: plain)
+    check(badLook.error?.contains("look_off") == true, "a look_off that isn't a boolean is refused (\(badLook.error ?? "no error"))")
   }
 
   /// A reference file with a long name (and the profile Match Reference names after it) must

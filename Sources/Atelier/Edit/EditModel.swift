@@ -407,6 +407,12 @@ final class EditModel {
     options = options.setting(stage, on: on)
   }
 
+  /// The Look checkbox: the whole look on or off (`EditOptions.lookOff`), the stages' own
+  /// checkboxes and every setting left as they are. Through `options`, as `setStage` is.
+  func setLook(on: Bool) {
+    options.lookOff = !on
+  }
+
   /// Remembering the look: encoded and written to UserDefaults half a second after the last
   /// change, rather than on each of a slider's 16 ms ticks, and at once when a slider is let go,
   /// the app goes to the background or quits (`flushRemembered`), so nothing is lost.
@@ -992,8 +998,8 @@ final class EditModel {
     rebuildContext()
   }
 
-  /// Reset: grain.py's default look, with no profile, reference or LUT, and every stage on
-  /// (`grainDefaults` has none off). The seed is kept.
+  /// Reset: grain.py's default look, with no profile, reference or LUT, and the look and every
+  /// stage on (`grainDefaults` has none off). The seed is kept.
   func reset() {
     var look = EditOptions.grainDefaults
     look.grain.seed = options.grain.seed

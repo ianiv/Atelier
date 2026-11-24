@@ -302,6 +302,36 @@ struct EditJobTests {
     #expect(!job.isSameEdit(as: Self.job(project: "P", source: 1, options: Self.look)))
   }
 
+  /// The whole look off renders nothing and leaves the stages off and the settings alone;
+  /// missing reads on, and on isn't written, so older looks encode as before.
+  @Test func lookOffRendersNothingAndKeepsTheStages() throws {
+    var options = Self.look.setting(.grain, on: false)
+    options.lookOff = true
+    #expect(options.isIdentity && options.rendered.isIdentity && options.rendered.grain.seed == Self.look.grain.seed)
+    #expect(options.off == [.grain] && options.grade == Self.look.grade)
+    options.lookOff = false
+    #expect(options.rendered == Self.look.setting(.grain, on: false).rendered)
+    let on = String(decoding: try JSONEncoder().encode(Self.look), as: UTF8.self)
+    #expect(!on.contains("lookOff"))
+    var off = Self.look
+    off.lookOff = true
+    let data = try JSONEncoder().encode(off)
+    #expect(String(decoding: data, as: UTF8.self).contains(#""lookOff":true"#))
+    #expect(try JSONDecoder().decode(EditOptions.self, from: data) == off)
+    #expect(try JSONDecoder().decode(EditOptions.self, from: Data("{}".utf8)).lookOff == false)
+    #expect(try EditOptions.decoded(from: Data("{}".utf8), over: off).lookOff, "missing keeps the base's")
+    #expect(off.snapped.lookOff)
+    // Through a step's profile_data (snake case) and back.
+    let job = Self.job(options: off)
+    var profile = ProjectMapping.Profile(duration: 1, inputTensorId: 12, parentTensorId: 12)
+    profile.edit = job.record
+    #expect(String(decoding: profile.bytes, as: UTF8.self).contains(#""look_off":true"#))
+    #expect(try #require(ProjectMapping.Profile(profile.bytes)).edit?.options.lookOff == true)
+    // Turning it off or on is another edit; a profile and Reset's look leave or clear it.
+    #expect(!job.isSameEdit(as: Self.job(options: Self.look)))
+    #expect(GrainProfile.Settings().applied(to: off).lookOff && !EditOptions.grainDefaults.lookOff)
+  }
+
   /// The agent's `options.off`: stage names replacing the base's, checked.
   @MainActor @Test func agentOptionsTakeOff() throws {
     let base = Self.look.setting(.lens, on: false)
@@ -313,6 +343,13 @@ struct EditJobTests {
     #expect(throws: AgentTools.ToolError.self) { try AgentTools.lookOptions(["off": ["sharpen"]], over: base) }
     #expect(throws: AgentTools.ToolError.self) { try AgentTools.lookOptions(["off": "grain"], over: base) }
     #expect(throws: AgentTools.ToolError.self) { try AgentTools.lookOptions(["off": [3]], over: base) }
+    // `look_off`: a boolean, the stages left as they are.
+    let lookOff = try AgentTools.lookOptions(["look_off": true], over: base)
+    #expect(lookOff.lookOff && lookOff.off == [.lens])
+    #expect(try !AgentTools.lookOptions(["look_off": false], over: lookOff).lookOff)
+    #expect(try AgentTools.lookOptions(["grain": ["lum": 4]], over: lookOff).lookOff)
+    #expect(throws: AgentTools.ToolError.self) { try AgentTools.lookOptions(["look_off": 1], over: base) }
+    #expect(throws: AgentTools.ToolError.self) { try AgentTools.lookOptions(["look_off": "yes"], over: base) }
     do {
       _ = try AgentTools.lookOptions(["off": ["sharpen"]], over: base)
     } catch {

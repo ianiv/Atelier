@@ -24,7 +24,10 @@ import Foundation
 /// here, so turning one back on brings them back, and what renders is `rendered`, with those
 /// stages' settings as no change. A missing `off` key is the base's (all on from `identity`),
 /// an unknown stage name is dropped, and an empty `off` isn't encoded, so an all-on look
-/// encodes byte for byte as it did before stages could be turned off.
+/// encodes as it did before stages could be turned off. `lookOff` is the master switch over
+/// them all (the sidebar's Look checkbox): it renders no look at all and leaves `off` as it is,
+/// so turning it back on brings back the stages that were on. It's read and written the same
+/// way: missing is on, and it's written only when it's off.
 nonisolated struct EditOptions: Codable, Hashable, Sendable {
   var match = Match()
   var histogram = Histogram()
@@ -36,11 +39,13 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
   var grain = Grain()
   /// The stages turned off, their settings kept (`rendered`).
   var off: Set<Stage> = []
+  /// The whole look turned off, `off` and every setting kept (`rendered`).
+  var lookOff = false
 
   init(
     match: Match = Match(), histogram: Histogram = Histogram(), grade: Grade = Grade(), lut: LUTRef = LUTRef(),
     halation: Halation = Halation(), lens: Lens = Lens(), vignette: Vignette = Vignette(), grain: Grain = Grain(),
-    off: Set<Stage> = []
+    off: Set<Stage> = [], lookOff: Bool = false
   ) {
     self.match = match
     self.histogram = histogram
@@ -51,6 +56,7 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
     self.vignette = vignette
     self.grain = grain
     self.off = off
+    self.lookOff = lookOff
   }
 
   /// A part of the look the sidebar turns on and off as one, one per sidebar section, in
@@ -105,7 +111,13 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
   /// takes this of whatever it's given, so turning a stage off renders exactly as that stage set
   /// to nothing, and turning it back on asks for the earlier key again (a cache hit). Kept as
   /// they are: the match target and histogram space (not amounts) and the grain seed.
+  /// With the whole look off (`lookOff`), it's `identity` (the seed kept), whatever `off` says.
   var rendered: EditOptions {
+    if lookOff {
+      var none = EditOptions.identity
+      none.grain.seed = grain.seed
+      return none
+    }
     guard !off.isEmpty else { return self }
     var out = self
     out.off = []
@@ -155,7 +167,7 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
   /// Whether rendering with these options gives back the source unchanged (`EditPipeline.render`
   /// skips every step then); a stage that's off counts as doing nothing.
   var isIdentity: Bool {
-    guard off.isEmpty else { return rendered.isIdentity }
+    guard off.isEmpty, !lookOff else { return rendered.isIdentity }
     return match.isIdentity && histogram.isIdentity && grade.isIdentity && lut.isIdentity && halation.isIdentity
       && lens.isIdentity && vignette.isIdentity && grain.isIdentity
   }
@@ -170,13 +182,14 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
   var snapped: EditOptions {
     EditOptions(
       match: match.snapped, histogram: histogram.snapped, grade: grade.snapped, lut: lut.snapped,
-      halation: halation.snapped, lens: lens.snapped, vignette: vignette.snapped, grain: grain.snapped, off: off)
+      halation: halation.snapped, lens: lens.snapped, vignette: vignette.snapped, grain: grain.snapped, off: off, lookOff: lookOff)
   }
 
-  private enum CodingKeys: String, CodingKey { case match, histogram, grade, lut, halation, lens, vignette, grain, off }
+  // `lookOff` is `look_off` in a step's `profile_data`, whose coder converts to and from snake case.
+  private enum CodingKeys: String, CodingKey { case match, histogram, grade, lut, halation, lens, vignette, grain, off, lookOff }
 
   /// The synthesized encoding's keys, then `off` (its names in pipeline order, so the same
-  /// stages always encode alike) only when a stage is off.
+  /// stages always encode alike) only when a stage is off, and `lookOff` only when it's set.
   func encode(to encoder: Encoder) throws {
     var c = encoder.container(keyedBy: CodingKeys.self)
     try c.encode(match, forKey: .match)
@@ -188,6 +201,7 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
     try c.encode(vignette, forKey: .vignette)
     try c.encode(grain, forKey: .grain)
     if !off.isEmpty { try c.encode(off.sorted().map(\.rawValue), forKey: .off) }
+    if lookOff { try c.encode(true, forKey: .lookOff) }
   }
 
   init(from decoder: Decoder) throws {
@@ -203,6 +217,7 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
     grain = lenient(c, Grain.self, .grain) ?? base.grain
     // Read as names, so one unknown name (a later Atelier's stage) drops only itself.
     off = lenient(c, [String].self, .off).map { Set($0.compactMap(Stage.init(rawValue:))) } ?? base.off
+    lookOff = lenient(c, Bool.self, .lookOff) ?? base.lookOff
   }
 
   /// No bound: grain.py's own settings aren't capped.

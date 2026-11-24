@@ -167,8 +167,9 @@ nonisolated enum Edit {
     /// 2 added `crop`; a version 1 record has none, and an older Atelier reading a version 2 one
     /// ignores it (shows the source uncropped with the look). 3 added `heal`, which an older
     /// Atelier ignores the same way (the source unhealed). 4 added `options.off`, the stages
-    /// turned off with their settings kept; an older Atelier ignores it and shows an off stage
-    /// on (the step's saved pixels are right either way).
+    /// turned off with their settings kept, and `options.lookOff`, the whole look off; an older
+    /// Atelier ignores them and shows the stages on (the step's saved pixels are right either
+    /// way).
     static let currentVersion = 4
 
     var version = Record.currentVersion

@@ -498,11 +498,12 @@ final class AgentTools {
           "history_step": ["type": "integer", "description": "A history step from list_history or generate. Omit for the canvas image."],
           "options": [
             "type": "object",
-            "description": "The look, partial: sections and keys left out are no change from the base. Sections and keys (ranges): match {target: reference|original, tint, saturation, brightness, contrast (0–1, how far each Lab statistic moves to the target's, as match_colors), colour (≥0, grain.py's RGB mean and spread match to the profile's reference; needs a profile)}; histogram {amount 0–1, space: luma|rgb} (CDF match to the target); grade {exposure (stops), temperature −100–100, tint (grain.py's green − / magenta +, about −30–30), contrast, saturation, vibrance (−1–1)}; lut {strength 0–1}; halation {amount 0–1, threshold 0–1 (default 0.8), radius 1–200 px (20), warmth 0–1 (0.6)}; lens {motion px (smears above 1), angle degrees, blur px (grain.py's default 3; none below 0.3)}; vignette {amount −1–1, size 0–1, softness 0–1}; grain {lum (grain.py's default 9), size (1), chroma (3), csize (1), real (needs a profile with real noise), seed (7)}. grain also takes grain.py's other flat names, blur, motion, angle, colour, tint and expo, so a grain.py settings dict can go in as it is. Matching to a target needs a reference (or target original with an original). off: an array of stages to turn off (lens, match, grade, lut, halation, vignette, grain; match covers match and histogram): their settings are kept in the saved step but don't render, as the Edit screen's section checkboxes do; it replaces the base's (a step saved with grain off starts with grain off), and [] turns every stage on. What a stage that's off needs (a reference, a profile) isn't asked for.",
+            "description": "The look, partial: sections and keys left out are no change from the base. Sections and keys (ranges): match {target: reference|original, tint, saturation, brightness, contrast (0–1, how far each Lab statistic moves to the target's, as match_colors), colour (≥0, grain.py's RGB mean and spread match to the profile's reference; needs a profile)}; histogram {amount 0–1, space: luma|rgb} (CDF match to the target); grade {exposure (stops), temperature −100–100, tint (grain.py's green − / magenta +, about −30–30), contrast, saturation, vibrance (−1–1)}; lut {strength 0–1}; halation {amount 0–1, threshold 0–1 (default 0.8), radius 1–200 px (20), warmth 0–1 (0.6)}; lens {motion px (smears above 1), angle degrees, blur px (grain.py's default 3; none below 0.3)}; vignette {amount −1–1, size 0–1, softness 0–1}; grain {lum (grain.py's default 9), size (1), chroma (3), csize (1), real (needs a profile with real noise), seed (7)}. grain also takes grain.py's other flat names, blur, motion, angle, colour, tint and expo, so a grain.py settings dict can go in as it is. Matching to a target needs a reference (or target original with an original). off: an array of stages to turn off (lens, match, grade, lut, halation, vignette, grain; match covers match and histogram): their settings are kept in the saved step but don't render, as the Edit screen's section checkboxes do; it replaces the base's (a step saved with grain off starts with grain off), and [] turns every stage on. look_off: true turns the whole look off (the saved step is the image without it) and leaves off and every setting as they are; false turns it back on; left out, it's the base's. What a stage that's off needs (a reference, a profile) isn't asked for.",
             "properties": [
               "match": ["type": "object"], "histogram": ["type": "object"], "grade": ["type": "object"], "lut": ["type": "object"],
               "halation": ["type": "object"], "lens": ["type": "object"], "vignette": ["type": "object"], "grain": ["type": "object"],
               "off": ["type": "array", "items": ["type": "string", "enum": EditOptions.Stage.allCases.map(\.rawValue)]],
+              "look_off": ["type": "boolean"],
             ],
           ],
           "profile": ["type": "string", "description": "A grain profile from list_grain_profiles: its settings and grain data. Not with match_reference."],
@@ -2604,10 +2605,11 @@ final class AgentTools {
   /// `options` checked key by key (a wrong name or value is an error, not ignored as decoding
   /// would), grain.py's flat names moved to their sections, and laid over `base`. `off`, beside
   /// the sections, is the stages to turn off (`EditOptions.Stage`'s names), replacing the base's:
-  /// `[]` turns every stage on.
+  /// `[]` turns every stage on. `look_off`, a boolean, is the whole look off (`lookOff`), `off`
+  /// left as it is; missing keeps the base's.
   nonisolated static func lookOptions(_ value: Any?, over base: EditOptions) throws -> EditOptions {
     guard let value else { return base }
-    let sectionNames = (lookKeys.keys.sorted() + ["off"]).joined(separator: ", ")
+    let sectionNames = (lookKeys.keys.sorted() + ["off", "look_off"]).joined(separator: ", ")
     guard var sections = value as? [String: Any] else { throw ToolError("`options` is an object of sections: \(sectionNames).") }
     let stageNames = EditOptions.Stage.allCases.map(\.rawValue)
     var off: Set<EditOptions.Stage>?
@@ -2623,6 +2625,11 @@ final class AgentTools {
         stages.insert(stage)
       }
       off = stages
+    }
+    var lookOff: Bool?
+    if let given = sections.removeValue(forKey: "look_off") {
+      guard isBoolean(given), let flag = given as? Bool else { throw ToolError("`options.look_off` is true or false.") }
+      lookOff = flag
     }
     if var grain = sections["grain"] as? [String: Any] {
       for (alias, target) in grainPyAliases {
@@ -2672,12 +2679,16 @@ final class AgentTools {
     let data = try JSONSerialization.data(withJSONObject: sections)
     var options = try EditOptions.decoded(from: data, over: base)
     if let off { options.off = off }
+    if let lookOff { options.lookOff = lookOff }
     return options
   }
 
-  /// A look's options as JSON, for answers.
+  /// A look's options as JSON, for answers, by the names `options` takes (`look_off`).
   static func lookJSON(_ options: EditOptions) -> Any {
-    jsonObject(try? JSONEncoder().encode(options))
+    let object = jsonObject(try? JSONEncoder().encode(options))
+    guard var sections = object as? [String: Any], let lookOff = sections.removeValue(forKey: "lookOff") else { return object }
+    sections["look_off"] = lookOff
+    return sections
   }
 
   /// A JSON number, or null for one that isn't a number (an unmeasured statistic).

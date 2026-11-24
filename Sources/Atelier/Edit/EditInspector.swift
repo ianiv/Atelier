@@ -15,7 +15,9 @@ import UniformTypeIdentifiers
 ///
 /// Each settings section has a checkbox in its header (`EditStageHeader`) that turns its stage
 /// on and off, its settings kept (`EditOptions.off`); while it's off its controls are disabled,
-/// not hidden, so a slider never moves with nothing changing on screen.
+/// not hidden, so a slider never moves with nothing changing on screen. Above them all, the Look
+/// checkbox (`EditLookSwitch`) turns the whole look off and on, leaving the stages' checkboxes
+/// as they are (`EditOptions.lookOff`).
 struct EditInspector: View {
   @Environment(EditModel.self) private var edit
   @Environment(CreateModel.self) private var create
@@ -26,6 +28,7 @@ struct EditInspector: View {
     let _ = EditViewCounts.note("EditInspector")
     ScrollView {
       VStack(alignment: .leading, spacing: 14) {
+        EditLookSwitch()
         EditLookSection(choosingStep: $choosingStep, error: $error)
         EditLookSections(error: $error)
       }
@@ -314,26 +317,56 @@ private struct EditStageHeader: View {
   let help: String
 
   var body: some View {
-    let binding = Binding(get: { isOn }, set: { edit.setStage(stage, on: $0) })
-    let tooltip = "\(help) Turning it off keeps its settings."
+    EditTitleToggle(
+      title: stage.title, isOn: Binding(get: { isOn }, set: { edit.setStage(stage, on: $0) }),
+      help: "\(help) Turning it off keeps its settings.")
+  }
+}
+
+/// The Look checkbox above the sections: the whole look off and on (`EditModel.setLook(on:)`),
+/// each stage's checkbox and setting left as it is, so they stay clickable while it's off and
+/// turning it back on brings back the stages that were on. Styled as a section's header.
+private struct EditLookSwitch: View {
+  @Environment(EditModel.self) private var edit
+
+  var body: some View {
+    let lookOn = !edit.options.lookOff
+    EditTitleToggle(
+      title: "Look", isOn: Binding(get: { lookOn }, set: { edit.setLook(on: $0) }),
+      help: "The whole look. Turning it off shows and saves the image without it, and keeps every section's checkbox and settings.")
+      .font(.subheadline.weight(.semibold))
+      .foregroundStyle(.secondary)
+      .padding(.horizontal, 4)
+  }
+}
+
+/// A checkbox with a title as its label: clicking the title flips it, as a checkbox's label
+/// does; on iPad, where it's a switch, tapping the title does too. One control, named by the
+/// title.
+private struct EditTitleToggle: View {
+  let title: String
+  let isOn: Binding<Bool>
+  let help: String
+
+  var body: some View {
     #if os(macOS)
-      Toggle(isOn: binding) { Text(stage.title) }
+      Toggle(isOn: isOn) { Text(title) }
         .checkboxToggleStyle()
-        .help(tooltip)
+        .help(help)
     #else
       // A switch's label doesn't flip it, and the switch goes before the title as the Mac's
       // checkbox does: the title is a tap target of its own, hidden from VoiceOver, which
       // reads the switch by the title.
       HStack(spacing: 6) {
-        Toggle(stage.title, isOn: binding)
+        Toggle(title, isOn: isOn)
           .checkboxToggleStyle()
           .labelsHidden()
-        Text(stage.title)
+        Text(title)
           .contentShape(Rectangle())
-          .onTapGesture { binding.wrappedValue.toggle() }
+          .onTapGesture { isOn.wrappedValue.toggle() }
           .accessibilityHidden(true)
       }
-      .help(tooltip)
+      .help(help)
     #endif
   }
 }
