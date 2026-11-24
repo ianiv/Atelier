@@ -56,7 +56,7 @@ Heal goes first, before the crop and the look. The strokes are in the whole imag
 
 ## The look
 
-The inspector's sections are in the order the look is applied: lens smear and blur, the matches, the grade, the LUT, halation, the vignette, then the grain. Every control is always there; one that can't do anything yet (Match Reference without a reference, Real Noise without a profile that has real noise) is unavailable, with a line saying what it needs.
+The look is applied in this order: lens smear and blur, the matches, the grade, the LUT, halation, the vignette, then the grain. The inspector lists its sections in that order too, except **Lens**, which sits between **Halation** and **Vignette** even though its smear and blur are applied first. Every control is always there; one that can't do anything yet (Match Reference without a reference, Real Noise without a profile that has real noise) is unavailable, with a line saying what it needs.
 
 ### Look
 
