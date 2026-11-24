@@ -94,6 +94,10 @@
           files.compactMap { file in library.catalog.first { $0.file == file } }
         }
 
+        // A refresh the folder reload started can land after the one awaited here.
+        for _ in 0..<100 where entries([one, two, three, copy]).count < 4 {
+          try? await Task.sleep(for: .milliseconds(100))
+        }
         // Move To: models 2 and 3; model 1 and its copy, outside the batch, need the encoder.
         guard entries([one, two, three, copy]).count == 4 else {
           log("FAIL the stand-in models aren't in the catalog")
@@ -127,6 +131,10 @@
         check(registered("custom.json", b) == [two, three] && registered("custom.json", a) == [one, copy], "the entries moved")
 
         // Models already in B are left out of a later batch; one B has a copy of is skipped.
+        // Create may pick model 1 after the reread and load it, which holds a move off.
+        for _ in 0..<200 where !(entries([one]).first.map(library.canMove) ?? true) {
+          try? await Task.sleep(for: .milliseconds(100))
+        }
         if let again = library.planMoves(entries([one, two, three]), to: b) {
           check(
             again.items.map(\.file) == [one] && again.items[0].copied == [vae] && !again.items[0].moved.contains(encoder),
@@ -198,7 +206,12 @@
         try? fm.setAttributes([.immutable: false], ofItemAtPath: lockedURL.path)
         locked = nil
         library.errorMessage = nil
-        if let entry = entries([three]).first, let single = library.planTrash([entry]) {
+        // The only model left, Create picks it and starts loading it, which holds a delete off.
+        for _ in 0..<200 where !(entries([three]).first.map(library.canDelete) ?? true) {
+          try? await Task.sleep(for: .milliseconds(100))
+        }
+        let remaining = entries([three]).first
+        if let entry = remaining, let single = library.planTrash([entry]) {
           check(
             ModelLibrary.trashTitle(single) == "Move \(entry.name) to the Trash?"
               && ModelLibrary.trashMessage(single).hasPrefix("\(three) is moved to the Trash and removed from custom.json."),
