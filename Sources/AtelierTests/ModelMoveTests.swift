@@ -37,6 +37,28 @@ struct ModelMoveTests {
     }
   }
 
+  @Test func aBatchMovesASharedEncoderOnceOrCopiesItOnce() {
+    withTestFolder { root in
+      let source = root.appending(path: "A"), destination = root.appending(path: "B")
+      for file in ["one_f16.ckpt", "two_f16.ckpt", "one_vae.ckpt", "te.ckpt", "there.ckpt"] {
+        touch(source.appending(path: file))
+      }
+      touch(destination.appending(path: "there.ckpt"))
+      let items: [(own: [String], needs: Set<String>, source: URL)] = [
+        (["one_f16.ckpt", "one_vae.ckpt"], ["one_f16.ckpt", "one_vae.ckpt", "te.ckpt", "there.ckpt"], source),
+        (["two_f16.ckpt"], ["two_f16.ckpt", "one_vae.ckpt", "te.ckpt", "there.ckpt"], source),
+      ]
+      // Nothing outside the batch needs the encoder: it moves, once, with the first.
+      let alone = ModelLibrary.sortBatchFiles(items: items, neededElsewhere: [], to: destination)
+      #expect(alone[0].moved == ["one_f16.ckpt", "one_vae.ckpt", "te.ckpt"] && alone[0].copied.isEmpty)
+      #expect(alone[1].moved == ["two_f16.ckpt"] && alone[1].copied.isEmpty)
+      // A model outside the batch needs it: copied once, never moved.
+      let shared = ModelLibrary.sortBatchFiles(items: items, neededElsewhere: ["te.ckpt"], to: destination)
+      #expect(shared[0].moved == ["one_f16.ckpt", "one_vae.ckpt"] && shared[0].copied == ["te.ckpt"])
+      #expect(shared[1].moved == ["two_f16.ckpt"] && shared[1].copied.isEmpty)
+    }
+  }
+
   @Test func aMoveAcrossDrivesCopiesChecksAndDeletes() async throws {
     let root = FileManager.default.temporaryDirectory.appending(path: "ModelMoveTests-\(UUID())")
     defer { try? FileManager.default.removeItem(at: root) }

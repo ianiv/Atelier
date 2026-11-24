@@ -7,15 +7,22 @@ import UniformTypeIdentifiers
 struct LoRAsView: View {
   @Environment(ModelLibrary.self) private var library
   @Environment(FileDialogs.self) private var fileDialogs
-  @State private var pendingDelete: ModelLibrary.LoRA?
-  @State private var pendingMove: ModelLibrary.Move?
+  @State private var pendingTrash: ModelLibrary.TrashBatch?
+  @State private var pendingMove: ModelLibrary.MoveBatch?
+  #if os(iOS)
+    /// Select mode, for picking several rows by touch (a pointer's ⌘- and ⇧-click work anyway).
+    @State private var editMode = EditMode.inactive
+    /// The selection when Select mode began: the inspector follows it rather than each tap, so
+    /// in a narrow window it doesn't open over the list until Done.
+    @State private var selectionBeforeSelecting: Set<String> = []
+  #endif
   @State private var dropTargeted = false
   @State private var linkRequest: LinkSheetRequest?
   /// Search, family, selection and sort live on the library, so they're still there after
   /// visiting another screen.
   private var search: String { library.loraScreen.search }
   private var family: String? { library.loraScreen.family }
-  private var selection: String? {
+  private var selection: Set<String> {
     get { library.loraScreen.selection }
     nonmutating set { library.loraScreen.selection = newValue }
   }
@@ -54,8 +61,29 @@ struct LoRAsView: View {
     }
   }
 
+  /// The selected LoRAs the list shows, in its order; actions never reach a hidden one.
+  private var selectedLoRAs: [ModelLibrary.LoRA] {
+    let visible = Set(ModelLibrary.visibleSelection(selection, visible: tableRows.map(\.id)))
+    return tableRows.map(\.lora).filter { visible.contains($0.file) }
+  }
+
+  /// The one selected LoRA, when exactly one is selected.
   private var selected: ModelLibrary.LoRA? {
-    library.loras.first { $0.file == selection }
+    let selected = selectedLoRAs
+    return selected.count == 1 ? selected[0] : nil
+  }
+
+  /// What the inspector follows: on iPad in Select mode, the selection as it was.
+  private var inspectorSelection: Set<String> {
+    #if os(iOS)
+      editMode.isEditing ? selectionBeforeSelecting : selection
+    #else
+      selection
+    #endif
+  }
+
+  private func loras(_ files: Set<String>) -> [ModelLibrary.LoRA] {
+    tableRows.map(\.lora).filter { files.contains($0.file) }
   }
 
   private var familyPicker: some View {
@@ -65,8 +93,17 @@ struct LoRAsView: View {
     }
   }
 
+  /// The list, in Select mode on iPad while that's on.
+  private var selectableContent: some View {
+    #if os(iOS)
+      content.environment(\.editMode, $editMode)
+    #else
+      content
+    #endif
+  }
+
   var body: some View {
-    content
+    selectableContent
       .overlay {
         if dropTargeted {
           RoundedRectangle(cornerRadius: 8)
@@ -104,16 +141,32 @@ struct LoRAsView: View {
           importMenu
             .help("Import .safetensors LoRA files (or drop them here) or a Hugging Face link")
         }
+        #if os(iOS)
+          ToolbarItem {
+            Button(editMode.isEditing ? "Done" : "Select") {
+              if !editMode.isEditing { selectionBeforeSelecting = selection }
+              editMode = editMode.isEditing ? .inactive : .active
+            }
+            .help("Select several LoRAs to move or delete together")
+          }
+        #endif
         HelpToolbarItem(section: .loras)
       }
       .searchable(text: screen.loraScreen.search, placement: .toolbar, prompt: "Filter LoRAs")
-      .detailInspector(selection: selection, isEmpty: selected == nil, clearSelection: { selection = nil }) {
+      .detailInspector(
+        selection: inspectorSelection, isEmpty: selectedLoRAs.isEmpty, clearSelection: { selection = [] }
+      ) {
         Group {
+          let selectedLoRAs = selectedLoRAs
           if let selected {
             LoRADetail(
-              lora: selected, delete: { pendingDelete = selected },
-              move: { pendingMove = library.planMove(selected, to: $0) })
+              lora: selected, delete: { pendingTrash = library.planTrash([selected]) },
+              move: { pendingMove = library.planMoves([selected], to: $0) })
               .id(selected.file)
+          } else if selectedLoRAs.count > 1 {
+            LibrarySelectionSummary(
+              loras: selectedLoRAs, trash: { pendingTrash = library.planTrash(selectedLoRAs) },
+              move: { pendingMove = library.planMoves(selectedLoRAs, to: $0) })
           } else {
             ContentUnavailableView(
               "No selection", systemImage: "slider.horizontal.3",
@@ -143,24 +196,18 @@ struct LoRAsView: View {
       .debugPresents("loraImport", .constant(false)) {
         library.prepareImport([URL(fileURLWithPath: "/tmp/Example LoRA.safetensors")])
       }
-      .confirmationDialog(
-        "Move \(pendingDelete?.name ?? "this LoRA") to the Trash?",
-        isPresented: Binding(
-          get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
-        presenting: pendingDelete
-      ) { lora in
-        Button("Move to Trash", role: .destructive) {
-          pendingDelete = nil
-          library.delete(lora)
-          if selection == lora.file { selection = filtered.first?.file }
-        }
-        Button("Cancel", role: .cancel) { pendingDelete = nil }
-      } message: { lora in
-        Text("\(lora.file) is moved to the Trash and removed from custom_lora.json.")
+      .trashConfirmation($pendingTrash) { _ in
+        let visible = tableRows.map(\.id)
+        selection.formIntersection(visible)
+        if selection.isEmpty, let first = visible.first { selection = [first] }
       }
       .moveConfirmation($pendingMove)
       .libraryErrorAlert()
-      .deleteCommand { pendingDelete = selected }
+      .deleteCommand { pendingTrash = library.planTrash(selectedLoRAs) }
+      // ⌘A, then a search or family that hides rows, mustn't leave hidden rows selected.
+      .onChange(of: tableRows.map(\.id)) { _, visible in
+        if !library.loras.isEmpty { selection.formIntersection(visible) }
+      }
       .task { await library.reloadLoRAsIfRegistriesChanged() }
   }
 
@@ -218,15 +265,29 @@ struct LoRAsView: View {
         .width(min: 70, ideal: 110)
       }
       .contextMenu(forSelectionType: String.self) { files in
-        if let file = files.first, let lora = library.loras.first(where: { $0.file == file }) {
+        if files.count > 1 {
+          let loras = loras(files)
+          let present = loras.filter(\.isDownloaded)
+          Button(Finder.revealTitle) { library.reveal(present.map(\.file)) }
+            .disabled(!LibrarySelectionSummary.canReveal(present.map(\.folder)))
+          MoveToFolderMenu(
+            library: library, files: present.map(\.file), folders: present.map(\.folder),
+            enabled: present.contains(where: library.canMove)
+          ) {
+            pendingMove = library.planMoves(loras, to: $0)
+          }
+          Divider()
+          Button("Move to Trash", role: .destructive) { pendingTrash = library.planTrash(loras) }
+            .disabled(loras.allSatisfy { library.moving?.files.contains($0.file) == true })
+        } else if let file = files.first, let lora = library.loras.first(where: { $0.file == file }) {
           Button(Finder.revealTitle) { library.reveal(lora.file) }
             .disabled(!lora.isDownloaded)
           MoveToFolderMenu(library: library, file: lora.file, folder: lora.folder, enabled: library.canMove(lora)) {
-            pendingMove = library.planMove(lora, to: $0)
+            pendingMove = library.planMoves([lora], to: $0)
           }
           Divider()
-          Button("Move to Trash", role: .destructive) { pendingDelete = lora }
-            .disabled(library.moving?.file == lora.file)
+          Button("Move to Trash", role: .destructive) { pendingTrash = library.planTrash([lora]) }
+            .disabled(library.moving?.files.contains(lora.file) == true)
         }
       }
     }
@@ -287,7 +348,7 @@ struct LoRADetail: View {
             .disabled(!lora.isDownloaded)
           MoveToFolderMenu(library: library, file: lora.file, folder: lora.folder, enabled: library.canMove(lora), choose: move)
           Button("Move to Trash", role: .destructive, action: delete)
-            .disabled(library.moving?.file == lora.file)
+            .disabled(library.moving?.files.contains(lora.file) == true)
         }
         MoveProgressRow(file: lora.file)
       }
@@ -442,7 +503,7 @@ struct LoRATableRow: Identifiable {
 struct LoRAScreenState {
   var search = ""
   var family: String?
-  var selection: String?
+  var selection: Set<String> = []
   /// The column the table is sorted by; empty keeps the list's order.
   var sortOrder: [KeyPathComparator<LoRATableRow>] = []
 }

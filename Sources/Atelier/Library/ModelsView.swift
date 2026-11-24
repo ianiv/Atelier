@@ -17,9 +17,20 @@ struct ModelsView: View {
   @Environment(FileDialogs.self) private var fileDialogs
   @State private var search = ""
   @AppStorage("modelsFilter") private var filter = Filter.downloaded
-  @State private var selection: String?
-  @State private var pendingDelete: MediaGenerationResolvedModel?
-  @State private var pendingMove: ModelLibrary.Move?
+  @State private var pendingTrash: ModelLibrary.TrashBatch?
+  @State private var pendingMove: ModelLibrary.MoveBatch?
+  #if os(iOS)
+    /// Select mode, for picking several rows by touch (a pointer's ⌘- and ⇧-click work anyway).
+    @State private var editMode = EditMode.inactive
+    /// The selection when Select mode began: the inspector follows it rather than each tap, so
+    /// in a narrow window it doesn't open over the list until Done.
+    @State private var selectionBeforeSelecting: Set<String> = []
+  #endif
+  /// Lives on the library, so it's still there after visiting another screen.
+  private var selection: Set<String> {
+    get { library.modelScreen.selection }
+    nonmutating set { library.modelScreen.selection = newValue }
+  }
   @State private var dropTargeted = false
   @State private var showingH3ImageInstall = false
   @State private var linkRequest: LinkSheetRequest?
@@ -43,8 +54,35 @@ struct ModelsView: View {
     }
   }
 
+  /// The selected rows the list shows, in its order; actions never reach a hidden one.
+  private var visibleSelection: [String] {
+    ModelLibrary.visibleSelection(selection, visible: tableRows.map(\.id))
+  }
+
+  /// The selected models the list shows (not the MiniMax H3 Image row).
+  private var selectedModels: [MediaGenerationResolvedModel] {
+    models(visibleSelection)
+  }
+
+  private func models(_ files: some Sequence<String>) -> [MediaGenerationResolvedModel] {
+    let files = Set(files)
+    return library.catalog.filter { files.contains($0.file) }
+  }
+
+  /// The one selected model, when exactly one row is selected.
   private var selected: MediaGenerationResolvedModel? {
-    library.catalog.first { $0.file == selection }
+    let visible = visibleSelection
+    guard visible.count == 1 else { return nil }
+    return library.catalog.first { $0.file == visible[0] }
+  }
+
+  /// What the inspector follows: on iPad in Select mode, the selection as it was.
+  private var inspectorSelection: Set<String> {
+    #if os(iOS)
+      editMode.isEditing ? selectionBeforeSelecting : selection
+    #else
+      selection
+    #endif
   }
 
   /// MiniMax H3 Image isn't in the download catalog (it needs two manual downloads and a
@@ -95,8 +133,17 @@ struct ModelsView: View {
     return model.isDownloaded ? 1 : 2
   }
 
+  /// The list, in Select mode on iPad while that's on.
+  private var selectableTable: some View {
+    #if os(iOS)
+      table.environment(\.editMode, $editMode)
+    #else
+      table
+    #endif
+  }
+
   var body: some View {
-    table
+    selectableTable
       .overlay {
         if dropTargeted {
           RoundedRectangle(cornerRadius: 8)
@@ -141,21 +188,35 @@ struct ModelsView: View {
           }
           .help("Import .safetensors model checkpoints from files (or drop them here) or a Hugging Face link")
         }
+        #if os(iOS)
+          ToolbarItem {
+            Button(editMode.isEditing ? "Done" : "Select") {
+              if !editMode.isEditing { selectionBeforeSelecting = selection }
+              editMode = editMode.isEditing ? .inactive : .active
+            }
+            .help("Select several models to move or delete together")
+          }
+        #endif
         HelpToolbarItem(section: .models)
       }
       .searchable(text: $search, placement: .toolbar, prompt: "Filter models")
       .safeAreaBar(edge: .bottom, spacing: 0) { footer }
       .detailInspector(
-        selection: selection, isEmpty: selected == nil && selection != ModelRow.h3ImageID,
-        clearSelection: { selection = nil }
+        selection: inspectorSelection, isEmpty: visibleSelection.isEmpty, clearSelection: { selection = [] }
       ) {
         Group {
-          if selection == ModelRow.h3ImageID {
+          let visible = visibleSelection
+          if visible == [ModelRow.h3ImageID] {
             H3ImageDetail { showingH3ImageInstall = true }
           } else if let selected {
             ModelDetail(
-              model: selected, delete: { pendingDelete = selected },
-              move: { pendingMove = library.planMove(selected, to: $0) })
+              model: selected, delete: { pendingTrash = library.planTrash([selected]) },
+              move: { pendingMove = library.planMoves([selected], to: $0) })
+          } else if visible.count > 1 {
+            LibrarySelectionSummary(
+              models: selectedModels, includesH3Image: visible.contains(ModelRow.h3ImageID),
+              trash: { pendingTrash = library.planTrash(selectedModels) },
+              move: { pendingMove = library.planMoves(selectedModels, to: $0) })
           } else {
             ContentUnavailableView(
               "No selection", systemImage: "shippingbox",
@@ -201,34 +262,21 @@ struct ModelsView: View {
         .debugPresents("modelImport", .constant(false)) {
           library.prepareModelImport([URL(fileURLWithPath: "/tmp/Example Checkpoint.safetensors")])
         }
-        .confirmationDialog(
-          "Move \(pendingDelete?.name ?? "this model") to the Trash?",
-          isPresented: Binding(
-            get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
-          presenting: pendingDelete
-        ) { model in
-          Button("Move to Trash", role: .destructive) {
-            pendingDelete = nil
-            Task {
-              await library.delete(model)
-              // The deleted model can drop out of the list (or the catalog); show the first one.
-              if !filtered.contains(where: { $0.file == selection }) {
-                selection = filtered.first?.file
-              }
-            }
-          }
-          Button("Cancel", role: .cancel) { pendingDelete = nil }
-        } message: { model in
-          Text(
-            library.isCustom(model)
-              ? "\(model.file) is moved to the Trash and removed from custom.json. Shared files such as text encoders and VAEs stay in the models folder."
-              : "\(model.file) is moved to the Trash. Shared files such as text encoders and VAEs stay in the models folder."
-          )
+        .trashConfirmation($pendingTrash) { _ in
+          // A trashed model can drop out of the list (or the catalog); with nothing selected
+          // left, show the first one.
+          let visible = tableRows.map(\.id)
+          selection.formIntersection(visible)
+          if selection.isEmpty, let first = visible.first { selection = [first] }
         }
         .moveConfirmation($pendingMove)
         .libraryErrorAlert()
         .deleteCommand {
-          if let selected, library.canDelete(selected) { pendingDelete = selected }
+          if library.selectionKinds(selectedModels).canTrash { pendingTrash = library.planTrash(selectedModels) }
+        }
+        // ⌘A, then a search or filter that hides rows, mustn't leave hidden rows selected.
+        .onChange(of: tableRows.map(\.id)) { _, visible in
+          if !library.catalog.isEmpty { selection.formIntersection(visible) }
         }
         .task {
           if library.catalog.isEmpty { await library.refresh() }
@@ -251,7 +299,7 @@ struct ModelsView: View {
     } else if rows.isEmpty, !search.isEmpty {
       ContentUnavailableView.search(text: search)
     } else {
-      Table(tableRows, selection: $selection, sortOrder: Bindable(library).modelSortOrder) {
+      Table(tableRows, selection: Bindable(library).modelScreen.selection, sortOrder: Bindable(library).modelSortOrder) {
         TableColumn("Name", value: \.name) { item in
           let row = item.row
           HStack(spacing: 6) {
@@ -290,7 +338,9 @@ struct ModelsView: View {
         .width(min: 130, ideal: 150)
       }
       .contextMenu(forSelectionType: String.self) { files in
-        if files.first == ModelRow.h3ImageID {
+        if files.count > 1 {
+          multipleMenu(files)
+        } else if files.first == ModelRow.h3ImageID {
           Button("Install…") { showingH3ImageInstall = true }
             .disabled(library.h3ImageInstall.isRunning)
         } else if let file = files.first, let model = library.catalog.first(where: { $0.file == file }) {
@@ -302,21 +352,62 @@ struct ModelsView: View {
             }
             Button(Finder.revealTitle) { library.reveal(model.file) }
             MoveToFolderMenu(library: library, file: model.file, folder: library.folders[model.file], enabled: library.canMove(model)) {
-              pendingMove = library.planMove(model, to: $0)
+              pendingMove = library.planMoves([model], to: $0)
             }
             Divider()
-            Button("Move to Trash", role: .destructive) { pendingDelete = model }
+            Button("Move to Trash", role: .destructive) { pendingTrash = library.planTrash([model]) }
               .disabled(!library.canDelete(model))
           } else if library.downloads[model.file] != nil {
             Button("Cancel Download") { library.cancelDownload(model.file) }
           } else if library.isCustom(model) {
-            Button("Remove from Library", role: .destructive) { pendingDelete = model }
+            Button("Remove from Library", role: .destructive) { pendingTrash = library.planTrash([model]) }
           } else {
             Button("Download") { library.download(model) }
           }
         }
       }
     }
+  }
+
+  /// The context menu for several rows: the same commands whatever they are, each enabled when
+  /// it fits one of them, acting on those it fits.
+  @ViewBuilder
+  private func multipleMenu(_ files: Set<String>) -> some View {
+    let models = models(files)
+    let kinds = library.selectionKinds(models)
+    Button("Download") {
+      for model in models where !model.isDownloaded && !library.isCustom(model) && library.downloads[model.file] == nil {
+        library.download(model)
+      }
+    }
+    .disabled(!kinds.canDownload)
+    Button("Cancel Download") {
+      for model in models where library.downloads[model.file] != nil { library.cancelDownload(model.file) }
+    }
+    .disabled(!kinds.canCancelDownload)
+    if kinds.offersMissingFile {
+      Button("Download Missing File") {
+        for model in models where library.missingHiddenRefiner(of: model) != nil && library.downloads[model.file] == nil {
+          library.download(model)
+        }
+      }
+      .disabled(!kinds.canDownloadMissing)
+    }
+    Button(Finder.revealTitle) { library.reveal(models.filter(\.isDownloaded).map(\.file)) }
+      .disabled(!LibrarySelectionSummary.canReveal(models.filter(\.isDownloaded).map { library.folders[$0.file] }))
+    MoveToFolderMenu(
+      library: library, files: models.filter(\.isDownloaded).map(\.file),
+      folders: models.filter(\.isDownloaded).map { library.folders[$0.file] }, enabled: kinds.canMove
+    ) {
+      pendingMove = library.planMoves(models, to: $0)
+    }
+    if files.contains(ModelRow.h3ImageID) {
+      // Its install is a guided sheet, for that row alone.
+      Button("Install…") {}.disabled(true)
+    }
+    Divider()
+    Button("Move to Trash", role: .destructive) { pendingTrash = library.planTrash(models) }
+      .disabled(!kinds.canTrash)
   }
 
   @ViewBuilder
@@ -576,44 +667,67 @@ struct ModelDetail: View {
 }
 
 /// "Move to" with the other models folders. Always there, disabled when a move can't start now
-/// or there's only one folder; a folder that already has the file is disabled in it.
+/// or there's only one folder; a folder that already has the file is disabled in it. For several
+/// files, a folder is left out only when all of them are in it, and disabled when each one is
+/// there already (`ModelLibrary.destinationDisabled`).
 /// Gets the library passed in, for context menus built without the window's environment.
 struct MoveToFolderMenu: View {
   let library: ModelLibrary
-  let file: String
-  let folder: URL?
+  let files: [String]
+  let folders: [URL?]
   let enabled: Bool
   let choose: (URL) -> Void
 
+  init(library: ModelLibrary, files: [String], folders: [URL?], enabled: Bool, choose: @escaping (URL) -> Void) {
+    self.library = library
+    self.files = files
+    self.folders = folders
+    self.enabled = enabled
+    self.choose = choose
+  }
+
+  init(library: ModelLibrary, file: String, folder: URL?, enabled: Bool, choose: @escaping (URL) -> Void) {
+    self.init(library: library, files: [file], folders: [folder], enabled: enabled, choose: choose)
+  }
+
   var body: some View {
     Menu("Move To") {
-      ForEach(library.destinations(from: folder), id: \.self) { destination in
+      ForEach(ModelLibrary.batchDestinations(all: library.directories, folders: folders), id: \.self) { destination in
         Button(library.folderName(destination)) { choose(destination) }
-          .disabled(library.has(file, in: destination))
+          .disabled(ModelLibrary.destinationDisabled(destination, files: files, folders: folders, has: library.has))
       }
     }
     .disabled(!enabled)
     .help(
       library.hasOtherFolders
-        ? "Move its files to another models folder"
+        ? (files.count == 1 ? "Move its files to another models folder" : "Move their files to another models folder")
         : "Add another models folder in Settings to move files between folders")
   }
 }
 
-/// The progress of a move of `file`, while there is one.
+/// The progress of a move of any of `files`, while there is one: "Moving 2 of 5…" for a batch.
 struct MoveProgressRow: View {
-  let file: String
+  let files: [String]
   @Environment(ModelLibrary.self) private var library
 
+  init(file: String) {
+    files = [file]
+  }
+
+  init(files: [String]) {
+    self.files = files
+  }
+
   var body: some View {
-    if let moving = library.moving, moving.file == file {
+    if let moving = library.moving, !Set(moving.files).isDisjoint(with: files) {
+      let folder = library.folderName(moving.destination)
       HStack(spacing: 6) {
         VStack(alignment: .leading) {
           ProgressView(value: moving.fraction)
           Text(
             moving.fraction == nil
-              ? "Waiting to move to \(library.folderName(moving.destination))…"
-              : "Moving to \(library.folderName(moving.destination))…"
+              ? "Waiting to move to \(folder)…"
+              : moving.count > 1 ? "Moving \(moving.index + 1) of \(moving.count) to \(folder)…" : "Moving to \(folder)…"
           )
           .font(.caption).foregroundStyle(.secondary)
         }
@@ -632,28 +746,57 @@ struct MoveProgressRow: View {
 
 extension View {
   /// Asks before running a planned move, saying what it moves and copies.
-  func moveConfirmation(_ move: Binding<ModelLibrary.Move?>) -> some View {
+  func moveConfirmation(_ move: Binding<ModelLibrary.MoveBatch?>) -> some View {
     modifier(MoveConfirmation(move: move))
+  }
+
+  /// Asks before a planned Move to Trash, saying how much goes; `done` gets what went.
+  func trashConfirmation(
+    _ batch: Binding<ModelLibrary.TrashBatch?>, done: @escaping (ModelLibrary.TrashResult) -> Void
+  ) -> some View {
+    modifier(TrashConfirmation(batch: batch, done: done))
   }
 }
 
 private struct MoveConfirmation: ViewModifier {
-  @Binding var move: ModelLibrary.Move?
+  @Binding var move: ModelLibrary.MoveBatch?
   @Environment(ModelLibrary.self) private var library
 
   func body(content: Content) -> some View {
     content.confirmationDialog(
-      "Move \(move?.name ?? "it") to \(move.map { library.folderName($0.destination) } ?? "another folder")?",
+      "Move \(move?.title ?? "it") to \(move.map { library.folderName($0.destination) } ?? "another folder")?",
       isPresented: Binding(get: { move != nil }, set: { if !$0 { move = nil } }),
       presenting: move
     ) { planned in
       Button("Move") {
         move = nil
-        library.runMove(planned)
+        library.runMoves(planned)
       }
       Button("Cancel", role: .cancel) { move = nil }
     } message: { planned in
       Text(library.describe(planned))
+    }
+  }
+}
+
+private struct TrashConfirmation: ViewModifier {
+  @Binding var batch: ModelLibrary.TrashBatch?
+  let done: (ModelLibrary.TrashResult) -> Void
+  @Environment(ModelLibrary.self) private var library
+
+  func body(content: Content) -> some View {
+    content.confirmationDialog(
+      batch.map(ModelLibrary.trashTitle) ?? "Move to the Trash?",
+      isPresented: Binding(get: { batch != nil }, set: { if !$0 { batch = nil } }),
+      presenting: batch
+    ) { planned in
+      Button("Move to Trash", role: .destructive) {
+        batch = nil
+        Task { done(await library.trash(planned)) }
+      }
+      Button("Cancel", role: .cancel) { batch = nil }
+    } message: { planned in
+      Text(ModelLibrary.trashMessage(planned))
     }
   }
 }

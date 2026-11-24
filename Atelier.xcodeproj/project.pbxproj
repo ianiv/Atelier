@@ -40,6 +40,7 @@
 		B7A1F0C2B3D4A59687786201 /* StyleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A1F0C2B3D4A59687786301 /* StyleTests.swift */; };
 		B7A1F0C2B3D4A59687786202 /* HistoryGraphTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A1F0C2B3D4A59687786302 /* HistoryGraphTests.swift */; };
 		A9C3E5F70B1D2E3F40516276 /* ModelMoveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9C3E5F70B1D2E3F40516275 /* ModelMoveTests.swift */; };
+		B7D1E2F3A4B5C6D7E8F90006 /* LibraryBatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7D1E2F3A4B5C6D7E8F90005 /* LibraryBatchTests.swift */; };
 		D693B32CA7045CE418942D36 /* LoRACopiesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5C56096D693B32CA7045CE4 /* LoRACopiesTests.swift */; };
 		B7A1F0C2B3D4A59687786203 /* FileCleanupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A1F0C2B3D4A59687786303 /* FileCleanupTests.swift */; };
 		5A4E1C0D2B3F4A6E8D9C7B04 /* ShareTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A4E1C0D2B3F4A6E8D9C7B03 /* ShareTests.swift */; };
@@ -202,6 +203,8 @@
 		C1A1B98D2F1D4DB733D3A91A /* InspectorPresets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1695448917E4F53AE8A6DC58 /* InspectorPresets.swift */; };
 		1A2A67114ED9030A8948E8ED /* InspectorSize.swift in Sources */ = {isa = PBXBuildFile; fileRef = 767CBEA7FD85E530CA5726C1 /* InspectorSize.swift */; };
 		A9C3E5F70B1D2E3F40516274 /* ModelMove.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9C3E5F70B1D2E3F40516273 /* ModelMove.swift */; };
+		B7D1E2F3A4B5C6D7E8F90004 /* LibrarySelectionSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7D1E2F3A4B5C6D7E8F90003 /* LibrarySelectionSummary.swift */; };
+		B7D1E2F3A4B5C6D7E8F90002 /* LibraryBatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7D1E2F3A4B5C6D7E8F90001 /* LibraryBatch.swift */; };
 		79B323C9DF45E28D4AC8C438 /* LoRACopies.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CB306D579B323C9DF45E28D /* LoRACopies.swift */; };
 		B7D4E6F80C1D2E3F40516282 /* AddFolder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7D4E6F80C1D2E3F40516281 /* AddFolder.swift */; };
 		FEC22431AE15251468257CA2 /* LibraryErrorAlert.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAFF310E4AA538AA8C02FC77 /* LibraryErrorAlert.swift */; };
@@ -381,6 +384,7 @@
 		B7A1F0C2B3D4A59687786301 /* StyleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StyleTests.swift; sourceTree = "<group>"; };
 		B7A1F0C2B3D4A59687786302 /* HistoryGraphTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryGraphTests.swift; sourceTree = "<group>"; };
 		A9C3E5F70B1D2E3F40516275 /* ModelMoveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelMoveTests.swift; sourceTree = "<group>"; };
+		B7D1E2F3A4B5C6D7E8F90005 /* LibraryBatchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryBatchTests.swift; sourceTree = "<group>"; };
 		B5C56096D693B32CA7045CE4 /* LoRACopiesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoRACopiesTests.swift; sourceTree = "<group>"; };
 		B7A1F0C2B3D4A59687786303 /* FileCleanupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileCleanupTests.swift; sourceTree = "<group>"; };
 		5A4E1C0D2B3F4A6E8D9C7B03 /* ShareTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareTests.swift; sourceTree = "<group>"; };
@@ -538,6 +542,8 @@
 		1695448917E4F53AE8A6DC58 /* InspectorPresets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorPresets.swift; sourceTree = "<group>"; };
 		767CBEA7FD85E530CA5726C1 /* InspectorSize.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorSize.swift; sourceTree = "<group>"; };
 		A9C3E5F70B1D2E3F40516273 /* ModelMove.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelMove.swift; sourceTree = "<group>"; };
+		B7D1E2F3A4B5C6D7E8F90003 /* LibrarySelectionSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibrarySelectionSummary.swift; sourceTree = "<group>"; };
+		B7D1E2F3A4B5C6D7E8F90001 /* LibraryBatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryBatch.swift; sourceTree = "<group>"; };
 		3CB306D579B323C9DF45E28D /* LoRACopies.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoRACopies.swift; sourceTree = "<group>"; };
 		B7D4E6F80C1D2E3F40516281 /* AddFolder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddFolder.swift; sourceTree = "<group>"; };
 		DAFF310E4AA538AA8C02FC77 /* LibraryErrorAlert.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryErrorAlert.swift; sourceTree = "<group>"; };
@@ -932,6 +938,8 @@
 			children = (
 				DAFF310E4AA538AA8C02FC77 /* LibraryErrorAlert.swift */,
 				A9C3E5F70B1D2E3F40516273 /* ModelMove.swift */,
+				B7D1E2F3A4B5C6D7E8F90003 /* LibrarySelectionSummary.swift */,
+				B7D1E2F3A4B5C6D7E8F90001 /* LibraryBatch.swift */,
 				3CB306D579B323C9DF45E28D /* LoRACopies.swift */,
 				B7D4E6F80C1D2E3F40516281 /* AddFolder.swift */,
 				434F7495899302690802E139 /* LoRAsView.swift */,
@@ -1085,6 +1093,7 @@
 				B7A1F0C2B3D4A59687786303 /* FileCleanupTests.swift */,
 				5A4E1C0D2B3F4A6E8D9C7B03 /* ShareTests.swift */,
 				A9C3E5F70B1D2E3F40516275 /* ModelMoveTests.swift */,
+				B7D1E2F3A4B5C6D7E8F90005 /* LibraryBatchTests.swift */,
 				B5C56096D693B32CA7045CE4 /* LoRACopiesTests.swift */,
 				B7A1F0C2B3D4A59687786304 /* QueueTests.swift */,
 				AF232DA4CD210F5B739657F4 /* RemoteTests.swift */,
@@ -1567,6 +1576,8 @@
 				1A2A67114ED9030A8948E8ED /* InspectorSize.swift in Sources */,
 				FEC22431AE15251468257CA2 /* LibraryErrorAlert.swift in Sources */,
 				A9C3E5F70B1D2E3F40516274 /* ModelMove.swift in Sources */,
+				B7D1E2F3A4B5C6D7E8F90004 /* LibrarySelectionSummary.swift in Sources */,
+				B7D1E2F3A4B5C6D7E8F90002 /* LibraryBatch.swift in Sources */,
 				79B323C9DF45E28D4AC8C438 /* LoRACopies.swift in Sources */,
 				B7D4E6F80C1D2E3F40516282 /* AddFolder.swift in Sources */,
 				600FFF1041FD67847B794622 /* LoRAsView.swift in Sources */,
@@ -1627,6 +1638,7 @@
 				B7A1F0C2B3D4A59687786203 /* FileCleanupTests.swift in Sources */,
 				5A4E1C0D2B3F4A6E8D9C7B04 /* ShareTests.swift in Sources */,
 				A9C3E5F70B1D2E3F40516276 /* ModelMoveTests.swift in Sources */,
+				B7D1E2F3A4B5C6D7E8F90006 /* LibraryBatchTests.swift in Sources */,
 				D693B32CA7045CE418942D36 /* LoRACopiesTests.swift in Sources */,
 				B7A1F0C2B3D4A59687786204 /* QueueTests.swift in Sources */,
 				C1C8FF826A372CCCEC268435 /* RemoteTests.swift in Sources */,

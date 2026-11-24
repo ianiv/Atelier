@@ -188,6 +188,8 @@ final class ModelLibrary {
   private(set) var freeSpace: Int64?
   /// The move to another models folder running now (see `ModelMove.swift`); one at a time.
   var moving: MoveProgress?
+  /// How the last move or batch of moves ended.
+  var lastMoveOutcome: MoveOutcome?
   /// The Hugging Face token, for link imports (`HuggingFaceAuth.swift`).
   let huggingFace = HuggingFaceAccount()
   /// Downloads from Hugging Face links running now, by staging folder path (`LinkDownload.swift`).
@@ -203,6 +205,8 @@ final class ModelLibrary {
   var errorMessage: String?
   /// The LoRAs screen's search, family filter, selection and sort, kept while it isn't shown.
   var loraScreen = LoRAScreenState()
+  /// The Models screen's selection, kept the same way, and settable by the scripted checks.
+  var modelScreen = ModelScreenState()
   /// The Models table's sort (empty keeps the catalog's order, by name), kept the same way.
   var modelSortOrder: [KeyPathComparator<ModelTableRow>] = []
 
@@ -483,25 +487,20 @@ final class ModelLibrary {
   /// Moves the model's own files to the Trash. Shared files (text encoders, VAEs) stay. An
   /// imported model also loses its custom.json entry and the companion files its import wrote, and
   /// a model with a hidden refiner (LongCat-Video Avatar 1.6's OPSD half) loses that file too.
+  /// A batch of one (`trash(_:)`, in LibraryBatch.swift).
   func delete(_ model: MediaGenerationResolvedModel) async {
-    guard canDelete(model) else { return }
-    let isCustom = isCustom(model)
-    let companions = (isCustom ? Self.importedCompanions(of: model.file) : []) + Self.hiddenCompanions(of: model.file)
-    do {
-      for file in [model.file] + companions {
-        for url in Self.files(of: file, in: directories) {
-          try FileManager.default.trashItem(at: url, resultingItemURL: nil)
-        }
-      }
-      if isCustom { try unregisterModel(model.file) }
-    } catch {
-      errorMessage = "Couldn't delete \(model.name): \(error.localizedDescription)"
-    }
-    await afterChange()
+    guard canDelete(model), let batch = planTrash([model]) else { return }
+    _ = await trash(batch)
   }
 
   func reveal(_ file: String) {
-    let urls = Self.files(of: file, in: directories)
+    reveal([file])
+  }
+
+  /// Selects every one of `files` (with its `-tensordata`) in the Finder; on iPad, Files opens the
+  /// first one's folder.
+  func reveal(_ files: [String]) {
+    let urls = files.flatMap { Self.files(of: $0, in: directories) }
     Finder.reveal(urls.isEmpty ? [directory] : urls)
   }
 
@@ -1176,7 +1175,7 @@ final class ModelLibrary {
         for url in Self.files(of: full.file, in: directories) {
           try FileManager.default.trashItem(at: url, resultingItemURL: nil)
         }
-        try unregisterModel(full.file)
+        try unregisterModels([full.file])
         await afterChange()
       } else {
         fullInUse = true
@@ -1239,10 +1238,19 @@ final class ModelLibrary {
 
   /// Files an import of `file` wrote next to it (`<name>_vae_f16.ckpt` and the like, the
   /// suffixes ModelImporter uses), when its specification names them. Shared encoders and VAEs
-  /// stay.
-  static func importedCompanions(of file: String) -> [String] {
-    guard file.hasSuffix("_f16.ckpt"), let specification = ModelZoo.specificationForModel(file)
-    else { return [] }
+  /// stay: one another listed model names is shared, unless that model is in `excluding` (the rest
+  /// of a batch going with it, as a model and its 8-bit copy, which name the same VAE).
+  static func importedCompanions(of file: String, excluding: Set<String> = []) -> [String] {
+    importedCompanions(
+      of: file, specification: ModelZoo.specificationForModel(file), others: ModelZoo.availableSpecifications,
+      excluding: excluding)
+  }
+
+  /// `importedCompanions(of:excluding:)` against a given list of specifications.
+  nonisolated static func importedCompanions(
+    of file: String, specification: ModelZoo.Specification?, others: [ModelZoo.Specification], excluding: Set<String>
+  ) -> [String] {
+    guard file.hasSuffix("_f16.ckpt"), let specification else { return [] }
     let stem = String(file.dropLast("f16.ckpt".count))
     let suffixes = [
       "vae_f16.ckpt", "clip_vit_l14_f16.ckpt", "open_clip_vit_h14_f16.ckpt",
@@ -1254,30 +1262,32 @@ final class ModelLibrary {
     // An 8-bit copy names the same files, and the H3 Image VAE is shared by every copy even when
     // the model's name would make it look like the import wrote it.
     let shared = Set(
-      ModelZoo.availableSpecifications.filter { $0.file != file }.flatMap {
+      others.filter { $0.file != file && !excluding.contains($0.file) }.flatMap {
         [$0.autoencoder, $0.textEncoder, $0.clipEncoder].compactMap(\.self) + ($0.additionalClipEncoders ?? [])
       } + [H3ImageVAEImporter.file])
     return suffixes.map { stem + $0 }.filter { named.contains($0) && !shared.contains($0) }
   }
 
-  /// Removes `file`'s custom.json entries in every models folder, keeping every other entry as
-  /// written, and drops it from the running engine's model list.
-  private func unregisterModel(_ file: String) throws {
-    for directory in directories where Self.readCustomModels(in: directory).contains(file) {
+  /// Removes the custom.json entries of `files` in every models folder, keeping every other entry
+  /// as written, one write per folder, and drops them from the running engine's model list.
+  func unregisterModels(_ files: Set<String>) throws {
+    guard !files.isEmpty else { return }
+    for directory in directories where !Set(Self.readCustomModels(in: directory)).isDisjoint(with: files) {
       backUpModelRegistryOnce(in: directory)
       let url = directory.appendingPathComponent("custom.json")
       if let data = try? Data(contentsOf: url),
          let entries = try JSONSerialization.jsonObject(with: data) as? [[String: Any]]
       {
-        let remaining = entries.filter { $0["file"] as? String != file }
         try JSONSerialization.data(
-          withJSONObject: remaining, options: [.prettyPrinted, .withoutEscapingSlashes]
+          withJSONObject: Self.removingEntries(files, from: entries), options: [.prettyPrinted, .withoutEscapingSlashes]
         ).write(to: url, options: .atomic)
       }
     }
-    ModelZoo.availableSpecifications.removeAll { $0.file == file }
-    ModelZoo.fallbackMapping[file] = nil
-    if Self.overriddenFiles.remove(file) != nil { ModelZoo.overrideMapping[file] = nil }
+    ModelZoo.availableSpecifications.removeAll { files.contains($0.file) }
+    for file in files {
+      ModelZoo.fallbackMapping[file] = nil
+      if Self.overriddenFiles.remove(file) != nil { ModelZoo.overrideMapping[file] = nil }
+    }
   }
 
   /// Lists a model file already in `directory` that nothing explains, from what its owner says it
@@ -1690,28 +1700,18 @@ final class ModelLibrary {
     Self.loadCustomLoRAs(in: directories)
   }
 
-  /// Moves the LoRA file to the Trash and removes its custom_lora.json entry.
+  /// Moves the LoRA file to the Trash and removes its custom_lora.json entry. A batch of one
+  /// (`trashLoRAs(_:)`, in LibraryBatch.swift).
   func delete(_ lora: LoRA) {
-    guard moving?.file != lora.file else { return }
-    errorMessage = nil
-    do {
-      for url in Self.files(of: lora.file, in: directories) {
-        try FileManager.default.trashItem(at: url, resultingItemURL: nil)
-      }
-      backUpLoRARegistryOnce(in: lora.registry)
-      let remaining = Self.readLoRASpecifications(in: lora.registry).filter {
-        $0.file != lora.file
-      }
-      try Self.writeLoRASpecifications(remaining, in: lora.registry)
-      // The engine's in-memory table keeps the entry, but with the file gone it's skipped.
-      // Gone from the list at once, so a screen picking the next selection doesn't pick it; the
-      // reread lands a moment later.
-      invalidateLoRAReads()
-      loras.removeAll { $0.file == lora.file }
-    } catch {
-      errorMessage = "Couldn't delete \(lora.name): \(error.localizedDescription)"
-    }
-    Task { await reloadLoRAs() }
+    guard let batch = planTrash([lora]) else { return }
+    _ = trashLoRAs(batch)
+  }
+
+  /// Takes LoRAs off the list at once, so a screen picking the next selection doesn't pick one;
+  /// the reread already running is dropped, and the next one lands a moment later.
+  func unlistLoRAs(_ files: Set<String>) {
+    invalidateLoRAReads()
+    loras.removeAll { files.contains($0.file) }
   }
 
   /// Copies a folder's custom_lora.json aside before the app first changes it in a session.
@@ -1749,7 +1749,7 @@ final class ModelLibrary {
     directories.first { FileManager.default.fileExists(atPath: $0.appendingPathComponent(file).path) }
   }
 
-  private nonisolated static func size(of file: String, in directories: [URL]) -> Int64? {
+  nonisolated static func size(of file: String, in directories: [URL]) -> Int64? {
     folder(of: file, in: directories).flatMap { size(of: file, inFolder: $0) }
   }
 
