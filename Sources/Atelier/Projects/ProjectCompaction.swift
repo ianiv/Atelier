@@ -249,14 +249,22 @@ nonisolated enum ProjectCompaction {
   static func scheduleCleanUp(at url: URL, whileOpen: Bool) {
     let started = generation.withLock { $0 }
     queue.async {
+      // A deleted project's stops too: its connection would bring back a -wal and -shm at the
+      // old path (`HistoryStore.delete`).
       let outcome = cleanUp(at: url) {
-        generation.withLock { $0 } != started || (!whileOpen && isOpen(url))
+        generation.withLock { $0 } != started || (!whileOpen && isOpen(url)) || !FileManager.default.fileExists(atPath: url.path)
       }
       if let outcome {
         Log.project.info(
           "Cleaned up \(url.lastPathComponent, privacy: .public): \(format(outcome.bytesBefore), privacy: .public) → \(format(outcome.bytesAfter), privacy: .public)")
       }
     }
+  }
+
+  /// Waits for the clean-ups running or queued now (`scheduleCleanUp`); one whose file is gone stops
+  /// at its next transaction.
+  static func finishCleanUps() async {
+    await withCheckedContinuation { continuation in queue.async { continuation.resume() } }
   }
 
   /// Frees the file's free pages with `incremental_vacuum`, in short transactions

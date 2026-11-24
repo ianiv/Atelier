@@ -4055,11 +4055,14 @@ extension CreateModel {
   /// save into that project alone. Every other job saves into whichever project is open, as after
   /// any switch, so it carries on into the one opened in its place. The canvas keeps showing its
   /// image, no longer a step of any project, so a project made later under the same name doesn't
-  /// take it for one of its own.
+  /// take it for one of its own. A video still being copied into it stops too (an agent's
+  /// `import_video`, which this can't cancel, stops when the project closes, `HistoryStore.importVideo`),
+  /// so it doesn't bring back the media folder the delete trashed.
   /// Returns the trashed project file (`HistoryStore.delete`).
   @discardableResult
   func deleteProject(_ name: String) async throws -> URL? {
     for job in colorMatchJobs(in: name) + editJobs(in: name) + depthMapJobs(in: name) { cancel(job.id) }
+    if name == history.project.name { cancelVideoImport() }
     defer {
       if let step = imageStep, step.project == name, step.project != history.project.name { imageStep = nil }
     }

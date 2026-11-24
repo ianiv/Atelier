@@ -523,9 +523,12 @@ extension Automation {
 
   /// Deletes scratch projects the way Delete Project… does (`CreateModel.deleteProject`), as
   /// PASS/FAIL lines: the current project switches to the next one, its files go to the Trash,
-  /// its cached clip videos go (another project's stay), a queued Match Colors job for it is
-  /// cancelled, the canvas image isn't taken for a step of a later project of the same name, and
-  /// thumbnails aren't either.
+  /// its media folder (a video imported into it) with them, and once the project it closed has
+  /// had time to shut down no -wal, -shm or media folder is back at the old path, not even from
+  /// an import still running when the delete came (as an agent's `import_video`); another
+  /// project's media folder stays. Its cached clip videos go (another project's stay), a queued
+  /// Match Colors job for it is cancelled, the canvas image isn't taken for a step of a later
+  /// project of the same name, and thumbnails aren't either.
   ///
   ///   Atelier --delete-project-check --project delete-check-<random> [--quit]
   ///
@@ -574,7 +577,7 @@ extension Automation {
       /// Removes what a delete put in the Trash: it's this check's scratch file.
       func emptyTrashed(_ trashed: URL?) {
         guard let trashed else { return }
-        for suffix in ["", "-wal", "-shm"] {
+        for suffix in ["", "-wal", "-shm", Media.suffix] {
           try? fileManager.removeItem(atPath: trashed.path + suffix)
         }
       }
@@ -621,14 +624,40 @@ extension Automation {
         check(model.colorMatchJobs(in: name).count == 1, "a Match Colors job for “\(name)” waits")
       }
 
+      // A video in the project's media folder, and one in another project's (`last`, which isn't
+      // opened before it's looked at, so its orphan clean-up can't take the file).
+      let movie = fileManager.temporaryDirectory.appending(path: "\(name)-movie.mov", directoryHint: .notDirectory)
+      defer { try? fileManager.removeItem(at: movie) }
+      do {
+        try await writeMovie(to: movie, width: 64, height: 32, frames: 8, framesPerSecond: 24)
+        _ = try await history.importVideo(movie, name: "Delete check")
+      } catch {
+        check(false, "import a video into “\(name)”: \(error.localizedDescription)")
+      }
+      let lastMedia = Media.folder(forProject: HistoryStore.url(for: last))
+      let lastMediaFile = lastMedia.appending(path: "\(UUID().uuidString).mov", directoryHint: .notDirectory)
+      try? fileManager.createDirectory(at: lastMedia, withIntermediateDirectories: true)
+      try? fileManager.copyItem(at: movie, to: lastMediaFile)
+      defer { try? fileManager.removeItem(at: lastMedia) }
+
       let deleted = history.project
       let url = deleted.url
+      check(exists(url, Media.suffix), "“\(name)” has a media folder")
       do {
+        // Another import still running as the delete starts, as an agent's is (nothing cancels it).
+        let racing = Task { @MainActor in try await history.importVideo(movie, name: "Delete check during delete") }
         let trashed = try await model.deleteProject(name)
+        let raced = await racing.result
+        print("the import during the delete \((try? raced.get()) == nil ? "stopped" : "finished first")")
+        // The closed project's background shut-down, had it been let go, would come in this time.
+        try? await Task.sleep(for: .seconds(1))
         check(history.project.name == sibling, "“\(sibling)” is open in its place (got “\(history.project.name)”)")
         check(history.items.count == 1, "and lists its own image")
         check(!exists(url) && !exists(url, "-wal") && !exists(url, "-shm"), "the project's files are gone from Projects")
+        check(!exists(url, Media.suffix), "its media folder is gone from Projects")
         check(trashed.map { exists($0) } == true, "the project file is in the Trash")
+        check(trashed.map { exists($0, Media.suffix) } == true, "its media folder is in the Trash")
+        check(exists(lastMediaFile), "another project's media folder stays")
         emptyTrashed(trashed)
         check(!history.projectNames.contains(name), "the project menu no longer lists it")
         check(!deleted.isOpen, "the project that was open is closed")
