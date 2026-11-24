@@ -3,7 +3,9 @@ import SwiftUI
 /// Match Colors… on the canvas image: Match Colors to Original with how far the colors and the
 /// light move chosen, and whether to measure only what the edit left alone, beside a preview of
 /// what they make; then queue it. The result is a new image in History after the edited one, as
-/// the one-click item's is.
+/// the one-click item's is. With a mask on the canvas when it opened (`mask`), only the masked
+/// area changes, matched to the picture around it, and the pictures compare it with the image
+/// before the match rather than with the original.
 ///
 /// The preview is the edited image at a reduced size, matched with the statistics of the full
 /// images (`ColorMatch.Preview`), so it shows what the job will make. The pictures take all the
@@ -28,6 +30,9 @@ struct ColorMatchSheet: View {
   @Environment(\.dismiss) private var dismiss
   /// The step it was opened for, kept here: the canvas can change while the sheet is open.
   let item: HistoryItem
+  /// The canvas mask when it opened (`CreateModel.canvasColorMatchMask`), in the step's pixels:
+  /// the match keeps to it. Nil for the whole image.
+  var mask: CanvasMask?
   /// Last used, the amounts as fractions from 0 to 1. The one-click menu item doesn't read them.
   @AppStorage("colorMatchTint") private var tint = 1.0
   @AppStorage("colorMatchSaturation") private var saturation = 1.0
@@ -37,6 +42,9 @@ struct ColorMatchSheet: View {
   /// removed something gets matched, which is what it's for.
   @AppStorage("colorMatchUnchangedOnly") private var unchangedOnly = true
   @AppStorage("colorMatchCompareMode") private var compareMode = CompareMode.sideBySide
+  /// With a mask: match the masked area to all the rest of the picture rather than to its edge
+  /// (`ColorMatch.Options.maskWhole`).
+  @AppStorage("colorMatchMaskWhole") private var maskWhole = false
   /// The size the sheet opens at until it's been dragged to another, and the smallest it goes.
   static let defaultSize = CGSize(width: 1000, height: 800)
   static let minSize = CGSize(width: 640, height: 560)
@@ -54,7 +62,10 @@ struct ColorMatchSheet: View {
   @State private var matched: CGImage?
 
   private var options: ColorMatch.Options {
-    ColorMatch.Options(tint: tint, saturation: saturation, brightness: brightness, contrast: contrast, unchangedOnly: unchangedOnly).snapped
+    ColorMatch.Options(
+      tint: tint, saturation: saturation, brightness: brightness, contrast: contrast, unchangedOnly: unchangedOnly,
+      maskWhole: mask != nil && maskWhole
+    ).snapped
   }
 
   /// What Match queues: `options`, but measuring the whole image when that's what a match from
@@ -73,7 +84,7 @@ struct ColorMatchSheet: View {
     if preview == nil { return "The image or its original couldn't be read." }
     // Another project was opened under the sheet: the match would be queued for the wrong one.
     if create.history.item(tensorId: item.tensorId) == nil { return "That image isn't in the open project any more." }
-    if create.pendingColorMatch(for: item, options: queuedOptions) != nil {
+    if create.pendingColorMatch(for: item, options: queuedOptions, mask: mask) != nil {
       return "A match with these settings is already waiting or running for this image."
     }
     return nil
@@ -83,11 +94,56 @@ struct ColorMatchSheet: View {
   /// do anything.
   private var shapesDiffer: Bool { preview?.measurements.reason == .shape }
 
+  /// What the masked area is matched to, as measured: with a mask that has enough on both sides
+  /// of its edge (`ColorMatch.Measurements.masked`), its surroundings or the rest of the picture;
+  /// else the original. Until it's measured, as if it has.
+  private var reference: Reference {
+    guard mask != nil, preview.map({ $0.measurements.masked != nil }) ?? true else { return .original }
+    return maskWhole ? .rest : .surroundings
+  }
+
+  /// What the sliders' far end and hints call what's matched to.
+  private var referenceName: String { reference.name }
+
+  /// What a match is made toward, as the sheet names it.
+  enum Reference: Sendable {
+    case original, surroundings, rest
+
+    /// In a sentence ("the original").
+    var name: String {
+      switch self {
+      case .original: "original"
+      case .surroundings: "surroundings"
+      case .rest: "rest of the picture"
+      }
+    }
+
+    /// At a slider's far end.
+    var label: String {
+      switch self {
+      case .original: "Original"
+      case .surroundings: "Surroundings"
+      case .rest: "Rest"
+      }
+    }
+
+    /// What a hint says when there's nothing to match.
+    var same: String { "Same as the \(name)." }
+  }
+
   /// What the two pictures are compared from, under the toggle: how much of the picture, or why
   /// all of it.
   private var measuredNote: String {
     guard let measurements = preview?.measurements else { return " " }
     func percent(_ fraction: Double) -> Int { Int((fraction * 100).rounded()) }
+    if mask != nil {
+      guard measurements.masked != nil else {
+        return "Too little lies on one side of the mask's edge, so the masked area is compared with the original."
+      }
+      return maskWhole
+        ? "Only the masked area changes, compared with all of the picture outside it."
+        : "Only the masked area changes, compared with the picture just around it."
+    }
     switch measurements.reason {
     case .shape:
       return "The original has a different shape, so the whole picture is compared."
@@ -105,48 +161,51 @@ struct ColorMatchSheet: View {
   /// How the original differs from the edit, as measured the way the toggle says (so the hints
   /// change with it, as the preview does); nil until the two are measured.
   private var comparison: ColorMatch.Comparison? {
-    preview?.measurements.measurement(unchangedOnly: unchangedOnly).comparison
+    preview?.measurements.measurement(unchangedOnly: unchangedOnly, maskWhole: options.maskWhole).comparison
   }
 
   /// What a slider's hint says when there's nothing for it to match.
   static let sameHint = "Same as the original."
 
   /// "The original is slightly darker.": what a slider's far end holds, in plain words, since
-  /// the sliders only go toward the original and never past the edit.
-  private static func hint(_ lead: String, _ size: ColorMatch.Comparison.Size, _ word: String) -> String {
-    "The original \(lead) \(size == .slight ? "slightly " : "")\(word)."
+  /// the sliders only go toward the original and never past the edit. With a mask, what's
+  /// matched to instead (“The surroundings are…”, “The rest of the picture is…”).
+  private static func hint(_ lead: String, _ size: ColorMatch.Comparison.Size, _ word: String, reference: Reference) -> String {
+    let verb = reference == .surroundings ? (lead == "is" ? "are" : "have") : lead
+    return "The \(reference.name) \(verb) \(size == .slight ? "slightly " : "")\(word)."
   }
 
-  static func tintHint(_ difference: ColorMatch.Comparison.Difference<ColorMatch.Comparison.Cast>?) -> String {
-    guard let difference else { return sameHint }
+  static func tintHint(_ difference: ColorMatch.Comparison.Difference<ColorMatch.Comparison.Cast>?, reference: Reference = .original) -> String {
+    guard let difference else { return reference == .original ? sameHint : reference.same }
     let word = switch difference.direction {
     case .warmer: "warmer"
     case .cooler: "cooler"
     case .pinker: "pinker"
     case .greener: "greener"
     }
-    return hint("is", difference.size, word)
+    return hint("is", difference.size, word, reference: reference)
   }
 
-  static func saturationHint(_ difference: ColorMatch.Comparison.Difference<ColorMatch.Comparison.Spread>?) -> String {
-    guard let difference else { return sameHint }
-    return hint("is", difference.size, difference.direction == .more ? "more vivid" : "more muted")
+  static func saturationHint(_ difference: ColorMatch.Comparison.Difference<ColorMatch.Comparison.Spread>?, reference: Reference = .original) -> String {
+    guard let difference else { return reference == .original ? sameHint : reference.same }
+    return hint("is", difference.size, difference.direction == .more ? "more vivid" : "more muted", reference: reference)
   }
 
-  static func brightnessHint(_ difference: ColorMatch.Comparison.Difference<ColorMatch.Comparison.Light>?) -> String {
-    guard let difference else { return sameHint }
-    return hint("is", difference.size, difference.direction == .darker ? "darker" : "brighter")
+  static func brightnessHint(_ difference: ColorMatch.Comparison.Difference<ColorMatch.Comparison.Light>?, reference: Reference = .original) -> String {
+    guard let difference else { return reference == .original ? sameHint : reference.same }
+    return hint("is", difference.size, difference.direction == .darker ? "darker" : "brighter", reference: reference)
   }
 
-  static func contrastHint(_ difference: ColorMatch.Comparison.Difference<ColorMatch.Comparison.Spread>?) -> String {
-    guard let difference else { return sameHint }
-    return hint("has", difference.size, difference.direction == .more ? "more contrast" : "less contrast")
+  static func contrastHint(_ difference: ColorMatch.Comparison.Difference<ColorMatch.Comparison.Spread>?, reference: Reference = .original) -> String {
+    guard let difference else { return reference == .original ? sameHint : reference.same }
+    return hint("has", difference.size, difference.direction == .more ? "more contrast" : "less contrast", reference: reference)
   }
 
   var body: some View {
     let options = self.options
     let problem = self.problem
     let comparison = self.comparison
+    let reference = self.reference
     VStack(alignment: .leading, spacing: 14) {
       Text("Match Colors").font(.headline)
       Picker("Comparison", selection: $compareMode) {
@@ -166,21 +225,35 @@ struct ColorMatchSheet: View {
           // One heading over all four: with each slider's ends named, the heading and a row's
           // name read together ("Match the original's Brightness").
           Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 2) {
-            heading("Match the original's")
-            slider("Tint", $tint, shown: options.tint, same: comparison.map { $0.tint == nil }, hint: comparison.map { Self.tintHint($0.tint) })
+            heading(reference == .surroundings ? "Match the surroundings'" : "Match the \(referenceName)'s")
+            slider(
+              "Tint", $tint, shown: options.tint,
+              same: comparison.map { $0.tint == nil }, hint: comparison.map { Self.tintHint($0.tint, reference: reference) })
             slider(
               "Saturation", $saturation, shown: options.saturation,
-              same: comparison.map { $0.saturation == nil }, hint: comparison.map { Self.saturationHint($0.saturation) })
+              same: comparison.map { $0.saturation == nil },
+              hint: comparison.map { Self.saturationHint($0.saturation, reference: reference) })
             slider(
               "Brightness", $brightness, shown: options.brightness,
-              same: comparison.map { $0.brightness == nil }, hint: comparison.map { Self.brightnessHint($0.brightness) })
+              same: comparison.map { $0.brightness == nil },
+              hint: comparison.map { Self.brightnessHint($0.brightness, reference: reference) })
             slider(
               "Contrast", $contrast, shown: options.contrast,
-              same: comparison.map { $0.contrast == nil }, hint: comparison.map { Self.contrastHint($0.contrast) })
+              same: comparison.map { $0.contrast == nil },
+              hint: comparison.map { Self.contrastHint($0.contrast, reference: reference) })
           }
+          // Always here, so nothing moves; only a mask has anything for it to choose.
+          Picker("Masked area", selection: $maskWhole) {
+            Text("Match to Its Edge").tag(false)
+            Text("Match to Rest of Picture").tag(true)
+          }
+          .pickerStyle(.segmented)
+          .fixedSize()
+          .disabled(mask == nil)
           VStack(alignment: .leading, spacing: 4) {
+            // A mask decides what's compared, so there are no edited areas to leave out.
             Toggle("Ignore edited areas", isOn: $unchangedOnly)
-              .disabled(shapesDiffer)
+              .disabled(shapesDiffer || mask != nil)
             // Room for it always, so nothing moves when it arrives or changes.
             Text(measuredNote)
               .font(.caption).foregroundStyle(.secondary)
@@ -207,7 +280,7 @@ struct ColorMatchSheet: View {
         Button("Cancel", role: .cancel) { dismiss() }
           .keyboardShortcut(.cancelAction)
         Button("Match") {
-          create.matchColors(item, options: queuedOptions)
+          create.matchColors(item, options: queuedOptions, mask: mask)
           dismiss()
         }
         .keyboardShortcut(.defaultAction)
@@ -219,7 +292,7 @@ struct ColorMatchSheet: View {
       minWidth: Self.minSize.width, minHeight: Self.minSize.height, idealSize: Self.defaultSize, rememberedAs: Self.sizeKey)
     // Once: the images don't change under the sheet.
     .task {
-      preview = await create.colorMatchPreview(for: item) { original = $0 }
+      preview = await create.colorMatchPreview(for: item, mask: mask) { original = $0 }
       loaded = true
     }
     // Again whenever a setting changes (or the preview arrives), away from the main actor; a
@@ -249,7 +322,7 @@ struct ColorMatchSheet: View {
       } minimumValueLabel: {
         Self.label("Edit")
       } maximumValueLabel: {
-        Self.label("Original")
+        Self.label(reference.label)
       }
       .labelsHidden()
       // All the width the row has: with its ends labelled a slider keeps to its own size, and
@@ -257,7 +330,7 @@ struct ColorMatchSheet: View {
       .frame(maxWidth: .infinity)
       .disabled(same == true)
       .accessibilityLabel(title)
-      .accessibilityHint(hint.map { "From the edit to the original. \($0)" } ?? "From the edit to the original.")
+      .accessibilityHint(hint.map { "From the edit to the \(referenceName). \($0)" } ?? "From the edit to the \(referenceName).")
       percent(shown)
     }
     .padding(.top, 6)
@@ -286,8 +359,15 @@ struct ColorMatchSheet: View {
   /// The least height the pictures (with their labels) keep when the sheet is short.
   private static let minPicturesHeight: CGFloat = 150
 
-  /// The original as shown: at the preview's size once that's made, as read until then.
-  private var shownOriginal: CGImage? { preview?.original ?? original }
+  /// The original as shown: at the preview's size once that's made, as read until then. With a
+  /// mask, the image before the match instead (once the preview has it): the masked area is
+  /// compared within it, not with the original.
+  private var shownOriginal: CGImage? {
+    mask != nil ? preview?.before : preview?.original ?? original
+  }
+
+  /// What the left-hand picture is called.
+  private var originalTitle: String { mask != nil ? "Before" : "Original" }
 
   /// What stands in for the matched picture while there's none; nil when it's only being drawn.
   private var matchedNote: String? {
@@ -302,13 +382,13 @@ struct ColorMatchSheet: View {
     switch compareMode {
     case .sideBySide:
       HStack(alignment: .top, spacing: 12) {
-        picture(shownOriginal, note: nil, title: "Original")
+        picture(shownOriginal, note: nil, title: originalTitle)
         picture(matched, note: matchedNote, title: "Matched")
       }
     case .slider:
       SliderComparison(
         matched: matched, original: shownOriginal, matchedNote: matchedNote,
-        shape: preview.map { CGSize(width: $0.width, height: $0.height) })
+        shape: preview.map { CGSize(width: $0.width, height: $0.height) }, originalTitle: originalTitle)
     }
   }
 

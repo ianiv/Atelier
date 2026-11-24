@@ -307,7 +307,7 @@ struct QueueRow: View {
     // Its project, when it isn't the one open.
     let elsewhere = job.project.flatMap { $0 == create.history.project.name ? nil : "in “\($0)”" }
     if let match = request.colorMatch {
-      return [create.runLocationName(of: job), elsewhere, size, Self.colorText(match.options), Self.lightnessText(match.options), Self.unchangedText(match), took]
+      return [create.runLocationName(of: job), elsewhere, size, Self.colorText(match.options), Self.lightnessText(match.options), match.mask == nil ? Self.unchangedText(match) : match.options.maskWhole ? "masked area to the rest" : "masked area to its edge", took]
         .compactMap(\.self).joined(separator: " · ")
     }
     // An edit, too, uses no model, seed or steps.

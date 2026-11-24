@@ -457,7 +457,7 @@ struct CanvasView: View {
       ImageUpscaleSheet(width: model.image?.width ?? 0, height: model.image?.height ?? 0)
     }
     .sheet(item: Bindable(model).colorMatchSheetItem) { item in
-      ColorMatchSheet(item: item)
+      ColorMatchSheet(item: item, mask: model.colorMatchSheetMask)
     }
     .sheet(item: Bindable(model).depthModelSheetItem) { item in
       DepthModelSheet(item: item, project: model.history.project.name)
@@ -823,9 +823,12 @@ struct CanvasView: View {
     Divider()
     Button("Upscale…") { model.upscalingCanvasImage = true }
       .disabled(!model.canUpscaleCanvasImage)
-    Button("Match Colors to Original") { model.matchCanvasColors() }
-      .disabled(!model.canMatchCanvasColors)
-    Button("Match Colors…") { model.colorMatchSheetItem = model.imageItem }
+    // With a mask on the canvas only the masked area changes, matched to the picture around it.
+    Button(model.canvasColorMatchMask == nil ? "Match Colors to Original" : "Match Masked Colors to Surroundings") {
+      model.matchCanvasColors()
+    }
+    .disabled(!model.canMatchCanvasColors)
+    Button("Match Colors…") { model.openMatchColors() }
       .disabled(!model.canOpenMatchColors)
     Button("Extract Depth Map") { model.extractCanvasDepthMap() }
       .disabled(!model.canExtractCanvasDepthMap)

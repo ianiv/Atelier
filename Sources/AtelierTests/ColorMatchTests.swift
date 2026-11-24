@@ -1120,4 +1120,141 @@ struct ColorMatchTests {
     #expect(ColorMatchSheet.saturationHint(.init(direction: .less, size: .slight)) == "The original is slightly more muted.")
     #expect(ColorMatchSheet.contrastHint(nil) == "Same as the original.")
   }
+
+  // MARK: Masks
+
+  /// A 400×200 picture whose right half (the "outpainted" part, masked) is the same kind of
+  /// texture as its left but `delta` off in Lab, with the mask over that half.
+  private func outpainted(delta: SIMD3<Double> = SIMD3(0, 3, 9)) throws -> (image: CGImage, pixels: [UInt8], mask: CanvasMask, width: Int, height: Int) {
+    let width = 400, height = 200
+    let left = pixels(width * height, seed: 3)
+    let warm = shifted(left, by: delta)
+    var out = left
+    for y in 0..<height {
+      for x in (width / 2)..<width {
+        let index = (y * width + x) * 4
+        out.replaceSubrange(index..<(index + 4), with: warm[index..<(index + 4)])
+      }
+    }
+    let image = try #require(ColorMatch.cgImage(rgba: out, width: width, height: height))
+    return (image, out, CanvasMask(rects: [CGRect(x: width / 2, y: 0, width: width / 2, height: height)]), width, height)
+  }
+
+  @Test func aMaskedMatchChangesOnlyTheMaskAndMatchesItsSurroundings() throws {
+    let picture = try outpainted()
+    // The original doesn't matter with a mask: a gray square of another shape.
+    let gray = try #require(ColorMatch.cgImage(rgba: [UInt8](repeating: 128, count: 64 * 64 * 4).enumerated().map { $0.offset % 4 == 3 ? 255 : $0.element }, width: 64, height: 64))
+    let result = try #require(ColorMatch.matched(picture.image, to: gray, mask: picture.mask))
+    let back = try #require(ColorMatch.rgba(result.image))
+    let width = picture.width, height = picture.height
+    var leftBefore: [UInt8] = [], leftAfter: [UInt8] = [], rightAfter: [UInt8] = []
+    for y in 0..<height {
+      for x in 0..<width {
+        let index = (y * width + x) * 4
+        if x < width / 2 {
+          leftBefore += picture.pixels[index..<(index + 4)]
+          leftAfter += back[index..<(index + 4)]
+        } else if x >= width / 2 + 10 {
+          // Past the feather.
+          rightAfter += back[index..<(index + 4)]
+        }
+      }
+    }
+    #expect(leftAfter == leftBefore, "nothing outside the mask changes")
+    #expect(abs(result.shift.b - 9) < 1 && abs(result.shift.a - 3) < 1, "the shift is the masked side's against the other")
+    let matched = ColorMatch.stats(rgba: rightAfter).mean
+    let around = ColorMatch.stats(rgba: leftBefore).mean
+    #expect(abs(matched.z - around.z) < 0.6 && abs(matched.y - around.y) < 0.6)
+  }
+
+  @Test func aMaskedMatchMeasuresNextToTheEdge() throws {
+    // The left quarter is a red block, far from the mask: only what lies beside the mask's edge
+    // speaks for the colors the masked side should have.
+    var picture = try outpainted()
+    let width = picture.width, height = picture.height
+    for y in 0..<height {
+      for x in 0..<(width / 4) {
+        let index = (y * width + x) * 4
+        picture.pixels.replaceSubrange(index..<(index + 3), with: [200, 40, 40])
+      }
+    }
+    let measured = ColorMatch.measurements(
+      edited: picture.pixels, width: width, height: height, original: picture.pixels, width: width, height: height, mask: picture.mask)
+    let masked = try #require(measured.masked)
+    #expect(measured.measurement(unchangedOnly: false) == masked && measured.measurement(unchangedOnly: true) == masked)
+    #expect(abs(masked.shift.b - 9) < 1 && abs(masked.shift.a - 3) < 1)
+    // Against the whole rest of the picture, the red block counts: the masked side reads as much
+    // less red (a) than all of what's outside it.
+    let whole = try #require(measured.maskedWhole)
+    #expect(measured.measurement(unchangedOnly: true, maskWhole: true) == whole)
+    #expect(whole.shift.a < masked.shift.a - 5)
+    // The edge's target is part of the masked side, the whole one all of it.
+    let right = (0..<height).flatMap { y in ((width / 2)..<width).flatMap { x in picture.pixels[((y * width + x) * 4)..<((y * width + x) * 4 + 4)] } }
+    #expect(abs(whole.target.mean.z - ColorMatch.stats(rgba: right).mean.z) < 0.01)
+  }
+
+  @Test func maskWholeIsKeptWithTheSettings() throws {
+    let job = ColorMatch.Job(project: "P", sourceTensorId: 4, options: .init(maskWhole: true), mask: CanvasMask(rects: [CGRect(x: 0, y: 0, width: 2, height: 2)]))
+    let back = try JSONDecoder().decode(ColorMatch.Job.self, from: JSONEncoder().encode(job))
+    #expect(back.options.maskWhole && back.isSameMatch(as: job))
+    var edge = job
+    edge.options.maskWhole = false
+    #expect(!edge.isSameMatch(as: job))
+    // Saved before there was a choice: the edge.
+    let old = try JSONDecoder().decode(ColorMatch.Record.self, from: Data(#"{"strength":1,"luminance":false,"masked":true}"#.utf8))
+    #expect(!old.options.maskWhole && old.masked)
+  }
+
+  @Test func aMaskOverEverythingFallsBackToTheOriginal() throws {
+    let picture = try outpainted()
+    let all = CanvasMask(rects: [CGRect(x: 0, y: 0, width: picture.width, height: picture.height)])
+    let measured = ColorMatch.measurements(
+      edited: picture.pixels, width: picture.width, height: picture.height, original: picture.pixels, width: picture.width,
+      height: picture.height, mask: all)
+    #expect(measured.masked == nil && measured.measurement(unchangedOnly: false) == measured.whole)
+    // A mask of only erasing is no mask.
+    #expect(ColorMatch.masking(CanvasMask(strokes: [.rect(CGRect(x: 0, y: 0, width: 10, height: 10), erases: true)])) == nil)
+  }
+
+  @Test func maskWeightsRiseInsideTheEdge() throws {
+    let mask = CanvasMask(rects: [CGRect(x: 50, y: 0, width: 50, height: 10)])
+    let weights = try #require(ColorMatch.maskWeights(mask, width: 100, height: 10))
+    #expect(weights[5 * 100 + 49] == 0 && weights[5 * 100 + 50] < 0.5 && weights[5 * 100 + 70] == 1)
+    #expect(ColorMatch.maskWeights(CanvasMask(), width: 100, height: 10) == nil)
+  }
+
+  @Test func previewRendersTheMaskedMatchAsTheJobDoes() async throws {
+    let picture = try outpainted()
+    let options = ColorMatch.Options(tint: 0.8, saturation: 0.5)
+    let preview = try #require(await ColorMatch.Preview.make(edited: picture.image, original: picture.image, mask: picture.mask))
+    #expect(preview.before != nil && preview.weights != nil)
+    let rendered = try #require(preview.render(options))
+    let shown = try #require(ColorMatch.rgba(rendered))
+    let made = try #require(ColorMatch.matched(picture.image, to: picture.image, options: options, mask: picture.mask))
+    let job = try #require(ColorMatch.rgba(made.image))
+    #expect(shown == job)
+  }
+
+  @Test func jobKeepsItsMask() throws {
+    let mask = CanvasMask(rects: [CGRect(x: 1, y: 2, width: 3, height: 4)])
+    let job = ColorMatch.Job(project: "P", sourceTensorId: 4, mask: mask)
+    let back = try JSONDecoder().decode(ColorMatch.Job.self, from: JSONEncoder().encode(job))
+    #expect(back.mask == mask && back.isSameMatch(as: job))
+    #expect(!job.isSameMatch(as: ColorMatch.Job(project: "P", sourceTensorId: 4)))
+    let record = ColorMatch.Record(options: .init(), masked: true)
+    #expect(try JSONDecoder().decode(ColorMatch.Record.self, from: JSONEncoder().encode(record)).masked)
+    #expect(try !JSONDecoder().decode(ColorMatch.Record.self, from: JSONEncoder().encode(ColorMatch.Record(options: .init()))).masked)
+  }
+
+  @Test func surroundingsHints() {
+    #expect(ColorMatchSheet.tintHint(.init(direction: .warmer, size: .slight), reference: .surroundings) == "The surroundings are slightly warmer.")
+    #expect(ColorMatchSheet.contrastHint(.init(direction: .more, size: .clear), reference: .surroundings) == "The surroundings have more contrast.")
+    #expect(ColorMatchSheet.brightnessHint(nil, reference: .surroundings) == "Same as the surroundings.")
+    #expect(ColorMatchSheet.tintHint(.init(direction: .cooler, size: .clear), reference: .rest) == "The rest of the picture is cooler.")
+    #expect(ColorMatchSheet.contrastHint(.init(direction: .less, size: .slight), reference: .rest) == "The rest of the picture has slightly less contrast.")
+    #expect(ColorMatchSheet.saturationHint(nil, reference: .rest) == "Same as the rest of the picture.")
+    #expect(ColorMatchSheet.tintHint(nil) == "Same as the original.")
+    #expect(ColorMatch.Shift(l: 0, a: 0, b: 0).summary(masked: true, whole: true).hasPrefix("Matched the masked area to the rest of the picture."))
+    #expect(ColorMatch.Shift(l: 0, a: 0, b: 3).summary(masked: true) == "Matched the masked area to the picture around it. It had come out warmer (Δa +0.0, Δb +3.0).")
+  }
 }

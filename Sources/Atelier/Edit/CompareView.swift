@@ -52,6 +52,8 @@ struct SliderComparison: View {
   let shape: CGSize?
   /// The right-hand side's name.
   var matchedTitle = "Matched"
+  /// The left-hand side's name.
+  var originalTitle = "Original"
   /// Where the divider is, as a fraction of the picture's width. Not remembered: the middle
   /// is where a comparison starts.
   @State private var divider = 0.5
@@ -67,7 +69,7 @@ struct SliderComparison: View {
         }
         .frame(width: box.width, height: box.height)
         HStack {
-          Compare.label("Original")
+          Compare.label(originalTitle)
           Spacer()
           Compare.label(matchedTitle)
         }
@@ -101,7 +103,7 @@ struct SliderComparison: View {
         ZStack {
           Rectangle().fill(.background)
           Rectangle().fill(.quaternary)
-          Image(original, scale: 1, label: Text("Original")).resizable().aspectRatio(contentMode: .fit)
+          Image(original, scale: 1, label: Text(originalTitle)).resizable().aspectRatio(contentMode: .fit)
         }
         .frame(width: size.width, height: size.height)
         .mask(alignment: .leading) { Rectangle().frame(width: x) }

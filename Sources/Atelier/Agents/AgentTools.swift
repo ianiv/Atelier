@@ -464,6 +464,8 @@ final class AgentTools {
           "brightness": ["type": "number", "minimum": 0, "maximum": 1, "description": "How far the brightness (the average of L) moves to the original's, 0–1. Default 0: edits often mean to change the light."],
           "contrast": ["type": "number", "minimum": 0, "maximum": 1, "description": "How far the contrast (the spread of L) moves to the original's, 0–1. Default 0."],
           "unchanged_only": ["type": "boolean", "description": "Measure both images only where the edit left the picture alone, so what it added or removed isn't taken for a color shift. Measures the parts that barely changed from the original, and falls back to the whole image when less than a quarter of the picture qualifies (most of it was edited, or the whole picture shifted) or when the original has another shape. Default false."],
+          "use_mask": ["type": "boolean", "description": "Change only what the image's mask paints (the canvas mask for the canvas image, else the mask the step remembers; see set_canvas_mask), matched to the picture just around the mask instead of to the original: for an outpainted or inpainted part that came out a different color from what it was extended from. Default false."],
+          "mask_compare": ["type": "string", "enum": ["edge", "whole"], "description": "With use_mask: what the masked area is matched to. `edge` (default): the picture just around the mask's edge, for a part that continues what it touches (a strip of sky). `whole`: all of the picture outside the mask, for a part that should match the rest of it (an outpainted third of a room)."],
           "original_history_step": ["type": "integer", "description": "The history step to match to, instead of the step's own input. Pass the source image's step after an edit made with paint (edit_image `paint`, or set_canvas_paint and use_canvas), whose recorded input is the painted frame: that has the paint's color in it, and zoomed in it's only the region. Use it with unchanged_only true."],
           "strength": ["type": "number", "minimum": 0, "maximum": 1, "description": "Shortcut: sets tint and saturation together, 0–1. tint and saturation override it."],
           "luminance": [
@@ -2394,10 +2396,30 @@ final class AgentTools {
       guard Self.isBoolean(given), let value = given as? Bool else { throw ToolError("`unchanged_only` must be true or false.") }
       options.unchangedOnly = value
     }
-    // In whole percents, as the job is queued, so the same settings find the same job below.
+    // The mask the match keeps to: the canvas's for the canvas image, else the step's own.
+    var mask: CanvasMask?
+    if let given = arguments["use_mask"] {
+      guard Self.isBoolean(given), let value = given as? Bool else { throw ToolError("`use_mask` must be true or false.") }
+      if value {
+        let onCanvas = create.imageItem?.tensorId == item.tensorId
+        mask = onCanvas ? create.canvasColorMatchMask : ColorMatch.masking(await create.mask(of: item))
+        guard mask != nil else {
+          throw ToolError("History step \(item.id.logicalTime) has no mask\(onCanvas ? " on the canvas (or it's hidden)" : ""). Paint one with set_canvas_mask, or leave out use_mask.")
+        }
+      }
+    }
+    if let given = arguments["mask_compare"] {
+      guard let value = given as? String, ["edge", "whole"].contains(value) else { throw ToolError("`mask_compare` must be \"edge\" or \"whole\".") }
+      guard mask != nil else { throw ToolError("`mask_compare` needs use_mask true.") }
+      options.maskWhole = value == "whole"
+    }
+    // In whole percents, as the job is queued, so the same settings find the same job below; a
+    // mask leaves unchanged_only off, as the job is queued (`CreateModel.colorMatchJob`).
     options = options.snapped
+    if mask != nil { options.unchangedOnly = false }
     let project = create.history.project.name
-    let match = ColorMatch.Job(project: project, sourceTensorId: item.tensorId, options: options, originalTensorId: original?.tensorId)
+    let match = ColorMatch.Job(
+      project: project, sourceTensorId: item.tensorId, options: options, originalTensorId: original?.tensorId, mask: mask)
     // Another call's job for the same step and settings: this call answers with it.
     if let existing = jobs.values.first(where: { $0.finishedAt == nil && $0.colorMatch?.isSameMatch(as: match) == true }) {
       return try await answer(existing, background: background, progress: progress)
@@ -2410,7 +2432,7 @@ final class AgentTools {
       guard let self else { throw CancellationError() }
       update(Progress(step: 0, total: nil, message: "Waiting for the current run to finish", isQueued: true))
       // Named as it's called now: a rename while the job waited moved it.
-      let (saved, project) = try await self.create.matchColors(forAgent: item, options: options, original: original?.tensorId) { step, message in
+      let (saved, project) = try await self.create.matchColors(forAgent: item, options: options, original: original?.tensorId, mask: mask) { step, message in
         update(Progress(step: step, total: 1_000, message: message))
       }
       // What the saved step records.
@@ -2425,12 +2447,16 @@ final class AgentTools {
         "unchanged_only": used.unchangedOnly, "strength": used.tint, "luminance": used.matchesLightness,
       ]
       if let original { result["original_history_step"] = original.step }
+      if record?.masked == true {
+        result["masked"] = true
+        result["mask_compare"] = used.maskWhole ? "whole" : "edge"
+      }
       // Only when the unchanged areas were what was measured: not when it fell back to the whole image.
       if let counted = record?.counted { result["unchanged_fraction"] = rounded(counted) }
       if let shift = record?.shift {
         result["delta_a"] = rounded(shift.a)
         result["delta_b"] = rounded(shift.b)
-        result["summary"] = shift.summary
+        result["summary"] = shift.summary(masked: record?.masked == true, whole: used.maskWhole)
         if used.matchesLightness { result["delta_l"] = rounded(shift.l) }
       }
       if project != self.create.history.project.name {

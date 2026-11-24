@@ -3064,12 +3064,29 @@ final class CreateModel {
   /// (matching it twice would make the same image).
   var canMatchCanvasColors: Bool {
     guard canOpenMatchColors, let item = imageItem else { return false }
-    return pendingColorMatch(for: item) == nil
+    return pendingColorMatch(for: item, mask: canvasColorMatchMask) == nil
+  }
+
+  /// The mask a Match Colors on the canvas image limits itself to: the one runs take
+  /// (`activeMask`), when it paints anything. Only what it paints is changed, matched to the
+  /// picture around it (`ColorMatch.Job.mask`), which brings an outpainted or inpainted part to
+  /// what it was extended from.
+  var canvasColorMatchMask: CanvasMask? {
+    canvasShowsImage ? ColorMatch.masking(activeMask) : nil
   }
 
   /// The step the Match Colors… sheet (`ColorMatchSheet`) is open for. The sheet keeps it: the
   /// canvas can change while it's open.
   var colorMatchSheetItem: HistoryItem?
+  /// The canvas mask when the sheet opened (`canvasColorMatchMask`), which its match keeps to.
+  var colorMatchSheetMask: CanvasMask?
+
+  /// Opens Match Colors… for the canvas image, with the mask on it now.
+  func openMatchColors() {
+    guard canOpenMatchColors else { return }
+    colorMatchSheetMask = canvasColorMatchMask
+    colorMatchSheetItem = imageItem
+  }
 
   /// The step Extract Depth Map asks to download the depth model for (`DepthModelSheet`), which
   /// it queues once the model is in.
@@ -3085,25 +3102,37 @@ final class CreateModel {
 
   /// The waiting or running Match Colors to Original job for `item`, a step of the current
   /// project, with the same settings as `options` (by default the one-click item's).
-  func pendingColorMatch(for item: HistoryItem, options: ColorMatch.Options = ColorMatch.Options(), original: Int64? = nil) -> JobQueue.Job? {
-    queue.pendingColorMatch(colorMatchJob(for: item, options: options, original: original))
+  func pendingColorMatch(
+    for item: HistoryItem, options: ColorMatch.Options = ColorMatch.Options(), original: Int64? = nil, mask: CanvasMask? = nil
+  ) -> JobQueue.Job? {
+    queue.pendingColorMatch(colorMatchJob(for: item, options: options, original: original, mask: mask))
   }
 
   /// Its settings in whole percents, so the same ones always make the same job (`isSameMatch`).
-  private func colorMatchJob(for item: HistoryItem, options: ColorMatch.Options, original: Int64? = nil) -> ColorMatch.Job {
-    ColorMatch.Job(project: history.project.name, sourceTensorId: item.tensorId, options: options.snapped, originalTensorId: original)
+  /// With a mask the unchanged areas aren't what's measured (`ColorMatch.Measurements.masked`),
+  /// so that setting is left off: either way would make the same image.
+  private func colorMatchJob(
+    for item: HistoryItem, options: ColorMatch.Options, original: Int64? = nil, mask: CanvasMask? = nil
+  ) -> ColorMatch.Job {
+    let mask = ColorMatch.masking(mask)
+    var options = options.snapped
+    if mask != nil { options.unchangedOnly = false } else { options.maskWhole = false }
+    return ColorMatch.Job(
+      project: history.project.name, sourceTensorId: item.tensorId, options: options, originalTensorId: original, mask: mask)
   }
 
   /// What the Match Colors… sheet previews `item` with: the step and its original, read and
   /// measured as the job does (`run(_:request:job:)`); nil when either can't be read. `read`
   /// hears the original as soon as it's read, before the measuring, which takes longer: the
   /// sheet shows it meanwhile.
-  func colorMatchPreview(for item: HistoryItem, read: (CGImage) -> Void = { _ in }) async -> ColorMatch.Preview? {
+  func colorMatchPreview(
+    for item: HistoryItem, mask: CanvasMask? = nil, read: (CGImage) -> Void = { _ in }
+  ) async -> ColorMatch.Preview? {
     let project = history.project
     guard let original = await originalImage(for: item, in: project) else { return nil }
     read(original.image)
     guard let edited = await project.read({ $0.image(tensorId: item.tensorId) }) else { return nil }
-    return await ColorMatch.Preview.make(edited: edited, original: original.image)
+    return await ColorMatch.Preview.make(edited: edited, original: original.image, mask: mask)
   }
 
   /// Whether a step has an image its colors can be matched to (see `originalImage(for:)`). A
@@ -3158,14 +3187,16 @@ final class CreateModel {
   /// same step with the same settings when there is one, since a second would make the same
   /// image. Other settings make another image, so they queue beside it. `original` names the
   /// image to match to (its tensor in the same project) in place of the step's recorded input
-  /// (`ColorMatch.Job.originalTensorId`).
+  /// (`ColorMatch.Job.originalTensorId`). `mask`, in the step's image pixels, limits the match to
+  /// what it paints (`ColorMatch.Job.mask`).
   @discardableResult
   func queueColorMatch(
-    _ item: HistoryItem, options: ColorMatch.Options = ColorMatch.Options(), original: Int64? = nil, fromAgent: Bool = false
+    _ item: HistoryItem, options: ColorMatch.Options = ColorMatch.Options(), original: Int64? = nil, mask: CanvasMask? = nil,
+    fromAgent: Bool = false
   ) throws -> UUID {
     guard !item.isVideo else { throw ColorMatchError.video }
     guard original != nil || hasOriginal(item) else { throw ColorMatchError.noOriginal }
-    let match = colorMatchJob(for: item, options: options, original: original)
+    let match = colorMatchJob(for: item, options: options, original: original, mask: mask)
     if let pending = queue.pendingColorMatch(match) { return pending.id }
     guard var configuration = settings else { throw ColorMatchError.noSettings }
     // Its settings, as an upscale carries them; the size is the step's own.
@@ -3183,20 +3214,21 @@ final class CreateModel {
     return id
   }
 
-  /// Match Colors to Original on the canvas image, with the default options.
+  /// Match Colors to Original on the canvas image, with the default options, kept to the canvas
+  /// mask when there is one (`canvasColorMatchMask`).
   func matchCanvasColors() {
     guard canMatchCanvasColors, let item = imageItem else { return }
     do {
-      try queueColorMatch(item)
+      try queueColorMatch(item, mask: canvasColorMatchMask)
     } catch {
       errorMessage = error.localizedDescription
     }
   }
 
-  /// Match Colors… on `item` with the sheet's settings.
-  func matchColors(_ item: HistoryItem, options: ColorMatch.Options) {
+  /// Match Colors… on `item` with the sheet's settings, kept to `mask` (the one it opened with).
+  func matchColors(_ item: HistoryItem, options: ColorMatch.Options, mask: CanvasMask? = nil) {
     do {
-      try queueColorMatch(item, options: options)
+      try queueColorMatch(item, options: options, mask: mask)
     } catch {
       errorMessage = error.localizedDescription
     }
@@ -3206,10 +3238,11 @@ final class CreateModel {
   /// step with the same settings, and returns the step it saved. `progress` hears the step (of 1,000) and what it's
   /// doing. Cancelling the caller cancels the job.
   func matchColors(
-    forAgent item: HistoryItem, options: ColorMatch.Options, original: Int64? = nil, progress: @escaping (Int, String) -> Void
+    forAgent item: HistoryItem, options: ColorMatch.Options, original: Int64? = nil, mask: CanvasMask? = nil,
+    progress: @escaping (Int, String) -> Void
   ) async throws -> (item: HistoryItem, project: String) {
-    let pending = pendingColorMatch(for: item, options: options, original: original)?.id
-    let id = try queueColorMatch(item, options: options, original: original, fromAgent: true)
+    let pending = pendingColorMatch(for: item, options: options, original: original, mask: mask)?.id
+    let id = try queueColorMatch(item, options: options, original: original, mask: mask, fromAgent: true)
     // A match someone else queued (the canvas menu) is theirs: giving up on it only ends this wait.
     let joined = id == pending
     return try await withTaskCancellationHandler {
@@ -3296,8 +3329,9 @@ final class CreateModel {
             self.syncBackgroundTask()
           }
         }
-        guard let result = try await ColorMatch.matching(edited, to: original.image, options: match.options, progress: report),
-              let tensor = ImageTensor.tensor(from: result.image)
+        guard let result = try await ColorMatch.matching(
+                edited, to: original.image, options: match.options, mask: match.mask, progress: report),
+          let tensor = ImageTensor.tensor(from: result.image)
         else { throw ColorMatchError.unreadable }
         try Task.checkCancellation()
         setRunMessage("Saving…", job)
@@ -3315,7 +3349,9 @@ final class CreateModel {
         // A moodboard original goes along, so matching the result again finds it there.
         request.moodboard = original.moodboard.map { [$0] } ?? []
         let record = ColorMatch.Record(
-          options: match.options, counted: result.counted, originalTensorId: original.tensorId, shift: shift)
+          options: match.options, counted: result.counted, originalTensorId: original.tensorId, shift: shift,
+          masked: match.mask != nil)
+        let summary = shift.summary(masked: record.masked, whole: match.options.maskWhole)
         request.colorMatch?.record = record
         let followsRun = { self.canvasFollowsRun && job.id == self.foregroundJobID && self.jobProjectIsOpen(job) }
         let history = history
@@ -3335,11 +3371,11 @@ final class CreateModel {
         if job.id == foregroundJobID { step = 1_000 }
         if into === history.project {
           landSavedImage(matched, tensorId: saved.tensorId, onCanvas: followsRun())
-          statusNote = shift.summary
+          statusNote = summary
         }
         if let failure = await history.writeToOutputFolder(saved, image: matched, in: into) { errorMessage = failure }
         saveSession()
-        FinishedNotice.post(prompt: shift.summary, seconds: Date().timeIntervalSince(startedAt), title: "Colors matched")
+        FinishedNotice.post(prompt: summary, seconds: Date().timeIntervalSince(startedAt), title: "Colors matched")
         status = .finished(tensorId: saved.tensorId)
         inputTensorId = saved.inputTensorId
         inOpenProject = into === history.project

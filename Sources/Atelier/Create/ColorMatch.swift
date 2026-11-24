@@ -36,13 +36,22 @@ nonisolated enum ColorMatch {
     /// it added or removed doesn't count as a color shift. Off for the one-click item and agents,
     /// whose results stay what they were; the sheet turns it on.
     var unchangedOnly = false
+    /// With a mask (`Job.mask`): match the masked area to all of the picture outside it, rather
+    /// than to what lies just around its edge. For an outpainted third of a room, the room it was
+    /// extended from; the edge is for a part that should continue what it touches (a strip of
+    /// sky). Off for the one-click item and agents unless asked; nothing without a mask.
+    var maskWhole = false
 
-    init(tint: Double = 1, saturation: Double = 1, brightness: Double = 0, contrast: Double = 0, unchangedOnly: Bool = false) {
+    init(
+      tint: Double = 1, saturation: Double = 1, brightness: Double = 0, contrast: Double = 0, unchangedOnly: Bool = false,
+      maskWhole: Bool = false
+    ) {
       self.tint = tint
       self.saturation = saturation
       self.brightness = brightness
       self.contrast = contrast
       self.unchangedOnly = unchangedOnly
+      self.maskWhole = maskWhole
     }
 
     /// The settings from when there were two: `strength` for the colors, and `luminance` for how
@@ -60,12 +69,12 @@ nonisolated enum ColorMatch {
     var snapped: Options {
       Options(
         tint: ColorMatch.snapped(tint), saturation: ColorMatch.snapped(saturation), brightness: ColorMatch.snapped(brightness),
-        contrast: ColorMatch.snapped(contrast), unchangedOnly: unchangedOnly)
+        contrast: ColorMatch.snapped(contrast), unchangedOnly: unchangedOnly, maskWhole: maskWhole)
     }
 
     /// The keys a saved step or queue holds the settings under, beside the record's or job's own.
     /// `strength` and `luminance` are the two settings there were before these.
-    private enum CodingKeys: String, CodingKey { case tint, saturation, brightness, contrast, unchangedOnly, strength, luminance }
+    private enum CodingKeys: String, CodingKey { case tint, saturation, brightness, contrast, unchangedOnly, maskWhole, strength, luminance }
 
     /// Reads the settings from among a record's or job's keys. One saved before there were four
     /// has only `strength` and `luminance` (true, false, or for a while an amount), which give
@@ -80,6 +89,7 @@ nonisolated enum ColorMatch {
       brightness = try container.decodeIfPresent(Double.self, forKey: .brightness) ?? legacy.brightness
       contrast = try container.decodeIfPresent(Double.self, forKey: .contrast) ?? legacy.contrast
       unchangedOnly = try container.decodeIfPresent(Bool.self, forKey: .unchangedOnly) ?? false
+      maskWhole = try container.decodeIfPresent(Bool.self, forKey: .maskWhole) ?? false
     }
 
     /// Writes the settings among a record's or job's keys, and always `strength` as a number and
@@ -92,6 +102,7 @@ nonisolated enum ColorMatch {
       try container.encode(brightness, forKey: .brightness)
       try container.encode(contrast, forKey: .contrast)
       try container.encode(unchangedOnly, forKey: .unchangedOnly)
+      if maskWhole { try container.encode(true, forKey: .maskWhole) }
       try container.encode(tint, forKey: .strength)
       try container.encode(matchesLightness, forKey: .luminance)
     }
@@ -110,16 +121,22 @@ nonisolated enum ColorMatch {
     var b: Double
 
     /// For the status bar, in plain words.
-    var summary: String {
+    var summary: String { summary(masked: false) }
+
+    /// `summary`, or with `masked` what a match of a masked area to the picture around it took
+    /// out (with `whole`, to all the rest of the picture: `Options.maskWhole`).
+    func summary(masked: Bool, whole: Bool = false) -> String {
       func signed(_ value: Double) -> String { String(format: "%+.1f", value) }
       let numbers = "Δa \(signed(a)), Δb \(signed(b))"
+      let done = !masked ? "Matched colors to the original."
+        : whole ? "Matched the masked area to the rest of the picture." : "Matched the masked area to the picture around it."
       guard max(abs(a), abs(b)) >= 0.5 else {
-        return "Matched colors to the original. They were already close (\(numbers))."
+        return "\(done) They were already close (\(numbers))."
       }
       var casts: [String] = []
       if abs(b) >= 0.5 { casts.append(b > 0 ? "warmer" : "cooler") }
       if abs(a) >= 0.5 { casts.append(a > 0 ? "more magenta" : "greener") }
-      return "Matched colors to the original. The edit had come out \(casts.joined(separator: " and ")) (\(numbers))."
+      return "\(done) \(masked ? "It" : "The edit") had come out \(casts.joined(separator: " and ")) (\(numbers))."
     }
   }
 
@@ -137,14 +154,18 @@ nonisolated enum ColorMatch {
     /// The shift taken out, so the Queue and agents can say what changed without measuring again.
     /// Optional: steps saved before it was recorded don't have it.
     var shift: Shift?
+    /// Only the masked area was changed, matched to the picture around it (`Job.mask`). Absent
+    /// (false) for a match of the whole image, and in steps saved before masks were.
+    var masked = false
 
-    private enum CodingKeys: String, CodingKey { case counted, originalTensorId, shift }
+    private enum CodingKeys: String, CodingKey { case counted, originalTensorId, shift, masked }
 
-    init(options: Options, counted: Double? = nil, originalTensorId: Int64? = nil, shift: Shift? = nil) {
+    init(options: Options, counted: Double? = nil, originalTensorId: Int64? = nil, shift: Shift? = nil, masked: Bool = false) {
       self.options = options
       self.counted = counted
       self.originalTensorId = originalTensorId
       self.shift = shift
+      self.masked = masked
     }
 
     init(from decoder: Decoder) throws {
@@ -153,6 +174,7 @@ nonisolated enum ColorMatch {
       counted = try container.decodeIfPresent(Double.self, forKey: .counted)
       originalTensorId = try container.decodeIfPresent(Int64.self, forKey: .originalTensorId)
       shift = try container.decodeIfPresent(Shift.self, forKey: .shift)
+      masked = try container.decodeIfPresent(Bool.self, forKey: .masked) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -161,6 +183,7 @@ nonisolated enum ColorMatch {
       try container.encodeIfPresent(counted, forKey: .counted)
       try container.encodeIfPresent(originalTensorId, forKey: .originalTensorId)
       try container.encodeIfPresent(shift, forKey: .shift)
+      if masked { try container.encode(true, forKey: .masked) }
     }
   }
 
@@ -196,23 +219,33 @@ nonisolated enum ColorMatch {
     /// which is neither the picture's colors nor, zoomed in, its shape. Nil, as a rule, and absent
     /// from jobs saved before it.
     var originalTensorId: Int64?
+    /// The canvas mask when it was queued, in the step's image pixels: only what it paints is
+    /// changed, matched to the picture around it rather than to the original (`measurements`,
+    /// `maskWeights`), so an outpainted or inpainted part can be brought to what it was extended
+    /// from. Nil, or absent from jobs saved before it, for the whole image. Never one that paints
+    /// nothing (`masking`).
+    var mask: CanvasMask?
 
     /// The same match: the same step with the same settings against the same original, whose
     /// result would be the same image, so it's never queued twice. Other settings make another
     /// image, and may queue.
     func isSameMatch(as other: Job) -> Bool {
       project == other.project && sourceTensorId == other.sourceTensorId && options.snapped == other.options.snapped
-        && originalTensorId == other.originalTensorId
+        && originalTensorId == other.originalTensorId && mask == other.mask
     }
 
-    private enum CodingKeys: String, CodingKey { case project, sourceTensorId, record, originalTensorId }
+    private enum CodingKeys: String, CodingKey { case project, sourceTensorId, record, originalTensorId, mask }
 
-    init(project: String, sourceTensorId: Int64, options: Options = Options(), record: Record? = nil, originalTensorId: Int64? = nil) {
+    init(
+      project: String, sourceTensorId: Int64, options: Options = Options(), record: Record? = nil, originalTensorId: Int64? = nil,
+      mask: CanvasMask? = nil
+    ) {
       self.project = project
       self.sourceTensorId = sourceTensorId
       self.options = options
       self.record = record
       self.originalTensorId = originalTensorId
+      self.mask = ColorMatch.masking(mask)
     }
 
     init(from decoder: Decoder) throws {
@@ -222,6 +255,7 @@ nonisolated enum ColorMatch {
       options = try Options(savedIn: decoder)
       record = try container.decodeIfPresent(Record.self, forKey: .record)
       originalTensorId = try container.decodeIfPresent(Int64.self, forKey: .originalTensorId)
+      mask = try container.decodeIfPresent(CanvasMask.self, forKey: .mask)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -231,7 +265,13 @@ nonisolated enum ColorMatch {
       try options.save(in: encoder)
       try container.encodeIfPresent(record, forKey: .record)
       try container.encodeIfPresent(originalTensorId, forKey: .originalTensorId)
+      try container.encodeIfPresent(mask, forKey: .mask)
     }
+  }
+
+  /// `mask` when it may paint something, else nil: a mask of only erasing is the whole image.
+  static func masking(_ mask: CanvasMask?) -> CanvasMask? {
+    mask?.mayHavePaint == true ? mask : nil
   }
 
   /// What the Match Colors… sheet previews with: the statistics exactly as the job takes them
@@ -254,6 +294,12 @@ nonisolated enum ColorMatch {
     var opaque: Bool
     /// The original at the same fit, to show beside it.
     var original: CGImage
+    /// How much of the match each shown pixel takes (`maskWeights` at this size), when a mask
+    /// limits it; nil for all of it.
+    var weights: [Float]?
+    /// The edited image as shown (`pixels`), unmatched: what a masked match is compared with,
+    /// since its original isn't what it's matched to. Nil without a mask.
+    var before: CGImage?
 
     /// The longer side of the previewed image, in pixels (a smaller image is left its own size):
     /// enough that the sheet's pictures, which fill a large sheet, aren't soft, and no more,
@@ -271,13 +317,14 @@ nonisolated enum ColorMatch {
     /// The small edited image matched with `options`, as the job would the full one. `progress`
     /// is `transferred`'s, and can throw to stop.
     func render(_ options: Options, progress: (Double) throws -> Void) rethrows -> CGImage? {
-      let measured = measurements.measurement(unchangedOnly: options.unchangedOnly)
+      let measured = measurements.measurement(unchangedOnly: options.unchangedOnly, maskWhole: options.maskWhole)
       let out = try ColorMatch.transfer(
         count: alpha.count, target: measured.target, reference: measured.reference, options: options, progress: progress
       ) { range in
         (Planes(l: Array(planes.l[range]), a: Array(planes.a[range]), b: Array(planes.b[range])), Array(alpha[range]))
       }
-      return ColorMatch.cgImage(rgba: out, width: width, height: height, opaque: opaque)
+      let shown = weights.map { ColorMatch.blended(pixels, toward: out, weights: $0) } ?? out
+      return ColorMatch.cgImage(rgba: shown, width: width, height: height, opaque: opaque)
     }
 
     /// `render` with no progress.
@@ -291,12 +338,13 @@ nonisolated enum ColorMatch {
       try render(options) { _ in try Task.checkCancellation() }
     }
 
-    /// Reads both images and measures them, away from the main actor; nil when either can't be read.
-    @concurrent static func make(edited: CGImage, original: CGImage) async -> Preview? {
+    /// Reads both images and measures them, away from the main actor; nil when either can't be
+    /// read. `mask`, in `edited`'s pixels, limits the match to what it paints, as `Job.mask` does.
+    @concurrent static func make(edited: CGImage, original: CGImage, mask: CanvasMask? = nil) async -> Preview? {
       guard let pixels = rgba(edited), let referencePixels = rgba(original) else { return nil }
       let measurements = ColorMatch.measurements(
         edited: pixels, width: edited.width, height: edited.height,
-        original: referencePixels, width: original.width, height: original.height)
+        original: referencePixels, width: original.width, height: original.height, mask: mask)
       let size = fitSize(width: edited.width, height: edited.height, side: side)
       let originalSize = fitSize(width: original.width, height: original.height, side: side)
       guard let small = cgImage(
@@ -305,9 +353,14 @@ nonisolated enum ColorMatch {
       else { return nil }
       let shown = downsampled(pixels, width: edited.width, height: edited.height, fit: side)
       let alpha = stride(from: 3, to: shown.count, by: 4).map { shown[$0] }
+      // The mask at the shown size, feathered as much for its size as the job's is for the full one.
+      let weights = masking(mask).flatMap {
+        maskWeights($0.scaled(from: CGSize(width: edited.width, height: edited.height), to: CGSize(width: size.width, height: size.height)), width: size.width, height: size.height)
+      }
       return Preview(
         measurements: measurements, pixels: shown, width: size.width, height: size.height,
-        planes: slicedLab(rgba: shown), alpha: alpha, opaque: !alpha.contains { $0 != 255 }, original: small)
+        planes: slicedLab(rgba: shown), alpha: alpha, opaque: !alpha.contains { $0 != 255 }, original: small, weights: weights,
+        before: weights == nil ? nil : cgImage(rgba: shown, width: size.width, height: size.height))
     }
   }
 
@@ -351,11 +404,20 @@ nonisolated enum ColorMatch {
     var unchanged: Measurement?
     /// Why `unchanged` can't be used, when it can't.
     var reason: WholeImageReason?
+    /// With a mask: the edit's masked pixels next to the edge of the mask (`target`), against the
+    /// edit's own unmasked ones next to it (`reference`) (`maskedMeasurement`). Nil without a
+    /// mask, or when either side of its edge has too little to measure.
+    var masked: Measurement?
+    /// With a mask: all of the edit's masked pixels against all of its unmasked ones
+    /// (`Options.maskWhole`). Nil as `masked` is.
+    var maskedWhole: Measurement?
 
-    /// What a match with `Options.unchangedOnly` set so is made with: the whole image when the
-    /// unchanged areas can't be used.
-    func measurement(unchangedOnly: Bool) -> Measurement {
-      unchangedOnly ? unchanged ?? whole : whole
+    /// What a match with `Options.unchangedOnly` and `maskWhole` set so is made with: the masked
+    /// area against what's around its edge, or against the whole rest of the picture, when
+    /// there's a mask to measure that way, whatever `unchangedOnly` says; else the whole image
+    /// when the unchanged areas can't be used.
+    func measurement(unchangedOnly: Bool, maskWhole: Bool = false) -> Measurement {
+      (maskWhole ? maskedWhole : masked) ?? (unchangedOnly ? unchanged ?? whole : whole)
     }
   }
 
@@ -369,19 +431,27 @@ nonisolated enum ColorMatch {
   // MARK: Images
 
   /// `image` with its colors matched to `reference`'s, the shift taken out, and the fraction of
-  /// the image measured when that was only its unchanged areas; nil when either can't be read. `progress` hears how far it is, 0 to 1, mostly through the transfer, which
+  /// the image measured when that was only its unchanged areas; nil when either can't be read.
+  /// With `mask` (in `image`'s pixels) only what it paints changes, matched to the picture around
+  /// it (`Job.mask`). `progress` hears how far it is, 0 to 1, mostly through the transfer, which
   /// takes the time; it can throw to stop.
   static func matched(
-    _ image: CGImage, to reference: CGImage, options: Options = Options(), progress: (Double) throws -> Void
+    _ image: CGImage, to reference: CGImage, options: Options = Options(), mask: CanvasMask? = nil, progress: (Double) throws -> Void
   ) rethrows -> (image: CGImage, shift: Shift, counted: Double?)? {
     guard let pixels = rgba(image), let referencePixels = rgba(reference) else { return nil }
+    let mask = masking(mask)
     let measured = measure(
       edited: pixels, width: image.width, height: image.height,
-      original: referencePixels, width: reference.width, height: reference.height, unchangedOnly: options.unchangedOnly)
+      original: referencePixels, width: reference.width, height: reference.height, unchangedOnly: options.unchangedOnly, mask: mask,
+      maskWhole: options.maskWhole)
     try progress(0.05)
-    let out = try transferred(rgba: pixels, target: measured.target, reference: measured.reference, options: options) {
-      try progress(0.05 + 0.9 * $0)
+    var out = try transferred(rgba: pixels, target: measured.target, reference: measured.reference, options: options) {
+      try progress(0.05 + 0.85 * $0)
     }
+    if let mask, let weights = maskWeights(mask, width: image.width, height: image.height) {
+      out = blended(pixels, toward: out, weights: weights)
+    }
+    try progress(0.95)
     guard let result = cgImage(rgba: out, width: image.width, height: image.height) else { return nil }
     try progress(1)
     return (result, measured.shift, measured.counted)
@@ -389,17 +459,18 @@ nonisolated enum ColorMatch {
 
   /// `matched` with no progress. (A defaulted closure would make every `rethrows` call throwing.)
   static func matched(
-    _ image: CGImage, to reference: CGImage, options: Options = Options()
+    _ image: CGImage, to reference: CGImage, options: Options = Options(), mask: CanvasMask? = nil
   ) -> (image: CGImage, shift: Shift, counted: Double?)? {
-    matched(image, to: reference, options: options) { _ in }
+    matched(image, to: reference, options: options, mask: mask) { _ in }
   }
 
   /// Runs `matched` away from the main actor: a large image takes a moment. Stops with
   /// `CancellationError` when the task is cancelled, between slices of the transfer.
   @concurrent static func matching(
-    _ image: CGImage, to reference: CGImage, options: Options, progress: @escaping @Sendable (Double) -> Void = { _ in }
+    _ image: CGImage, to reference: CGImage, options: Options, mask: CanvasMask? = nil,
+    progress: @escaping @Sendable (Double) -> Void = { _ in }
   ) async throws -> (image: CGImage, shift: Shift, counted: Double?)? {
-    try matched(image, to: reference, options: options) { fraction in
+    try matched(image, to: reference, options: options, mask: mask) { fraction in
       try Task.checkCancellation()
       progress(fraction)
     }
@@ -548,12 +619,12 @@ nonisolated enum ColorMatch {
   /// show another match than the job makes.
   static func measure(
     edited: [UInt8], width: Int, height: Int, original: [UInt8], width originalWidth: Int, height originalHeight: Int,
-    unchangedOnly: Bool
+    unchangedOnly: Bool, mask: CanvasMask? = nil, maskWhole: Bool = false
   ) -> Measurement {
     measurements(
       edited: edited, width: width, height: height, original: original, width: originalWidth, height: originalHeight,
-      unchanged: unchangedOnly
-    ).measurement(unchangedOnly: unchangedOnly)
+      unchanged: unchangedOnly, mask: mask
+    ).measurement(unchangedOnly: unchangedOnly, maskWhole: maskWhole)
   }
 
   /// `measure` both ways at once (the unchanged areas only with `unchanged`, which takes longer).
@@ -566,9 +637,12 @@ nonisolated enum ColorMatch {
   /// image having turned red. It falls back to the whole images when the original has another
   /// shape (nothing lines up), or when the unchanged areas are too little of the image
   /// (`minimumUnchangedFraction`).
+  ///
+  /// With `mask` (in `edited`'s pixels) it also measures the masked area against what's around
+  /// it in the edit itself (`maskedMeasurement`), which a match then uses.
   static func measurements(
     edited: [UInt8], width: Int, height: Int, original: [UInt8], width originalWidth: Int, height originalHeight: Int,
-    unchanged: Bool = true
+    unchanged: Bool = true, mask: CanvasMask? = nil
   ) -> Measurements {
     let target = downsampled(edited, width: width, height: height, fit: statsSide)
     let reference = downsampled(original, width: originalWidth, height: originalHeight, fit: statsSide)
@@ -576,8 +650,16 @@ nonisolated enum ColorMatch {
     let referenceLab = lab(rgba: reference)
     var result = Measurements(
       whole: Measurement(target: stats(lab: targetLab, rgba: target), reference: stats(lab: referenceLab, rgba: reference)))
-    guard unchanged else { return result }
     let size = fitSize(width: width, height: height, side: statsSide)
+    if let mask = masking(mask), target.count == size.width * size.height * 4 {
+      let painted = mask.coverage(
+        width: size.width, height: size.height,
+        scale: (Double(size.width) / Double(width), Double(size.height) / Double(height)))
+      let measured = maskedMeasurement(edited: target, lab: targetLab, painted: painted, width: size.width, height: size.height)
+      result.masked = measured?.edge
+      result.maskedWhole = measured?.whole
+    }
+    guard unchanged else { return result }
     let originalSize = fitSize(width: originalWidth, height: originalHeight, side: statsSide)
     // The same shape when the original, scaled so its longer side is the edit's, comes to the
     // edit's size, give or take the rounding of both (what two images a pixel apart, each fit to
@@ -672,6 +754,100 @@ nonisolated enum ColorMatch {
       unchanged += 1
     }
     return (mask, Double(unchanged) / Double(visible))
+  }
+
+  // MARK: Masks
+
+  /// How far from the edge of the mask, each way, the pixels measured on either side of it reach,
+  /// as a fraction of the longer side (32 pixels at `statsSide`). Next to the edge rather than all
+  /// of each side: an outpainted strip of sky should match the sky it continues, not the whole
+  /// picture's average with the ground in it. What's right beside the edge is the same scene on
+  /// both sides, so the difference there is the cast the run left.
+  static let maskBandFraction = 1.0 / 16
+  /// The least either side of the edge must have, as a fraction of the measured pixels, for the
+  /// masked area to be measured against its surroundings; with less (a mask over nearly all of
+  /// the picture, or over none of what shows) the match is measured as it would be without one.
+  static let minimumMaskBandFraction = 0.002
+  /// How far in from the mask's edge the match fades in, as a fraction of the longer side (8
+  /// pixels on a 1024 image). Nothing outside the mask changes; inside, a hard edge would show
+  /// where the correction starts.
+  static let maskFeatherFraction = 1.0 / 128
+
+  /// The masked area's statistics next to its edge, against the unmasked pixels next to it
+  /// (`edge`), and all of it against all of the rest (`whole`), of the edited image (`edited`,
+  /// its Lab planes `lab`, and `painted`, its mask coverage, all at the measured size); nil when
+  /// either side of the edge has too little (`minimumMaskBandFraction`).
+  static func maskedMeasurement(
+    edited: [UInt8], lab: Planes, painted: [UInt8], width: Int, height: Int
+  ) -> (edge: Measurement, whole: Measurement)? {
+    let count = width * height
+    guard painted.count == count, edited.count == count * 4 else { return nil }
+    var inside = [Double](repeating: 0, count: count)
+    var outside = [Double](repeating: 0, count: count)
+    var visible = 0
+    for index in 0..<count where edited[index * 4 + 3] > 0 {
+      visible += 1
+      if painted[index] != 0 { inside[index] = 1 } else { outside[index] = 1 }
+    }
+    guard visible > 0 else { return nil }
+    let radius = max(1, Int((Double(max(width, height)) * maskBandFraction).rounded()))
+    // Whether any of the other side lies within the box around each pixel.
+    let nearInside = boxBlurred(inside, width: width, height: height, radius: radius)
+    let nearOutside = boxBlurred(outside, width: width, height: height, radius: radius)
+    var targetBand = [Bool](repeating: false, count: count)
+    var referenceBand = [Bool](repeating: false, count: count)
+    var targetCount = 0
+    var referenceCount = 0
+    for index in 0..<count {
+      if inside[index] == 1, nearOutside[index] > 1e-9 {
+        targetBand[index] = true
+        targetCount += 1
+      } else if outside[index] == 1, nearInside[index] > 1e-9 {
+        referenceBand[index] = true
+        referenceCount += 1
+      }
+    }
+    let least = max(1, Int((Double(visible) * minimumMaskBandFraction).rounded(.up)))
+    guard targetCount >= least, referenceCount >= least else { return nil }
+    let edge = Measurement(
+      target: stats(lab: lab, rgba: edited, where: targetBand), reference: stats(lab: lab, rgba: edited, where: referenceBand))
+    let whole = Measurement(
+      target: stats(lab: lab, rgba: edited, where: inside.map { $0 == 1 }),
+      reference: stats(lab: lab, rgba: edited, where: outside.map { $0 == 1 }))
+    return (edge, whole)
+  }
+
+  /// How much of the match each pixel of a `width` × `height` image takes under `mask`: 0 outside
+  /// it, rising to 1 within `maskFeatherFraction` of the longer side inside its edge. Nil when it
+  /// paints nothing there.
+  static func maskWeights(_ mask: CanvasMask, width: Int, height: Int) -> [Float]? {
+    let painted = mask.coverage(width: width, height: height)
+    guard painted.contains(255) else { return nil }
+    let radius = max(1, Int((Double(max(width, height)) * maskFeatherFraction).rounded()))
+    let blurred = boxBlurred(painted.map { $0 != 0 ? 1 : 0 }, width: width, height: height, radius: radius)
+    var weights = [Float](repeating: 0, count: painted.count)
+    // A painted pixel's box is at least about half painted at the edge (a quarter at a corner),
+    // all of it once the edge is `radius` away: from 0 at the edge to 1 there.
+    for index in weights.indices where painted[index] != 0 {
+      weights[index] = Float(min(max(2 * blurred[index] - 1, 0), 1))
+    }
+    return weights
+  }
+
+  /// `pixels` (RGBA8) moved toward `matched` by each pixel's weight; alpha is `pixels'`.
+  static func blended(_ pixels: [UInt8], toward matched: [UInt8], weights: [Float]) -> [UInt8] {
+    guard pixels.count == matched.count, weights.count * 4 == pixels.count else { return matched }
+    var out = pixels
+    for index in weights.indices {
+      let weight = weights[index]
+      guard weight > 0 else { continue }
+      let base = index * 4
+      for channel in 0..<3 {
+        let from = Float(pixels[base + channel])
+        out[base + channel] = UInt8(min(max(from + weight * (Float(matched[base + channel]) - from), 0), 255).rounded())
+      }
+    }
+    return out
   }
 
   /// A plane averaged over the (2·`radius` + 1)-wide box around each value, the box cut off at
