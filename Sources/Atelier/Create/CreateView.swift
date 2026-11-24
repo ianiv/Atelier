@@ -402,8 +402,11 @@ struct CanvasView: View {
         // The Select tool's own controls, over the canvas while it's the tool: outside the
         // canvas's gestures, so a click on them doesn't mark the image.
         // At the bottom: the moodboard sits at the top right.
+        // Hidden while a video run's preview is up: its play/stop control takes the same spot.
         .toolBarOverlay {
-          if model.canvasTool == .select {
+          if model.canvasClip == nil, model.canvasPreviewFrames.count > 1 {
+            EmptyView()
+          } else if model.canvasTool == .select {
             AutoMaskBar()
           } else if Self.layerBarShows(for: model.canvasTool) {
             if model.canvasLayer == .color {
