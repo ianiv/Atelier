@@ -99,7 +99,7 @@ enum Automation {
       "--timeline-check", "--upscale-check", "--timeline-export-check", "--flashvsr-check", "--recavsr-check",
       "--model-folders-check", "--styles-check", "--cleanup-check", "--engine-check", "--playback-check",
       "--remote-check", "--remote-net-check", "--remote-shots", "--remote-url-check", "--remote-tailnet-check",
-      "--catalog-retry-check", "--model-move-check", "--add-folder-check", "--hf-link-check", "--color-match-check", "--depth-check", "--canvas-clip-check",
+      "--catalog-retry-check", "--model-move-check", "--library-batch-check", "--add-folder-check", "--hf-link-check", "--color-match-check", "--depth-check", "--canvas-clip-check",
       "--create-delete-check", "--reference-video-check", "--reference-video-run",
       "--history-loras-check",
       "--input-entries-check", "--entries-freeze-check", "--tab-switch-bench", "--delete-project-check", "--compact-check",
@@ -285,6 +285,10 @@ enum Automation {
     }
     if args.contains("--model-move-check") {
       modelMoveCheck(model, library: library)
+      return
+    }
+    if args.contains("--library-batch-check") {
+      libraryBatchCheck(model, library: library)
       return
     }
     if args.contains("--timeline-export-check") {

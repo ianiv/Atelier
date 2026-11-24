@@ -10,6 +10,12 @@ Click **Models** in the sidebar.
 - **Refresh** reloads the catalog, rescans the models folder, and rereads `custom.json` and `custom_lora.json`, so changes you make to them in a text editor show up without restarting Atelier. If the community list can't be fetched, for example with no network, Atelier uses the copy it shipped with, which may not have the newest models. Refresh tries the download again.
 - Select a model to see its file, family, size on disk and description, and a link to its Hugging Face page when it has one.
 
+### Selecting several
+
+⌘-click adds a model to the selection, ⇧-click selects a range, and ⌘A selects every model the list shows. **On iPad**, tap **Select** in the toolbar, tap the models, then **Done** (with a keyboard or trackpad, ⌘- and ⇧-click work too); the selection stays after Done.
+
+With several selected, the inspector shows how many, their size on disk (not counting shared text encoders and VAEs), how many are downloaded, their folders and family, and the commands that work on all of them: **Reveal in Finder**, **Move To**, **Move to Trash**, **Download** and **Cancel Download**. The context menu has the same commands. Each works on the selected models it fits and is unavailable when it fits none: **Download** downloads the ones not downloaded yet, to the folder in **Add To**, **Move to Trash** skips a model that's downloading or used by a queued job, and the confirmation says which. Commands for one model, such as **Make 8-bit Copy** and the Hugging Face page, are in its own inspector. A search or **Show** filter that hides a selected model also takes it out of the selection, so a command never reaches a model you can't see. **On iPad**, **Show in Files** opens one folder, so it works when all the selected files are in the same one.
+
 ### Downloading
 
 Select a model and click **Download**. Atelier also downloads the text encoders and other files the model needs. Progress shows in the list; **Cancel Download** stops it, and downloading again later resumes where it stopped.
@@ -19,6 +25,8 @@ Select a model and click **Download**. Atelier also downloads the text encoders 
 ### Deleting
 
 **Move to Trash** moves the model's file to the Trash. Text encoders and other files that other models share are kept. For an imported model, its entry is removed from the library too. If an imported model's file has gone missing from the folder, it says "File missing" and **Remove from Library** cleans up the entry.
+
+With several models selected, **Move to Trash** (or the Delete key on the Mac) asks once for all of them, saying how much goes and which imported ones lose their `custom.json` entry. A VAE an import wrote for itself goes when nothing outside the selection uses it, so trashing an imported model together with its 8-bit copy takes their VAE too. If a file can't be moved to the Trash, the rest still go and Atelier says which stayed.
 
 ### Choosing where new models go
 
@@ -35,6 +43,7 @@ With [additional model folders](settings.md#additional-model-folders), the **Fol
 - An imported model's `custom.json` entry moves to the destination folder's `custom.json` (both are backed up first, as for other changes).
 - Between two drives, every file is copied, read back and compared before the originals are deleted. Keep both drives connected until it finishes. Cancelling (the × beside the progress) before the copies are done leaves everything where it was. On one drive the files are just renamed, which is instant.
 - A move waits for a generation in progress to finish, and generations started meanwhile wait for the move. **Move To** is unavailable while a download, import or 8-bit copy is running, while a queued job uses the model, or when there's only one models folder.
+- With several models selected, **Move To** moves them all in one go, after one confirmation. A file two of them need moves once (or is copied once, if a model you didn't select needs it too). A selected model already in the destination is skipped, and the confirmation names it. The progress shows which one is moving ("Moving 2 of 5"). Cancelling leaves the one being copied where it was and starts no more; the ones already moved stay moved.
 
 ### Importing a checkpoint
 
@@ -153,6 +162,8 @@ LoRAs trained with the [MOSS Image Edit trainer](https://github.com/Chenkin-x/Mo
 ### Managing LoRAs
 
 Select a LoRA to rename it or change its trigger words (commas separate them; each becomes a toggle under the LoRA in Create, where the first starts on, so put the main one first), then click **Save** (or **Revert**). **Reveal in Finder** (on iPad, **Show in Files**, which opens its folder) shows its file, and **Move to Trash** deletes the file and removes it from `custom_lora.json`. **Move To** moves its file to another models folder, with its `custom_lora.json` entry when that's in the same folder, the same way as [moving a model](#moving-between-folders).
+
+Select several LoRAs the same way as [models](#selecting-several) (⌘-click, ⇧-click, ⌘A, or **Select** on iPad) to reveal, move or trash them together. The inspector shows how many, their size, any whose file is missing, and their folders and family; renaming and trigger words are for one LoRA at a time.
 
 To use a LoRA, add it in the inspector's LoRAs section in Create; see [Creating images](creating-images.md#loras).
 

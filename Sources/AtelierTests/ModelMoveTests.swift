@@ -37,6 +37,35 @@ struct ModelMoveTests {
     }
   }
 
+  @Test func aBatchCopiesASharedFileOnceAndDeletesItAfterAll() {
+    withTestFolder { root in
+      let source = root.appending(path: "A"), destination = root.appending(path: "B")
+      for file in ["one_f16.ckpt", "two_f16.ckpt", "own_vae.ckpt", "shared_vae.ckpt", "te.ckpt", "there.ckpt"] {
+        touch(source.appending(path: file))
+      }
+      touch(destination.appending(path: "there.ckpt"))
+      let items: [(own: [String], needs: Set<String>, source: URL)] = [
+        (["one_f16.ckpt", "own_vae.ckpt", "shared_vae.ckpt"], ["one_f16.ckpt", "own_vae.ckpt", "shared_vae.ckpt", "te.ckpt", "there.ckpt"], source),
+        // Owns the same companion (a duplicate claim) and needs the first model's file.
+        (["two_f16.ckpt", "shared_vae.ckpt"], ["two_f16.ckpt", "one_f16.ckpt", "shared_vae.ckpt", "te.ckpt", "there.ckpt"], source),
+      ]
+      // Nothing outside the batch needs them: the first item copies each shared file, and they
+      // go from A only after both moved.
+      let alone = ModelLibrary.sortBatchFiles(items: items, neededElsewhere: [], to: destination)
+      #expect(alone.items[0].moved == ["one_f16.ckpt", "own_vae.ckpt"])
+      #expect(alone.items[0].copied == ["shared_vae.ckpt", "te.ckpt"])
+      #expect(alone.items[1].moved == ["two_f16.ckpt"] && alone.items[1].copied.isEmpty)
+      #expect(alone.shared.map(\.file) == ["shared_vae.ckpt", "te.ckpt"] && alone.shared.allSatisfy { $0.items == [0, 1] })
+      // A model outside the batch needs the encoder: copied, and never deleted after.
+      let outside = ModelLibrary.sortBatchFiles(items: items, neededElsewhere: ["te.ckpt"], to: destination)
+      #expect(outside.items[0].copied == ["shared_vae.ckpt", "te.ckpt"])
+      #expect(outside.shared.map(\.file) == ["shared_vae.ckpt"])
+      // One item alone moves its companions as before.
+      let single = ModelLibrary.sortBatchFiles(items: [items[0]], neededElsewhere: [], to: destination)
+      #expect(single.items[0].moved == ["one_f16.ckpt", "own_vae.ckpt", "shared_vae.ckpt", "te.ckpt"] && single.shared.isEmpty)
+    }
+  }
+
   @Test func aMoveAcrossDrivesCopiesChecksAndDeletes() async throws {
     let root = FileManager.default.temporaryDirectory.appending(path: "ModelMoveTests-\(UUID())")
     defer { try? FileManager.default.removeItem(at: root) }
