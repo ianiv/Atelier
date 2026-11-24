@@ -11,6 +11,10 @@ import UniformTypeIdentifiers
 /// a slider dragged in one ticks every 16 ms, and working out the whole inspector's body (and
 /// every slider's) on each tick held up the main thread long enough to make the drag stutter.
 /// Now a tick works out the section the slider is in, and the others are left as they are.
+///
+/// Each settings section has a checkbox in its header (`EditStageHeader`) that turns its stage
+/// on and off, its settings kept (`EditOptions.off`); while it's off its controls are disabled,
+/// not hidden, so a slider never moves with nothing changing on screen.
 struct EditInspector: View {
   @Environment(EditModel.self) private var edit
   @Environment(CreateModel.self) private var create
@@ -286,13 +290,36 @@ private struct EditLookSections: View {
   var body: some View {
     let _ = EditViewCounts.note("EditInspector settings")
     let options = edit.options
-    EditMatchSection(match: options.match, histogram: options.histogram).equatable()
-    EditGradeSection(grade: options.grade).equatable()
-    EditLUTSection(lut: options.lut, error: $error).equatable()
-    EditHalationSection(halation: options.halation).equatable()
-    EditLensSection(lens: options.lens).equatable()
-    EditVignetteSection(vignette: options.vignette).equatable()
-    EditGrainSection(grain: options.grain).equatable()
+    EditMatchSection(match: options.match, histogram: options.histogram, isOn: options.isOn(.match)).equatable()
+    EditGradeSection(grade: options.grade, isOn: options.isOn(.grade)).equatable()
+    EditLUTSection(lut: options.lut, isOn: options.isOn(.lut), error: $error).equatable()
+    EditHalationSection(halation: options.halation, isOn: options.isOn(.halation)).equatable()
+    EditLensSection(lens: options.lens, isOn: options.isOn(.lens)).equatable()
+    EditVignetteSection(vignette: options.vignette, isOn: options.isOn(.vignette)).equatable()
+    EditGrainSection(grain: options.grain, isOn: options.isOn(.grain)).equatable()
+  }
+}
+
+/// A settings section's header: the checkbox that turns its stage on and off, then its title,
+/// as the Create inspector's feature sections have them. The checkbox reads `isOn`, the stage
+/// as the section has it, not `options`, so it doesn't tie the section to the whole look.
+private struct EditStageHeader: View {
+  @Environment(EditModel.self) private var edit
+  let stage: EditOptions.Stage
+  let isOn: Bool
+  /// The title's tooltip.
+  let help: String
+
+  var body: some View {
+    let name = stage == .lut ? "LUT" : stage.title.lowercased()
+    HStack(spacing: 6) {
+      Toggle(stage.title, isOn: Binding(get: { isOn }, set: { edit.setStage(stage, on: $0) }))
+        .checkboxToggleStyle()
+        .labelsHidden()
+        .help("Use the \(name). Turning it off keeps its settings.")
+        .accessibilityLabel("Use \(stage.title)")
+      Text(stage.title).help(help)
+    }
   }
 }
 
@@ -310,8 +337,9 @@ private struct EditMatchSection: View, Equatable {
   @Environment(EditModel.self) private var edit
   let match: EditOptions.Match
   let histogram: EditOptions.Histogram
+  let isOn: Bool
 
-  nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.match == rhs.match && lhs.histogram == rhs.histogram }
+  nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.match == rhs.match && lhs.histogram == rhs.histogram && lhs.isOn == rhs.isOn }
 
   var body: some View {
     let _ = EditViewCounts.note("EditInspector Match")
@@ -320,43 +348,46 @@ private struct EditMatchSection: View, Equatable {
     let noLab = target?.lab == nil
     let noHistogram = target?.histogram == nil
     InspectorGroup {
-      Text("Match").help("Moves the image's colours and tones toward a reference or the step's input.")
+      EditStageHeader(stage: .match, isOn: isOn, help: "Moves the image's colours and tones toward a reference or the step's input.")
     } content: {
-      InspectorRow {
-        Text("Match to").lineLimit(1).fixedSize().help(EditInspector.matchToHelp)
-      } control: {
-        MatchTargetControl(
-          target: Binding(get: { match.target }, set: { edit.setMatchTarget($0) }),
-          hasReference: edit.reference != nil, hasInput: edit.original != nil)
-          .help(EditInspector.matchToHelp)
-          .accessibilityHint(EditInspector.matchToHelp)
-      }
-      Text(noLab ? (match.target == .reference ? "Choose a reference to match to." : "This image wasn't made from an input image.") : "Moves the colours toward \(target?.name ?? "it").")
-        .font(.caption).foregroundStyle(.secondary)
-        .lineLimit(2, reservesSpace: true)
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: .infinity, alignment: .leading)
-      EditInspector.percentSlider("Tint", match.tint, \.match.tint, help: "How far the colour cast moves toward the target's, in Lab, from 0% (leave it) to 100% (match it).").disabled(noLab)
-      EditInspector.percentSlider("Saturation", match.saturation, \.match.saturation, help: "How far the colourfulness moves toward the target's, in Lab, from 0% to 100%.").disabled(noLab)
-      EditInspector.percentSlider("Brightness", match.brightness, \.match.brightness, help: "How far the average brightness moves toward the target's, in Lab, from 0% to 100%.").disabled(noLab)
-      EditInspector.percentSlider("Contrast", match.contrast, \.match.contrast, help: "How far the spread of brightness moves toward the target's, in Lab, from 0% to 100%.").disabled(noLab)
-      EditInspector.percentSlider("Histogram", histogram.amount, \.histogram.amount, help: "Reshapes the image's tones to the target's distribution, blended in by this amount.").disabled(noHistogram)
-      InspectorRow {
-        Text("Histogram of").help(EditInspector.histogramOfHelp)
-      } control: {
-        Picker("Histogram of", selection: edit.binding(histogram, \.histogram, \.space)) {
-          Text("Luma").tag(EditOptions.Histogram.Space.luma)
-          Text("RGB").tag(EditOptions.Histogram.Space.rgb)
+      Group {
+        InspectorRow {
+          Text("Match to").lineLimit(1).fixedSize().help(EditInspector.matchToHelp)
+        } control: {
+          MatchTargetControl(
+            target: Binding(get: { match.target }, set: { edit.setMatchTarget($0) }),
+            hasReference: edit.reference != nil, hasInput: edit.original != nil)
+            .help(EditInspector.matchToHelp)
+            .accessibilityHint(EditInspector.matchToHelp)
         }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .fixedSize()
-        .help(EditInspector.histogramOfHelp)
-        .accessibilityHint(EditInspector.histogramOfHelp)
+        Text(noLab ? (match.target == .reference ? "Choose a reference to match to." : "This image wasn't made from an input image.") : "Moves the colours toward \(target?.name ?? "it").")
+          .font(.caption).foregroundStyle(.secondary)
+          .lineLimit(2, reservesSpace: true)
+          .fixedSize(horizontal: false, vertical: true)
+          .frame(maxWidth: .infinity, alignment: .leading)
+        EditInspector.percentSlider("Tint", match.tint, \.match.tint, help: "How far the colour cast moves toward the target's, in Lab, from 0% (leave it) to 100% (match it).").disabled(noLab)
+        EditInspector.percentSlider("Saturation", match.saturation, \.match.saturation, help: "How far the colourfulness moves toward the target's, in Lab, from 0% to 100%.").disabled(noLab)
+        EditInspector.percentSlider("Brightness", match.brightness, \.match.brightness, help: "How far the average brightness moves toward the target's, in Lab, from 0% to 100%.").disabled(noLab)
+        EditInspector.percentSlider("Contrast", match.contrast, \.match.contrast, help: "How far the spread of brightness moves toward the target's, in Lab, from 0% to 100%.").disabled(noLab)
+        EditInspector.percentSlider("Histogram", histogram.amount, \.histogram.amount, help: "Reshapes the image's tones to the target's distribution, blended in by this amount.").disabled(noHistogram)
+        InspectorRow {
+          Text("Histogram of").help(EditInspector.histogramOfHelp)
+        } control: {
+          Picker("Histogram of", selection: edit.binding(histogram, \.histogram, \.space)) {
+            Text("Luma").tag(EditOptions.Histogram.Space.luma)
+            Text("RGB").tag(EditOptions.Histogram.Space.rgb)
+          }
+          .pickerStyle(.segmented)
+          .labelsHidden()
+          .fixedSize()
+          .help(EditInspector.histogramOfHelp)
+          .accessibilityHint(EditInspector.histogramOfHelp)
+        }
+        .disabled(noHistogram)
+        EditInspector.slider("Profile Colour", match.colour, \.match.colour, 0...1, step: 0.01, digits: 2, help: "Moves each RGB channel's average and spread toward the loaded profile's reference photo, 0 to 1. Ignores Match to, and needs a profile with colour data; Match Reference sets it to 0.6.")
+          .disabled(edit.context.refStats == nil)
       }
-      .disabled(noHistogram)
-      EditInspector.slider("Profile Colour", match.colour, \.match.colour, 0...1, step: 0.01, digits: 2, help: "Moves each RGB channel's average and spread toward the loaded profile's reference photo, 0 to 1. Ignores Match to, and needs a profile with colour data; Match Reference sets it to 0.6.")
-        .disabled(edit.context.refStats == nil)
+      .disabled(!isOn)
     }
   }
 }
@@ -364,20 +395,24 @@ private struct EditMatchSection: View, Equatable {
 private struct EditGradeSection: View, Equatable {
   @Environment(EditModel.self) private var edit
   let grade: EditOptions.Grade
+  let isOn: Bool
 
-  nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.grade == rhs.grade }
+  nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.grade == rhs.grade && lhs.isOn == rhs.isOn }
 
   var body: some View {
     let _ = EditViewCounts.note("EditInspector Grade")
     InspectorGroup {
-      Text("Grade").help("Basic colour and tone adjustments, applied in this order.")
+      EditStageHeader(stage: .grade, isOn: isOn, help: "Basic colour and tone adjustments, applied in this order.")
     } content: {
-      EditInspector.slider("Exposure", grade.exposure, \.grade.exposure, EditOptions.Grade.exposureRange, step: 0.01, digits: 2, help: "Brightens or darkens the image in stops: +1 doubles the light, −1 halves it.")
-      EditInspector.slider("Temperature", grade.temperature, \.grade.temperature, EditOptions.Grade.temperatureRange, step: 1, digits: 0, help: "Warms (+) or cools (−) the white balance, −100 to 100.")
-      EditInspector.slider("Tint", grade.tint, \.grade.tint, EditOptions.Grade.tintRange, step: 0.1, digits: 1, help: "Shifts the colour toward green (−) or magenta (+).")
-      EditInspector.slider("Contrast", grade.contrast, \.grade.contrast, EditOptions.Grade.unitRange, step: 0.01, digits: 2, help: "Raises (+) or lowers (−) contrast around mid grey, −1 to 1.")
-      EditInspector.slider("Saturation", grade.saturation, \.grade.saturation, EditOptions.Grade.unitRange, step: 0.01, digits: 2, help: "Makes colours stronger (+) or weaker (−); −1 is black and white.")
-      EditInspector.slider("Vibrance", grade.vibrance, \.grade.vibrance, EditOptions.Grade.unitRange, step: 0.01, digits: 2, help: "Saturation that boosts muted colours more than vivid ones and mostly spares skin tones, −1 to 1.")
+      Group {
+        EditInspector.slider("Exposure", grade.exposure, \.grade.exposure, EditOptions.Grade.exposureRange, step: 0.01, digits: 2, help: "Brightens or darkens the image in stops: +1 doubles the light, −1 halves it.")
+        EditInspector.slider("Temperature", grade.temperature, \.grade.temperature, EditOptions.Grade.temperatureRange, step: 1, digits: 0, help: "Warms (+) or cools (−) the white balance, −100 to 100.")
+        EditInspector.slider("Tint", grade.tint, \.grade.tint, EditOptions.Grade.tintRange, step: 0.1, digits: 1, help: "Shifts the colour toward green (−) or magenta (+).")
+        EditInspector.slider("Contrast", grade.contrast, \.grade.contrast, EditOptions.Grade.unitRange, step: 0.01, digits: 2, help: "Raises (+) or lowers (−) contrast around mid grey, −1 to 1.")
+        EditInspector.slider("Saturation", grade.saturation, \.grade.saturation, EditOptions.Grade.unitRange, step: 0.01, digits: 2, help: "Makes colours stronger (+) or weaker (−); −1 is black and white.")
+        EditInspector.slider("Vibrance", grade.vibrance, \.grade.vibrance, EditOptions.Grade.unitRange, step: 0.01, digits: 2, help: "Saturation that boosts muted colours more than vivid ones and mostly spares skin tones, −1 to 1.")
+      }
+      .disabled(!isOn)
     }
   }
 }
@@ -386,31 +421,37 @@ private struct EditLUTSection: View, Equatable {
   @Environment(EditModel.self) private var edit
   @Environment(FileDialogs.self) private var fileDialogs
   let lut: EditOptions.LUTRef
+  let isOn: Bool
   @Binding var error: String?
 
-  nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.lut == rhs.lut }
+  nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.lut == rhs.lut && lhs.isOn == rhs.isOn }
 
   var body: some View {
     let _ = EditViewCounts.note("EditInspector LUT")
     InspectorGroup {
-      Text("LUT").help("A 3D colour lookup table, built in or loaded from a .cube file.")
+      EditStageHeader(stage: .lut, isOn: isOn, help: "A 3D colour lookup table, built in or loaded from a .cube file.")
     } content: {
-      InspectorRow {
-        Text("LUT").layoutPriority(1).help(EditInspector.lutHelp)
-      } control: {
-        lutMenu.nameMenu(edit.lut?.name)
-          .accessibilityHint(EditInspector.lutHelp)
+      // The LUT's own controls; Export LUT… stays usable with the LUT off, as it bakes the
+      // match and grade too (without the LUT, as they render).
+      Group {
+        InspectorRow {
+          Text("LUT").layoutPriority(1).help(EditInspector.lutHelp)
+        } control: {
+          lutMenu.nameMenu(edit.lut?.name)
+            .accessibilityHint(EditInspector.lutHelp)
+        }
+        HStack(spacing: 6) {
+          Button("Load .cube…") { loadLUT() }
+            .help("Load a 3D LUT in the Adobe/Resolve .cube format and apply it at full strength")
+          Button("Remove") { edit.removeLUT() }
+            .disabled(edit.lut == nil && edit.fileLUT == nil)
+            .help("Take the LUT off and drop the loaded file's LUT from the menu")
+        }
+        .controlSize(.small)
+        .padding(.vertical, 4)
+        EditInspector.percentSlider("Strength", lut.strength, \.lut.strength, help: "How much of the LUT's look is blended in, from 0% to 100%.").disabled(edit.lut == nil)
       }
-      HStack(spacing: 6) {
-        Button("Load .cube…") { loadLUT() }
-          .help("Load a 3D LUT in the Adobe/Resolve .cube format and apply it at full strength")
-        Button("Remove") { edit.removeLUT() }
-          .disabled(edit.lut == nil && edit.fileLUT == nil)
-          .help("Take the LUT off and drop the loaded file's LUT from the menu")
-      }
-      .controlSize(.small)
-      .padding(.vertical, 4)
-      EditInspector.percentSlider("Strength", lut.strength, \.lut.strength, help: "How much of the LUT's look is blended in, from 0% to 100%.").disabled(edit.lut == nil)
+      .disabled(!isOn)
       InspectorRow {
         Text("Match and Grade as a LUT").font(.caption).foregroundStyle(.secondary).help(EditInspector.exportLUTHelp)
       } control: {
@@ -459,18 +500,22 @@ private struct EditLUTSection: View, Equatable {
 private struct EditHalationSection: View, Equatable {
   @Environment(EditModel.self) private var edit
   let halation: EditOptions.Halation
+  let isOn: Bool
 
-  nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.halation == rhs.halation }
+  nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.halation == rhs.halation && lhs.isOn == rhs.isOn }
 
   var body: some View {
     let _ = EditViewCounts.note("EditInspector Halation")
     InspectorGroup {
-      Text("Halation").help("A warm glow around highlights, as film gives.")
+      EditStageHeader(stage: .halation, isOn: isOn, help: "A warm glow around highlights, as film gives.")
     } content: {
-      EditInspector.percentSlider("Amount", halation.amount, \.halation.amount, help: "How strong the glow around highlights is, as film gives.")
-      EditInspector.slider("Threshold", halation.threshold, \.halation.threshold, 0...1, step: 0.01, digits: 2, help: "How bright light must be before it starts to glow, 0 to 1. Only the light past it glows, more the further past it is.")
-      EditInspector.slider("Radius", halation.radius, \.halation.radius, EditOptions.Halation.radiusRange, step: 0.1, digits: 1, help: "How far the glow spreads, in pixels at full size.")
-      EditInspector.percentSlider("Warmth", halation.warmth, \.halation.warmth, help: "The glow's colour, from the highlight's own colour (0%) to film's red-orange (100%).")
+      Group {
+        EditInspector.percentSlider("Amount", halation.amount, \.halation.amount, help: "How strong the glow around highlights is, as film gives.")
+        EditInspector.slider("Threshold", halation.threshold, \.halation.threshold, 0...1, step: 0.01, digits: 2, help: "How bright light must be before it starts to glow, 0 to 1. Only the light past it glows, more the further past it is.")
+        EditInspector.slider("Radius", halation.radius, \.halation.radius, EditOptions.Halation.radiusRange, step: 0.1, digits: 1, help: "How far the glow spreads, in pixels at full size.")
+        EditInspector.percentSlider("Warmth", halation.warmth, \.halation.warmth, help: "The glow's colour, from the highlight's own colour (0%) to film's red-orange (100%).")
+      }
+      .disabled(!isOn)
     }
   }
 }
@@ -478,17 +523,21 @@ private struct EditHalationSection: View, Equatable {
 private struct EditLensSection: View, Equatable {
   @Environment(EditModel.self) private var edit
   let lens: EditOptions.Lens
+  let isOn: Bool
 
-  nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.lens == rhs.lens }
+  nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.lens == rhs.lens && lhs.isOn == rhs.isOn }
 
   var body: some View {
     let _ = EditViewCounts.note("EditInspector Lens")
     InspectorGroup {
-      Text("Lens").help("Motion smear and softening, applied before everything else.")
+      EditStageHeader(stage: .lens, isOn: isOn, help: "Motion smear and softening, applied before everything else.")
     } content: {
-      EditInspector.slider("Motion", lens.motion, \.lens.motion, EditOptions.Lens.motionRange, step: 0.1, digits: 1, help: "The length of a slow-shutter motion smear, in pixels at full size. Below 2 there's none.")
-      EditInspector.slider("Angle", lens.angle, \.lens.angle, EditOptions.Lens.angleRange, step: 1, digits: 0, help: "The direction of the motion smear, in degrees; 0 is horizontal.")
-      EditInspector.slider("Blur", lens.blur, \.lens.blur, EditOptions.Lens.blurRange, step: 0.01, digits: 2, help: "Softens the image before the grain is added, in pixels. The default is 3.")
+      Group {
+        EditInspector.slider("Motion", lens.motion, \.lens.motion, EditOptions.Lens.motionRange, step: 0.1, digits: 1, help: "The length of a slow-shutter motion smear, in pixels at full size. Below 2 there's none.")
+        EditInspector.slider("Angle", lens.angle, \.lens.angle, EditOptions.Lens.angleRange, step: 1, digits: 0, help: "The direction of the motion smear, in degrees; 0 is horizontal.")
+        EditInspector.slider("Blur", lens.blur, \.lens.blur, EditOptions.Lens.blurRange, step: 0.01, digits: 2, help: "Softens the image before the grain is added, in pixels. The default is 3.")
+      }
+      .disabled(!isOn)
     }
   }
 }
@@ -496,17 +545,21 @@ private struct EditLensSection: View, Equatable {
 private struct EditVignetteSection: View, Equatable {
   @Environment(EditModel.self) private var edit
   let vignette: EditOptions.Vignette
+  let isOn: Bool
 
-  nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.vignette == rhs.vignette }
+  nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.vignette == rhs.vignette && lhs.isOn == rhs.isOn }
 
   var body: some View {
     let _ = EditViewCounts.note("EditInspector Vignette")
     InspectorGroup {
-      Text("Vignette").help("Darkens or brightens toward the corners.")
+      EditStageHeader(stage: .vignette, isOn: isOn, help: "Darkens or brightens toward the corners.")
     } content: {
-      EditInspector.slider("Amount", vignette.amount, \.vignette.amount, -1...1, step: 0.01, digits: 2, help: "Darkens the corners; below 0 it brightens the edges instead.")
-      EditInspector.percentSlider("Size", vignette.size, \.vignette.size, help: "Where the falloff starts, from the centre (0%) to the corners (100%).")
-      EditInspector.percentSlider("Softness", vignette.softness, \.vignette.softness, help: "How gradual the falloff is, from a hard edge (0%) to the softest (100%).")
+      Group {
+        EditInspector.slider("Amount", vignette.amount, \.vignette.amount, -1...1, step: 0.01, digits: 2, help: "Darkens the corners; below 0 it brightens the edges instead.")
+        EditInspector.percentSlider("Size", vignette.size, \.vignette.size, help: "Where the falloff starts, from the centre (0%) to the corners (100%).")
+        EditInspector.percentSlider("Softness", vignette.softness, \.vignette.softness, help: "How gradual the falloff is, from a hard edge (0%) to the softest (100%).")
+      }
+      .disabled(!isOn)
     }
   }
 }
@@ -514,40 +567,44 @@ private struct EditVignetteSection: View, Equatable {
 private struct EditGrainSection: View, Equatable {
   @Environment(EditModel.self) private var edit
   let grain: EditOptions.Grain
+  let isOn: Bool
 
-  nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.grain == rhs.grain }
+  nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.grain == rhs.grain && lhs.isOn == rhs.isOn }
 
   var body: some View {
     let _ = EditViewCounts.note("EditInspector Grain")
     InspectorGroup {
-      Text("Grain").help("Film grain, plus the profile's real noise.")
+      EditStageHeader(stage: .grain, isOn: isOn, help: "Film grain, plus the profile's real noise.")
     } content: {
-      EditInspector.slider("Grain", grain.lum, \.grain.lum, EditOptions.Grain.strengthRange, step: 0.1, digits: 1, help: "The strength of the brightness grain. The default is 9.")
-      EditInspector.slider("Size", grain.size, \.grain.size, EditOptions.Grain.sizeRange, step: 0.01, digits: 2, help: "How coarse the grain is; 1 is the default, higher is coarser.")
-      EditInspector.slider("Colour Noise", grain.chroma, \.grain.chroma, EditOptions.Grain.strengthRange, step: 0.1, digits: 1, help: "The strength of the coloured grain. The default is 3.")
-      EditInspector.slider("Colour Size", grain.csize, \.grain.csize, EditOptions.Grain.sizeRange, step: 0.01, digits: 2, help: "How large the colour noise blotches are; 1 is the default.")
-      EditInspector.slider("Real Noise", grain.real, \.grain.real, EditOptions.Grain.realRange, step: 0.01, digits: 2, help: "Adds the profile's real noise, sampled from its reference photo; 1 is the reference's amount. Needs a profile with real noise.")
-        .disabled(edit.context.realNoise == nil)
-      Text(edit.missingDataNote ?? (edit.context.realNoise == nil ? "Real Noise needs a profile with real noise (Match Reference makes one)." : " "))
-        .font(.caption).foregroundStyle(.secondary)
-        .lineLimit(2, reservesSpace: true)
-        .fixedSize(horizontal: false, vertical: true)
-      InspectorRow {
-        Text("Seed").help(EditInspector.seedHelp)
-      } control: {
-        HStack(spacing: 6) {
-          TextField("", value: bind(\.seed), format: .number.grouping(.never))
-            .labelsHidden()
-            .accessibilityLabel("Seed")
-            .accessibilityHint(EditInspector.seedHelp)
-            .help(EditInspector.seedHelp)
-            .multilineTextAlignment(.trailing)
-            .frame(width: 80)
-          Button("New Grain") { edit.newGrain() }
-            .controlSize(.small)
-            .help("Pick a new random seed: a different grain pattern with the same look")
+      Group {
+        EditInspector.slider("Grain", grain.lum, \.grain.lum, EditOptions.Grain.strengthRange, step: 0.1, digits: 1, help: "The strength of the brightness grain. The default is 9.")
+        EditInspector.slider("Size", grain.size, \.grain.size, EditOptions.Grain.sizeRange, step: 0.01, digits: 2, help: "How coarse the grain is; 1 is the default, higher is coarser.")
+        EditInspector.slider("Colour Noise", grain.chroma, \.grain.chroma, EditOptions.Grain.strengthRange, step: 0.1, digits: 1, help: "The strength of the coloured grain. The default is 3.")
+        EditInspector.slider("Colour Size", grain.csize, \.grain.csize, EditOptions.Grain.sizeRange, step: 0.01, digits: 2, help: "How large the colour noise blotches are; 1 is the default.")
+        EditInspector.slider("Real Noise", grain.real, \.grain.real, EditOptions.Grain.realRange, step: 0.01, digits: 2, help: "Adds the profile's real noise, sampled from its reference photo; 1 is the reference's amount. Needs a profile with real noise.")
+          .disabled(edit.context.realNoise == nil)
+        Text(edit.missingDataNote ?? (edit.context.realNoise == nil ? "Real Noise needs a profile with real noise (Match Reference makes one)." : " "))
+          .font(.caption).foregroundStyle(.secondary)
+          .lineLimit(2, reservesSpace: true)
+          .fixedSize(horizontal: false, vertical: true)
+        InspectorRow {
+          Text("Seed").help(EditInspector.seedHelp)
+        } control: {
+          HStack(spacing: 6) {
+            TextField("", value: bind(\.seed), format: .number.grouping(.never))
+              .labelsHidden()
+              .accessibilityLabel("Seed")
+              .accessibilityHint(EditInspector.seedHelp)
+              .help(EditInspector.seedHelp)
+              .multilineTextAlignment(.trailing)
+              .frame(width: 80)
+            Button("New Grain") { edit.newGrain() }
+              .controlSize(.small)
+              .help("Pick a new random seed: a different grain pattern with the same look")
+          }
         }
       }
+      .disabled(!isOn)
     }
   }
 
