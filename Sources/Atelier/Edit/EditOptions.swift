@@ -19,6 +19,15 @@ import Foundation
 /// rather than adding grain.py's blur and grain. To lay a partial look over another, decode with
 /// `decoded(from:over:)`: the keys it names replace the base's, the rest stay the base's. Nothing
 /// here throws on a bad value, so one setting never loses the rest.
+///
+/// `off` names the stages turned off (the sidebar sections' checkboxes): their settings stay
+/// here, so turning one back on brings them back, and what renders is `rendered`, with those
+/// stages' settings as no change. A missing `off` key is the base's (all on from `identity`),
+/// an unknown stage name is dropped, and an empty `off` isn't encoded, so an all-on look
+/// encodes as it did before stages could be turned off. `lookOff` is the master switch over
+/// them all (the sidebar's Look checkbox): it renders no look at all and leaves `off` as it is,
+/// so turning it back on brings back the stages that were on. It's read and written the same
+/// way: missing is on, and it's written only when it's off.
 nonisolated struct EditOptions: Codable, Hashable, Sendable {
   var match = Match()
   var histogram = Histogram()
@@ -28,10 +37,15 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
   var lens = Lens()
   var vignette = Vignette()
   var grain = Grain()
+  /// The stages turned off, their settings kept (`rendered`).
+  var off: Set<Stage> = []
+  /// The whole look turned off, `off` and every setting kept (`rendered`).
+  var lookOff = false
 
   init(
     match: Match = Match(), histogram: Histogram = Histogram(), grade: Grade = Grade(), lut: LUTRef = LUTRef(),
-    halation: Halation = Halation(), lens: Lens = Lens(), vignette: Vignette = Vignette(), grain: Grain = Grain()
+    halation: Halation = Halation(), lens: Lens = Lens(), vignette: Vignette = Vignette(), grain: Grain = Grain(),
+    off: Set<Stage> = [], lookOff: Bool = false
   ) {
     self.match = match
     self.histogram = histogram
@@ -41,6 +55,89 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
     self.lens = lens
     self.vignette = vignette
     self.grain = grain
+    self.off = off
+    self.lookOff = lookOff
+  }
+
+  /// A part of the look the sidebar turns on and off as one, one per sidebar section, in
+  /// pipeline order (`EditPipeline`).
+  enum Stage: String, Codable, CaseIterable, Hashable, Sendable, Comparable {
+    /// The motion smear and blur, steps 1 and 2 (`lens`).
+    case lens
+    /// The Reinhard Lab match, the histogram match and grain.py's colour match, steps 3 to 5
+    /// (`match` and `histogram`, one sidebar section).
+    case match
+    /// Step 6 (`grade`).
+    case grade
+    /// Step 7 (`lut`).
+    case lut
+    /// Step 8 (`halation`).
+    case halation
+    /// Step 9 (`vignette`).
+    case vignette
+    /// The random grain and the real noise, steps 10 and 11 (`grain`).
+    case grain
+
+    /// The sidebar section's title.
+    var title: String {
+      switch self {
+      case .lens: "Lens"
+      case .match: "Match"
+      case .grade: "Grade"
+      case .lut: "LUT"
+      case .halation: "Halation"
+      case .vignette: "Vignette"
+      case .grain: "Grain"
+      }
+    }
+
+    static func < (a: Stage, b: Stage) -> Bool {
+      allCases.firstIndex(of: a)! < allCases.firstIndex(of: b)!
+    }
+  }
+
+  /// Whether `stage` is on.
+  func isOn(_ stage: Stage) -> Bool { !off.contains(stage) }
+
+  /// A copy with `stage` turned on or off, its settings left as they are.
+  func setting(_ stage: Stage, on: Bool) -> EditOptions {
+    var copy = self
+    if on { copy.off.remove(stage) } else { copy.off.insert(stage) }
+    return copy
+  }
+
+  /// What renders: these options with each stage that's off as no change (and `off` empty).
+  /// Every renderer cache is keyed by the options it's handed (`EditRenderer`), and the renderer
+  /// takes this of whatever it's given, so turning a stage off renders exactly as that stage set
+  /// to nothing, and turning it back on asks for the earlier key again (a cache hit). Kept as
+  /// they are: the match target and histogram space (not amounts) and the grain seed.
+  /// With the whole look off (`lookOff`), it's `identity` (the seed kept), whatever `off` says.
+  var rendered: EditOptions {
+    if lookOff {
+      var none = EditOptions.identity
+      none.grain.seed = grain.seed
+      return none
+    }
+    guard !off.isEmpty else { return self }
+    var out = self
+    out.off = []
+    for stage in off {
+      switch stage {
+      case .lens: out.lens = .identity
+      case .match:
+        out.match = Match(target: match.target)
+        out.histogram = Histogram(space: histogram.space)
+      case .grade: out.grade = Grade()
+      case .lut: out.lut = LUTRef()
+      case .halation: out.halation = Halation()
+      case .vignette: out.vignette = Vignette()
+      case .grain:
+        var grain = Grain.identity
+        grain.seed = self.grain.seed
+        out.grain = grain
+      }
+    }
+    return out
   }
 
   /// grain.py's default look, `EditOptions()`: its blur and grain on, everything else off.
@@ -68,9 +165,10 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
   }
 
   /// Whether rendering with these options gives back the source unchanged (`EditPipeline.render`
-  /// skips every step then).
+  /// skips every step then); a stage that's off counts as doing nothing.
   var isIdentity: Bool {
-    match.isIdentity && histogram.isIdentity && grade.isIdentity && lut.isIdentity && halation.isIdentity
+    guard off.isEmpty, !lookOff else { return rendered.isIdentity }
+    return match.isIdentity && histogram.isIdentity && grade.isIdentity && lut.isIdentity && halation.isIdentity
       && lens.isIdentity && vignette.isIdentity && grain.isIdentity
   }
 
@@ -84,10 +182,27 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
   var snapped: EditOptions {
     EditOptions(
       match: match.snapped, histogram: histogram.snapped, grade: grade.snapped, lut: lut.snapped,
-      halation: halation.snapped, lens: lens.snapped, vignette: vignette.snapped, grain: grain.snapped)
+      halation: halation.snapped, lens: lens.snapped, vignette: vignette.snapped, grain: grain.snapped, off: off, lookOff: lookOff)
   }
 
-  private enum CodingKeys: String, CodingKey { case match, histogram, grade, lut, halation, lens, vignette, grain }
+  // `lookOff` is `look_off` in a step's `profile_data`, whose coder converts to and from snake case.
+  private enum CodingKeys: String, CodingKey { case match, histogram, grade, lut, halation, lens, vignette, grain, off, lookOff }
+
+  /// The synthesized encoding's keys, then `off` (its names in pipeline order, so the same
+  /// stages always encode alike) only when a stage is off, and `lookOff` only when it's set.
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    try c.encode(match, forKey: .match)
+    try c.encode(histogram, forKey: .histogram)
+    try c.encode(grade, forKey: .grade)
+    try c.encode(lut, forKey: .lut)
+    try c.encode(halation, forKey: .halation)
+    try c.encode(lens, forKey: .lens)
+    try c.encode(vignette, forKey: .vignette)
+    try c.encode(grain, forKey: .grain)
+    if !off.isEmpty { try c.encode(off.sorted().map(\.rawValue), forKey: .off) }
+    if lookOff { try c.encode(true, forKey: .lookOff) }
+  }
 
   init(from decoder: Decoder) throws {
     let base = Self.base(decoder)
@@ -100,6 +215,9 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
     lens = lenient(c, Lens.self, .lens) ?? base.lens
     vignette = lenient(c, Vignette.self, .vignette) ?? base.vignette
     grain = lenient(c, Grain.self, .grain) ?? base.grain
+    // Read as names, so one unknown name (a later Atelier's stage) drops only itself.
+    off = lenient(c, [String].self, .off).map { Set($0.compactMap(Stage.init(rawValue:))) } ?? base.off
+    lookOff = lenient(c, Bool.self, .lookOff) ?? base.lookOff
   }
 
   /// No bound: grain.py's own settings aren't capped.
@@ -123,7 +241,7 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
   struct Match: Codable, Hashable, Sendable {
     /// What the Reinhard and histogram matches move toward.
     enum Target: String, Codable, Hashable, Sendable, CaseIterable {
-      /// The reference image picked in Look (a file, a History step, a moodboard image).
+      /// The reference image picked in Profile (a file, a History step, a moodboard image).
       case reference
       /// The image the step was made from (`CreateModel.originalImage`), as Match Colors… uses.
       case original

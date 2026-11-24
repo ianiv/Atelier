@@ -166,8 +166,11 @@ nonisolated enum Edit {
     /// The layout this version writes. A record of a later version reads as well as it can.
     /// 2 added `crop`; a version 1 record has none, and an older Atelier reading a version 2 one
     /// ignores it (shows the source uncropped with the look). 3 added `heal`, which an older
-    /// Atelier ignores the same way (the source unhealed).
-    static let currentVersion = 3
+    /// Atelier ignores the same way (the source unhealed). 4 added `options.off`, the stages
+    /// turned off with their settings kept, and `options.lookOff`, the whole look off; an older
+    /// Atelier ignores them and shows the stages on (the step's saved pixels are right either
+    /// way).
+    static let currentVersion = 4
 
     var version = Record.currentVersion
     var options: EditOptions
@@ -258,8 +261,10 @@ nonisolated enum Edit {
       return look
     }
 
-    /// What makes the image: everything but the names and where the data is stored, the options
-    /// snapped (`EditOptions.snapped`).
+    /// What makes the image and what the step keeps: everything but the names and where the data
+    /// is stored, the options snapped (`EditOptions.snapped`). A stage that's off counts with its
+    /// settings: a step saved with different hidden settings reopens differently, so changing
+    /// them and saving again is a new edit.
     var renderKey: Record {
       var key = self
       key.version = 0

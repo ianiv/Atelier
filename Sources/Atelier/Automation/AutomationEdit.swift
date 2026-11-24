@@ -13,6 +13,16 @@ extension Automation {
   ///   and its source;
   /// - opening the saved step goes back to its source with the recorded look;
   /// - Export PNG gives a PNG of the source's size;
+  /// - with Grain and Halation turned off (their checkboxes), Save to History records them off
+  ///   with their settings kept, and the saved pixels are the look rendered with those stages at
+  ///   no change (not with them on); Export PNG is that render exactly; opening the step again
+  ///   brings back the stages off and their settings; turned back on, Save queues a new job;
+  ///   edit_image_look on that step keeps them off unless `options.off` says otherwise (`[]`
+  ///   turns them on, the grain saved with it), and refuses a stage name that isn't one;
+  /// - with the Look checkbox off (Grain off too), the saved step is the image's own pixels and
+  ///   records the look off with the stages and settings; Reset turns it on; reopening brings
+  ///   it back; edit_image_look's `look_off: false` turns it on with Grain still off, and a
+  ///   `look_off` that isn't a boolean is refused;
   /// - Export LUT… of a grade, loaded back as a LUT over no change, renders within a few levels
   ///   of the grade itself;
   /// - Export PNG's metadata records the look at the start, though the look changes while it
@@ -32,6 +42,7 @@ extension Automation {
   ///
   /// With `--snapshot-dir DIR` it also saves the window: the empty screen (`edit-empty.png`),
   /// the look in each comparison mode (`edit-<mode>.png`) and zoomed to 200% (`edit-zoom200.png`),
+  /// the inspector with Grain and Halation off (`edit-stage-off.png`),
   /// then, with a long-named reference matched, checks that the inspector still goes to its
   /// narrowest and the window narrow (`edit-long-name*.png`).
   ///
@@ -188,6 +199,7 @@ extension Automation {
       check(edit.options == look, "opening the saved step loads its look")
       check(edit.saveProblem == nil, "Save to History is available again once the job is done")
       await builtInLUTCheck(model, edit: edit, look: look, source: source, check: check)
+      await stageOffChecks(model, edit: edit, presets: presets, look: look, image: image, source: source, snapshotDir: snapshotDir, check: check)
 
       // Export PNG.
       do {
@@ -315,6 +327,148 @@ extension Automation {
     edit.reset()
     await edit.open(source)
     edit.options = look
+  }
+
+  /// Grain and Halation turned off on `source` with `look`: what's saved, exported, reopened and
+  /// what edit_image_look does with it (see the check's list). Puts `look`, all on, back.
+  private static func stageOffChecks(
+    _ model: CreateModel, edit: EditModel, presets: PresetStore, look: EditOptions, image: CGImage, source: HistoryItem, snapshotDir: URL?,
+    check: (Bool, String) -> Void
+  ) async {
+    defer { edit.options = look }
+    func waitFor(_ jobID: UUID) async -> HistoryItem? {
+      var waited = 0
+      while model.queue.recent.first(where: { $0.id == jobID }) == nil, waited < 600 {
+        try? await Task.sleep(for: .milliseconds(100))
+        waited += 1
+      }
+      guard case .finished(let tensorId)? = model.queue.recent.first(where: { $0.id == jobID })?.status else { return nil }
+      return model.history.item(tensorId: tensorId)
+    }
+    /// The mean and largest difference of two images' colour bytes; nil when they can't be compared.
+    func difference(_ a: CGImage?, _ b: CGImage?) -> (mean: Double, largest: Int)? {
+      guard let a = a.flatMap(ColorMatch.rgba), let b = b.flatMap(ColorMatch.rgba), a.count == b.count, !a.isEmpty else { return nil }
+      var total = 0, largest = 0
+      for i in a.indices where i % 4 != 3 {
+        let d = abs(Int(a[i]) - Int(b[i]))
+        total += d
+        largest = max(largest, d)
+      }
+      return (Double(total) / Double(a.count / 4 * 3), largest)
+    }
+
+    edit.options = look
+    edit.setStage(.grain, on: false)
+    edit.setStage(.halation, on: false)
+    let off = edit.options
+    check(
+      off.off == [.grain, .halation] && off.grain == look.grain && off.halation == look.halation && edit.renderedOptions.grain.isIdentity
+        && edit.renderedOptions.halation.isIdentity,
+      "turning Grain and Halation off keeps their settings and renders them as no change")
+    if let snapshotDir {
+      try? await Task.sleep(for: .seconds(2))
+      snapshot(to: snapshotDir.appendingPathComponent("edit-stage-off.png"))
+    }
+    // What it should render: the look with those two stages set to nothing by hand.
+    var manual = look
+    manual.grain = EditOptions.Grain(lum: 0, size: look.grain.size, chroma: 0, csize: look.grain.csize, real: 0, seed: look.grain.seed)
+    manual.halation = EditOptions.Halation()
+    let context = edit.context
+    guard let expected = try? await EditRenderer().full(source: image, options: manual, context: context),
+          let withStages = try? await EditRenderer().full(source: image, options: look, context: context)
+    else { return check(false, "the stage-off look couldn't be rendered to compare") }
+
+    guard let jobID = try? edit.save(), let saved = await waitFor(jobID) else { return check(false, "Save to History with stages off didn't save a step") }
+    let record = saved.sidecar.edit
+    check(
+      record?.options.off == [.grain, .halation] && record?.options.grain == look.grain && record?.options.halation == look.halation
+        && record?.version == Edit.Record.currentVersion,
+      "the step saved with stages off records them off with their settings (version \(record?.version ?? 0))")
+    let savedImage = await model.history.project.read { $0.image(tensorId: saved.imageTensorId ?? saved.tensorId) }
+    if let same = difference(savedImage, expected), let other = difference(savedImage, withStages) {
+      check(
+        same.mean < 0.5 && same.largest <= 2 && other.mean > same.mean + 0.5,
+        String(format: "the saved pixels are the look without those stages (%.3f levels on average, %d at most; %.2f from the look with them)", same.mean, same.largest, other.mean))
+    } else {
+      check(false, "the saved step's pixels couldn't be compared (\(savedImage?.width ?? 0)×\(savedImage?.height ?? 0))")
+    }
+    do {
+      let exported = ImageLoader.image(from: try await edit.exportPNG())
+      let diff = difference(exported, expected)
+      check(diff?.largest == 0, "Export PNG with stages off is that render exactly (\(diff.map { "\($0.largest) at most" } ?? "not comparable"))")
+    } catch {
+      check(false, "Export PNG with stages off failed: \(error.localizedDescription)")
+    }
+
+    // Reopen: the stages off, their settings back.
+    edit.reset()
+    check(edit.options.off.isEmpty, "Reset turns every stage back on")
+    await edit.open(saved)
+    check(edit.item?.tensorId == source.tensorId && edit.options == off, "opening the step brings back the stages off and their settings")
+    edit.setStage(.grain, on: true)
+    edit.setStage(.halation, on: true)
+    let problem = edit.saveProblem
+    let onID = try? edit.save()
+    check(problem == nil && onID != nil && onID != jobID, "turned back on, Save to History queues a new job")
+    if let onID { _ = await waitFor(onID) }
+
+    // The agent: the base keeps the stages off; `options.off` replaces them; bad names refused.
+    let tools = AgentTools(create: model, presets: presets, grainProfiles: edit.profiles)
+    // The saved step on the canvas, which a call without history_step edits: a step number is
+    // shared by every edit of the source (a branch each), so it could name another of them.
+    func call(_ arguments: [String: Any], on step: HistoryItem? = nil) async -> (record: Edit.Record?, error: String?) {
+      model.show(step ?? saved)
+      let before = Set(model.history.items.map(\.tensorId))
+      do {
+        let answer = try await tools.call("edit_image_look", arguments: arguments) { _ in }
+        var result = answer["structuredContent"] as? [String: Any]
+        if result == nil, let content = answer["content"] as? [[String: Any]], let text = content.first?["text"] as? String {
+          result = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any]
+        }
+        guard result?["history_step"] != nil else { return (nil, nil) }
+        // The step it added: a step number is shared by every edit of the source.
+        return (model.history.items.first { !before.contains($0.tensorId) }?.sidecar.edit, nil)
+      } catch {
+        return (nil, error.localizedDescription)
+      }
+    }
+    let kept = await call(["options": ["vignette": ["amount": 0.2]]])
+    check(
+      kept.error == nil && kept.record?.options.off == [.grain, .halation] && kept.record?.options.vignette.amount == 0.2,
+      "edit_image_look on that step keeps its stages off (\(kept.record.map { "off \($0.options.off.sorted().map(\.rawValue)), vignette \($0.options.vignette.amount)" } ?? "no record"))\(kept.error.map { ": \($0)" } ?? "")")
+    let on = await call(["options": ["off": [String]()]])
+    check(
+      on.error == nil && on.record?.options.off.isEmpty == true && on.record?.options.grain == look.grain,
+      "edit_image_look with options.off [] turns them on with the grain saved\(on.error.map { ": \($0)" } ?? "")")
+    let bad = await call(["options": ["off": ["sharpen"]]])
+    check(bad.error?.contains("off") == true && bad.error?.contains("sharpen") == true, "an unknown stage in options.off is refused (\(bad.error ?? "no error"))")
+
+    // The whole look off: the image without it, the stages' checkboxes kept.
+    edit.options = look
+    edit.setStage(.grain, on: false)
+    edit.setLook(on: false)
+    let lookOff = edit.options
+    check(lookOff.lookOff && lookOff.off == [.grain] && edit.renderedOptions.isIdentity, "the Look checkbox off renders no look and keeps Grain off")
+    guard let lookOffID = try? edit.save(), let plain = await waitFor(lookOffID) else { return check(false, "Save to History with the look off didn't save a step") }
+    check(
+      plain.sidecar.edit?.options.lookOff == true && plain.sidecar.edit?.options.off == [.grain] && plain.sidecar.edit?.options.grade == look.grade,
+      "the step saved with the look off records it, the stages off and the settings")
+    let plainImage = await model.history.project.read { $0.image(tensorId: plain.imageTensorId ?? plain.tensorId) }
+    if let same = difference(plainImage, image) {
+      check(same.largest <= 1, String(format: "with the look off the saved pixels are the image's own (%.3f levels on average, %d at most)", same.mean, same.largest))
+    } else {
+      check(false, "the look-off step's pixels couldn't be compared")
+    }
+    edit.reset()
+    check(!edit.options.lookOff, "Reset turns the look back on")
+    await edit.open(plain)
+    check(edit.options == lookOff, "opening that step brings back the look off with its stages and settings")
+    let lookOn = await call(["options": ["look_off": false]], on: plain)
+    check(
+      lookOn.error == nil && lookOn.record?.options.lookOff == false && lookOn.record?.options.off == [.grain],
+      "edit_image_look with options.look_off false turns the look on, Grain still off\(lookOn.error.map { ": \($0)" } ?? "")")
+    let badLook = await call(["options": ["look_off": "yes"]], on: plain)
+    check(badLook.error?.contains("look_off") == true, "a look_off that isn't a boolean is refused (\(badLook.error ?? "no error"))")
   }
 
   /// A reference file with a long name (and the profile Match Reference names after it) must

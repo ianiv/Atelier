@@ -212,6 +212,151 @@ struct EditJobTests {
     #expect(!job.isSameEdit(as: Self.job(project: "P", source: 1, context: Self.context(noiseByte: 200))))
   }
 
+  // MARK: Stages off
+
+  /// Each stage off renders as that stage at no change, the other sections and the options
+  /// themselves left as they are; Match off clears the histogram too, Grain off keeps the seed.
+  @Test func offStagesRenderAsIdentityAndKeepTheirSettings() {
+    for stage in EditOptions.Stage.allCases {
+      let off = Self.look.setting(stage, on: false)
+      #expect(off.off == [stage] && !off.isOn(stage) && off.match == Self.look.match)
+      let rendered = off.rendered
+      #expect(rendered.off.isEmpty)
+      var expected = Self.look
+      switch stage {
+      case .lens: expected.lens = .identity
+      case .match:
+        expected.match = EditOptions.Match(target: Self.look.match.target)
+        expected.histogram = EditOptions.Histogram(space: Self.look.histogram.space)
+      case .grade: expected.grade = EditOptions.Grade()
+      case .lut: expected.lut = EditOptions.LUTRef()
+      case .halation: expected.halation = EditOptions.Halation()
+      case .vignette: expected.vignette = EditOptions.Vignette()
+      case .grain: expected.grain = EditOptions.Grain(lum: 0, chroma: 0, seed: Self.look.grain.seed)
+      }
+      #expect(rendered == expected, "\(stage)")
+      // Back on: the settings were kept.
+      #expect(off.setting(stage, on: true) == Self.look)
+    }
+    #expect(Self.look.rendered == Self.look)
+    // Everything off renders nothing; snapping keeps the stages off.
+    let allOff = EditOptions(off: Set(EditOptions.Stage.allCases))
+    #expect(allOff.isIdentity && !EditOptions().isIdentity)
+    #expect(Self.look.setting(.grain, on: false).snapped.off == [.grain])
+  }
+
+  @Test func isIdentityCountsOffStages() {
+    var options = EditOptions.identity
+    options.vignette.amount = 0.5
+    #expect(!options.isIdentity)
+    #expect(options.setting(.vignette, on: false).isIdentity)
+    #expect(!options.setting(.grain, on: false).isIdentity)
+  }
+
+  /// `off` round trips; a look without it (every record and remembered look from before) reads
+  /// all on, an unknown stage is dropped, and an all-on look encodes exactly as before.
+  @Test func offRoundTripsAndMissingReadsAllOn() throws {
+    let off = Self.look.setting(.halation, on: false).setting(.grain, on: false)
+    let data = try JSONEncoder().encode(off)
+    #expect(try JSONDecoder().decode(EditOptions.self, from: data) == off)
+    #expect(String(decoding: data, as: UTF8.self).contains(#""off":["halation","grain"]"#), "in pipeline order")
+    let allOn = try JSONEncoder().encode(Self.look)
+    #expect(!String(decoding: allOn, as: UTF8.self).contains(#""off""#))
+    // An all-on look's encoding is the sections alone, as it always was.
+    let object = try #require(try JSONSerialization.jsonObject(with: allOn) as? [String: Any])
+    #expect(Set(object.keys) == ["match", "histogram", "grade", "lut", "halation", "lens", "vignette", "grain"])
+    #expect(try JSONDecoder().decode(EditOptions.self, from: allOn).off.isEmpty)
+    let unknown = try JSONDecoder().decode(EditOptions.self, from: Data(#"{"off": ["grain", "sharpen", 3]}"#.utf8))
+    #expect(unknown.off.isEmpty, "a wrong-typed array is no change")
+    let named = try JSONDecoder().decode(EditOptions.self, from: Data(#"{"off": ["grain", "sharpen"]}"#.utf8))
+    #expect(named.off == [.grain])
+    // Laid over a look, a missing `off` keeps the base's; a given one replaces it.
+    #expect(try EditOptions.decoded(from: Data(#"{"grain": {"lum": 5}}"#.utf8), over: off).off == off.off)
+    #expect(try EditOptions.decoded(from: Data(#"{"off": []}"#.utf8), over: off).off.isEmpty)
+  }
+
+  /// A record keeps its stages off through `profile_data`; a version 3 record (before stages
+  /// could be off) reads all on.
+  @Test func recordKeepsOffAndVersion4() throws {
+    #expect(Edit.Record.currentVersion == 4)
+    let job = Self.job(options: Self.look.setting(.grain, on: false))
+    var profile = ProjectMapping.Profile(duration: 1, inputTensorId: 12, parentTensorId: 12)
+    profile.edit = job.record
+    let read = try #require(ProjectMapping.Profile(profile.bytes))
+    #expect(read.edit?.options.off == [.grain] && read.edit?.options.grain == Self.look.grain)
+    var object = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(Self.record())) as? [String: Any])
+    object["version"] = 3
+    let old = try JSONDecoder().decode(Edit.Record.self, from: JSONSerialization.data(withJSONObject: object))
+    #expect(old.options.off.isEmpty && old.options == Self.look)
+  }
+
+  /// A stage that's off counts with its settings: changing them is another edit (the step
+  /// would reopen differently), and so is turning the stage on.
+  @Test func sameEditComparesTheStagesOffAndTheirSettings() {
+    let off = Self.look.setting(.grain, on: false)
+    let job = Self.job(project: "P", source: 1, options: off)
+    #expect(job.isSameEdit(as: Self.job(project: "P", source: 1, options: off)))
+    var hidden = off
+    hidden.grain.lum = 30
+    #expect(!job.isSameEdit(as: Self.job(project: "P", source: 1, options: hidden)))
+    #expect(!job.isSameEdit(as: Self.job(project: "P", source: 1, options: Self.look)))
+  }
+
+  /// The whole look off renders nothing and leaves the stages off and the settings alone;
+  /// missing reads on, and on isn't written, so older looks encode as before.
+  @Test func lookOffRendersNothingAndKeepsTheStages() throws {
+    var options = Self.look.setting(.grain, on: false)
+    options.lookOff = true
+    #expect(options.isIdentity && options.rendered.isIdentity && options.rendered.grain.seed == Self.look.grain.seed)
+    #expect(options.off == [.grain] && options.grade == Self.look.grade)
+    options.lookOff = false
+    #expect(options.rendered == Self.look.setting(.grain, on: false).rendered)
+    let on = String(decoding: try JSONEncoder().encode(Self.look), as: UTF8.self)
+    #expect(!on.contains("lookOff"))
+    var off = Self.look
+    off.lookOff = true
+    let data = try JSONEncoder().encode(off)
+    #expect(String(decoding: data, as: UTF8.self).contains(#""lookOff":true"#))
+    #expect(try JSONDecoder().decode(EditOptions.self, from: data) == off)
+    #expect(try JSONDecoder().decode(EditOptions.self, from: Data("{}".utf8)).lookOff == false)
+    #expect(try EditOptions.decoded(from: Data("{}".utf8), over: off).lookOff, "missing keeps the base's")
+    #expect(off.snapped.lookOff)
+    // Through a step's profile_data (snake case) and back.
+    let job = Self.job(options: off)
+    var profile = ProjectMapping.Profile(duration: 1, inputTensorId: 12, parentTensorId: 12)
+    profile.edit = job.record
+    #expect(String(decoding: profile.bytes, as: UTF8.self).contains(#""look_off":true"#))
+    #expect(try #require(ProjectMapping.Profile(profile.bytes)).edit?.options.lookOff == true)
+    // Turning it off or on is another edit; a profile and Reset's look leave or clear it.
+    #expect(!job.isSameEdit(as: Self.job(options: Self.look)))
+    #expect(GrainProfile.Settings().applied(to: off).lookOff && !EditOptions.grainDefaults.lookOff)
+  }
+
+  /// The agent's `options.off`: stage names replacing the base's, checked.
+  @MainActor @Test func agentOptionsTakeOff() throws {
+    let base = Self.look.setting(.lens, on: false)
+    let kept = try AgentTools.lookOptions(["grain": ["lum": 5]], over: base)
+    #expect(kept.off == [.lens] && kept.grain.lum == 5)
+    let replaced = try AgentTools.lookOptions(["off": ["grain", "halation"]], over: base)
+    #expect(replaced.off == [.grain, .halation] && replaced.lens == base.lens)
+    #expect(try AgentTools.lookOptions(["off": [String]()], over: base).off.isEmpty)
+    #expect(throws: AgentTools.ToolError.self) { try AgentTools.lookOptions(["off": ["sharpen"]], over: base) }
+    #expect(throws: AgentTools.ToolError.self) { try AgentTools.lookOptions(["off": "grain"], over: base) }
+    #expect(throws: AgentTools.ToolError.self) { try AgentTools.lookOptions(["off": [3]], over: base) }
+    // `look_off`: a boolean, the stages left as they are.
+    let lookOff = try AgentTools.lookOptions(["look_off": true], over: base)
+    #expect(lookOff.lookOff && lookOff.off == [.lens])
+    #expect(try !AgentTools.lookOptions(["look_off": false], over: lookOff).lookOff)
+    #expect(try AgentTools.lookOptions(["grain": ["lum": 4]], over: lookOff).lookOff)
+    #expect(throws: AgentTools.ToolError.self) { try AgentTools.lookOptions(["look_off": 1], over: base) }
+    #expect(throws: AgentTools.ToolError.self) { try AgentTools.lookOptions(["look_off": "yes"], over: base) }
+    do {
+      _ = try AgentTools.lookOptions(["off": ["sharpen"]], over: base)
+    } catch {
+      #expect(error.localizedDescription.contains("sharpen") && error.localizedDescription.contains("halation"))
+    }
+  }
+
   /// A crop goes in the record inline (a few numbers), round trips through `profile_data`, and
   /// makes another image; a record from before crops reads with none.
   @Test func recordKeepsItsCrop() throws {
@@ -571,6 +716,20 @@ struct EditModelTests {
     expected.grade.exposure = 1
     #expect(EditModel.decodeRemembered(partial) == expected)
     #expect(EditModel.decodeRemembered(Data("not json".utf8)) == EditOptions.grainDefaults)
+  }
+
+  /// The remembered look keeps its stages off; Reset's look and a profile leave them as they are.
+  @Test func stagesOffAreRememberedAndProfilesLeaveThem() throws {
+    let look = EditOptions.grainDefaults.setting(.grain, on: false).setting(.lut, on: false)
+    let data = try #require(EditModel.encodeRemembered(look))
+    #expect(EditModel.decodeRemembered(data).off == [.grain, .lut])
+    #expect(EditOptions.grainDefaults.off.isEmpty)
+    var settings = GrainProfile.Settings()
+    settings.lum = 20
+    let applied = settings.applied(to: look)
+    #expect(applied.off == look.off && applied.grain.lum == 20)
+    // A profile saved from a look with a stage off keeps that stage's settings as set.
+    #expect(GrainProfile.Settings(look).lum == look.grain.lum)
   }
 
   @Test func anEditedStepOpensAsItsSource() async throws {

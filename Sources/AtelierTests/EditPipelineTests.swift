@@ -752,6 +752,27 @@ struct EditPipelineTests {
     #expect(counters.preGrainMisses == 2)
   }
 
+  /// A stage that's off renders as that stage at no change, and turning it back on asks for
+  /// what was rendered before (a cache hit).
+  @Test func offStagesRenderAsNoChangeAndComeBackFromCache() async throws {
+    let (options, context) = everything()
+    let source = try image(GrainTests.picture(width: 200, height: 150))
+    for stage in EditOptions.Stage.allCases {
+      let off = options.setting(stage, on: false)
+      let rendered = try await EditPipeline.render(source: source, options: off, context: context)
+      let expected = try await EditPipeline.render(source: source, options: off.rendered, context: context)
+      #expect(ColorMatch.rgba(rendered) == ColorMatch.rgba(expected), "\(stage)")
+    }
+    let renderer = EditRenderer()
+    let on = try await renderer.preview(source: source, options: options, context: context, fitting: 100, height: 100)
+    _ = try await renderer.preview(source: source, options: options.setting(.halation, on: false), context: context, fitting: 100, height: 100)
+    let before = await renderer.counters
+    let back = try await renderer.preview(source: source, options: options, context: context, fitting: 100, height: 100)
+    let after = await renderer.counters
+    #expect(after.preGrainHits == before.preGrainHits + 1 && after.preGrainMisses == before.preGrainMisses)
+    #expect(ColorMatch.rgba(back) == ColorMatch.rgba(on))
+  }
+
   /// A fitted preview is the full render made smaller: its size follows the fit, and with the
   /// blur, smear and halation scaled to it, it's close to the full render scaled down (closer
   /// than leaving the lengths in full-size pixels would be).

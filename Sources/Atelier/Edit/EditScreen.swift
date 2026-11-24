@@ -851,7 +851,7 @@ private struct EditPane: View {
     originalWindow.cancel()
     renders.schedule(
       targets, image: image, renderer: edit.renderer, context: edit.context,
-      look: EditRenderLook(options: edit.options, context: edit.contextVersion), settled: edit.lastChangeIsFinal && !edit.isAdjusting,
+      look: EditRenderLook(options: edit.renderedOptions, context: edit.contextVersion), settled: edit.lastChangeIsFinal && !edit.isAdjusting,
       moving: edit.isMovingView)
   }
 
@@ -904,7 +904,7 @@ private struct EditLookChanges: View {
 
   var body: some View {
     Color.clear
-      .onChange(of: EditRenderLook(options: edit.options, context: edit.contextVersion)) { changed() }
+      .onChange(of: EditRenderLook(options: edit.renderedOptions, context: edit.contextVersion)) { changed() }
   }
 }
 
@@ -998,7 +998,7 @@ private struct EditSliderPane: View {
 
   private func schedule(_ target: EditRenderTarget) {
     let renderer = edit.renderer, context = edit.context, image = image
-    let key = EditPaneRenders.Loop.Key(target: target, look: .init(options: edit.options, context: edit.contextVersion))
+    let key = EditPaneRenders.Loop.Key(target: target, look: .init(options: edit.renderedOptions, context: edit.contextVersion))
     loop.request(key, settled: edit.lastChangeIsFinal && !edit.isAdjusting) {
       try await renderer.preview(source: image, options: key.look.options, context: context, fitting: key.target.width, height: key.target.height)
     }
