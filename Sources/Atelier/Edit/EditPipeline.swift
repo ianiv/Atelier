@@ -713,13 +713,14 @@ actor EditRenderer {
   /// The whole-image statistics the matches use for `options` (what `bakeLUT` takes).
   @concurrent nonisolated func sourceStats(source: CGImage, options: EditOptions, context: Context = .empty) async throws -> EditPipeline.SourceStats {
     let entry = try await sourceEntry(source)
-    return try await stats(entry, options: options, context: context)
+    return try await stats(entry, options: options.rendered, context: context)
   }
 
   /// Export LUT…: steps 3–7 for this image baked into a `size`³ table.
   @concurrent nonisolated func bakeLUT(
     source: CGImage, options: EditOptions, context: Context = .empty, size: Int = 33, name: String
   ) async throws -> Edit.LUTTable {
+    let options = options.rendered
     let stats = try await sourceStats(source: source, options: options, context: context)
     try Task.checkCancellation()
     return EditPipeline.bakeLUT(options: options, context: context, stats: stats, size: size, name: name)
@@ -756,8 +757,14 @@ actor EditRenderer {
   // MARK: Rendering
 
   /// The render, as `window` (nil for the whole image at full size).
+  ///
+  /// This and the other calls (`zoomed`, `keptView`, `sourceStats`, `bakeLUT`) render
+  /// `options.rendered`, the stages that are off as no change, so no caller (the screen, Save,
+  /// Export…, an agent's job) can render a stage that's off, and every cache is keyed by what
+  /// actually renders.
   @concurrent nonisolated func render(source: CGImage, options: EditOptions, context: Context, window: Window?) async throws -> CGImage {
     try Task.checkCancellation()
+    let options = options.rendered
     // Nothing to do: the source as it is.
     if options.isIdentity, window == nil || window == .whole(width: source.width, height: source.height) { return source }
     let cancel = EditPipeline.Cancel()
@@ -864,6 +871,7 @@ actor EditRenderer {
     progress: (@Sendable (CGImage) async -> Void)? = nil
   ) async throws -> CGImage {
     try Task.checkCancellation()
+    let options = options.rendered
     let cancel = EditPipeline.Cancel()
     return try await withTaskCancellationHandler {
       try await tiled(source: source, options: options, context: context, contextID: contextID, zoomed: zoomed, progress: progress, cancel: cancel)
@@ -884,6 +892,7 @@ actor EditRenderer {
     source: CGImage, options: EditOptions, contextID: Int = 0, zoomed: EditPipeline.Zoomed, excluding: Resample.Region? = nil,
     skipping: Set<Tile> = []
   ) async -> (image: CGImage, zoomed: EditPipeline.Zoomed, tiles: Set<Tile>)? {
+    let options = options.rendered
     let view = Geometry(width: source.width, height: source.height, scale: zoomed.scale, region: zoomed.region)
     let region = view.region, side = tileSide
     let id = ObjectIdentifier(source)
