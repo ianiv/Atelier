@@ -197,7 +197,11 @@ final class HistoryStore {
   /// Original saving into its own project), by name, so `project(named:)` and `open` hand out the
   /// same one rather than open a second connection to the same file.
   @ObservationIgnored private var heldProjects: [String: WeakProject] = [:]
-  /// Run before another project opens (`CreateModel` records a pending moodboard change).
+  /// Projects being deleted now (`delete`), which nothing may open, make or rename to until their
+  /// files have gone: they'd be trashed from under it.
+  @ObservationIgnored private var deletingNames: Set<String> = []
+  /// Run before another project opens, or the current one is renamed (`CreateModel` records a
+  /// pending moodboard change and stops a video being copied in).
   @ObservationIgnored var willSwitchProject: (() async -> Void)?
   /// Whether nothing is running or waiting that could write to the project (`CreateModel`: the
   /// queue is empty), for cleaning up after deletes.
@@ -285,19 +289,24 @@ final class HistoryStore {
     if currentTensorId.flatMap(tree.step(tensorId:)) == nil {
       currentTensorId = Self.openingCurrent(in: tree, stored: stored)
     }
-    projectNames = Self.scanProjectNames()
-    if !projectNames.contains(project.name) { projectNames = (projectNames + [project.name]).sorted() }
+    refreshProjectNames()
     isLoaded = true
   }
 
   // MARK: - Projects
 
-  /// Makes `name` the current project, creating it if needed.
+  /// The project menu's names: the files there, less those being deleted, plus the current one.
+  private func refreshProjectNames() {
+    projectNames = Self.scanProjectNames().filter { !deletingNames.contains($0) }
+    if !projectNames.contains(project.name) { projectNames = (projectNames + [project.name]).sorted() }
+  }
+
+  /// Makes `name` the current project, creating it if needed. Not one being deleted (`delete`).
   func open(_ name: String) async {
-    guard name != project.name else { return }
+    guard name != project.name, !deletingNames.contains(name) else { return }
     // A moodboard change still to be recorded goes into the project it was made in.
     await willSwitchProject?()
-    guard name != project.name else { return }
+    guard name != project.name, !deletingNames.contains(name) else { return }
     // One still held (a job saving into it) is the one opened; the one left stays findable while
     // it's held.
     let previous = project
@@ -366,6 +375,7 @@ final class HistoryStore {
   /// while one holds it, see `heldProjects`). Nil when there's no such project file.
   func project(named name: String) -> Project? {
     if name == project.name { return project }
+    guard !deletingNames.contains(name) else { return nil }
     if let held = heldProjects[name]?.project { return held }
     let url = Self.url(for: name)
     guard FileManager.default.fileExists(atPath: url.path) else { return nil }
@@ -376,7 +386,7 @@ final class HistoryStore {
 
   /// A name not taken yet: `base`, else `base 2`, `base 3`, …
   func availableName(_ base: String = "Untitled") -> String {
-    let names = Set(Self.scanProjectNames() + [project.name])
+    let names = Set(Self.scanProjectNames() + [project.name]).union(deletingNames)
     var name = base
     var n = 2
     while names.contains(name) {
@@ -391,10 +401,14 @@ final class HistoryStore {
     return !trimmed.isEmpty && !trimmed.contains("/") && !trimmed.hasPrefix(".")
   }
 
-  /// Renames the current project's file (and its -wal/-shm and media folder).
+  /// Renames the current project's file (and its -wal/-shm and media folder). What's waiting to
+  /// be written into it goes first, and a video being copied in stops (`willSwitchProject`): it
+  /// would land at the old path.
   func renameCurrent(to name: String) async throws {
     let name = name.trimmingCharacters(in: .whitespaces)
     guard Self.isValidName(name), name != project.name else { return }
+    // Its files are still going to the Trash.
+    guard !deletingNames.contains(name) else { throw CocoaError(.fileWriteFileExists) }
     let target = Self.url(for: name)
     guard !FileManager.default.fileExists(atPath: target.path) else {
       throw CocoaError(.fileWriteFileExists)
@@ -403,6 +417,9 @@ final class HistoryStore {
     guard !FileManager.default.fileExists(atPath: Media.folder(forProject: target).path) else {
       throw RenameError.mediaFolderExists(Media.folder(forProject: target).lastPathComponent)
     }
+    await willSwitchProject?()
+    // Another rename or a switch came meanwhile.
+    guard name != project.name, !deletingNames.contains(name), !FileManager.default.fileExists(atPath: target.path) else { return }
     let old = project.url
     // Close the workspace first so nothing writes while the files move.
     await project.close()
@@ -467,7 +484,7 @@ final class HistoryStore {
   /// the list, else the one before, else a new empty one (not `name` again, which would bring the
   /// deleted project's name straight back).
   func projectToOpen(afterDeleting name: String) -> String {
-    let others = Self.scanProjectNames()
+    let others = Self.scanProjectNames().filter { $0 == name || !deletingNames.contains($0) }
     let all = (others.contains(name) ? others : (others + [name])).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     if let index = all.firstIndex(of: name) {
       if index + 1 < all.count { return all[index + 1] }
@@ -483,9 +500,21 @@ final class HistoryStore {
   /// checkpoint on a background queue, reopening the file by path and bringing back a -wal and
   /// -shm after they'd gone. Closed, a job still holding it (`heldProjects`) or a video import into
   /// it (`importVideo`) finds it closed (`Project.isOpen`) rather than writing into the Trash.
+  /// A `Project` let go before the delete began may still be shutting down from its deinit on a
+  /// global queue, which nothing can wait for: its checkpoint finds the file gone (or a closed
+  /// clean-up stops, `ProjectCompaction.finishCleanUps`), and the last sweep takes what it left.
+  /// While it runs the name is off the project menu and nothing may open, make or rename to it
+  /// (`deletingNames`), since its files would be trashed from under it.
   /// Returns the trashed project file, nil when it went for good (iPad, see `trashProjectFiles`).
   @discardableResult
   func delete(_ name: String) async throws -> URL? {
+    guard !deletingNames.contains(name) else { throw DeleteError.alreadyDeleting(name) }
+    deletingNames.insert(name)
+    defer {
+      deletingNames.remove(name)
+      refreshProjectNames()
+    }
+    refreshProjectNames()
     let deleting = name == project.name ? project : heldProjects[name]?.project
     if name == project.name {
       await open(projectToOpen(afterDeleting: name))
@@ -494,18 +523,17 @@ final class HistoryStore {
     guard name != project.name else { throw DeleteError.stillOpen(name) }
     heldProjects.removeValue(forKey: name)
     await deleting?.close()
+    guard name != project.name else { throw DeleteError.stillOpen(name) }
     let url = Self.url(for: name)
     let trashed = try await Self.trashProjectFiles(at: url)
     // A clean-up of the file from before (`ProjectCompaction`) stops once it's gone; what it left
     // at the old path goes too.
-    await ProjectCompaction.finishCleanUps()
-    ProjectFiles.sweepSidecars(of: url)
+    await ProjectCompaction.finishCleanUps(at: url)
+    ProjectFiles.sweepSidecars(of: url, with: Self.discardProjectFile)
     Self.removeClipFiles(in: Self.clipCache, project: name)
     // Thumbnails are cached by the file's path: a project made later under the same name mustn't
     // show this one's.
     Self.thumbnails.removeAllObjects()
-    projectNames = Self.scanProjectNames()
-    if !projectNames.contains(project.name) { projectNames = (projectNames + [project.name]).sorted() }
     return trashed
   }
 
@@ -521,29 +549,35 @@ final class HistoryStore {
 
   enum DeleteError: LocalizedError {
     case stillOpen(String)
+    case alreadyDeleting(String)
     var errorDescription: String? {
       switch self {
       case .stillOpen(let name): "“\(name)” is open again. Switch to another project and try again."
+      case .alreadyDeleting(let name): "“\(name)” is already being deleted."
       }
     }
   }
 
   /// Moves a project file and its -wal/-shm and media folder to the Trash (`ProjectFiles.discard`).
   /// On iPad they're removed instead: the Trash is the Mac's (Files' Recently Deleted only takes
-  /// what's deleted in Files), and the confirmation says it can't be undone. On the Mac a failure
-  /// to move the database leaves the files where they are rather than removing them outright.
+  /// what's deleted in Files), and the confirmation says it can't be undone. On the Mac nothing is
+  /// ever removed outright: a database that can't move leaves everything where it is, and a sidecar
+  /// that can't (a media folder of videos, a -wal with writes not yet in the file) stays, logged.
   @concurrent nonisolated static func trashProjectFiles(at url: URL) async throws -> URL? {
-    let fileManager = FileManager.default
-    return try ProjectFiles.discard(at: url) { file in
-      #if os(macOS)
-        var trashed: NSURL?
-        try fileManager.trashItem(at: file, resultingItemURL: &trashed)
-        return trashed as URL?
-      #else
-        try fileManager.removeItem(at: file)
-        return nil
-      #endif
-    }
+    try ProjectFiles.discard(at: url, with: discardProjectFile)
+  }
+
+  /// How a deleted project's files go (`trashProjectFiles`): to the Trash on the Mac, for good on
+  /// iPad. Returns where it went, if anywhere.
+  nonisolated static func discardProjectFile(_ file: URL) throws -> URL? {
+    #if os(macOS)
+      var trashed: NSURL?
+      try FileManager.default.trashItem(at: file, resultingItemURL: &trashed)
+      return trashed as URL?
+    #else
+      try FileManager.default.removeItem(at: file)
+      return nil
+    #endif
   }
 
   nonisolated static func scanProjectNames() -> [String] {
@@ -1021,7 +1055,7 @@ final class HistoryStore {
       let bytes = try await Self.copyMedia(source, to: target, moving: moving, into: project)
       let inspection = try await Media.inspect(target)
       try Task.checkCancellation()
-      guard project.isOpen else { throw CancellationError() }
+      guard project.isOpen else { throw ImportError.projectClosed }
       // As the engine's CLI reads a video: upright, SDR (`Media.generator`), at the file's size.
       let first = try await Media.frame(0, of: target, framesPerSecond: inspection.framesPerSecond)
       guard let tensor = await Self.tensor(of: first) else { throw Media.Failure.invalidVideo }
@@ -1057,6 +1091,16 @@ final class HistoryStore {
     }
   }
 
+  enum ImportError: LocalizedError {
+    /// Its project closed while it came in (`importVideo`).
+    case projectClosed
+    var errorDescription: String? {
+      switch self {
+      case .projectClosed: "The project was renamed or deleted while the video was coming in."
+      }
+    }
+  }
+
   private nonisolated static func partialURL(_ target: URL) -> URL { target.appendingPathExtension(Media.partialExtension) }
 
   /// Copies (or moves) `source` to `target` by way of a `.partial` file, so a half-copied file
@@ -1065,7 +1109,7 @@ final class HistoryStore {
   /// during the copy is caught after it (`importVideo`).
   @concurrent private nonisolated static func copyMedia(_ source: URL, to target: URL, moving: Bool, into project: Project) async throws -> Int64 {
     let fileManager = FileManager.default
-    guard project.isOpen else { throw CancellationError() }
+    guard project.isOpen else { throw ImportError.projectClosed }
     try fileManager.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
     let partial = partialURL(target)
     try? fileManager.removeItem(at: partial)

@@ -13,36 +13,31 @@ nonisolated enum ProjectFiles {
     sidecarSuffixes.map { URL(fileURLWithPath: url.path + $0) }
   }
 
-  /// Discards the project file at `url` and its sidecars with `discard` (to the Trash on the Mac),
-  /// returning what it returned for the file. The database goes first: when it can't, nothing
-  /// else has, and the project is still whole. Then each sidecar; one that fails is logged, since
-  /// the project itself is gone by then. A last sweep removes outright any sidecar that's there
-  /// again: a connection let go just before (a `Project`'s deinit checkpoint, a clean-up) or a
-  /// video import finishing can bring back a -wal, -shm or media folder at the old path, and
-  /// nothing would ever remove it, or a project made later under the name would pick it up.
+  /// Discards the project file at `url` and its sidecars with `discard` (to the Trash on the Mac,
+  /// `HistoryStore.discardProjectFile`), returning what it returned for the file. The database goes
+  /// first: when it can't, nothing else has, and the project is still whole. Then its sidecars
+  /// (`sweepSidecars`).
   static func discard(at url: URL, with discard: (URL) throws -> URL?) throws -> URL? {
-    let fileManager = FileManager.default
-    let discarded = fileManager.fileExists(atPath: url.path) ? try discard(url) : nil
-    for side in sidecars(of: url) where fileManager.fileExists(atPath: side.path) {
-      Log.attempt(Log.project, "Deleting a project's \(side.lastPathComponent) file") { _ = try discard(side) }
-    }
-    sweepSidecars(of: url)
+    let discarded = FileManager.default.fileExists(atPath: url.path) ? try discard(url) : nil
+    sweepSidecars(of: url, with: discard)
     return discarded
   }
 
-  /// Removes any sidecar of `url` that's there while its project file isn't (a deleted project's,
-  /// brought back after it went). Nothing while the file is there: they're its data.
-  static func sweepSidecars(of url: URL) {
+  /// Discards with `discard` each sidecar of `url` that's there while its project file isn't: a
+  /// deleted project's, at the delete and again once what could bring one back has had its turn
+  /// (a `Project`'s deinit checkpoint, a clean-up, a video import finishing would put a -wal, -shm
+  /// or media folder back at the old path, for a project made later under the name to pick up).
+  /// One that fails stays, logged: it may hold videos or writes, so it's never removed outright in
+  /// its place. Nothing while the file is there: they're its data.
+  static func sweepSidecars(of url: URL, with discard: (URL) throws -> URL?) {
     let fileManager = FileManager.default
     guard !fileManager.fileExists(atPath: url.path) else { return }
     for side in sidecars(of: url) where fileManager.fileExists(atPath: side.path) {
-      Log.attempt(Log.project, "Removing a deleted project's \(side.lastPathComponent)") {
-        try fileManager.removeItem(at: side)
-      }
+      Log.attempt(Log.project, "Deleting a project's \(side.lastPathComponent)") { _ = try discard(side) }
     }
   }
 
-  /// Removes a project's media folder when it's empty, for an import that stopped after its
+  /// Removes a project's media folder when it's empty (nothing in it to keep in the Trash), for an import that stopped after its
   /// project closed (a delete, a rename): it may have made the folder again at the old path. Not
   /// while the project file is there, where another import may be about to copy in.
   static func removeEmptyMediaFolder(ofProject url: URL) {

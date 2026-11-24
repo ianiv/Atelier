@@ -525,10 +525,12 @@ extension Automation {
   /// PASS/FAIL lines: the current project switches to the next one, its files go to the Trash,
   /// its media folder (a video imported into it) with them, and once the project it closed has
   /// had time to shut down no -wal, -shm or media folder is back at the old path, not even from
-  /// an import still running when the delete came (as an agent's `import_video`); another
-  /// project's media folder stays. Its cached clip videos go (another project's stay), a queued
-  /// Match Colors job for it is cancelled, the canvas image isn't taken for a step of a later
-  /// project of the same name, and thumbnails aren't either.
+  /// an import into it still running when the delete came (as an agent's `import_video`), which
+  /// either stops because the project closed or finished first and went to the Trash with it, and
+  /// put nothing into the project opened in its place; another project's media folder stays. Its
+  /// cached clip videos go (another project's stay), a queued Match Colors job for it is cancelled
+  /// (a SKIP line when there are no settings to queue one with), the canvas image isn't taken for a
+  /// step of a later project of the same name, and thumbnails aren't either.
   ///
   ///   Atelier --delete-project-check --project delete-check-<random> [--quit]
   ///
@@ -622,12 +624,14 @@ extension Automation {
         request.colorMatch = ColorMatch.Job(project: name, sourceTensorId: first.tensorId, options: ColorMatch.Options())
         model.queue.append([request], currentTensorId: history.currentTensorId)
         check(model.colorMatchJobs(in: name).count == 1, "a Match Colors job for “\(name)” waits")
+      } else {
+        print("SKIP the Match Colors job: no settings to queue it with")
+        fflush(stdout)
       }
 
       // A video in the project's media folder, and one in another project's (`last`, which isn't
       // opened before it's looked at, so its orphan clean-up can't take the file).
       let movie = fileManager.temporaryDirectory.appending(path: "\(name)-movie.mov", directoryHint: .notDirectory)
-      defer { try? fileManager.removeItem(at: movie) }
       do {
         try await writeMovie(to: movie, width: 64, height: 32, frames: 8, framesPerSecond: 24)
         _ = try await history.importVideo(movie, name: "Delete check")
@@ -638,21 +642,50 @@ extension Automation {
       let lastMediaFile = lastMedia.appending(path: "\(UUID().uuidString).mov", directoryHint: .notDirectory)
       try? fileManager.createDirectory(at: lastMedia, withIntermediateDirectories: true)
       try? fileManager.copyItem(at: movie, to: lastMediaFile)
-      defer { try? fileManager.removeItem(at: lastMedia) }
 
       let deleted = history.project
       let url = deleted.url
       check(exists(url, Media.suffix), "“\(name)” has a media folder")
       do {
-        // Another import still running as the delete starts, as an agent's is (nothing cancels it).
-        let racing = Task { @MainActor in try await history.importVideo(movie, name: "Delete check during delete") }
+        // Another import, into this project, still running as the delete starts, as an agent's is
+        // (nothing cancels it). `importVideo` takes the project it imports into before its first
+        // suspension, so once it has started it's this one's; then it's given until its file
+        // shows up in the media folder (the copy is a clone, so it may be done by then).
+        let mediaFolder = Media.folder(forProject: url)
+        func mediaCount() -> Int { (try? fileManager.contentsOfDirectory(atPath: mediaFolder.path).count) ?? 0 }
+        let before = mediaCount()
+        let progress = RaceProgress()
+        let racing = Task { @MainActor in
+          progress.started = true
+          defer { progress.done = true }
+          return try await history.importVideo(movie, name: "Delete check during delete")
+        }
+        let deadline = Date().addingTimeInterval(2)
+        while !progress.started || (!progress.done && mediaCount() == before && Date() < deadline) {
+          await Task.yield()
+          if progress.started { try? await Task.sleep(for: .milliseconds(1)) }
+        }
+        check(history.project === deleted, "the import during the delete started into “\(name)”")
         let trashed = try await model.deleteProject(name)
         let raced = await racing.result
-        print("the import during the delete \((try? raced.get()) == nil ? "stopped" : "finished first")")
         // The closed project's background shut-down, had it been let go, would come in this time.
         try? await Task.sleep(for: .seconds(1))
+        switch raced {
+        case .success(let item):
+          print("the import during the delete finished first")
+          let file = item.clip?.media?.file
+          check(
+            file != nil && trashed.map { exists($0, Media.suffix + "/" + (file ?? "")) } == true,
+            "the import that finished first went to the Trash with the project")
+        case .failure(let error):
+          print("the import during the delete stopped: \(error.localizedDescription)")
+          check(
+            error is CancellationError || (error as? HistoryStore.ImportError) == .projectClosed,
+            "it stopped because the project closed (got \(error.localizedDescription))")
+        }
+        check(!exists(HistoryStore.url(for: sibling), Media.suffix), "the import put nothing into “\(sibling)”")
         check(history.project.name == sibling, "“\(sibling)” is open in its place (got “\(history.project.name)”)")
-        check(history.items.count == 1, "and lists its own image")
+        check(history.items.count == 1, "and lists exactly its own image (got \(history.items.count))")
         check(!exists(url) && !exists(url, "-wal") && !exists(url, "-shm"), "the project's files are gone from Projects")
         check(!exists(url, Media.suffix), "its media folder is gone from Projects")
         check(trashed.map { exists($0) } == true, "the project file is in the Trash")
@@ -694,8 +727,17 @@ extension Automation {
       } catch {
         check(false, "delete again: \(error.localizedDescription)")
       }
+      // Before `finish`, which may quit.
+      try? fileManager.removeItem(at: lastMedia)
+      try? fileManager.removeItem(at: movie)
       finish()
     }
+  }
+
+  /// How far `deleteProjectCheck`'s import during the delete has got.
+  @MainActor private final class RaceProgress {
+    var started = false
+    var done = false
   }
 
   /// A test image with distinct values in every channel; `seed` varies the blue channel.

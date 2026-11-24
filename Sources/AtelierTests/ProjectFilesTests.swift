@@ -54,7 +54,9 @@ struct ProjectFilesTests {
     }
   }
 
-  @Test func aSidecarThatCantGoIsSweptAway() throws {
+  /// The Mac's Trash refusing a sidecar mustn't erase it: a media folder holds videos, a -wal
+  /// writes not yet in the file.
+  @Test func aSidecarThatCantGoStays() throws {
     try withTestFolder { folder in
       let trash = folder.appending(path: "Trash", directoryHint: .isDirectory)
       try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
@@ -62,26 +64,36 @@ struct ProjectFilesTests {
       for suffix in ["", "-wal", "-shm", "-media/v.mov"] { touch(URL(fileURLWithPath: url.path + suffix)) }
       let move = moving(into: trash)
       struct Refused: Error {}
-      // Only the database moves; the sweep removes what stayed.
-      _ = try ProjectFiles.discard(at: url) { file in
-        guard file == url else { throw Refused() }
-        return try move(file)
+      // The database and its -shm move; the -wal and media folder can't.
+      let refuse = { (file: URL) throws -> URL? in
+        guard file.path.hasSuffix("-wal") || file.path.hasSuffix("-media") else { return try move(file) }
+        throw Refused()
       }
-      for suffix in ["", "-wal", "-shm", "-media"] { #expect(!exists(URL(fileURLWithPath: url.path + suffix))) }
+      _ = try ProjectFiles.discard(at: url, with: refuse)
+      ProjectFiles.sweepSidecars(of: url, with: refuse)
+      #expect(!exists(url))
+      #expect(!exists(URL(fileURLWithPath: url.path + "-shm")))
+      #expect(exists(URL(fileURLWithPath: url.path + "-wal")))
+      #expect(exists(URL(fileURLWithPath: url.path + "-media/v.mov")))
     }
   }
 
-  @Test func sweepLeavesAProjectThatsThere() {
-    withTestFolder { folder in
+  @Test func sweepLeavesAProjectThatsThere() throws {
+    try withTestFolder { folder in
+      let trash = folder.appending(path: "Trash", directoryHint: .isDirectory)
+      try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
       let url = folder.appending(path: "A.sqlite3")
       for suffix in ["", "-wal", "-shm"] { touch(URL(fileURLWithPath: url.path + suffix)) }
-      ProjectFiles.sweepSidecars(of: url)
+      ProjectFiles.sweepSidecars(of: url, with: moving(into: trash))
       for suffix in ["-wal", "-shm"] { #expect(exists(URL(fileURLWithPath: url.path + suffix))) }
-      // Gone: what came back after it goes.
-      try? FileManager.default.removeItem(at: url)
+      // Gone: what came back after it goes too, to the Trash.
+      try FileManager.default.removeItem(at: url)
       touch(URL(fileURLWithPath: url.path + "-media/v.mov"))
-      ProjectFiles.sweepSidecars(of: url)
-      for suffix in ["-wal", "-shm", "-media"] { #expect(!exists(URL(fileURLWithPath: url.path + suffix))) }
+      ProjectFiles.sweepSidecars(of: url, with: moving(into: trash))
+      for suffix in ["-wal", "-shm", "-media"] {
+        #expect(!exists(URL(fileURLWithPath: url.path + suffix)))
+        #expect(exists(trash.appending(path: "A.sqlite3\(suffix)")))
+      }
     }
   }
 
