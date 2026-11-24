@@ -2,7 +2,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// The Edit screen's inspector: Look, Match, Grade, LUT, Halation, Lens, Vignette and Grain, in
-/// pipeline order. Every control is always there; one that can't do anything yet (no image, no
+/// pipeline order but for Lens, listed after Halation though the renderer applies its smear and
+/// blur first (`EditPipeline`). Every control is always there; one that can't do anything yet (no image, no
 /// reference to match, no LUT, no real noise in the profile) is disabled, with a line saying why
 /// where it isn't plain. Sliders show their value beside them, typed into to go past the
 /// slider's range (grain.py's own settings aren't capped), as the Create inspector's do.
@@ -311,12 +312,11 @@ private struct EditStageHeader: View {
   let help: String
 
   var body: some View {
-    let name = stage == .lut ? "LUT" : stage.title.lowercased()
     HStack(spacing: 6) {
       Toggle(stage.title, isOn: Binding(get: { isOn }, set: { edit.setStage(stage, on: $0) }))
         .checkboxToggleStyle()
         .labelsHidden()
-        .help("Use the \(name). Turning it off keeps its settings.")
+        .help("Use \(stage.title). Turning it off keeps its settings.")
         .accessibilityLabel("Use \(stage.title)")
       Text(stage.title).help(help)
     }

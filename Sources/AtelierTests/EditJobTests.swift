@@ -290,13 +290,15 @@ struct EditJobTests {
     #expect(old.options.off.isEmpty && old.options == Self.look)
   }
 
-  /// Two looks that differ only in a stage that's off make the same image; off and on don't.
-  @Test func sameEditComparesTheRenderedLook() {
+  /// A stage that's off counts with its settings: changing them is another edit (the step
+  /// would reopen differently), and so is turning the stage on.
+  @Test func sameEditComparesTheStagesOffAndTheirSettings() {
     let off = Self.look.setting(.grain, on: false)
+    let job = Self.job(project: "P", source: 1, options: off)
+    #expect(job.isSameEdit(as: Self.job(project: "P", source: 1, options: off)))
     var hidden = off
     hidden.grain.lum = 30
-    let job = Self.job(project: "P", source: 1, options: off)
-    #expect(job.isSameEdit(as: Self.job(project: "P", source: 1, options: hidden)))
+    #expect(!job.isSameEdit(as: Self.job(project: "P", source: 1, options: hidden)))
     #expect(!job.isSameEdit(as: Self.job(project: "P", source: 1, options: Self.look)))
   }
 

@@ -260,13 +260,14 @@ nonisolated enum Edit {
       return look
     }
 
-    /// What makes the image: everything but the names and where the data is stored, the options
-    /// snapped (`EditOptions.snapped`) as they render (`EditOptions.rendered`), so two looks that
-    /// differ only in a stage that's off make the same image.
+    /// What makes the image and what the step keeps: everything but the names and where the data
+    /// is stored, the options snapped (`EditOptions.snapped`). A stage that's off counts with its
+    /// settings: a step saved with different hidden settings reopens differently, so changing
+    /// them and saving again is a new edit.
     var renderKey: Record {
       var key = self
       key.version = 0
-      key.options = options.snapped.rendered
+      key.options = options.snapped
       key.profileName = nil
       key.referenceName = nil
       key.realNoise?.id = nil
