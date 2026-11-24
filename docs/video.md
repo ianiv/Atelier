@@ -87,7 +87,7 @@ For MiniMax H3 models (including FastH3 and HyperFlow H3), **Sol Attention** (it
 
 ## While it runs
 
-The canvas plays the run's preview as it forms, frame by frame, and the status bar shows the step. Saving a long video takes a few seconds after the last step.
+The canvas shows the run's preview as it forms, and the status bar shows the step. The preview starts as a still of its first frame, since its few rough frames change completely every step and flicker and flash when played. Press **Play** at the bottom of the frame (shown while stopped or when the pointer is over the frame on Mac, always on iPad) to play it frame by frame, and **Stop** to go back to the still; Atelier remembers the choice for every run, across launches. Saving a long video takes a few seconds after the last step.
 
 ## Watching and reusing a video
 
