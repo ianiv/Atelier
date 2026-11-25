@@ -219,7 +219,7 @@ extension Automation {
         errorText(localPath.body)?.hasPrefix("Couldn't read an image") == true,
         "the same path from this Mac is read (\(errorText(localPath.body) ?? "no error"))")
 
-      await modernChecks(lan: lan, token: token, post: { host, message, token, headers in await post(host, message, token: token, headers: headers) }, check: check)
+      await modernChecks(lan: lan, port: port, token: token, post: { host, message, token, headers in await post(host, message, token: token, headers: headers) }, check: check)
 
       started.regenerateToken()
       let old = await post(lan, list, token: token)
@@ -381,6 +381,40 @@ extension Automation {
     }
   }
 
+  /// A modern list_skills call over a plain socket that shuts its sending side right after the
+  /// request (a FIN, as some clients and the tailnet bridge send), then reads the reply to the end.
+  nonisolated static func halfClosedCall(port: Int) -> String {
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    guard fd >= 0 else { return "" }
+    defer { Darwin.close(fd) }
+    var timeout = timeval(tv_sec: 10, tv_usec: 0)
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+    var address = sockaddr_in()
+    address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_addr.s_addr = inet_addr("127.0.0.1")
+    address.sin_port = UInt16(port).bigEndian
+    let connected = withUnsafePointer(to: &address) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+    }
+    guard connected == 0 else { return "" }
+    let body = #"{"jsonrpc":"2.0","id":60,"method":"tools/call","params":{"name":"list_skills","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}"#
+    let request =
+      "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\nContent-Type: application/json\r\nAccept: application/json\r\n"
+      + "MCP-Protocol-Version: 2026-07-28\r\nMcp-Method: tools/call\r\nMcp-Name: list_skills\r\nContent-Length: \(body.utf8.count)\r\n\r\n" + body
+    let bytes = Array(request.utf8)
+    guard bytes.withUnsafeBytes({ Darwin.write(fd, $0.baseAddress, $0.count) }) == bytes.count else { return "" }
+    shutdown(fd, SHUT_WR)
+    var reply = Data()
+    var buffer = [UInt8](repeating: 0, count: 4096)
+    while true {
+      let count = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
+      guard count > 0 else { break }
+      reply.append(contentsOf: buffer[0..<count])
+    }
+    return String(decoding: reply, as: UTF8.self)
+  }
+
   typealias AgentNetPost = (
     _ host: String, _ message: [String: Any], _ token: String?, _ headers: [String: String]
   ) async -> (status: Int, body: [String: Any], authenticate: String?, raw: String)
@@ -395,7 +429,7 @@ extension Automation {
   /// declared, and tools/list without modern fields.
   @MainActor
   static func modernChecks(
-    lan: String, token: String,
+    lan: String, port: Int, token: String,
     post: AgentNetPost, check: (Bool, String) -> Void
   ) async {
     func message(_ method: String, _ params: [String: Any] = [:], version: String = "2026-07-28", capabilities: Bool = true) -> [String: Any] {
@@ -466,6 +500,12 @@ extension Automation {
     check(
       remote.status == 200 && remoteCall.status == 200 && ![remote.raw, remoteCall.raw].contains { $0.contains("/Users/") || $0.contains(NSHomeDirectory()) },
       "modern \(lan) with the token: 200 and no paths")
+
+    // A client that half-closes once its request is sent still gets the whole answer.
+    let halfClosed = await Task.detached { halfClosedCall(port: port) }.value
+    check(
+      halfClosed.contains("200 OK") && halfClosed.contains("\"resultType\":\"complete\"") && !halfClosed.contains("Cancelled."),
+      "modern tools/call from a client that half-closes after its request: answered, not cancelled")
 
     let initialize = await send(["jsonrpc": "2.0", "id": 51, "method": "initialize", "params": ["protocolVersion": "2026-07-28", "capabilities": [String: Any]()]], [:])
     let initialized = initialize.body["result"] as? [String: Any]

@@ -147,4 +147,80 @@ struct SkillEditorModelTests {
     #expect(throws: SkillEditorModel.Failure.self) { try draft.addTextFile(at: "a.md") }
     #expect(try String(contentsOf: fixture.builtIn.appending(path: "ours/SKILL.md"), encoding: .utf8) == SkillFixture.skillFile("ours"))
   }
+
+  @Test func hiddenFilesSurviveSaves() async throws {
+    let (fixture, store, draft) = try await setUp()
+    let folder = fixture.user.appending(path: "editing")
+    try Data("*.tmp\n".utf8).write(to: folder.appending(path: "notes/.gitignore"))
+    try FileManager.default.createDirectory(at: folder.appending(path: ".git/objects"), withIntermediateDirectories: true)
+    try Data("[core]\n".utf8).write(to: folder.appending(path: ".git/config"))
+    draft.reloadFromDisk()
+    #expect(draft.filePaths == ["SKILL.md", "logo.png", "notes/a.md"], "hidden files aren't listed")
+    #expect(draft.totals.files == 3)
+    draft.body = "Edited.\n"
+    try await draft.save()
+    let saved = fixture.user.appending(path: "editing")
+    #expect(try String(contentsOf: saved.appending(path: "notes/.gitignore"), encoding: .utf8) == "*.tmp\n")
+    #expect(try String(contentsOf: saved.appending(path: ".git/config"), encoding: .utf8) == "[core]\n")
+    #expect(SkillScanner.stat(saved.appending(path: ".git/objects"))?.isDirectory == true, "an empty hidden folder too")
+    // A renamed folder takes its hidden files along.
+    try draft.rename("notes", to: "references")
+    try await draft.save()
+    #expect(try String(contentsOf: saved.appending(path: "references/.gitignore"), encoding: .utf8) == "*.tmp\n")
+    #expect(SkillScanner.stat(saved.appending(path: "notes")) == nil)
+    #expect(store.served.first { $0.name == "editing" }?.files.map(\.relPath) == ["SKILL.md", "logo.png", "references/a.md"], "and they're not served")
+  }
+
+  @Test func overLimitSaveKeepsEveryFile() async throws {
+    let fixture = try SkillFixture()
+    var files = ["SKILL.md": SkillFixture.skillFile("crowded")]
+    for index in 0..<600 { files["many/f\(index).txt"] = "\(index)" }
+    try fixture.write("crowded", files)
+    let store = fixture.store()
+    await store.reload()
+    let draft = store.draft(for: try #require(store.skills.first))
+    #expect(draft.totals.files == 601)
+    draft.body = "Edited.\n"
+    try await draft.save()
+    let saved = try FileManager.default.contentsOfDirectory(atPath: fixture.user.appending(path: "crowded/many").path)
+    #expect(saved.count == 600, "every file past the limit is kept")
+    #expect(try String(contentsOf: fixture.user.appending(path: "crowded/many/f599.txt"), encoding: .utf8) == "599")
+  }
+
+  @Test func failedSaveLeavesTheOriginal() async throws {
+    let (fixture, _, draft) = try await setUp()
+    let before = try skillFile(fixture)
+    let outside = fixture.root.appending(path: "vanishing.txt")
+    try Data("x".utf8).write(to: outside)
+    try draft.addFiles([outside])
+    draft.body = "Never written.\n"
+    try FileManager.default.removeItem(at: outside)
+    await #expect(throws: (any Error).self) { try await draft.save() }
+    #expect(try skillFile(fixture) == before)
+    #expect(FileManager.default.fileExists(atPath: fixture.user.appending(path: "editing/notes/a.md").path))
+    #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.user.path).filter { $0.hasPrefix(".") }.isEmpty, "no staging left behind")
+  }
+
+  @Test func invalidYAMLSurvivesASave() async throws {
+    let yaml = "name: editing\ndescription: Keeps: this colon\nlicense: MIT\n"
+    let (fixture, store, draft) = try await setUp("---\n\(yaml)---\nOld body.\n")
+    defer { withExtendedLifetime(store) {} }
+    #expect(draft.frontmatterIsRaw && draft.otherYAML == yaml)
+    #expect(draft.otherYAMLError?.line == 2)
+    draft.body = "New body.\n"
+    try await draft.save()
+    #expect(try skillFile(fixture) == "---\n\(yaml)---\nNew body.\n", "the frontmatter is written back byte for byte")
+    let numbered = try await setUp("---\nname: editing\ndescription: 5\n---\nBody.\n")
+    #expect(numbered.2.frontmatterIsRaw, "a description that isn't text is kept as written")
+  }
+
+  @Test func nameComesFromTheFolder() async throws {
+    let (fixture, store, draft) = try await setUp("---\nname: other-name\ndescription: D.\n---\nBody.\n")
+    #expect(draft.name == "editing")
+    #expect(draft.issues.contains { $0.contains("other-name") })
+    draft.body = "Changed.\n"
+    try await draft.save()
+    #expect(FileManager.default.fileExists(atPath: fixture.user.appending(path: "editing/SKILL.md").path), "the folder isn't renamed")
+    #expect(store.served.first?.name == "editing")
+  }
 }

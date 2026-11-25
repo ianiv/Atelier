@@ -274,4 +274,67 @@ struct AgentSkillsTests {
     #expect((await result("resources/templates/list")?["resourceTemplates"] as? [Any])?.isEmpty == true)
     #expect(await code("skills/unknown") == -32601)
   }
+
+  @Test func byteOrderMarkGoesAsBlob() async throws {
+    let fixture = try SkillFixture()
+    let bom = Data([0xEF, 0xBB, 0xBF]) + Data("# Notes\n".utf8)
+    let folder = try fixture.write("bom", ["SKILL.md": SkillFixture.skillFile("bom")])
+    try bom.write(to: folder.appending(path: "notes.md"))
+    let store = fixture.store()
+    let rpc = SkillsRPC(store: store)
+    guard case .success(let result) = await rpc.handle("resources/read", params: ["uri": "skill://bom/notes.md"], isRemote: false) else {
+      Issue.record("read failed")
+      return
+    }
+    let content = try #require((result["contents"] as? [[String: Any]])?.first)
+    #expect(content["text"] == nil)
+    let blob = try #require((content["blob"] as? String).flatMap { Data(base64Encoded: $0) })
+    #expect(SkillScanner.digest(blob) == store.served.first?.file("notes.md")?.digest, "what's served is what was hashed")
+  }
+
+  @Test func readThatKeepsChangingIsAnError() async throws {
+    let fixture = try SkillFixture()
+    try fixture.writePDFSkill()
+    let store = fixture.store()
+    await store.reload()
+    let changing: @Sendable (URL) throws -> Data = { _ in Data(UUID().uuidString.utf8) }
+    await #expect(throws: SkillStore.Failure.self) { try await store.read(uri: "skill://pdf-processing/SKILL.md", reader: changing) }
+  }
+
+  @Test func duplicateOfALongName() async throws {
+    let fixture = try SkillFixture()
+    let long = String(repeating: "a", count: 62) + "-b"
+    try fixture.write(long, ["SKILL.md": SkillFixture.skillFile(long)])
+    let store = fixture.store()
+    await store.reload()
+    let original = try #require(store.skills.first)
+    let first = try await store.duplicate(original)
+    let second = try await store.duplicate(original)
+    #expect(first.name.count <= 64 && second.name.count <= 64)
+    #expect(first.name.hasSuffix("-copy") && second.name.hasSuffix("-copy-2"))
+    #expect(first.isValid && second.isValid, "\(first.issues) \(second.issues)")
+  }
+
+  @Test func folderOperationsRefuseLinks() async throws {
+    let fixture = try SkillFixture()
+    let folder = try fixture.write("linked-ops", ["SKILL.md": SkillFixture.skillFile("linked-ops")])
+    let outside = fixture.root.appending(path: "outside", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(atPath: folder.appending(path: "escape").path, withDestinationPath: outside.path)
+    let store = fixture.store()
+    await store.reload()
+    let skill = try #require(store.skills.first)
+    await #expect(throws: SkillStore.Failure.self) { try await store.newFile(skill, at: "escape/planted.md") }
+    #expect(!FileManager.default.fileExists(atPath: outside.appending(path: "planted.md").path))
+  }
+
+  @Test func zipFolderEntriesCount() async throws {
+    let fixture = try SkillFixture()
+    let store = fixture.store()
+    var entries: [(path: String, data: Data?)] = [("SKILL.md", Data(SkillFixture.skillFile("folders").utf8))]
+    for index in 0..<1100 { entries.append(("d\(index)/", nil)) }
+    let url = try zip(entries)
+    defer { try? FileManager.default.removeItem(at: url) }
+    await #expect(throws: (any Error).self) { try await store.importItem(at: url) }
+  }
 }

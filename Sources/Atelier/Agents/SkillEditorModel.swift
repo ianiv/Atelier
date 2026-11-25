@@ -70,18 +70,34 @@ final class SkillEditorModel {
 
   var isDirty: Bool { current != base }
 
-  /// Every file path of the draft, SKILL.md first.
-  var filePaths: [String] { [SkillScanner.skillFileName] + entries.keys.sorted() }
+  /// Every file path the Files tab shows, SKILL.md first. Hidden files (a part of the path
+  /// starting with `.`) are in the draft, so Save keeps them and renaming or removing a folder
+  /// takes them along, but they aren't listed, counted or served.
+  var filePaths: [String] { [SkillScanner.skillFileName] + entries.keys.filter { !Self.isHidden($0) }.sorted() }
+  var folderPaths: [String] { folders.filter { !Self.isHidden($0) }.sorted() }
+
+  static func isHidden(_ path: String) -> Bool { path.split(separator: "/").contains { $0.hasPrefix(".") } }
+
+  /// SKILL.md's frontmatter didn't parse, or its name or description isn't text: the whole
+  /// frontmatter is then `otherYAML`, written back as it is (name and description aren't edited
+  /// separately), so saving the body never loses what the YAML said.
+  private(set) var frontmatterIsRaw = false
+  /// The name SKILL.md gave when it was read, when that isn't its folder's.
+  private(set) var mismatchedName: String?
+  @ObservationIgnored private var originalFiles: [String] = []
+  @ObservationIgnored private var originalFolders: [String] = []
 
   // MARK: - Loading
 
   /// Reads the skill's folder into the draft, dropping any edits.
   private func load(_ skill: Skill) {
     self.skill = skill
-    let print = SkillScanner.fingerprint(skill.directory)
+    let print = Self.walk(skill.directory)
     acceptedFingerprint = print
     var snapshot = Snapshot()
     originalSizes = [:]
+    frontmatterIsRaw = false
+    mismatchedName = nil
     for item in print where !item.isSymlink {
       if item.isDirectory {
         snapshot.folders.insert(item.relPath)
@@ -90,15 +106,22 @@ final class SkillEditorModel {
         originalSizes[item.relPath] = Int(item.size)
       }
     }
+    originalFiles = Array(snapshot.entries.keys)
+    originalFolders = Array(snapshot.folders)
+    // The folder names the skill; a different name in SKILL.md is shown as a problem, and Save
+    // writes the folder's.
     snapshot.name = skill.name
     if let data = try? Data(contentsOf: skill.directory.appending(path: SkillScanner.skillFileName)) {
       let text = String(decoding: data, as: UTF8.self)
       if let (yaml, body) = try? SkillFrontmatter.split(data) {
         snapshot.body = body
-        snapshot.otherYAML = SkillFrontmatter.extractOther(yaml: yaml)
-        if let parsed = try? SkillFrontmatter.parse(yaml) {
-          snapshot.name = parsed["name"] as? String ?? skill.name
-          snapshot.description = parsed["description"] as? String ?? ""
+        if let parsed = try? SkillFrontmatter.parse(yaml), let name = parsed["name"] as? String, let description = parsed["description"] as? String {
+          snapshot.otherYAML = SkillFrontmatter.extractOther(yaml: yaml)
+          snapshot.description = description
+          if name != skill.name { mismatchedName = name }
+        } else {
+          frontmatterIsRaw = true
+          snapshot.otherYAML = yaml
         }
       } else {
         snapshot.body = text
@@ -120,11 +143,17 @@ final class SkillEditorModel {
   /// Back to the skill as it was read.
   func revert() { apply(base) }
 
+  /// Everything in the folder, hidden items included and with no limit, so the draft knows every
+  /// file a Save must carry over.
+  private static func walk(_ directory: URL) -> [SkillFingerprint] {
+    SkillScanner.fingerprint(directory, includesHidden: true, limit: .max)
+  }
+
   /// Whether the folder changed on disk since it was read (or since Keep Mine).
-  func diskChanged() -> Bool { SkillScanner.fingerprint(skill.directory) != acceptedFingerprint }
+  func diskChanged() -> Bool { Self.walk(skill.directory) != acceptedFingerprint }
 
   /// Keeps the draft over a change on disk: the next Save overwrites it.
-  func keepMine() { acceptedFingerprint = SkillScanner.fingerprint(skill.directory) }
+  func keepMine() { acceptedFingerprint = Self.walk(skill.directory) }
 
   /// Drops the draft and reads the skill again (from the store's newest scan when there is one).
   func reloadFromDisk() {
@@ -135,7 +164,12 @@ final class SkillEditorModel {
   // MARK: - SKILL.md
 
   /// SKILL.md as Save writes it.
-  var skillFileData: Data { SkillFrontmatter.serialize(name: name, description: description, otherYAML: otherYAML, body: body) }
+  var skillFileData: Data {
+    if frontmatterIsRaw {
+      return Data(("---\n" + otherYAML + (otherYAML.isEmpty || otherYAML.hasSuffix("\n") ? "" : "\n") + "---\n" + body).utf8)
+    }
+    return SkillFrontmatter.serialize(name: name, description: description, otherYAML: otherYAML, body: body)
+  }
   var preview: String { String(decoding: skillFileData, as: UTF8.self) }
 
   /// The frontmatter Save would write, or why it wouldn't parse.
@@ -152,8 +186,9 @@ final class SkillEditorModel {
   /// A YAML error in the other fields, with its line in them (1-based), for the editor.
   var otherYAMLError: SkillFrontmatter.ParseError? {
     guard case .failure(let error) = previewFrontmatter else { return nil }
-    // SKILL.md's line 1 is ---, 2 name, 3 description; the other fields start on line 4.
-    return SkillFrontmatter.ParseError(line: max(error.line - 3, 1), message: error.message)
+    // SKILL.md's line 1 is ---, then (unless the frontmatter is raw) name and description; the
+    // other fields start after them.
+    return SkillFrontmatter.ParseError(line: max(error.line - (frontmatterIsRaw ? 1 : 3), 1), message: error.message)
   }
 
   /// What would be wrong with the skill as saved: YAML, the Agent Skills rules (its folder being
@@ -167,6 +202,9 @@ final class SkillEditorModel {
       issues.append(error.localizedDescription)
     }
     if let problem = SkillStore.folderNameProblem(name), SkillFrontmatter.nameProblem(name) == nil { issues.append(problem) }
+    if let mismatchedName, name == skill.name, !frontmatterIsRaw {
+      issues.append("SKILL.md names the skill “\(mismatchedName)”, but its folder is “\(skill.name)”; Save writes “\(skill.name)”.")
+    }
     if name != skill.name, let store, store.skills.contains(where: { $0.origin == .user && $0.name == name }) {
       issues.append("You already have a skill named “\(name)”.")
     }
@@ -183,7 +221,8 @@ final class SkillEditorModel {
 
   /// Files and bytes the saved skill would have, SKILL.md included.
   var totals: (files: Int, bytes: Int) {
-    (entries.count + 1, entries.keys.reduce(skillFileData.count) { $0 + size(of: $1) })
+    let visible = entries.keys.filter { !Self.isHidden($0) }
+    return (visible.count + 1, visible.reduce(skillFileData.count) { $0 + size(of: $1) })
   }
 
   func size(of path: String) -> Int {
@@ -329,13 +368,14 @@ final class SkillEditorModel {
     var files: [String: SkillStore.WritePlan.Source] = [:]
     for (path, entry) in entries {
       switch entry {
-      case .original(let original): files[path] = .file(skill.directory.appending(path: original))
+      case .original(let original): files[path] = .original(original)
       case .text(let text): files[path] = .data(Data(text.utf8))
       case .copy(let url): files[path] = .file(url)
       }
     }
     let saved = try await store.write(
-      SkillStore.WritePlan(skill: skill, name: name, skillFile: skillFileData, files: files, folders: folders))
+      SkillStore.WritePlan(
+        skill: skill, name: name, skillFile: skillFileData, files: files, folders: folders, originals: originalFiles, originalFolders: originalFolders))
     load(saved)
   }
 }

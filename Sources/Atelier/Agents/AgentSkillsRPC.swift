@@ -46,7 +46,7 @@ struct SkillsRPC {
           throw RPCError(code: -32602, message: "Resource not found: \(uri)")
         }
         var content: [String: Any] = ["uri": uri, "mimeType": file.mimeType]
-        if SkillScanner.isTextual(file.mimeType), let text = String(data: data, encoding: .utf8) {
+        if let text = SkillScanner.text(data, mimeType: file.mimeType) {
           content["text"] = text
         } else {
           content["blob"] = data.base64EncodedString()

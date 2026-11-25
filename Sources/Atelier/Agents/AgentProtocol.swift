@@ -139,8 +139,9 @@ nonisolated enum AgentProtocol {
   }
 
   /// `Mcp-Name`'s value: plain ASCII, or `=?base64?…?=` around the UTF-8 bytes base64-encoded
-  /// (Streamable HTTP: Value Encoding; the markers are case-sensitive). Nil when it's neither,
-  /// or the decoded text has control characters.
+  /// (Streamable HTTP: Value Encoding; the markers are case-sensitive). Nil when the header
+  /// itself has characters a header can't carry, or the base64 isn't valid UTF-8. Decoded text
+  /// may hold anything (that's why it was encoded); it only has to match the body.
   static func decodeHeaderValue(_ raw: String) -> String? {
     guard let plain = plainHeaderValue(raw) else { return nil }
     let prefix = "=?base64?"

@@ -110,15 +110,17 @@ nonisolated enum SkillScanner {
       isSymlink: type == S_IFLNK)
   }
 
-  /// The folder's items below `directory`, hidden ones left out, in path order. The walk stops
-  /// once there are more files than a skill may have: that's enough to say it's too big.
-  static func fingerprint(_ directory: URL) -> [SkillFingerprint] {
+  /// The folder's items below `directory`, in path order. For serving, hidden ones are left out
+  /// and the walk stops once there are more files than a skill may have, which is enough to say
+  /// it's too big. The editor sees everything (`includesHidden`, no `limit`), so a Save can
+  /// carry every item over.
+  static func fingerprint(_ directory: URL, includesHidden: Bool = false, limit: Int = maxFiles) -> [SkillFingerprint] {
     var prints: [SkillFingerprint] = []
     var files = 0
     func walk(_ folder: URL, prefix: String) {
       guard let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path) else { return }
-      for name in names.sorted() where !name.hasPrefix(".") {
-        guard files <= maxFiles else { return }
+      for name in names.sorted() where includesHidden || !name.hasPrefix(".") {
+        guard files <= limit else { return }
         let url = folder.appending(path: name)
         guard var print = stat(url) else { continue }
         // A name from the directory listing has no slash, so the path stays inside the skill.
@@ -203,6 +205,14 @@ nonisolated enum SkillScanner {
     return mime
   }
 
+  /// A file's bytes as `text`, when they're text and the text's UTF-8 is exactly those bytes:
+  /// decoding drops a byte-order mark, and a client checking the digest and size must get back
+  /// what was hashed, so such a file goes as a base64 blob.
+  static func text(_ data: Data, mimeType: String) -> String? {
+    guard isTextual(mimeType), let text = String(data: data, encoding: .utf8), Data(text.utf8) == data else { return nil }
+    return text
+  }
+
   /// Whether bytes of this type are text to hand over as `text` rather than base64.
   static func isTextual(_ mimeType: String) -> Bool {
     if mimeType.hasPrefix("text/") { return true }
@@ -259,13 +269,16 @@ nonisolated enum SkillArchive {
   }
 
   /// Unpacks `zip` into `destination` (an empty folder). Refused outright: absolute paths, `..`,
-  /// backslashes, links, more entries than a skill may have, or more bytes. Hidden files and
+  /// backslashes, links, more files than a skill may have (or more than twice that many entries,
+  /// folders included: folders don't count toward the extension's limit, but an archive of
+  /// endless empty folders must still be refused), or more bytes. Hidden files and
   /// macOS's `__MACOSX` folder are skipped. The byte limit is counted on what's actually
   /// unpacked, not only on what the archive claims.
   static func extract(_ zip: URL, to destination: URL) throws {
     guard let archive = Archive(url: zip, accessMode: .read) else { throw Failure("The file isn't a zip archive.") }
     let root = destination.standardizedFileURL.path
     var entries = 0
+    var files = 0
     var claimed: UInt64 = 0
     var written = 0
     for entry in archive {
@@ -281,12 +294,14 @@ nonisolated enum SkillArchive {
       guard entry.type != .symlink else { throw Failure("The archive holds a link (\(path)); skills can't hold links.") }
       let target = destination.appending(path: components.joined(separator: "/"))
       guard target.standardizedFileURL.path.hasPrefix(root + "/") else { throw Failure("The archive has an entry with an unsafe path (\(path)).") }
+      entries += 1
+      guard entries <= 2 * SkillScanner.maxFiles else { throw Failure("The archive has more than \(2 * SkillScanner.maxFiles) entries.") }
       if entry.type == .directory {
         try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
         continue
       }
-      entries += 1
-      guard entries <= SkillScanner.maxFiles else { throw Failure("The archive has more than \(SkillScanner.maxFiles) files; a skill can have at most \(SkillScanner.maxFiles).") }
+      files += 1
+      guard files <= SkillScanner.maxFiles else { throw Failure("The archive has more than \(SkillScanner.maxFiles) files; a skill can have at most \(SkillScanner.maxFiles).") }
       claimed += entry.uncompressedSize
       guard claimed <= UInt64(SkillScanner.maxBytes) else { throw Failure("The archive unpacks to more than 16 MiB; a skill can hold at most 16 MiB.") }
       try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -317,6 +332,82 @@ nonisolated enum SkillArchive {
   }
 }
 
+/// One Save's disk work (`SkillStore.write`), off the main actor.
+nonisolated struct SkillWriteJob: @unchecked Sendable {
+  let plan: SkillStore.WritePlan
+  let userDirectory: URL
+  let destination: URL
+  let usesTrash: Bool
+
+  func run() throws {
+    let manager = FileManager.default
+    let old = plan.skill.directory
+    let token = UUID().uuidString
+    let staging = userDirectory.appending(path: ".save-\(token)", directoryHint: .isDirectory)
+    let held = userDirectory.appending(path: ".held-\(token)", directoryHint: .isDirectory)
+    defer {
+      try? manager.removeItem(at: staging)
+      try? manager.removeItem(at: held)
+    }
+    try manager.copyItem(at: old, to: staging)
+    // The files the draft knew are moved aside, then put back where it says (or not at all).
+    for path in plan.originals {
+      let from = staging.appending(path: path)
+      guard SkillScanner.stat(from) != nil else { continue }
+      let to = held.appending(path: path)
+      try manager.createDirectory(at: to.deletingLastPathComponent(), withIntermediateDirectories: true)
+      try manager.moveItem(at: from, to: to)
+    }
+    // Folders the draft removed go, with what's left in them; deepest first.
+    for folder in plan.originalFolders.sorted(by: { $0.count > $1.count }) where !plan.folders.contains(folder) {
+      let url = staging.appending(path: folder, directoryHint: .isDirectory)
+      if SkillScanner.stat(url) != nil { try manager.removeItem(at: url) }
+    }
+    for folder in plan.folders.sorted() {
+      try manager.createDirectory(at: staging.appending(path: folder, directoryHint: .isDirectory), withIntermediateDirectories: true)
+    }
+    for (path, source) in plan.files {
+      let target = staging.appending(path: path)
+      try manager.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+      if SkillScanner.stat(target) != nil { try manager.removeItem(at: target) }
+      switch source {
+      case .original(let original):
+        try manager.moveItem(at: held.appending(path: original), to: target)
+      case .file(let url):
+        if SkillScanner.stat(url)?.isSymlink != false { throw SkillStore.Failure("\(path) is a link or missing; skills can't hold links.") }
+        try manager.copyItem(at: url, to: target)
+      case .data(let data):
+        try data.write(to: target)
+      }
+    }
+    try plan.skillFile.write(to: staging.appending(path: SkillScanner.skillFileName))
+    try swap(staging, replacing: old)
+  }
+
+  /// Puts the finished folder at `destination` and the old one in the Trash. If the last move
+  /// fails, the old folder comes back from the Trash.
+  private func swap(_ staging: URL, replacing old: URL) throws {
+    let manager = FileManager.default
+    let renamed = destination.standardizedFileURL.path != old.standardizedFileURL.path
+    if renamed, SkillScanner.stat(destination) != nil { throw SkillStore.Failure("You already have a skill named “\(destination.lastPathComponent)”.") }
+    var removed: NSURL?
+    if usesTrash {
+      try manager.trashItem(at: old, resultingItemURL: &removed)
+    } else {
+      let aside = userDirectory.appending(path: ".old-\(UUID().uuidString)", directoryHint: .isDirectory)
+      try manager.moveItem(at: old, to: aside)
+      removed = aside as NSURL
+    }
+    do {
+      try manager.moveItem(at: staging, to: destination)
+    } catch {
+      if let removed = removed as URL? { try? manager.moveItem(at: removed, to: old) }
+      throw error
+    }
+    if !usesTrash, let removed = removed as URL? { try? manager.removeItem(at: removed) }
+  }
+}
+
 /// The skills agents get: Atelier's own, read in place from the app (`Contents/Resources/Skills`,
 /// never written), and the user's in Application Support/Atelier/Skills (a temporary folder in
 /// scripted runs and tests). Also the Skills screen's state: each skill's unsaved draft and what
@@ -330,8 +421,11 @@ final class SkillStore {
   }
 
   /// What one Save writes (`SkillEditorModel.save`): the folder's new contents, all at once.
-  struct WritePlan {
+  nonisolated struct WritePlan {
     enum Source {
+      /// A file of the old folder, by its path as read.
+      case original(String)
+      /// A file from elsewhere, copied in.
       case file(URL)
       case data(Data)
     }
@@ -339,9 +433,13 @@ final class SkillStore {
     var skill: Skill
     var name: String
     var skillFile: Data
-    /// Every file but SKILL.md, by its path in the saved folder.
+    /// Every file but SKILL.md, by its path in the saved folder, hidden ones included.
     var files: [String: Source]
     var folders: Set<String>
+    /// The files and folders of the old folder the draft knew (paths as read): the ones the
+    /// draft doesn't keep are removed, and the others moved to where `files` puts them.
+    var originals: [String] = []
+    var originalFolders: [String] = []
   }
 
   static let disabledKey = "agentServer.disabledSkills"
@@ -467,17 +565,21 @@ final class SkillStore {
   }
 
   /// A served file's bytes, checked against the listing's digest: bytes that no longer match
-  /// mean the folder changed since it was read, so it's read again before answering.
-  func read(uri: String) async throws -> (file: SkillFile, data: Data)? {
+  /// mean the folder changed since it was read, so it's read again (twice at most) before
+  /// answering, and bytes that still don't match what the fresh listing says are an error rather
+  /// than content a client would fail to verify. `reader` is for tests.
+  func read(
+    uri: String, reader: @escaping @Sendable (URL) throws -> Data = { try Data(contentsOf: $0) }
+  ) async throws -> (file: SkillFile, data: Data)? {
     _ = await current()
-    guard let (skill, path) = served(uri: uri), let file = skill.file(path) else { return nil }
-    let url = skill.directory.appending(path: path)
-    let data = try await Task.detached { try Data(contentsOf: url) }.value
-    if data.count == file.size, SkillScanner.digest(data) == file.digest { return (file, data) }
-    await reload()
-    guard let (fresh, freshPath) = served(uri: uri), let freshFile = fresh.file(freshPath) else { return nil }
-    let again = try await Task.detached { try Data(contentsOf: url) }.value
-    return (freshFile, again)
+    for attempt in 0..<3 {
+      if attempt > 0 { await reload() }
+      guard let (skill, path) = served(uri: uri), let file = skill.file(path) else { return nil }
+      let url = skill.directory.appending(path: path)
+      let data = try await Task.detached { try reader(url) }.value
+      if data.count == file.size, SkillScanner.digest(data) == file.digest { return (file, data) }
+    }
+    throw Failure("The file kept changing while it was read; try again.")
   }
 
   // MARK: - Turning on and off
@@ -566,14 +668,18 @@ final class SkillStore {
 
   /// A copy of yours to edit, of any skill (Atelier's included): `name-copy`, or with a number.
   @discardableResult func duplicate(_ skill: Skill) async throws -> Skill {
-    var name = skill.name + "-copy"
+    // The name shortened to leave room for the suffix, so a long one still makes a valid name.
+    func candidate(_ suffix: String) -> String {
+      let room = SkillFrontmatter.maxNameLength - suffix.count
+      let base = String(skill.name.prefix(room)).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+      return base + suffix
+    }
+    var name = candidate("-copy")
     var number = 2
     while userSkillExists(name) {
-      name = "\(skill.name)-copy-\(number)"
+      name = candidate("-copy-\(number)")
       number += 1
     }
-    if name.count > SkillFrontmatter.maxNameLength { name = String(name.suffix(SkillFrontmatter.maxNameLength)).trimmingCharacters(in: CharacterSet(charactersIn: "-")) }
-    guard !userSkillExists(name) else { throw Failure(takenMessage(name)) }
     try FileManager.default.createDirectory(at: userDirectory, withIntermediateDirectories: true)
     let staging = userDirectory.appending(path: ".copy-\(UUID().uuidString)", directoryHint: .isDirectory)
     defer { try? FileManager.default.removeItem(at: staging) }
@@ -630,11 +736,19 @@ final class SkillStore {
     return path
   }
 
+  /// The file a folder operation touches, refused if anything on the way to it (the skill's
+  /// folder included) is a link, which would lead outside the skill.
   private func editable(_ skill: Skill, _ path: String, allowsSkillFile: Bool = true) throws -> URL {
     guard skill.origin == .user else { throw Failure("Built-in skills can't be changed.") }
     guard let path = Self.safeRelativePath(path) else { throw Failure("“\(path)” isn't a path inside the skill.") }
     if !allowsSkillFile, path == SkillScanner.skillFileName { throw Failure("SKILL.md can't be renamed or removed.") }
-    return skill.directory.appending(path: path)
+    var url = skill.directory
+    if SkillScanner.stat(url)?.isSymlink != false { throw Failure("The skill's folder is a link or missing.") }
+    for component in path.split(separator: "/") {
+      url = url.appending(path: String(component))
+      if SkillScanner.stat(url)?.isSymlink == true { throw Failure("“\(path)” goes through a link; skills can't hold links.") }
+    }
+    return url
   }
 
   func newFile(_ skill: Skill, at path: String, contents: Data = Data()) async throws {
@@ -679,44 +793,26 @@ final class SkillStore {
     await reload()
   }
 
-  /// Writes a Save: the whole folder built beside the old one, then swapped in, so a skill is
-  /// never left half-written. A new name moves it to a folder of that name, refused (with
-  /// nothing written) if you have one already. Hidden items in the old folder's top are kept.
+  /// Writes a Save. The new folder starts as a copy of the old one, so whatever the draft didn't
+  /// track (links, anything new on disk since Keep Mine) comes along; the draft's files are then
+  /// moved, removed and written on that copy, which is swapped in only once it's complete. The
+  /// old folder goes to the Trash (deleted in a scripted run's folder). Anything that fails
+  /// before the swap leaves the skill as it was. A new name moves it to a folder of that name,
+  /// refused (with nothing written) if you have one already. The copying runs off the main actor.
   @discardableResult func write(_ plan: WritePlan) async throws -> Skill {
     let skill = plan.skill
     guard skill.origin == .user else { throw Failure("Built-in skills can't be changed.") }
     if let problem = Self.folderNameProblem(plan.name) { throw Failure(problem) }
     let renamed = plan.name != skill.name
-    let destination = userDirectory.appending(path: plan.name, directoryHint: .isDirectory)
     if renamed, userSkillExists(plan.name) { throw Failure(takenMessage(plan.name)) }
-    for path in Array(plan.files.keys) + Array(plan.folders) where Self.safeRelativePath(path) == nil || path == SkillScanner.skillFileName {
+    for path in Array(plan.files.keys) + Array(plan.folders) + plan.originals where !Self.isInside(path) || path == SkillScanner.skillFileName {
       throw Failure("“\(path)” isn't a path inside the skill.")
     }
-    let staging = userDirectory.appending(path: ".save-\(UUID().uuidString)", directoryHint: .isDirectory)
-    defer { try? FileManager.default.removeItem(at: staging) }
-    let manager = FileManager.default
-    try manager.createDirectory(at: staging, withIntermediateDirectories: true)
-    for folder in plan.folders.sorted() {
-      try manager.createDirectory(at: staging.appending(path: folder, directoryHint: .isDirectory), withIntermediateDirectories: true)
-    }
-    for (path, source) in plan.files {
-      let target = staging.appending(path: path)
-      try manager.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-      switch source {
-      case .file(let url):
-        if SkillScanner.stat(url)?.isSymlink == true { throw Failure("\(path) is a link; skills can't hold links.") }
-        try manager.copyItem(at: url, to: target)
-      case .data(let data): try data.write(to: target)
-      }
-    }
-    try plan.skillFile.write(to: staging.appending(path: SkillScanner.skillFileName))
-    for hidden in (try? manager.contentsOfDirectory(atPath: skill.directory.path)) ?? [] where hidden.hasPrefix(".") {
-      try? manager.copyItem(at: skill.directory.appending(path: hidden), to: staging.appending(path: hidden))
-    }
+    let job = SkillWriteJob(
+      plan: plan, userDirectory: userDirectory, destination: userDirectory.appending(path: plan.name, directoryHint: .isDirectory),
+      usesTrash: usesTrash)
+    try await Task.detached { try job.run() }.value
     if renamed {
-      // Fails, leaving everything as it was, if the name was taken meanwhile.
-      try manager.moveItem(at: staging, to: destination)
-      try? manager.removeItem(at: skill.directory)
       let newID = "user/\(plan.name)"
       if let draft = drafts.removeValue(forKey: skill.id) { drafts[newID] = draft }
       if screenSelection == skill.id { screenSelection = newID }
@@ -724,10 +820,15 @@ final class SkillStore {
         disabled.insert(plan.name)
         defaults.set(disabled.sorted(), forKey: Self.disabledKey)
       }
-    } else {
-      _ = try manager.replaceItemAt(skill.directory, withItemAt: staging)
     }
     return try await reloaded(plan.name)
+  }
+
+  /// A relative path that stays inside a folder: no empty, `.` or `..` parts. Hidden parts are
+  /// allowed, since a Save carries hidden files along.
+  nonisolated static func isInside(_ path: String) -> Bool {
+    let parts = path.split(separator: "/", omittingEmptySubsequences: false)
+    return !parts.isEmpty && parts.allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains("\0") }
   }
 
   // MARK: - Drafts

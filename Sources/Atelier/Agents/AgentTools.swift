@@ -2838,7 +2838,7 @@ final class AgentTools {
     guard skill.file(path) != nil, let (file, data) = try await skills.read(uri: uri) else {
       throw ToolError("“\(name)” has no file \(path). See list_skills for its files.")
     }
-    guard SkillScanner.isTextual(file.mimeType), let text = String(data: data, encoding: .utf8) else {
+    guard let text = SkillScanner.text(data, mimeType: file.mimeType) else {
       let size = ByteCountFormatter.string(fromByteCount: Int64(file.size), countStyle: .file)
       return Self.textResult("\(path) isn't text (\(file.mimeType), \(size)). resources/read at \(uri) gives its bytes.")
     }

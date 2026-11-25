@@ -264,13 +264,16 @@ final nonisolated class LoopbackHTTPServer: Sendable {
     }
   }
 
-  /// The client sends nothing after its request, so a read that ends means it hung up.
+  /// The client sends nothing after its request, so a failed read means it hung up. A read that
+  /// just ends (FIN) isn't one: a client may half-close once its request is sent and still wait
+  /// for the answer, and the tailnet bridge passes half-closes on. A client gone that way is
+  /// noticed when a write to it fails (`Responder.write`), as the keep-alives do every 15 s.
   private func watchForClose(_ connection: NWConnection, responder: Responder) {
     connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 16) {
-      [self] data, _, isComplete, error in
-      if isComplete || error != nil || data == nil {
+      [self] _, _, isComplete, error in
+      if error != nil {
         responder.clientDidClose()
-      } else {
+      } else if !isComplete {
         watchForClose(connection, responder: responder)
       }
     }
@@ -328,6 +331,8 @@ final nonisolated class LoopbackHTTPServer: Sendable {
     private struct State {
       var closeHandler: (@Sendable () -> Void)?
       var isClosed = false
+      /// The client hung up, perhaps before a handler was registered.
+      var clientClosed = false
     }
 
     private let connection: NWConnection
@@ -337,14 +342,21 @@ final nonisolated class LoopbackHTTPServer: Sendable {
       self.connection = connection
     }
 
-    /// Called once if the client hangs up before the response is finished.
+    /// Called once if the client hangs up before the response is finished; at once if it
+    /// already has, so a hang-up that comes before the handler isn't missed.
     func onClientClose(_ handler: @escaping @Sendable () -> Void) {
-      state.withLock { $0.closeHandler = handler }
+      let now = state.withLock { state -> Bool in
+        if state.clientClosed { return !state.isClosed }
+        state.closeHandler = handler
+        return false
+      }
+      if now { handler() }
     }
 
     fileprivate func clientDidClose() {
       let handler = state.withLock {
         defer { $0.closeHandler = nil }
+        $0.clientClosed = true
         return $0.isClosed ? nil : $0.closeHandler
       }
       handler?()
@@ -389,7 +401,7 @@ final nonisolated class LoopbackHTTPServer: Sendable {
           content: data, contentContext: .finalMessage, isComplete: true,
           completion: .contentProcessed { [connection] _ in connection.cancel() })
       } else {
-        connection.send(content: data, completion: .contentProcessed { _ in })
+        connection.send(content: data, completion: .contentProcessed { [weak self] error in if error != nil { self?.clientDidClose() } })
       }
     }
 
