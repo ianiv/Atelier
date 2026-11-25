@@ -133,8 +133,14 @@ final class ModelLibrary {
     var stage: String?
     /// As `LoRAImport.ownedFolder`: a link download's staging folder, deleted after the import.
     var ownedFolder: URL?
+    /// For a MiniMax H3 video checkpoint: FL2VA or Ref2VA, as detected (`H3VideoVariant.detect`)
+    /// or picked in the sheet. Nil until one is, and the file can't be imported until then.
+    var h3Variant: H3VideoVariant?
+    /// What `H3VideoVariant.detect` found and what it was based on; nil when nothing said.
+    var h3Detected: H3VideoVariant.Detection?
 
-    var canImport: Bool { !isInspecting && problem == nil }
+    var isH3Video: Bool { version == ModelVersion.minimaxH3.rawValue }
+    var canImport: Bool { !isInspecting && problem == nil && (!isH3Video || h3Variant != nil) }
     var family: String? { isH3ImageVAE ? "MiniMax H3 Image VAE" : version.map(ModelLibrary.familyName) }
 
     init(source: URL) {
@@ -567,7 +573,12 @@ final class ModelLibrary {
     switch result {
     case .success(let version):
       importingModels[index].version = version.rawValue
-      if version != .mossImage, Self.unconvertibleVersions.contains(version) {
+      if version == .minimaxH3 {
+        let detected = await Self.detectedH3Variant(of: source)
+        guard let index = importingModels.firstIndex(where: { $0.id == id }) else { return }
+        importingModels[index].h3Variant = detected?.variant
+        importingModels[index].h3Detected = detected
+      } else if version != .mossImage, Self.unconvertibleVersions.contains(version) {
         importingModels[index].problem =
           "\(ModelZoo.humanReadableNameForVersion(version)) checkpoints can't be converted yet."
       } else if version == .fibo2, Fibo2TextEncoderImporter.isMissing(in: directories),
@@ -584,6 +595,19 @@ final class ModelLibrary {
   func updateModelImport(_ id: UUID, name: String) {
     guard let index = importingModels.firstIndex(where: { $0.id == id }) else { return }
     importingModels[index].name = name
+  }
+
+  /// The FL2VA or Ref2VA the person picked for a MiniMax H3 video checkpoint in the sheet.
+  func updateModelImport(_ id: UUID, h3Variant: H3VideoVariant) {
+    guard let index = importingModels.firstIndex(where: { $0.id == id }) else { return }
+    importingModels[index].h3Variant = h3Variant
+  }
+
+  @concurrent nonisolated static func detectedH3Variant(
+    of source: URL
+  ) async -> H3VideoVariant.Detection? {
+    let header = source.pathExtension.lowercased() == "safetensors" ? try? SafetensorsHeader.read(source) : nil
+    return H3VideoVariant.detect(header: header, fileName: source.lastPathComponent)
   }
 
   func removeModelImport(_ id: UUID) {
@@ -647,8 +671,11 @@ final class ModelLibrary {
   }
 
   /// Converts a checkpoint to the engine's format in `folder`.
+  /// `h3Variant` replaces the FL2VA or Ref2VA the engine reads from the file name for a MiniMax H3
+  /// video checkpoint (see `H3VideoVariant`).
   @concurrent private nonisolated static func convert(
     _ source: URL, modelName: String, displayName: String, into folder: URL,
+    h3Variant: H3VideoVariant? = nil,
     progress: @escaping @Sendable (Float) -> Void
   ) async throws -> ModelZoo.Specification {
     func convertMOSS() throws -> ModelZoo.Specification {
@@ -673,13 +700,17 @@ final class ModelLibrary {
     }
     let (files, version, modifier, inspection) = try importer.import(
       versionCheck: { _ in }, progress: progress)
-    return ModelImporter.inferModelSpecification(
+    var specification = ModelImporter.inferModelSpecification(
       modelName: displayName, fileName: modelName,
       fileNames: files.map { URL(fileURLWithPath: $0).lastPathComponent },
       modelVersion: version, modifier: modifier, inspectionResult: inspection, prefix: "",
       objective: nil, conditioning: nil, noiseDiscretization: nil, upcastAttention: false,
       finetuneScale: defaultImportScale(for: version, fileName: source.lastPathComponent)
     ).specification
+    if version == .minimaxH3, let h3Variant {
+      specification.modifier = h3Variant == .ref2va ? .ref2va : .fl2va
+    }
+    return specification
   }
 
   /// Removes what an import that failed left in `directory`: files it made, which aren't in
@@ -729,7 +760,8 @@ final class ModelLibrary {
     // ModelImporter writes `<modelName>_f16.ckpt` and its encoders to the folder it's given (an
     // `outputDirectory` the fork adds), not just the first models folder.
     let specification = try await Self.convert(
-      source, modelName: modelName, displayName: displayName, into: folder, progress: progress)
+      source, modelName: modelName, displayName: displayName, into: folder, h3Variant: item.h3Variant,
+      progress: progress)
     guard
       FileManager.default.fileExists(
         atPath: folder.appendingPathComponent(specification.file).path)

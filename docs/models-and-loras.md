@@ -51,6 +51,7 @@ To use a model that isn't in the catalog, such as a fine-tune you downloaded:
 
 1. Click **Import…** in the Models toolbar, choose **Choose Files…** and pick one or more `.safetensors` or `.ckpt` files, or drop them on the Models list. To download one first, choose **From Hugging Face Link…** instead (see [Importing from a Hugging Face link](#importing-from-a-hugging-face-link)).
 2. Atelier inspects each file and shows the model family it detected. Give it a name if you like, or remove a file you don't want to import.
+   For a MiniMax H3 video checkpoint, a **Model** menu also says whether it's FL2VA (first and last frame) or Ref2VA (reference images). HyperFlow H3 Flash files are told apart by their weights; for other H3 files the two look the same, so the menu goes by the file name, and if the name doesn't say, you pick one before the file can be imported.
 3. Start the import. Converting a checkpoint takes a few minutes and a lot of memory; a 10 GB file can take 10 to 30 minutes.
 
 On iPad, Import… opens the Files picker. Importing a checkpoint and Make 8-bit Copy work there too but haven't been tried on an iPad yet; converting needs a lot of memory, so a Mac is the safer place for large checkpoints.

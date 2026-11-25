@@ -21,8 +21,8 @@ FastH3 Omni is a fast MiniMax H3 Ref2VA: it starts at 1280×768, 8 steps and gui
 
 1. Download a GGUF from the `fl2va_gguf` or `ref2va_gguf` folder (Q8_0 is about 15 GB) and that folder's partner `config.json` from `fl2va_int8_convrot` or `ref2va_int8_convrot`.
 2. Convert it with `Scripts/hyperflow/hyperflow_gguf_to_safetensors.py` from the engine fork (needs Python with `gguf` and `numpy`):
-   `python hyperflow_gguf_to_safetensors.py <file>.gguf hyperflow_h3_flash_fl2va.safetensors --config config.json`. Keep `hyperflow` in the output name, and put `ref2va` in it for the Ref2VA file. The result is about 28 GB.
-3. Import the `.safetensors` file in **Models** (see [Importing a checkpoint](models-and-loras.md#importing-a-checkpoint)). It uses the MiniMax H3 text encoder and VAE.
+   `python hyperflow_gguf_to_safetensors.py <file>.gguf hyperflow_h3_flash_fl2va.safetensors --config config.json` for FL2VA, or `… hyperflow_h3_flash_ref2va.safetensors …` for Ref2VA. Keep `hyperflow` in the output name: Atelier's defaults for it go by that. The result is about 28 GB.
+3. Import the `.safetensors` file in **Models** (see [Importing a checkpoint](models-and-loras.md#importing-a-checkpoint)). The import sheet shows **Model: FL2VA** or **Ref2VA**, detected from the weights whatever the file is called. It uses the MiniMax H3 text encoder and VAE.
 4. Select it in **Models** and click **Make 8-bit S Copy** (see [Make 8-bit Copy](models-and-loras.md#make-8-bit-copy-moss-minimax-h3-and-longcat-models)). The copy is about half the size and needs half the memory; use it in Create and move the full-precision one to the Trash if you like.
 
 It starts at 1344×768, 124 frames, 6 steps, guidance 1 and shift 12. It's trained for exactly 4, 6 or 8 steps (4 is fastest, 8 best) and always runs its own sampler on those steps; any other step count falls back to a plain linear schedule and looks worse. Leave guidance at 1 and the negative prompt empty.

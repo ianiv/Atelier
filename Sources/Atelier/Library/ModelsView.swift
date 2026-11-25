@@ -870,6 +870,9 @@ struct ModelImportSheet: View {
         }
       }
       .font(.caption).foregroundStyle(.secondary)
+      if item.isH3Video, item.problem == nil {
+        h3VariantPicker(item)
+      }
       if item.problem == nil {
         TextField(
           "Name",
@@ -880,6 +883,46 @@ struct ModelImportSheet: View {
         .labelsHidden()
         .disabled(library.isImportingModels)
       }
+    }
+  }
+}
+
+extension ModelImportSheet {
+  /// FL2VA or Ref2VA for a MiniMax H3 video checkpoint, which the engine would otherwise take from
+  /// the file name. Preset to what `H3VideoVariant.detect` found; with nothing found it starts
+  /// empty and the file can't be imported until one is picked.
+  private func h3VariantPicker(_ item: ModelLibrary.ModelImport) -> some View {
+    VStack(alignment: .leading, spacing: 2) {
+      Picker(
+        "Model",
+        selection: Binding(
+          get: { item.h3Variant },
+          set: { if let variant = $0 { library.updateModelImport(item.id, h3Variant: variant) } })
+      ) {
+        if item.h3Variant == nil {
+          Text("Choose…").tag(H3VideoVariant?.none)
+        }
+        ForEach(H3VideoVariant.allCases, id: \.self) { variant in
+          Text(variant.title).tag(H3VideoVariant?.some(variant))
+        }
+      }
+      .disabled(library.isImportingModels)
+      Text(h3VariantNote(item))
+        .font(.caption).foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+  }
+
+  private func h3VariantNote(_ item: ModelLibrary.ModelImport) -> String {
+    guard let detected = item.h3Detected else {
+      return "FL2VA and Ref2VA weights look the same and the file name doesn't say which this is."
+    }
+    if item.h3Variant != detected.variant {
+      return "Detected as \(detected.variant == .ref2va ? "Ref2VA" : "FL2VA") from the \(detected.evidence == .weights ? "weights" : "file name")."
+    }
+    switch detected.evidence {
+    case .weights: return "Detected from the weights."
+    case .name: return "Detected from the file name. FL2VA and Ref2VA weights look the same, so check it's right."
     }
   }
 }
