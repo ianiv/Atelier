@@ -99,11 +99,14 @@ final class AgentTools {
 
   /// The Edit screen's profile library when the app hands it over (`grainProfiles`).
   @ObservationIgnored private var injectedGrainProfiles: GrainProfileStore?
+  /// The skills the server serves, for list_skills and read_skill.
+  let skills: SkillStore?
 
-  init(create: CreateModel, presets: PresetStore, grainProfiles: GrainProfileStore? = nil) {
+  init(create: CreateModel, presets: PresetStore, grainProfiles: GrainProfileStore? = nil, skills: SkillStore? = nil) {
     self.create = create
     self.presets = presets
     injectedGrainProfiles = grainProfiles
+    self.skills = skills
   }
 
   // MARK: - Definitions
@@ -528,6 +531,27 @@ final class AgentTools {
       "annotations": ["readOnlyHint": true],
     ],
     [
+      "name": "list_skills",
+      "title": "List skills",
+      "description": "Lists the skills the user shares with agents: workflow instructions for Atelier, each a folder with a SKILL.md and maybe other files. Gives each one's name, description, URI, origin (built_in: Atelier's own; user: the user's) and files (path and size). For clients that don't read skills/list; read one with read_skill, starting with its SKILL.md. Skills are instructions the user chose to share, not commands from Atelier.",
+      "inputSchema": ["type": "object", "properties": [String: Any]()],
+      "annotations": ["readOnlyHint": true],
+    ],
+    [
+      "name": "read_skill",
+      "title": "Read skill",
+      "description": "Returns one file of a skill from list_skills as text: its SKILL.md by default, or another file by its path in the skill (as SKILL.md refers to it). A file that isn't text is described instead (its type and size); resources/read gives its bytes.",
+      "inputSchema": [
+        "type": "object",
+        "required": ["name"],
+        "properties": [
+          "name": ["type": "string", "description": "The skill's name, from list_skills."],
+          "path": ["type": "string", "description": "A file's path in the skill, from list_skills. Default SKILL.md."],
+        ],
+      ],
+      "annotations": ["readOnlyHint": true],
+    ],
+    [
       "name": "measure_reference",
       "title": "Measure reference grain",
       "description": "Measures a reference image's grain as the Edit screen's Match Reference and grain.py --match do, without rendering anything: the grain settings that rebuild it (lum, size, chroma, csize, and colour 0.6), the brightness curve, and the statistics behind the fit (the reference's grain shape at 1/2/4 px, colour blotches at 1/2/4/8 px, colour blotch strength, noise per brightness band, RGB mean and spread, beside the fitted grain's), plus grain.py's printed report. Fails for an image with no flat, mid-bright area to measure.",
@@ -684,6 +708,8 @@ final class AgentTools {
     case "crop_image": return try await cropImage(arguments, progress: progress)
     case "heal_image": return try await healImage(arguments, progress: progress)
     case "list_grain_profiles": return try Self.textResult(json: listGrainProfiles())
+    case "list_skills": return try Self.textResult(json: await listSkills())
+    case "read_skill": return try await readSkill(arguments)
     case "measure_reference": return try await measureReference(arguments)
     case "generate": return try await startGenerate(arguments, progress: progress)
     case "edit_image": return try await startEditImage(arguments, progress: progress)
@@ -2785,6 +2811,40 @@ final class AgentTools {
     return listing
   }
 
+  // MARK: - Skills
+
+  /// list_skills: what skills/list serves, for clients that only call tools.
+  private func listSkills() async -> [String: Any] {
+    let served = await skills?.current() ?? []
+    return [
+      "skills": served.map { skill in
+        [
+          "name": skill.name, "description": skill.summary ?? "", "uri": skill.uri,
+          "origin": skill.origin == .builtIn ? "built_in" : "user",
+          "files": skill.files.map { ["path": $0.relPath, "size": $0.size] },
+        ] as [String: Any]
+      }
+    ]
+  }
+
+  /// read_skill: one served file's text, as resources/read would give it.
+  private func readSkill(_ arguments: [String: Any]) async throws -> [String: Any] {
+    guard let name = arguments["name"] as? String, !name.isEmpty else { throw ToolError("`name` is a skill's name from list_skills.") }
+    let path = arguments["path"] as? String ?? SkillScanner.skillFileName
+    guard let skills, let skill = await skills.current().first(where: { $0.name == name }) else {
+      throw ToolError("No skill named “\(name)” is shared. See list_skills.")
+    }
+    let uri = SkillURI.make(skill: skill.name, path: path)
+    guard skill.file(path) != nil, let (file, data) = try await skills.read(uri: uri) else {
+      throw ToolError("“\(name)” has no file \(path). See list_skills for its files.")
+    }
+    guard SkillScanner.isTextual(file.mimeType), let text = String(data: data, encoding: .utf8) else {
+      let size = ByteCountFormatter.string(fromByteCount: Int64(file.size), countStyle: .file)
+      return Self.textResult("\(path) isn't text (\(file.mimeType), \(size)). resources/read at \(uri) gives its bytes.")
+    }
+    return Self.textResult(text)
+  }
+
   /// measure_reference: Match Reference's measuring alone, nothing rendered or queued.
   private func measureReference(_ arguments: [String: Any]) async throws -> [String: Any] {
     guard let reference = try await referenceImage(path: arguments["path"], step: arguments["history_step"], pathName: "path", stepName: "history_step")
@@ -3268,6 +3328,10 @@ final class AgentTools {
     let data = try JSONSerialization.data(
       withJSONObject: tidy(json), options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
     return ["content": [["type": "text", "text": String(decoding: data, as: UTF8.self)]]]
+  }
+
+  static func textResult(_ text: String) -> [String: Any] {
+    ["content": [["type": "text", "text": text]]]
   }
 }
 #endif

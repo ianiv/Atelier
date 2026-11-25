@@ -20,6 +20,11 @@ import UniformTypeIdentifiers
 /// with progress notifications while it generates; anything else gets a plain JSON response.
 /// There are no sessions and no server-to-client requests, so GET (the optional standalone
 /// stream) is refused with 405, as the transport allows.
+///
+/// Both protocol eras are served (`AgentProtocol`): 2025 clients open with `initialize`, and
+/// 2026-07-28 clients send their version in every request's `_meta` and headers. It also serves
+/// the user's skills (`io.modelcontextprotocol/skills`, `SkillsRPC`), with the fallback tools
+/// list_skills and read_skill for clients that only call tools.
 @MainActor
 @Observable
 final class AgentServer {
@@ -131,6 +136,8 @@ final class AgentServer {
       : "The certificate expires \(expires.formatted(.relative(presentation: .named)))."
   }
   let tools: AgentTools
+  /// The skills agents get (the Skills screen's store).
+  let skills: SkillStore
   /// `--mcp` on the command line: on for this launch without changing the setting.
   private let forcedOn: Bool
   /// `--mcp PORT`: that port for this launch.
@@ -191,7 +198,6 @@ final class AgentServer {
     }
   }
 
-  private static let protocolVersions = ["2025-11-25", "2025-06-18", "2025-03-26"]
   private static let instructions = """
     Atelier generates images on this Mac with local diffusion models (the Draw Things engine). \
     Call list_models first to pick a model, then generate. Images are saved to the user's \
@@ -217,17 +223,31 @@ final class AgentServer {
     matching a reference photo's colors and grain), use edit_image_look, with \
     list_grain_profiles and measure_reference; crop_image crops and heal_image removes spots and \
     blemishes, copying from a source point you pick beside each. extract_depth_map makes an \
-    image's depth map (near white) as a new step, for a depth control's input. Coordinates are always the image's own pixels from its top left.
+    image's depth map (near white) as a new step, for a depth control's input. Coordinates are always the image's own pixels from its top left. \
+    The user may share skills, workflow instructions for Atelier: skills/list lists them (or the \
+    list_skills tool), and resources/read (or read_skill) reads one's SKILL.md and files.
     """
+
+  /// Who this server is, in `initialize`'s `serverInfo` and every modern result's `_meta`.
+  private static var serverInfo: [String: Any] {
+    [
+      "name": "atelier", "title": "Atelier",
+      "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0",
+    ]
+  }
 
   /// `defaults` and `secrets` are where the settings, token and certificate are kept: the user's,
   /// or a scratch suite and memory for a scripted check's own server (`commandLine` false: no
   /// `--mcp` flags, and it starts whenever it's on), which can bring its own `certificate`.
+  /// `skills` is the store the Skills screen shows; without one, a store of its own (in a
+  /// scripted run, over a temporary folder).
   init(
-    create: CreateModel, presets: PresetStore, grainProfiles: GrainProfileStore? = nil, defaults: UserDefaults = .standard, secrets: (any RemoteSecretStore)? = nil,
-    certificate: AgentTLSIdentity? = nil, commandLine: Bool = true
+    create: CreateModel, presets: PresetStore, grainProfiles: GrainProfileStore? = nil, skills: SkillStore? = nil, defaults: UserDefaults = .standard,
+    secrets: (any RemoteSecretStore)? = nil, certificate: AgentTLSIdentity? = nil, commandLine: Bool = true
   ) {
-    tools = AgentTools(create: create, presets: presets, grainProfiles: grainProfiles)
+    let skills = skills ?? SkillStore.makeForApp()
+    self.skills = skills
+    tools = AgentTools(create: create, presets: presets, grainProfiles: grainProfiles, skills: skills)
     self.defaults = defaults
     // A scripted run never touches the user's Keychain.
     let secrets = secrets ?? (Automation.isRequested ? MemorySecretStore() : KeychainSecretStore(service: "Atelier Agents"))
@@ -662,43 +682,71 @@ final class AgentServer {
       return respond(error: -32700, "Expected one JSON-RPC message.", id: NSNull(), via: responder)
     }
     guard let id = message["id"], let method = message["method"] as? String else {
-      // A notification, or a response (the server sends no requests, so it's ignored).
-      if message["method"] as? String == "notifications/cancelled",
+      // A notification, or a response (the server sends no requests, so it's ignored). Only a
+      // 2025 client cancels with notifications/cancelled; a 2026-07-28 one closes the stream.
+      let modernHeader = request.headers[AgentProtocol.versionHeader].map(AgentProtocol.modernVersions.contains) ?? false
+      if !modernHeader, message["method"] as? String == "notifications/cancelled",
         let params = message["params"] as? [String: Any], let id = params["requestId"]
       {
         calls[Self.key(id)]?.cancel()
       }
       return responder.send(status: 202, body: Data())
     }
+    guard message["params"] == nil || message["params"] is [String: Any] else {
+      return respond(error: -32602, "params must be an object.", id: id, via: responder)
+    }
     let params = message["params"] as? [String: Any] ?? [:]
+    let era: AgentProtocol.Era
+    switch AgentProtocol.classify(method: method, params: params, headers: request.headers) {
+    case .success(let classified): era = classified
+    case .failure(let error):
+      return respond(error: error.code, error.message, data: error.data, id: id, status: error.httpStatus, via: responder)
+    }
+    let context = ToolContext(isRemote: isRemote)
+    func answer(_ result: [String: Any]) {
+      respond(result: AgentProtocol.envelope(result, era: era, method: method, serverInfo: Self.serverInfo), id: id, via: responder)
+    }
     switch method {
-    case "initialize":
+    case "initialize" where !era.isModern:
+      // A 2025 client asking for 2026-07-28 here is answered with the newest 2025 version: the
+      // newer revision has no initialize.
       let requested = params["protocolVersion"] as? String ?? ""
       respond(
         result: [
-          "protocolVersion": Self.protocolVersions.contains(requested) ? requested : Self.protocolVersions[0],
-          "capabilities": ["tools": ["listChanged": false]],
-          "serverInfo": [
-            "name": "atelier", "title": "Atelier",
-            "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0",
-          ],
+          "protocolVersion": AgentProtocol.legacyVersions.contains(requested) ? requested : AgentProtocol.legacyVersions[0],
+          "capabilities": AgentProtocol.capabilities(),
+          "serverInfo": Self.serverInfo,
           "instructions": Self.instructions,
         ], id: id, via: responder)
-    case "ping":
+    case "ping" where !era.isModern:
       respond(result: [:], id: id, via: responder)
+    case "server/discover":
+      answer([
+        "supportedVersions": AgentProtocol.allVersions, "capabilities": AgentProtocol.capabilities(), "instructions": Self.instructions,
+      ])
     case "tools/list":
-      respond(result: ["tools": AgentTools.definitions], id: id, via: responder)
+      answer(["tools": AgentTools.definitions])
     case "tools/call":
       callTool(
-        params, id: id, streaming: request.headers["accept"]?.contains("text/event-stream") == true,
-        context: ToolContext(isRemote: isRemote), via: responder)
+        params, id: id, era: era, streaming: request.headers["accept"]?.contains("text/event-stream") == true,
+        context: context, via: responder)
+    case _ where SkillsRPC.methods.contains(method):
+      let rpc = SkillsRPC(store: skills)
+      Task { @MainActor in
+        switch await rpc.handle(method, params: params, isRemote: context.isRemote) {
+        case .success(let result): answer(result)
+        case .failure(let error): respond(error: error.code, error.message, id: id, via: responder)
+        }
+      }
     default:
-      respond(error: -32601, "Method not found: \(method)", id: id, via: responder)
+      // The 2026-07-28 transport answers an unknown method (ping and subscriptions/listen
+      // included, which this server doesn't have) with 404.
+      respond(error: -32601, "Method not found: \(method)", id: id, status: era.isModern ? 404 : 200, via: responder)
     }
   }
 
   private func callTool(
-    _ params: [String: Any], id: Any, streaming: Bool, context: ToolContext, via responder: LoopbackHTTPServer.Responder
+    _ params: [String: Any], id: Any, era: AgentProtocol.Era, streaming: Bool, context: ToolContext, via responder: LoopbackHTTPServer.Responder
   ) {
     guard let name = params["name"] as? String else {
       return respond(error: -32602, "tools/call needs a tool name.", id: id, via: responder)
@@ -709,7 +757,9 @@ final class AgentServer {
     let arguments = params["arguments"] as? [String: Any] ?? [:]
     let progressToken = (params["_meta"] as? [String: Any])?["progressToken"]
     let key = Self.key(id)
-    if streaming { responder.startEvents() }
+    // Proxies must pass a modern stream's events on as they come (Streamable HTTP: Receiving
+    // Messages).
+    if streaming { responder.startEvents(headers: era.isModern ? ["X-Accel-Buffering": "no"] : [:]) }
     let task = Task { @MainActor [tools] in
       let keepAlive = streaming ? Task {
         while !Task.isCancelled {
@@ -741,7 +791,9 @@ final class AgentServer {
         result = ["content": [["type": "text", "text": message]], "isError": true]
       }
       calls[key] = nil
-      let response: [String: Any] = ["jsonrpc": "2.0", "id": id, "result": result]
+      let response: [String: Any] = [
+        "jsonrpc": "2.0", "id": id, "result": AgentProtocol.envelope(result, era: era, method: "tools/call", serverInfo: Self.serverInfo),
+      ]
       if streaming {
         Self.send(response, streamingTo: responder)
         responder.finish()
@@ -750,22 +802,33 @@ final class AgentServer {
       }
     }
     calls[key] = task
-    // A client that hangs up (some give up on calls after a few minutes) doesn't stop the run:
-    // generate keeps it going as a job for get_job.
+    if era.isModern {
+      // On 2026-07-28 a client cancels by closing the response stream. That stops this call's
+      // wait; a job it started keeps running for get_job, as when a 2025 client hangs up, and
+      // only cancel_job stops it.
+      responder.onClientClose { Task { @MainActor in task.cancel() } }
+    }
+    // A 2025 client that hangs up (some give up on calls after a few minutes) doesn't stop the
+    // run: generate keeps it going as a job for get_job.
   }
 
   private func respond(result: [String: Any], id: Any, via responder: LoopbackHTTPServer.Responder) {
     Self.send(["jsonrpc": "2.0", "id": id, "result": result], via: responder)
   }
 
-  private func respond(error code: Int, _ message: String, id: Any, via responder: LoopbackHTTPServer.Responder) {
-    Self.send(
-      ["jsonrpc": "2.0", "id": id, "error": ["code": code, "message": message]], via: responder)
+  /// A JSON-RPC error; `status` is the HTTP status, 400 or 404 for the 2026-07-28 transport's
+  /// protocol errors and 200 otherwise.
+  private func respond(
+    error code: Int, _ message: String, data: [String: Any]? = nil, id: Any, status: Int = 200, via responder: LoopbackHTTPServer.Responder
+  ) {
+    var error: [String: Any] = ["code": code, "message": message]
+    if let data { error["data"] = data }
+    Self.send(["jsonrpc": "2.0", "id": id, "error": error], status: status, via: responder)
   }
 
-  private static func send(_ message: [String: Any], via responder: LoopbackHTTPServer.Responder) {
+  private static func send(_ message: [String: Any], status: Int = 200, via responder: LoopbackHTTPServer.Responder) {
     let data = (try? JSONSerialization.data(withJSONObject: message, options: .withoutEscapingSlashes)) ?? Data()
-    responder.send(status: 200, contentType: "application/json", body: data)
+    responder.send(status: status, contentType: "application/json", body: data)
   }
 
   private static func send(_ message: [String: Any], streamingTo responder: LoopbackHTTPServer.Responder) {

@@ -357,10 +357,10 @@ final nonisolated class LoopbackHTTPServer: Sendable {
       write(Self.head(status: status, headers: all) + body, final: true)
     }
 
-    func startEvents() {
+    func startEvents(headers: [String: String] = [:]) {
       write(
         Self.head(
-          status: 200, headers: ["Content-Type": "text/event-stream", "Cache-Control": "no-cache"]),
+          status: 200, headers: headers.merging(["Content-Type": "text/event-stream", "Cache-Control": "no-cache"]) { _, fixed in fixed }),
         final: false)
     }
 

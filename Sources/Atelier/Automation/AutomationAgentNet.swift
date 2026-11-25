@@ -86,8 +86,9 @@ extension Automation {
   /// network address refused). Then ports: a port held by a socket of its own names Atelier in
   /// Status with Try Again on, and Try Again listens once it's free, for the plain port and an
   /// HTTPS Port; a Compute server of its own taking the automatic HTTPS port moves HTTPS, and each
-  /// field refuses the other's port. Needs no model and changes nothing in the project, the user's
-  /// settings or Keychain.
+  /// field refuses the other's port. Every request above is a 2025 client's; `modernChecks` adds a
+  /// 2026-07-28 client's (headers and `_meta`) and the rules between the two. Needs no model and
+  /// changes nothing in the project, the user's settings or Keychain.
   ///
   ///   Atelier --agent-net-check --project NAME [--quit]
   static func agentNetCheck(_ model: CreateModel, presets: PresetStore) {
@@ -150,8 +151,8 @@ extension Automation {
       let trusting = URLSession(configuration: .ephemeral, delegate: AutomationAnchoredTrust(anchor: testCertificate.authority), delegateQueue: nil)
       func post(
         _ host: String, _ message: [String: Any], token: String? = nil, origin: String? = nil, scheme: String = "http",
-        port: Int = port, session: URLSession = session
-      ) async -> (status: Int, body: [String: Any], authenticate: String?) {
+        port: Int = port, session: URLSession = session, headers: [String: String] = [:]
+      ) async -> (status: Int, body: [String: Any], authenticate: String?, raw: String) {
         var request = URLRequest(url: URL(string: AgentAuth.endpoint(scheme: scheme, host: host, port: port))!)
         request.httpMethod = "POST"
         request.timeoutInterval = 10
@@ -159,12 +160,13 @@ extension Automation {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         if let origin { request.setValue(origin, forHTTPHeaderField: "Origin") }
+        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
         request.httpBody = try? JSONSerialization.data(withJSONObject: message)
         guard let (data, response) = try? await session.data(for: request), let http = response as? HTTPURLResponse else {
-          return (0, [:], nil)
+          return (0, [:], nil, "")
         }
         let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
-        return (http.statusCode, body, http.value(forHTTPHeaderField: "WWW-Authenticate"))
+        return (http.statusCode, body, http.value(forHTTPHeaderField: "WWW-Authenticate"), String(decoding: data, as: UTF8.self))
       }
       let list: [String: Any] = ["jsonrpc": "2.0", "id": 1, "method": "tools/list"]
       func call(_ name: String, _ arguments: [String: Any]) -> [String: Any] {
@@ -216,6 +218,8 @@ extension Automation {
       check(
         errorText(localPath.body)?.hasPrefix("Couldn't read an image") == true,
         "the same path from this Mac is read (\(errorText(localPath.body) ?? "no error"))")
+
+      await modernChecks(lan: lan, token: token, post: { host, message, token, headers in await post(host, message, token: token, headers: headers) }, check: check)
 
       started.regenerateToken()
       let old = await post(lan, list, token: token)
@@ -375,6 +379,104 @@ extension Automation {
       await computeServer.settled()
       finish()
     }
+  }
+
+  typealias AgentNetPost = (
+    _ host: String, _ message: [String: Any], _ token: String?, _ headers: [String: String]
+  ) async -> (status: Int, body: [String: Any], authenticate: String?, raw: String)
+
+  /// The 2026-07-28 protocol on the check's server (`AgentProtocol`): server/discover's fields,
+  /// modern tools/list and tools/call results, each mirrored header refused when it's missing,
+  /// wrong or doesn't match the body (-32020), base64 in Mcp-Name, an unknown version (-32022
+  /// with the supported ones), missing client capabilities (-32602), the removed ping and the
+  /// unimplemented subscriptions/listen (404 -32601), the network address without the token
+  /// (401), no paths in what another device gets, and beside them the 2025 forms: initialize
+  /// asking for 2026-07-28 answered with 2025-11-25, resources and the skills extension
+  /// declared, and tools/list without modern fields.
+  @MainActor
+  static func modernChecks(
+    lan: String, token: String,
+    post: AgentNetPost, check: (Bool, String) -> Void
+  ) async {
+    func message(_ method: String, _ params: [String: Any] = [:], version: String = "2026-07-28", capabilities: Bool = true) -> [String: Any] {
+      var meta: [String: Any] = [AgentProtocol.versionKey: version, "io.modelcontextprotocol/clientInfo": ["name": "agent-net-check", "version": "1"]]
+      if capabilities { meta[AgentProtocol.clientCapabilitiesKey] = [String: Any]() }
+      var params = params
+      params["_meta"] = meta
+      return ["jsonrpc": "2.0", "id": 50, "method": method, "params": params]
+    }
+    func headers(_ method: String, name: String? = nil, version: String = "2026-07-28") -> [String: String] {
+      var headers = ["MCP-Protocol-Version": version, "Mcp-Method": method]
+      if let name { headers["Mcp-Name"] = name }
+      return headers
+    }
+    func send(_ message: [String: Any], _ headers: [String: String], host: String = "127.0.0.1", token: String? = nil) async -> (
+      status: Int, body: [String: Any], authenticate: String?, raw: String
+    ) {
+      await post(host, message, token, headers)
+    }
+    func code(_ body: [String: Any]) -> Int? { (body["error"] as? [String: Any])?["code"] as? Int }
+
+    let discover = await send(message("server/discover"), headers("server/discover"))
+    let result = discover.body["result"] as? [String: Any] ?? [:]
+    let capabilities = result["capabilities"] as? [String: Any]
+    let skills = (capabilities?["extensions"] as? [String: Any])?[AgentProtocol.skillsExtension] as? [String: Any]
+    let info = (result["_meta"] as? [String: Any])?[AgentProtocol.serverInfoKey] as? [String: Any]
+    check(
+      discover.status == 200 && result["resultType"] as? String == "complete"
+        && result["supportedVersions"] as? [String] == ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26"]
+        && result["ttlMs"] as? Int == 3_600_000 && result["cacheScope"] as? String == "private" && info?["name"] as? String == "atelier"
+        && skills?["directoryRead"] as? Bool == true && capabilities?["resources"] != nil && result["instructions"] is String,
+      "modern server/discover: resultType, four versions, ttlMs, cacheScope, serverInfo, the skills extension (got \(discover.status))")
+    let tools = await send(message("tools/list"), headers("tools/list"))
+    let toolsResult = tools.body["result"] as? [String: Any]
+    check(
+      tools.status == 200 && toolsResult?["ttlMs"] as? Int == 3_600_000 && (toolsResult?["tools"] as? [Any])?.isEmpty == false,
+      "modern tools/list carries ttlMs")
+    let call = await send(message("tools/call", ["name": "list_skills", "arguments": [String: Any]()]), headers("tools/call", name: "list_skills"))
+    let callResult = call.body["result"] as? [String: Any]
+    check(call.status == 200 && callResult?["resultType"] as? String == "complete" && callResult?["ttlMs"] == nil, "modern tools/call: resultType, no ttlMs")
+
+    let noHeader = await send(message("tools/list"), [:])
+    check(noHeader.status == 400 && code(noHeader.body) == -32020, "modern _meta without MCP-Protocol-Version: 400 -32020 (got \(noHeader.status) \(code(noHeader.body) ?? 0))")
+    let mismatch = await send(message("tools/list"), headers("tools/list", version: "2025-11-25"))
+    check(mismatch.status == 400 && code(mismatch.body) == -32020, "MCP-Protocol-Version unlike _meta's: 400 -32020")
+    let wrongMethod = await send(message("tools/list"), headers("resources/list"))
+    check(wrongMethod.status == 400 && code(wrongMethod.body) == -32020, "wrong Mcp-Method: 400 -32020")
+    let noName = await send(message("tools/call", ["name": "list_skills", "arguments": [String: Any]()]), headers("tools/call"))
+    check(noName.status == 400 && code(noName.body) == -32020, "tools/call without Mcp-Name: 400 -32020")
+    let encoded = "=?base64?\(Data("list_skills".utf8).base64EncodedString())?="
+    let base64 = await send(message("tools/call", ["name": "list_skills", "arguments": [String: Any]()]), headers("tools/call", name: encoded))
+    check(base64.status == 200 && (base64.body["result"] as? [String: Any])?["resultType"] as? String == "complete", "a base64 Mcp-Name: 200 (got \(base64.status))")
+    let old = await send(message("tools/list", version: "1900-01-01"), headers("tools/list", version: "1900-01-01"))
+    let data = (old.body["error"] as? [String: Any])?["data"] as? [String: Any]
+    check(
+      old.status == 400 && code(old.body) == -32022 && (data?["supported"] as? [String])?.first == "2026-07-28" && data?["requested"] as? String == "1900-01-01",
+      "protocol version 1900-01-01: 400 -32022 with the supported versions (got \(old.status) \(code(old.body) ?? 0))")
+    let noCapabilities = await send(message("tools/list", capabilities: false), headers("tools/list"))
+    check(noCapabilities.status == 400 && code(noCapabilities.body) == -32602, "missing clientCapabilities: 400 -32602")
+    let ping = await send(message("ping"), headers("ping"))
+    check(ping.status == 404 && code(ping.body) == -32601, "modern ping: 404 -32601 (got \(ping.status))")
+    let listen = await send(message("subscriptions/listen"), headers("subscriptions/listen"))
+    check(listen.status == 404 && code(listen.body) == -32601, "subscriptions/listen: 404 -32601")
+    let remoteMissing = await send(message("server/discover"), headers("server/discover"), host: lan)
+    check(remoteMissing.status == 401, "modern \(lan) without the token: 401 (got \(remoteMissing.status))")
+    let remote = await send(message("server/discover"), headers("server/discover"), host: lan, token: token)
+    let remoteCall = await send(message("tools/call", ["name": "list_skills", "arguments": [String: Any]()]), headers("tools/call", name: "list_skills"), host: lan, token: token)
+    check(
+      remote.status == 200 && remoteCall.status == 200 && ![remote.raw, remoteCall.raw].contains { $0.contains("/Users/") || $0.contains(NSHomeDirectory()) },
+      "modern \(lan) with the token: 200 and no paths")
+
+    let initialize = await send(["jsonrpc": "2.0", "id": 51, "method": "initialize", "params": ["protocolVersion": "2026-07-28", "capabilities": [String: Any]()]], [:])
+    let initialized = initialize.body["result"] as? [String: Any]
+    let initCapabilities = initialized?["capabilities"] as? [String: Any]
+    check(
+      initialized?["protocolVersion"] as? String == "2025-11-25" && initCapabilities?["resources"] != nil
+        && (initCapabilities?["extensions"] as? [String: Any])?[AgentProtocol.skillsExtension] != nil && initialized?["resultType"] == nil,
+      "legacy initialize asking for 2026-07-28: 2025-11-25, with resources and the skills extension")
+    let legacyTools = await send(["jsonrpc": "2.0", "id": 52, "method": "tools/list"], [:])
+    let legacyResult = legacyTools.body["result"] as? [String: Any]
+    check(legacyTools.status == 200 && legacyResult?["tools"] != nil && legacyResult?["resultType"] == nil && legacyResult?["ttlMs"] == nil, "legacy tools/list has no resultType or ttlMs")
   }
 }
 #endif

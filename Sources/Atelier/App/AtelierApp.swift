@@ -17,6 +17,8 @@ struct AtelierApp: App {
   @State private var remoteServer: RemoteServer
   #if os(macOS)
     @State private var agents: AgentServer
+    /// The skills agents get; in a scripted run, a temporary folder of the user's own.
+    @State private var skills: SkillStore
     @State private var updater = Updater()
   #endif
   @State private var fileDialogs = FileDialogs()
@@ -76,7 +78,9 @@ struct AtelierApp: App {
       AppLifecycle.onWillTerminate { TemporaryFiles.cleanAtQuit() }
     }
     #if os(macOS)
-      _agents = State(initialValue: AgentServer(create: create, presets: presets, grainProfiles: edit.profiles))
+      let skills = SkillStore.makeForApp()
+      _skills = State(initialValue: skills)
+      _agents = State(initialValue: AgentServer(create: create, presets: presets, grainProfiles: edit.profiles, skills: skills))
       AppLifecycle.workUnderway = { create.workUnderway }
       Automation.remoteServer = remoteServer
       Automation.editModel = edit
