@@ -976,6 +976,7 @@ struct ZoomMenuItems: View {
     Button("Zoom to Fit") { canvas.zoomToFit() }
       .keyboardShortcut("9", modifiers: .command)
     Button("Zoom to Fill") { canvas.zoomToFill() }
+      .keyboardShortcut("f", modifiers: .command)
     Button("Actual Size") { canvas.zoom(to: 1) }
       .keyboardShortcut("0", modifiers: .command)
   }

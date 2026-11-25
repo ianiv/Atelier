@@ -32,6 +32,7 @@ The iPad version works the same way, with a few differences noted under "On iPad
 | ⇧⌘V | Paste an image onto the canvas |
 | ⌘+ / ⌘− | Zoom the canvas (or the Video Editor's track) in / out |
 | ⌘9 | Zoom to fit |
+| ⌘F | Zoom to fill |
 | Space, ← / →, J / K / L | Video Editor: play or pause, step a frame, play backwards / pause / play |
 | ⌘B | Video Editor: split the clip at the playhead |
 | ⌘0 | Actual size |
