@@ -175,8 +175,9 @@ struct SettingDescriptor: Identifiable {
   var control: SettingControl
   var keywords: [String] = []
   let applies: (ModelTraits) -> Bool
-  /// Shown, since the model family uses it, but disabled because this model ignores it (Shift on
-  /// MiniMax H3 Image, which the engine always runs at 1). Values still read and write as usual.
+  /// Shown, since the model family uses it, but disabled because this model ignores it
+  /// (Resolution-Dependent Shift on MiniMax H3 Image, which `ModelZoo.isResolutionDependentShiftAvailable`
+  /// doesn't list). Values still read and write as usual.
   var hasNoEffect: (ModelTraits) -> Bool = { _ in false }
   /// The same for one choice of a picker: shown, but disabled because this model can't run it
   /// (the ComfyUI samplers on Stable Cascade and MiniMax H3 video).
@@ -429,11 +430,11 @@ enum SettingsRegistry {
       float(
         "shift", \.shift, "Shift", .sampling,
         "Shifts the noise schedule toward high noise; flow models like 3 to 6.", range: 0...12,
-        step: 0.1, applies: flow
-      ).withoutEffect { $0.isMiniMaxH3Image },
+        step: 0.1, applies: flow),
       toggle(
         "resolutionDependentShift", \.resolutionDependentShift, "Resolution-Dependent Shift",
-        .sampling, "Scale the shift with image size. Off uses Shift as is.", applies: flow),
+        .sampling, "Scale the shift with image size. Off uses Shift as is.", applies: flow
+      ).withoutEffect { $0.isMiniMaxH3Image },
       float(
         "shiftForAudio", \.shiftForAudio, "Audio Shift", .sampling,
         "Shifts the soundtrack's noise schedule, as Shift does the video's.", range: 0...12,

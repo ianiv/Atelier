@@ -30,9 +30,9 @@ nonisolated enum StrengthSteps {
   /// sampler's discretization (`LocalImageGenerator.sampler(from:)`). Nil where the steps run
   /// aren't the user's to count: a model `ModelZoo` doesn't know (a server's), the fixed sigma
   /// grids of HyperFlow H3 Flash, Würstchen, and samplers on manual timesteps or sigmas. MiniMax
-  /// H3 Image's grids are counted (`FixedGrid.ddimTrailing`). MiniMax H3 Image ignores Shift
-  /// (the engine runs it at 1, as ComfyUI does), and a `scheduler` other than the sampler's own
-  /// counts on that schedule (`Denoiser.ScheduledDiscretization`).
+  /// H3 Image's grids are counted (`FixedGrid.ddimTrailing`), shifted by Shift as the engine
+  /// shifts them, and a `scheduler` other than the sampler's own counts on that schedule
+  /// (`Denoiser.ScheduledDiscretization`).
   static func start(
     model: String, sampler: DataModels.SamplerType, steps: Int, strength: Float, shift: Double,
     resolutionDependentShift: Bool, width: Int, height: Int, tile: (width: Int, height: Int)? = nil,
@@ -66,8 +66,6 @@ nonisolated enum StrengthSteps {
       let units = (width: width / 64, height: height / 64)
       let tiled = tile.map { (width: min($0.width / 64, units.width), height: min($0.height / 64, units.height)) } ?? units
       runShift = ModelZoo.shiftFor((width: UInt16(clamping: tiled.width), height: UInt16(clamping: tiled.height)), version: version)
-    } else if version == .minimaxH3Image {
-      runShift = 1
     }
     return start(
       parameterization: parameterization, objective: ModelZoo.objectiveForModel(model), version: version,
@@ -282,8 +280,7 @@ extension CreateModel {
         text: "Runs all \(steps) steps",
         help: "With an input image on the canvas, Strength below 1 starts partway into the steps.", dimmed: true)
     }
-    // MiniMax H3 Image runs at Shift 1 whatever the setting.
-    let takesShift = SettingsRegistry.byID["shift"]?.applies(traits) == true && !traits.isMiniMaxH3Image
+    let takesShift = SettingsRegistry.byID["shift"]?.applies(traits) == true
     let hint = StrengthSteps.hint(start, strength: settings.strength, shift: takesShift ? Double(settings.shift) : nil)
     return SettingHint(text: hint.text, help: hint.help)
   }

@@ -227,7 +227,8 @@ nonisolated enum ModelDefaults {
     // its own sigma grid. The engine samples that grid with Euler only for DDIM Trailing at a step
     // count that has one (`LocalImageGenerator.sampler(from:)`, `MiniMaxH3Layout.sigmaGrids`), so
     // these defaults are the native schedule; any other sampler or step count runs as on other
-    // flow models. The engine ignores Shift for it (always 1), as ComfyUI does. Tuned for about 2,048 x 2,048 pixels of
+    // flow models. Shift 1 runs that grid as trained; other values shift it, as Draw Things does
+    // (ComfyUI ignores Shift for this model). Tuned for about 2,048 x 2,048 pixels of
     // area; the size popover offers up to 48 megapixels for it (`SizePreset.largeMegapixels`).
     Fallback(
       prefix: "", steps: 6, guidanceScale: 1, shift: 1,
