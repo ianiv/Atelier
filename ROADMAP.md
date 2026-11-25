@@ -22,6 +22,10 @@ Planned work that isn't built yet. Items marked **User request** or **User-repor
   - **Keep original texture:** the model's low band (light, colour, mood) under the original's high band, so pores, grain, hair and sharpness survive the VAE round trip, with less identity drift.
   - **Keep original color:** the original's low band under the model's high band, for refine / add-detail passes: new detail without colour or exposure drift (what Match Colors… corrects today, more exactly).
 
+## Projects
+
+- **Configurable projects folder.** Projects always live in `~/Pictures/Atelier/Projects/`. Let Settings choose the folder, like the models folder. Decide what happens to the projects already there (move them, or leave them and just switch), and handle a folder that goes missing (an unmounted external drive). The current project, session state and queued jobs, which name projects, must follow the change. On iPad the folder needs a security-scoped bookmark.
+
 ## Samplers
 
 - **DPM++ 2M Trailing breaks on MiniMax H3 Image.** At 768 px, 8 steps (seed 1234, 2026-11-21), the result shows smeared mosaic bricks; DDIM Trailing and DPM++ 2M Karras are fine. Check whether 0.19.0 (before the Scheduler work, 5d91b6f) does the same, then find the cause (likely its schedule vs the trained sigma grid, as with LCM).
