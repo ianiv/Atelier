@@ -110,8 +110,13 @@ nonisolated enum StrengthSteps {
         fixed = grids.isEmpty ? .never : .ddimTrailing(grids: grids)
       }
     }
-    fixedGrids.withLock { $0[model] = fixed }
+    remember(fixed, for: model)
     return fixed
+  }
+
+  /// Records what `checkFixedGrid` found for `model` (and lets tests stand in for a file).
+  static func remember(_ fixed: FixedGrid, for model: String) {
+    fixedGrids.withLock { $0[model] = fixed }
   }
 
   /// The start for a parameterization and sampler: the discretization each sampler type is built
