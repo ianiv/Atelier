@@ -82,6 +82,28 @@ struct StrengthStepsTests {
     #expect(karras.startStep > plain.startStep)
   }
 
+  /// MiniMax H3 Image takes Shift as the engine does, on top of its grid: at Shift 3 the 6-step
+  /// grid becomes (1, .99, .96, .90, .77, .47, 0), so Strength 0.5 starts about 92% of the way
+  /// from step 4 to step 5, later than at Shift 1, a Simple scheduler counts the same, and the
+  /// hint names the Shift.
+  @Test func h3ImageTakesShift() throws {
+    let grid = [1.0, 0.9675, 0.8875, 0.75, 0.5328, 0.2320, 0.0]
+    let grids: [Int: [Double]] = [6: grid]
+    func start(
+      _ shift: Double, _ sampler: DataModels.SamplerType = .dDIMTrailing, _ scheduler: Denoiser.Scheduler = .samplerDefault
+    ) -> StrengthSteps.Start? {
+      StrengthSteps.start(
+        parameterization: Self.flow, objective: Self.flowObjective, version: .minimaxH3Image, sampler: sampler,
+        sampling: Sampling(steps: 6, shift: shift), strength: 0.5, h3ImageGrids: grids, scheduler: scheduler)
+    }
+    let shift3 = try #require(start(3))
+    #expect(abs(shift3.startStep - 4.92) < 0.01, "\(shift3.startStep)")
+    #expect(shift3.startStep > (try #require(start(1))).startStep)
+    let simple = try #require(start(3, .eulerA, .simple))
+    #expect(abs(simple.startStep - shift3.startStep) < 0.01, "\(simple.startStep) vs \(shift3.startStep)")
+    #expect(StrengthSteps.hint(shift3, strength: 0.5, shift: 3).text == "≈1.1 of 6 steps at Shift 3")
+  }
+
   /// Flow models on Karras sigmas count from the sigma each step is told
   /// (`KarrasDiscretization.timestep(for:)` = sigma × 1000): Strength 1 starts at the top, and
   /// lower Strength starts later.

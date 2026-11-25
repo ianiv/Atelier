@@ -9,7 +9,9 @@ import Testing
 /// the engine keeps every step at or above the grid's last nonzero sigma (0.232): Karras and
 /// exponential end there, and the others' nonzero sigmas are remapped linearly onto
 /// [0.232, top] when they'd go lower (`ScheduledDiscretization.floored`), so the H3 tables are
-/// ComfyUI's with that floor.
+/// ComfyUI's with that floor. ComfyUI ignores Shift for H3 Image; the engine shifts the floored
+/// schedule as Draw Things shifts any flow model's, so at Shift s each sigma is
+/// s·σ / (1 + (s − 1)·σ) of ComfyUI's, and only Shift 1 matches ComfyUI.
 @Suite(.tags(.smoke))
 struct ScheduleTests {
   private static let flow = Denoiser.Parameterization.rf(.init())
@@ -90,16 +92,35 @@ struct ScheduleTests {
     }
   }
 
-  /// ComfyUI's `MiniMaxH3ImageModelSampling` ignores the shift, and so does the engine.
-  @Test func h3ImageMatchesComfyUIWhateverTheShift() {
-    for shift in [1.0, 3.0] {
+  /// Draw Things' flow shift, `time_snr_shift`.
+  private static func shifted(_ sigma: Double, _ shift: Double) -> Double {
+    shift * sigma / (1 + (shift - 1) * sigma)
+  }
+
+  /// At Shift 1, H3 Image's schedules are ComfyUI's `MiniMaxH3ImageModelSampling` ones (with the
+  /// floor).
+  @Test func h3ImageAtShift1MatchesComfyUI() {
+    for (scheduler, expected) in Self.h3ImageAt6 {
+      Self.expectClose(Self.sigmas(scheduler, Self.flow, steps: 6, shift: 1, grid: Self.grid), expected, "\(scheduler) @6")
+    }
+    for (scheduler, expected) in Self.h3ImageAt8 {
+      Self.expectClose(Self.sigmas(scheduler, Self.flow, steps: 8, shift: 1, grid: Self.grid), expected, "\(scheduler) @8")
+    }
+  }
+
+  /// At any other Shift, each sigma is the Shift-1 one shifted, as the engine shifts H3 Image's
+  /// grid for DDIM Trailing (`RFSigmaGridDiscretization`).
+  @Test func h3ImageShiftsComfyUISchedule() {
+    for shift in [3.0, 0.5] {
       for (scheduler, expected) in Self.h3ImageAt6 {
         Self.expectClose(
-          Self.sigmas(scheduler, Self.flow, steps: 6, shift: shift, grid: Self.grid), expected, "\(scheduler) @6 shift \(shift)")
+          Self.sigmas(scheduler, Self.flow, steps: 6, shift: shift, grid: Self.grid), expected.map { Self.shifted($0, shift) },
+          "\(scheduler) @6 shift \(shift)")
       }
       for (scheduler, expected) in Self.h3ImageAt8 {
         Self.expectClose(
-          Self.sigmas(scheduler, Self.flow, steps: 8, shift: shift, grid: Self.grid), expected, "\(scheduler) @8 shift \(shift)")
+          Self.sigmas(scheduler, Self.flow, steps: 8, shift: shift, grid: Self.grid), expected.map { Self.shifted($0, shift) },
+          "\(scheduler) @8 shift \(shift)")
       }
     }
   }
@@ -113,15 +134,19 @@ struct ScheduleTests {
     }
   }
 
-  /// No H3 Image step sits below the grid's last nonzero sigma, at any step count, and no two
-  /// steps repeat.
+  /// No H3 Image step sits below the grid's last nonzero sigma (where the Shift moves it), at any
+  /// step count, and no two steps repeat.
   @Test func h3ImageNeverGoesBelowTheGridFloor() throws {
-    for scheduler in Denoiser.Scheduler.allCases where scheduler != .samplerDefault {
-      for steps in [1, 4, 6, 8, 20, 50] {
-        let sigmas = try #require(Self.sigmas(scheduler, Self.flow, steps: steps, shift: 1, grid: Self.grid))
-        let nonzero = sigmas.dropLast()
-        #expect(nonzero.allSatisfy { $0 >= Self.grid[5] - 1e-12 }, "\(scheduler) @\(steps): \(sigmas)")
-        #expect(zip(nonzero, nonzero.dropFirst()).allSatisfy { $0 > $1 } || steps == 1, "\(scheduler) @\(steps): \(sigmas)")
+    for shift in [1.0, 3.0, 0.5] {
+      let floor = Self.shifted(Self.grid[5], shift)
+      for scheduler in Denoiser.Scheduler.allCases where scheduler != .samplerDefault {
+        for steps in [1, 4, 6, 8, 20, 50] {
+          let sigmas = try #require(Self.sigmas(scheduler, Self.flow, steps: steps, shift: shift, grid: Self.grid))
+          let nonzero = sigmas.dropLast()
+          #expect(nonzero.allSatisfy { $0 >= floor - 1e-12 }, "\(scheduler) @\(steps) shift \(shift): \(sigmas)")
+          #expect(
+            zip(nonzero, nonzero.dropFirst()).allSatisfy { $0 > $1 } || steps == 1, "\(scheduler) @\(steps) shift \(shift): \(sigmas)")
+        }
       }
     }
   }
