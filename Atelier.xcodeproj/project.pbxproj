@@ -47,6 +47,7 @@
 		5A4E1C0D2B3F4A6E8D9C7B04 /* ShareTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A4E1C0D2B3F4A6E8D9C7B03 /* ShareTests.swift */; };
 		C1C8FF826A372CCCEC268435 /* RemoteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF232DA4CD210F5B739657F4 /* RemoteTests.swift */; };
 		849CCDE48F9A76E9FEAE8E8B /* AgentAccessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE226E20EA994092E7F84E7E /* AgentAccessTests.swift */; };
+		DF6B15A5F760E6616F0236CB /* LoopbackHTTPServerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90E574A52C60D5CE0F4FC53C /* LoopbackHTTPServerTests.swift */; };
 		B7A1F0C2B3D4A59687786204 /* QueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A1F0C2B3D4A59687786304 /* QueueTests.swift */; };
 		B7A1F0C2B3D4A5968778CA01 /* InspectorLoRAsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A1F0C2B3D4A5968778CA02 /* InspectorLoRAsTests.swift */; };
 		7A1C0E5D00000000000000B1 /* TriggerWordsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A1C0E5D00000000000000B2 /* TriggerWordsTests.swift */; };
@@ -411,6 +412,7 @@
 		5A4E1C0D2B3F4A6E8D9C7B03 /* ShareTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareTests.swift; sourceTree = "<group>"; };
 		AF232DA4CD210F5B739657F4 /* RemoteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTests.swift; sourceTree = "<group>"; };
 		CE226E20EA994092E7F84E7E /* AgentAccessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentAccessTests.swift; sourceTree = "<group>"; };
+		90E574A52C60D5CE0F4FC53C /* LoopbackHTTPServerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopbackHTTPServerTests.swift; sourceTree = "<group>"; };
 		B7A1F0C2B3D4A59687786304 /* QueueTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueueTests.swift; sourceTree = "<group>"; };
 		B7A1F0C2B3D4A5968778CA02 /* InspectorLoRAsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorLoRAsTests.swift; sourceTree = "<group>"; };
 		7A1C0E5D00000000000000B2 /* TriggerWordsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TriggerWordsTests.swift; sourceTree = "<group>"; };
@@ -1158,6 +1160,7 @@
 				B7A1F0C2B3D4A59687786304 /* QueueTests.swift */,
 				AF232DA4CD210F5B739657F4 /* RemoteTests.swift */,
 				CE226E20EA994092E7F84E7E /* AgentAccessTests.swift */,
+				90E574A52C60D5CE0F4FC53C /* LoopbackHTTPServerTests.swift */,
 				B7A1F0C2B3D4A5968778CA02 /* InspectorLoRAsTests.swift */,
 				7A1C0E5D00000000000000B2 /* TriggerWordsTests.swift */,
 				7D0C1A5E00000000000000B2 /* ToolUITests.swift */,
@@ -1721,6 +1724,7 @@
 				B7A1F0C2B3D4A59687786204 /* QueueTests.swift in Sources */,
 				C1C8FF826A372CCCEC268435 /* RemoteTests.swift in Sources */,
 				849CCDE48F9A76E9FEAE8E8B /* AgentAccessTests.swift in Sources */,
+				DF6B15A5F760E6616F0236CB /* LoopbackHTTPServerTests.swift in Sources */,
 				B7A1F0C2B3D4A5968778CA01 /* InspectorLoRAsTests.swift in Sources */,
 				7A1C0E5D00000000000000B1 /* TriggerWordsTests.swift in Sources */,
 				7D0C1A5E00000000000000B1 /* ToolUITests.swift in Sources */,

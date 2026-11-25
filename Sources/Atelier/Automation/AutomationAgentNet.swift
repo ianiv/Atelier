@@ -501,7 +501,9 @@ extension Automation {
       remote.status == 200 && remoteCall.status == 200 && ![remote.raw, remoteCall.raw].contains { $0.contains("/Users/") || $0.contains(NSHomeDirectory()) },
       "modern \(lan) with the token: 200 and no paths")
 
-    // A client that half-closes once its request is sent still gets the whole answer.
+    // A client that half-closes once its request is sent still gets the whole answer. Every tool
+    // slow enough to prove the FIN came first needs a model or a job, so LoopbackHTTPServerTests
+    // pins that with a handler that answers 800 ms after the half-close.
     let halfClosed = await Task.detached { halfClosedCall(port: port) }.value
     check(
       halfClosed.contains("200 OK") && halfClosed.contains("\"resultType\":\"complete\"") && !halfClosed.contains("Cancelled."),

@@ -345,8 +345,11 @@ nonisolated struct SkillWriteJob: @unchecked Sendable {
     let token = UUID().uuidString
     let staging = userDirectory.appending(path: ".save-\(token)", directoryHint: .isDirectory)
     let held = userDirectory.appending(path: ".held-\(token)", directoryHint: .isDirectory)
+    // Set when the swap couldn't put either folder back: the staging folder is then the only copy
+    // of the new content and must stay.
+    var keepsStaging = false
     defer {
-      try? manager.removeItem(at: staging)
+      if !keepsStaging { try? manager.removeItem(at: staging) }
       try? manager.removeItem(at: held)
     }
     try manager.copyItem(at: old, to: staging)
@@ -381,30 +384,47 @@ nonisolated struct SkillWriteJob: @unchecked Sendable {
       }
     }
     try plan.skillFile.write(to: staging.appending(path: SkillScanner.skillFileName))
-    try swap(staging, replacing: old)
+    try swap(staging, replacing: old, keepsStaging: &keepsStaging)
   }
 
-  /// Puts the finished folder at `destination` and the old one in the Trash. If the last move
-  /// fails, the old folder comes back from the Trash.
-  private func swap(_ staging: URL, replacing old: URL) throws {
+  /// Puts the finished folder at `destination` and the old one in the Trash (or, where the
+  /// volume has no Trash and in scripted runs, moved aside and deleted). If the last move fails,
+  /// the old folder comes back; if that fails too, neither is lost: the error says where each one
+  /// is, and `keepsStaging` tells `run` to leave the new one.
+  private func swap(_ staging: URL, replacing old: URL, keepsStaging: inout Bool) throws {
     let manager = FileManager.default
     let renamed = destination.standardizedFileURL.path != old.standardizedFileURL.path
     if renamed, SkillScanner.stat(destination) != nil { throw SkillStore.Failure("You already have a skill named “\(destination.lastPathComponent)”.") }
-    var removed: NSURL?
+    var removed: URL?
+    var trashed = false
     if usesTrash {
-      try manager.trashItem(at: old, resultingItemURL: &removed)
-    } else {
+      var result: NSURL?
+      // trashItem throws on a volume without a Trash; moving aside still works there.
+      if (try? manager.trashItem(at: old, resultingItemURL: &result)) != nil, let result = result as URL? {
+        removed = result
+        trashed = true
+      }
+    }
+    if removed == nil {
       let aside = userDirectory.appending(path: ".old-\(UUID().uuidString)", directoryHint: .isDirectory)
       try manager.moveItem(at: old, to: aside)
-      removed = aside as NSURL
+      removed = aside
     }
     do {
       try manager.moveItem(at: staging, to: destination)
     } catch {
-      if let removed = removed as URL? { try? manager.moveItem(at: removed, to: old) }
+      if let removed {
+        do {
+          try manager.moveItem(at: removed, to: old)
+        } catch {
+          keepsStaging = true
+          throw SkillStore.Failure(
+            "Couldn't save the skill: the new version is in \(staging.path) and the old one in \(removed.path). (\(error.localizedDescription))")
+        }
+      }
       throw error
     }
-    if !usesTrash, let removed = removed as URL? { try? manager.removeItem(at: removed) }
+    if !trashed, let removed { try? manager.removeItem(at: removed) }
   }
 }
 

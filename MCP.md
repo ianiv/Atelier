@@ -344,7 +344,7 @@ Agents work with this Mac's models, and their jobs run on this Mac even when Cre
 
 ## Progress and cancelling
 
-Runs stream progress (`notifications/progress`) to clients that send a progress token. Cancelling or dropping the call doesn't stop the generation, because clients also cancel calls they give up on. A 2025 client cancels with `notifications/cancelled`; a 2026-07-28 one closes the call's response stream, which ends the call at once. Either way the run carries on as a job, and `cancel_job` (or Cancel in the Queue) stops it.
+Runs stream progress (`notifications/progress`) to clients that send a progress token. Cancelling or dropping the call doesn't stop the generation, because clients also cancel calls they give up on. A 2025 client cancels with `notifications/cancelled`. A 2026-07-28 one cancels by closing the call's response stream, but an ordinary close looks to Atelier like a client that has only finished sending, so the call's wait ends when the next keep-alive to it fails (within about 15–30 seconds), and a call answered without a stream (`Accept: application/json` only) waits on until it's done. Either way the run carries on as a job, and `cancel_job` (or Cancel in the Queue) stops it.
 
 ## Long runs
 
