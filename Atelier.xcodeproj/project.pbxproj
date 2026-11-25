@@ -331,6 +331,8 @@
 		4CC606E717D3717870BFAAD5 /* AgentSkills.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48E2AEE7C724E3CF285F6D49 /* AgentSkills.swift */; };
 		932042EC9AF9F11641679525 /* SkillFrontmatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3F405E4E3E322C49701C796 /* SkillFrontmatterTests.swift */; };
 		EDCA3D670CFA1A6B6071656C /* SkillEditorModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09F0FF986060CA36F424AC7C /* SkillEditorModel.swift */; };
+		5A0B4C1FBBC37CA776106DC0 /* SkillDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48DD8C70FCC6C88D3B675B24 /* SkillDetailView.swift */; };
+		CFE770AD9288AD633CADD9EE /* SkillsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5225085597173C83F629B20F /* SkillsView.swift */; };
 		DC8F9D63796C6AF8C0E15131 /* SkillToolCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73E6E5FCA41E53E7345977C9 /* SkillToolCheck.swift */; };
 		61F1F8E5C261AFC71C8F6084 /* AgentSkillsRPC.swift in Sources */ = {isa = PBXBuildFile; fileRef = 419A89AF8F723CD38E775594 /* AgentSkillsRPC.swift */; };
 		4B924AD2992C1710E43E9B43 /* AutomationAgentSkills.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FC88BB1B5D83CCC2F00402F /* AutomationAgentSkills.swift */; };
@@ -692,6 +694,8 @@
 		48E2AEE7C724E3CF285F6D49 /* AgentSkills.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSkills.swift; sourceTree = "<group>"; };
 		D3F405E4E3E322C49701C796 /* SkillFrontmatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillFrontmatterTests.swift; sourceTree = "<group>"; };
 		09F0FF986060CA36F424AC7C /* SkillEditorModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillEditorModel.swift; sourceTree = "<group>"; };
+		48DD8C70FCC6C88D3B675B24 /* SkillDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillDetailView.swift; sourceTree = "<group>"; };
+		5225085597173C83F629B20F /* SkillsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillsView.swift; sourceTree = "<group>"; };
 		73E6E5FCA41E53E7345977C9 /* SkillToolCheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillToolCheck.swift; sourceTree = "<group>"; };
 		419A89AF8F723CD38E775594 /* AgentSkillsRPC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSkillsRPC.swift; sourceTree = "<group>"; };
 		3FC88BB1B5D83CCC2F00402F /* AutomationAgentSkills.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationAgentSkills.swift; sourceTree = "<group>"; };
@@ -771,6 +775,8 @@
 				419A89AF8F723CD38E775594 /* AgentSkillsRPC.swift */,
 				73E6E5FCA41E53E7345977C9 /* SkillToolCheck.swift */,
 				09F0FF986060CA36F424AC7C /* SkillEditorModel.swift */,
+				48DD8C70FCC6C88D3B675B24 /* SkillDetailView.swift */,
+				5225085597173C83F629B20F /* SkillsView.swift */,
 				48E2AEE7C724E3CF285F6D49 /* AgentSkills.swift */,
 				D9DCD0727791849AFE318230 /* SkillFrontmatter.swift */,
 				847B563F8C004BD0C3CB71DB /* AgentProtocol.swift */,
@@ -1437,6 +1443,8 @@
 				61F1F8E5C261AFC71C8F6084 /* AgentSkillsRPC.swift in Sources */,
 				DC8F9D63796C6AF8C0E15131 /* SkillToolCheck.swift in Sources */,
 				EDCA3D670CFA1A6B6071656C /* SkillEditorModel.swift in Sources */,
+				5A0B4C1FBBC37CA776106DC0 /* SkillDetailView.swift in Sources */,
+				CFE770AD9288AD633CADD9EE /* SkillsView.swift in Sources */,
 				4CC606E717D3717870BFAAD5 /* AgentSkills.swift in Sources */,
 				1FE0D0F4FF611014D8E9FCF3 /* SkillFrontmatter.swift in Sources */,
 				A89BD7B03B13D82BEBC6AB44 /* AgentProtocol.swift in Sources */,

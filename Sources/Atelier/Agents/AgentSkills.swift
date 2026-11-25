@@ -499,12 +499,17 @@ final class SkillStore {
 
   static var bundledDirectory: URL? { Bundle.main.resourceURL?.appending(path: "Skills", directoryHint: .isDirectory) }
 
-  /// The app's store: the user's folder, or in a scripted run a temporary one (the app's own
-  /// skills are read either way, since nothing writes them).
+  /// The app's store: the user's folder, or in a scripted run a temporary one with settings in
+  /// memory, so turning a skill off there leaves the user's list alone. The app's own skills are
+  /// read either way, since nothing writes them, except for `--agent-skills-check`, which puts
+  /// fixtures of its own in a temporary folder in their place.
   static func makeForApp() -> SkillStore {
     if Automation.isRequested {
-      let folder = FileManager.default.temporaryDirectory.appending(path: "atelier-skills-\(UUID().uuidString)", directoryHint: .isDirectory)
-      return SkillStore(userDirectory: folder, persistsScreenState: false, usesTrash: false)
+      let root = FileManager.default.temporaryDirectory.appending(path: "atelier-skills-\(UUID().uuidString)", directoryHint: .isDirectory)
+      let builtIn = CommandLine.arguments.contains("--agent-skills-check") ? root.appending(path: "builtin", directoryHint: .isDirectory) : bundledDirectory
+      return SkillStore(
+        userDirectory: root.appending(path: "user", directoryHint: .isDirectory), builtInDirectory: builtIn,
+        defaults: MemoryDefaults(suiteName: nil) ?? .standard, persistsScreenState: false, usesTrash: false)
     }
     return SkillStore()
   }
@@ -531,6 +536,19 @@ final class SkillStore {
   /// Whether any skill has edits not saved yet, for the quit warning.
   var hasUnsavedEdits: Bool { drafts.values.contains { $0.isDirty } }
   var unsavedSkillNames: [String] { drafts.values.filter(\.isDirty).map(\.skill.name).sorted() }
+
+  /// The quit warning's sentence about unsaved skill edits, or nil with none.
+  var unsavedEditsSentence: String? {
+    let names = unsavedSkillNames.map { "“\($0)”" }
+    guard !names.isEmpty else { return nil }
+    return names.count == 1
+      ? "The skill \(names[0]) has edits you haven't saved."
+      : "The skills \(names.formatted(.list(type: .and))) have edits you haven't saved."
+  }
+
+  /// Counts the times Atelier came to the front, so the Skills screen can look for changes made
+  /// on disk meanwhile.
+  var activations = 0
 
   // MARK: - Reading
 

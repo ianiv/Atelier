@@ -15,12 +15,20 @@ extension Automation {
   /// new digest; a skill turned off isn't served (-32602); this Mac's local network address with
   /// the token gets skills and no paths; a draft saved through the editor shows its new digest.
   /// The modern resources/read without Mcp-Name is refused (-32020), and the invalid skill is
-  /// listed in the store with its problem but not served. Needs no model and never touches the
-  /// user's skills, settings or Keychain.
+  /// listed in the store with its problem but not served.
   ///
-  ///   Atelier --agent-skills-check [--quit]
-  static func agentSkillsCheck(_ model: CreateModel, presets: PresetStore) {
+  /// Then the Skills screen, on the app's own store (which in this run reads these fixtures:
+  /// `SkillStore.makeForApp`): selecting a skill there makes its draft; the selection, tab and
+  /// filter survive leaving the screen and coming back and aren't written to the user's
+  /// settings; an unsaved edit stays in its draft when another skill is selected and the quit
+  /// warning names it. `--snapshot-dir DIR` saves skills-list.png, skills-instructions.png,
+  /// skills-files.png, skills-agent.png and skills-builtin.png (Atelier's own skill, with its
+  /// banner). Needs no model and never touches the user's skills, settings or Keychain.
+  ///
+  ///   Atelier --agent-skills-check [--snapshot-dir DIR] [--quit]
+  static func agentSkillsCheck(_ model: CreateModel, presets: PresetStore, navigation: Navigation) {
     let args = CommandLine.arguments
+    let snapshotDir = args.firstIndex(of: "--snapshot-dir").flatMap { $0 + 1 < args.count ? URL(fileURLWithPath: args[$0 + 1]) : nil }
     Task { @MainActor in
       var failures = 0
       func check(_ ok: Bool, _ message: String) {
@@ -28,9 +36,15 @@ extension Automation {
         print("\(ok ? "PASS" : "FAIL") \(message)")
         fflush(stdout)
       }
-      let root = FileManager.default.temporaryDirectory.appending(path: "atelier-agent-skills-\(UUID().uuidString)", directoryHint: .isDirectory)
-      let user = root.appending(path: "user", directoryHint: .isDirectory)
-      let builtIn = root.appending(path: "builtin", directoryHint: .isDirectory)
+      // The app's store, so the Skills screen shows the fixtures; its folders are temporary in a
+      // scripted run, Atelier's own included for this check.
+      guard let store = Automation.skills, let builtIn = store.builtInDirectory, builtIn != SkillStore.bundledDirectory else {
+        print("FAIL the app's skills store reads a temporary folder for Atelier's skills")
+        if args.contains("--quit") { AppLifecycle.quit() }
+        return
+      }
+      let user = store.userDirectory
+      let root = user.deletingLastPathComponent()
       var server: AgentServer?
       @MainActor func finish() {
         server?.isEnabled = false
@@ -71,7 +85,6 @@ extension Automation {
       write(builtIn, "git-workflow", ["SKILL.md": skillFile("git-workflow", "Follow this team's Git conventions")])
       check(SkillFrontmatter.validate(["name": "a"], directoryName: "a").contains { $0.field == "description" }, "the broken fixture is invalid by the rules")
 
-      let store = SkillStore(userDirectory: user, builtInDirectory: builtIn, defaults: defaults, persistsScreenState: false, usesTrash: false, loads: false)
       await store.reload()
       guard let lan = RemoteNetworkInfo.interfaces().first(where: { interface in
         guard case .v4 = interface.ip else { return false }
@@ -272,9 +285,80 @@ extension Automation {
       let imageKitText = String(decoding: skillFile("image-kit", "Makes images.", "Call `generate`, then `fake_tool_name`.\n"), as: UTF8.self)
       check(SkillToolCheck.scan([imageKitText], known: known).unknown == ["fake_tool_name"], "the tool-name check flags fake_tool_name only")
 
-      // The Skills screen's checks (screen state, --snapshot-dir shots) are added here.
+      await skillsScreenCheck(store, navigation: navigation, snapshotDir: snapshotDir, check: check)
       finish()
     }
+  }
+
+  /// The Skills screen part of `--agent-skills-check`, on the app's store.
+  @MainActor
+  private static func skillsScreenCheck(_ store: SkillStore, navigation: Navigation, snapshotDir: URL?, check: (Bool, String) -> Void) async {
+    func settle() async { try? await Task.sleep(for: .milliseconds(800)) }
+    func shot(_ name: String) {
+      guard let snapshotDir else { return }
+      snapshot(to: snapshotDir.appending(path: name))
+      check(FileManager.default.fileExists(atPath: snapshotDir.appending(path: name).path), "saved \(name)")
+    }
+    let savedSelection = UserDefaults.standard.object(forKey: "skillsSelection") as? String
+    let savedTab = UserDefaults.standard.object(forKey: "skillsTab") as? String
+    let wasSection = navigation.section
+    store.screenSelection = nil
+    store.screenSearch = ""
+    store.screenTab = SkillDetailView.Tab.instructions.rawValue
+    navigation.section = .skills
+    await settle()
+    shot("skills-list.png")
+
+    let pdfID = "user/pdf-processing"
+    store.drafts[pdfID] = nil
+    store.screenSelection = pdfID
+    await settle()
+    check(store.drafts[pdfID] != nil, "selecting a skill on the screen makes its draft")
+    shot("skills-instructions.png")
+    store.screenTab = SkillDetailView.Tab.files.rawValue
+    await settle()
+    shot("skills-files.png")
+    store.screenTab = SkillDetailView.Tab.agent.rawValue
+    await settle()
+    shot("skills-agent.png")
+
+    // Leaving the screen and coming back.
+    store.screenTab = SkillDetailView.Tab.files.rawValue
+    store.screenSearch = "pdf"
+    navigation.section = .create
+    await settle()
+    navigation.section = .skills
+    await settle()
+    check(
+      store.screenSelection == pdfID && store.screenTab == "files" && store.screenSearch == "pdf",
+      "selection, tab and filter survive leaving the screen (\(store.screenSelection ?? "none"), \(store.screenTab), \(store.screenSearch))")
+    check(
+      UserDefaults.standard.object(forKey: "skillsSelection") as? String == savedSelection && UserDefaults.standard.object(forKey: "skillsTab") as? String == savedTab,
+      "a scripted run doesn't write the screen's state to the user's settings")
+
+    // An unsaved edit, kept while another skill is shown, and named by the quit warning.
+    store.screenSearch = ""
+    if let imageKit = store.skills.first(where: { $0.id == "user/image-kit" }) {
+      let draft = store.draft(for: imageKit)
+      draft.description += " Edited."
+      store.screenSelection = pdfID
+      await settle()
+      check(store.drafts[imageKit.id]?.isDirty == true, "an unsaved edit stays in its draft while another skill is shown")
+      let warning = AppLifecycle.unsavedEdits?() ?? ""
+      check(warning.contains("image-kit"), "the quit warning names the skill with unsaved edits: \(warning)")
+      draft.revert()
+      check(AppLifecycle.unsavedEdits?() == nil, "after Revert the quit warning has nothing to name")
+    } else {
+      check(false, "found image-kit on the screen")
+    }
+
+    // Atelier's own skill: read-only, with its banner.
+    store.screenSelection = "builtIn/git-workflow"
+    store.screenTab = SkillDetailView.Tab.instructions.rawValue
+    await settle()
+    check(store.drafts["builtIn/git-workflow"]?.isBuiltIn == true, "Atelier's skill opens read-only")
+    shot("skills-builtin.png")
+    navigation.section = wasSection
   }
 }
 #endif

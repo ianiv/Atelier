@@ -12,6 +12,7 @@
 10. [Settings](settings.md): the models folder, the output folder and the performance options.
 11. [Running jobs on another device](remote.md): pairing your devices, sending images, videos, upscales and exports to another Mac or iPad over Tailscale or any network, and what a paired device can see.
 12. [Atelier for agents (MCP)](../MCP.md): letting Claude Code and other agents generate images and videos with your models, and work on the Create screen with you (Mac only).
+    - [Skills](../MCP.md#skills): instructions you write for agents, and the Skills screen where you make and edit them (Mac only).
 13. [Certificates for HTTPS](certificates.md): keeping the MCP server safe on your network, getting a Tailscale certificate or making your own (mkcert, OpenSSL, a company CA), and having agents trust it.
 
 In the app, the **?** button at the right of each screen's toolbar opens that screen's page, and Help ▸ Atelier Help (⌘?) opens this one.

@@ -88,6 +88,8 @@ enum Automation {
   static var remoteServer: RemoteServer?
   /// The app's Edit screen, for the window snapshots host and the Edit checks.
   static var editModel: EditModel?
+  /// The app's skills, which the Skills screen shows, for `--agent-skills-check`.
+  static var skills: SkillStore?
   /// Opens the Settings window, set once a window is up (`openSettings` comes from a view).
   static var openSettingsWindow: (() -> Void)?
 
@@ -173,7 +175,7 @@ enum Automation {
       return
     }
     if args.contains("--agent-skills-check") {
-      agentSkillsCheck(model, presets: presets)
+      agentSkillsCheck(model, presets: presets, navigation: navigation)
       return
     }
     if args.contains("--automask-check") {

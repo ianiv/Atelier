@@ -54,29 +54,38 @@ struct LoopbackHTTPServerTests {
     return String(decoding: reply, as: UTF8.self)
   }
 
+  /// Blocking socket calls, on a thread of their own rather than the shared task threads.
+  private static func onThread<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
+    await withCheckedContinuation { continuation in
+      Thread.detachNewThread { continuation.resume(returning: work()) }
+    }
+  }
+
   @Test func failedKeepAliveWriteReportsTheClientGone() async throws {
     let closed = Mutex(false)
     let (server, port) = try await Self.start { _, responder in
       responder.onClientClose { closed.withLock { $0 = true } }
       responder.startEvents()
-      Task.detached {
-        // A call that runs long, sending keep-alives as `callTool` does (every 15 s there).
-        for _ in 0..<200 where !closed.withLock({ $0 }) {
-          try? await Task.sleep(for: .milliseconds(25))
+      // A call that runs long, sending keep-alives as `callTool` does (every 15 s there). On a
+      // thread of its own, as the socket work below is: with every suite running at once the
+      // shared task threads can be busy for a long while.
+      Thread.detachNewThread {
+        for _ in 0..<400 where !closed.withLock({ $0 }) {
+          Thread.sleep(forTimeInterval: 0.025)
           responder.sendKeepAlive()
         }
       }
     }
     defer { server.stop() }
-    let head = await Task.detached {
+    let head = await Self.onThread {
       let fd = Self.connectAndPost(port: port)
       let head = Self.read(fd, until: "\r\n\r\n")
       // An ordinary close: a FIN, which alone isn't taken as hanging up; the writes after it fail.
       Darwin.close(fd)
       return head
-    }.value
+    }
     #expect(head.contains("200 OK") && head.contains("text/event-stream"))
-    let deadline = ContinuousClock.now + .seconds(5)
+    let deadline = ContinuousClock.now + .seconds(10)
     while !closed.withLock({ $0 }), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
     #expect(closed.withLock { $0 }, "a keep-alive write to a closed socket fails and reports the client gone")
   }
@@ -85,19 +94,19 @@ struct LoopbackHTTPServerTests {
     let closed = Mutex(false)
     let (server, port) = try await Self.start { _, responder in
       responder.onClientClose { closed.withLock { $0 = true } }
-      Task.detached {
+      Thread.detachNewThread {
         // Slow enough that the FIN has long arrived before the answer.
-        try? await Task.sleep(for: .milliseconds(800))
+        Thread.sleep(forTimeInterval: 0.8)
         responder.send(status: 200, contentType: "application/json", body: Data(#"{"answer":true}"#.utf8))
       }
     }
     defer { server.stop() }
-    let reply = await Task.detached {
+    let reply = await Self.onThread {
       let fd = Self.connectAndPost(port: port)
       defer { Darwin.close(fd) }
       shutdown(fd, SHUT_WR)
       return Self.read(fd)
-    }.value
+    }
     #expect(reply.contains("200 OK") && reply.contains(#"{"answer":true}"#), "the whole answer after a half-close")
     #expect(!closed.withLock { $0 }, "a FIN after the request isn't a hang-up")
   }
