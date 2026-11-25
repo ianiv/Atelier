@@ -216,10 +216,10 @@ struct AgentSkillsTests {
   }
 
   @Test func uriParsing() {
-    #expect(SkillURI.parse("skill://pdf-processing/SKILL.md") == ("pdf-processing", "SKILL.md"))
-    #expect(SkillURI.parse("skill://pdf-processing/templates/invoice.md") == ("pdf-processing", "templates/invoice.md"))
-    #expect(SkillURI.parse("skill://pdf-processing") == ("pdf-processing", ""))
-    #expect(SkillURI.parse("skill://a/my%20file.md") == ("a", "my file.md"))
+    #expect(SkillURI.parse("skill://pdf-processing/SKILL.md").map { [$0.skill, $0.path] } == ["pdf-processing", "SKILL.md"])
+    #expect(SkillURI.parse("skill://pdf-processing/templates/invoice.md").map { [$0.skill, $0.path] } == ["pdf-processing", "templates/invoice.md"])
+    #expect(SkillURI.parse("skill://pdf-processing").map { [$0.skill, $0.path] } == ["pdf-processing", ""])
+    #expect(SkillURI.parse("skill://a/my%20file.md").map { [$0.skill, $0.path] } == ["a", "my file.md"])
     for bad in [
       "file:///etc/passwd", "skill:/a/SKILL.md", "Skill://a/SKILL.md", "skill://", "skill://a/", "skill://a//b", "skill://a/../b",
       "skill://a/%2e%2e/b", "skill://a/%2E%2E", "skill://a/./b", "skill://a/b?x=1", "skill://a/b#f", "skill://a/%2fetc", "skill://%2e%2e/x",
