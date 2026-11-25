@@ -287,8 +287,7 @@ struct SkillEditorModelTests {
     #expect(missing.isMissing && !missing.isServed && store.served.allSatisfy { $0.name != "editing" })
     #expect(store.drafts["user/editing"] === draft && store.unsavedSkillNames == ["editing"], "the quit warning still names it")
     // Save to Recreate.
-    draft.keepMine()
-    try await draft.save()
+    try await draft.recreate()
     #expect(try skillFile(fixture).hasSuffix("Unsaved.\n"))
     #expect(FileManager.default.fileExists(atPath: fixture.user.appending(path: "editing/new.md").path))
     #expect(!FileManager.default.fileExists(atPath: fixture.user.appending(path: "editing/logo.png").path), "files only on disk went with the folder")
@@ -302,8 +301,7 @@ struct SkillEditorModelTests {
     await store.reload()
     try fixture.write("editing", ["SKILL.md": SkillFixture.skillFile("editing")])
     // A folder of that name appeared after the skill was listed as missing.
-    draft.keepMine()
-    await #expect(throws: (any Error).self) { try await draft.save() }
+    await #expect(throws: SkillEditorModel.Failure.self) { try await draft.recreate() }
     #expect(try skillFile(fixture) == SkillFixture.skillFile("editing"), "the folder that appeared is left alone")
   }
 
@@ -348,5 +346,35 @@ struct SkillEditorModelTests {
     #expect(cache.lookup("missing.md", in: draft) == .notText, "a path the draft doesn't have")
     cache.clear()
     #expect(cache.count == 0)
+  }
+
+  @Test func keepMineOverAFolderMissingAFileSaves() async throws {
+    let (fixture, store, draft) = try await setUp()
+    draft.body = "Mine.\n"
+    // The folder replaced by one without notes/a.md (a checkout, say).
+    let folder = fixture.user.appending(path: "editing")
+    try FileManager.default.removeItem(at: folder.appending(path: "notes/a.md"))
+    await store.reload()
+    #expect(draft.diskChanged())
+    draft.keepMine()
+    try await draft.save()
+    #expect(try skillFile(fixture).hasSuffix("Mine.\n"))
+    #expect(!FileManager.default.fileExists(atPath: folder.appending(path: "notes/a.md").path))
+    #expect(FileManager.default.fileExists(atPath: folder.appending(path: "logo.png").path))
+  }
+
+  @Test func missingRowStaysThroughItsSave() async throws {
+    let (fixture, store, draft) = try await setUp()
+    draft.body = "Unsaved.\n"
+    try FileManager.default.removeItem(at: fixture.user.appending(path: "editing"))
+    await store.reload()
+    let save = Task { try await draft.recreate() }
+    await Task.yield()
+    #expect(draft.isSaving)
+    // A reload from elsewhere (an agent's request) while the folder is being written.
+    await store.reload()
+    #expect(store.skills.contains { $0.id == "user/editing" }, "the row doesn't go while it saves")
+    try await save.value
+    #expect(store.skills.first { $0.id == "user/editing" }?.isMissing == false)
   }
 }

@@ -213,7 +213,6 @@ struct SkillDetailView: View {
     Task {
       await skills.reload()
       // Recreating writes a new folder: there's nothing on disk to keep or lose.
-      if recreating { draft.keepMine() }
       let changed = recreating ? false : await draft.diskChangedInBackground()
       preparingSave = false
       if changed {
@@ -221,7 +220,7 @@ struct SkillDetailView: View {
         return
       }
       do {
-        try await draft.save()
+        if recreating { try await draft.recreate() } else { try await draft.save() }
         cache.clear()
       } catch {
         draft.saveError = error.localizedDescription

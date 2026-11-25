@@ -371,6 +371,17 @@ final class SkillEditorModel {
 
   // MARK: - Saving
 
+  /// Save to Recreate, for a skill whose folder was removed outside Atelier: writes the draft as
+  /// a new folder. Refused if a folder of the name is there again (the Skills screen then shows
+  /// the skill as usual, with the changed-on-disk question).
+  func recreate() async throws {
+    if SkillScanner.stat(skill.directory) != nil {
+      throw Failure("A folder named “\(skill.name)” is there again; it's shown as usual now.")
+    }
+    keepMine()
+    try await save()
+  }
+
   /// Writes the draft as the skill's folder (renamed to the name if that changed), then reads it
   /// back as the new base. Refused for Atelier's skills, for a name you already have (nothing is
   /// written), and when the disk changed since it was read, until Keep Mine. A skill the rules

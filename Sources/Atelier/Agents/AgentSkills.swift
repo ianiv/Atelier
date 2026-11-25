@@ -394,7 +394,9 @@ nonisolated struct SkillWriteJob: @unchecked Sendable {
       if SkillScanner.stat(target) != nil { try manager.removeItem(at: target) }
       switch source {
       case .original(let original):
-        if recreating, SkillScanner.stat(held.appending(path: original)) == nil { continue }
+        // Gone from disk (the folder was recreated, or changed and the user kept their draft
+        // over it): nothing to carry over.
+        if SkillScanner.stat(held.appending(path: original)) == nil { continue }
         try manager.moveItem(at: held.appending(path: original), to: target)
       case .file(let url):
         if SkillScanner.stat(url)?.isSymlink != false { throw SkillStore.Failure("\(path) is a link or missing; skills can't hold links.") }
@@ -622,8 +624,11 @@ final class SkillStore {
   /// saving is left alone: a rename's folder is briefly under neither name.
   private func missingSkills(present: Set<String>) -> [Skill] {
     var missing: [Skill] = []
-    for (id, draft) in drafts where !present.contains(id) && !draft.isSaving {
-      if draft.isDirty, draft.skill.origin == .user {
+    for (id, draft) in drafts where !present.contains(id) {
+      // A missing skill being recreated keeps its row until the Save's own reload finds it.
+      let wasMissing = skills.contains { $0.id == id && $0.isMissing }
+      if draft.isSaving, !wasMissing { continue }
+      if draft.isDirty || wasMissing && draft.isSaving, draft.skill.origin == .user {
         var skill = draft.skill
         skill.isMissing = true
         missing.append(skill)
