@@ -158,7 +158,7 @@ The **Generate / Edit** switch beside the prompt, above the Generate button, dec
 Bringing in an image switches to Edit for you. Ways to bring one in:
 
 - Drop an image file on the canvas.
-- **Image ▸ Open Image…** (⌘O), **Open from Photos…** or **Paste Image** (⇧⌘V). A photo saved by Atelier or Draw Things keeps its settings.
+- **Image ▸ Open Image…** (⌘O), **Open from Photos…** or **Paste Image** (⇧⌘V). A photo saved by Atelier or Draw Things keeps its settings. An image opened from a file or from Photos is zoomed to fill the frame.
 - Right-click a recent image and choose **Use as Input**.
 
 ### Refining part of an image

@@ -1157,13 +1157,14 @@ final class CreateModel {
     return canEdit ? canvasMode : .generate
   }
 
-  /// Puts an image from outside the project on the canvas, fitted to the frame, and switches to
-  /// Edit so the next run starts from it. Settings it carries (`metadata`) can then be loaded.
+  /// Puts an image from outside the project on the canvas, fitted to the frame (or covering it,
+  /// `filling`), and switches to Edit so the next run starts from it. Settings it carries
+  /// (`metadata`) can then be loaded.
   ///
   /// The image goes into History at once as an Imported entry, with the moodboard, and becomes the
   /// canvas's step once it's written (`adoptImport`): masks are kept with it, and a run from it
   /// follows it.
-  func setCanvasImage(_ newImage: CGImage, metadata: ImageMetadata.Embedded? = nil) {
+  func setCanvasImage(_ newImage: CGImage, metadata: ImageMetadata.Embedded? = nil, filling: Bool = false) {
     // A moodboard change made with the canvas before goes in first.
     recordMoodboardChange()
     stopFollowingRun()
@@ -1175,7 +1176,18 @@ final class CreateModel {
     if importedSettings != nil {
       statusNote = "This image carries its generation settings: Load Settings from Image applies them."
     }
-    canvas.zoomToFit()
+    if filling {
+      // The canvas updates its fit and fill scales only once it lays out the new image, so they're
+      // worked out here the way it does, from the frame (the output size) and the image.
+      let frame = settings.flatMap { $0.width > 0 && $0.height > 0 ? CGSize(width: $0.width, height: $0.height) : nil }
+        ?? CGSize(width: newImage.width, height: newImage.height)
+      let across = frame.width / Double(newImage.width), down = frame.height / Double(newImage.height)
+      canvas.fitScale = min(across, down)
+      canvas.fillScale = max(across, down)
+      canvas.zoomToFill()
+    } else {
+      canvas.zoomToFit()
+    }
     canvasMode = .edit
     // A new step of its own, even for an image brought in before.
     adoptedImport = nil
@@ -1267,7 +1279,7 @@ final class CreateModel {
       if target == .moodboard {
         moodboard.add(image)
       } else {
-        setCanvasImage(image, metadata: ImageMetadata.embedded(at: url))
+        setCanvasImage(image, metadata: ImageMetadata.embedded(at: url), filling: true)
       }
     }
   }
@@ -1335,7 +1347,7 @@ final class CreateModel {
       if target == .moodboard {
         moodboard.add(image)
       } else {
-        setCanvasImage(image, metadata: ImageMetadata.embedded(in: data))
+        setCanvasImage(image, metadata: ImageMetadata.embedded(in: data), filling: true)
       }
     }
     if failed > 0 { errorMessage = "Couldn't load \(failed == 1 ? "the photo" : "\(failed) photos")." }
