@@ -19,6 +19,9 @@ enum HelpLinks {
     case .models: anchored("docs/models-and-loras.md", "models")
     case .loras: anchored("docs/models-and-loras.md", "loras")
     case .styles: base.appending(path: "docs/styles.md")
+    #if os(macOS)
+      case .skills: anchored("MCP.md", "skills")
+    #endif
     }
   }
 

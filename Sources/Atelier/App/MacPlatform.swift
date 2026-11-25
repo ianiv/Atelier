@@ -26,13 +26,16 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
   }
 
   func applicationShouldTerminate(_: NSApplication) -> NSApplication.TerminateReply {
-    guard !AppLifecycle.isQuittingWithoutAsking, let work = AppLifecycle.workUnderway?() else {
-      return .terminateNow
-    }
+    guard !AppLifecycle.isQuittingWithoutAsking else { return .terminateNow }
+    let work = AppLifecycle.workUnderway?()
+    let unsaved = AppLifecycle.unsavedEdits?()
+    guard work != nil || unsaved != nil else { return .terminateNow }
     let alert = NSAlert()
-    alert.messageText = "Quit while Atelier is working?"
-    alert.informativeText =
-      "\(work) Quitting stops it. Queued generations come back paused next time you open Atelier; exports don't."
+    alert.messageText = work != nil ? "Quit while Atelier is working?" : "Quit with unsaved changes?"
+    alert.informativeText = [
+      work.map { "\($0) Quitting stops it. Queued generations come back paused next time you open Atelier; exports don't." },
+      unsaved.map { "\($0) Quitting loses them." },
+    ].compactMap(\.self).joined(separator: "\n\n")
     alert.addButton(withTitle: "Quit")
     alert.addButton(withTitle: "Cancel")
     return alert.runModal() == .alertFirstButtonReturn ? .terminateNow : .terminateCancel
@@ -96,6 +99,8 @@ enum AppLifecycle {
 
   /// What quitting now would stop, in a sentence, or nil to quit without asking.
   static var workUnderway: (@MainActor () -> String?)?
+  /// Edits quitting now would lose (the Skills screen's unsaved drafts), in a sentence, or nil.
+  static var unsavedEdits: (@MainActor () -> String?)?
 
   private static var observations: [any NSObjectProtocol] = []
 

@@ -17,6 +17,8 @@ struct AtelierApp: App {
   @State private var remoteServer: RemoteServer
   #if os(macOS)
     @State private var agents: AgentServer
+    /// The skills agents get; in a scripted run, a temporary folder of the user's own.
+    @State private var skills: SkillStore
     @State private var updater = Updater()
   #endif
   @State private var fileDialogs = FileDialogs()
@@ -76,8 +78,14 @@ struct AtelierApp: App {
       AppLifecycle.onWillTerminate { TemporaryFiles.cleanAtQuit() }
     }
     #if os(macOS)
-      _agents = State(initialValue: AgentServer(create: create, presets: presets, grainProfiles: edit.profiles))
+      let skills = SkillStore.makeForApp()
+      _skills = State(initialValue: skills)
+      _agents = State(initialValue: AgentServer(create: create, presets: presets, grainProfiles: edit.profiles, skills: skills))
       AppLifecycle.workUnderway = { create.workUnderway }
+      AppLifecycle.unsavedEdits = { skills.unsavedEditsSentence }
+      // The Skills screen checks for changes on disk whenever Atelier comes back to the front.
+      AppLifecycle.onBecomeActive { skills.activations += 1 }
+      Automation.skills = skills
       Automation.remoteServer = remoteServer
       Automation.editModel = edit
       // Started here rather than from a view's .task: SwiftUI doesn't put windows up while the
@@ -107,6 +115,11 @@ struct AtelierApp: App {
           .environment(remoteServer)
           .environment(fileDialogs)
           .environment(edit)
+        #if os(macOS)
+          // The Skills screen's list and its server bar.
+          .environment(skills)
+          .environment(agents)
+        #endif
       }
       #if os(macOS)
         .frame(minWidth: 960, minHeight: 640)
@@ -235,17 +248,12 @@ struct SettingsTabs: View {
     let agents: AgentServer
   #endif
 
-  /// The first tab, or in Debug builds the one `-AtelierSettingsTab NAME` names (layout checks).
-  @State private var tab: String = {
-    #if DEBUG
-      UserDefaults.standard.string(forKey: "AtelierSettingsTab") ?? "Models"
-    #else
-      "Models"
-    #endif
-  }()
+  /// Which tab is up: `Navigation.settingsTab`, so a screen can open Settings on one.
+  @Environment(Navigation.self) private var navigation
 
   var body: some View {
-    TabView(selection: $tab) {
+    @Bindable var navigation = navigation
+    TabView(selection: $navigation.settingsTab) {
       Tab("Models", systemImage: "shippingbox", value: "Models") {
         ModelsSettingsView()
       }

@@ -32,13 +32,16 @@ Scripts/test-map.txt         | smoke |
 Sources/AtelierTests/Tags.swift | smoke |
 
 # Sources, one line per folder.
-Sources/Atelier/Agents/      | HostTests,CanvasEditArgumentsTests,AgentAccessTests,CropTests,HealTests | --agent-canvas-check,--depth-check,--edit-screen-check,--edit-tools-check,--agent-net-check
+Sources/Atelier/Agents/      | HostTests,CanvasEditArgumentsTests,AgentAccessTests,CropTests,HealTests,AgentProtocolTests,SkillFrontmatterTests,AgentSkillsTests,SkillEditorModelTests,SkillToolCheckTests,LoopbackHTTPServerTests | --agent-canvas-check,--depth-check,--edit-screen-check,--edit-tools-check,--agent-net-check,--agent-skills-check
+Sources/Atelier/Agents/SkillsView.swift | SkillEditorModelTests,AgentSkillsTests | --agent-skills-check,--tab-switch-bench
+Sources/Atelier/Agents/SkillDetailView.swift | SkillEditorModelTests,SkillToolCheckTests | --agent-skills-check
 Sources/Atelier/App/         | HostTests,TemporaryFilesTests,ClipCacheTests,OrphanTests,ModelFolderTests,WaitUntilTests,ShareTests,SharePickerTests | --cleanup-check,--ux-check,--resize-bench,--tab-switch-bench,--model-folders-check
 Sources/Atelier/App/PortClaims.swift | PortClaimsTests,AgentAccessTests,PortOwnerTests | --agent-net-check,--remote-net-check,--remote-check,--remote-tailnet-check
 Sources/Atelier/App/PortOwner.swift | PortOwnerTests,PortClaimsTests | --agent-net-check,--remote-net-check
 Sources/Atelier/App/ToolUI.swift | ToolUITests | --paint-check,--automask-check,--ux-check,--edit-tools-check
 Sources/Atelier/Automation/  | HostTests,AutomationSamplerTests | --generate
-Sources/Atelier/Automation/AutomationAgentNet.swift | AgentAccessTests | --agent-net-check
+Sources/Atelier/Automation/AutomationAgentNet.swift | AgentAccessTests,AgentProtocolTests | --agent-net-check
+Sources/Atelier/Automation/AutomationAgentSkills.swift | AgentSkillsTests,SkillEditorModelTests,SkillToolCheckTests | --agent-skills-check
 Sources/Atelier/Automation/AutomationEditTools.swift | CropTests,EditJobTests | --edit-tools-check
 Sources/Atelier/Automation/AutomationReferenceVideo.swift | ReferenceVideoTests,SavedQueueTests | --reference-video-check
 Sources/Atelier/Automation/AutomationLibraryBatch.swift | LibraryBatchTests,ModelMoveTests | --library-batch-check

@@ -88,6 +88,8 @@ enum Automation {
   static var remoteServer: RemoteServer?
   /// The app's Edit screen, for the window snapshots host and the Edit checks.
   static var editModel: EditModel?
+  /// The app's skills, which the Skills screen shows, for `--agent-skills-check`.
+  static var skills: SkillStore?
   /// Opens the Settings window, set once a window is up (`openSettings` comes from a view).
   static var openSettingsWindow: (() -> Void)?
 
@@ -95,7 +97,7 @@ enum Automation {
   nonisolated static var isRequested: Bool {
     let flags = [
       "--show", "--resize-bench", "--inspector-check", "--library-check", "--project-check",
-      "--reuse", "--generate", "--ux-check", "--edit-input-check", "--refine-check", "--agent-canvas-check", "--agent-net-check",
+      "--reuse", "--generate", "--ux-check", "--edit-input-check", "--refine-check", "--agent-canvas-check", "--agent-net-check", "--agent-skills-check",
       "--automask-check", "--queue-check",
       "--timeline-check", "--upscale-check", "--timeline-export-check", "--flashvsr-check", "--recavsr-check",
       "--model-folders-check", "--styles-check", "--cleanup-check", "--engine-check", "--playback-check",
@@ -170,6 +172,10 @@ enum Automation {
     }
     if args.contains("--agent-net-check") {
       agentNetCheck(model, presets: presets)
+      return
+    }
+    if args.contains("--agent-skills-check") {
+      agentSkillsCheck(model, presets: presets, navigation: navigation)
       return
     }
     if args.contains("--automask-check") {
