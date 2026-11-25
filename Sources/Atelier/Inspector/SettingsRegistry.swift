@@ -278,18 +278,30 @@ enum SettingsRegistry {
       read: { $0[id] })
   }
 
+  /// `minimum`, when given, is a floor every value is raised to however it arrives (typed, a
+  /// preset, a saved step or image, an agent), not just the slider's.
   private static func float(
     _ id: String, _ kp: KP<Float>, _ title: String, _ section: SettingSection, _ help: String,
-    range: ClosedRange<Double>, step: Double, digits: Int = 1, keywords: [String] = [],
+    range: ClosedRange<Double>, step: Double, digits: Int = 1, minimum: Double? = nil, keywords: [String] = [],
     applies: @escaping (ModelTraits) -> Bool = always
   ) -> SettingDescriptor {
     SettingDescriptor(
       id: id, title: title, help: help, section: section,
       control: .slider(range, step: step, digits: digits), keywords: keywords, applies: applies,
       get: { JSONValue($0[keyPath: kp]) },
-      set: { if let v = $1.doubleValue { $0[keyPath: kp] = Float(v) } },
+      set: { if let v = $1.doubleValue { $0[keyPath: kp] = Float(raised(v, to: minimum)) } },
       read: { $0[id] })
   }
+
+  /// `value`, or `minimum` when it's lower (or not a number).
+  static func raised(_ value: Double, to minimum: Double?) -> Double {
+    guard let minimum else { return value }
+    return value >= minimum ? value : minimum
+  }
+
+  /// The lowest Shift: at 0 every flow model's schedule collapses to sigma 0 and the run comes
+  /// out as NaN (the shift's s·σ / (1 + (s − 1)·σ) is 0 for every σ below 1).
+  static let minimumShift = 0.1
 
   private static func choice<E: CaseIterable & Hashable>(
     _ id: String, _ kp: KP<E>, _ title: String, _ section: SettingSection, _ help: String,
@@ -429,8 +441,8 @@ enum SettingsRegistry {
       // Sampling
       float(
         "shift", \.shift, "Shift", .sampling,
-        "Shifts the noise schedule toward high noise; flow models like 3 to 6.", range: 0...12,
-        step: 0.1, applies: flow),
+        "Shifts the noise schedule toward high noise; flow models like 3 to 6.", range: minimumShift...12,
+        step: 0.1, minimum: minimumShift, applies: flow),
       toggle(
         "resolutionDependentShift", \.resolutionDependentShift, "Resolution-Dependent Shift",
         .sampling, "Scale the shift with image size. Off uses Shift as is.", applies: flow
