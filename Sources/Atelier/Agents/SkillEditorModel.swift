@@ -19,6 +19,12 @@ final class SkillEditorModel {
     static let changedOnDisk = Failure("The skill changed on disk since it was opened.")
   }
 
+  /// A Save is writing the folder.
+  private(set) var isSaving = false
+  /// Why the last Save from the Skills screen failed, until it's been shown. On the draft rather
+  /// than the screen, so it survives switching skills while the Save runs.
+  var saveError: String?
+
   /// Where a file of the draft comes from.
   enum Entry: Equatable {
     /// The file at this path in the skill as read.
@@ -145,12 +151,20 @@ final class SkillEditorModel {
 
   /// Everything in the folder, hidden items included and with no limit, so the draft knows every
   /// file a Save must carry over.
-  private static func walk(_ directory: URL) -> [SkillFingerprint] {
+  private nonisolated static func walk(_ directory: URL) -> [SkillFingerprint] {
     SkillScanner.fingerprint(directory, includesHidden: true, limit: .max)
   }
 
   /// Whether the folder changed on disk since it was read (or since Keep Mine).
   func diskChanged() -> Bool { Self.walk(skill.directory) != acceptedFingerprint }
+
+  /// `diskChanged`, with the walk off the main actor: a folder can hold a whole `.git`, and the
+  /// Skills screen checks whenever a skill is shown or Atelier comes to the front.
+  func diskChangedInBackground() async -> Bool {
+    let directory = skill.directory
+    let accepted = acceptedFingerprint
+    return await Task.detached(priority: .userInitiated) { Self.walk(directory) != accepted }.value
+  }
 
   /// Keeps the draft over a change on disk: the next Save overwrites it.
   func keepMine() { acceptedFingerprint = Self.walk(skill.directory) }
@@ -363,6 +377,10 @@ final class SkillEditorModel {
   /// call invalid can be saved: it's shown with its problems and isn't served.
   func save() async throws {
     try checkWritable()
+    // The plan is taken now and the draft reloaded from what's written, so the screen doesn't
+    // take edits until it's done (and the store keeps the draft through a rename's reload).
+    isSaving = true
+    defer { isSaving = false }
     guard let store else { throw Failure("The skill can't be saved here.") }
     if diskChanged() { throw Failure.changedOnDisk }
     var files: [String: SkillStore.WritePlan.Source] = [:]

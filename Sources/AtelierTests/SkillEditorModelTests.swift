@@ -223,4 +223,62 @@ struct SkillEditorModelTests {
     #expect(FileManager.default.fileExists(atPath: fixture.user.appending(path: "editing/SKILL.md").path), "the folder isn't renamed")
     #expect(store.served.first?.name == "editing")
   }
+
+  // MARK: - The Skills screen's use
+
+  @Test func diskCheckOffTheMainActor() async throws {
+    let (fixture, _, draft) = try await setUp()
+    #expect(await !draft.diskChangedInBackground())
+    try "changed\n".write(to: fixture.user.appending(path: "editing/notes/a.md"), atomically: true, encoding: .utf8)
+    #expect(await draft.diskChangedInBackground() && draft.diskChanged(), "both checks see an edit on disk")
+    draft.keepMine()
+    #expect(await !draft.diskChangedInBackground())
+  }
+
+  @Test func savingIsFlaggedOnlyWhileItRuns() async throws {
+    let (fixture, store, draft) = try await setUp()
+    draft.body = "During.\n"
+    let save = Task { try await draft.save() }
+    // The save runs up to its first wait (the write, off the main actor).
+    await Task.yield()
+    #expect(draft.isSaving, "flagged while the write runs")
+    try await save.value
+    #expect(!draft.isSaving && !draft.isDirty)
+    _ = (fixture, store)
+    draft.saveError = "kept on the draft"
+    #expect(draft.saveError == "kept on the draft")
+  }
+
+  @Test func selectingMakesTheDraftAtOnce() async throws {
+    let (fixture, store, _) = try await setUp()
+    try fixture.write("other", ["SKILL.md": SkillFixture.skillFile("other")])
+    await store.reload()
+    store.screenSelection = "user/other"
+    #expect(store.drafts["user/other"] != nil, "made as the selection changes, not on the next redraw")
+  }
+
+  @Test func draftsOfGoneSkillsAreDropped() async throws {
+    let (fixture, store, draft) = try await setUp()
+    draft.body = "Unsaved.\n"
+    #expect(store.unsavedSkillNames == ["editing"])
+    try FileManager.default.removeItem(at: fixture.user.appending(path: "editing"))
+    await store.reload()
+    #expect(store.drafts["user/editing"] == nil && store.unsavedEditsSentence == nil, "the quit warning doesn't name a skill that's gone")
+  }
+
+  @Test func textCacheKeepsOnlyFilesFromDisk() async throws {
+    let (fixture, store, draft) = try await setUp()
+    defer { _ = (fixture, store) }
+    let cache = SkillTextCache()
+    #expect(cache.lookup("notes/a.md", in: draft) == .loading)
+    await cache.load("notes/a.md", in: draft)
+    #expect(cache.lookup("notes/a.md", in: draft) == .text("note a\n") && cache.count == 1)
+    for index in 0..<20 { draft.setText("typed \(index)\n", for: "notes/a.md") }
+    #expect(cache.lookup("notes/a.md", in: draft) == .text("typed 19\n"), "an edited file's text is the draft's")
+    await cache.load("notes/a.md", in: draft)
+    #expect(cache.count == 1, "edits never add to the cache")
+    #expect(cache.lookup("missing.md", in: draft) == .notText, "a path the draft doesn't have")
+    cache.clear()
+    #expect(cache.count == 0)
+  }
 }

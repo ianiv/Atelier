@@ -26,16 +26,24 @@ struct SkillDetailView: View {
   /// (`SkillEditorModel.text(of:)` reads unedited files every call).
   @State private var cache = SkillTextCache()
   @State private var changedOnDisk = false
+  /// Why Duplicate to Edit failed. A Save's failure is kept on the draft instead
+  /// (`SkillEditorModel.saveError`, shown by `SkillsView`), since the user may switch skills
+  /// while it runs.
   @State private var failure: String?
-  @State private var saving = false
+  /// Between Save being clicked and the draft's own save starting (the disk check).
+  @State private var preparingSave = false
+
+  private var saving: Bool { preparingSave || draft.isSaving }
 
   private var tab: Binding<Tab> {
     Binding(get: { Tab(rawValue: skills.screenTab) ?? .instructions }, set: { skills.screenTab = $0.rawValue })
   }
 
   var body: some View {
+    // Once per redraw, for the header and the tabs.
+    let issues = draft.issues
     VStack(spacing: 0) {
-      header
+      header(issues)
       if draft.isBuiltIn { builtInBanner }
       Picker("Tab", selection: tab) {
         ForEach(Tab.allCases) { Text($0.title).tag($0) }
@@ -47,11 +55,13 @@ struct SkillDetailView: View {
       Divider()
       Group {
         switch tab.wrappedValue {
-        case .instructions: SkillInstructionsTab(draft: draft)
-        case .files: SkillFilesTab(draft: draft, cache: cache) { tab.wrappedValue = .instructions }
+        case .instructions: SkillInstructionsTab(draft: draft, issues: issues)
+        case .files: SkillFilesTab(draft: draft, cache: cache, issues: issues) { tab.wrappedValue = .instructions }
         case .agent: SkillAgentTab(skill: skill, draft: draft)
         }
       }
+      // A Save reloads the draft from what it wrote, so nothing typed meanwhile would last.
+      .disabled(saving)
       .frame(maxHeight: .infinity, alignment: .top)
       Divider()
       saveBar
@@ -59,7 +69,10 @@ struct SkillDetailView: View {
     .task { await checkDisk() }
     .onChange(of: skills.activations) { Task { await checkDisk() } }
     .alert("“\(draft.skill.name)” changed on disk", isPresented: $changedOnDisk) {
-      Button("Keep Mine") { draft.keepMine() }
+      Button("Keep Mine") {
+        draft.keepMine()
+        cache.clear()
+      }
       Button("Reload", role: .destructive) {
         draft.reloadFromDisk()
         cache.clear()
@@ -67,7 +80,7 @@ struct SkillDetailView: View {
     } message: {
       Text("Its folder was changed outside Atelier while you were editing it. Keep Mine keeps your edits, and your next Save overwrites the changes on disk; Reload drops your edits and shows the skill as it is now.")
     }
-    .alert("Couldn't save “\(draft.skill.name)”", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
+    .alert("Couldn't duplicate “\(draft.skill.name)”", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
       Button("OK") { failure = nil }
     } message: {
       Text(failure ?? "")
@@ -76,9 +89,8 @@ struct SkillDetailView: View {
 
   // MARK: - Header
 
-  private var header: some View {
-    let issues = draft.issues
-    return HStack(alignment: .firstTextBaseline, spacing: 8) {
+  private func header(_ issues: [String]) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: 8) {
       Text(draft.skill.name).font(.title2.weight(.semibold)).lineLimit(1).textSelection(.enabled)
       SkillBadge(skill: skill)
       Spacer()
@@ -104,9 +116,9 @@ struct SkillDetailView: View {
       Text(skill.overridden ? "Built-in skills can't be changed. Agents get yours of this name instead." : "Built-in skills can't be changed.")
         .fixedSize(horizontal: false, vertical: true)
       Spacer()
-      if skill.overridden {
-        Button("Show Mine") { skills.screenSelection = "user/\(skill.name)" }
-      }
+      Button("Show Mine") { skills.screenSelection = "user/\(skill.name)" }
+        .disabled(!skill.overridden)
+        .help(skill.overridden ? "Show your skill of this name, which agents get instead" : "You have no skill of this name")
       Button("Duplicate to Edit") { duplicate() }
     }
     .font(.callout)
@@ -156,7 +168,7 @@ struct SkillDetailView: View {
   /// read again; with edits, the user picks.
   private func checkDisk() async {
     await skills.reload()
-    guard draft.diskChanged() else { return }
+    guard !saving, await draft.diskChangedInBackground() else { return }
     if draft.isDirty {
       changedOnDisk = true
     } else {
@@ -165,12 +177,17 @@ struct SkillDetailView: View {
     }
   }
 
+  /// Runs on if the user switches skills meanwhile: the draft keeps the outcome.
   private func save() {
-    saving = true
+    preparingSave = true
+    let draft = draft
+    let skills = skills
+    let cache = cache
     Task {
-      defer { saving = false }
       await skills.reload()
-      if draft.diskChanged() {
+      let changed = await draft.diskChangedInBackground()
+      preparingSave = false
+      if changed {
         changedOnDisk = true
         return
       }
@@ -178,32 +195,76 @@ struct SkillDetailView: View {
         try await draft.save()
         cache.clear()
       } catch {
-        failure = error.localizedDescription
+        draft.saveError = error.localizedDescription
       }
     }
   }
 }
 
-/// Texts of files as read from disk, by path and where they come from. Not observed: what it
-/// holds only changes when the draft does, which redraws anyway.
+/// Texts of unedited files as read from disk, by where they come from (the file in the skill or
+/// the file to copy in), read off the main actor. Edited files' text is the draft's own and is
+/// never kept here. Not observed: the Files tab redraws when a read finishes.
+@MainActor
 final class SkillTextCache {
-  private var texts: [String: String?] = [:]
-
-  func text(of path: String, in draft: SkillEditorModel) -> String? {
-    let key = "\(path)|\(String(describing: draft.entries[path]))"
-    if let cached = texts[key] { return cached }
-    let text = draft.text(of: path)
-    texts[key] = text
-    return text
+  enum Lookup: Equatable {
+    case text(String)
+    /// Too large, not UTF-8, or not there.
+    case notText
+    /// Not read yet: call `load`.
+    case loading
   }
 
-  func clear() { texts = [:] }
+  /// nil for a file that isn't editable text.
+  private var texts: [String: String?] = [:]
+  /// Bumped by `clear`, so a read for an older generation can tell.
+  private(set) var generation = 0
+  var count: Int { texts.count }
+
+  /// Where the path's text comes from, or nil when it isn't read from a file.
+  func key(_ path: String, in draft: SkillEditorModel) -> String? {
+    switch draft.entries[path] {
+    case .original(let original): "skill:\(original)"
+    case .copy(let url): "copy:\(url.path)"
+    case .text, nil: nil
+    }
+  }
+
+  func lookup(_ path: String, in draft: SkillEditorModel) -> Lookup {
+    if case .text(let text) = draft.entries[path] { return .text(text) }
+    guard let key = key(path, in: draft) else { return .notText }
+    guard let cached = texts[key] else { return .loading }
+    return cached.map(Lookup.text) ?? .notText
+  }
+
+  /// Reads the path's file, if it isn't known yet.
+  func load(_ path: String, in draft: SkillEditorModel) async {
+    guard let key = key(path, in: draft), texts[key] == nil else { return }
+    let url: URL
+    switch draft.entries[path] {
+    case .original(let original): url = draft.skill.directory.appending(path: original)
+    case .copy(let copy): url = copy
+    default: return
+    }
+    let generation = generation
+    let text: String? =
+      draft.size(of: path) > SkillEditorModel.maxEditableText
+      ? nil
+      : await Task.detached(priority: .userInitiated) { (try? Data(contentsOf: url)).flatMap { String(data: $0, encoding: .utf8) } }.value
+    guard generation == self.generation else { return }
+    texts[key] = .some(text)
+  }
+
+  func clear() {
+    texts = [:]
+    generation += 1
+  }
 }
 
 // MARK: - Instructions
 
 private struct SkillInstructionsTab: View {
   @Bindable var draft: SkillEditorModel
+  let issues: [String]
   @Environment(SkillStore.self) private var skills
 
   private var readOnly: Bool { draft.isBuiltIn }
@@ -261,7 +322,6 @@ private struct SkillInstructionsTab: View {
             .frame(minHeight: 280)
             .disabled(readOnly)
         }
-        let issues = draft.issues
         if !issues.isEmpty {
           section("Problems") {
             ForEach(issues, id: \.self) { issue in
@@ -345,12 +405,15 @@ private struct SkillFileNode: Identifiable, Hashable {
 private struct SkillFilesTab: View {
   @Bindable var draft: SkillEditorModel
   let cache: SkillTextCache
+  let issues: [String]
   let goToInstructions: () -> Void
   @Environment(FileDialogs.self) private var fileDialogs
   @State private var selection: String?
   @State private var renaming: String?
   @State private var renameText = ""
   @State private var failure: String?
+  /// Bumped when a file's text has been read, to redraw (the cache isn't observed).
+  @State private var reads = 0
   @FocusState private var renameFocused: Bool
 
   private var readOnly: Bool { draft.isBuiltIn }
@@ -364,17 +427,38 @@ private struct SkillFilesTab: View {
     return selectedIsFolder ? selection : SkillFileNode.parent(of: selection)
   }
 
+  /// Every folder's total size and file count, in one pass over the files.
+  private func folderTotals() -> [String: (bytes: Int, files: Int)] {
+    var totals: [String: (bytes: Int, files: Int)] = [:]
+    for path in draft.filePaths where path != SkillScanner.skillFileName {
+      let size = draft.size(of: path)
+      var parent = SkillFileNode.parent(of: path)
+      while !parent.isEmpty {
+        totals[parent, default: (0, 0)].bytes += size
+        totals[parent, default: (0, 0)].files += 1
+        parent = SkillFileNode.parent(of: parent)
+      }
+    }
+    return totals
+  }
+
   var body: some View {
+    let folders = folderTotals()
     VStack(alignment: .leading, spacing: 8) {
       buttons
       List(selection: $selection) {
-        OutlineGroup(nodes, children: \.children) { node in row(node).tag(node.path) }
+        OutlineGroup(nodes, children: \.children) { node in row(node, folders: folders).tag(node.path) }
       }
       .listStyle(.bordered)
       .alternatingRowBackgrounds()
       .frame(minHeight: 150, idealHeight: 200, maxHeight: 260)
-      selectedDetail
+      selectedDetail(folders: folders)
         .frame(maxHeight: .infinity, alignment: .top)
+        .task(id: selection.map { "\($0)|\(cache.key($0, in: draft) ?? "")|\(cache.generation)" }) {
+          guard let selection, cache.lookup(selection, in: draft) == .loading else { return }
+          await cache.load(selection, in: draft)
+          reads += 1
+        }
       limits
       problems
     }
@@ -417,7 +501,7 @@ private struct SkillFilesTab: View {
     .buttonStyle(.bordered)
   }
 
-  private func row(_ node: SkillFileNode) -> some View {
+  private func row(_ node: SkillFileNode, folders: [String: (bytes: Int, files: Int)]) -> some View {
     HStack(spacing: 6) {
       Image(systemName: node.isFolder ? "folder" : node.path == SkillScanner.skillFileName ? "doc.richtext" : "doc")
         .foregroundStyle(.secondary)
@@ -427,12 +511,14 @@ private struct SkillFilesTab: View {
           .textFieldStyle(.roundedBorder)
           .focused($renameFocused)
           .onSubmit { commitRename() }
+          // Escape cancels; clicking elsewhere keeps the name, as in Finder.
           .onExitCommand { renaming = nil }
+          .onChange(of: renameFocused) { if !renameFocused, renaming == node.path { commitRename() } }
       } else {
         Text(node.name).lineLimit(1)
       }
       Spacer()
-      Text(ByteCountFormatter.string(fromByteCount: Int64(size(of: node)), countStyle: .file))
+      Text(ByteCountFormatter.string(fromByteCount: Int64(node.isFolder ? folders[node.path]?.bytes ?? 0 : draft.size(of: node.path)), countStyle: .file))
         .monospacedDigit()
         .foregroundStyle(.secondary)
       Text(typeDescription(node))
@@ -443,11 +529,6 @@ private struct SkillFilesTab: View {
     .font(.callout)
   }
 
-  private func size(of node: SkillFileNode) -> Int {
-    guard node.isFolder else { return draft.size(of: node.path) }
-    return draft.filePaths.filter { $0.hasPrefix(node.path + "/") }.reduce(0) { $0 + draft.size(of: $1) }
-  }
-
   private func typeDescription(_ node: SkillFileNode) -> String {
     if node.isFolder { return "Folder" }
     let ext = (node.path as NSString).pathExtension
@@ -456,7 +537,8 @@ private struct SkillFilesTab: View {
 
   // MARK: Selected file
 
-  @ViewBuilder private var selectedDetail: some View {
+  @ViewBuilder private func selectedDetail(folders: [String: (bytes: Int, files: Int)]) -> some View {
+    let _ = reads
     if let path = selection, draft.filePaths.contains(path) || draft.folderPaths.contains(path) {
       if path == SkillScanner.skillFileName {
         HStack {
@@ -466,16 +548,18 @@ private struct SkillFilesTab: View {
         }
         .font(.callout)
       } else if draft.folderPaths.contains(path) {
-        let count = draft.filePaths.filter { $0.hasPrefix(path + "/") }.count
+        let count = folders[path]?.files ?? 0
         Text("Folder · \(count == 1 ? "1 file" : "\(count) files")").font(.callout).foregroundStyle(.secondary)
-      } else if cache.text(of: path, in: draft) != nil {
+      } else if cache.lookup(path, in: draft) == .loading {
+        ProgressView().controlSize(.small)
+      } else if case .text = cache.lookup(path, in: draft) {
         VStack(alignment: .leading, spacing: 4) {
           Text(path).font(.callout.weight(.medium))
           SkillTextEditor(
             text: Binding(
               get: {
-                if case .text(let text) = draft.entries[path] { return text }
-                return cache.text(of: path, in: draft) ?? ""
+                if case .text(let text) = cache.lookup(path, in: draft) { return text }
+                return ""
               },
               set: { draft.setText($0, for: path) }),
             monospaced: true
@@ -524,19 +608,11 @@ private struct SkillFilesTab: View {
     .help("The most a skill may hold, as the Skills extension sets: agents don't get a skill past either")
   }
 
-  /// What's wrong with the folder: links on disk, the limits as the draft would save, and files
-  /// to copy in that are gone or links.
+  /// What's wrong with the folder: links on disk, and from the draft's problems (worked out once
+  /// per redraw) the limits as it would save and files to copy in that are gone or links.
   private var folderProblems: [String] {
-    var problems = SkillScanner.structuralIssues(draft.skill.fingerprint).filter { $0.contains("link") }
-    let (count, bytes) = draft.totals
-    if count > SkillScanner.maxFiles { problems.append("\(count) files; a skill can have at most \(SkillScanner.maxFiles).") }
-    if bytes > SkillScanner.maxBytes {
-      problems.append("\(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)) in all; a skill can hold at most 16 MiB.")
-    }
-    for (path, entry) in draft.entries.sorted(by: { $0.key < $1.key }) {
-      if case .copy(let url) = entry, SkillScanner.stat(url)?.isSymlink != false { problems.append("\(path) is a link or missing.") }
-    }
-    return problems
+    SkillScanner.structuralIssues(draft.skill.fingerprint).filter { $0.contains("link") }
+      + issues.filter { $0.hasSuffix("is a link or missing.") || $0.contains("a skill can have at most") || $0.contains("a skill can hold at most") }
   }
 
   private var problems: some View {
@@ -586,7 +662,8 @@ private struct SkillFilesTab: View {
     guard let selection, canChangeSelection else { return }
     renameText = (selection as NSString).lastPathComponent
     renaming = selection
-    renameFocused = true
+    // Once the field is there to take it.
+    Task { renameFocused = true }
   }
 
   private func commitRename() {

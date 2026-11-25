@@ -14,13 +14,16 @@ final class Navigation {
 
   /// Settings' tab, here so a screen can open Settings on one (the Skills screen's Open
   /// Settings ▸ Agents). In Debug builds `-AtelierSettingsTab NAME` picks the first (layout checks).
-  var settingsTab: String = {
+  var settingsTab = Navigation.firstSettingsTab
+
+  /// Models, or in Debug builds the tab `-AtelierSettingsTab NAME` names (layout checks).
+  static var firstSettingsTab: String {
     #if DEBUG
       UserDefaults.standard.string(forKey: "AtelierSettingsTab") ?? "Models"
     #else
       "Models"
     #endif
-  }()
+  }
 
   private static var savedSection: ContentView.Section {
     guard SessionState.isEnabled, let saved = UserDefaults.standard.string(forKey: "section") else {
@@ -201,6 +204,8 @@ struct ContentView: View {
         // For layout checks (Scripts/ipad-layout-shots.sh): -AtelierShowSettings YES.
         .onAppear { if UserDefaults.standard.bool(forKey: "AtelierShowSettings") { showingSettings = true } }
       #endif
+      // Settings opens on its first tab each time, as it did when the sheet kept its own tab.
+      .onChange(of: showingSettings) { if showingSettings { navigation.settingsTab = Navigation.firstSettingsTab } }
       .sheet(isPresented: $showingSettings) {
         NavigationStack {
           SettingsTabs()

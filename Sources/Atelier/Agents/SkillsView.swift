@@ -80,9 +80,6 @@ struct SkillsView: View {
       }
       .inspectorColumnWidth(min: 420, ideal: 540, max: 900)
     }
-    // The selected skill's draft, made here rather than while the detail is drawn.
-    .onChange(of: skills.screenSelection, initial: true) { makeDraft() }
-    .onChange(of: skills.skills.map(\.id)) { makeDraft() }
     .task { await skills.reload() }
     .sheet(isPresented: $creating) { newSkillSheet }
     .debugPresents("newSkill", $creating)
@@ -107,12 +104,19 @@ struct SkillsView: View {
     } message: {
       Text(message?.text ?? "")
     }
+    // A Save that failed, from whichever skill: kept on its draft, so it's shown even when the
+    // user moved on to another skill while it ran.
+    .alert(
+      "Couldn't save “\(failedSave?.skill.name ?? "")”",
+      isPresented: Binding(get: { failedSave != nil }, set: { if !$0 { failedSave?.saveError = nil } })
+    ) {
+      Button("OK") { failedSave?.saveError = nil }
+    } message: {
+      Text(failedSave?.saveError ?? "")
+    }
   }
 
-  private func makeDraft() {
-    guard let selected, skills.drafts[selected.id] == nil else { return }
-    _ = skills.draft(for: selected)
-  }
+  private var failedSave: SkillEditorModel? { skills.drafts.values.first { $0.saveError != nil } }
 
   // MARK: - Server bar
 
@@ -150,7 +154,9 @@ struct SkillsView: View {
     Button("Duplicate to Edit", systemImage: "plus.square.on.square") { duplicate(skill) }
       .disabled(skill.origin != .builtIn)
     Button(Finder.revealTitle, systemImage: "folder") { Finder.reveal([skill.directory]) }
-    Button("Export as .zip…", systemImage: "square.and.arrow.up") { export(skill) }
+    // The saved skill, which the title says when there are edits not in it.
+    Button(skills.drafts[skill.id]?.isDirty == true ? "Export Saved Version as .zip…" : "Export as .zip…", systemImage: "square.and.arrow.up") { export(skill) }
+      .help("Exports the skill as last saved; edits you haven't saved aren't in it")
     Divider()
     Button("Move to Trash", systemImage: "trash", role: .destructive) { pendingTrash = skill }
       .disabled(skill.origin != .user)

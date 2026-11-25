@@ -483,7 +483,10 @@ final class SkillStore {
 
   /// The Skills screen's selected skill id, tab and filter, remembered when the session is.
   var screenSelection: String? {
-    didSet { if persistsScreenState { defaults.set(screenSelection, forKey: Self.selectionKey) } }
+    didSet {
+      if persistsScreenState { defaults.set(screenSelection, forKey: Self.selectionKey) }
+      makeSelectedDraft()
+    }
   }
   var screenTab: String {
     didSet { if persistsScreenState { defaults.set(screenTab, forKey: Self.tabKey) } }
@@ -509,7 +512,7 @@ final class SkillStore {
       let builtIn = CommandLine.arguments.contains("--agent-skills-check") ? root.appending(path: "builtin", directoryHint: .isDirectory) : bundledDirectory
       return SkillStore(
         userDirectory: root.appending(path: "user", directoryHint: .isDirectory), builtInDirectory: builtIn,
-        defaults: MemoryDefaults(suiteName: nil) ?? .standard, persistsScreenState: false, usesTrash: false)
+        defaults: MemoryDefaults.make(), persistsScreenState: false, usesTrash: false)
     }
     return SkillStore()
   }
@@ -566,6 +569,23 @@ final class SkillStore {
       return (mine, ours)
     }.value
     skills = decorate(user: found.0, builtIn: found.1)
+    pruneDrafts()
+    makeSelectedDraft()
+  }
+
+  /// The selected skill's draft, made as soon as it's selected (and once a restored selection's
+  /// skill has been read), so the screen never shows the skill without it.
+  private func makeSelectedDraft() {
+    guard let id = screenSelection, drafts[id] == nil, let skill = skills.first(where: { $0.id == id }) else { return }
+    drafts[id] = SkillEditorModel(skill: skill, store: self)
+  }
+
+  /// Drops the drafts of skills whose folders are gone (removed outside Atelier): they can't be
+  /// saved, and the quit warning mustn't name them. A draft that's saving is kept: a rename's
+  /// folder is briefly under neither name.
+  private func pruneDrafts() {
+    let ids = Set(skills.map(\.id))
+    for (id, draft) in drafts where !ids.contains(id) && !draft.isSaving { drafts[id] = nil }
   }
 
   private func decorate(user: [Skill], builtIn: [Skill]) -> [Skill] {

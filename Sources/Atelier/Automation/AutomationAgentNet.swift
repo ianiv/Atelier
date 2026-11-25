@@ -13,6 +13,13 @@ final nonisolated class MemoryDefaults: UserDefaults, @unchecked Sendable {
     super.init(suiteName: suitename)
   }
 
+  /// One with no suite, which can't fail (`UserDefaults(suiteName: nil)` never does); never the
+  /// real settings in its place.
+  static func make() -> MemoryDefaults {
+    guard let defaults = MemoryDefaults(suiteName: nil) else { preconditionFailure("UserDefaults(suiteName: nil) failed") }
+    return defaults
+  }
+
   override func object(forKey defaultName: String) -> Any? { lock.withLock { values[defaultName] } }
   override func set(_ value: Any?, forKey defaultName: String) { lock.withLock { values[defaultName] = value } }
   override func set(_ value: Bool, forKey defaultName: String) { set(value as Any?, forKey: defaultName) }
