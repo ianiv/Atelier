@@ -2,6 +2,7 @@
 @preconcurrency import DataModels
 @preconcurrency import Diffusion
 @preconcurrency import LocalImageGenerator
+@preconcurrency import ModelZoo
 import Testing
 
 /// Strength's start step, worked out as the engine's samplers work it out
@@ -102,6 +103,24 @@ struct StrengthStepsTests {
     let simple = try #require(start(3, .eulerA, .simple))
     #expect(abs(simple.startStep - shift3.startStep) < 0.01, "\(simple.startStep) vs \(shift3.startStep)")
     #expect(StrengthSteps.hint(shift3, strength: 0.5, shift: 3).text == "≈1.1 of 6 steps at Shift 3")
+  }
+
+  /// The Shift setting reaches an H3 Image file's count as it's set (`start(model:…)`), not as 1:
+  /// a stand-in file `ModelZoo` takes for MiniMax H3 Image, with the 6-step grid as if read.
+  @MainActor @Test func h3ImageModelCountsAtItsShift() throws {
+    let file = "atelier_test_h3_image_shift.ckpt"
+    ModelZoo.overrideMapping[file] = ModelZoo.Specification(name: "H3 Image Shift Test", file: file, prefix: "", version: .minimaxH3Image)
+    defer { ModelZoo.overrideMapping[file] = nil }
+    StrengthSteps.remember(.ddimTrailing(grids: [6: [1.0, 0.9675, 0.8875, 0.75, 0.5328, 0.2320, 0.0]]), for: file)
+    func start(_ shift: Double) -> StrengthSteps.Start? {
+      StrengthSteps.start(
+        model: file, sampler: .dDIMTrailing, steps: 6, strength: 0.5, shift: shift, resolutionDependentShift: false,
+        width: 1024, height: 1024)
+    }
+    let shift3 = try #require(start(3))
+    #expect(abs(shift3.startStep - 4.92) < 0.01, "\(shift3.startStep)")
+    let shift1 = try #require(start(1))
+    #expect(shift1.startStep < 4.5, "\(shift1.startStep)")
   }
 
   /// Flow models on Karras sigmas count from the sigma each step is told
