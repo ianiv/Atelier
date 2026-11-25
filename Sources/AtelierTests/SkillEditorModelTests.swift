@@ -257,13 +257,81 @@ struct SkillEditorModelTests {
     #expect(store.drafts["user/other"] != nil, "made as the selection changes, not on the next redraw")
   }
 
-  @Test func draftsOfGoneSkillsAreDropped() async throws {
-    let (fixture, store, draft) = try await setUp()
-    draft.body = "Unsaved.\n"
-    #expect(store.unsavedSkillNames == ["editing"])
+  @Test func cleanDraftsOfGoneSkillsAreDropped() async throws {
+    let (fixture, store, _) = try await setUp()
     try FileManager.default.removeItem(at: fixture.user.appending(path: "editing"))
     await store.reload()
-    #expect(store.drafts["user/editing"] == nil && store.unsavedEditsSentence == nil, "the quit warning doesn't name a skill that's gone")
+    #expect(store.drafts["user/editing"] == nil && store.skills.allSatisfy { $0.name != "editing" })
+  }
+
+  @Test func failedListingKeepsEverything() async throws {
+    let (fixture, store, draft) = try await setUp()
+    draft.body = "Unsaved.\n"
+    try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: fixture.user.path)
+    defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fixture.user.path) }
+    await store.reload()
+    #expect(store.listingError != nil, "the failed read is reported")
+    #expect(store.drafts["user/editing"] === draft && store.skills.contains { $0.id == "user/editing" && !$0.isMissing }, "a failed read isn't an empty folder")
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fixture.user.path)
+    await store.reload()
+    #expect(store.listingError == nil)
+  }
+
+  @Test func editedDraftOfRemovedFolderIsKeptAsMissing() async throws {
+    let (fixture, store, draft) = try await setUp()
+    draft.body = "Unsaved.\n"
+    try draft.addTextFile(at: "new.md", text: "new\n")
+    try FileManager.default.removeItem(at: fixture.user.appending(path: "editing"))
+    await store.reload()
+    let missing = try #require(store.skills.first { $0.id == "user/editing" })
+    #expect(missing.isMissing && !missing.isServed && store.served.allSatisfy { $0.name != "editing" })
+    #expect(store.drafts["user/editing"] === draft && store.unsavedSkillNames == ["editing"], "the quit warning still names it")
+    // Save to Recreate.
+    draft.keepMine()
+    try await draft.save()
+    #expect(try skillFile(fixture).hasSuffix("Unsaved.\n"))
+    #expect(FileManager.default.fileExists(atPath: fixture.user.appending(path: "editing/new.md").path))
+    #expect(!FileManager.default.fileExists(atPath: fixture.user.appending(path: "editing/logo.png").path), "files only on disk went with the folder")
+    #expect(store.skills.first { $0.id == "user/editing" }?.isMissing == false && store.served.contains { $0.name == "editing" })
+  }
+
+  @Test func recreateRefusesATakenName() async throws {
+    let (fixture, store, draft) = try await setUp()
+    draft.body = "Unsaved.\n"
+    try FileManager.default.removeItem(at: fixture.user.appending(path: "editing"))
+    await store.reload()
+    try fixture.write("editing", ["SKILL.md": SkillFixture.skillFile("editing")])
+    // A folder of that name appeared after the skill was listed as missing.
+    draft.keepMine()
+    await #expect(throws: (any Error).self) { try await draft.save() }
+    #expect(try skillFile(fixture) == SkillFixture.skillFile("editing"), "the folder that appeared is left alone")
+  }
+
+  @Test func discardDropsAMissingSkill() async throws {
+    let (fixture, store, draft) = try await setUp()
+    draft.body = "Unsaved.\n"
+    store.screenSelection = "user/editing"
+    try FileManager.default.removeItem(at: fixture.user.appending(path: "editing"))
+    await store.reload()
+    store.discardDraft("user/editing")
+    #expect(store.drafts["user/editing"] == nil && store.skills.allSatisfy { $0.id != "user/editing" } && store.screenSelection == nil)
+    #expect(store.unsavedEditsSentence == nil)
+  }
+
+  @Test func folderComingBackReattachesTheDraft() async throws {
+    let (fixture, store, draft) = try await setUp()
+    draft.body = "Unsaved.\n"
+    let folder = fixture.user.appending(path: "editing")
+    let aside = fixture.user.deletingLastPathComponent().appending(path: "aside-\(UUID().uuidString)")
+    try FileManager.default.moveItem(at: folder, to: aside)
+    await store.reload()
+    #expect(store.skills.first { $0.id == "user/editing" }?.isMissing == true)
+    // Back, as a checkout would put it: changed.
+    try "checked out\n".write(to: aside.appending(path: "notes/a.md"), atomically: true, encoding: .utf8)
+    try FileManager.default.moveItem(at: aside, to: folder)
+    await store.reload()
+    #expect(store.skills.first { $0.id == "user/editing" }?.isMissing == false && store.drafts["user/editing"] === draft && draft.isDirty)
+    #expect(await draft.diskChangedInBackground(), "the usual Keep Mine / Reload question applies")
   }
 
   @Test func textCacheKeepsOnlyFilesFromDisk() async throws {

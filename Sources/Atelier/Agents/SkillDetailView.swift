@@ -45,6 +45,7 @@ struct SkillDetailView: View {
     VStack(spacing: 0) {
       header(issues)
       if draft.isBuiltIn { builtInBanner }
+      if skill.isMissing { missingBanner }
       Picker("Tab", selection: tab) {
         ForEach(Tab.allCases) { Text($0.title).tag($0) }
       }
@@ -128,6 +129,26 @@ struct SkillDetailView: View {
     .padding(.vertical, 4)
   }
 
+  /// An edited skill of yours whose folder was removed outside Atelier.
+  private var missingBanner: some View {
+    HStack(spacing: 10) {
+      Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
+      Text("This skill's folder was removed outside Atelier. Your edits are kept; files that were only on disk are gone.")
+        .fixedSize(horizontal: false, vertical: true)
+      Spacer()
+      Button("Discard Edits", role: .destructive) { skills.discardDraft(skill.id) }
+        .disabled(saving)
+      Button("Save to Recreate") { save() }
+        .disabled(saving)
+        .help("Write the skill as a new folder of its name")
+    }
+    .font(.callout)
+    .padding(10)
+    .background(.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+    .padding(.horizontal, 16)
+    .padding(.vertical, 4)
+  }
+
   private func duplicate() {
     Task {
       do {
@@ -168,7 +189,12 @@ struct SkillDetailView: View {
   /// read again; with edits, the user picks.
   private func checkDisk() async {
     await skills.reload()
-    guard !saving, await draft.diskChangedInBackground() else { return }
+    // A missing skill's folder is gone on purpose; its banner offers what to do.
+    guard !saving, !skill.isMissing else { return }
+    let before = draft.skill.fingerprint
+    let changed = await draft.diskChangedInBackground()
+    // A Save that ran meanwhile read the draft again: the walk compared with the old folder.
+    guard changed, !saving, draft.skill.fingerprint == before else { return }
     if draft.isDirty {
       changedOnDisk = true
     } else {
@@ -183,9 +209,12 @@ struct SkillDetailView: View {
     let draft = draft
     let skills = skills
     let cache = cache
+    let recreating = skill.isMissing
     Task {
       await skills.reload()
-      let changed = await draft.diskChangedInBackground()
+      // Recreating writes a new folder: there's nothing on disk to keep or lose.
+      if recreating { draft.keepMine() }
+      let changed = recreating ? false : await draft.diskChangedInBackground()
       preparingSave = false
       if changed {
         changedOnDisk = true
@@ -427,11 +456,13 @@ private struct SkillFilesTab: View {
     return selectedIsFolder ? selection : SkillFileNode.parent(of: selection)
   }
 
-  /// Every folder's total size and file count, in one pass over the files.
+  /// Every file's size, and every folder's total size and file count, in one pass over the
+  /// files (a file to copy in is looked up on disk once here).
   private func folderTotals() -> [String: (bytes: Int, files: Int)] {
     var totals: [String: (bytes: Int, files: Int)] = [:]
-    for path in draft.filePaths where path != SkillScanner.skillFileName {
+    for path in draft.filePaths {
       let size = draft.size(of: path)
+      totals[path] = (size, 1)
       var parent = SkillFileNode.parent(of: path)
       while !parent.isEmpty {
         totals[parent, default: (0, 0)].bytes += size
@@ -518,7 +549,7 @@ private struct SkillFilesTab: View {
         Text(node.name).lineLimit(1)
       }
       Spacer()
-      Text(ByteCountFormatter.string(fromByteCount: Int64(node.isFolder ? folders[node.path]?.bytes ?? 0 : draft.size(of: node.path)), countStyle: .file))
+      Text(ByteCountFormatter.string(fromByteCount: Int64(folders[node.path]?.bytes ?? 0), countStyle: .file))
         .monospacedDigit()
         .foregroundStyle(.secondary)
       Text(typeDescription(node))
@@ -568,12 +599,13 @@ private struct SkillFilesTab: View {
           .frame(minHeight: 140)
         }
       } else {
-        let size = ByteCountFormatter.string(fromByteCount: Int64(draft.size(of: path)), countStyle: .file)
+        let bytes = folders[path]?.bytes ?? 0
+        let size = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
         let kind = UTType(filenameExtension: (path as NSString).pathExtension)?.localizedDescription ?? "File"
         HStack {
           VStack(alignment: .leading, spacing: 2) {
             Text("\(kind) · \(size)").font(.callout.weight(.medium))
-            Text(draft.size(of: path) > SkillEditorModel.maxEditableText ? "Larger than 1 MiB, so it isn't edited here." : "Not text, so it isn't edited here.")
+            Text(bytes > SkillEditorModel.maxEditableText ? "Larger than 1 MiB, so it isn't edited here." : "Not text, so it isn't edited here.")
               .font(.caption)
               .foregroundStyle(.secondary)
           }

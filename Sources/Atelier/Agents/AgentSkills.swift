@@ -60,7 +60,10 @@ nonisolated struct Skill: @unchecked Sendable, Identifiable {
   var id: String { "\(origin.rawValue)/\(name)" }
   var uri: String { SkillURI.make(skill: name, path: SkillScanner.skillFileName) }
   var isValid: Bool { issues.isEmpty }
-  var isServed: Bool { isValid && isEnabled && !overridden }
+  /// One of yours whose folder was removed outside Atelier while it had unsaved edits: listed
+  /// (from its draft) so the edits can be saved again or discarded, never served.
+  var isMissing = false
+  var isServed: Bool { isValid && isEnabled && !overridden && !isMissing }
   var summary: String? { frontmatter?["description"] as? String }
   var totalSize: Int { fingerprint.filter { !$0.isDirectory }.reduce(0) { $0 + Int($1.size) } }
 
@@ -77,7 +80,16 @@ nonisolated enum SkillScanner {
   /// Every skill folder in `root`, reusing a previous scan's skill (`previous`, by name) whose
   /// fingerprint hasn't changed.
   static func scan(root: URL, origin: Skill.Origin, previous: [String: Skill] = [:]) -> [Skill] {
-    guard let names = try? FileManager.default.contentsOfDirectory(atPath: root.path) else { return [] }
+    scanListing(root: root, origin: origin, previous: previous) ?? []
+  }
+
+  /// `scan`, or nil when the folder is there but couldn't be listed: that says nothing about
+  /// which skills it holds, so the store keeps what it had. A folder that isn't there (yet) has
+  /// no skills.
+  static func scanListing(root: URL, origin: Skill.Origin, previous: [String: Skill] = [:]) -> [Skill]? {
+    guard let names = try? FileManager.default.contentsOfDirectory(atPath: root.path) else {
+      return stat(root) == nil ? [] : nil
+    }
     var skills: [Skill] = []
     for name in names.sorted() where !name.hasPrefix(".") {
       let directory = root.appending(path: name, directoryHint: .isDirectory)
@@ -352,7 +364,14 @@ nonisolated struct SkillWriteJob: @unchecked Sendable {
       if !keepsStaging { try? manager.removeItem(at: staging) }
       try? manager.removeItem(at: held)
     }
-    try manager.copyItem(at: old, to: staging)
+    // A skill whose folder was removed outside Atelier (Save to Recreate) starts empty; its
+    // files that were only on disk are gone with it.
+    let recreating = SkillScanner.stat(old) == nil
+    if recreating {
+      try manager.createDirectory(at: staging, withIntermediateDirectories: true)
+    } else {
+      try manager.copyItem(at: old, to: staging)
+    }
     // The files the draft knew are moved aside, then put back where it says (or not at all).
     for path in plan.originals {
       let from = staging.appending(path: path)
@@ -375,6 +394,7 @@ nonisolated struct SkillWriteJob: @unchecked Sendable {
       if SkillScanner.stat(target) != nil { try manager.removeItem(at: target) }
       switch source {
       case .original(let original):
+        if recreating, SkillScanner.stat(held.appending(path: original)) == nil { continue }
         try manager.moveItem(at: held.appending(path: original), to: target)
       case .file(let url):
         if SkillScanner.stat(url)?.isSymlink != false { throw SkillStore.Failure("\(path) is a link or missing; skills can't hold links.") }
@@ -394,7 +414,14 @@ nonisolated struct SkillWriteJob: @unchecked Sendable {
   private func swap(_ staging: URL, replacing old: URL, keepsStaging: inout Bool) throws {
     let manager = FileManager.default
     let renamed = destination.standardizedFileURL.path != old.standardizedFileURL.path
-    if renamed, SkillScanner.stat(destination) != nil { throw SkillStore.Failure("You already have a skill named “\(destination.lastPathComponent)”.") }
+    if renamed || SkillScanner.stat(old) == nil, SkillScanner.stat(destination) != nil {
+      throw SkillStore.Failure("You already have a skill named “\(destination.lastPathComponent)”.")
+    }
+    // Recreating: there's no old folder to put aside.
+    if SkillScanner.stat(old) == nil {
+      try manager.moveItem(at: staging, to: destination)
+      return
+    }
     var removed: URL?
     var trashed = false
     if usesTrash {
@@ -558,20 +585,29 @@ final class SkillStore {
   /// Reads both folders again, off the main actor; skills whose folders haven't changed are kept
   /// as they were, digests and all.
   func reload() async {
-    let previous = skills
+    let previous = skills.filter { !$0.isMissing }
     let user = userDirectory
     let builtIn = builtInDirectory
     let found = await Task.detached(priority: .userInitiated) {
       let userPrevious = Dictionary(previous.filter { $0.origin == .user }.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
       let builtInPrevious = Dictionary(previous.filter { $0.origin == .builtIn }.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
-      let mine = SkillScanner.scan(root: user, origin: .user, previous: userPrevious)
+      let mine = SkillScanner.scanListing(root: user, origin: .user, previous: userPrevious)
       let ours = builtIn.map { SkillScanner.scan(root: $0, origin: .builtIn, previous: builtInPrevious) } ?? []
       return (mine, ours)
     }.value
-    skills = decorate(user: found.0, builtIn: found.1)
-    pruneDrafts()
+    if let mine = found.0 {
+      listingError = nil
+      skills = decorate(user: mine, builtIn: found.1)
+    } else {
+      // Nothing is known about the folder: keep the skills (and so the drafts) as they were.
+      listingError = "Couldn't read your Skills folder (\(user.path)); showing the skills as last read."
+      skills = decorate(user: previous.filter { $0.origin == .user }, builtIn: found.1)
+    }
     makeSelectedDraft()
   }
+
+  /// Why the user's Skills folder couldn't be read on the last reload, for the Skills screen.
+  private(set) var listingError: String?
 
   /// The selected skill's draft, made as soon as it's selected (and once a restored selection's
   /// skill has been read), so the screen never shows the skill without it.
@@ -580,12 +616,29 @@ final class SkillStore {
     drafts[id] = SkillEditorModel(skill: skill, store: self)
   }
 
-  /// Drops the drafts of skills whose folders are gone (removed outside Atelier): they can't be
-  /// saved, and the quit warning mustn't name them. A draft that's saving is kept: a rename's
-  /// folder is briefly under neither name.
-  private func pruneDrafts() {
-    let ids = Set(skills.map(\.id))
-    for (id, draft) in drafts where !ids.contains(id) && !draft.isSaving { drafts[id] = nil }
+  /// The drafts of skills whose folders are gone (removed outside Atelier, or briefly missing
+  /// while something replaces them): an unedited one is dropped; an edited one of yours is kept
+  /// and its skill listed as missing, to save again (Save to Recreate) or discard. A draft that's
+  /// saving is left alone: a rename's folder is briefly under neither name.
+  private func missingSkills(present: Set<String>) -> [Skill] {
+    var missing: [Skill] = []
+    for (id, draft) in drafts where !present.contains(id) && !draft.isSaving {
+      if draft.isDirty, draft.skill.origin == .user {
+        var skill = draft.skill
+        skill.isMissing = true
+        missing.append(skill)
+      } else {
+        drafts[id] = nil
+      }
+    }
+    return missing
+  }
+
+  /// Drops a missing skill's edits (Discard Edits), and with them its row.
+  func discardDraft(_ id: String) {
+    drafts[id] = nil
+    if screenSelection == id { screenSelection = nil }
+    skills = decorate(user: skills.filter { $0.origin == .user && !$0.isMissing }, builtIn: skills.filter { $0.origin == .builtIn })
   }
 
   private func decorate(user: [Skill], builtIn: [Skill]) -> [Skill] {
@@ -594,7 +647,7 @@ final class SkillStore {
       var skill = skill
       skill.overridden = mine.contains(skill.name)
       return skill
-    }
+    } + missingSkills(present: Set((user + builtIn).map(\.id)))
     return all.map { skill in
       var skill = skill
       skill.isEnabled = !disabled.contains(skill.name)
@@ -645,7 +698,7 @@ final class SkillStore {
   func setEnabled(_ skill: Skill, _ isEnabled: Bool) {
     if isEnabled { disabled.remove(skill.name) } else { disabled.insert(skill.name) }
     defaults.set(disabled.sorted(), forKey: Self.disabledKey)
-    skills = decorate(user: skills.filter { $0.origin == .user }, builtIn: skills.filter { $0.origin == .builtIn })
+    skills = decorate(user: skills.filter { $0.origin == .user && !$0.isMissing }, builtIn: skills.filter { $0.origin == .builtIn })
   }
 
   // MARK: - Making and removing skills

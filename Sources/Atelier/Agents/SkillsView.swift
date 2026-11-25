@@ -50,7 +50,21 @@ struct SkillsView: View {
         ContentUnavailableView.search(text: skills.screenSearch)
       }
     }
-    .safeAreaBar(edge: .top, spacing: 0) { serverBar }
+    .safeAreaBar(edge: .top, spacing: 0) {
+      VStack(spacing: 0) {
+        serverBar
+        // Not modal: the list stays as last read meanwhile.
+        if let error = skills.listingError {
+          Label(error, systemImage: "exclamationmark.triangle.fill")
+            .font(.callout)
+            .foregroundStyle(.orange)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 6)
+            .background(.bar)
+        }
+      }
+    }
     .toolbar {
       ToolbarItem {
         Button("New Skill", systemImage: "plus") {
@@ -153,13 +167,16 @@ struct SkillsView: View {
   @ViewBuilder private func contextMenu(for skill: Skill) -> some View {
     Button("Duplicate to Edit", systemImage: "plus.square.on.square") { duplicate(skill) }
       .disabled(skill.origin != .builtIn)
+    // A missing skill has no folder to show or export, nor to trash: Discard Edits is in its detail.
     Button(Finder.revealTitle, systemImage: "folder") { Finder.reveal([skill.directory]) }
+      .disabled(skill.isMissing)
     // The saved skill, which the title says when there are edits not in it.
     Button(skills.drafts[skill.id]?.isDirty == true ? "Export Saved Version as .zip…" : "Export as .zip…", systemImage: "square.and.arrow.up") { export(skill) }
       .help("Exports the skill as last saved; edits you haven't saved aren't in it")
+      .disabled(skill.isMissing)
     Divider()
     Button("Move to Trash", systemImage: "trash", role: .destructive) { pendingTrash = skill }
-      .disabled(skill.origin != .user)
+      .disabled(skill.origin != .user || skill.isMissing)
   }
 
   private func duplicate(_ skill: Skill) {
@@ -300,6 +317,7 @@ private struct SkillRow: View {
   @Environment(SkillStore.self) private var skills
 
   private var toggleHelp: String {
+    if skill.isMissing { return "Its folder was removed outside Atelier; save it again to share it" }
     if skill.overridden { return "Agents get your skill of this name instead" }
     if !skill.isValid { return "Agents can't get a skill with problems; fix them first" }
     return skill.isEnabled ? "Agents get this skill; turn it off to keep it from them" : "Agents don't get this skill; turn it on to share it"
@@ -311,7 +329,7 @@ private struct SkillRow: View {
         .labelsHidden()
         .toggleStyle(.switch)
         .controlSize(.mini)
-        .disabled(!skill.isValid || skill.overridden)
+        .disabled(!skill.isValid || skill.overridden || skill.isMissing)
         .help(toggleHelp)
       VStack(alignment: .leading, spacing: 2) {
         HStack(spacing: 6) {
@@ -342,20 +360,22 @@ private struct SkillRow: View {
   }
 }
 
-/// Built-in, Yours or Overridden.
+/// Built-in, Yours, Overridden, or Missing (yours, with unsaved edits, whose folder was removed).
 struct SkillBadge: View {
   let skill: Skill
 
   var body: some View {
-    let title = skill.origin == .user ? "Yours" : skill.overridden ? "Overridden" : "Built-in"
+    let title = skill.isMissing ? "Missing" : skill.origin == .user ? "Yours" : skill.overridden ? "Overridden" : "Built-in"
     Text(title)
       .font(.caption2.weight(.medium))
       .padding(.horizontal, 5)
       .padding(.vertical, 1)
-      .foregroundStyle(.secondary)
-      .overlay(Capsule().strokeBorder(.secondary.opacity(0.5)))
+      .foregroundStyle(skill.isMissing ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+      .overlay(Capsule().strokeBorder(skill.isMissing ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary.opacity(0.5))))
       .help(
-        skill.origin == .user
+        skill.isMissing
+          ? "Removed outside Atelier; your unsaved edits are kept until you save or discard them"
+          : skill.origin == .user
           ? "Your skill, in Atelier's Skills folder" : skill.overridden ? "Atelier's skill, replaced by yours of the same name" : "Comes with Atelier; can't be changed")
   }
 }
