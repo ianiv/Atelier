@@ -330,6 +330,7 @@
 		ED17ED17000000000000002D /* LUTTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED17ED17000000000000002C /* LUTTests.swift */; };
 		A89BD7B03B13D82BEBC6AB44 /* AgentProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 847B563F8C004BD0C3CB71DB /* AgentProtocol.swift */; };
 		EE5AD14F8CC5E81CE96B455C /* AgentProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F293B543AF2AF29C97726CE3 /* AgentProtocolTests.swift */; };
+		7B35E9664D787EBDA68DECBA /* AgentTasksTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83FF6EB6BAB9A3B7E4C9380F /* AgentTasksTests.swift */; };
 		1FE0D0F4FF611014D8E9FCF3 /* SkillFrontmatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9DCD0727791849AFE318230 /* SkillFrontmatter.swift */; };
 		4CC606E717D3717870BFAAD5 /* AgentSkills.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48E2AEE7C724E3CF285F6D49 /* AgentSkills.swift */; };
 		932042EC9AF9F11641679525 /* SkillFrontmatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3F405E4E3E322C49701C796 /* SkillFrontmatterTests.swift */; };
@@ -338,6 +339,7 @@
 		CFE770AD9288AD633CADD9EE /* SkillsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5225085597173C83F629B20F /* SkillsView.swift */; };
 		DC8F9D63796C6AF8C0E15131 /* SkillToolCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73E6E5FCA41E53E7345977C9 /* SkillToolCheck.swift */; };
 		61F1F8E5C261AFC71C8F6084 /* AgentSkillsRPC.swift in Sources */ = {isa = PBXBuildFile; fileRef = 419A89AF8F723CD38E775594 /* AgentSkillsRPC.swift */; };
+		7975BBE7C902C0A73290F896 /* AgentTasks.swift in Sources */ = {isa = PBXBuildFile; fileRef = A27C1A0BE626C82C2960C8FC /* AgentTasks.swift */; };
 		4B924AD2992C1710E43E9B43 /* AutomationAgentSkills.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FC88BB1B5D83CCC2F00402F /* AutomationAgentSkills.swift */; };
 		F43F05479681AC9EDB323E30 /* AgentSkillsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFC129760F88008D9B82CF9D /* AgentSkillsTests.swift */; };
 		E70B90639E71CC04026640F5 /* SkillEditorModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 902641C14A43EBB60B1E21A2 /* SkillEditorModelTests.swift */; };
@@ -696,6 +698,7 @@
 		ED17ED17000000000000002C /* LUTTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LUTTests.swift; sourceTree = "<group>"; };
 		847B563F8C004BD0C3CB71DB /* AgentProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentProtocol.swift; sourceTree = "<group>"; };
 		F293B543AF2AF29C97726CE3 /* AgentProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentProtocolTests.swift; sourceTree = "<group>"; };
+		83FF6EB6BAB9A3B7E4C9380F /* AgentTasksTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTasksTests.swift; sourceTree = "<group>"; };
 		D9DCD0727791849AFE318230 /* SkillFrontmatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillFrontmatter.swift; sourceTree = "<group>"; };
 		48E2AEE7C724E3CF285F6D49 /* AgentSkills.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSkills.swift; sourceTree = "<group>"; };
 		D3F405E4E3E322C49701C796 /* SkillFrontmatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillFrontmatterTests.swift; sourceTree = "<group>"; };
@@ -704,6 +707,7 @@
 		5225085597173C83F629B20F /* SkillsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillsView.swift; sourceTree = "<group>"; };
 		73E6E5FCA41E53E7345977C9 /* SkillToolCheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillToolCheck.swift; sourceTree = "<group>"; };
 		419A89AF8F723CD38E775594 /* AgentSkillsRPC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSkillsRPC.swift; sourceTree = "<group>"; };
+		A27C1A0BE626C82C2960C8FC /* AgentTasks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTasks.swift; sourceTree = "<group>"; };
 		3FC88BB1B5D83CCC2F00402F /* AutomationAgentSkills.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationAgentSkills.swift; sourceTree = "<group>"; };
 		FFC129760F88008D9B82CF9D /* AgentSkillsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSkillsTests.swift; sourceTree = "<group>"; };
 		902641C14A43EBB60B1E21A2 /* SkillEditorModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillEditorModelTests.swift; sourceTree = "<group>"; };
@@ -779,6 +783,7 @@
 			children = (
 				7D94F29F93F53F4B26C21101 /* Skills */,
 				419A89AF8F723CD38E775594 /* AgentSkillsRPC.swift */,
+				A27C1A0BE626C82C2960C8FC /* AgentTasks.swift */,
 				73E6E5FCA41E53E7345977C9 /* SkillToolCheck.swift */,
 				09F0FF986060CA36F424AC7C /* SkillEditorModel.swift */,
 				48DD8C70FCC6C88D3B675B24 /* SkillDetailView.swift */,
@@ -1131,6 +1136,7 @@
 				FFC129760F88008D9B82CF9D /* AgentSkillsTests.swift */,
 				D3F405E4E3E322C49701C796 /* SkillFrontmatterTests.swift */,
 				F293B543AF2AF29C97726CE3 /* AgentProtocolTests.swift */,
+				83FF6EB6BAB9A3B7E4C9380F /* AgentTasksTests.swift */,
 				ED17ED170000000000000026 /* EditJobTests.swift */,
 				ED17ED170000000000000028 /* EditPipelineTests.swift */,
 				ED17ED170000000000005102 /* EditRenderLoopTests.swift */,
@@ -1450,6 +1456,7 @@
 			files = (
 				4B924AD2992C1710E43E9B43 /* AutomationAgentSkills.swift in Sources */,
 				61F1F8E5C261AFC71C8F6084 /* AgentSkillsRPC.swift in Sources */,
+				7975BBE7C902C0A73290F896 /* AgentTasks.swift in Sources */,
 				DC8F9D63796C6AF8C0E15131 /* SkillToolCheck.swift in Sources */,
 				EDCA3D670CFA1A6B6071656C /* SkillEditorModel.swift in Sources */,
 				5A0B4C1FBBC37CA776106DC0 /* SkillDetailView.swift in Sources */,
@@ -1721,6 +1728,7 @@
 				F43F05479681AC9EDB323E30 /* AgentSkillsTests.swift in Sources */,
 				932042EC9AF9F11641679525 /* SkillFrontmatterTests.swift in Sources */,
 				EE5AD14F8CC5E81CE96B455C /* AgentProtocolTests.swift in Sources */,
+				7B35E9664D787EBDA68DECBA /* AgentTasksTests.swift in Sources */,
 				ED17ED170000000000000027 /* EditJobTests.swift in Sources */,
 				ED17ED170000000000000029 /* EditPipelineTests.swift in Sources */,
 				ED17ED170000000000005103 /* EditRenderLoopTests.swift in Sources */,

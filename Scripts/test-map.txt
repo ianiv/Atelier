@@ -32,7 +32,7 @@ Scripts/test-map.txt         | smoke |
 Sources/AtelierTests/Tags.swift | smoke |
 
 # Sources, one line per folder.
-Sources/Atelier/Agents/      | HostTests,CanvasEditArgumentsTests,AgentAccessTests,CropTests,HealTests,AgentProtocolTests,SkillFrontmatterTests,AgentSkillsTests,SkillEditorModelTests,SkillToolCheckTests,LoopbackHTTPServerTests | --agent-canvas-check,--depth-check,--edit-screen-check,--edit-tools-check,--agent-net-check,--agent-skills-check
+Sources/Atelier/Agents/      | HostTests,CanvasEditArgumentsTests,AgentAccessTests,CropTests,HealTests,AgentProtocolTests,AgentTasksTests,SkillFrontmatterTests,AgentSkillsTests,SkillEditorModelTests,SkillToolCheckTests,LoopbackHTTPServerTests | --agent-canvas-check,--depth-check,--edit-screen-check,--edit-tools-check,--agent-net-check,--agent-skills-check
 Sources/Atelier/Agents/SkillsView.swift | SkillEditorModelTests,AgentSkillsTests | --agent-skills-check,--tab-switch-bench
 Sources/Atelier/Agents/SkillDetailView.swift | SkillEditorModelTests,SkillToolCheckTests | --agent-skills-check
 Sources/Atelier/App/         | HostTests,TemporaryFilesTests,ClipCacheTests,OrphanTests,ModelFolderTests,WaitUntilTests,ShareTests,SharePickerTests | --cleanup-check,--ux-check,--resize-bench,--tab-switch-bench,--model-folders-check

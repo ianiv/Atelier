@@ -31,6 +31,9 @@ nonisolated struct ToolContext: Sendable {
   /// The client isn't on this Mac: its file paths name files on another device, and the paths
   /// Atelier writes are no use to it.
   var isRemote = false
+  /// A 2026-07-28 tools/call that declared the Tasks extension: a job tool answers it with a
+  /// task handle (`AgentTasks`) instead of waiting for the result.
+  var createsTasks = false
 
   @TaskLocal static var current = ToolContext()
 }

@@ -208,7 +208,8 @@ final class AgentServer {
     use_app_settings (no prompt). To see an image, including ones the user generated, use \
     get_image (the canvas by default) and list_history. For videos and other long runs, call \
     generate with background: true and check on the job_id with get_job, which waits up to \
-    wait_seconds per call. \
+    wait_seconds per call (a client that declares the Tasks extension gets a task from every \
+    job tool instead, and polls tasks/get). \
     To redo part of an image (a small face, a hand), work zoomed in: on the canvas, \
     set_canvas_image, then find_faces or get_image to locate it, set_canvas_mask or auto_mask \
     and grow_canvas_mask to mask it, set_canvas_frame to zoom the frame onto it at a scale, \
@@ -714,7 +715,7 @@ final class AgentServer {
       respond(
         result: [
           "protocolVersion": AgentProtocol.legacyVersions.contains(requested) ? requested : AgentProtocol.legacyVersions[0],
-          "capabilities": AgentProtocol.capabilities(),
+          "capabilities": AgentProtocol.capabilities(modern: false),
           "serverInfo": Self.serverInfo,
           "instructions": Self.instructions,
         ], id: id, via: responder)
@@ -722,7 +723,8 @@ final class AgentServer {
       respond(result: [:], id: id, via: responder)
     case "server/discover":
       answer([
-        "supportedVersions": AgentProtocol.allVersions, "capabilities": AgentProtocol.capabilities(), "instructions": Self.instructions,
+        "supportedVersions": AgentProtocol.allVersions, "capabilities": AgentProtocol.capabilities(modern: true),
+        "instructions": Self.instructions,
       ])
     case "tools/list":
       answer(["tools": AgentTools.definitions])
@@ -730,6 +732,8 @@ final class AgentServer {
       callTool(
         params, id: id, era: era, streaming: request.headers["accept"]?.contains("text/event-stream") == true,
         context: context, via: responder)
+    case "tasks/get", "tasks/update", "tasks/cancel" where era.isModern:
+      taskMethod(method, params: params, era: era, id: id, context: context, via: responder)
     case _ where SkillsRPC.methods.contains(method):
       let rpc = SkillsRPC(store: skills)
       Task { @MainActor in
@@ -755,7 +759,11 @@ final class AgentServer {
       return respond(error: -32602, "Unknown tool: \(name)", id: id, via: responder)
     }
     let arguments = params["arguments"] as? [String: Any] ?? [:]
-    let progressToken = (params["_meta"] as? [String: Any])?["progressToken"]
+    // A job tool answers a client that declared Tasks with a task, which carries no progress
+    // (Tasks: notifications/progress isn't supported on tasks): it polls tasks/get instead.
+    var context = context
+    context.createsTasks = AgentProtocol.declaresTasks(era: era, params: params) && AgentTools.jobTools.contains(name)
+    let progressToken = context.createsTasks ? nil : (params["_meta"] as? [String: Any])?["progressToken"]
     let key = Self.key(id)
     // Proxies must pass a modern stream's events on as they come (Streamable HTTP: Receiving
     // Messages).
@@ -810,6 +818,42 @@ final class AgentServer {
     }
     // A 2025 client that hangs up (some give up on calls after a few minutes) doesn't stop the
     // run: generate keeps it going as a job for get_job.
+  }
+
+  /// tasks/get, tasks/update and tasks/cancel (2026-07-28 only; a 2025 request gets "method not
+  /// found"). Checked in the spec's order once the headers have been: the request's own
+  /// declaration (-32021), then its params (-32602, an unknown task too).
+  private func taskMethod(
+    _ method: String, params: [String: Any], era: AgentProtocol.Era, id: Any, context: ToolContext, via responder: LoopbackHTTPServer.Responder
+  ) {
+    func answer(_ result: [String: Any]) {
+      respond(result: AgentProtocol.envelope(result, era: era, method: method, serverInfo: Self.serverInfo), id: id, via: responder)
+    }
+    guard AgentProtocol.declaresTasks(era: era, params: params) else {
+      return respond(error: AgentTasks.missingCapability, "Missing required client capability", data: AgentTasks.missingCapabilityData, id: id, via: responder)
+    }
+    guard let taskId = params["taskId"] as? String else {
+      return respond(error: -32602, "\(method) needs a taskId string.", id: id, via: responder)
+    }
+    switch method {
+    case "tasks/get":
+      guard let task = tools.task(taskId, context: context) else {
+        return respond(error: -32602, "Failed to retrieve task: Task not found (tasks end an hour after they finish, and when Atelier quits)", id: id, via: responder)
+      }
+      answer(task)
+    case "tasks/update":
+      // No task ever asks for input, so no key is outstanding and every response is ignored
+      // (Tasks: Task Update Requests); the ack is still owed for a known task.
+      guard params["inputResponses"] is [String: Any] else {
+        return respond(error: -32602, "tasks/update needs an inputResponses object.", id: id, via: responder)
+      }
+      guard tools.hasTask(taskId) else { return respond(error: -32602, "Task not found", id: id, via: responder) }
+      answer([:])
+    default:
+      // As cancel_job: the ack is eventually consistent, and a finished task stays as it ended.
+      guard tools.cancelTask(taskId) else { return respond(error: -32602, "Task not found", id: id, via: responder) }
+      answer([:])
+    }
   }
 
   private func respond(result: [String: Any], id: Any, via responder: LoopbackHTTPServer.Responder) {

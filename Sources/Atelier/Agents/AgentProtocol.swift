@@ -19,6 +19,7 @@ nonisolated enum AgentProtocol {
   static let clientCapabilitiesKey = "io.modelcontextprotocol/clientCapabilities"
   static let serverInfoKey = "io.modelcontextprotocol/serverInfo"
   static let skillsExtension = "io.modelcontextprotocol/skills"
+  static let tasksExtension = AgentTasks.extensionID
 
   /// Header names as the listener gives them (lowercased).
   static let versionHeader = "mcp-protocol-version"
@@ -61,8 +62,12 @@ nonisolated enum AgentProtocol {
     }
   }
 
-  /// The methods whose `params` value a modern request also sends as `Mcp-Name`.
-  static let namedMethods: [String: String] = ["tools/call": "name", "resources/read": "uri", "prompts/get": "name"]
+  /// The methods whose `params` value a modern request also sends as `Mcp-Name` (the task
+  /// methods' since Tasks: Streamable HTTP: Routing Headers).
+  static let namedMethods: [String: String] = [
+    "tools/call": "name", "resources/read": "uri", "prompts/get": "name",
+    "tasks/get": "taskId", "tasks/update": "taskId", "tasks/cancel": "taskId",
+  ]
 
   /// Results a modern client may cache (Caching): they carry `ttlMs` and `cacheScope`.
   static let cacheableMethods: Set<String> = [
@@ -153,22 +158,39 @@ nonisolated enum AgentProtocol {
   }
 
   /// What `initialize` and `server/discover` declare. Skills ride on Resources, so declaring the
-  /// extension means declaring `resources` too (Skills: Capability Negotiation).
-  static func capabilities() -> [String: Any] {
-    [
+  /// extension means declaring `resources` too (Skills: Capability Negotiation). Tasks only on
+  /// 2026-07-28 (`server/discover`): the extension isn't defined for 2025-11-25, whose own
+  /// experimental tasks this server doesn't offer.
+  static func capabilities(modern: Bool) -> [String: Any] {
+    var extensions: [String: Any] = [skillsExtension: ["directoryRead": true]]
+    if modern { extensions[tasksExtension] = [String: Any]() }
+    return [
       "tools": ["listChanged": false],
       "resources": [String: Any](),
-      "extensions": [skillsExtension: ["directoryRead": true]],
+      "extensions": extensions,
     ]
   }
 
-  /// Wraps a result for its era: modern results say they're complete, carry the server's name in
-  /// `_meta` and, when cacheable, how long to keep them (always private: every result depends on
-  /// this user's library). Legacy results are left as 2025 shaped them.
+  /// Whether this request may be answered with a task: a 2026-07-28 request whose own
+  /// `_meta` capabilities declare the extension (Tasks: Capability Negotiation; earlier requests
+  /// don't count). A 2025 `params.task` is ignored in either era.
+  static func declaresTasks(era: Era, params: [String: Any]) -> Bool {
+    guard era.isModern,
+      let capabilities = (params["_meta"] as? [String: Any])?[clientCapabilitiesKey] as? [String: Any],
+      let extensions = capabilities["extensions"] as? [String: Any]
+    else { return false }
+    return extensions[tasksExtension] is [String: Any]
+  }
+
+  /// Wraps a result for its era: modern results say they're complete (a CreateTaskResult keeps
+  /// its "task"), carry the server's name in `_meta` and, when cacheable, how long to keep them
+  /// (always private: every result depends on this user's library). Tasks' results are never
+  /// cacheable, so a Task's own `ttlMs` is never overwritten. Legacy results are left as 2025
+  /// shaped them.
   static func envelope(_ result: [String: Any], era: Era, method: String, serverInfo: [String: Any]) -> [String: Any] {
     guard era.isModern else { return result }
     var result = result
-    result["resultType"] = "complete"
+    if !(method == "tools/call" && result["resultType"] as? String == "task") { result["resultType"] = "complete" }
     var meta = result["_meta"] as? [String: Any] ?? [:]
     meta[serverInfoKey] = serverInfo
     result["_meta"] = meta
