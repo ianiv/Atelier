@@ -859,6 +859,11 @@ extension Automation {
           started["job_id"] is String && started["history_step"] == nil && ran["has_paint"] as? Bool == true && ran["merged"] as? Bool == true
             && listedJob?["tool"] as? String == "edit_image" && (listedJob?["prompt"] as? String)?.contains("green area") == true,
           "edit_image in the background returns a job_id, get_job collects the painted edit and list_jobs lists it (\(listedJob?["tool"] ?? "not listed"))")
+        // Job ids are task ids (AgentTasks): opaque and unguessable, and summaries say how it ended.
+        let jobID = started["job_id"] as? String ?? ""
+        check(
+          jobID.hasPrefix("job-") && UUID(uuidString: String(jobID.dropFirst(4))) != nil && listedJob?["status"] as? String == "done",
+          "the background job's id is job-<UUID> and list_jobs says it's done (\(jobID), \(listedJob?["status"] ?? "no status"))")
         paintedStep = (ran["history_step"] as? NSNumber)?.int64Value
         if let paintedStep, let found = model.history.items.first(where: { $0.id.logicalTime == paintedStep }),
            let paintedImage = await model.history.image(for: found)
