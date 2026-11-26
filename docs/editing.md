@@ -81,7 +81,7 @@ The **Look** checkbox at the top of the inspector (a switch on iPad) turns the w
 - **Highlights** brightens (+) or pulls back (−) the brightest tones, by up to a stop at white, which can bring back a little of a too-bright sky.
 - **Shadows** lifts (+) or deepens (−) the darkest tones, by up to a stop, without making pure black grey.
 
-All three are −1 to 1 and work on each pixel's brightness, keeping its colour, so they go into **Export LUT…** like the rest of the grade.
+All three are −1 to 1 and work on each pixel's brightness, keeping its colour, so they go into **Export LUT…** like the rest of the grade. A strong lift can clip saturated blues and reds, whose brightest channel reaches white before the pixel's brightness does.
 
 ### LUT
 

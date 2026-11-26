@@ -127,6 +127,28 @@ struct EditPipelineTests {
     #expect(close(graded(.init(shadows: 1), [200, 200, 200]), [200, 200, 200]))
     let lifted = 25.5 * pow(2, 1 - 0.104 as Float)
     #expect(close(graded(.init(shadows: 1), [25.5, 25.5, 25.5]), [lifted, lifted, lifted]))
+    // Above white brightness leaves values alone (slope 1), so halation's over-white input isn't
+    // multiplied up.
+    for b in [-1.0, 1.0] {
+      #expect(close(graded(.init(brightness: b), [306, 306, 306]), [306, 306, 306]))
+    }
+  }
+
+  /// Near and below zero luma the ratio is its limit at black, (1 + a)·2^s, not 1, so a colour
+  /// match's opposite-sign channels aren't treated unlike their neighbours.
+  @Test func toneRatioIsContinuousAtBlack() {
+    let grade = EditOptions.Grade(brightness: 0.5, shadows: 1)
+    let limit: Float = 2 * 2
+    func graded(_ p: SIMD3<Float>) -> SIMD3<Float> {
+      var planes = planes([p])
+      Grade.apply(grade, to: &planes)
+      return pixel(planes, 0)
+    }
+    #expect(close(graded([-10, 5, 0]), [-40, 20, 0]))
+    let tiny: Float = 0.001
+    #expect(close(graded([tiny, tiny, tiny]), [tiny * limit, tiny * limit, tiny * limit], 1e-5))
+    let small: Float = 0.01
+    #expect(abs(graded([small, small, small]).x / small - limit) < 1e-3)
   }
 
   @Test func toneControlsAreMonotoneAndKeepHue() {

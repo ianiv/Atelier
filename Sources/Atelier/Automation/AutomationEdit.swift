@@ -1102,10 +1102,15 @@ extension Automation {
     grade.contrast = 0.2
     grade.saturation = 0.1
     grade.vibrance = 0.2
+    time("Grade") {
+      var p = planes
+      Grade.apply(grade, to: &p)
+    }
+    // Brightness, highlights and shadows run their own loop, so they're timed apart.
     grade.brightness = 0.2
     grade.highlights = -0.3
     grade.shadows = 0.25
-    time("Grade") {
+    time("Grade with tone") {
       var p = planes
       Grade.apply(grade, to: &p)
     }
