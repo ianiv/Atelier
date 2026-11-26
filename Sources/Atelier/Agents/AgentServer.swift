@@ -732,7 +732,8 @@ final class AgentServer {
       callTool(
         params, id: id, era: era, streaming: request.headers["accept"]?.contains("text/event-stream") == true,
         context: context, via: responder)
-    case "tasks/get", "tasks/update", "tasks/cancel" where era.isModern:
+    // Each pattern needs its own `where`: one after the list guards only the last.
+    case "tasks/get" where era.isModern, "tasks/update" where era.isModern, "tasks/cancel" where era.isModern:
       taskMethod(method, params: params, era: era, id: id, context: context, via: responder)
     case _ where SkillsRPC.methods.contains(method):
       let rpc = SkillsRPC(store: skills)
@@ -830,7 +831,10 @@ final class AgentServer {
       respond(result: AgentProtocol.envelope(result, era: era, method: method, serverInfo: Self.serverInfo), id: id, via: responder)
     }
     guard AgentProtocol.declaresTasks(era: era, params: params) else {
-      return respond(error: AgentTasks.missingCapability, "Missing required client capability", data: AgentTasks.missingCapabilityData, id: id, via: responder)
+      // HTTP 400 (base schema 2026-07-28, MissingRequiredClientCapabilityError).
+      return respond(
+        error: AgentTasks.missingCapability, "Missing required client capability", data: AgentTasks.missingCapabilityData, id: id, status: 400,
+        via: responder)
     }
     guard let taskId = params["taskId"] as? String else {
       return respond(error: -32602, "\(method) needs a taskId string.", id: id, via: responder)

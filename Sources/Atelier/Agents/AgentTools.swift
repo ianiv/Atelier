@@ -1227,6 +1227,8 @@ final class AgentTools {
       // Bad arguments are the call's own error, not a task (no task is made for them), and the
       // task is only returned once tasks/get can read it (Tasks: Task Creation): it's in `jobs`.
       await waitUntil { job.accepted }
+      // The call itself was cancelled (its stream closed) before the job checked its arguments.
+      guard job.accepted else { throw CancellationError() }
       if job.finishedAt != nil { return try Self.outcome(of: job) }
       return AgentTasks.createResult(Self.snapshot(job), isRemote: ToolContext.current.isRemote)
     }

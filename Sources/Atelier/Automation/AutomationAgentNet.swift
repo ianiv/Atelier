@@ -229,7 +229,12 @@ extension Automation {
         "the same path from this Mac is read (\(errorText(localPath.body) ?? "no error"))")
 
       await modernChecks(lan: lan, port: port, token: token, post: { host, message, token, headers in await post(host, message, token: token, headers: headers) }, check: check)
-      await taskChecks(model, lan: lan, port: port, token: token, post: { host, message, token, headers in await post(host, message, token: token, headers: headers) }, check: check)
+      // The tasks section saves steps: never into the project you were working in.
+      if let index = args.firstIndex(of: "--project"), index + 1 < args.count {
+        await taskChecks(model, lan: lan, port: port, token: token, post: { host, message, token, headers in await post(host, message, token: token, headers: headers) }, check: check)
+      } else {
+        check(false, "tasks: --project NAME is given (the tasks section saves steps, so it's skipped)")
+      }
 
       started.regenerateToken()
       let old = await post(lan, list, token: token)
@@ -537,11 +542,11 @@ extension Automation {
   /// one, with the Queue paused, gets a task (resultType "task", a job-<UUID> id, working, ttlMs
   /// null, pollIntervalMs) that get_job and list_jobs (with its status) see too; tasks/get
   /// without or with the wrong Mcp-Name (-32020), from a request that doesn't declare it
-  /// (-32021 naming the extension), for an unknown id (-32602); tasks/update's ack, and -32602
+  /// (400 -32021 naming the extension), for an unknown id (-32602); tasks/update's ack, and -32602
   /// without inputResponses; tasks/cancel's ack and the task then cancelled, and its ack again
   /// once it's over; another task polled to completed with the step in its result and an hour's
   /// ttlMs, read from another device without paths; tasks/result and tasks/list 404 -32601, a
-  /// 2025 tasks/get -32601; an argument error and a tool that isn't a job answered inline. The
+  /// 2025 tasks/get and tasks/update -32601; an argument error and a tool that isn't a job answered inline. The
   /// Queue's paused state is put back.
   @MainActor
   static func taskChecks(
@@ -655,8 +660,8 @@ extension Automation {
     let undeclared = await task("tasks/get", taskID, declares: false)
     let required = ((undeclared.body["error"] as? [String: Any])?["data"] as? [String: Any])?["requiredCapabilities"] as? [String: Any]
     check(
-      code(undeclared.body) == -32021 && (required?["extensions"] as? [String: Any])?[tasksID] is [String: Any],
-      "tasks/get from a request that doesn't declare the extension: -32021 naming it (got \(undeclared.status) \(code(undeclared.body) ?? 0))")
+      undeclared.status == 400 && code(undeclared.body) == -32021 && (required?["extensions"] as? [String: Any])?[tasksID] is [String: Any],
+      "tasks/get from a request that doesn't declare the extension: 400 -32021 naming it (got \(undeclared.status) \(code(undeclared.body) ?? 0))")
     let unknownID = AgentTasks.newJobID()
     let unknown = await task("tasks/get", unknownID)
     check(code(unknown.body) == -32602, "tasks/get for an unknown task: -32602")
@@ -713,6 +718,9 @@ extension Automation {
     check(taskList.status == 404 && code(taskList.body) == -32601, "tasks/list: 404 -32601 (got \(taskList.status))")
     let legacy = await post("127.0.0.1", ["jsonrpc": "2.0", "id": 91, "method": "tasks/get", "params": ["taskId": secondID]], nil, [:])
     check(legacy.status == 200 && code(legacy.body) == -32601, "a 2025 tasks/get: 200 -32601 (got \(legacy.status))")
+    let legacyUpdate = await post(
+      "127.0.0.1", ["jsonrpc": "2.0", "id": 92, "method": "tasks/update", "params": ["taskId": secondID, "inputResponses": [String: Any]()]], nil, [:])
+    check(legacyUpdate.status == 200 && code(legacyUpdate.body) == -32601, "a 2025 tasks/update: 200 -32601 (got \(legacyUpdate.status) \(code(legacyUpdate.body) ?? 0))")
 
     let badArguments = result(await callTool("edit_image_look", ["history_step": 999_999]).body)
     check(

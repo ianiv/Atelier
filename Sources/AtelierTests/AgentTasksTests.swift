@@ -101,11 +101,11 @@ struct AgentTasksTests {
     #expect(Set(ids).count == ids.count)
     for id in ids.prefix(5) {
       #expect(id.hasPrefix("job-"))
-      let uuid = UUID(uuidString: String(id.dropFirst(4)))
-      #expect(uuid != nil)
       #expect(id == id.lowercased())
       // Version 4: 122 random bits.
-      #expect(String(id.dropFirst(4))[String.Index(utf16Offset: 14, in: String(id.dropFirst(4)))] == "4")
+      let uuid = UUID(uuidString: String(id.dropFirst(4)))?.uuid
+      #expect(uuid != nil)
+      #expect(uuid.map { $0.6 >> 4 } == 4)
     }
   }
 
