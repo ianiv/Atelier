@@ -895,13 +895,29 @@ final class EditModel {
     return saved
   }
 
-  /// Adds the current look to the library (numbered when the name's taken) and makes it the
-  /// loaded profile.
+  /// Adds the current look to the library as `name`, the name asked for in Add to Library,
+  /// replacing the library's profile of that name, and makes it the loaded profile.
   @discardableResult
-  func addProfileToLibrary() throws -> GrainProfile {
-    let added = try profiles.add(profileToSave)
+  func addProfileToLibrary(named name: String) throws -> GrainProfile {
+    var added = profileToSave
+    added.name = name
+    try profiles.save(added)
     profile = added
     return added
+  }
+
+  /// Renames the loaded profile, the library's (`profileIsInLibrary`), in the library and on the
+  /// screen. The look on screen is left as it is.
+  func renameProfile(to newName: String) throws {
+    guard let profile, profileIsInLibrary else { return }
+    self.profile = try profiles.rename(profile.name, to: newName)
+  }
+
+  /// Moves the loaded profile's library file to the Trash. The look and its grain data stay on
+  /// the screen, as a profile no longer in the library (Add to Library… puts it back).
+  func deleteProfileFromLibrary() throws {
+    guard let profile, profileIsInLibrary, let listed = profiles.profile(named: profile.name) else { return }
+    try profiles.delete(listed)
   }
 
   /// Whether the loaded profile is the library's of that name, unchanged.

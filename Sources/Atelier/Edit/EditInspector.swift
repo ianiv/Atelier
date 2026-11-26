@@ -123,6 +123,62 @@ struct EditInspector: View {
 
 // MARK: - Look
 
+/// The name sheet for Add to Library (starting from the profile's own name, numbered when that's
+/// taken) and Rename. Adding under a name that's in the library replaces that profile, as Save
+/// Preset does, and says so first; renaming to one is refused.
+private struct ProfileNameSheet: View {
+  @Environment(EditModel.self) private var edit
+  @Environment(\.dismiss) private var dismiss
+  let title: String
+  let action: String
+  let original: String
+  /// Whether a name in the library replaces that profile (Add), rather than being refused (Rename).
+  let replaces: Bool
+  let commitName: (String) -> Void
+  @State private var name: String
+
+  init(title: String, action: String, name: String, replaces: Bool, commit: @escaping (String) -> Void) {
+    self.title = title
+    self.action = action
+    original = name
+    self.replaces = replaces
+    commitName = commit
+    _name = State(initialValue: name)
+  }
+
+  private var trimmed: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
+  private var taken: Bool { trimmed != (replaces ? "" : original) && edit.profiles.profile(named: trimmed) != nil }
+  private var canCommit: Bool { !trimmed.isEmpty && (replaces || !taken) }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Text(title).font(.headline)
+      TextField("Name", text: $name)
+        .onSubmit(commit)
+      // Always there, so the sheet doesn't change size as the name changes.
+      Text(replaces ? "Replaces the profile “\(trimmed)” in your library." : "There's already a profile named “\(trimmed)”.")
+        .font(.caption).foregroundStyle(.secondary)
+        .opacity(taken ? 1 : 0)
+      HStack {
+        Spacer()
+        Button("Cancel", role: .cancel) { dismiss() }
+          .keyboardShortcut(.cancelAction)
+        Button(action, action: commit)
+          .keyboardShortcut(.defaultAction)
+          .disabled(!canCommit)
+      }
+    }
+    .padding()
+    .frame(width: 320)
+  }
+
+  private func commit() {
+    guard canCommit else { return }
+    commitName(trimmed)
+    dismiss()
+  }
+}
+
 /// The Profile section: the grain profile and the reference. It reads none of the look's settings, so a
 /// slider moving leaves it alone.
 private struct EditLookSection: View {
@@ -131,6 +187,9 @@ private struct EditLookSection: View {
   @Environment(FileDialogs.self) private var fileDialogs
   @Binding var choosingStep: Bool
   @Binding var error: String?
+  @State private var addingToLibrary = false
+  @State private var renaming = false
+  @State private var confirmingDelete = false
 
   var body: some View {
     let _ = EditViewCounts.note("EditInspector Look")
@@ -146,22 +205,32 @@ private struct EditLookSection: View {
           ForEach(edit.profiles.profiles, id: \.name) { profile in
             Button(profile.name) { edit.applyProfile(profile) }
           }
+          Divider()
+          // Act on the loaded profile when it's the library's; disabled otherwise.
+          Button(edit.profileIsInLibrary ? "Rename “\(edit.profile?.name ?? "")”…" : "Rename…") { renaming = true }
+            .disabled(!edit.profileIsInLibrary)
+          Button(edit.profileIsInLibrary ? "Delete “\(edit.profile?.name ?? "")”…" : "Delete…") { confirmingDelete = true }
+            .disabled(!edit.profileIsInLibrary)
         } label: {
           EditInspector.nameLabel(edit.profile?.name)
         }
         .nameMenu(edit.profile?.name)
         .accessibilityHint(EditInspector.profileHelp)
       }
-      HStack(spacing: 6) {
-        Button("Open Profile…") { openProfile() }
-          .help("Open a .grain.json profile from anywhere, such as one saved by another copy of Atelier")
-        Button("Save Profile…") { saveProfile() }
-          .help("Save the current look as a .grain.json profile")
-        Button("Add to Library") {
-          do { try edit.addProfileToLibrary() } catch { self.error = error.localizedDescription }
+      // Equal columns, so no button is cut short in a narrow inspector.
+      Grid(horizontalSpacing: 6, verticalSpacing: 6) {
+        GridRow {
+          Button { openProfile() } label: { Text("Open Profile…").frame(maxWidth: .infinity) }
+            .help("Open a .grain.json profile from anywhere, such as one saved by another copy of Atelier")
+          Button { saveProfile() } label: { Text("Save Profile…").frame(maxWidth: .infinity) }
+            .help("Save the current look as a .grain.json profile")
         }
-        .disabled(edit.profileIsInLibrary)
-        .help("Add the current look to your profile library, so it's in the Profile menu")
+        GridRow {
+          Button { addingToLibrary = true } label: { Text("Add to Library…").frame(maxWidth: .infinity) }
+            .disabled(edit.profileIsInLibrary)
+            .help("Add the current look to your profile library, so it's in the Profile menu")
+          Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
+        }
       }
       .controlSize(.small)
       .padding(.vertical, 4)
@@ -195,6 +264,25 @@ private struct EditLookSection: View {
       .foregroundStyle(.secondary)
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.bottom, 4)
+    }
+    .sheet(isPresented: $addingToLibrary) {
+      ProfileNameSheet(title: "Add to Library", action: "Add", name: edit.profiles.unusedName(edit.profileToSave.name), replaces: true) { name in
+        do { try edit.addProfileToLibrary(named: name) } catch { self.error = error.localizedDescription }
+      }
+    }
+    .sheet(isPresented: $renaming) {
+      ProfileNameSheet(title: "Rename Profile", action: "Rename", name: edit.profile?.name ?? "", replaces: false) { name in
+        do { try edit.renameProfile(to: name) } catch { self.error = error.localizedDescription }
+      }
+    }
+    .confirmationDialog(
+      "Delete the profile “\(edit.profile?.name ?? "")”?", isPresented: $confirmingDelete, titleVisibility: .visible
+    ) {
+      Button("Delete", role: .destructive) {
+        do { try edit.deleteProfileFromLibrary() } catch { self.error = error.localizedDescription }
+      }
+    } message: {
+      Text("Its file goes to the Trash. The look stays on screen, and Add to Library… puts it back.")
     }
   }
 

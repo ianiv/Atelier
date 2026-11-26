@@ -403,6 +403,48 @@ final class GrainProfileStore {
     try add(GrainProfile.load(from: url))
   }
 
+  /// Renames the listed profile `name` to `newName`, a name that isn't listed: its file moves to
+  /// one named after the new name (a numbered one when that's another profile's), so a rename
+  /// that changes only case keeps its file on a case-insensitive volume.
+  @discardableResult
+  func rename(_ name: String, to newName: String) throws -> GrainProfile {
+    guard var renamed = self.profile(named: name), let oldURL = files[name] else { throw RenameError.missing(name) }
+    guard newName != name else { return renamed }
+    guard files[newName] == nil else { throw RenameError.taken(newName) }
+    renamed.name = newName
+    files[name] = nil
+    let ownFile = LayoutStore.fileName(newName) + "." + GrainProfile.fileExtension
+    // A case-only change of the file name is the same file on a case-insensitive volume, which
+    // `newFileURL` would see as taken.
+    let newURL = ownFile.lowercased() == oldURL.lastPathComponent.lowercased()
+      ? directory.appendingPathComponent(ownFile)
+      : newFileURL(for: newName)
+    do {
+      if newURL != oldURL { try FileManager.default.moveItem(at: oldURL, to: newURL) }
+      try renamed.write(to: newURL)
+    } catch {
+      files[name] = FileManager.default.fileExists(atPath: oldURL.path) ? oldURL : newURL
+      throw error
+    }
+    files[newName] = newURL
+    profiles.removeAll { $0.name == name }
+    profiles.append(renamed)
+    profiles.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    return renamed
+  }
+
+  enum RenameError: LocalizedError {
+    case missing(String)
+    case taken(String)
+
+    var errorDescription: String? {
+      switch self {
+      case .missing(let name): "“\(name)” isn't in your profile library."
+      case .taken(let name): "There's already a profile named “\(name)” in your library."
+      }
+    }
+  }
+
   /// Moves the profile's file to the Trash, or deletes it where there's no Trash (iPad).
   func delete(_ profile: GrainProfile) throws {
     if let url = files[profile.name], FileManager.default.fileExists(atPath: url.path), (try? FileManager.default.trashItem(at: url, resultingItemURL: nil)) == nil {
@@ -412,8 +454,8 @@ final class GrainProfileStore {
     profiles.removeAll { $0.name == profile.name }
   }
 
-  /// `name`, or "name 2", "name 3"… when it's listed.
-  private func unusedName(_ name: String) -> String {
+  /// `name`, or "name 2", "name 3"… when it's listed: what Add to Library suggests.
+  func unusedName(_ name: String) -> String {
     var candidate = name
     var n = 2
     while files[candidate] != nil {

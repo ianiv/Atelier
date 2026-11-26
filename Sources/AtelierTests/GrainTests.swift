@@ -147,6 +147,25 @@ struct GrainTests {
     #expect(Set(GrainProfileStore(directory: folder).profiles.map(\.name)) == ["Day-Night", "Night"])
   }
 
+  /// Renaming moves the profile to a file named after it, refuses a listed name, and a
+  /// case-only rename keeps one file.
+  @MainActor
+  @Test func profileLibraryRename() throws {
+    let folder = FileManager.default.temporaryDirectory.appending(path: "GrainTests-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let store = GrainProfileStore(directory: folder)
+    let old = try store.save(GrainProfile(name: "Night", created: "2026-11-19"))
+    try store.save(GrainProfile(name: "Day", created: "2026-11-19"))
+    #expect(throws: GrainProfileStore.RenameError.self) { try store.rename("Night", to: "Day") }
+    try store.rename("Night", to: "Dusk")
+    #expect(!FileManager.default.fileExists(atPath: old.path))
+    #expect(try GrainProfile.load(from: folder.appending(path: "Dusk.grain.json")).name == "Dusk")
+    try store.rename("Dusk", to: "dusk")
+    let files = try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted()
+    #expect(files == ["Day.grain.json", "dusk.grain.json"])
+    #expect(GrainProfileStore(directory: folder).profiles.map(\.name) == ["Day", "dusk"])
+  }
+
   /// Pillow's mode "F" bicubic, enlarging and shrinking, matches bit for bit; a region is exactly
   /// that part of the whole resize.
   @Test func pillowBicubicFloat() {
