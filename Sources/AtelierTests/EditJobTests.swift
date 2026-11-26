@@ -10,7 +10,7 @@ struct EditJobTests {
   private static let look = EditOptions(
     match: .init(target: .original, tint: 0.5, saturation: 0.25, brightness: 0.1, contrast: 0.2, colour: 0.6),
     histogram: .init(amount: 0.4, space: .rgb),
-    grade: .init(exposure: 0.5, temperature: -20, tint: 6, contrast: 0.1, saturation: -0.2, vibrance: 0.3),
+    grade: .init(exposure: 0.5, brightness: 0.2, highlights: -0.4, shadows: 0.3, temperature: -20, tint: 6, contrast: 0.1, saturation: -0.2, vibrance: 0.3),
     lut: .init(name: "Film.cube", digest: "abc", strength: 0.7),
     halation: .init(amount: 0.3, threshold: 0.7, radius: 30, warmth: 0.9),
     lens: .init(motion: 18, angle: 10, blur: 2),
@@ -84,6 +84,17 @@ struct EditJobTests {
     #expect(lenient.histogram == EditOptions.Histogram() && lenient.grain == EditOptions.Grain.identity)
   }
 
+  /// A record from before brightness, highlights and shadows decodes with them at 0, and a
+  /// partial grade over a base keeps the base's.
+  @Test func toneKeysDecodeFromOlderRecords() throws {
+    let old = try JSONDecoder().decode(EditOptions.self, from: Data(#"{"grade": {"exposure": 1}}"#.utf8))
+    #expect(old.grade.exposure == 1 && old.grade.brightness == 0 && old.grade.highlights == 0 && old.grade.shadows == 0)
+    let over = try EditOptions.decoded(from: Data(#"{"grade": {"exposure": 1}}"#.utf8), over: Self.look)
+    #expect(over.grade.brightness == 0.2 && over.grade.highlights == -0.4 && over.grade.shadows == 0.3)
+    let set = try EditOptions.decoded(from: Data(#"{"grade": {"shadows": -0.5}}"#.utf8), over: Self.look)
+    #expect(set.grade.shadows == -0.5 && set.grade.brightness == 0.2)
+  }
+
   /// Blends keep to 0–1; grain.py's own settings are only rounded (and kept from going
   /// below zero where that means nothing), as grain.py doesn't cap them.
   @Test func snappedRoundsAndClampsOnlyBlends() {
@@ -105,6 +116,11 @@ struct EditJobTests {
     #expect(snapped.snapped == snapped)
     options.grade.exposure = .nan
     #expect(options.snapped.grade.exposure == 0)
+    // Brightness, highlights and shadows keep to −1–1; NaN is 0.
+    options.grade.brightness = 1.7
+    options.grade.highlights = -3
+    options.grade.shadows = .nan
+    #expect(options.snapped.grade.brightness == 1 && options.snapped.grade.highlights == -1 && options.snapped.grade.shadows == 0)
   }
 
   /// The queued job carries the data itself (the queue file keeps it), the record only digests.
@@ -337,6 +353,8 @@ struct EditJobTests {
     let base = Self.look.setting(.lens, on: false)
     let kept = try AgentTools.lookOptions(["grain": ["lum": 5]], over: base)
     #expect(kept.off == [.lens] && kept.grain.lum == 5)
+    #expect(try AgentTools.lookOptions(["grade": ["shadows": 0.4]], over: base).grade.shadows == 0.4)
+    #expect(throws: AgentTools.ToolError.self) { try AgentTools.lookOptions(["grade": ["shadows": 2]], over: base) }
     let replaced = try AgentTools.lookOptions(["off": ["grain", "halation"]], over: base)
     #expect(replaced.off == [.grain, .halation] && replaced.lens == base.lens)
     #expect(try AgentTools.lookOptions(["off": [String]()], over: base).off.isEmpty)

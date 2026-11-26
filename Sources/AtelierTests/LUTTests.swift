@@ -49,7 +49,7 @@ struct LUTTests {
   @Test(arguments: [17, 33]) func exportThenImportIsWithinALevel(size: Int) throws {
     // A curve, a cross-channel mix and a grade, so the table isn't trivially linear.
     let baked = CubeLUT.bake(size: size, name: "Look") { planes in
-      Grade.apply(EditOptions.Grade(temperature: 30, contrast: 0.3, saturation: 0.4), to: &planes)
+      Grade.apply(EditOptions.Grade(brightness: 0.3, highlights: -0.4, shadows: 0.3, temperature: 30, contrast: 0.3, saturation: 0.4), to: &planes)
     }
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("atelier-lut-\(UUID().uuidString).cube")
     defer { try? FileManager.default.removeItem(at: url) }
@@ -71,7 +71,7 @@ struct LUTTests {
       exact.b[i] = (exact.b[i] / step).rounded() * step
     }
     var graded = exact
-    Grade.apply(EditOptions.Grade(temperature: 30, contrast: 0.3, saturation: 0.4), to: &graded)
+    Grade.apply(EditOptions.Grade(brightness: 0.3, highlights: -0.4, shadows: 0.3, temperature: 30, contrast: 0.3, saturation: 0.4), to: &graded)
     for i in graded.r.indices {
       graded.r[i] = min(max(graded.r[i], 0), 255)
       graded.g[i] = min(max(graded.g[i], 0), 255)

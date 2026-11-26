@@ -244,6 +244,9 @@ extension Automation {
       grade.grade.contrast = 0.2
       grade.grade.saturation = 0.15
       grade.grade.exposure = 0.2
+      grade.grade.brightness = 0.2
+      grade.grade.highlights = -0.3
+      grade.grade.shadows = 0.25
       edit.removeLUT()
       edit.options = grade
       do {
@@ -1099,6 +1102,9 @@ extension Automation {
     grade.contrast = 0.2
     grade.saturation = 0.1
     grade.vibrance = 0.2
+    grade.brightness = 0.2
+    grade.highlights = -0.3
+    grade.shadows = 0.25
     time("Grade") {
       var p = planes
       Grade.apply(grade, to: &p)

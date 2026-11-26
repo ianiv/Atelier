@@ -336,11 +336,18 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
 
   // MARK: - Grade (step 6)
 
-  /// The basic grade, applied in this order: exposure, then temperature and tint, contrast,
-  /// saturation and vibrance. All 0 leaves the image alone.
+  /// The basic grade, applied in this order: exposure, brightness, highlights and shadows, then
+  /// temperature and tint, contrast, saturation and vibrance. All 0 leaves the image alone.
   struct Grade: Codable, Hashable, Sendable {
     /// Stops: the image times 2^exposure, grain.py's `expo`.
     var exposure: Double = 0
+    /// Midtones lifted (+) or darkened (−) with black and white held, −1 to 1 (`Grade.apply` has
+    /// the curve). Not `Match.brightness`, which is how far a colour match moves the Lab L mean.
+    var brightness: Double = 0
+    /// The bright tones brightened (+) or pulled back (−), up to a stop at white, −1 to 1.
+    var highlights: Double = 0
+    /// The dark tones lifted (+) or deepened (−), up to a stop near black (pure black stays), −1 to 1.
+    var shadows: Double = 0
     /// Cooler (−) to warmer (+), −100 to 100.
     var temperature: Double = 0
     /// grain.py's `tint`, green (−) to magenta (+), −30 to 30 on the slider, by its formula: green
@@ -359,8 +366,11 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
     static let tintRange = -30.0...30.0
     static let unitRange = -1.0...1.0
 
-    init(exposure: Double = 0, temperature: Double = 0, tint: Double = 0, contrast: Double = 0, saturation: Double = 0, vibrance: Double = 0) {
+    init(exposure: Double = 0, brightness: Double = 0, highlights: Double = 0, shadows: Double = 0, temperature: Double = 0, tint: Double = 0, contrast: Double = 0, saturation: Double = 0, vibrance: Double = 0) {
       self.exposure = exposure
+      self.brightness = brightness
+      self.highlights = highlights
+      self.shadows = shadows
       self.temperature = temperature
       self.tint = tint
       self.contrast = contrast
@@ -368,21 +378,25 @@ nonisolated struct EditOptions: Codable, Hashable, Sendable {
       self.vibrance = vibrance
     }
 
-    var isIdentity: Bool { exposure == 0 && temperature == 0 && tint == 0 && contrast == 0 && saturation == 0 && vibrance == 0 }
+    var isIdentity: Bool { exposure == 0 && brightness == 0 && highlights == 0 && shadows == 0 && temperature == 0 && tint == 0 && contrast == 0 && saturation == 0 && vibrance == 0 }
 
     var snapped: Grade {
       Grade(
-        exposure: EditOptions.snap(exposure), temperature: EditOptions.snap(temperature, Self.temperatureRange, step: 0.1),
+        exposure: EditOptions.snap(exposure), brightness: EditOptions.snap(brightness, Self.unitRange),
+        highlights: EditOptions.snap(highlights, Self.unitRange), shadows: EditOptions.snap(shadows, Self.unitRange), temperature: EditOptions.snap(temperature, Self.temperatureRange, step: 0.1),
         tint: EditOptions.snap(tint, step: 0.1), contrast: EditOptions.snap(contrast, Self.unitRange),
         saturation: EditOptions.snap(saturation, Self.unitRange), vibrance: EditOptions.snap(vibrance, Self.unitRange))
     }
 
-    private enum CodingKeys: String, CodingKey { case exposure, temperature, tint, contrast, saturation, vibrance }
+    private enum CodingKeys: String, CodingKey { case exposure, brightness, highlights, shadows, temperature, tint, contrast, saturation, vibrance }
 
     init(from decoder: Decoder) throws {
       let base = EditOptions.base(decoder).grade
       let c = try decoder.container(keyedBy: CodingKeys.self)
       exposure = lenient(c, Double.self, .exposure) ?? base.exposure
+      brightness = lenient(c, Double.self, .brightness) ?? base.brightness
+      highlights = lenient(c, Double.self, .highlights) ?? base.highlights
+      shadows = lenient(c, Double.self, .shadows) ?? base.shadows
       temperature = lenient(c, Double.self, .temperature) ?? base.temperature
       tint = lenient(c, Double.self, .tint) ?? base.tint
       contrast = lenient(c, Double.self, .contrast) ?? base.contrast

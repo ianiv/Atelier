@@ -4,11 +4,26 @@ import Foundation
 /// grain.py's 0–255 float units, nothing clipped until the pipeline truncates at the end (as
 /// grain.py's float array is only clipped when it's written out).
 ///
-/// The grade runs in `EditOptions.Grade`'s order: exposure, temperature, tint, contrast,
-/// saturation, vibrance. A control at 0 is skipped, not applied as nothing, so the defaults give
+/// The grade runs in `EditOptions.Grade`'s order: exposure, brightness, highlights, shadows,
+/// temperature, tint, contrast, saturation, vibrance. A control at 0 is skipped, not applied as nothing, so the defaults give
 /// back the very same floats.
 ///
 /// - Exposure: every channel times 2^exposure, grain.py's `a *= 2 ** s["expo"]`.
+/// - Brightness, highlights and shadows (the tone step) are global curves on the pixel's luma
+///   after exposure (x = luma/255), and R, G and B are all scaled by the one ratio the curves give
+///   the luma, so hue and the channel ratios are kept (a curve per channel would shift hues and
+///   add saturation in the shadows). They're per pixel, not local tone mapping, so the colour
+///   stage stays "each pixel on its own" and Export LUT can still bake it. Each curve is
+///   monotone, so no tones swap places:
+///   - Brightness b: `y = x(1 + a)/(1 + a·x)`, a = 2^(2b) − 1, black and white held (b = 1 takes
+///     mid grey 0.5 to 0.8, −1 to 0.2). Its slope at black is finite (1 + a), so near-black noise
+///     isn't blown up as a gamma's would be. Above white it goes on straight at its slope at 1.
+///   - Highlights h: times 2^(h · smoothstep(0.25, 1, x)), a stop at white and above. The mask is
+///     that wide because a narrower one isn't monotone at −1 stop.
+///   - Shadows s: times 2^(s · (1 − smoothstep(0, 0.5, x))), nothing above half; a gain, so
+///     pure black stays black.
+///   A lift on a saturated dark colour can push one channel past 255, which then clips at the
+///   end: hue is kept, not clipped channels.
 /// - Temperature: a white-balance gain on red and blue, green left alone: red times
 ///   2^(0.25·t), blue times 2^(−0.25·t), t = temperature/100. So 100 is red ×1.19 and blue
 ///   ×0.84, −100 the reverse.
@@ -34,6 +49,12 @@ nonisolated enum Grade {
   static let midGrey: Float = 127.5
   /// How much of vibrance's push skin keeps out of (1 = all of it).
   static let skinProtection: Float = 0.6
+  /// Highlights' and shadows' gain at ±1, in stops.
+  static let toneStops: Float = 1
+  /// Where highlights' mask starts rising (x, luma/255); it's full at white.
+  static let highlightsStart: Float = 0.25
+  /// Where shadows' mask has fallen to nothing (x, luma/255); it's full at black.
+  static let shadowsEnd: Float = 0.5
 
   /// `planes` graded by `grade`. Nothing happens when it's `isIdentity`.
   static func apply(_ grade: EditOptions.Grade, to planes: inout EditPipeline.Planes, cancel: EditPipeline.Cancel = .never) {
@@ -52,15 +73,26 @@ nonisolated enum Grade {
     let saturates = grade.saturation != 0
     let vibrant = vibrance != 0
     let midGrey = midGrey
+    let tone = ToneCurve(grade)
+    let tones = !tone.isIdentity
     planes.withPixelBands(cancel: cancel) { range, r, g, b in
       for i in range {
         var red = r[i]
         var green = g[i]
         var blue = b[i]
+        // Exposure and temperature are channel gains and the tone step scales all three
+        // channels by one ratio, so exposure → tone → temperature is the fused gains times the
+        // ratio of the exposed luma (before the temperature gain), and the fused path stays as is.
+        let toneRatio: Float = tones ? tone.ratio(exposure * luma(red, green, blue) / 255) : 1
         if scales {
           red *= redGain
           green *= exposure
           blue *= blueGain
+        }
+        if tones {
+          red *= toneRatio
+          green *= toneRatio
+          blue *= toneRatio
         }
         if tints {
           green -= tint * 0.5
@@ -90,6 +122,50 @@ nonisolated enum Grade {
         b[i] = blue
       }
     }
+  }
+
+  /// Brightness, highlights and shadows as one luma curve (see the type's doc), with what doesn't
+  /// change per pixel worked out once.
+  struct ToneCurve {
+    /// Brightness' a = 2^(2b) − 1; 0 is off.
+    let a: Float
+    /// Highlights and shadows in stops at full mask; 0 is off.
+    let highlightStops: Float
+    let shadowStops: Float
+
+    init(_ grade: EditOptions.Grade) {
+      // Untrusted values reach here only snapped, but a NaN would blacken the whole image.
+      func unit(_ v: Double) -> Float { v.isFinite ? Float(min(max(v, -1), 1)) : 0 }
+      let brightness = unit(grade.brightness)
+      a = brightness != 0 ? exp2(2 * brightness) - 1 : 0
+      highlightStops = unit(grade.highlights) * Grade.toneStops
+      shadowStops = unit(grade.shadows) * Grade.toneStops
+    }
+
+    var isIdentity: Bool { a == 0 && highlightStops == 0 && shadowStops == 0 }
+
+    /// What a pixel whose luma/255 is `x` is multiplied by. Black (and below, and non-finite)
+    /// is left alone.
+    @inline(__always) func ratio(_ x: Float) -> Float {
+      guard x > 1e-6, x.isFinite else { return 1 }
+      var y = x
+      if a != 0 {
+        y = y <= 1 ? y * (1 + a) / (1 + a * y) : 1 + (y - 1) / (1 + a)
+      }
+      if highlightStops != 0 {
+        y *= exp2(highlightStops * Grade.smoothstep(Grade.highlightsStart, 1, y))
+      }
+      if shadowStops != 0 {
+        y *= exp2(shadowStops * (1 - Grade.smoothstep(0, Grade.shadowsEnd, y)))
+      }
+      return y / x
+    }
+  }
+
+  /// 0 at or below `low`, 1 at or above `high`, the cubic smoothstep between.
+  @inline(__always) static func smoothstep(_ low: Float, _ high: Float, _ x: Float) -> Float {
+    let s = min(max((x - low) / (high - low), 0), 1)
+    return s * s * (3 - 2 * s)
   }
 
   /// grain.py's `luma`: Rec. 601 weights.

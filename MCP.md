@@ -288,7 +288,7 @@ It's non-destructive like the screen. For a step saved from Edit (by the screen,
 
 - `match`: `target` (`reference` or `original`, the image the step was made from, shown as **Step's Input** on the Edit screen; a step made from no image has none), `tint`, `saturation`, `brightness`, `contrast` (0–1, how far each moves to the target's, as `match_colors`), `colour` (grain.py's per-channel color match to the profile's reference; needs a profile).
 - `histogram`: `amount` (0–1), `space` (`luma`, the default, or `rgb`).
-- `grade`: `exposure` (stops), `temperature` (−100 to 100), `tint` (grain.py's green − / magenta +, about −30 to 30), `contrast`, `saturation`, `vibrance` (−1 to 1).
+- `grade`: `exposure` (stops), `brightness` (−1 to 1: lifts or darkens the midtones, black and white held), `highlights` (−1 to 1: the bright tones up or down, up to a stop at white), `shadows` (−1 to 1: the dark tones up or down, up to a stop near black; pure black stays), `temperature` (−100 to 100), `tint` (grain.py's green − / magenta +, about −30 to 30), `contrast`, `saturation`, `vibrance` (−1 to 1).
 - `lut`: `strength` (0–1). The table comes from `lut` or `lut_path`.
 - `halation`: `amount`, `threshold` (default 0.8), `radius` (1–200 px, default 20), `warmth` (default 0.6).
 - `lens`: `motion` (px; smears above 1), `angle` (degrees), `blur` (px; grain.py's default is 3).

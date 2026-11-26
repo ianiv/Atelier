@@ -456,6 +456,9 @@ private struct EditGradeSection: View, Equatable {
     } content: {
       Group {
         EditInspector.slider("Exposure", grade.exposure, \.grade.exposure, EditOptions.Grade.exposureRange, step: 0.01, digits: 2, help: "Brightens or darkens the image in stops: +1 doubles the light, −1 halves it.")
+        EditInspector.slider("Brightness", grade.brightness, \.grade.brightness, EditOptions.Grade.unitRange, step: 0.01, digits: 2, help: "Lifts (+) or darkens (−) the midtones, leaving black and white in place, −1 to 1.")
+        EditInspector.slider("Highlights", grade.highlights, \.grade.highlights, EditOptions.Grade.unitRange, step: 0.01, digits: 2, help: "Brightens (+) or recovers (−) the brightest tones, up to a stop at white, −1 to 1.")
+        EditInspector.slider("Shadows", grade.shadows, \.grade.shadows, EditOptions.Grade.unitRange, step: 0.01, digits: 2, help: "Lifts (+) or deepens (−) the darkest tones without moving pure black, −1 to 1.")
         EditInspector.slider("Temperature", grade.temperature, \.grade.temperature, EditOptions.Grade.temperatureRange, step: 1, digits: 0, help: "Warms (+) or cools (−) the white balance, −100 to 100.")
         EditInspector.slider("Tint", grade.tint, \.grade.tint, EditOptions.Grade.tintRange, step: 0.1, digits: 1, help: "Shifts the colour toward green (−) or magenta (+).")
         EditInspector.slider("Contrast", grade.contrast, \.grade.contrast, EditOptions.Grade.unitRange, step: 0.01, digits: 2, help: "Raises (+) or lowers (−) contrast around mid grey, −1 to 1.")

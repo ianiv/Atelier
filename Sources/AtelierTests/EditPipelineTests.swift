@@ -109,6 +109,59 @@ struct EditPipelineTests {
     // Saturation around Rec. 601 luma.
     #expect(close(graded(.init(saturation: -1), [200, 100, 50]), [124.2, 124.2, 124.2]))
     #expect(close(graded(.init(saturation: 1), [200, 100, 50]), [275.8, 75.8, -24.2]))
+    // Brightness: x(1 + a)/(1 + a·x), a = 2^(2b) − 1, so b = 0.5 takes mid grey to 2/3 and b = ±1
+    // to 0.8 / 0.2; black and white stay.
+    #expect(close(graded(.init(brightness: 0.5), [127.5, 127.5, 127.5]), [170, 170, 170]))
+    #expect(close(graded(.init(brightness: 1), [127.5, 127.5, 127.5]), [204, 204, 204]))
+    #expect(close(graded(.init(brightness: -1), [127.5, 127.5, 127.5]), [51, 51, 51]))
+    for b in [-1.0, 1.0] {
+      #expect(close(graded(.init(brightness: b), [0, 0, 0]), [0, 0, 0]))
+      #expect(close(graded(.init(brightness: b), [255, 255, 255]), [255, 255, 255]))
+    }
+    // Highlights: a full stop at white, nothing below a quarter.
+    #expect(close(graded(.init(highlights: -1), [255, 255, 255]), [127.5, 127.5, 127.5]))
+    #expect(close(graded(.init(highlights: 1), [255, 255, 255]), [510, 510, 510]))
+    #expect(close(graded(.init(highlights: -1), [50, 50, 50]), [50, 50, 50]))
+    // Shadows: black stays black, nothing above half, 2^(1 − smoothstep(0, 0.5, 0.1)) at 0.1.
+    #expect(close(graded(.init(shadows: 1), [0, 0, 0]), [0, 0, 0]))
+    #expect(close(graded(.init(shadows: 1), [200, 200, 200]), [200, 200, 200]))
+    let lifted = 25.5 * pow(2, 1 - 0.104 as Float)
+    #expect(close(graded(.init(shadows: 1), [25.5, 25.5, 25.5]), [lifted, lifted, lifted]))
+  }
+
+  @Test func toneControlsAreMonotoneAndKeepHue() {
+    let values = [-1.0, 0, 1]
+    for b in values {
+      for h in values {
+        for s in values {
+          let grade = EditOptions.Grade(brightness: b, highlights: h, shadows: s)
+          let greys = stride(from: Float(0), through: 1.5, by: 0.005).map { SIMD3<Float>(repeating: $0 * 255) }
+          var planes = planes(greys)
+          Grade.apply(grade, to: &planes)
+          for i in 1..<greys.count {
+            #expect(planes.r[i] >= planes.r[i - 1] - 1e-3, "b \(b) h \(h) s \(s) at \(greys[i].x)")
+          }
+          // A colour keeps its channel ratios.
+          var colour = self.planes([[180, 90, 30], [40, 25, 10]])
+          Grade.apply(grade, to: &colour)
+          #expect(abs(colour.r[0] / colour.g[0] - 2) < 1e-4 && abs(colour.g[0] / colour.b[0] - 3) < 1e-4)
+          #expect(abs(colour.r[1] / colour.g[1] - 1.6) < 1e-4 && abs(colour.g[1] / colour.b[1] - 2.5) < 1e-4)
+        }
+      }
+    }
+  }
+
+  @Test func toneWithExposureMatchesOrder() {
+    // exposure → tone → temperature, by hand, against the fused gains times the tone ratio.
+    let p: SIMD3<Float> = [120, 100, 70]
+    let tone = EditOptions.Grade(brightness: 0.4, highlights: -0.6, shadows: 0.3)
+    var exposed = planes([p])
+    Grade.apply(.init(exposure: 0.7), to: &exposed)
+    Grade.apply(tone, to: &exposed)
+    Grade.apply(.init(temperature: 60, tint: 5), to: &exposed)
+    var together = planes([p])
+    Grade.apply(.init(exposure: 0.7, brightness: 0.4, highlights: -0.6, shadows: 0.3, temperature: 60, tint: 5), to: &together)
+    #expect(close(pixel(together, 0), pixel(exposed, 0)))
   }
 
   @Test func vibranceFavorsMutedColorsAndSkin() {

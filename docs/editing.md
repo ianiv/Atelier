@@ -75,7 +75,13 @@ The **Look** checkbox at the top of the inspector (a switch on iPad) turns the w
 
 ### Grade
 
-**Exposure** (in stops), **Temperature**, **Tint** (green to magenta), **Contrast**, **Saturation** and **Vibrance** (saturation that moves muted colors more than vivid ones), applied in that order.
+**Exposure** (in stops), **Brightness**, **Highlights**, **Shadows**, **Temperature**, **Tint** (green to magenta), **Contrast**, **Saturation** and **Vibrance** (saturation that moves muted colors more than vivid ones), applied in that order.
+
+- **Brightness** lifts (+) or darkens (−) the midtones while black and white stay where they are; it isn't Exposure, which moves everything, white included. (Match's **Brightness** is a different control: how far a colour match moves the image's brightness.)
+- **Highlights** brightens (+) or pulls back (−) the brightest tones, by up to a stop at white, which can bring back a little of a too-bright sky.
+- **Shadows** lifts (+) or deepens (−) the darkest tones, by up to a stop, without making pure black grey.
+
+All three are −1 to 1 and work on each pixel's brightness, keeping its colour, so they go into **Export LUT…** like the rest of the grade.
 
 ### LUT
 
