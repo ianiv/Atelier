@@ -1,9 +1,10 @@
 import SwiftUI
 
 /// The Select tool's controls, over the bottom of the canvas while Select is the tool: Smart |
-/// Rectangle | Lasso (what a drag makes), Select Subject (Vision, nothing to download), SAM 2.1's size and download, then Add / Subtract /
-/// Replace to put the preview into the mask, Fill to paint it with the paint color, and Clear Points.
-/// Every control stays; ones that can't act are disabled.
+/// Rectangle | Lasso (what a drag makes), Select Subject (Vision, nothing to download), SAM 2.1's
+/// size and download, then Add / Subtract / Replace to put the preview into the mask, Fill to
+/// paint it with the paint color, and Clear Points. Every control stays; ones that can't act are
+/// disabled.
 struct AutoMaskBar: View {
   @Environment(CreateModel.self) private var model
   @Environment(\.undoManager) private var undoManager

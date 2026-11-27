@@ -212,6 +212,101 @@ struct AutoMaskTests {
     #expect(replaced.coverage(width: width, height: height) == shape.coverage(width: width, height: height))
   }
 
+  @Test func lassoPointsMapThroughTheCanvasPlacement() throws {
+    // At 2× with the image moved: the 2000×1000 drawing's left edge is 400 frame pixels left of
+    // the frame's, its top 200 above, so frame (0, 0) is image (200, 100).
+    let source = CGSize(width: 1000, height: 500)
+    let placement = CanvasPlacement(sourceSize: source, frameSize: source, scale: 2, offset: CGSize(width: 100, height: 50))
+    let frame = [CGPoint(x: 0, y: 0), CGPoint(x: 200, y: 0), CGPoint(x: 0, y: 100)]
+    let image = frame.map { placement.sourcePoint(fromFrame: $0) }
+    #expect(image == [CGPoint(x: 200, y: 100), CGPoint(x: 300, y: 100), CGPoint(x: 200, y: 150)])
+    let shape = try #require(SelectionShape.lasso(image, imageSize: source))
+    let coverage = shape.coverage(width: 1000, height: 500)
+    #expect(coverage[110 * 1000 + 210] == 255)
+    #expect(coverage[140 * 1000 + 290] == 0)
+    #expect(coverage[90 * 1000 + 210] == 0)
+  }
+
+  // MARK: iPad touches for Rectangle and Lasso
+
+  typealias Tracker = ShapeTouchTracker<Int>
+
+  static func finger(_ id: Int, _ x: Double, _ y: Double, _ phase: Tracker.Phase = .active) -> Tracker.Touch {
+    Tracker.Touch(id: id, isPencil: false, phase: phase, location: CGPoint(x: x, y: y))
+  }
+
+  static func pencil(_ id: Int, _ x: Double, _ y: Double, _ phase: Tracker.Phase = .active) -> Tracker.Touch {
+    Tracker.Touch(id: id, isPencil: true, phase: phase, location: CGPoint(x: x, y: y))
+  }
+
+  static func draws(_ actions: [Tracker.Action]) -> Bool {
+    actions.contains { if case .draw = $0 { true } else if case .end = $0 { true } else { false } }
+  }
+
+  @Test func oneFingerDrawsAndEndsOneShape() {
+    var tracker = Tracker()
+    #expect(tracker.update([Self.finger(1, 0, 0)]) == [.draw(start: .zero, to: .zero)])
+    #expect(tracker.update([Self.finger(1, 50, 40)]) == [.draw(start: .zero, to: CGPoint(x: 50, y: 40))])
+    #expect(tracker.end([Self.finger(1, 60, 40, .ended)]) == [
+      .draw(start: .zero, to: CGPoint(x: 60, y: 40)), .end(start: .zero, to: CGPoint(x: 60, y: 40), pencil: false),
+    ])
+    // Lifted in `onChanged` instead: ended there, nothing more at the gesture's end.
+    var lifted = Tracker()
+    _ = lifted.update([Self.finger(1, 0, 0)])
+    #expect(lifted.update([Self.finger(1, 10, 10, .ended)]).last == .end(start: .zero, to: CGPoint(x: 10, y: 10), pencil: false))
+    #expect(lifted.end([]).isEmpty)
+  }
+
+  @Test func aSecondFingerCancelsAndPinches() {
+    var tracker = Tracker()
+    _ = tracker.update([Self.finger(1, 0, 0)])
+    _ = tracker.update([Self.finger(1, 20, 0)])
+    let actions = tracker.update([Self.finger(1, 20, 0), Self.finger(2, 100, 100)])
+    #expect(actions == [.cancel, .pinch(ids: [1, 2], a: CGPoint(x: 20, y: 0), b: CGPoint(x: 100, y: 100))])
+    #expect(tracker.end([Self.finger(1, 20, 0, .ended), Self.finger(2, 100, 100, .ended)]).isEmpty)
+  }
+
+  @Test func theFingerLeftAfterAPinchDrawsNothing() {
+    // The drawing finger lifts first and drops out of the events; the other keeps moving.
+    var tracker = Tracker()
+    _ = tracker.update([Self.finger(1, 0, 0)])
+    _ = tracker.update([Self.finger(1, 0, 0), Self.finger(2, 50, 50)])
+    _ = tracker.update([Self.finger(1, 0, 0, .ended), Self.finger(2, 60, 60)])
+    #expect(!Self.draws(tracker.update([Self.finger(2, 90, 90)])))
+    #expect(!Self.draws(tracker.update([Self.finger(2, 140, 140)])))
+    #expect(tracker.end([Self.finger(2, 150, 150, .ended)]).isEmpty)
+    // And the other way round: both landing together.
+    var together = Tracker()
+    _ = together.update([Self.finger(1, 0, 0), Self.finger(2, 50, 50)])
+    #expect(!Self.draws(together.update([Self.finger(2, 90, 90)])))
+    #expect(together.end([Self.finger(2, 90, 90, .ended)]).isEmpty)
+  }
+
+  @Test func pencilDrawsPastARestingFingerWhichThenDrawsNothing() {
+    var tracker = Tracker()
+    _ = tracker.update([Self.finger(9, 300, 300), Self.pencil(1, 0, 0)])
+    #expect(tracker.update([Self.finger(9, 300, 300), Self.pencil(1, 40, 40)]) == [.draw(start: .zero, to: CGPoint(x: 40, y: 40))])
+    #expect(tracker.update([Self.finger(9, 300, 300), Self.pencil(1, 50, 50, .ended)]).last
+      == .end(start: .zero, to: CGPoint(x: 50, y: 50), pencil: true))
+    // The Pencil has dropped out; the resting finger moving draws nothing.
+    #expect(!Self.draws(tracker.update([Self.finger(9, 320, 330)])))
+    #expect(!Self.draws(tracker.update([Self.finger(9, 360, 380)])))
+    #expect(tracker.end([Self.finger(9, 360, 380, .ended)]).isEmpty)
+  }
+
+  @Test func aPinchCancelsAndAnUnseenEndStartsOver() {
+    var tracker = Tracker()
+    _ = tracker.update([Self.finger(1, 0, 0)])
+    let wasDrawing = tracker.cancel()
+    #expect(wasDrawing)
+    #expect(!Self.draws(tracker.update([Self.finger(1, 30, 30)])))
+    // A new gesture whose start came without the last one's end: none of its touches were seen.
+    #expect(tracker.update([Self.finger(5, 10, 10)]) == [.draw(start: CGPoint(x: 10, y: 10), to: CGPoint(x: 10, y: 10))])
+    // A cancelled touch drops the shape.
+    #expect(tracker.update([Self.finger(5, 20, 20, .cancelled)]) == [.cancel])
+    #expect(tracker.end([]).isEmpty)
+  }
+
   @Test func selectModeRawValuesStayPut() {
     #expect(SelectMode.allCases.map(\.rawValue) == ["smart", "rectangle", "lasso"])
     #expect(SelectMode.stored("lasso") == .lasso)

@@ -172,9 +172,6 @@ struct CanvasView: View {
   @State private var selectDrag: (start: CGPoint, end: CGPoint)?
   /// The Lasso being drawn, in image pixels.
   @State private var selectLasso: [CGPoint]?
-  /// A Rectangle or Lasso drag was dropped (a pinch, or a second finger, came in): the rest of
-  /// the gesture draws nothing, and its end commits nothing.
-  @State private var shapeCancelled = false
   /// Whether a video run's preview plays (`AppSettings.playsVideoPreviewsKey`).
   @AppStorage(AppSettings.playsVideoPreviewsKey) private var playsVideoPreviews = false
   /// The pointer is over the frame, so a playing preview shows its control (as a clip does).
@@ -185,6 +182,12 @@ struct CanvasView: View {
     /// Option is held: a Select click marks what to leave out.
     @State private var optionDown = false
     @FocusState private var canvasFocused: Bool
+    /// A Rectangle or Lasso drag was dropped (a pinch came in): the rest of the drag draws
+    /// nothing, and its end commits nothing. Cleared by the next drag's start too, as a drag the
+    /// system cancels never reaches `onEnded`.
+    @State private var shapeCancelled = false
+    /// Where the drag under way began, to tell a fresh drag's first change from the rest.
+    @State private var dragStart: CGPoint?
   #else
     /// Where each finger's drag began, for moving with one finger.
     @State private var touchStart: CGPoint?
@@ -192,11 +195,8 @@ struct CanvasView: View {
     @State private var pencilStart: CGPoint?
     /// When the Pencil last marked a point or box, so the same touch's tap doesn't mark again.
     @State private var pencilMarkedAt: Date?
-    /// The touch (Pencil or one finger) drawing a Rectangle or Lasso, where it began (view
-    /// points; nil once it's done) and where it was last.
-    @State private var shapeTouch: SpatialEventCollection.Event.ID?
-    @State private var shapeStart: CGPoint?
-    @State private var shapeLast: CGPoint?
+    /// The touches of a Rectangle or Lasso gesture: which draws and when it's done.
+    @State private var shapeTracker = ShapeTouchTracker<SpatialEventCollection.Event.ID>()
     /// Two fingers' pinch with Rectangle or Lasso, which moves and zooms together: the touches and
     /// where they and the canvas were when it began.
     @State private var twoFinger: (ids: [SpatialEventCollection.Event.ID], center: CGPoint, distance: Double, scale: Double, offset: CGSize)?
@@ -590,14 +590,18 @@ struct CanvasView: View {
   }
 
   /// Follows a Rectangle or Lasso drag from `start` to `location` (view points). A lasso's points
-  /// are kept a couple of view points apart (`SelectionShape.appending`), whatever the zoom.
-  private func drawShape(from start: CGPoint, to location: CGPoint, frame: CGRect, points: Double, zoom: Double) {
+  /// are kept a couple of view points apart (`SelectionShape.appending`), whatever the zoom: the
+  /// spacing is two view points mapped through the same placement as the points themselves, so a
+  /// zoomed-in refine region spaces them by its own scale too.
+  private func drawShape(from start: CGPoint, to location: CGPoint, frame: CGRect, points: Double) {
     guard model.autoMask.selectMode == .lasso else {
       return dragSelection(from: start, to: location, frame: frame, points: points)
     }
-    guard let point = selectPoint(location, frame: frame, points: points) else { return }
+    guard let point = selectPoint(location, frame: frame, points: points),
+          let beside = selectPoint(CGPoint(x: location.x + 2, y: location.y), frame: frame, points: points)
+    else { return }
     let drawn = selectLasso ?? selectPoint(start, frame: frame, points: points).map { [$0] } ?? []
-    selectLasso = SelectionShape.appending(point, to: drawn, minSpacing: 2 / max(zoom * points, 0.0001))
+    selectLasso = SelectionShape.appending(point, to: drawn, minSpacing: hypot(beside.x - point.x, beside.y - point.y))
   }
 
   /// Ends a Rectangle or Lasso drag: the shape drawn becomes the selection (one undo step). A
@@ -621,10 +625,14 @@ struct CanvasView: View {
   /// Drops a Rectangle or Lasso being drawn, for the rest of its gesture: a pinch took over. Never
   /// commits it, as a pinch's end would otherwise.
   private func cancelShape() {
-    guard selectDrag != nil || selectLasso != nil else { return }
+    #if os(macOS)
+      guard selectDrag != nil || selectLasso != nil else { return }
+      shapeCancelled = true
+    #else
+      shapeTracker.cancel()
+    #endif
     selectDrag = nil
     selectLasso = nil
-    shapeCancelled = true
   }
 
   #if os(macOS)
@@ -638,12 +646,17 @@ struct CanvasView: View {
       let selects = model.canvasTool == .select
       return DragGesture(minimumDistance: paints ? 0 : 2)
         .onChanged { value in
+          // A fresh drag: one cancelled by the system never reached `onEnded` to clear this.
+          if value.startLocation != dragStart {
+            dragStart = value.startLocation
+            shapeCancelled = false
+          }
           // A pinch dropped the shape: the rest of the drag neither draws nor moves.
           if shapeCancelled { return }
           if paints, !spaceDown, gestureStart == nil {
             canvasFocused = true
             if selects, model.autoMask.selectMode != .smart {
-              drawShape(from: value.startLocation, to: value.location, frame: frame, points: points, zoom: zoom)
+              drawShape(from: value.startLocation, to: value.location, frame: frame, points: points)
             } else if selects {
               dragSelection(from: value.startLocation, to: value.location, frame: frame, points: points)
             } else if colors {
@@ -657,6 +670,7 @@ struct CanvasView: View {
         }
         .onEnded { value in
           gestureStart = nil
+          dragStart = nil
           endStroke()
           if shapeCancelled {
             shapeCancelled = false
@@ -677,8 +691,10 @@ struct CanvasView: View {
       SpatialEventGesture()
         .onChanged { events in
           let active = events.filter { $0.phase == .active }
-          if model.canvasTool == .select, model.autoMask.selectMode != .smart {
-            shapeTouches(events, canvas: canvas, frame: frame, points: points, zoom: zoom)
+          // Only while the mask can take a selection (the mode picker is disabled otherwise):
+          // then fingers move the image as with any tool.
+          if model.canvasTool == .select, model.autoMask.selectMode != .smart, model.canPaintMask {
+            shapeTouches(events, canvas: canvas, frame: frame, points: points)
           } else if model.canvasTool == .select, let pencil = events.first(where: { $0.kind == .pencil }) {
             // With Select the Pencil marks: a tap a point, a drag a box.
             guard model.canPaintMask else { return }
@@ -712,14 +728,9 @@ struct CanvasView: View {
           touchStart = nil
           // A shape's touch lifted in the last events (or before them, unseen): it ends the shape,
           // unless it was cancelled.
-          if !shapeCancelled, let id = shapeTouch, let start = shapeStart {
-            let touch = events.first { $0.id == id }
-            if touch?.phase != .cancelled, let location = touch?.location ?? shapeLast {
-              endShape(from: start, to: location)
-              if touch?.kind == .pencil { pencilMarkedAt = Date() }
-            }
-          }
-          resetShapeTouches()
+          shapeActions(shapeTracker.end(Self.shapeTouches(events)), canvas: canvas, frame: frame, points: points)
+          twoFinger = nil
+          selectLasso = nil
           // A Pencil lifted in the gesture's last events, which `onChanged` doesn't see.
           if let start = pencilStart, let pencil = events.first(where: { $0.kind == .pencil }) {
             endSelection(from: start, to: pencil.location, positive: !model.autoMask.negative)
@@ -732,59 +743,51 @@ struct CanvasView: View {
     }
 
     /// Rectangle and Lasso on iPad: Apple Pencil, or one finger alone, draws the shape; two fingers
-    /// move and zoom together. A second finger (or a pinch, `zoomGesture`) landing while one
-    /// draws drops the shape, never commits it, and the rest of the gesture moves and zooms.
-    /// Fingers resting while the Pencil draws are ignored.
-    private func shapeTouches(_ events: SpatialEventCollection, canvas: CanvasState, frame: CGRect, points: Double, zoom: Double) {
-      // A touch left over from a gesture that ended unseen (the system took it).
-      if let id = shapeTouch, !events.contains(where: { $0.id == id }) { resetShapeTouches() }
-      let drawing = shapeTouch.flatMap { id in events.first { $0.id == id } }
-      if drawing?.kind == .pencil || (drawing == nil && events.contains { $0.kind == .pencil }) {
-        guard let pencil = drawing ?? events.first(where: { $0.kind == .pencil }) else { return }
-        trackShape(pencil, frame: frame, points: points, zoom: zoom)
-        return
-      }
-      let fingers = events.filter { $0.phase == .active && $0.kind != .pencil }
-      if fingers.count >= 2 {
-        // Only one finger alone draws: nothing more in this gesture does, once two are down.
-        cancelShape()
-        shapeCancelled = true
-        pinch(canvas, fingers[0], fingers[1], frame: frame, points: points)
-        return
-      }
-      twoFinger = nil
-      if let touch = drawing ?? fingers.first { trackShape(touch, frame: frame, points: points, zoom: zoom) }
+    /// move and zoom together (the rules, and why a lifted touch doesn't start a new shape, are
+    /// `ShapeTouchTracker`'s).
+    private func shapeTouches(_ events: SpatialEventCollection, canvas: CanvasState, frame: CGRect, points: Double) {
+      shapeActions(shapeTracker.update(Self.shapeTouches(events)), canvas: canvas, frame: frame, points: points)
     }
 
-    /// Follows the touch drawing a shape, and ends the shape when it lifts.
-    private func trackShape(_ touch: SpatialEventCollection.Event, frame: CGRect, points: Double, zoom: Double) {
-      guard !shapeCancelled, model.canPaintMask else { return }
-      if shapeTouch == nil {
-        shapeTouch = touch.id
-        shapeStart = touch.location
+    private static func shapeTouches(_ events: SpatialEventCollection) -> [ShapeTouchTracker<SpatialEventCollection.Event.ID>.Touch] {
+      events.map { event in
+        let phase: ShapeTouchTracker<SpatialEventCollection.Event.ID>.Phase = switch event.phase {
+        case .active: .active
+        case .ended: .ended
+        default: .cancelled
+        }
+        return .init(id: event.id, isPencil: event.kind == .pencil, phase: phase, location: event.location)
       }
-      // Done already: this touch's shape was set when it lifted.
-      guard touch.id == shapeTouch, let start = shapeStart else { return }
-      switch touch.phase {
-      case .active:
-        drawShape(from: start, to: touch.location, frame: frame, points: points, zoom: zoom)
-        shapeLast = touch.location
-      case .ended:
-        drawShape(from: start, to: touch.location, frame: frame, points: points, zoom: zoom)
-        endShape(from: start, to: touch.location)
-        shapeStart = nil
-        if touch.kind == .pencil { pencilMarkedAt = Date() }
-      default:
-        cancelShape()
+    }
+
+    /// Carries out what the tracker decided.
+    private func shapeActions(
+      _ actions: [ShapeTouchTracker<SpatialEventCollection.Event.ID>.Action], canvas: CanvasState, frame: CGRect, points: Double
+    ) {
+      var pinched = false
+      for action in actions {
+        switch action {
+        case .draw(let start, let location):
+          drawShape(from: start, to: location, frame: frame, points: points)
+        case .end(let start, let location, let pencil):
+          endShape(from: start, to: location)
+          if pencil { pencilMarkedAt = Date() }
+        case .cancel:
+          selectDrag = nil
+          selectLasso = nil
+        case .pinch(let ids, let a, let b):
+          pinch(canvas, ids: ids, a, b, frame: frame, points: points)
+          pinched = true
+        }
       }
+      if !pinched { twoFinger = nil }
     }
 
     /// Two fingers move and zoom the canvas together, keeping the image under them in place:
     /// with Rectangle and Lasso one finger draws, so there's no other way to move it.
-    private func pinch(_ canvas: CanvasState, _ a: SpatialEventCollection.Event, _ b: SpatialEventCollection.Event, frame: CGRect, points: Double) {
-      let ids = [a.id, b.id]
-      let center = CGPoint(x: (a.location.x + b.location.x) / 2, y: (a.location.y + b.location.y) / 2)
-      let distance = max(hypot(a.location.x - b.location.x, a.location.y - b.location.y), 1)
+    private func pinch(_ canvas: CanvasState, ids: [SpatialEventCollection.Event.ID], _ a: CGPoint, _ b: CGPoint, frame: CGRect, points: Double) {
+      let center = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
+      let distance = max(hypot(a.x - b.x, a.y - b.y), 1)
       let start = twoFinger.flatMap { $0.ids == ids ? $0 : nil }
         ?? (ids: ids, center: center, distance: distance, scale: canvas.effectiveScale, offset: canvas.offset)
       twoFinger = start
@@ -797,14 +800,6 @@ struct CanvasView: View {
       canvas.offset.height += (center.y - start.center.y) / points
     }
 
-    private func resetShapeTouches() {
-      shapeTouch = nil
-      shapeStart = nil
-      shapeLast = nil
-      shapeCancelled = false
-      twoFinger = nil
-      selectLasso = nil
-    }
   #endif
 
   /// The canvas image's detail layers (`CreateModel.canvasDetail`) over it, each at its rectangle
@@ -977,8 +972,9 @@ struct CanvasView: View {
         let shapes = model.canvasTool == .select && model.autoMask.selectMode != .smart
         if shapes { cancelShape() }
         #if os(iOS)
-          // There two fingers move and zoom together, in `shapeTouches`.
-          if shapes { return }
+          // There two fingers move and zoom together, in `shapeTouches` (only while the mask can
+          // take a selection; otherwise fingers work as with any tool).
+          if shapes, model.canPaintMask { return }
         #endif
         let start = gestureStart ?? (canvas.effectiveScale, canvas.offset)
         gestureStart = start

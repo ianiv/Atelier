@@ -142,3 +142,111 @@ nonisolated enum SelectionShape: Equatable, Sendable {
     CanvasMask(strokes: [stroke]).coverage(width: width, height: height)
   }
 }
+
+/// What the touches in one iPad gesture do with Rectangle and Lasso Select, kept apart from the
+/// view so its rules can be tested: Apple Pencil, or one finger alone, draws one shape; two
+/// fingers move and zoom. The invariant: a gesture draws at most one shape, and once it's done
+/// (ended, cancelled, or a second finger came) nothing more in that gesture draws, while any
+/// touch seen in it is still down — a lifted touch drops out of the events while others stay, so
+/// "the drawing touch is gone" never means "a new gesture". Fingers resting while the Pencil
+/// draws are ignored. Only when none of the touches seen is in the events (a gesture whose end
+/// went unseen, the system took it) does it start over.
+nonisolated struct ShapeTouchTracker<ID: Hashable> {
+  enum Phase: Equatable { case active, ended, cancelled }
+
+  struct Touch: Equatable {
+    var id: ID
+    var isPencil: Bool
+    var phase: Phase
+    var location: CGPoint
+  }
+
+  enum Action: Equatable {
+    /// The shape follows the drawing touch from `start` to `to` (view points).
+    case draw(start: CGPoint, to: CGPoint)
+    /// The drawing touch lifted at `to`: the shape becomes the selection.
+    case end(start: CGPoint, to: CGPoint, pencil: Bool)
+    /// The shape being drawn is dropped, never committed.
+    case cancel
+    /// Two fingers (`ids`, in order) at `a` and `b` move and zoom the canvas.
+    case pinch(ids: [ID], a: CGPoint, b: CGPoint)
+  }
+
+  /// Every touch seen in this gesture.
+  private(set) var seen: Set<ID> = []
+  private var drawing: ID?
+  private var drawingIsPencil = false
+  private var start: CGPoint?
+  private var last: CGPoint?
+  /// Nothing more draws in this gesture.
+  private(set) var done = false
+
+  /// A shape is being drawn.
+  var inProgress: Bool { start != nil && !done }
+
+  mutating func update(_ events: [Touch]) -> [Action] {
+    if !seen.isEmpty, !events.contains(where: { seen.contains($0.id) }) { self = ShapeTouchTracker() }
+    seen.formUnion(events.map(\.id))
+    let current = drawing.flatMap { id in events.first { $0.id == id } }
+    if current?.isPencil == true || (drawing == nil && events.contains { $0.isPencil }) {
+      guard let pencil = current ?? events.first(where: \.isPencil) else { return [] }
+      return track(pencil)
+    }
+    let fingers = events.filter { $0.phase == .active && !$0.isPencil }
+    if fingers.count >= 2 {
+      let actions: [Action] = inProgress ? [.cancel] : []
+      // Only one finger alone draws: once two are down, this gesture only moves and zooms, even
+      // after one lifts (else the finger left would start a stray shape).
+      done = true
+      start = nil
+      return actions + [.pinch(ids: [fingers[0].id, fingers[1].id], a: fingers[0].location, b: fingers[1].location)]
+    }
+    // The drawing touch, else (nothing drawn yet) the one finger down.
+    guard let touch = current ?? (drawing == nil ? fingers.first : nil) else { return [] }
+    return track(touch)
+  }
+
+  /// A pinch (`MagnifyGesture`) took over: drops the shape, and nothing more draws in this
+  /// gesture. True when a shape was being drawn.
+  @discardableResult
+  mutating func cancel() -> Bool {
+    let was = inProgress
+    done = true
+    start = nil
+    return was
+  }
+
+  /// The gesture ended, with its last events: the drawing touch lifting there (or before, unseen)
+  /// ends the shape, unless it was cancelled. Starts over for the next gesture.
+  mutating func end(_ events: [Touch]) -> [Action] {
+    defer { self = ShapeTouchTracker() }
+    guard !done, let id = drawing, let start else { return [] }
+    let touch = events.first { $0.id == id }
+    if touch?.phase == .cancelled { return [.cancel] }
+    guard let location = touch?.location ?? last else { return [] }
+    return [.draw(start: start, to: location), .end(start: start, to: location, pencil: drawingIsPencil)]
+  }
+
+  private mutating func track(_ touch: Touch) -> [Action] {
+    guard !done else { return [] }
+    if drawing == nil {
+      drawing = touch.id
+      drawingIsPencil = touch.isPencil
+      start = touch.location
+    }
+    guard touch.id == drawing, let start else { return [] }
+    switch touch.phase {
+    case .active:
+      last = touch.location
+      return [.draw(start: start, to: touch.location)]
+    case .ended:
+      done = true
+      self.start = nil
+      return [.draw(start: start, to: touch.location), .end(start: start, to: touch.location, pencil: touch.isPencil)]
+    case .cancelled:
+      done = true
+      self.start = nil
+      return [.cancel]
+    }
+  }
+}
