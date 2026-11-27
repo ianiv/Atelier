@@ -129,6 +129,96 @@ struct AutoMaskTests {
     #expect(AutoMaskMode.add.applied(picked, to: nil)?.coverage(width: width, height: height) == coverage(top))
   }
 
+  // MARK: Rectangle and Lasso
+
+  @Test func rectangleIsStandardizedAndCutToTheImage() {
+    let size = CGSize(width: 100, height: 50)
+    // Dragged up and left from past the bottom right.
+    #expect(
+      SelectionShape.rect(from: CGPoint(x: 150, y: 80), to: CGPoint(x: 60, y: 20), imageSize: size)
+        == .rect(CGRect(x: 60, y: 20, width: 40, height: 30)))
+    // Less than a pixel, or off the image: nothing.
+    #expect(SelectionShape.rect(from: CGPoint(x: 10, y: 10), to: CGPoint(x: 10.5, y: 30), imageSize: size) == nil)
+    #expect(SelectionShape.rect(from: CGPoint(x: 120, y: 0), to: CGPoint(x: 200, y: 40), imageSize: size) == nil)
+  }
+
+  @Test func rectangleCoversExactlyItsPixels() {
+    let shape = SelectionShape.rect(CGRect(x: 3, y: 2, width: 5, height: 4))
+    let coverage = shape.coverage(width: 12, height: 10)
+    #expect(coverage.count(where: { $0 != 0 }) == 20)
+    #expect(coverage[2 * 12 + 3] == 255 && coverage[5 * 12 + 7] == 255)
+    #expect(coverage[1 * 12 + 3] == 0 && coverage[2 * 12 + 8] == 0)
+    #expect(shape.actionName == "Select Rectangle")
+  }
+
+  @Test func lassoNeedsAreaOnTheImage() {
+    let size = CGSize(width: 100, height: 100)
+    #expect(SelectionShape.lasso([CGPoint(x: 0, y: 0), CGPoint(x: 10, y: 10)], imageSize: size) == nil)
+    // Collinear: no area.
+    #expect(SelectionShape.lasso([CGPoint(x: 0, y: 0), CGPoint(x: 10, y: 10), CGPoint(x: 20, y: 20)], imageSize: size) == nil)
+    // Wholly off the image.
+    #expect(SelectionShape.lasso([CGPoint(x: 200, y: 0), CGPoint(x: 300, y: 0), CGPoint(x: 250, y: 50)], imageSize: size) == nil)
+    #expect(SelectionShape.lasso([CGPoint(x: 0, y: 0), CGPoint(x: CGFloat.nan, y: 0), CGPoint(x: 5, y: 5)], imageSize: size) == nil)
+    // Partly off it is kept as drawn.
+    let partly = [CGPoint(x: -20, y: 10), CGPoint(x: 50, y: 10), CGPoint(x: 50, y: 60)]
+    #expect(SelectionShape.lasso(partly, imageSize: size) == .polygon(partly))
+    #expect(SelectionShape.lasso(partly, imageSize: size)?.actionName == "Select Lasso")
+  }
+
+  @Test func lassoPointsAreSpacedAndCapped() {
+    var points: [CGPoint] = []
+    for x in stride(from: 0.0, through: 10, by: 0.5) {
+      points = SelectionShape.appending(CGPoint(x: x, y: 0), to: points, minSpacing: 2)
+    }
+    // The first, then every 2 px.
+    #expect(points.first == .zero)
+    #expect(points.map(\.x) == [0, 2, 4, 6, 8, 10])
+    #expect(SelectionShape.appending(CGPoint(x: CGFloat.infinity, y: 0), to: points, minSpacing: 2) == points)
+    let full = (0..<SelectionShape.maxLassoPoints).map { CGPoint(x: Double($0) * 3, y: 0) }
+    #expect(SelectionShape.appending(CGPoint(x: -100, y: 0), to: full, minSpacing: 2).count == SelectionShape.maxLassoPoints)
+  }
+
+  @Test func lassoTriangleCoversAboutItsArea() throws {
+    let triangle = [CGPoint(x: 0, y: 0), CGPoint(x: 100, y: 0), CGPoint(x: 0, y: 100)]
+    let shape = try #require(SelectionShape.lasso(triangle, imageSize: CGSize(width: 100, height: 100)))
+    #expect(abs(SelectionShape.area(triangle)) == 5000)
+    let count = shape.coverage(width: 100, height: 100).count(where: { $0 != 0 })
+    #expect(abs(count - 5000) <= 110)
+  }
+
+  @Test func crossingLassoFillsBothLobes() throws {
+    // A figure 8: the two loops wind opposite ways, and both are selected.
+    let eight = [CGPoint(x: 0, y: 0), CGPoint(x: 40, y: 40), CGPoint(x: 40, y: 0), CGPoint(x: 0, y: 40)]
+    // Its signed area is nothing (the loops cancel), but it isn't a line.
+    #expect(SelectionShape.area(eight) == 0)
+    let shape = try #require(SelectionShape.lasso(eight, imageSize: CGSize(width: 40, height: 40)))
+    let coverage = shape.coverage(width: 40, height: 40)
+    #expect(coverage[20 * 40 + 5] == 255)
+    #expect(coverage[20 * 40 + 35] == 255)
+    #expect(coverage[3 * 40 + 20] == 0)
+  }
+
+  @Test func shapeSelectionCommitsLikeSAMs() throws {
+    let width = 10, height = 10
+    let shape = SelectionShape.rect(CGRect(x: 0, y: 0, width: 10, height: 5))
+    let image = try #require(SAMGeometry.grayImage(shape.coverage(width: width, height: height), width: width, height: height))
+    let picked = try #require(CanvasMask.Stroke.bitmap(image))
+    let existing = CanvasMask(rects: [CGRect(x: 0, y: 0, width: 5, height: 10)])
+    let added = try #require(AutoMaskMode.add.applied(picked, to: existing))
+    #expect(added.coverage(width: width, height: height).count(where: { $0 != 0 }) == 75)
+    let subtracted = try #require(AutoMaskMode.subtract.applied(picked, to: existing))
+    #expect(subtracted.coverage(width: width, height: height).count(where: { $0 != 0 }) == 25)
+    let replaced = try #require(AutoMaskMode.replace.applied(picked, to: existing))
+    #expect(replaced.coverage(width: width, height: height) == shape.coverage(width: width, height: height))
+  }
+
+  @Test func selectModeRawValuesStayPut() {
+    #expect(SelectMode.allCases.map(\.rawValue) == ["smart", "rectangle", "lasso"])
+    #expect(SelectMode.stored("lasso") == .lasso)
+    #expect(SelectMode.stored("polygon") == .smart)
+    #expect(SelectMode.stored(nil) == .smart)
+  }
+
   // MARK: Encoder cache
 
   @Test func encoderCacheKeyChangesWithTheImageAndModel() throws {

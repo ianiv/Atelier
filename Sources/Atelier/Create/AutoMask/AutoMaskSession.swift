@@ -41,15 +41,18 @@ nonisolated enum AutoMaskMode: String, CaseIterable, Sendable, Codable {
   }
 }
 
-/// What the Select tool selects from: SAM's clicks and box, or Vision's subject (under a point, or
-/// all of them). Each change is an undo step (`AutoMaskSession.change`).
+/// What the Select tool selects from: SAM's clicks and box, Vision's subject (under a point, or
+/// all of them), or a Rectangle or Lasso shape. Each change is an undo step
+/// (`AutoMaskSession.change`).
 struct AutoMaskPrompt: Equatable {
   var points: [SAMSegmenter.Point] = []
   var box: CGRect?
   var subject = false
   var subjectPoint: CGPoint?
+  /// A Rectangle or Lasso selection; it stands alone (a click or box afterwards drops it).
+  var shape: SelectionShape?
 
-  var isEmpty: Bool { points.isEmpty && box == nil && !subject }
+  var isEmpty: Bool { points.isEmpty && box == nil && !subject && shape == nil }
 
   /// The clicks the decoder can take beside the box (`SAMGeometry.promptInputs`), so the dots on
   /// the canvas are the ones used: the earliest go.
@@ -118,6 +121,13 @@ enum AutoMaskError: LocalizedError {
 @Observable
 final class AutoMaskSession {
   static let sizeKey = "autoMaskModelSize"
+  static let selectModeKey = "selectToolMode"
+
+  /// Smart, Rectangle or Lasso: what a drag on the canvas makes. Remembered; not an undo step, and
+  /// it leaves the selection there is (a shape made in one mode commits the same in another).
+  var selectMode = SelectMode.stored(UserDefaults.standard.string(forKey: AutoMaskSession.selectModeKey)) {
+    didSet { UserDefaults.standard.set(selectMode.rawValue, forKey: Self.selectModeKey) }
+  }
 
   /// Which SAM 2.1 to use (Small unless picked otherwise). Changing it starts over: a selection
   /// is the model's (`setSize` makes that an undo step).
@@ -133,6 +143,8 @@ final class AutoMaskSession {
   /// The preview is Vision's subject (under `subjectPoint`, else all of them), not SAM's.
   private var subject = false
   private var subjectPoint: CGPoint?
+  /// The Rectangle or Lasso selection, when that's what the preview is of.
+  private(set) var shape: SelectionShape?
   /// The points came back (an undo) while a run's preview covered their image: selecting waits
   /// until the image shows again (`resumeSelecting`).
   private(set) var selectionWaits = false
@@ -145,11 +157,11 @@ final class AutoMaskSession {
   private(set) var image: CGImage?
   private var task: Task<Void, Never>?
 
-  var hasPrompt: Bool { !points.isEmpty || box != nil }
+  var hasPrompt: Bool { !points.isEmpty || box != nil || shape != nil }
 
   /// What the preview is selected from now.
   var prompt: AutoMaskPrompt {
-    AutoMaskPrompt(points: points, box: box, subject: subject, subjectPoint: subjectPoint)
+    AutoMaskPrompt(points: points, box: box, subject: subject, subjectPoint: subjectPoint, shape: shape)
   }
 
   /// Starts over when the canvas shows another image. Not an undo step: the steps on the old
@@ -168,6 +180,7 @@ final class AutoMaskSession {
     box = nil
     subject = false
     subjectPoint = nil
+    shape = nil
     selectionWaits = false
     preview = nil
     failure = nil
@@ -200,6 +213,15 @@ final class AutoMaskSession {
     follow(model.image)
     let next = AutoMaskPrompt(points: points, box: rect.standardized)
     change(to: next.trimmed(), actionName: "Select Box", model: model, undoManager: undoManager)
+  }
+
+  /// Selects a Rectangle or Lasso shape (image pixels): one undo step, “Select Rectangle” or
+  /// “Select Lasso”. It replaces whatever was selected (points, box, subject or another shape);
+  /// no model, so nothing needs downloading.
+  func setShape(_ shape: SelectionShape, model: CreateModel, undoManager: UndoManager? = nil) {
+    guard model.canPaintMask else { return }
+    follow(model.image)
+    change(to: AutoMaskPrompt(shape: shape), actionName: shape.actionName, model: model, undoManager: undoManager)
   }
 
   /// Select Subject: Vision's subject (the one under `point`, else all of them) as the preview,
@@ -266,6 +288,7 @@ final class AutoMaskSession {
     box = prompt.box
     subject = prompt.subject
     subjectPoint = prompt.subjectPoint
+    shape = prompt.shape
     failure = nil
     selectionWaits = false
     // Under a run's preview the image can't be selected on; its points wait for it.
@@ -275,7 +298,9 @@ final class AutoMaskSession {
       selectionWaits = true
       return
     }
-    if prompt.subject {
+    if let shape = prompt.shape {
+      run(model) { model in try await model.shapeSelection(shape) }
+    } else if prompt.subject {
       let point = prompt.subjectPoint
       run(model) { model in try await model.subjectSelection(at: point).selection }
     } else if hasPrompt {
@@ -366,7 +391,8 @@ extension AutoMaskSession {
   }
 
   /// The selection with its tint, pixel count and mask stroke, all worked out off the main actor.
-  private static func selection(_ coverage: [UInt8], width: Int, height: Int, image: CGImage) async -> AutoMaskSelection {
+  /// Rectangle and Lasso shapes come through here too (`CreateModel.shapeSelection`).
+  static func selection(_ coverage: [UInt8], width: Int, height: Int, image: CGImage) async -> AutoMaskSelection {
     let (tint, count, stroke) = await Task.detached(priority: .userInitiated) {
       let count = coverage.reduce(0) { $0 + ($1 != 0 ? 1 : 0) }
       let stroke = count == 0 ? nil : SAMGeometry.grayImage(coverage, width: width, height: height).flatMap { CanvasMask.Stroke.bitmap($0) }
@@ -392,6 +418,19 @@ extension CreateModel {
     let found = try await AutoMaskSession.autoMaskStroke(on: image, prompt: prompt, subjectAt: nil, size: size ?? autoMask.size)
     guard self.image === image, let result = found.result else { throw AutoMaskError.imageChanged }
     return (found.selection, result)
+  }
+
+  /// A Rectangle or Lasso shape's selection on the canvas image: the shape rasterized at the
+  /// image's size (off the main actor) into the same whole-image bitmap SAM's selection is, so
+  /// committing, Fill and the mask's later uses can't tell them apart (Fill takes only bitmap
+  /// strokes, and a bitmap pick flattens with the rest in `CanvasMask.compacted`).
+  func shapeSelection(_ shape: SelectionShape) async throws -> AutoMaskSelection {
+    guard canEditMask, let image else { throw AutoMaskError.cannotPaint }
+    let width = image.width, height = image.height
+    let coverage = await Task.detached(priority: .userInitiated) { shape.coverage(width: width, height: height) }.value
+    let selection = await AutoMaskSession.selection(coverage, width: width, height: height, image: image)
+    guard self.image === image else { throw AutoMaskError.imageChanged }
+    return selection
   }
 
   /// Vision's subject selection on the canvas image: the subject under `point` (image pixels),
