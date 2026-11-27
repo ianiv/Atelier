@@ -8,8 +8,9 @@ extension Automation {
   static func keepCanvasSettings(_ model: CreateModel) -> @MainActor () -> Void {
     let layer = model.canvasLayer, color = model.paintColor, recent = model.recentPaintColors
     let paintSize = model.paintBrushSize, maskSize = model.brushSize, opacity = model.maskOpacity
+    let selectMode = model.autoMask.selectMode
     let defaults = UserDefaults.standard
-    let stored = ["canvasLayer", "paintColor", "recentPaintColors", "paintBrushSize", "brushSize", "maskOpacity"]
+    let stored = ["canvasLayer", "paintColor", "recentPaintColors", "paintBrushSize", "brushSize", "maskOpacity", AutoMaskSession.selectModeKey]
       .map { ($0, defaults.object(forKey: $0)) }
     return {
       model.canvasLayer = layer
@@ -18,6 +19,7 @@ extension Automation {
       model.paintBrushSize = paintSize
       model.brushSize = maskSize
       model.maskOpacity = opacity
+      model.autoMask.selectMode = selectMode
       // Exactly as they were: a key that wasn't set stays unset (the app's default).
       for (key, value) in stored { defaults.set(value, forKey: key) }
     }

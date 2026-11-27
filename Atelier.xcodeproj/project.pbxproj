@@ -262,6 +262,7 @@
 		B908C537C64A752F2FE356A3 /* FaceFinder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1FA4D39BC2BC4443930E113 /* FaceFinder.swift */; };
 		251EE7CC7085758DB96F5ABD /* AutoMaskSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D59EEAE1B0E02FE2DA055D2 /* AutoMaskSession.swift */; };
 		A22FE4A30B0DC7FF13ACDCE6 /* AutoMaskBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8038A15556420887CF8415C5 /* AutoMaskBar.swift */; };
+		5E1EC7A65E1EC7A65E1EC7A6 /* SelectionShape.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E1EC7A55E1EC7A55E1EC7A5 /* SelectionShape.swift */; };
 		CA9420258E514629F01CC732 /* AutomationAutoMask.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60B649AE442AE955874615B1 /* AutomationAutoMask.swift */; };
 		06894D65878AC914FC56A284 /* AutomationPaint.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E317D0BA709EEB6CB86F5A2 /* AutomationPaint.swift */; };
 		39581119081A4BFFD6967A0B /* AutoMaskTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC3541FFA68BA7C5424778CE /* AutoMaskTests.swift */; };
@@ -632,6 +633,7 @@
 		C1FA4D39BC2BC4443930E113 /* FaceFinder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FaceFinder.swift; sourceTree = "<group>"; };
 		5D59EEAE1B0E02FE2DA055D2 /* AutoMaskSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoMaskSession.swift; sourceTree = "<group>"; };
 		8038A15556420887CF8415C5 /* AutoMaskBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoMaskBar.swift; sourceTree = "<group>"; };
+		5E1EC7A55E1EC7A55E1EC7A5 /* SelectionShape.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionShape.swift; sourceTree = "<group>"; };
 		60B649AE442AE955874615B1 /* AutomationAutoMask.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationAutoMask.swift; sourceTree = "<group>"; };
 		4E317D0BA709EEB6CB86F5A2 /* AutomationPaint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationPaint.swift; sourceTree = "<group>"; };
 		CC3541FFA68BA7C5424778CE /* AutoMaskTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoMaskTests.swift; sourceTree = "<group>"; };
@@ -1217,6 +1219,7 @@
 			isa = PBXGroup;
 			children = (
 				8038A15556420887CF8415C5 /* AutoMaskBar.swift */,
+				5E1EC7A55E1EC7A55E1EC7A5 /* SelectionShape.swift */,
 				5D59EEAE1B0E02FE2DA055D2 /* AutoMaskSession.swift */,
 				D8A27E0F10C779523A431B40 /* SubjectMask.swift */,
 				C1FA4D39BC2BC4443930E113 /* FaceFinder.swift */,
@@ -1657,6 +1660,7 @@
 				F37644302DD33DAC7A1E63B0 /* SizePreset.swift in Sources */,
 				367D99D75A579BE7CCD45664 /* CanvasTools.swift in Sources */,
 				A22FE4A30B0DC7FF13ACDCE6 /* AutoMaskBar.swift in Sources */,
+				5E1EC7A65E1EC7A65E1EC7A6 /* SelectionShape.swift in Sources */,
 				251EE7CC7085758DB96F5ABD /* AutoMaskSession.swift in Sources */,
 				DD7B1B704350CC07217B960B /* SubjectMask.swift in Sources */,
 				B908C537C64A752F2FE356A3 /* FaceFinder.swift in Sources */,

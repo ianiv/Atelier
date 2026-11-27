@@ -1614,6 +1614,12 @@ final class AgentTools {
         "points": session.points.count,
         "box": session.box.map(Self.json) ?? NSNull(),
         "subject": session.prompt.subject,
+        "shape": session.shape.map { shape -> String in
+          switch shape {
+          case .rect: "rect"
+          case .polygon: "lasso"
+          }
+        } ?? NSNull(),
         "busy": session.isBusy,
         "failure": session.failure ?? NSNull(),
       ] as [String: Any]

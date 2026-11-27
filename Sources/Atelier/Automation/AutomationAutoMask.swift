@@ -19,6 +19,14 @@ extension Automation {
   ///     through them in order (each undo of a point selecting again, its preview the same as a
   ///     fresh selection of those points), and undoing the commit brings back both the mask and
   ///     its points. Prints encoder and decoder timing.
+  ///   Rectangle and Lasso (always; no model): the mode picked is remembered; a rectangle
+  ///     previews exactly its pixels without touching the mask, as one “Select Rectangle” step,
+  ///     and is a pending selection Generate would add; Add paints it and clears it (“Add
+  ///     Selection”), undo brings the shape back and redo adds it again; a lasso triangle
+  ///     (“Select Lasso”) previews about half the rectangle and Subtract takes exactly that away;
+  ///     Replace makes a rectangle the whole mask; Fill paints exactly a lasso's pixels, leaving
+  ///     the mask alone (“Fill Selection”); Generate's auto-add commits a shape preview; with SAM
+  ///     installed a click afterwards drops the shape.
   /// Points and box are in the input's pixels. `--snapshot-dir` saves the mask over the image
   /// after each part. Prints PASS/FAIL lines.
   ///
@@ -579,6 +587,7 @@ extension Automation {
           check(false, "sam: \(error.localizedDescription)")
         }
       }
+      await shapesCheck(model, input: input, check: check, painted: painted, paintedPixels: paintedPixels, snapshot: snapshot)
       model.clearMask(undoManager: nil)
       // The Select tool as it looks with a preview, for the eye.
       if let snapshots {
@@ -597,6 +606,132 @@ extension Automation {
       }
       finish()
     }
+  }
+
+  /// The Rectangle and Lasso part of `autoMaskCheck` (see there).
+  private static func shapesCheck(
+    _ model: CreateModel, input: CGImage, check: (Bool, String) -> Void, painted: (CGPoint) -> Bool, paintedPixels: () -> Int,
+    snapshot: (String) -> Void
+  ) async {
+    model.clearMask(undoManager: nil)
+    model.clearPaint(undoManager: nil)
+    model.autoMask.clearPoints(model: model, undoManager: nil)
+    model.autoMask.selectMode = .lasso
+    check(
+      UserDefaults.standard.string(forKey: AutoMaskSession.selectModeKey) == SelectMode.lasso.rawValue,
+      "shapes: the Select mode picked is remembered")
+    let history = UndoManager()
+    history.groupsByEvent = false
+    func settle() async {
+      while model.autoMask.isBusy { try? await Task.sleep(for: .milliseconds(20)) }
+    }
+    func select(_ shape: SelectionShape) async {
+      history.beginUndoGrouping()
+      model.autoMask.setShape(shape, model: model, undoManager: history)
+      history.endUndoGrouping()
+      await settle()
+    }
+    func nextUndo() -> String { history.canUndo ? history.undoActionName : "nothing" }
+    let width = Double(input.width), height = Double(input.height)
+    let imageSize = CGSize(width: width, height: height)
+    let rect = CGRect(x: (width / 4).rounded(), y: (height / 4).rounded(), width: (width / 2).rounded(), height: (height / 4).rounded())
+    let rectArea = Int(rect.width * rect.height)
+    let inside = CGPoint(x: rect.midX, y: rect.midY)
+
+    await select(.rect(rect))
+    let preview = model.autoMask.preview
+    check(
+      preview?.selectedPixels == rectArea && preview?.stroke != nil && model.canvasMask == nil && nextUndo() == "Select Rectangle",
+      "shapes: a rectangle previews exactly its \(rectArea) px (\(preview?.selectedPixels ?? 0)) and leaves the mask alone, one “Select Rectangle” step (next to undo “\(nextUndo())”, \(model.autoMask.failure ?? "no failure"))")
+    check(model.hasPendingSelection, "shapes: the rectangle is a pending selection Generate would add")
+
+    history.beginUndoGrouping()
+    let added = model.commitAutoMaskPreview(mode: .add, undoManager: history)
+    history.endUndoGrouping()
+    check(
+      added && paintedPixels() == rectArea && painted(inside) && model.autoMask.shape == nil && model.autoMask.preview == nil
+        && nextUndo() == "Add Selection",
+      "shapes: Add paints the rectangle (\(paintedPixels()) px) and clears the selection, one “Add Selection” step (next to undo “\(nextUndo())”)")
+    snapshot("shape-rect")
+    history.undo()
+    await settle()
+    check(
+      model.canvasMask == nil && model.autoMask.shape == .rect(rect) && model.autoMask.preview?.selectedPixels == rectArea,
+      "shapes: undoing Add takes the mask away and brings back the rectangle and its preview")
+    history.redo()
+    await settle()
+    check(paintedPixels() == rectArea && model.autoMask.shape == nil, "shapes: redo adds it again (\(paintedPixels()) px)")
+
+    // A right triangle on the rectangle's corners: about half of it, all inside it.
+    let triangle = [CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.minY), CGPoint(x: rect.minX, y: rect.maxY)]
+    guard let lasso = SelectionShape.lasso(triangle, imageSize: imageSize) else {
+      return check(false, "shapes: the triangle makes a lasso")
+    }
+    await select(lasso)
+    let lassoPixels = model.autoMask.preview?.selectedPixels ?? 0
+    let half = rectArea / 2, slack = Int(rect.width + rect.height)
+    check(
+      abs(lassoPixels - half) <= slack && nextUndo() == "Select Lasso",
+      "shapes: a lasso triangle previews about half the rectangle (\(lassoPixels) px, half \(half)), one “Select Lasso” step (next to undo “\(nextUndo())”)")
+    history.beginUndoGrouping()
+    let subtracted = model.commitAutoMaskPreview(mode: .subtract, undoManager: history)
+    history.endUndoGrouping()
+    check(
+      subtracted && paintedPixels() == rectArea - lassoPixels && nextUndo() == "Subtract Selection",
+      "shapes: Subtract takes exactly the lasso away (\(paintedPixels()) px of \(rectArea - lassoPixels)), one “Subtract Selection” step")
+    snapshot("shape-lasso-subtract")
+
+    let small = CGRect(x: rect.minX, y: rect.maxY + 8, width: 32, height: 16)
+    if let shape = SelectionShape.rect(from: small.origin, to: CGPoint(x: small.maxX, y: small.maxY), imageSize: imageSize) {
+      await select(shape)
+      history.beginUndoGrouping()
+      let replaced = model.commitAutoMaskPreview(mode: .replace, undoManager: history)
+      history.endUndoGrouping()
+      check(
+        replaced && paintedPixels() == 32 * 16 && !painted(inside) && nextUndo() == "Replace Mask",
+        "shapes: Replace makes a rectangle the whole mask (\(paintedPixels()) px), one “Replace Mask” step")
+    } else {
+      check(false, "shapes: the small rectangle is on the image")
+    }
+
+    // Fill: the lasso's pixels painted in the paint colour, the mask left as it is.
+    let maskBefore = model.canvasMask
+    model.paintColor = CanvasPaint.Color(red: 1, green: 0.5, blue: 0)
+    await select(lasso)
+    let selected = model.autoMask.preview?.coverage.map { $0 != 0 ? UInt8(255) : 0 }
+    history.beginUndoGrouping()
+    let filled = model.fillAutoMaskPreview(undoManager: history)
+    history.endUndoGrouping()
+    let layer = model.canvasPaint?.layer(width: input.width, height: input.height)
+    let covered = layer.flatMap { CanvasMask.alpha(of: $0, width: input.width, height: input.height) }?.map { $0 != 0 ? UInt8(255) : 0 }
+    check(
+      filled && selected != nil && covered == selected && model.canvasMask == maskBefore && model.autoMask.shape == nil
+        && nextUndo() == "Fill Selection",
+      "shapes: Fill paints exactly the lasso (\(lassoPixels) px) and leaves the mask alone, one “Fill Selection” step (next to undo “\(nextUndo())”)")
+    model.clearPaint(undoManager: nil)
+
+    // Generate adds a shape preview first.
+    model.clearMask(undoManager: nil)
+    await select(.rect(rect))
+    let note = model.addPendingSelection(undoManager: history)
+    check(
+      note == nil && paintedPixels() == rectArea && model.autoMask.shape == nil && !model.hasPendingSelection,
+      "shapes: Generate's auto-add commits the rectangle (\(paintedPixels()) px\(note.map { ", \($0)" } ?? ""))")
+
+    if SAMDownload.shared.isInstalled(model.autoMask.size) {
+      await select(.rect(rect))
+      // In a group of its own: with groupsByEvent off, registering outside one raises.
+      history.beginUndoGrouping()
+      model.autoMask.addPoint(inside, positive: true, model: model, undoManager: history)
+      history.endUndoGrouping()
+      check(
+        model.autoMask.shape == nil && model.autoMask.points.count == 1,
+        "shapes: a Smart click after a shape drops the shape (points \(model.autoMask.points.count))")
+      await settle()
+    }
+    model.autoMask.clearPoints(model: model, undoManager: nil)
+    model.clearMask(undoManager: nil)
+    model.clearPaint(undoManager: nil)
   }
 
   /// Each pixel's distance in pixels to the nearest unselected one (or the image's edge), by a

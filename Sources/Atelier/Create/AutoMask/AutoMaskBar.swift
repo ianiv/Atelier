@@ -1,17 +1,21 @@
 import SwiftUI
 
-/// The Select tool's controls, over the bottom of the canvas while Select is the tool: Select
-/// Subject (Vision, nothing to download), SAM 2.1's size and download, then Add / Subtract /
-/// Replace to put the preview into the mask, Fill to paint it with the paint color, and Clear Points.
-/// Every control stays; ones that can't act are disabled.
+/// The Select tool's controls, over the bottom of the canvas while Select is the tool: Smart |
+/// Rectangle | Lasso (what a drag makes), Select Subject (Vision, nothing to download), SAM 2.1's
+/// size and download, then Add / Subtract / Replace to put the preview into the mask, Fill to
+/// paint it with the paint color, and Clear Points. Every control stays; ones that can't act are
+/// disabled.
 struct AutoMaskBar: View {
   @Environment(CreateModel.self) private var model
   @Environment(\.undoManager) private var undoManager
   private var download = SAMDownload.shared
+  /// The Smart | Rectangle | Lasso segment under the pointer, for that segment's tooltip.
+  @State private var hoveredMode: SelectMode?
+  @State private var modePickerWidth: Double = 0
 
   var body: some View {
     // One row when the canvas is wide enough, else two (an iPad in portrait, a narrow window).
-    ToolBarPanel(help: Self.gestureHelp) {
+    ToolBarPanel(help: model.autoMask.selectMode.gestureHelp) {
       selecting
     } second: {
       committing
@@ -23,12 +27,36 @@ struct AutoMaskBar: View {
     .onAppear { download.refresh() }
   }
 
-  /// Select Subject, SAM's size and download, the iPad's include/exclude choice.
+  /// Smart | Rectangle | Lasso, Select Subject, SAM's size and download, the iPad's
+  /// include/exclude choice.
   @ViewBuilder private var selecting: some View {
     @Bindable var session = model.autoMask
     let paints = model.canPaintMask
     let installed = download.isInstalled(session.size)
     let downloading = download.size
+    // Icons, each mode's name its accessibility label and tooltip. SwiftUI ignores `.help` on a
+    // segmented picker's items (the segments are one platform control), so the picker's own
+    // tooltip follows the segment under the pointer instead; the segments are equal widths.
+    // Hover tracking takes no clicks: the picker keeps its own look, keyboard and VoiceOver.
+    Picker("Select", selection: $session.selectMode) {
+      ForEach(SelectMode.allCases, id: \.self) { mode in
+        Label(mode.title, systemImage: mode.systemImage).tag(mode)
+      }
+    }
+    .pickerStyle(.segmented)
+    .labelsHidden()
+    .labelStyle(.iconOnly)
+    .fixedSize()
+    .onGeometryChange(for: Double.self) { $0.size.width } action: { modePickerWidth = $0 }
+    .onContinuousHover { phase in
+      guard case .active(let location) = phase, modePickerWidth > 0 else { return hoveredMode = nil }
+      let modes = SelectMode.allCases
+      let index = Int(location.x / (modePickerWidth / Double(modes.count)))
+      hoveredMode = modes.indices.contains(index) ? modes[index] : nil
+    }
+    .help(hoveredMode?.help ?? "What a drag selects: Smart, Rectangle or Lasso")
+    .disabled(!paints)
+    Divider().frame(height: 18)
     Button("Select Subject", systemImage: "person.crop.rectangle") {
       model.autoMask.selectSubject(model: model, undoManager: undoManager)
     }
@@ -75,7 +103,8 @@ struct AutoMaskBar: View {
       .labelStyle(.iconOnly)
       .fixedSize()
       .help("What a tap marks: something to include, or to leave out")
-      .disabled(!paints || !installed)
+      // Rectangle and Lasso make no points.
+      .disabled(!paints || !installed || session.selectMode != .smart)
     #endif
   }
 
@@ -112,14 +141,6 @@ struct AutoMaskBar: View {
     case .subtract: "Take the selection out of the mask"
     case .replace: "Make the selection the whole mask"
     }
-  }
-
-  private static var gestureHelp: String {
-    #if os(iOS)
-      "Tap to mark what to select (or what to leave out, with − chosen); drag a box with Apple Pencil. Fingers move and zoom."
-    #else
-      "Click to mark what to select, Option-click what to leave out, or drag a box. Hold Space to drag the image."
-    #endif
   }
 
   /// Where the Download button puts SAM, named so it's no surprise.
