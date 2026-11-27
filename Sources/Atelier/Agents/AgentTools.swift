@@ -2651,7 +2651,8 @@ final class AgentTools {
       }
       return found
     }
-    guard canvas, let onCanvas = create.imageItem else {
+    // A sketch on the canvas too: it's an entry, which `imageItem` leaves out.
+    guard canvas, let onCanvas = create.imageItem ?? create.canvasSketchItem else {
       throw ToolError("The canvas doesn't show a saved image. Pass \(name) (see list_history).")
     }
     return onCanvas

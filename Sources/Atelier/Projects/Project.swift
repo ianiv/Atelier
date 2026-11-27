@@ -525,6 +525,14 @@ final nonisolated class Project: Sendable {
     return paint.baked(onto: base) ?? base
   }
 
+  /// The pixel size of the image `tensorId` as a layer row records it at its own density (an
+  /// Imported entry's image), without decoding it; nil when no such row has it.
+  func layerSize(tensorId: Int64) -> (width: Int, height: Int)? {
+    workspace.fetch(for: Layer.self).where(Layer.tensorId == tensorId)
+      .first { $0.scaleFactorBy120 == 120 && $0.width > 0 && $0.height > 0 }
+      .map { (Int($0.width), Int($0.height)) }
+  }
+
   /// Whether the step whose image is `tensorId` is a sketch (`ProjectMapping.Profile.sketch`).
   func isSketch(imageTensorId tensorId: Int64) -> Bool {
     sketchNode(imageTensorId: tensorId) != nil

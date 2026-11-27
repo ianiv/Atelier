@@ -1496,7 +1496,7 @@ final class HistoryStore {
   ) async -> Int64? {
     guard project.isOpen else { return nil }
     let size = CGSize(width: base.width, height: base.height)
-    let kept = paint?.mayHaveColor == true ? paint?.compacted(for: size) : nil
+    let kept = paint?.mayHaveColor == true ? paint?.compacted(for: size, flatteningLong: true) : nil
     let thumbnail = kept.flatMap { $0.baked(onto: base) } ?? base
     return await project.saveSketch(kept, thumbnail: thumbnail, forImage: tensorId)
   }

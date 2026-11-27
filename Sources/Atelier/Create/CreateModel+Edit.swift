@@ -25,9 +25,10 @@ extension CreateModel {
     // Its strokes are a paint layer over a blank image: an edit saved after it would name the
     // blank image as its source. Add to History in Edit makes the drawing a step of its own.
     if item.isSketch, job.project == history.project.name, let tensorId = item.imageTensorId,
-       // As History reads it (`Project.sketchImage`): stored paint that doesn't hold up isn't drawn.
-       history.project.storedPaint(forImage: tensorId)?
-         .validated(width: max(item.sidecar.width, 1), height: max(item.sidecar.height, 1))?.mayHaveColor == true
+       // As History reads it (`Project.sketchImage`): stored paint that doesn't hold up for the
+       // base's own size isn't drawn.
+       let size = history.project.layerSize(tensorId: tensorId),
+       history.project.storedPaint(forImage: tensorId)?.validated(width: size.width, height: size.height)?.mayHaveColor == true
     {
       throw EditJobError.sketch
     }
@@ -52,9 +53,17 @@ extension CreateModel {
   /// running for the same edit, and returns the step it saved, as `matchColors(forAgent:)` does.
   /// `progress` hears the step (of 1,000) and what it's doing. Cancelling the caller cancels the
   /// job, unless it joined one someone else queued (the Edit screen's Save to History).
+  ///
+  /// A sketch with strokes is edited as its drawing: added to History after it first, as the Edit
+  /// screen's Add to History does (`sketchDrawing`), and the edit saved after that.
   func edit(
     forAgent edit: Edit.Job, item: HistoryItem, progress: @escaping (Int, String) -> Void
   ) async throws -> (item: HistoryItem, project: String) {
+    var edit = edit, item = item
+    if let drawing = try await sketchDrawing(of: item, project: edit.project) {
+      item = drawing
+      edit.sourceTensorId = drawing.tensorId
+    }
     let pending = queue.pendingEdit(edit)?.id
     let id = try queueEdit(edit, item: item, fromAgent: true)
     let joined = id == pending
@@ -63,6 +72,37 @@ extension CreateModel {
     } onCancel: {
       if !joined { Task { @MainActor in self.cancel(id) } }
     }
+  }
+
+  /// For a sketch with strokes in the open project `project`: its drawing (the strokes baked in)
+  /// as an Imported entry after it, which an edit can name as its source, as the Edit screen's Add
+  /// to History makes one. Nil for anything else (it's edited as it is). The same drawing asked
+  /// for again this session is the entry made before, while it's still there.
+  func sketchDrawing(of item: HistoryItem, project: String) async throws -> HistoryItem? {
+    guard item.isSketch, project == history.project.name, let tensorId = item.imageTensorId else { return nil }
+    await keepSketchNow()
+    let open = history.project
+    let drawn = await open.read { project -> (image: CGImage, paint: CanvasPaint?)? in
+      guard let base = project.image(tensorId: tensorId) else { return nil }
+      let baked = project.sketchImage(base, tensorId: tensorId)
+      return baked === base ? nil : (baked, project.storedPaint(forImage: tensorId))
+    }
+    guard let drawn, open === history.project else { return nil }
+    if let made = sketchDrawings[tensorId], made.project == project, made.paint == drawn.paint,
+       let entry = history.item(tensorId: made.entry)
+    {
+      return entry
+    }
+    guard var input = entryInput(.imported) else { throw EditJobError.noSettings }
+    input.canvas = .image(drawn.image)
+    input.canvasImage = drawn.image
+    input.mask = nil
+    input.moodboard = []
+    guard let entry = try await history.saveEntry(input, after: tensorId, makeCurrent: false), open === history.project else {
+      throw EditJobError.stepMissing(project)
+    }
+    sketchDrawings[tensorId] = (project, drawn.paint, entry.tensorId)
+    return entry
   }
 
   /// Waits for Edit job `id` to end, and returns the step it saved, read from its project (`name`
@@ -197,7 +237,7 @@ extension CreateModel {
       case .stepMissing(let name): "The image is no longer in the project “\(name)”."
       case .failed(let message): message
       case .sketch:
-        "That step is a sketch: its strokes are a paint layer over a blank image, so an edit saved after it would start from the blank image. Make the drawing a step of its own first: get_image it with full_size, put that on the canvas with set_canvas_image (the image as a data: URL), and edit the step that adds."
+        "That step is a sketch: its strokes are a paint layer over a blank image, so an edit saved after it would start from the blank image. Add the drawing to History first (the Edit screen's Add to History), and edit that step."
       }
     }
   }

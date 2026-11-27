@@ -562,6 +562,23 @@ extension Automation {
     } catch {
       check(false, "edit_image on the sketch ran (\(error.localizedDescription))")
     }
+    // An agent's edit_image_look on the sketch edits its drawing: added to History after it
+    // first, the look saved after that.
+    do {
+      let tools = AgentTools(create: model, presets: presets)
+      let before = Set(history.items.map(\.tensorId))
+      _ = try await tools.call("edit_image_look", arguments: ["history_step": history.item(tensorId: newSketch.tensorId)?.id.logicalTime ?? -1]) { _ in }
+      let drawing = history.items.first {
+        !before.contains($0.tensorId) && $0.entryReason == .imported && !$0.isSketch && history.parent(of: $0)?.tensorId == newSketch.tensorId
+      }
+      let edited = history.items.first { !before.contains($0.tensorId) && $0.sidecar.edit != nil }
+      let editedImage: CGImage? = if let edited { await history.image(for: edited) } else { nil }
+      check(
+        drawing != nil && edited?.sidecar.edit?.sourceTensorId == drawing?.tensorId && isBlue(pixel(editedImage, Int(s * 0.25), Int(s * 0.5))),
+        "edit_image_look on a sketch adds its drawing after it and saves the look after that, strokes and all")
+    } catch {
+      check(false, "edit_image_look on the sketch ran (\(error.localizedDescription))")
+    }
     // Back on the sketch for what follows.
     if let item = history.item(tensorId: newSketch.tensorId) {
       model.restore(entry: item)

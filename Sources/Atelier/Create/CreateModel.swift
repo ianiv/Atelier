@@ -730,6 +730,9 @@ final class CreateModel {
   /// A sketch's paint waiting to be kept, and the delay before it is (`sketchPaintDidChange`).
   @ObservationIgnored private var pendingSketchSave: SketchSave?
   @ObservationIgnored private var sketchSaveDelay: Task<Void, Never>?
+  /// Sketch drawings added to History for agents' edits this session (`sketchDrawing`), by the
+  /// sketch's image, with the strokes they had and the entry made.
+  @ObservationIgnored var sketchDrawings: [Int64: (project: String, paint: CanvasPaint?, entry: Int64)] = [:]
   /// The moodboard changed and that isn't in History yet: it's recorded once it settles
   /// (`moodboardSettle`), or before anything that needs it there first (`recordMoodboardChange`).
   @ObservationIgnored private var moodboardChanged = false
@@ -4186,6 +4189,9 @@ extension CreateModel {
   /// when its own hasn't come back yet.
   private func persistCanvasPaint(for step: (project: String, tensorId: Int64)) {
     guard step.project == history.project.name else { return }
+    // A sketch keeps its own (`flushSketchSave`, just before this), off the main actor and
+    // flattened when it's long (`CanvasPaint.compacted(for:flatteningLong:)`).
+    if history.item(tensorId: step.tensorId)?.isSketch == true { return }
     if canvasPaint == nil, paintPendingTensorId == step.tensorId { return }
     if let landedPaint, landedPaint.tensorId == step.tensorId, landedPaint.paint == canvasPaint { return }
     history.setPaint(canvasPaint, forImage: step.tensorId, size: canvasStepSize(for: step))

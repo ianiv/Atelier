@@ -242,10 +242,12 @@ nonisolated struct CanvasPaint: Codable, Sendable, Hashable {
   /// holds several bitmaps (each Fill adds one, often a whole-image PNG), which are flattened,
   /// with everything else, into one colour image so the project doesn't keep a stack of them.
   ///
-  /// A layer nearing what `validated` takes (strokes, or points in one) is flattened the same
-  /// way, so a long sketch is never stored as one a read would refuse.
-  func compacted(for size: CGSize?) -> CanvasPaint {
-    let nearLimits = strokes.count > Self.maxStrokes / 2 || strokes.contains { $0.points.count > Self.maxPoints / 2 }
+  /// With `flatteningLong`, a layer nearing what `validated` takes (strokes, or points in one) is
+  /// flattened the same way, so a long sketch is never stored as one a read would refuse. Only a
+  /// sketch's save asks (`HistoryStore.writeSketch`, off the main actor, where drawing a 24 MP
+  /// layer won't hitch the screen); other images' paint is never read back through `validated`.
+  func compacted(for size: CGSize?, flatteningLong: Bool = false) -> CanvasPaint {
+    let nearLimits = flatteningLong && (strokes.count > Self.maxStrokes / 2 || strokes.contains { $0.points.count > Self.maxPoints / 2 })
     guard let size, strokes.count(where: { $0.bitmap != nil }) > 1 || nearLimits,
           let layer = layer(width: Int(size.width), height: Int(size.height)),
           let png = Self.png(layer)
