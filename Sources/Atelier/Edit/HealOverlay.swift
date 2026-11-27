@@ -21,8 +21,9 @@ final class HealDrag {
   /// touch is under way.
   var points: [CGPoint] = []
   private(set) var mode: Mode?
-  /// The pointer over the pane on the Mac, in the pane's points: where the brush outline is drawn
-  /// while not painting. Nil off the pane (and on iPad, which has no hover with a finger).
+  /// The pointer over the pane, in the pane's points: where the brush outline is drawn while not
+  /// painting. Nil off the pane, and on iPad until a trackpad's pointer or a Pencil hovers (a
+  /// finger has no hover).
   var hover: CGPoint?
 
   @ObservationIgnored private(set) var dragActive = false
@@ -133,6 +134,9 @@ struct HealOverlay: View {
   let drag: HealDrag
   let viewport: EditViewport
   let origin: CGPoint
+  /// Whether the outline stands in for the pointer when not painting: not while a click sets the
+  /// source (the pointer is a crosshair then) or Space pans.
+  var showsOutline = true
 
   /// A source pixel in the pane's points.
   private func view(_ point: CGPoint) -> CGPoint {
@@ -156,7 +160,10 @@ struct HealOverlay: View {
         add(painting, to: &path)
       }
       .stroke(.white.opacity(0.3), style: StrokeStyle(lineWidth: max(radius * 2 * ppp, 1), lineCap: .round, lineJoin: .round))
-      BrushOutline(center: brushCenter(painting), radius: radius, pointsPerPixel: ppp)
+      // The faint inner ring is where the feather begins, as new strokes are made.
+      BrushOutline(
+        center: painting.isEmpty && !showsOutline ? nil : brushCenter(painting), radius: radius, pointsPerPixel: ppp,
+        innerRadius: BrushOutline.innerRadius(radius: radius, feather: Double(Edit.HealStroke.defaultFeather)))
       if let source = sourcePoint(painting) {
         Crosshair().position(view(source))
       }

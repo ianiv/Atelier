@@ -168,6 +168,24 @@ extension View {
       self
     #endif
   }
+
+  /// A tool's pointer over the image on the Mac (`ToolPointer`). iPad keeps its own pointer (the
+  /// trackpad's dot is small and its shape isn't ours to change without UIKit); a brush's outline
+  /// draws beside it.
+  func toolPointer(_ pointer: ToolPointer) -> some View {
+    #if os(macOS)
+      pointerStyle(pointer.style)
+    #else
+      self
+    #endif
+  }
+}
+
+/// The pointer a tool shows over the image: the arrow; none, where a brush's `BrushOutline`
+/// stands in for it; or the crosshair, for tools that drag out a shape (Rectangle and Lasso select,
+/// Crop, Heal's source).
+enum ToolPointer {
+  case standard, hidden, crosshair
 }
 
 extension View {
