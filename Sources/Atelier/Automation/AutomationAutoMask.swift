@@ -720,7 +720,10 @@ extension Automation {
 
     if SAMDownload.shared.isInstalled(model.autoMask.size) {
       await select(.rect(rect))
+      // In a group of its own: with groupsByEvent off, registering outside one raises.
+      history.beginUndoGrouping()
       model.autoMask.addPoint(inside, positive: true, model: model, undoManager: history)
+      history.endUndoGrouping()
       check(
         model.autoMask.shape == nil && model.autoMask.points.count == 1,
         "shapes: a Smart click after a shape drops the shape (points \(model.autoMask.points.count))")
