@@ -371,11 +371,12 @@ struct CanvasView: View {
       .frame(width: geometry.size.width, height: geometry.size.height)
       .clipped()
       .contentShape(.rect)
-      // Over the image only: the tool bars (`toolBarOverlay`, outside this) keep the arrow.
+      // Over the whole canvas, margins included; the tool bars (`toolBarOverlay`, outside this)
+      // keep the arrow.
       .brushPointerHidden(showsBrushCursor)
       .crosshairPointer(drawsSelectShape)
       .gesture(
-        dragGesture(canvas, points: points, center: center, zoom: zoom, frame: frameRect)
+        dragGesture(canvas, points: points, center: center, zoom: zoom, frame: frameRect, bounds: geometry.size)
           .simultaneously(with: zoomGesture(canvas, frame: frameRect, points: points, in: geometry.size)))
       #if os(macOS)
         .focusable(model.canPaintMask || model.canPaintColor)
@@ -515,12 +516,15 @@ struct CanvasView: View {
     return model.canvasLayer == .color ? model.canPaintColor : model.canPaintMask
   }
 
-  /// Whether the brush erases: Eraser, or Brush with Option held on the Mac.
+  /// Whether the brush erases: the stroke under way's own flag (fixed when it began, whatever
+  /// Option does since), else Eraser, or Brush with Option held on the Mac.
   private var brushErases: Bool {
+    if let liveStroke { return liveStroke.erases }
+    if let livePaint { return livePaint.kind == .erase }
     #if os(macOS)
-      model.canvasTool == .eraser || optionDown
+      return model.canvasTool == .eraser || optionDown
     #else
-      model.canvasTool == .eraser
+      return model.canvasTool == .eraser
     #endif
   }
 
@@ -685,7 +689,10 @@ struct CanvasView: View {
     /// the colours as Mask | Color says, selects with Select (a click marks a point, Option-click
     /// one to leave out, a drag a box, or with Rectangle and Lasso the shape dragged; modifiers
     /// don't change those), and moves the image with Move or while Space is held.
-    private func dragGesture(_ canvas: CanvasState, points: Double, center: CGPoint, zoom: Double, frame: CGRect) -> some Gesture {
+    ///
+    /// `bounds` is the canvas's size: a stroke let go past it leaves no brush cursor behind, as no
+    /// hover comes to clear it.
+    private func dragGesture(_ canvas: CanvasState, points: Double, center: CGPoint, zoom: Double, frame: CGRect, bounds: CGSize) -> some Gesture {
       let colors = model.canvasTool.drawsOnLayer && model.canvasLayer == .color
       let paints = colors ? model.canPaintColor : model.canPaintMask && model.canvasTool != .move
       let selects = model.canvasTool == .select
@@ -718,6 +725,9 @@ struct CanvasView: View {
         .onEnded { value in
           gestureStart = nil
           dragStart = nil
+          if !selects {
+            brushPointer.location = CGRect(origin: .zero, size: bounds).contains(value.location) ? value.location : nil
+          }
           endStroke()
           if shapeCancelled {
             shapeCancelled = false
@@ -734,7 +744,10 @@ struct CanvasView: View {
     /// Apple Pencil paints (Eraser erases) on the layer Mask | Color picks, as a drag does on the
     /// Mac; one finger moves the image, and two zoom (`zoomGesture`). With Rectangle and Lasso
     /// Select one finger draws too, and two move and zoom (`shapeTouches`).
-    private func dragGesture(_ canvas: CanvasState, points: Double, center: CGPoint, zoom: Double, frame: CGRect) -> some Gesture {
+    ///
+    /// `bounds` goes unused here: the brush cursor is cleared whenever the Pencil lifts, and hover
+    /// brings it back over the canvas.
+    private func dragGesture(_ canvas: CanvasState, points: Double, center: CGPoint, zoom: Double, frame: CGRect, bounds _: CGSize) -> some Gesture {
       SpatialEventGesture()
         .onChanged { events in
           let active = events.filter { $0.phase == .active }
