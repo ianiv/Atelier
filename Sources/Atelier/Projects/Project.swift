@@ -557,28 +557,34 @@ final nonisolated class Project: Sendable {
   /// from it share) and its preview id stay, so nothing is renumbered. Whether it's still a sketch
   /// (not deleted meanwhile) is checked in the tile's own transaction; nothing is written when the
   /// project is closed, the step is gone or isn't a sketch, or another step shows the same
-  /// preview. A delete landing between the tile and the paint takes the paint back off. Returns
-  /// the preview id rewritten.
+  /// preview (the paint is still kept then). A delete landing between the tile and the paint takes
+  /// the paint back off. Returns the preview id rewritten, nil when no tile was.
   @concurrent func saveSketch(_ paint: CanvasPaint?, thumbnail: CGImage, forImage tensorId: Int64) async -> Int64? {
     guard isOpen else { return nil }
     let full = ImageTensor.jpeg(thumbnail, quality: 0.75)
     let half = ImageTensor.jpeg(ImageTensor.downsampled(thumbnail) ?? thumbnail, quality: 0.5)
     guard let full, let half else { return nil }
     let workspace = workspace
-    let written = Mutex<Int64?>(nil)
+    // Whether it's a sketch, and the preview rewritten (none when another step shows it too).
+    let found = Mutex<(isSketch: Bool, previewId: Int64?)>((false, nil))
     let succeeded = await withCheckedContinuation { continuation in
       workspace.performChanges([TensorHistoryNode.self, Layer.self, ThumbnailHistoryNode.self, ThumbnailHistoryHalfNode.self]) { transaction in
-        guard let node = self.sketchNode(imageTensorId: tensorId), node.previewId != 0,
+        guard let node = self.sketchNode(imageTensorId: tensorId) else { return }
+        found.withLock { $0.isSketch = true }
+        guard node.previewId != 0,
               workspace.fetch(for: TensorHistoryNode.self).where(TensorHistoryNode.previewId == node.previewId).count == 1
         else { return }
         transaction.try(
           submit: ThumbnailHistoryNodeChangeRequest.upsertRequest(ThumbnailHistoryNode(id: node.previewId, data: full)))
         transaction.try(
           submit: ThumbnailHistoryHalfNodeChangeRequest.upsertRequest(ThumbnailHistoryHalfNode(id: node.previewId, data: half)))
-        written.withLock { $0 = node.previewId }
+        found.withLock { $0.previewId = node.previewId }
       } completionHandler: { continuation.resume(returning: $0) }
     }
-    guard succeeded, let previewId = written.withLock({ $0 }), isOpen else { return nil }
+    // The paint is kept for a sketch even when its tile couldn't be rewritten.
+    let result = found.withLock { $0 }
+    guard succeeded, result.isSketch, isOpen else { return nil }
+    let previewId = result.previewId
     setStoredPaint(paint, forImage: tensorId)
     if sketchNode(imageTensorId: tensorId) == nil {
       // Unless another step still shows the image (a Mask entry on the sketch), as pruning keeps it.

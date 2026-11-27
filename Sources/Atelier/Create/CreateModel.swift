@@ -733,6 +733,8 @@ final class CreateModel {
   /// Sketch drawings added to History for agents' edits this session (`sketchDrawing`), by the
   /// sketch's image, with the strokes they had and the entry made.
   @ObservationIgnored var sketchDrawings: [Int64: (project: String, paint: CanvasPaint?, entry: Int64)] = [:]
+  /// `sketchDrawing`s on their way, by the sketch's image, which calls at once share.
+  @ObservationIgnored var sketchDrawingTasks: [Int64: Task<HistoryItem?, Error>] = [:]
   /// The moodboard changed and that isn't in History yet: it's recorded once it settles
   /// (`moodboardSettle`), or before anything that needs it there first (`recordMoodboardChange`).
   @ObservationIgnored private var moodboardChanged = false
@@ -4190,8 +4192,27 @@ extension CreateModel {
   private func persistCanvasPaint(for step: (project: String, tensorId: Int64)) {
     guard step.project == history.project.name else { return }
     // A sketch keeps its own (`flushSketchSave`, just before this), off the main actor and
-    // flattened when it's long (`CanvasPaint.compacted(for:flatteningLong:)`).
-    if history.item(tensorId: step.tensorId)?.isSketch == true { return }
+    // flattened when it's long (`CanvasPaint.compacted(for:flatteningLong:)`). As a backstop, when
+    // none is on its way and what it last kept isn't this (its save didn't run, or was skipped),
+    // the paint is kept here: at once when it's short, so even quitting keeps it; off the main
+    // actor, after the entries, when it's long enough to need flattening.
+    if history.item(tensorId: step.tensorId)?.isSketch == true {
+      if pendingSketchSave?.tensorId == step.tensorId { return }
+      if canvasPaint == nil, paintPendingTensorId == step.tensorId { return }
+      if let landedPaint, landedPaint.tensorId == step.tensorId, landedPaint.paint == canvasPaint { return }
+      let paint = canvasPaint, size = canvasStepSize(for: step)
+      landedPaint = (step.tensorId, paint)
+      if let paint, paint.strokes.count > CanvasPaint.maxStrokes / 2 || paint.strokes.contains(where: { $0.points.count > CanvasPaint.maxPoints / 2 }) {
+        let project = history.project, previous = entryChain
+        entryChain = Task {
+          await previous?.value
+          await HistoryStore.keepSketchPaint(paint, size: size, forImage: step.tensorId, in: project)
+        }
+      } else {
+        history.setPaint(paint, forImage: step.tensorId, size: size)
+      }
+      return
+    }
     if canvasPaint == nil, paintPendingTensorId == step.tensorId { return }
     if let landedPaint, landedPaint.tensorId == step.tensorId, landedPaint.paint == canvasPaint { return }
     history.setPaint(canvasPaint, forImage: step.tensorId, size: canvasStepSize(for: step))
@@ -4263,7 +4284,12 @@ extension CreateModel {
       // A later change took its place, or quitting wrote it.
       guard let self, pendingSketchSave?.id == save.id else { return }
       pendingSketchSave = nil
-      await history.saveSketch(save.paint, base: save.base, forImage: save.tensorId, in: save.project)
+      // Kept: leaving the sketch with this paint has nothing more to write (`persistCanvasPaint`).
+      if await history.saveSketch(save.paint, base: save.base, forImage: save.tensorId, in: save.project),
+         let imageStep, imageStep.tensorId == save.tensorId, save.project === history.project
+      {
+        landedPaint = (save.tensorId, save.paint)
+      }
     }
   }
 

@@ -1475,9 +1475,12 @@ final class HistoryStore {
   /// layer of its image `tensorId`, and its tile redrawn from `base` with the strokes baked in
   /// (`Project.saveSketch`). Into `project`, the one it was drawn in, while it's still open and the
   /// step is still there and a sketch. No new step, and the image tensor stays the blank base.
-  func saveSketch(_ paint: CanvasPaint?, base: CGImage, forImage tensorId: Int64, in project: Project) async {
-    guard let previewId = await Self.writeSketch(paint, base: base, forImage: tensorId, in: project) else { return }
+  /// Returns whether the tile was rewritten (the paint was kept too).
+  @discardableResult
+  func saveSketch(_ paint: CanvasPaint?, base: CGImage, forImage tensorId: Int64, in project: Project) async -> Bool {
+    guard let previewId = await Self.writeSketch(paint, base: base, forImage: tensorId, in: project) else { return false }
     didRewriteThumbnail(previewId, in: project)
+    return true
   }
 
   /// The preview `previewId` of `project` was rewritten (`saveSketch`, or at quit): its cached
@@ -1491,6 +1494,16 @@ final class HistoryStore {
   /// `saveSketch`'s writes, off the main actor (quitting waits on it there): the strokes baked
   /// into the tile, and the paint layer (`Project.saveSketch`). Returns the preview id rewritten,
   /// nil when nothing was (closed project, a step that's gone or isn't a sketch).
+  /// A sketch's paint layer alone, when there's no image to draw its tile from (`CreateModel`'s
+  /// backstop as the canvas leaves a sketch whose save didn't run): flattened when it's long, off
+  /// the main actor. Nothing for a closed project or a step that isn't a sketch.
+  @concurrent nonisolated static func keepSketchPaint(_ paint: CanvasPaint?, size: CGSize?, forImage tensorId: Int64, in project: Project) async {
+    guard project.isOpen, project.isSketch(imageTensorId: tensorId) else { return }
+    let kept = paint?.mayHaveColor == true ? paint?.compacted(for: size, flatteningLong: true) : nil
+    guard project.isOpen else { return }
+    project.setStoredPaint(kept, forImage: tensorId)
+  }
+
   @concurrent nonisolated static func writeSketch(
     _ paint: CanvasPaint?, base: CGImage, forImage tensorId: Int64, in project: Project
   ) async -> Int64? {

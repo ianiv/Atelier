@@ -3160,14 +3160,19 @@ final class AgentTools {
       guard let self else { throw CancellationError() }
       update(Progress(step: 0, total: nil, message: "Waiting for the current run to finish", isQueued: true))
       // Named as it's called now: a rename while the job waited moved it.
-      let (saved, savedIn) = try await self.create.edit(forAgent: edit, item: source) { step, message in
+      let (saved, savedIn, drawing) = try await self.create.edit(forAgent: edit, item: source) { step, message in
         update(Progress(step: step, total: 1_000, message: message))
       }
+      // A sketch's edit is saved after its drawing (`CreateModel.sketchDrawing`): that's the source.
       var result: [String: Any] = [
-        "project": savedIn, "history_step": saved.id.logicalTime, "source_step": sourceStep,
+        "project": savedIn, "history_step": saved.id.logicalTime, "source_step": drawing?.id.logicalTime ?? sourceStep,
         "options": Self.lookJSON(saved.sidecar.edit?.options ?? options), "width": saved.sidecar.width, "height": saved.sidecar.height,
       ]
       if editedStep != sourceStep { result["edited_step"] = editedStep }
+      if let drawing {
+        result["drawing_step"] = drawing.id.logicalTime
+        result["sketch_step"] = sourceStep
+      }
       // The crop in the source's pixels, or null for none: coordinates are always the source's.
       result["crop"] = (saved.sidecar.edit?.crop ?? crop).map { Self.cropJSON($0) as Any } ?? NSNull()
       // The strokes the step has, in the source's pixels (each its own offset).

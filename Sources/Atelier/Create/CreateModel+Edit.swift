@@ -24,13 +24,15 @@ extension CreateModel {
     guard !item.isVideo, item.hasImage else { throw EditJobError.video }
     // Its strokes are a paint layer over a blank image: an edit saved after it would name the
     // blank image as its source. Add to History in Edit makes the drawing a step of its own.
-    if item.isSketch, job.project == history.project.name, let tensorId = item.imageTensorId,
-       // As History reads it (`Project.sketchImage`): stored paint that doesn't hold up for the
-       // base's own size isn't drawn.
-       let size = history.project.layerSize(tensorId: tensorId),
-       history.project.storedPaint(forImage: tensorId)?.validated(width: size.width, height: size.height)?.mayHaveColor == true
-    {
-      throw EditJobError.sketch
+    // In its own project, open or not; one that can't be read is taken to have strokes. As History
+    // reads it (`Project.sketchImage`): stored paint that doesn't hold up for the base's own size
+    // (its layer's, else the step's recorded size) isn't drawn.
+    if item.isSketch, let tensorId = item.imageTensorId {
+      guard let project = history.project(named: job.project) else { throw EditJobError.sketch }
+      let size = project.layerSize(tensorId: tensorId) ?? (width: max(item.sidecar.width, 1), height: max(item.sidecar.height, 1))
+      if project.storedPaint(forImage: tensorId)?.validated(width: size.width, height: size.height)?.mayHaveColor == true {
+        throw EditJobError.sketch
+      }
     }
     if let pending = queue.pendingEdit(job) { return pending.id }
     guard var configuration = settings else { throw EditJobError.noSettings }
@@ -56,38 +58,57 @@ extension CreateModel {
   ///
   /// A sketch with strokes is edited as its drawing: added to History after it first, as the Edit
   /// screen's Add to History does (`sketchDrawing`), and the edit saved after that.
+  /// Returns the drawing too, when one was added or reused: the edit's real source.
   func edit(
     forAgent edit: Edit.Job, item: HistoryItem, progress: @escaping (Int, String) -> Void
-  ) async throws -> (item: HistoryItem, project: String) {
+  ) async throws -> (item: HistoryItem, project: String, drawing: HistoryItem?) {
     var edit = edit, item = item
-    if let drawing = try await sketchDrawing(of: item, project: edit.project) {
+    let drawing = try await sketchDrawing(of: item, project: edit.project)
+    if let drawing {
       item = drawing
       edit.sourceTensorId = drawing.tensorId
     }
     let pending = queue.pendingEdit(edit)?.id
     let id = try queueEdit(edit, item: item, fromAgent: true)
     let joined = id == pending
-    return try await withTaskCancellationHandler {
+    let saved = try await withTaskCancellationHandler {
       try await editResult(of: id, project: edit.project, progress: progress)
     } onCancel: {
       if !joined { Task { @MainActor in self.cancel(id) } }
     }
+    return (saved.item, saved.project, drawing)
   }
 
   /// For a sketch with strokes in the open project `project`: its drawing (the strokes baked in)
   /// as an Imported entry after it, which an edit can name as its source, as the Edit screen's Add
   /// to History makes one. Nil for anything else (it's edited as it is). The same drawing asked
   /// for again this session is the entry made before, while it's still there.
+  ///
+  /// Calls for the same sketch at once share one (`sketchDrawingTasks`), so it's added once. A
+  /// sketch whose project isn't open, or closes meanwhile, throws: its edit can't be made safely.
   func sketchDrawing(of item: HistoryItem, project: String) async throws -> HistoryItem? {
-    guard item.isSketch, project == history.project.name, let tensorId = item.imageTensorId else { return nil }
-    await keepSketchNow()
+    guard item.isSketch, let tensorId = item.imageTensorId else { return nil }
     let open = history.project
+    guard project == open.name else { throw EditJobError.sketchProjectClosed(project) }
+    if let running = sketchDrawingTasks[tensorId] { return try await running.value }
+    let task = Task { try await makeSketchDrawing(tensorId: tensorId, project: project, open: open) }
+    sketchDrawingTasks[tensorId] = task
+    defer { if sketchDrawingTasks[tensorId] == task { sketchDrawingTasks[tensorId] = nil } }
+    return try await task.value
+  }
+
+  /// `sketchDrawing`'s work, once per sketch at a time.
+  private func makeSketchDrawing(tensorId: Int64, project: String, open: Project) async throws -> HistoryItem? {
+    await keepSketchNow()
+    guard open === history.project else { throw EditJobError.sketchProjectClosed(project) }
     let drawn = await open.read { project -> (image: CGImage, paint: CanvasPaint?)? in
       guard let base = project.image(tensorId: tensorId) else { return nil }
       let baked = project.sketchImage(base, tensorId: tensorId)
       return baked === base ? nil : (baked, project.storedPaint(forImage: tensorId))
     }
-    guard let drawn, open === history.project else { return nil }
+    guard open === history.project else { throw EditJobError.sketchProjectClosed(project) }
+    // No strokes: it's edited as it is.
+    guard let drawn else { return nil }
     if let made = sketchDrawings[tensorId], made.project == project, made.paint == drawn.paint,
        let entry = history.item(tensorId: made.entry)
     {
@@ -227,6 +248,7 @@ extension CreateModel {
 
   nonisolated enum EditJobError: LocalizedError {
     case video, unreadable, noSettings, projectMissing(String), stepMissing(String), failed(String), sketch
+    case sketchProjectClosed(String)
 
     var errorDescription: String? {
       switch self {
@@ -236,6 +258,8 @@ extension CreateModel {
       case .projectMissing(let name): "The project “\(name)” the image was in is no longer there."
       case .stepMissing(let name): "The image is no longer in the project “\(name)”."
       case .failed(let message): message
+      case .sketchProjectClosed(let name):
+        "The sketch's project “\(name)” isn't open, so its drawing can't be added to History to edit. Open it and try again."
       case .sketch:
         "That step is a sketch: its strokes are a paint layer over a blank image, so an edit saved after it would start from the blank image. Add the drawing to History first (the Edit screen's Add to History), and edit that step."
       }
