@@ -358,14 +358,11 @@ struct CanvasView: View {
           size: model.canvasLayer == .color ? model.paintBrushSize : model.brushSize, points: points,
           erases: brushErases)
       }
-      // On iPad too: a trackpad's pointer and a hovering Pencil both move the brush cursor.
       .onContinuousHover { phase in
         if case .active(let location) = phase {
           hoveringFrame = frameRect.contains(location)
-          brushPointer.location = location
         } else {
           hoveringFrame = false
-          brushPointer.location = nil
         }
       }
       .frame(width: geometry.size.width, height: geometry.size.height)
@@ -373,8 +370,16 @@ struct CanvasView: View {
       .contentShape(.rect)
       // Over the whole canvas, margins included; the tool bars (`toolBarOverlay`, outside this)
       // keep the arrow.
-      .brushPointerHidden(showsBrushCursor)
-      .crosshairPointer(drawsSelectShape)
+      .toolPointer(showsBrushCursor ? .hidden : drawsSelectShape ? .crosshair : .standard)
+      // The brush cursor follows the pointer, on iPad too (a trackpad's pointer, a hovering
+      // Pencil). Outside the pointer's modifier, so nothing it does to the pointer comes between.
+      .onContinuousHover { phase in
+        if case .active(let location) = phase {
+          brushPointer.location = location
+        } else {
+          brushPointer.location = nil
+        }
+      }
       .gesture(
         dragGesture(canvas, points: points, center: center, zoom: zoom, frame: frameRect, bounds: geometry.size)
           .simultaneously(with: zoomGesture(canvas, frame: frameRect, points: points, in: geometry.size)))

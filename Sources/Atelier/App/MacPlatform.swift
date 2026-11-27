@@ -569,4 +569,23 @@ enum AutomationWindows {
     return rep.representation(using: .png, properties: [:])
   }
 }
+extension ToolPointer {
+  /// `rectSelection` is the SDK's crosshair. Hidden is a blank pointer image rather than
+  /// `pointerVisibility(.hidden)`: with the pointer hidden that way, `onContinuousHover` reported
+  /// where the pointer came in and then nothing more until a drag, so the brush outline stuck
+  /// there. A blank image hides it the way any custom pointer does, and hover goes on as usual.
+  var style: PointerStyle? {
+    switch self {
+    case .standard: nil
+    case .hidden: Self.blank
+    case .crosshair: .rectSelection
+    }
+  }
+
+  /// A 16-point pointer image with nothing drawn in it.
+  private static let blank: PointerStyle = {
+    let image = NSImage(size: NSSize(width: 16, height: 16), flipped: false) { _ in true }
+    return .image(Image(nsImage: image), hotSpot: .center)
+  }()
+}
 #endif

@@ -175,7 +175,7 @@ extension View {
 /// It takes no hits, so it never comes between the pointer and the tool's gesture.
 ///
 /// It stands in for the pointer over a brush's image (the screen hides the system one with
-/// `brushPointerHidden`), so it shows the brush's real footprint: dashed when the stroke erases,
+/// `toolPointer(.hidden)`), so it shows the brush's real footprint: dashed when the stroke erases,
 /// with a faint dashed `innerRadius` where a soft edge begins (Heal's feather), and a small cross
 /// when the circle would be too small to see, so the pointer never vanishes.
 struct BrushOutline: View {

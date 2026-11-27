@@ -662,7 +662,11 @@ private struct EditPane: View {
         // A Space let go after focus moved elsewhere never arrives here.
         .onChange(of: focused) { if !focused { spaceDown = false } }
       #endif
+        // Heal's outline stands in for the pointer, except while a click sets the source (it aims,
+        // so the crosshair does) or Space pans; Crop drags out a rectangle.
+        .toolPointer(heals && !healSourcing ? .hidden : crops || heals ? .crosshair : .standard)
         // The brush outline follows the pointer: on iPad too, a trackpad's or a hovering Pencil's.
+        // Outside the pointer's modifier, so nothing it does to the pointer comes between.
         .onContinuousHover { phase in
           guard edit.tool == .heal else { return }
           switch phase {
@@ -670,10 +674,6 @@ private struct EditPane: View {
           case .ended: healDrag.hover = nil
           }
         }
-        // Heal's outline stands in for the pointer, except while a click sets the source (it aims,
-        // so the crosshair does) or Space pans; Crop drags out a rectangle.
-        .brushPointerHidden(heals && !healSourcing)
-        .crosshairPointer(crops || (heals && healSourcing))
         .onTapGesture(count: 2) {
           // With Heal each click is a spot healed: a double-click is two, not a zoom.
           guard edit.tool != .heal else { return }
