@@ -1273,6 +1273,21 @@ final class CreateModel {
     moodboard.add(Self.moodboardImage(image, paint: canvasShowsImage ? canvasPaint : nil))
   }
 
+  /// Whether the canvas shows a sketch (New Sketch's entry, `HistoryItem.isSketch`), not a preview.
+  var canvasIsSketch: Bool {
+    guard !imageIsPreview, let imageStep, imageStep.project == history.project.name else { return false }
+    return history.item(tensorId: imageStep.tensorId)?.isSketch == true
+  }
+
+  /// The canvas image as it leaves the canvas (Copy Image, Save Image…, Save to Photos, Share,
+  /// Open in Edit, Upscale…): a sketch with its strokes baked in, unfaded and hidden or not, as
+  /// History shows it; any other image as it is, its paint being only a run's input.
+  var canvasExportImage: CGImage? {
+    guard let image else { return nil }
+    guard canvasIsSketch, canvasShowsImage, let paint = canvasPaint, paint.mayHaveColor else { return image }
+    return bakedCanvas(image, paint: paint) ?? image
+  }
+
   /// `image` with `paint` baked in (`CanvasPaint.baked`, no fade), or `image` itself without paint.
   nonisolated static func moodboardImage(_ image: CGImage, paint: CanvasPaint?) -> CGImage {
     guard let paint, paint.mayHaveColor else { return image }
@@ -3060,7 +3075,8 @@ final class CreateModel {
 
   /// Queues upscaling the canvas image. The result is a new History entry after it.
   func upscaleCanvasImage(_ upscale: ImageUpscale) {
-    guard canUpscaleCanvasImage, let image else { return }
+    // A sketch with its strokes (it has no item: it's an entry, so the image goes in as one from outside).
+    guard canUpscaleCanvasImage, let image = canvasExportImage else { return }
     self.upscale(image: image, item: imageItem, as: upscale)
   }
 
@@ -3194,7 +3210,9 @@ final class CreateModel {
       return await firstMoodboardImage()
     }
     if let tensorId = item.inputTensorId {
-      // The input's image: an input entry's is its canvas's.
+      // The input's image: an input entry's is its canvas's. Never a sketch's base for a run from
+      // a sketch with strokes: the canvas records a Draw entry with them baked in first, and an
+      // agent's edit_image saves its baked input as a step of its own.
       if let input = await project.read({ $0.input(of: item.id, tensorId: tensorId) }) { return (input.image, input.imageTensorId, nil) }
       // Else the image the recorded input names (an entry's key names its canvas's), if it's still
       // in the project.
@@ -4227,8 +4245,9 @@ extension CreateModel {
   }
 
   /// At quit the chain may not get another turn: a sketch save not yet taken is written now, off
-  /// the main actor while this waits, within `QuitDeadline`.
-  private func saveSketchBeforeQuit() {
+  /// the main actor while this waits, until `deadline` (`QuitDeadline`, shared with the other quit
+  /// writes; a check passes its own, so as not to start that one).
+  func saveSketchBeforeQuit(deadline: Date = QuitDeadline.date) {
     sketchSaveDelay?.cancel()
     guard let save = pendingSketchSave else { return }
     pendingSketchSave = nil
@@ -4237,7 +4256,7 @@ extension CreateModel {
       defer { done.signal() }
       _ = await HistoryStore.writeSketch(save.paint, base: save.base, forImage: save.tensorId, in: save.project)
     }
-    _ = done.wait(timeout: .now() + max(QuitDeadline.date.timeIntervalSinceNow, 0))
+    _ = done.wait(timeout: .now() + max(deadline.timeIntervalSinceNow, 0))
   }
 
   /// The image mask and Select steps belong to: the canvas image, or while a run's preview covers
@@ -4774,9 +4793,12 @@ extension CreateModel {
     stopFollowingRun()
     let projectName = history.project.name
     history.setCurrent(tensorId: entry.tensorId, exact: true)
-    moodboardRestores += 1
-    let restores = moodboardRestores
-    Task { await restoreMoodboard(from: entry.id, in: projectName, restores: restores) }
+    // A sketch is a picture, not a record of the inputs: opening it leaves the moodboard as it is.
+    if !entry.isSketch {
+      moodboardRestores += 1
+      let restores = moodboardRestores
+      Task { await restoreMoodboard(from: entry.id, in: projectName, restores: restores) }
+    }
     lastSavedTensorId = nil
     canvasIsImported = false
     // A Draw entry opens on the picture it was painted on, with its paint as a layer that can

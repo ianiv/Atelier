@@ -54,7 +54,8 @@ struct EditInspector: View {
       return
     }
     let sameProject = if case .step(let project, _) = edit.source { project == create.history.project.name } else { false }
-    await edit.setReference(image: image, name: "Step \(item.id.logicalTime)", tensorId: sameProject ? tensorId : nil)
+    // A sketch's image has its strokes baked in, which its tensor doesn't: it's kept as an image.
+    await edit.setReference(image: image, name: "Step \(item.id.logicalTime)", tensorId: sameProject && !item.isSketch ? tensorId : nil)
   }
 
   /// A menu's label showing a name someone chose (a file's, a profile's): one line, cut in the

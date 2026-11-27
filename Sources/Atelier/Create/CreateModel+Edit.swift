@@ -22,6 +22,13 @@ extension CreateModel {
       }
     }
     guard !item.isVideo, item.hasImage else { throw EditJobError.video }
+    // Its strokes are a paint layer over a blank image: an edit saved after it would name the
+    // blank image as its source. Add to History in Edit makes the drawing a step of its own.
+    if item.isSketch, job.project == history.project.name, let tensorId = item.imageTensorId,
+       history.project.storedPaint(forImage: tensorId)?.mayHaveColor == true
+    {
+      throw EditJobError.sketch
+    }
     if let pending = queue.pendingEdit(job) { return pending.id }
     guard var configuration = settings else { throw EditJobError.noSettings }
     // The step's settings, as Match Colors carries them; the size is the step's own.
@@ -112,9 +119,10 @@ extension CreateModel {
           }
           item = found
         }
-        guard !item.isVideo, item.hasImage else { throw EditJobError.video }
-        // A sketch's strokes baked in (`Project.image(for:)`), as Edit showed it.
-        guard let source = await project.read({ $0.image(for: item) }) else { throw EditJobError.unreadable }
+        guard !item.isVideo, let imageTensorId = item.imageTensorId else { throw EditJobError.video }
+        // The step's own image, which the record names as the source. A sketch with strokes never
+        // gets here (`queueEdit`): its image is the blank base.
+        guard let source = await project.read({ $0.image(tensorId: imageTensorId) }) else { throw EditJobError.unreadable }
         try Task.checkCancellation()
         setRunMessage("Rendering the edit…", job)
         setRunStep(100, job)
@@ -176,7 +184,7 @@ extension CreateModel {
   }
 
   nonisolated enum EditJobError: LocalizedError {
-    case video, unreadable, noSettings, projectMissing(String), stepMissing(String), failed(String)
+    case video, unreadable, noSettings, projectMissing(String), stepMissing(String), failed(String), sketch
 
     var errorDescription: String? {
       switch self {
@@ -186,6 +194,8 @@ extension CreateModel {
       case .projectMissing(let name): "The project “\(name)” the image was in is no longer there."
       case .stepMissing(let name): "The image is no longer in the project “\(name)”."
       case .failed(let message): message
+      case .sketch:
+        "This is a sketch: its strokes aren't part of its saved image. Open it in Edit and use Add to History, then edit the image that adds."
       }
     }
   }

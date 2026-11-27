@@ -1472,31 +1472,28 @@ final class HistoryStore {
   private(set) var thumbnailRevisions: [Int64: Int] = [:]
 
   /// Keeps a sketch's strokes as it's drawn on (`CreateModel`'s sketch saves): `paint` as the paint
-  /// layer of its image `tensorId` (`setPaint`), and its tile redrawn from `base` with the strokes
-  /// baked in (`Project.setSketchThumbnail`). Into `project`, the one it was drawn in, while it's
-  /// still open and the step is still there and a sketch; its tile here only when it's the current
-  /// project. No new step, and the image tensor stays the blank base.
+  /// layer of its image `tensorId`, and its tile redrawn from `base` with the strokes baked in
+  /// (`Project.saveSketch`). Into `project`, the one it was drawn in, while it's still open and the
+  /// step is still there and a sketch. No new step, and the image tensor stays the blank base.
   func saveSketch(_ paint: CanvasPaint?, base: CGImage, forImage tensorId: Int64, in project: Project) async {
-    guard let previewId = await Self.writeSketch(paint, base: base, forImage: tensorId, in: project),
-          project === self.project
-    else { return }
+    guard let previewId = await Self.writeSketch(paint, base: base, forImage: tensorId, in: project) else { return }
+    // Cached by the file's path: cleared even when `project` isn't the open one any more (a
+    // compaction or rename since swapped the object), so no stale tile is left for it.
     for half in [false, true] { Self.thumbnails.removeObject(forKey: "\(project.url.path)#\(previewId)#\(half)" as NSString) }
     thumbnailRevisions[previewId, default: 0] += 1
   }
 
-  /// `saveSketch`'s writes, off the main actor (quitting waits on it there): the paint layer, then
-  /// the tile. Returns the preview id rewritten, nil when nothing was (closed project, a step
-  /// that's gone or isn't a sketch).
+  /// `saveSketch`'s writes, off the main actor (quitting waits on it there): the strokes baked
+  /// into the tile, and the paint layer (`Project.saveSketch`). Returns the preview id rewritten,
+  /// nil when nothing was (closed project, a step that's gone or isn't a sketch).
   @concurrent nonisolated static func writeSketch(
     _ paint: CanvasPaint?, base: CGImage, forImage tensorId: Int64, in project: Project
   ) async -> Int64? {
-    guard project.isOpen, project.isSketch(imageTensorId: tensorId) else { return nil }
+    guard project.isOpen else { return nil }
     let size = CGSize(width: base.width, height: base.height)
     let kept = paint?.mayHaveColor == true ? paint?.compacted(for: size) : nil
-    guard project.isOpen else { return nil }
-    project.setStoredPaint(kept, forImage: tensorId)
     let thumbnail = kept.flatMap { $0.baked(onto: base) } ?? base
-    return await project.setSketchThumbnail(thumbnail, forImage: tensorId)
+    return await project.saveSketch(kept, thumbnail: thumbnail, forImage: tensorId)
   }
 
   /// The step's JPEG preview (`half` for grids), decoded off the main actor.

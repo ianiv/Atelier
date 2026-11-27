@@ -499,7 +499,10 @@ extension AgentTools {
 
     // The mask grown and measured, the paint, and the frame drawn: off the main actor, where a
     // 16-megapixel image takes a while.
-    let sourceTensorId = sourceItem?.imageTensorId
+    // A sketch's image as read here has its strokes baked in, unlike its step's tensor (the blank
+    // base): the run's input is saved as a step of its own, so a merge goes over the drawing and
+    // Match Colors on the result compares with it.
+    let sourceTensorId = sourceItem?.isSketch == true ? nil : sourceItem?.imageTensorId
     let prepared = await Self.prepared(
       CanvasEdit(
         source: source, sourceTensorId: sourceTensorId, isImported: sourceItem == nil, scale: scale, offset: offset, detail: detail,

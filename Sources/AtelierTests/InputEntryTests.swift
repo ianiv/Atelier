@@ -330,7 +330,25 @@ struct InputEntryTests {
 
     #expect(await HistoryStore.writeSketch(paint, base: base, forImage: plain.key, in: project) == nil)
     #expect(await project.read { $0.storedPaint(forImage: plain.key) } == nil)
-    await project.close()
+    // Deleted with a save on its way: nothing is written for it.
+    _ = try await project.delete(tensorId: sketch.key)
     #expect(await HistoryStore.writeSketch(paint, base: base, forImage: sketch.key, in: project) == nil)
+    #expect(await project.read { $0.storedPaint(forImage: sketch.key) } == nil)
+    await project.close()
+    #expect(await HistoryStore.writeSketch(paint, base: base, forImage: plain.key, in: project) == nil)
+  }
+
+  /// A sketch's image bakes in only a stored layer that holds up for its size (`validated`):
+  /// one with a point far off is left out, and the blank base is what's read.
+  @Test func badStoredPaintIsNotBaked() async throws {
+    let project = try Self.project()
+    let base = try #require(CreateModel.blankImage(width: 16, height: 16))
+    let sketch = try await Self.entry(project, .imported, canvas: .image(#require(ImageTensor.tensor(from: base))), after: nil, sketch: true)
+    let red = CanvasPaint.Color(red: 1, green: 0, blue: 0)
+    let bad = CanvasPaint(strokes: [.rect(CGRect(x: 0, y: 0, width: 16, height: 16), color: red), .rect(CGRect(x: 0, y: 0, width: 1e12, height: 1), color: red)])
+    await project.read { $0.setStoredPaint(bad, forImage: sketch.key) }
+    let item = try #require(await project.read { $0.tree().itemsNewestFirst.first })
+    let shown = try #require(await project.read { $0.image(for: item) })
+    #expect(Array(CanvasRefineTests.rgba(shown)[0..<3]) == [255, 255, 255])
   }
 }

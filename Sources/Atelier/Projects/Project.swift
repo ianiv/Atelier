@@ -517,31 +517,41 @@ final nonisolated class Project: Sendable {
   }
 
   /// A sketch's `base` with the paint layer kept for it (`storedPaint`) baked in, unfaded; the base
-  /// itself when it has none, or the stored layer was drawn for another size (validated, as it's
-  /// read from the file).
+  /// itself when it has none, or when the stored layer doesn't hold up for an image of this size
+  /// (`CanvasPaint.validated`): it's read from the file, so it's checked before it's drawn.
   func sketchImage(_ base: CGImage, tensorId: Int64) -> CGImage {
-    guard let paint = storedPaint(forImage: tensorId), paint.mayHaveColor else { return base }
+    guard let paint = storedPaint(forImage: tensorId)?.validated(width: base.width, height: base.height), paint.mayHaveColor
+    else { return base }
     return paint.baked(onto: base) ?? base
   }
 
-  /// Whether the step whose image is `tensorId` is a sketch (`ProjectMapping.Profile.sketch`), read
-  /// from its own row rather than every step's settings.
+  /// Whether the step whose image is `tensorId` is a sketch (`ProjectMapping.Profile.sketch`).
   func isSketch(imageTensorId tensorId: Int64) -> Bool {
-    guard let id = tree(items: false).step(tensorId: tensorId),
-          let node = workspace.fetch(for: TensorHistoryNode.self).where(
-            TensorHistoryNode.lineage == id.lineage && TensorHistoryNode.logicalTime == id.logicalTime
-          ).first
-    else { return false }
-    return node.reason == .imported && ProjectMapping.Profile(node.profileData)?.sketch == true
+    sketchNode(imageTensorId: tensorId) != nil
   }
 
-  /// Replaces the tile of the sketch whose image is `tensorId` (its `thumbnail_history` rows,
-  /// both sizes) with `thumbnail`: the sketch's image with its strokes baked in. Only the
-  /// thumbnail changes: the step, its image tensor (which Mask entries and runs from it share) and
-  /// its preview id stay, so nothing is renumbered. Nothing is written when the project is closed,
-  /// the step is gone or isn't a sketch, or another step shows the same preview. Returns the
-  /// preview id rewritten.
-  @concurrent func setSketchThumbnail(_ thumbnail: CGImage, forImage tensorId: Int64) async -> Int64? {
+  /// The sketch step whose image is `tensorId`, found by its image's layer row and its own node
+  /// (an Imported entry keeps its image as one layer), without reading every step.
+  private func sketchNode(imageTensorId tensorId: Int64) -> TensorHistoryNode? {
+    for layer in workspace.fetch(for: Layer.self).where(Layer.tensorId == tensorId) {
+      guard let node = workspace.fetch(for: TensorHistoryNode.self).where(
+        TensorHistoryNode.lineage == layer.lineage && TensorHistoryNode.logicalTime == layer.logicalTime
+      ).first, node.reason == .imported, ProjectMapping.Profile(node.profileData)?.sketch == true
+      else { continue }
+      return node
+    }
+    return nil
+  }
+
+  /// Keeps a sketch's strokes as it's drawn on: its tile (its `thumbnail_history` rows, both sizes)
+  /// becomes `thumbnail`, the sketch with its strokes baked in, and `paint` its paint layer
+  /// (`storedPaint`). Only those change: the step, its image tensor (which Mask entries and runs
+  /// from it share) and its preview id stay, so nothing is renumbered. Whether it's still a sketch
+  /// (not deleted meanwhile) is checked in the tile's own transaction; nothing is written when the
+  /// project is closed, the step is gone or isn't a sketch, or another step shows the same
+  /// preview. A delete landing between the tile and the paint takes the paint back off. Returns
+  /// the preview id rewritten.
+  @concurrent func saveSketch(_ paint: CanvasPaint?, thumbnail: CGImage, forImage tensorId: Int64) async -> Int64? {
     guard isOpen else { return nil }
     let full = ImageTensor.jpeg(thumbnail, quality: 0.75)
     let half = ImageTensor.jpeg(ImageTensor.downsampled(thumbnail) ?? thumbnail, quality: 0.5)
@@ -549,14 +559,9 @@ final nonisolated class Project: Sendable {
     let workspace = workspace
     let written = Mutex<Int64?>(nil)
     let succeeded = await withCheckedContinuation { continuation in
-      workspace.performChanges([
-        TensorHistoryNode.self, Layer.self, TensorMoodboardData.self, ThumbnailHistoryNode.self, ThumbnailHistoryHalfNode.self,
-      ]) { transaction in
-        let rows = Rows(workspace)
-        let tree = ProjectTree(nodes: rows.nodes, layers: rows.layers, items: false)
-        guard let id = tree.step(tensorId: tensorId), let node = rows.byID[id], node.reason == .imported,
-              ProjectMapping.Profile(node.profileData)?.sketch == true, node.previewId != 0,
-              rows.nodes.filter({ $0.previewId == node.previewId }).count == 1
+      workspace.performChanges([TensorHistoryNode.self, Layer.self, ThumbnailHistoryNode.self, ThumbnailHistoryHalfNode.self]) { transaction in
+        guard let node = self.sketchNode(imageTensorId: tensorId), node.previewId != 0,
+              workspace.fetch(for: TensorHistoryNode.self).where(TensorHistoryNode.previewId == node.previewId).count == 1
         else { return }
         transaction.try(
           submit: ThumbnailHistoryNodeChangeRequest.upsertRequest(ThumbnailHistoryNode(id: node.previewId, data: full)))
@@ -565,7 +570,13 @@ final nonisolated class Project: Sendable {
         written.withLock { $0 = node.previewId }
       } completionHandler: { continuation.resume(returning: $0) }
     }
-    return succeeded ? written.withLock { $0 } : nil
+    guard succeeded, let previewId = written.withLock({ $0 }), isOpen else { return nil }
+    setStoredPaint(paint, forImage: tensorId)
+    if sketchNode(imageTensorId: tensorId) == nil {
+      setStoredPaint(nil, forImage: tensorId)
+      return nil
+    }
+    return previewId
   }
 
   /// The full-resolution image of a step, if it has one.

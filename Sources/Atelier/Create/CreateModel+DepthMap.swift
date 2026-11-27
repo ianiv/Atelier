@@ -131,6 +131,8 @@ extension CreateModel {
           item = found
         }
         guard !item.isVideo, let imageTensorId = item.imageTensorId else { throw DepthMap.Failure.video }
+        // The step's own image. For a sketch that's its blank base, without the strokes; the canvas
+        // offers Extract Depth Map only with no paint showing (`canExtractCanvasDepthMap`).
         guard let source = await project.read({ $0.image(tensorId: imageTensorId) }) else { throw DepthMap.Failure.unreadable }
         try Task.checkCancellation()
         setRunMessage("Estimating depth…", job)

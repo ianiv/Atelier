@@ -47,7 +47,7 @@ extension Automation {
   ///
   /// `--size` is the frame's side (default 512), `--steps` the run's (default 4). Always pass a
   /// scratch `--project`: it adds steps to it.
-  static func paintCheck(_ model: CreateModel) {
+  static func paintCheck(_ model: CreateModel, presets: PresetStore) {
     let restoreSettings = keepCanvasSettings(model)
     let args = CommandLine.arguments
     func value(_ name: String) -> String? {
@@ -375,14 +375,16 @@ extension Automation {
           "a masked run the canvas didn't follow keeps its result's mask hidden (\(hidden.map(String.init) ?? "no result"))")
       }
 
-      await sketchHistoryCheck(model, size: size, check: check)
+      await sketchHistoryCheck(model, presets: presets, modelFile: file, size: size, steps: settings.steps, check: check)
       finish()
     }
   }
 
   /// `paintCheck`'s sketch part: a second New Sketch kept as a Sketch entry whose tile follows
   /// each change (see `paintCheck`). Its own function so the check's closure type-checks in time.
-  @MainActor static func sketchHistoryCheck(_ model: CreateModel, size: Int, check: (Bool, String) -> Void) async {
+  @MainActor static func sketchHistoryCheck(
+    _ model: CreateModel, presets: PresetStore, modelFile: String, size: Int, steps: Int, check: (Bool, String) -> Void
+  ) async {
     let history = model.history
     let s = Double(size)
     /// Waits (up to 10 s) for `condition`.
@@ -491,6 +493,76 @@ extension Automation {
     model.moodboard.removeAll()
     await model.flushEntries()
 
+    // Opening a sketch leaves the moodboard alone.
+    if let board = CreateModel.blankImage(width: 64, height: 64), let item = history.item(tensorId: newSketch.tensorId),
+       let run = history.items.first(where: { !$0.isEntry && !$0.isVideo })
+    {
+      model.moodboard.add(board)
+      model.show(run)
+      _ = await settled { model.canvasShowsImage && model.canvasPaint == nil }
+      model.restore(entry: item)
+      _ = await settled { model.canvasShowsImage && model.canvasPaint != nil }
+      try? await Task.sleep(for: .milliseconds(500))
+      check(model.moodboard.items.count == 1, "opening a sketch keeps the moodboard as it is (\(model.moodboard.items.count) images)")
+      model.moodboard.removeAll()
+      await model.flushEntries()
+    }
+
+    // The canvas's Copy Image (and Save, Share, Open in Edit, Upscale) take a sketch with its strokes.
+    check(isBlue(pixel(model.canvasExportImage, Int(s * 0.25), Int(s * 0.5))), "the canvas's export image of a sketch has its strokes")
+
+    // The Edit screen opens a sketch with its strokes, as an image of its own, and no edit is
+    // queued after its blank base.
+    if let item = history.item(tensorId: newSketch.tensorId) {
+      let edit = EditModel()
+      edit.create = model
+      await edit.open(item)
+      check(
+        edit.isFromFile && isBlue(pixel(edit.image, Int(s * 0.25), Int(s * 0.5))),
+        "Open in Edit on a sketch opens the drawing, strokes and all, as an image to Add to History")
+      var refused = false
+      do {
+        _ = try model.queueEdit(Edit.Job(project: history.project.name, sourceTensorId: newSketch.tensorId, options: EditOptions()), item: item)
+      } catch CreateModel.EditJobError.sketch {
+        refused = true
+      } catch {}
+      check(refused, "an Edit job on a sketch with strokes is refused")
+    }
+
+    // An agent's edit_image on the sketch, masked: the result keeps the strokes outside the mask.
+    do {
+      let tools = AgentTools(create: model, presets: presets)
+      let before = Set(history.items.map(\.tensorId))
+      let mask: [String: Any] = ["shape": "rect", "x": s * 0.6, "y": s * 0.25, "width": s * 0.25, "height": s * 0.25]
+      _ = try await tools.call(
+        "edit_image",
+        arguments: [
+          "history_step": history.item(tensorId: newSketch.tensorId)?.id.logicalTime ?? -1, "prompt": "a red apple",
+          "mask": ["shapes": [mask]], "steps": steps, "strength": 1, "seed": 7, "include_image": false, "model": modelFile,
+        ]) { _ in }
+      let result = history.items.first { !before.contains($0.tensorId) && !$0.isEntry }
+      let image: CGImage? = if let result { await history.image(for: result) } else { nil }
+      check(
+        result != nil && result?.inputTensorId != newSketch.tensorId && isBlue(pixel(image, Int(s * 0.25), Int(s * 0.5)))
+          && isBlue(pixel(image, Int(s * 0.8), Int(s * 0.8))),
+        "edit_image with a mask on a sketch keeps its strokes outside the mask, and its input isn't the blank base")
+    } catch {
+      check(false, "edit_image on the sketch ran (\(error.localizedDescription))")
+    }
+    // Back on the sketch for what follows.
+    if let item = history.item(tensorId: newSketch.tensorId) {
+      model.restore(entry: item)
+      _ = await settled { model.canvasShowsImage && model.canvasPaint != nil && model.canPaintColor }
+    }
+
+    // Quitting with a change waiting writes it at once.
+    draw(.rect(CGRect(x: s * 0.9, y: s * 0.3, width: s * 0.1, height: s * 0.1), color: blue))
+    let waiting = model.canvasPaint
+    model.saveSketchBeforeQuit(deadline: Date().addingTimeInterval(5))
+    let quitPaint = await history.project.read { $0.storedPaint(forImage: newSketch.tensorId) }
+    check(quitPaint != nil && quitPaint?.strokes.count == waiting?.strokes.count, "a change waiting at quit is written there and then")
+    check(await tileShows { isBlue(pixel($0, Int(s * 0.95), Int(s * 0.35))) }, "and the tile has it")
+
     // A project switch while a change waits: it lands in the sketch's project before it goes,
     // and nothing reaches the other one.
     let home = history.project.name
@@ -509,6 +581,21 @@ extension Automation {
     check(
       await tileShows { isBlue(pixel($0, Int(s * 0.8), Int(s * 0.1))) }, "and its tile shows it")
     _ = try? await history.delete(other)
+
+    // A sketch deleted with a change waiting: nothing is written for it, and nothing goes wrong.
+    model.newSketch()
+    await model.flushEntries()
+    if let doomed = history.currentItem, doomed.isSketch, await settled({ model.canPaintColor && model.canvasUndoImage === model.image }) {
+      draw(.rect(CGRect(x: 0, y: 0, width: s * 0.3, height: s * 0.3), color: blue))
+      try? await model.deleteHistoryItems([doomed])
+      await model.flushEntries()
+      try? await Task.sleep(for: .milliseconds(800))
+      await model.flushEntries()
+      let left = await history.project.read { $0.storedPaint(forImage: doomed.tensorId) }
+      check(left == nil && history.item(tensorId: doomed.tensorId) == nil, "a sketch deleted with a change waiting gets nothing written")
+    } else {
+      check(false, "a third sketch to delete")
+    }
   }
 }
 @MainActor

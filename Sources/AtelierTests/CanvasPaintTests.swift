@@ -251,4 +251,28 @@ struct CanvasPaintTests {
     #expect(CreateModel.moodboardImage(image, paint: nil) === image)
     #expect(CreateModel.moodboardImage(image, paint: CanvasPaint(strokes: [])) === image)
   }
+
+  /// A layer read from a project file is drawn only when it holds up for the image
+  /// (`CanvasPaint.validated`): non-finite or far-off points and radii, bad colours, too many
+  /// strokes and bitmaps that don't read are rejected.
+  @Test func storedPaintIsValidatedBeforeItsDrawn() throws {
+    let good = CanvasPaint(strokes: [
+      CanvasPaint.Stroke(kind: .brush, points: [CGPoint(x: 1, y: 2), CGPoint(x: 30, y: 4)], radius: 3, color: Self.red),
+      .rect(CGRect(x: -4, y: -4, width: 40, height: 40), color: Self.blue),
+    ])
+    #expect(good.validated(width: 32, height: 32) == good)
+    #expect(good.validated(width: 0, height: 32) == nil)
+    func with(_ stroke: CanvasPaint.Stroke) -> CanvasPaint { CanvasPaint(strokes: good.strokes + [stroke]) }
+    #expect(with(CanvasPaint.Stroke(kind: .brush, points: [CGPoint(x: CGFloat.nan, y: 0)], radius: 1, color: Self.red)).validated(width: 32, height: 32) == nil)
+    #expect(with(CanvasPaint.Stroke(kind: .brush, points: [CGPoint(x: 1e9, y: 0)], radius: 1, color: Self.red)).validated(width: 32, height: 32) == nil)
+    #expect(with(CanvasPaint.Stroke(kind: .brush, points: [.zero], radius: .infinity, color: Self.red)).validated(width: 32, height: 32) == nil)
+    #expect(with(CanvasPaint.Stroke(kind: .brush, points: [.zero], radius: -1, color: Self.red)).validated(width: 32, height: 32) == nil)
+    #expect(with(CanvasPaint.Stroke(kind: .brush, points: [.zero], radius: 1, color: CanvasPaint.Color(red: 5, green: 0, blue: 0))).validated(width: 32, height: 32) == nil)
+    #expect(with(CanvasPaint.Stroke(kind: .fill, points: [.zero], color: Self.red, bitmap: Data([1, 2, 3]))).validated(width: 32, height: 32) == nil)
+    let png = try #require(CanvasMask.grayPNG([UInt8](repeating: 255, count: 16), width: 4, height: 4))
+    #expect(with(CanvasPaint.Stroke(kind: .fill, points: [.zero], color: Self.red, bitmap: png)).validated(width: 32, height: 32) != nil)
+    #expect(with(CanvasPaint.Stroke(kind: .fill, points: [.zero], color: Self.red, bitmap: png, size: CGSize(width: 1e7, height: 4))).validated(width: 32, height: 32) == nil)
+    let many = CanvasPaint(strokes: Array(repeating: good.strokes[0], count: CanvasPaint.maxStrokes + 1))
+    #expect(many.validated(width: 32, height: 32) == nil)
+  }
 }

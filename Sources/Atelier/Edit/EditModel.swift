@@ -604,8 +604,24 @@ final class EditModel {
         note = "The image this edit was made from is no longer in the project, so the edit itself opens."
       }
     }
-    let source = sourceItem
-    guard source.hasImage, let picture = await project.read({ $0.image(for: source) })
+    // A sketch with strokes opens with them, as an image of its own: its step's image is the
+    // blank base, which a saved edit would name as its source, and the strokes can change after.
+    // Add to History then makes the drawing a step to save edits after.
+    if restored == nil, item.isSketch, let tensorId = item.imageTensorId {
+      let drawn = await project.read { project -> CGImage? in
+        guard let base = project.image(tensorId: tensorId) else { return nil }
+        let baked = project.sketchImage(base, tensorId: tensorId)
+        return baked === base ? nil : baked
+      }
+      guard opens.isCurrent(generation) else { return }
+      if let drawn {
+        show(image: drawn, name: "Sketch \(item.id.logicalTime)")
+        note = "A sketch opens with its strokes as an image of its own: Add to History to save edits after it."
+        return
+      }
+    }
+    // The step's own image, which a saved edit names as its source (`Edit.Record.sourceTensorId`).
+    guard let tensorId = sourceItem.imageTensorId, let picture = await project.read({ $0.image(tensorId: tensorId) })
     else {
       if opens.isCurrent(generation) { note = "The image couldn't be read." }
       return
@@ -725,11 +741,12 @@ final class EditModel {
 
   /// Opens what the Create screen's canvas shows: its step, or the image itself when it isn't one.
   func openCanvasImage() async {
-    guard let create, canUseCanvasImage, let image = create.image else { return }
+    guard let create, canUseCanvasImage, let image = create.canvasExportImage else { return }
     if let item = create.imageItem {
       await open(item)
     } else {
-      open(image: image, name: "Canvas Image")
+      // A sketch comes with its strokes (`canvasExportImage`), as an image of its own.
+      open(image: image, name: create.canvasIsSketch ? "Sketch" : "Canvas Image")
     }
   }
 

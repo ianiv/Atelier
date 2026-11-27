@@ -197,6 +197,47 @@ nonisolated struct CanvasPaint: Codable, Sendable, Hashable {
     return moved
   }
 
+  /// Most strokes, points per stroke and bitmap bytes a layer read from a project file may have
+  /// (`validated`): far past anything drawn by hand, short of what would stall drawing it.
+  static let maxStrokes = 20_000
+  static let maxPoints = 200_000
+  static let maxBitmapBytes = 64 << 20
+  static let maxBitmapSide = 16_384.0
+
+  /// The layer as read from a project file, checked before it's drawn on a `width` × `height`
+  /// image: nil unless every stroke is sane for it (a bounded number of strokes and points; finite
+  /// points, radii and colours within reach of the image; bitmaps of a bounded size whose size is
+  /// known). A layer that fails isn't drawn at all, rather than drawn in part.
+  func validated(width: Int, height: Int) -> CanvasPaint? {
+    guard width > 0, height > 0, strokes.count <= Self.maxStrokes else { return nil }
+    // Strokes reach a little past the image (a brush along its edge, a shape dragged out).
+    let reach = Double(max(width, height)) * 4
+    func near(_ value: Double) -> Bool { value.isFinite && abs(value) <= reach }
+    for stroke in strokes {
+      guard stroke.points.count <= Self.maxPoints, stroke.radius.isFinite, stroke.radius >= 0, stroke.radius <= reach,
+            stroke.points.allSatisfy({ near($0.x) && near($0.y) })
+      else { return nil }
+      if let color = stroke.color {
+        guard [color.red, color.green, color.blue, color.alpha].allSatisfy({ $0.isFinite && (-0.01...1.01).contains($0) })
+        else { return nil }
+      }
+      if let size = stroke.size {
+        guard size.width.isFinite, size.height.isFinite, abs(size.width) <= reach, abs(size.height) <= reach else { return nil }
+      }
+      if let bitmap = stroke.bitmap {
+        // Its own pixels (read from the header) and the size it's drawn at.
+        var own = stroke
+        own.size = nil
+        guard bitmap.count <= Self.maxBitmapBytes else { return nil }
+        for size in [own.bitmapSize, stroke.bitmapSize] {
+          guard let size, size.width > 0, size.height > 0, size.width <= Self.maxBitmapSide, size.height <= Self.maxBitmapSide
+          else { return nil }
+        }
+      }
+    }
+    return self
+  }
+
   /// The layer to keep with an image of `size` (`HistoryStore.setPaint`): as it is, unless it
   /// holds several bitmaps (each Fill adds one, often a whole-image PNG), which are flattened,
   /// with everything else, into one colour image so the project doesn't keep a stack of them.

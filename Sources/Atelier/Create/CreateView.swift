@@ -811,14 +811,14 @@ struct CanvasView: View {
     Button("Show Image Full Size") { model.viewingCanvasImage = true }
       .disabled(model.image == nil)
     Divider()
-    Button("Copy Image") { if let image = model.image { HistoryStore.copy(image) } }
+    Button("Copy Image") { if let image = model.canvasExportImage { HistoryStore.copy(image) } }
       .disabled(model.image == nil)
     Button("Save Image…") { save() }
       .disabled(model.image == nil)
     Button("Save to Photos") { saveToPhotos() }
       .disabled(model.image == nil)
     ShareItem(
-      exports: model.image.map { [history.canvasShare(image: $0, item: model.imageItem)] } ?? [],
+      exports: model.canvasExportImage.map { [history.canvasShare(image: $0, item: model.imageItem)] } ?? [],
       anchor: ShareAnchor.canvas)
     Divider()
     Button("Upscale…") { model.upscalingCanvasImage = true }
@@ -860,7 +860,7 @@ struct CanvasView: View {
 
   /// Adds the image to Photos as a PNG carrying its settings, like Save Image.
   private func saveToPhotos() {
-    guard let image = model.image else { return }
+    guard let image = model.canvasExportImage else { return }
     let item = model.imageItem
     Task {
       do {
@@ -898,7 +898,7 @@ struct CanvasView: View {
 
   /// Saves as PNG; a finished image carries its settings like History's Export.
   private func save() {
-    guard let image = model.image else { return }
+    guard let image = model.canvasExportImage else { return }
     let item = model.imageItem
     let history = history
     fileDialogs.save = FileDialogs.Save(
