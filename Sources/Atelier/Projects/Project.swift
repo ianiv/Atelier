@@ -509,9 +509,63 @@ final nonisolated class Project: Sendable {
     }
   }
 
-  /// The item's image: an entry's is its canvas's, none for an empty one.
+  /// The item's image: an entry's is its canvas's, none for an empty one. A sketch's has its
+  /// strokes baked in (`sketchImage`), as its tile shows it.
   func image(for item: HistoryItem) -> CGImage? {
-    item.imageTensorId.flatMap { image(tensorId: $0) }
+    guard let tensorId = item.imageTensorId, let image = image(tensorId: tensorId) else { return nil }
+    return item.isSketch ? sketchImage(image, tensorId: tensorId) : image
+  }
+
+  /// A sketch's `base` with the paint layer kept for it (`storedPaint`) baked in, unfaded; the base
+  /// itself when it has none, or the stored layer was drawn for another size (validated, as it's
+  /// read from the file).
+  func sketchImage(_ base: CGImage, tensorId: Int64) -> CGImage {
+    guard let paint = storedPaint(forImage: tensorId), paint.mayHaveColor else { return base }
+    return paint.baked(onto: base) ?? base
+  }
+
+  /// Whether the step whose image is `tensorId` is a sketch (`ProjectMapping.Profile.sketch`), read
+  /// from its own row rather than every step's settings.
+  func isSketch(imageTensorId tensorId: Int64) -> Bool {
+    guard let id = tree(items: false).step(tensorId: tensorId),
+          let node = workspace.fetch(for: TensorHistoryNode.self).where(
+            TensorHistoryNode.lineage == id.lineage && TensorHistoryNode.logicalTime == id.logicalTime
+          ).first
+    else { return false }
+    return node.reason == .imported && ProjectMapping.Profile(node.profileData)?.sketch == true
+  }
+
+  /// Replaces the tile of the sketch whose image is `tensorId` (its `thumbnail_history` rows,
+  /// both sizes) with `thumbnail`: the sketch's image with its strokes baked in. Only the
+  /// thumbnail changes: the step, its image tensor (which Mask entries and runs from it share) and
+  /// its preview id stay, so nothing is renumbered. Nothing is written when the project is closed,
+  /// the step is gone or isn't a sketch, or another step shows the same preview. Returns the
+  /// preview id rewritten.
+  @concurrent func setSketchThumbnail(_ thumbnail: CGImage, forImage tensorId: Int64) async -> Int64? {
+    guard isOpen else { return nil }
+    let full = ImageTensor.jpeg(thumbnail, quality: 0.75)
+    let half = ImageTensor.jpeg(ImageTensor.downsampled(thumbnail) ?? thumbnail, quality: 0.5)
+    guard let full, let half else { return nil }
+    let workspace = workspace
+    let written = Mutex<Int64?>(nil)
+    let succeeded = await withCheckedContinuation { continuation in
+      workspace.performChanges([
+        TensorHistoryNode.self, Layer.self, TensorMoodboardData.self, ThumbnailHistoryNode.self, ThumbnailHistoryHalfNode.self,
+      ]) { transaction in
+        let rows = Rows(workspace)
+        let tree = ProjectTree(nodes: rows.nodes, layers: rows.layers, items: false)
+        guard let id = tree.step(tensorId: tensorId), let node = rows.byID[id], node.reason == .imported,
+              ProjectMapping.Profile(node.profileData)?.sketch == true, node.previewId != 0,
+              rows.nodes.filter({ $0.previewId == node.previewId }).count == 1
+        else { return }
+        transaction.try(
+          submit: ThumbnailHistoryNodeChangeRequest.upsertRequest(ThumbnailHistoryNode(id: node.previewId, data: full)))
+        transaction.try(
+          submit: ThumbnailHistoryHalfNodeChangeRequest.upsertRequest(ThumbnailHistoryHalfNode(id: node.previewId, data: half)))
+        written.withLock { $0 = node.previewId }
+      } completionHandler: { continuation.resume(returning: $0) }
+    }
+    return succeeded ? written.withLock { $0 } : nil
   }
 
   /// The full-resolution image of a step, if it has one.
@@ -904,14 +958,14 @@ final nonisolated class Project: Sendable {
   @concurrent func appendEntry(
     reason: ProjectFormat.Reason, keyed: Bool, canvas: EntryCanvas, mask: CanvasMask?, moodboard: [EntryMood],
     thumbnail: CGImage?, model: String, prompt: String, negativePrompt: String, seed: UInt32,
-    settings: [String: JSONValue], createdAt: Date, after parentKey: Int64?
+    settings: [String: JSONValue], createdAt: Date, after parentKey: Int64?, sketch: Bool = false
   ) async throws -> AppendedEntry {
     for sharing in [true, false] {
       let moods = sharing ? moodboard : moodboard.map { EntryMood(shuffleId: nil, tensor: $0.tensor, weight: $0.weight) }
       if let appended = try await appendEntryOnce(
         reason: reason, keyed: keyed, canvas: canvas, mask: mask, moodboard: moods, thumbnail: thumbnail, model: model,
         prompt: prompt, negativePrompt: negativePrompt, seed: seed, settings: settings, createdAt: createdAt,
-        after: parentKey)
+        after: parentKey, sketch: sketch)
       {
         return appended
       }
@@ -924,7 +978,7 @@ final nonisolated class Project: Sendable {
   private func appendEntryOnce(
     reason: ProjectFormat.Reason, keyed: Bool, canvas: EntryCanvas, mask: CanvasMask?, moodboard: [EntryMood],
     thumbnail: CGImage?, model: String, prompt: String, negativePrompt: String, seed: UInt32,
-    settings: [String: JSONValue], createdAt: Date, after parentKey: Int64?
+    settings: [String: JSONValue], createdAt: Date, after parentKey: Int64?, sketch: Bool
   ) async throws -> AppendedEntry? {
     let full = thumbnail.flatMap { ImageTensor.jpeg($0, quality: 0.75) }
     let half = thumbnail.flatMap { ImageTensor.downsampled($0) ?? $0 }.flatMap { ImageTensor.jpeg($0, quality: 0.5) }
@@ -1040,7 +1094,8 @@ final nonisolated class Project: Sendable {
           moodboardCount: moodboard.count, parentTensorId: parent.flatMap { tree.steps[$0]?.key },
           layerCount: Int32(layers.count),
           contentOffset: layered ? source.map { ($0.contentOffsetX, $0.contentOffsetY) } : nil,
-          canvasScale: layered ? source?.scaleFactorBy120 : nil, entryKey: key, entryMask: mask, isEntry: true)
+          canvasScale: layered ? source?.scaleFactorBy120 : nil, entryKey: key, entryMask: mask, isEntry: true,
+          isSketch: sketch && reason == .imported)
         transaction.try(
           submit: TensorHistoryNodeChangeRequest.upsertRequest(ProjectMapping.node(for: step, settings: settings)))
         for layer in layers {
@@ -2487,6 +2542,7 @@ nonisolated struct ProjectTree: Sendable {
           id: id, tensorId: entryKey ?? tensorId ?? 0, previewId: node.previewId, sidecar: Project.sidecar(for: node),
           moodboardCount: Int(node.shuffleDataStored), weightedMoodboardCount: weightedMoods[id] ?? 0)
         item.entryReason = reason
+        item.isSketch = reason == .imported && profile?.sketch == true
         item.canvasTensorId = tensorId
         item.entryMask = profile?.entryMask
         item.entryMoodboard = (stepMoods[id] ?? []).sorted { $0.index < $1.index }.map(\.mood)

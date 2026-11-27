@@ -22,12 +22,12 @@ struct InputEntryTests {
 
   private static func entry(
     _ project: Project, _ reason: HistoryItem.EntryReason, canvas: Project.EntryCanvas, mask: CanvasMask? = nil,
-    moodboard: [Project.EntryMood] = [], after parent: Int64?
+    moodboard: [Project.EntryMood] = [], after parent: Int64?, sketch: Bool = false
   ) async throws -> Project.AppendedEntry {
     try await project.appendEntry(
       reason: reason.reason, keyed: reason != .imported, canvas: canvas, mask: mask, moodboard: moodboard,
       thumbnail: CanvasRefineTests.pattern(width: 8, height: 8), model: "m", prompt: "", negativePrompt: "", seed: 0,
-      settings: [:], createdAt: Date(), after: parent)
+      settings: [:], createdAt: Date(), after: parent, sketch: sketch)
   }
 
   private static func generated(_ project: Project, after parent: Int64?) async throws -> HistoryItem {
@@ -265,5 +265,72 @@ struct InputEntryTests {
     #expect(entry.shuffleIds != [1_700_000_001])
     let names = await project.read { $0.contents().tensorNames }
     #expect(names.contains("shuffle_\(entry.shuffleIds[0])"))
+  }
+
+  /// New Sketch's entry is marked a sketch in its profile (`sketch`), read back as `isSketch`:
+  /// badged Sketch and listed with Show Inputs off. A plain Imported entry isn't, and a profile
+  /// without the key, or with one that doesn't read, is no sketch.
+  @Test func sketchMarkRoundTrips() async throws {
+    let project = try Self.project()
+    let plain = try await Self.entry(project, .imported, canvas: .image(Self.tensor(1)), after: nil)
+    let sketch = try await Self.entry(project, .imported, canvas: .image(Self.tensor(2)), after: plain.key, sketch: true)
+    let items = await project.read { $0.tree().itemsNewestFirst }
+    let listedSketch = try #require(items.first { $0.tensorId == sketch.key })
+    let listedPlain = try #require(items.first { $0.tensorId == plain.key })
+    #expect(listedSketch.isSketch && listedSketch.entryReason == .imported && listedSketch.entryTitle == "Sketch")
+    #expect(!listedPlain.isSketch && listedPlain.entryTitle == "Imported")
+    #expect(EntryBadge.isListed(listedSketch, showsEntries: false) && !EntryBadge.isListed(listedPlain, showsEntries: false))
+    let marks = await project.read { [$0.isSketch(imageTensorId: sketch.key), $0.isSketch(imageTensorId: plain.key)] }
+    #expect(marks == [true, false])
+    // The flag in profile_data, decoded leniently.
+    var profile = ProjectMapping.Profile(duration: 0, inputTensorId: nil, parentTensorId: nil, inputEntry: true, sketch: true)
+    #expect(ProjectMapping.Profile(profile.bytes)?.sketch == true)
+    profile.sketch = nil
+    #expect(ProjectMapping.Profile(profile.bytes)?.sketch == nil)
+    let odd = Array(#"{"duration":0,"input_entry":true,"sketch":"yes"}"#.utf8)
+    #expect(ProjectMapping.Profile(odd)?.sketch == nil && ProjectMapping.Profile(odd)?.inputEntry == true)
+  }
+
+  /// Drawing on a sketch keeps its paint layer and redraws only its tile (`HistoryStore.writeSketch`):
+  /// no new step, the same ids and preview, the image tensor still the blank base, and its image as
+  /// History reads it has the strokes baked in. A plain Imported entry, or a closed project, takes
+  /// nothing.
+  @Test func sketchPaintRedrawsItsTile() async throws {
+    let project = try Self.project()
+    let base = try #require(CreateModel.blankImage(width: 32, height: 32))
+    let baseTensor = try #require(ImageTensor.tensor(from: base))
+    let sketch = try await Self.entry(project, .imported, canvas: .image(baseTensor), after: nil, sketch: true)
+    let plain = try await Self.entry(project, .imported, canvas: .image(Self.tensor(1)), after: sketch.key)
+    let before = await project.read { $0.tree() }
+    let item = try #require(before.itemsNewestFirst.first { $0.tensorId == sketch.key })
+    let red = CanvasPaint.Color(red: 1, green: 0, blue: 0)
+    let paint = CanvasPaint(strokes: [.rect(CGRect(x: 0, y: 0, width: 16, height: 32), color: red)])
+
+    let previewId = await HistoryStore.writeSketch(paint, base: base, forImage: sketch.key, in: project)
+    #expect(previewId == item.previewId)
+    let after = await project.read { $0.tree() }
+    #expect(after.itemsNewestFirst.map(\.id) == before.itemsNewestFirst.map(\.id))
+    #expect(after.itemsNewestFirst.map(\.previewId) == before.itemsNewestFirst.map(\.previewId))
+    #expect(await project.read { $0.storedPaint(forImage: sketch.key) } == paint.compacted(for: CGSize(width: 32, height: 32)))
+    let tile = try #require(await project.read { $0.thumbnail(previewId: item.previewId, half: false) })
+    let tileBytes = CanvasRefineTests.rgba(tile)
+    let left = tileBytes[(16 * tile.width + 2) * 4..<(16 * tile.width + 2) * 4 + 3]
+    let right = tileBytes[(16 * tile.width + tile.width - 3) * 4..<(16 * tile.width + tile.width - 3) * 4 + 3]
+    #expect(try #require(left.first) > 200 && left.dropFirst().allSatisfy { $0 < 60 })
+    #expect(right.allSatisfy { $0 > 200 })
+    // History's image has the strokes; the tensor stays the white base.
+    let shown = try #require(await project.read { $0.image(for: item) })
+    #expect(Array(CanvasRefineTests.rgba(shown)[0..<3]) == [255, 0, 0])
+    let own = try #require(await project.read { $0.image(tensorId: sketch.key) })
+    #expect(Array(CanvasRefineTests.rgba(own)[0..<3]) == [255, 255, 255])
+
+    // Clearing the paint gives the blank tile back and removes the layer.
+    #expect(await HistoryStore.writeSketch(nil, base: base, forImage: sketch.key, in: project) == item.previewId)
+    #expect(await project.read { $0.storedPaint(forImage: sketch.key) } == nil)
+
+    #expect(await HistoryStore.writeSketch(paint, base: base, forImage: plain.key, in: project) == nil)
+    #expect(await project.read { $0.storedPaint(forImage: plain.key) } == nil)
+    await project.close()
+    #expect(await HistoryStore.writeSketch(paint, base: base, forImage: sketch.key, in: project) == nil)
   }
 }

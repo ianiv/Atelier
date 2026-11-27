@@ -1292,8 +1292,8 @@ struct RecentStrip: View {
       .frame(width: 44, height: 44)
       .clipShape(.rect(cornerRadius: 4))
       .overlay(alignment: .topLeading) {
-        if let reason = item.entryReason {
-          EntryBadge(reason: reason)
+        if item.isEntry {
+          EntryBadge(item: item)
             .scaleEffect(0.8, anchor: .topLeading)
             .padding(1)
         } else if item.isImported {

@@ -239,4 +239,16 @@ struct CanvasPaintTests {
     let wholeMerge = try #require(CanvasMerge.merge(result, into: whole, input: whole.unpaintedInput, maskBlur: 0, maskBlurOutset: 0))
     #expect(Self.pixel(wholeMerge.image, 4, 4) == [0, 0, 255, 255] && Self.pixel(wholeMerge.image, 40, 40) == Self.pixel(image, 40, 40))
   }
+
+  /// Add to Moodboard takes the canvas image with its paint baked in, unfaded (`moodboardImage`);
+  /// without paint, or with paint that shows nothing, the image itself.
+  @Test func moodboardImageBakesThePaint() throws {
+    let image = try #require(CreateModel.blankImage(width: 16, height: 16))
+    let paint = CanvasPaint(strokes: [.rect(CGRect(x: 0, y: 0, width: 8, height: 16), color: Self.red)])
+    let baked = CreateModel.moodboardImage(image, paint: paint)
+    #expect(baked !== image && baked.width == 16 && baked.height == 16)
+    #expect(Self.pixel(baked, 2, 8) == [255, 0, 0, 255] && Self.pixel(baked, 12, 8) == [255, 255, 255, 255])
+    #expect(CreateModel.moodboardImage(image, paint: nil) === image)
+    #expect(CreateModel.moodboardImage(image, paint: CanvasPaint(strokes: [])) === image)
+  }
 }

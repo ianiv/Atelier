@@ -289,6 +289,8 @@ extension CreateModel {
     let previous = canvasPaint, previousHidden = layersHidden
     canvasPaint = paint?.strokes.isEmpty == true ? nil : paint
     layersHidden = hidden
+    // A sketch keeps every change (`sketchPaintDidChange`).
+    sketchPaintDidChange()
     guard let undoManager, let image = canvasUndoImage else { return }
     registerCanvasUndo(on: image, undoManager: undoManager, actionName: actionName) { [weak self] in
       self?.setPaint(previous, actionName: actionName, undoManager: undoManager, hidden: previousHidden)
@@ -300,7 +302,7 @@ extension CreateModel {
   func newSketch() {
     let size = frameSize ?? CGSize(width: 1024, height: 1024)
     guard let blank = Self.blankImage(width: Int(size.width), height: Int(size.height)) else { return }
-    setCanvasImage(blank)
+    setCanvasImage(blank, sketch: true)
     canvasTool = .brush
     canvasLayer = .color
   }

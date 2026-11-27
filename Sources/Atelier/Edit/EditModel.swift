@@ -604,8 +604,8 @@ final class EditModel {
         note = "The image this edit was made from is no longer in the project, so the edit itself opens."
       }
     }
-    guard let tensorId = sourceItem.imageTensorId,
-          let picture = await project.read({ $0.image(tensorId: tensorId) })
+    let source = sourceItem
+    guard source.hasImage, let picture = await project.read({ $0.image(for: source) })
     else {
       if opens.isCurrent(generation) { note = "The image couldn't be read." }
       return

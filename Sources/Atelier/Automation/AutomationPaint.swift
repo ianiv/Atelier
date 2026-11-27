@@ -36,7 +36,11 @@ extension Automation {
   /// outside the mask, and the stored source layer is the unpainted image, and it keeps the mask,
   /// hidden. Along the way: Mask Colored Areas adds the paint's coverage to the mask in one undo
   /// step; hidden mask and paint (Show/Hide Mask and Paint) are kept but the request has neither
-  /// (and no Draw entry is due), and a mask or paint stroke shows them.
+  /// (and no Draw entry is due), and a mask or paint stroke shows them. Then a second New Sketch:
+  /// one entry, marked a sketch and listed with Show Inputs off; each stroke and undo updates its
+  /// tile (and History's image) with no new entry and the base tensor left white; after another
+  /// step its strokes come back and keep updating it; Add to Moodboard bakes them in, hidden or
+  /// not; a change waiting at a project switch lands in its own project, none in the other.
   /// Prints PASS/FAIL lines.
   ///
   ///   Atelier --paint-check --project NAME --model M [--steps N] [--size S] [--quit]
@@ -370,8 +374,141 @@ extension Automation {
           background != nil && model.image === blank && hidden == true,
           "a masked run the canvas didn't follow keeps its result's mask hidden (\(hidden.map(String.init) ?? "no result"))")
       }
+
+      await sketchHistoryCheck(model, size: size, check: check)
       finish()
     }
+  }
+
+  /// `paintCheck`'s sketch part: a second New Sketch kept as a Sketch entry whose tile follows
+  /// each change (see `paintCheck`). Its own function so the check's closure type-checks in time.
+  @MainActor static func sketchHistoryCheck(_ model: CreateModel, size: Int, check: (Bool, String) -> Void) async {
+    let history = model.history
+    let s = Double(size)
+    /// Waits (up to 10 s) for `condition`.
+    func settled(_ condition: () -> Bool) async -> Bool {
+      for _ in 0..<100 {
+        if condition() { return true }
+        try? await Task.sleep(for: .milliseconds(100))
+      }
+      return condition()
+    }
+    /// RGBA (premultiplied sRGB) at an image pixel, from the top left; empty outside it.
+    func pixel(_ image: CGImage?, _ x: Int, _ y: Int) -> [UInt8] {
+      guard let image, (0..<image.width).contains(x), (0..<image.height).contains(y) else { return [] }
+      var bytes = [UInt8](repeating: 0, count: 4)
+      bytes.withUnsafeMutableBytes { raw in
+        let context = CGContext(
+          data: raw.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+          space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        context?.draw(image, in: CGRect(x: -x, y: y + 1 - image.height, width: image.width, height: image.height))
+      }
+      return bytes
+    }
+    func isWhite(_ rgba: [UInt8]) -> Bool { rgba.count == 4 && rgba.allSatisfy { $0 > 240 } }
+    // A sketch keeps what's drawn on it in its own entry: listed, badged Sketch, its tile
+    // following each change, with no new entries.
+    model.moodboard.removeAll()
+    await model.flushEntries()
+    let blue = CanvasPaint.Color(red: 0, green: 0, blue: 1)
+    func isBlue(_ rgba: [UInt8]) -> Bool { rgba.count == 4 && rgba[2] > 200 && rgba[0] < 70 && rgba[1] < 70 }
+    let countBefore = history.items.count
+    model.newSketch()
+    await model.flushEntries()
+    let newSketch = history.currentItem
+    check(
+      history.items.count == countBefore + 1 && newSketch?.isSketch == true && newSketch?.entryTitle == "Sketch"
+        && newSketch.map { EntryBadge.isListed($0, showsEntries: false) } == true,
+      "New Sketch writes one entry, marked a sketch (badge \(newSketch?.entryTitle ?? "none")) and listed with Show Inputs off")
+    guard let newSketch, await settled({ model.canPaintColor && model.canvasUndoImage === model.image }) else { return }
+    /// The sketch's tile as History reads it, once it shows `expected` (up to 5 s).
+    @MainActor func tileShows(_ expected: (CGImage) -> Bool) async -> Bool {
+      for _ in 0..<50 {
+        if let item = history.item(tensorId: newSketch.tensorId), let tile = await history.thumbnail(for: item, half: false),
+           expected(tile)
+        {
+          return true
+        }
+        try? await Task.sleep(for: .milliseconds(100))
+      }
+      return false
+    }
+    let sketchUndo = UndoManager()
+    sketchUndo.groupsByEvent = false
+    @MainActor func draw(_ stroke: CanvasPaint.Stroke) {
+      sketchUndo.beginUndoGrouping()
+      model.addPaintStrokes([stroke], undoManager: sketchUndo)
+      sketchUndo.endUndoGrouping()
+    }
+    let leftHalf = CanvasPaint.Stroke.rect(CGRect(x: 0, y: 0, width: s * 0.5, height: s), color: blue)
+    let corner = CanvasPaint.Stroke.rect(CGRect(x: s * 0.6, y: s * 0.6, width: s * 0.4, height: s * 0.4), color: blue)
+    draw(leftHalf)
+    check(
+      await tileShows { isBlue(pixel($0, Int(s * 0.25), Int(s * 0.5))) && isWhite(pixel($0, Int(s * 0.75), Int(s * 0.25))) },
+      "one stroke on the sketch: its tile shows it (not white), in the stroke's colour")
+    draw(corner)
+    check(await tileShows { isBlue(pixel($0, Int(s * 0.8), Int(s * 0.8))) }, "a second stroke: the tile follows")
+    check(sketchUndo.undoActionName == "Paint", "the next undo is the second stroke (\(sketchUndo.undoActionName))")
+    sketchUndo.undo()
+    check(
+      await tileShows { isWhite(pixel($0, Int(s * 0.8), Int(s * 0.8))) && isBlue(pixel($0, Int(s * 0.25), Int(s * 0.5))) },
+      "undo: the tile follows, the first stroke still there")
+    check(
+      history.items.count == countBefore + 1 && history.items.filter(\.isSketch).count >= 2
+        && history.item(tensorId: newSketch.tensorId)?.previewId == newSketch.previewId,
+      "strokes and undo add no entries; the sketch keeps its step and preview")
+    let shown = await history.image(for: newSketch)
+    check(isBlue(pixel(shown, Int(s * 0.25), Int(s * 0.5))), "History's full-size image of the sketch has the strokes baked in")
+    let own = await history.image(tensorId: newSketch.tensorId, in: history.project.name)
+    check(isWhite(pixel(own, Int(s * 0.25), Int(s * 0.5))), "the sketch's image tensor stays the blank base")
+
+    // Another step, then the sketch again: its strokes come back and keep updating it.
+    if let run = history.items.first(where: { !$0.isEntry && !$0.isVideo }) {
+      model.show(run)
+      _ = await settled { model.canvasShowsImage && model.canvasPaint == nil }
+      model.restore(entry: newSketch)
+      let back = await settled { model.canvasShowsImage && model.canvasPaint?.strokes == [leftHalf] }
+      check(back, "a generated step, then the sketch again: its strokes come back")
+      draw(corner)
+      check(await tileShows { isBlue(pixel($0, Int(s * 0.8), Int(s * 0.8))) }, "a stroke after coming back still updates the sketch's tile")
+    } else {
+      check(false, "a generated step to show between")
+    }
+
+    // Add to Moodboard: the strokes baked in, hidden or not.
+    model.addCanvasToMoodboard()
+    check(isBlue(pixel(model.moodboard.items.last?.image, Int(s * 0.25), Int(s * 0.5))), "Add to Moodboard bakes the strokes in")
+    model.setLayersHidden(true, undoManager: nil)
+    model.addCanvasToMoodboard()
+    check(
+      isBlue(pixel(model.moodboard.items.last?.image, Int(s * 0.25), Int(s * 0.5))),
+      "Add to Moodboard with Hide Mask and Paint on still bakes the strokes in")
+    model.setLayersHidden(false, undoManager: nil)
+    if let item = history.item(tensorId: newSketch.tensorId) {
+      let fromHistory = await history.image(for: item)
+      check(isBlue(pixel(fromHistory, Int(s * 0.8), Int(s * 0.8))), "History's Add to Moodboard of the sketch includes its strokes")
+    }
+    model.moodboard.removeAll()
+    await model.flushEntries()
+
+    // A project switch while a change waits: it lands in the sketch's project before it goes,
+    // and nothing reaches the other one.
+    let home = history.project.name
+    let other = home + " Sketch Switch"
+    let sketchesBefore = history.items.count
+    draw(.rect(CGRect(x: s * 0.6, y: 0, width: s * 0.4, height: s * 0.2), color: blue))
+    let drawnLast = model.canvasPaint
+    await history.open(other)
+    let otherPaint = await history.project.read { $0.storedPaint(forImage: newSketch.tensorId) }
+    check(history.project.name == other && history.items.isEmpty && otherPaint == nil, "the other project gets none of the sketch's paint")
+    await history.open(home)
+    let homePaint = await history.project.read { $0.storedPaint(forImage: newSketch.tensorId) }
+    check(
+      homePaint?.strokes.count == drawnLast?.strokes.count && history.items.count == sketchesBefore,
+      "the change waiting at the switch was kept in the sketch's own project, with no new entry")
+    check(
+      await tileShows { isBlue(pixel($0, Int(s * 0.8), Int(s * 0.1))) }, "and its tile shows it")
+    _ = try? await history.delete(other)
   }
 }
 @MainActor

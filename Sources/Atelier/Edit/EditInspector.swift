@@ -49,7 +49,7 @@ struct EditInspector: View {
 
   /// A History step as the reference, named by its step when it's in the image's own project.
   private func chooseReference(_ item: HistoryItem) async {
-    guard let tensorId = item.imageTensorId, let image = await create.history.project.read({ $0.image(tensorId: tensorId) }) else {
+    guard let tensorId = item.imageTensorId, let image = await create.history.project.read({ $0.image(for: item) }) else {
       error = "The image couldn't be read."
       return
     }

@@ -13,7 +13,7 @@ Every image you generate is saved to the **current project**. Click **History** 
 - **Model**: show only images made with one model.
 - **Rating**: show only images with at least that many stars, or only unrated ones.
 - Videos show as one tile each, with a film badge. **Images / Videos** in the toolbar shows only one kind. See [Making videos](video.md#in-history).
-- **Show Inputs** in the toolbar (on iPad, in the **Filter** menu) shows or hides [input entries](#input-entries). It's on by default, and the strip under the canvas in Create follows the same setting.
+- **Show Inputs** in the toolbar (on iPad, in the **Filter** menu) shows or hides [input entries](#input-entries) (sketches always show). It's on by default, and the strip under the canvas in Create follows the same setting.
 - Click an image to make it the **current image** (see Branches below) and see its prompt, negative prompt and settings (model, LoRAs with their weights, size, seed, steps, guidance, shift, sampler, hires fix and more) in the panel on the right. LoRAs show by their name in your LoRA list; one this device doesn't have (removed since, or used on a [server](remote.md)) shows its file name, marked **Not installed**. Prompts and seeds can be selected and copied.
 - Select several images with ⌘-click or ⇧-click to copy, export or delete them together. On iPad, tap **Select** in the toolbar, then tap images to add or remove them; tap **Done** when you're finished.
 - On iPad, a tap shows an image's details and a double tap uses its settings. In a narrow window the details open over the grid and close when you're done.
@@ -42,6 +42,7 @@ You can also drag images from History onto the canvas or the moodboard in Create
 History also records what went into your runs, as Draw Things does:
 
 - **Imported**: an image you put on the canvas (pasted, dropped, opened, picked from Photos, **Show on Canvas** from the moodboard, or placed by an agent), as you brought it in, with the moodboard at that moment.
+- **Sketch**: the white image **New Sketch** starts ([Painting colors](creating-images.md#painting-colors)). Unlike the other entries it's listed even with **Show Inputs** off, since it's a picture you drew. Its tile follows the drawing as you go (half a second after each change) without new entries, and opening, copying or exporting it gives the drawing, strokes and all. In the project file it's an Imported step, so Draw Things shows the blank image.
 - **Moodboard**: a change to the moodboard (adding, removing, clearing, or a new weight), with the canvas as it was. A burst of changes, or dragging a weight slider, is one entry, written about a second and a half after the last change (or straight away when you generate, put another image on the canvas, clear it, switch projects or quit).
 - **Cleared**: the canvas was cleared, with the moodboard at that moment.
 - **Mask**: when you generate (in Generate or Edit mode) with an image on the canvas and a mask that isn't the one the latest entry holds, the canvas, mask and moodboard go in first, and the run follows them.

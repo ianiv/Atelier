@@ -112,8 +112,9 @@ extension CreateModel {
           }
           item = found
         }
-        guard !item.isVideo, let imageTensorId = item.imageTensorId else { throw EditJobError.video }
-        guard let source = await project.read({ $0.image(tensorId: imageTensorId) }) else { throw EditJobError.unreadable }
+        guard !item.isVideo, item.hasImage else { throw EditJobError.video }
+        // A sketch's strokes baked in (`Project.image(for:)`), as Edit showed it.
+        guard let source = await project.read({ $0.image(for: item) }) else { throw EditJobError.unreadable }
         try Task.checkCancellation()
         setRunMessage("Rendering the edit…", job)
         setRunStep(100, job)

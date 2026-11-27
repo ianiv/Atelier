@@ -386,8 +386,8 @@ struct HistoryView: View {
               if let clip = item.clip { ClipBadge(clip: clip).padding(5) }
             }
             .overlay(alignment: .topLeading) {
-              if let reason = item.entryReason {
-                EntryBadge(reason: reason).padding(5)
+              if item.isEntry {
+                EntryBadge(item: item).padding(5)
               } else {
                 let stars = history.rating(of: item)
                 HStack(spacing: 4) {
@@ -1099,9 +1099,9 @@ struct HistoryDetail: View {
           }
         }
       }
-      if let reason = item.entryReason {
+      if let title = item.entryTitle {
         Section("Input") {
-          LabeledContent("Kind", value: reason.title)
+          LabeledContent("Kind", value: title)
           LabeledContent("Canvas", value: item.hasImage ? "\(sidecar.width) × \(sidecar.height) frame" : "Empty")
           LabeledContent("Mask", value: item.entryMask?.mayHavePaint == true ? "Painted" : "None")
           LabeledContent(
@@ -1345,7 +1345,8 @@ struct Thumbnail: View {
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(item.accessibilityDescription)
     .accessibilityAddTraits(.isImage)
-    .task(id: "\(item.previewId)#\(half)") {
+    // A sketch's tile is redrawn as it's drawn on (`HistoryStore.saveSketch`).
+    .task(id: "\(item.previewId)#\(half)#\(history.thumbnailRevisions[item.previewId] ?? 0)") {
       image = await history.thumbnail(for: item, half: half)
     }
   }
@@ -1678,7 +1679,7 @@ struct HistoryGraphRow: View {
           .lineLimit(1)
       }
       Spacer(minLength: 0)
-      if let reason = item.entryReason { EntryBadge(reason: reason) }
+      if item.isEntry { EntryBadge(item: item) }
       if stars > 0 { RatingBadge(stars: stars, plain: true) }
       if isCurrent {
         Text("Current")
@@ -1745,20 +1746,21 @@ struct ImportedBadge: View {
   }
 }
 
-/// The badge on an input entry's tile: what it records.
+/// The badge on an input entry's tile: what it records, or Sketch for one New Sketch made.
 struct EntryBadge: View {
-  var reason: HistoryItem.EntryReason
+  var item: HistoryItem
 
   /// The setting History's and the Create strip's Show Inputs share.
   static let showsEntriesKey = "showsInputEntries"
 
-  /// Whether History and the strip list `item` with Show Inputs `showsEntries`.
-  static func isListed(_ item: HistoryItem, showsEntries: Bool) -> Bool {
-    showsEntries || !item.isEntry
+  /// Whether History and the strip list `item` with Show Inputs `showsEntries`. A sketch is always
+  /// listed: it's a picture the user drew, not a record of an input.
+  nonisolated static func isListed(_ item: HistoryItem, showsEntries: Bool) -> Bool {
+    showsEntries || !item.isEntry || item.isSketch
   }
 
   var body: some View {
-    Text(reason.title)
+    Text(item.entryTitle ?? "")
       .font(.system(size: 9, weight: .semibold))
       .padding(.horizontal, 4)
       .padding(.vertical, 1)
@@ -1768,7 +1770,8 @@ struct EntryBadge: View {
   }
 
   private var help: String {
-    switch reason {
+    if item.isSketch { return "A sketch drawn on a blank canvas with New Sketch" }
+    return switch item.entryReason ?? .imported {
     case .imported: "Input: an image brought onto the canvas"
     case .moodboard: "Input: the moodboard changed"
     case .cleared: "Input: the canvas was cleared"

@@ -726,6 +726,9 @@ final class CreateModel {
   /// Input entries being written, one after another (`recordEntry`), and how many.
   @ObservationIgnored private var entryChain: Task<Void, Never>?
   @ObservationIgnored private var entriesPending = 0
+  /// A sketch's paint waiting to be kept, and the delay before it is (`sketchPaintDidChange`).
+  @ObservationIgnored private var pendingSketchSave: SketchSave?
+  @ObservationIgnored private var sketchSaveDelay: Task<Void, Never>?
   /// The moodboard changed and that isn't in History yet: it's recorded once it settles
   /// (`moodboardSettle`), or before anything that needs it there first (`recordMoodboardChange`).
   @ObservationIgnored private var moodboardChanged = false
@@ -1164,7 +1167,10 @@ final class CreateModel {
   /// The image goes into History at once as an Imported entry, with the moodboard, and becomes the
   /// canvas's step once it's written (`adoptImport`): masks are kept with it, and a run from it
   /// follows it.
-  func setCanvasImage(_ newImage: CGImage, metadata: ImageMetadata.Embedded? = nil, filling: Bool = false) {
+  ///
+  /// `sketch` marks the entry as New Sketch's (`HistoryItem.isSketch`): what's drawn on it then
+  /// keeps updating that entry (`sketchPaintDidChange`).
+  func setCanvasImage(_ newImage: CGImage, metadata: ImageMetadata.Embedded? = nil, filling: Bool = false, sketch: Bool = false) {
     // A moodboard change made with the canvas before goes in first.
     recordMoodboardChange()
     stopFollowingRun()
@@ -1195,6 +1201,7 @@ final class CreateModel {
       input.canvas = .image(newImage)
       input.canvasImage = newImage
       input.mask = nil
+      input.sketch = sketch
       recordEntry(input) { [weak self] item in self?.adoptImport(newImage, item) }
     }
   }
@@ -1258,8 +1265,18 @@ final class CreateModel {
     canvas.zoomToFit()
   }
 
+  /// The canvas image goes on the moodboard as it looks with its paint: the colours baked in,
+  /// unfaded, even while Hide Mask and Paint hides them (a sketch's strokes are the picture).
+  /// A run's preview has no paint of its own.
   func addCanvasToMoodboard() {
-    if let image { moodboard.add(image) }
+    guard let image else { return }
+    moodboard.add(Self.moodboardImage(image, paint: canvasShowsImage ? canvasPaint : nil))
+  }
+
+  /// `image` with `paint` baked in (`CanvasPaint.baked`, no fade), or `image` itself without paint.
+  nonisolated static func moodboardImage(_ image: CGImage, paint: CanvasPaint?) -> CGImage {
+    guard let paint, paint.mayHaveColor else { return image }
+    return paint.baked(onto: image) ?? image
   }
 
   func pasteImage() {
@@ -4097,6 +4114,8 @@ extension CreateModel {
   /// from outside the project (not yet a step) remember nothing. Nothing is written when the mask
   /// is the one it arrived with, or when its own hasn't come back yet.
   private func persistCanvasMask(for step: (project: String, tensorId: Int64)) {
+    // A sketch's strokes still to be kept go in now, in turn with the entries.
+    flushSketchSave()
     guard step.project == history.project.name else { return }
     // Its paint layer the same way.
     persistCanvasPaint(for: step)
@@ -4156,7 +4175,69 @@ extension CreateModel {
   /// The canvas image remembers its mask now (`persistCanvasMask`): before a job is queued from
   /// it, the project changes, or the app goes away.
   func rememberCanvasMask() {
-    if let imageStep { persistCanvasMask(for: imageStep) }
+    if let imageStep { persistCanvasMask(for: imageStep) } else { flushSketchSave() }
+  }
+
+  // MARK: Sketches
+
+  /// A sketch's paint layer waiting to be kept (`sketchPaintDidChange`): the project it was drawn
+  /// in, its image (the blank base, for the tile) and the paint. Whoever takes it first writes it:
+  /// the entry chain, or quitting (`saveSketchBeforeQuit`).
+  struct SketchSave {
+    let id = UUID()
+    var project: Project
+    var tensorId: Int64
+    var base: CGImage
+    var paint: CanvasPaint?
+  }
+
+  /// The canvas's paint changed (`setPaint`: a stroke, a fill, Clear Paint, undo and redo): when
+  /// the canvas image is a sketch (New Sketch's entry, `HistoryItem.isSketch`), its paint layer
+  /// and tile are kept half a second after the last change, so History shows what's drawn. The
+  /// same entry each time: no new step, and its image stays the blank base. Other images keep
+  /// their paint only when the canvas leaves them, as before.
+  func sketchPaintDidChange() {
+    guard let step = imageStep, step.project == history.project.name,
+          history.item(tensorId: step.tensorId)?.isSketch == true, let base = canvasUndoImage
+    else { return }
+    pendingSketchSave = SketchSave(project: history.project, tensorId: step.tensorId, base: base, paint: canvasPaint)
+    sketchSaveDelay?.cancel()
+    sketchSaveDelay = Task { [weak self] in
+      try? await Task.sleep(for: .milliseconds(500))
+      guard !Task.isCancelled else { return }
+      self?.flushSketchSave()
+    }
+  }
+
+  /// Puts the sketch save waiting (`sketchPaintDidChange`) in the entry chain now, after the
+  /// entries on their way: before the canvas leaves the sketch, the project changes or the app
+  /// quits. It's written into the project it was drawn in while that's open (`HistoryStore.saveSketch`).
+  func flushSketchSave() {
+    sketchSaveDelay?.cancel()
+    sketchSaveDelay = nil
+    guard let save = pendingSketchSave else { return }
+    let previous = entryChain
+    entryChain = Task { [weak self] in
+      await previous?.value
+      // A later change took its place, or quitting wrote it.
+      guard let self, pendingSketchSave?.id == save.id else { return }
+      pendingSketchSave = nil
+      await history.saveSketch(save.paint, base: save.base, forImage: save.tensorId, in: save.project)
+    }
+  }
+
+  /// At quit the chain may not get another turn: a sketch save not yet taken is written now, off
+  /// the main actor while this waits, within `QuitDeadline`.
+  private func saveSketchBeforeQuit() {
+    sketchSaveDelay?.cancel()
+    guard let save = pendingSketchSave else { return }
+    pendingSketchSave = nil
+    let done = DispatchSemaphore(value: 0)
+    Task.detached {
+      defer { done.signal() }
+      _ = await HistoryStore.writeSketch(save.paint, base: save.base, forImage: save.tensorId, in: save.project)
+    }
+    _ = done.wait(timeout: .now() + max(QuitDeadline.date.timeIntervalSinceNow, 0))
   }
 
   /// The image mask and Select steps belong to: the canvas image, or while a run's preview covers
@@ -4434,6 +4515,7 @@ extension CreateModel {
   /// their way. Before another project opens, and for checks.
   func flushEntries() async {
     recordMoodboardChange()
+    flushSketchSave()
     await entryChain?.value
   }
 
@@ -4469,6 +4551,7 @@ extension CreateModel {
   /// order, off the main actor while this waits, within the deadline every quit handler shares (`QuitDeadline`). One the
   /// chain is already writing finishes on its own, or not at all; it's not written again.
   private func recordEntriesBeforeQuit() {
+    saveSketchBeforeQuit()
     if moodboardChanged {
       moodboardChanged = false
       moodboardSettling?.cancel()
@@ -4614,6 +4697,8 @@ extension CreateModel {
     paintPendingTensorId = nil
     landedPaint = (tensorId, nil)
     canvasPaint = paint
+    // Drawn on before its entry landed: a sketch keeps it now.
+    if paint != nil { sketchPaintDidChange() }
   }
 
   /// The Mask entry Generate writes first, in Generate or Edit mode, when the canvas has an image

@@ -2261,11 +2261,14 @@ final class AgentTools {
     return create.history.items.prefix(limit).map { item in
       let sidecar = item.sidecar
       if let reason = item.entryReason {
-        return [
+        var entry: [String: Any] = [
           "history_step": item.id.logicalTime, "kind": "input", "reason": reason.rawValue,
           "has_image": item.hasImage, "width": sidecar.width, "height": sidecar.height,
           "has_mask": item.entryMask?.mayHavePaint == true, "moodboard": item.entryMoodboard.count,
         ]
+        // New Sketch's entry: its image is the drawing, strokes baked in.
+        if item.isSketch { entry["sketch"] = true }
+        return entry
       }
       var entry: [String: Any] = [
         "kind": item.isVideo ? "video" : "image",
@@ -2364,7 +2367,10 @@ final class AgentTools {
     }
 
     var text: String
-    if let item, let reason = item.entryReason {
+    if let item, item.isSketch {
+      text =
+        "History step \(item.id.logicalTime) in “\(create.history.project.name)” is a sketch (New Sketch), \(image.width)×\(image.height), with its strokes baked in. It isn't a run, so it has no prompt or settings."
+    } else if let item, let reason = item.entryReason {
       text =
         "History step \(item.id.logicalTime) in “\(create.history.project.name)” is an input entry (\(reason.rawValue)): the canvas as it was before a run, \(image.width)×\(image.height), with \(item.entryMoodboard.count) moodboard image\(item.entryMoodboard.count == 1 ? "" : "s"). It isn't a run, so it has no prompt or settings."
     } else if let item, let media = item.clip?.media, let clip = item.clip {
