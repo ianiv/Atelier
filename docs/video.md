@@ -79,7 +79,7 @@ Drop a video file on the Create canvas, or choose **Open Video…** or **Open Vi
 
 ## Audio
 
-Models that take an audio file show an **Audio** box at the top of the moodboard column. Drop an audio file on it or click **Choose Audio…**; it shows the file's name, length and waveform. For MiniMax H3 Ref2VA, refer to it in the prompt as `<Audio 1>`. Each queued video keeps the audio it was given, and **Use Settings** on a video brings its audio back.
+Models that take an audio file show an **Audio** box at the top of the moodboard column. Drop an audio file on it, click **Choose Audio…**, or copy an audio file (or audio) and click **Paste** at the top of the moodboard column; a new file replaces the current one, and with several on the clipboard the first is used. It shows the file's name, length and waveform. For MiniMax H3 Ref2VA, refer to it in the prompt as `<Audio 1>`. Each queued video keeps the audio it was given, and **Use Settings** on a video brings its audio back.
 
 LTX and MiniMax H3 make a soundtrack with the video. It's saved with the video, plays with it and is in the files you export. For MiniMax H3 models, **Audio Shift** (next to Shift in the inspector) shifts the soundtrack's noise schedule the way Shift does the video's.
 

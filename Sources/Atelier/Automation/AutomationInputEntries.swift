@@ -1,4 +1,5 @@
 #if os(macOS)
+import AVFoundation
 import SwiftUI
 
 extension Automation {
@@ -12,7 +13,10 @@ extension Automation {
   /// images with their weights, with nothing new recorded; Using the first run brings back the same
   /// state; Clear is a Cleared entry, and a second Clear repeats it, so it isn't recorded; deleting
   /// the entries leaves both runs with their images and tensors; and without Show Inputs only the
-  /// runs are listed. Prints PASS/FAIL lines.
+  /// runs are listed; Paste in the moodboard column adds two copied images as one Moodboard entry,
+  /// leaves out a copied WAV file with an image model, and, when a model that takes audio is
+  /// downloaded, puts it in the Audio box with that model selected (no run). Copies go to the
+  /// private pasteboard of scripted runs (`Clipboard.pasteboard`). Prints PASS/FAIL (and SKIP) lines.
   ///
   ///   Atelier --input-entries-check --project NAME --model M [--steps N] [--size S] [--quit]
   ///
@@ -390,6 +394,59 @@ extension Automation {
               : on == Array(history.items.prefix(24)) && off == Array(history.items.filter { !$0.isEntry }.prefix(24))),
           "the strip (\(lineage ? "Current Lineage" : "Chronological")) lists entries with Show Inputs on and only runs with it off")
       }
+
+      // Paste in the moodboard column: the clipboard's images (a private one in scripted runs)
+      // join the board as one Moodboard entry; audio fills the Audio box only for a model that
+      // takes it.
+      model.moodboard.removeAll()
+      await model.flushEntries()
+      let pasteBefore = history.items.count(where: \.isEntry)
+      Clipboard.copyImages([first, second].map { (ImageTensor.png($0), nil) })
+      check(await Clipboard.pastableKinds() == [.image], "two copied images are pastable as images")
+      model.pasteIntoMoodboard(await PastedMedia.load(Clipboard.items(takesAudio: false), takesAudio: false))
+      await model.flushEntries()
+      let pasted = history.currentItem
+      check(
+        model.moodboard.items.count == 2 && same(model.moodboard.items.first?.image, first)
+          && same(model.moodboard.items.last?.image, second),
+        "Paste adds both clipboard images to the moodboard, in order")
+      check(
+        pasted?.entryReason == .moodboard && pasted?.entryMoodboard.count == 2
+          && history.items.count(where: \.isEntry) == pasteBefore + 1,
+        "and they're one Moodboard entry holding both")
+      let audioFolder = FileManager.default.temporaryDirectory.appending(path: "Atelier-Automation-Paste-\(UUID().uuidString)")
+      try? FileManager.default.createDirectory(at: audioFolder, withIntermediateDirectories: true)
+      defer { try? FileManager.default.removeItem(at: audioFolder) }
+      let wav = audioFolder.appending(path: "paste check.wav")
+      if let format = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1),
+         let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4800)
+      {
+        buffer.frameLength = 4800
+        try? AVAudioFile(forWriting: wav, settings: format.settings).write(from: buffer)
+      }
+      Clipboard.copyFiles([wav])
+      check(await Clipboard.pastableKinds() == [.audio], "a copied WAV file is pastable as audio")
+      model.errorMessage = nil
+      let boardCount = model.moodboard.items.count
+      model.pasteIntoMoodboard(await PastedMedia.load(Clipboard.items(takesAudio: true), takesAudio: model.videoModel?.takesAudio == true))
+      check(
+        model.audio.url == nil && model.errorMessage != nil && model.moodboard.items.count == boardCount,
+        "with an image model, pasting audio alone adds nothing and says why (\(model.errorMessage ?? "no message"))")
+      // A model that takes audio, if one is downloaded: selected without running it.
+      if let audioModel = model.models.first(where: { VideoModel(model: $0.file, loras: [])?.takesAudio == true }) {
+        model.selectedModel = audioModel.file
+        await idle()
+        model.pasteIntoMoodboard(await PastedMedia.load(Clipboard.items(takesAudio: true), takesAudio: model.videoModel?.takesAudio == true))
+        check(
+          model.audio.url != nil && model.audio.name == "paste check.wav" && model.audio.duration > 0.09,
+          "with \(audioModel.file), pasting a WAV file fills the Audio box (\(model.audio.name))")
+        model.audio.clear()
+        model.selectedModel = file
+        await idle()
+      } else {
+        print("SKIP no downloaded model takes audio, so pasting audio into the Audio box wasn't checked")
+      }
+      Clipboard.copy("")
       finish()
     }
   }

@@ -35,18 +35,35 @@ final class AudioClip {
     load(file, name: UserDefaults.standard.string(forKey: "audioClipName") ?? file.lastPathComponent)
   }
 
-  /// Copies `source` in as the audio file. Jobs already queued keep the copy they took.
-  func set(_ source: URL) throws {
+  /// Copies `source` in as the audio file, named `name` (the file's own name by default: a
+  /// pasted copy has a made-up one). Jobs already queued keep the copy they took. A file
+  /// AVFoundation can't read throws and leaves the current audio as it was.
+  func set(_ source: URL, name: String? = nil) throws {
     let access = source.startAccessingSecurityScopedResource()
     defer { if access { source.stopAccessingSecurityScopedResource() } }
+    _ = try AVAudioFile(forReading: source)
+    let fileManager = FileManager.default
     let target = Self.folder.appending(path: "current").appendingPathExtension(source.pathExtension)
-    try? FileManager.default.createDirectory(at: Self.folder, withIntermediateDirectories: true)
-    removeFile()
-    // A scripted run starts with no clip, so a previous run's copy isn't `url` and is still here.
-    try? FileManager.default.removeItem(at: target)
-    try FileManager.default.copyItem(at: source, to: target)
-    load(target, name: source.lastPathComponent)
-    if SessionState.isEnabled { UserDefaults.standard.set(name, forKey: "audioClipName") }
+    try? fileManager.createDirectory(at: Self.folder, withIntermediateDirectories: true)
+    // Copied beside the current file first, then swapped in, so a copy that fails leaves the
+    // current audio as it was.
+    let incoming = Self.folder.appending(path: "incoming-\(UUID().uuidString)").appendingPathExtension(source.pathExtension)
+    do {
+      try fileManager.copyItem(at: source, to: incoming)
+      // A scripted run starts with no clip, so a previous run's copy isn't `url` and may be here.
+      if fileManager.fileExists(atPath: target.path) {
+        _ = try fileManager.replaceItemAt(target, withItemAt: incoming)
+      } else {
+        try fileManager.moveItem(at: incoming, to: target)
+      }
+    } catch {
+      try? fileManager.removeItem(at: incoming)
+      throw error
+    }
+    // The previous clip, when it had another extension.
+    if let url, url.standardizedFileURL != target.standardizedFileURL { try? fileManager.removeItem(at: url) }
+    load(target, name: name ?? source.lastPathComponent)
+    if SessionState.isEnabled { UserDefaults.standard.set(self.name, forKey: "audioClipName") }
   }
 
   /// Puts back the audio a run took (as the project keeps it: PCM in [channels, samples] order).

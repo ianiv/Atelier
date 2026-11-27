@@ -28,7 +28,7 @@ final class Moodboard {
 
   /// Reference images are scaled down to this long side: the engine resizes references to about
   /// the output's pixel count anyway, and full-size photos would bloat project files.
-  static let maxSide = 1536
+  nonisolated static let maxSide = 1536
 
   private nonisolated struct Entry: Codable {
     var id: UUID
@@ -390,6 +390,7 @@ struct MoodboardColumn: View {
           .menuIndicator(.hidden)
           .fixedSize()
           .help("Add reference images")
+          MoodboardPasteButton()
         }
         Button(shown ? "Hide Moodboard" : "Show Moodboard", systemImage: "square.stack") {
           shown.toggle()

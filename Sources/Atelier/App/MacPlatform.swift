@@ -1,6 +1,7 @@
 #if os(macOS)
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 // Every AppKit use in Atelier lives in this file: the few things SwiftUI has no equivalent for
 // that keeps the Mac app working as it does. Everything else is SwiftUI or a cross-platform
@@ -47,18 +48,25 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
 /// from menu items and buttons.
 @MainActor
 enum Clipboard {
+  /// The general pasteboard, or in scripted runs (and tests) a private one, so their copying and
+  /// pasting never touches what the user copied.
+  static var pasteboard: NSPasteboard {
+    SessionState.isEnabled ? .general : automationPasteboard
+  }
+
+  private static let automationPasteboard = NSPasteboard(name: NSPasteboard.Name("com.atelier.automation"))
+
   static func copy(_ text: String) {
-    NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString(text, forType: .string)
+    pasteboard.clearContents()
+    pasteboard.setString(text, forType: .string)
   }
 
   static var string: String? {
-    NSPasteboard.general.string(forType: .string)
+    pasteboard.string(forType: .string)
   }
 
   /// One image, as PNG and TIFF, which other apps paste most reliably.
   static func copyImage(png: Data?, tiff: Data?) {
-    let pasteboard = NSPasteboard.general
     pasteboard.clearContents()
     if let png { pasteboard.setData(png, forType: .png) }
     if let tiff { pasteboard.setData(tiff, forType: .tiff) }
@@ -72,22 +80,70 @@ enum Clipboard {
       if let tiff = image.tiff { entry.setData(tiff, forType: .tiff) }
       return entry
     }
-    let pasteboard = NSPasteboard.general
     pasteboard.clearContents()
     pasteboard.writeObjects(entries)
+  }
+
+  /// Files, as Finder copies them (scripted checks).
+  static func copyFiles(_ urls: [URL]) {
+    pasteboard.clearContents()
+    pasteboard.writeObjects(urls.map { $0 as NSURL })
   }
 
   /// A copied image's PNG or TIFF data.
   static var imageData: Data? {
     for type in [NSPasteboard.PasteboardType.png, .tiff] {
-      if let data = NSPasteboard.general.data(forType: type) { return data }
+      if let data = pasteboard.data(forType: type) { return data }
     }
     return nil
   }
 
   /// A copied file's URL, such as an image copied in Finder.
   static var fileURL: URL? {
-    (NSPasteboard.general.readObjects(forClasses: [NSURL.self]) as? [URL])?.first
+    (pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL])?.first
+  }
+
+  /// Goes up whenever anything is copied, in any app.
+  static var changeCount: Int {
+    pasteboard.changeCount
+  }
+
+  /// Every item on the clipboard, with the data the moodboard's Paste reads (none for audio when
+  /// the model takes none, as it's left out). Reading data is what macOS may ask the user about,
+  /// so this is only for a paste the user asked for.
+  static func items(takesAudio: Bool) -> [ClipboardItem] {
+    (pasteboard.pasteboardItems ?? []).map { entry in
+      let types = entry.types.compactMap { UTType($0.rawValue) }
+      let fileURL = entry.string(forType: .fileURL).flatMap { URL(string: $0) }.flatMap { $0.isFileURL ? $0 : nil }
+      let data = fileURL == nil
+        ? PastedMedia.payloadType(types, takesAudio: takesAudio).flatMap { entry.data(forType: .init($0.identifier)) } : nil
+      return ClipboardItem(types: types, fileURL: fileURL, data: data)
+    }
+  }
+
+  /// What the moodboard's Paste would find on the clipboard, read without reading it: the items'
+  /// types, and for a copied file the type the system detects for it (`detectedMetadata`), so
+  /// checking, every second while the moodboard shows, never makes macOS ask about pasting.
+  static func pastableKinds() async -> Set<PastedMedia.Kind> {
+    var kinds = Set<PastedMedia.Kind>()
+    for entry in pasteboard.pasteboardItems ?? [] {
+      let types = entry.types.compactMap { UTType($0.rawValue) }
+      guard types.contains(.fileURL) else {
+        if let kind = PastedMedia.kind(types: types, fileURL: nil) { kinds.insert(kind) }
+        continue
+      }
+      // Detection runs off the main actor. Nothing else uses this item meanwhile: each check reads
+      // the pasteboard's items afresh, so an item the clipboard replaced while it was detected
+      // costs no more than one wrong answer, until the next check a second later.
+      nonisolated(unsafe) let detecting = entry
+      var fileType = (try? await detecting.detectedMetadata(for: [\.contentType]))?.contentType
+      // The private pasteboard of scripted runs is Atelier's own, so reading it asks nothing.
+      if fileType == nil, !SessionState.isEnabled, let url = entry.string(forType: .fileURL).flatMap(URL.init(string:)) {
+        fileType = UTType(filenameExtension: url.pathExtension)
+      }
+      if let kind = PastedMedia.kind(of: fileType) { kinds.insert(kind) }
+    }
+    return kinds
   }
 }
 
