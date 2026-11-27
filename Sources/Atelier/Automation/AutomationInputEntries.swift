@@ -403,7 +403,7 @@ extension Automation {
       let pasteBefore = history.items.count(where: \.isEntry)
       Clipboard.copyImages([first, second].map { (ImageTensor.png($0), nil) })
       check(await Clipboard.pastableKinds() == [.image], "two copied images are pastable as images")
-      model.pasteIntoMoodboard(await PastedMedia.load(Clipboard.items, takesAudio: false))
+      model.pasteIntoMoodboard(await PastedMedia.load(Clipboard.items(takesAudio: false), takesAudio: false))
       await model.flushEntries()
       let pasted = history.currentItem
       check(
@@ -428,7 +428,7 @@ extension Automation {
       check(await Clipboard.pastableKinds() == [.audio], "a copied WAV file is pastable as audio")
       model.errorMessage = nil
       let boardCount = model.moodboard.items.count
-      model.pasteIntoMoodboard(await PastedMedia.load(Clipboard.items, takesAudio: model.videoModel?.takesAudio == true))
+      model.pasteIntoMoodboard(await PastedMedia.load(Clipboard.items(takesAudio: true), takesAudio: model.videoModel?.takesAudio == true))
       check(
         model.audio.url == nil && model.errorMessage != nil && model.moodboard.items.count == boardCount,
         "with an image model, pasting audio alone adds nothing and says why (\(model.errorMessage ?? "no message"))")
@@ -436,7 +436,7 @@ extension Automation {
       if let audioModel = model.models.first(where: { VideoModel(model: $0.file, loras: [])?.takesAudio == true }) {
         model.selectedModel = audioModel.file
         await idle()
-        model.pasteIntoMoodboard(await PastedMedia.load(Clipboard.items, takesAudio: model.videoModel?.takesAudio == true))
+        model.pasteIntoMoodboard(await PastedMedia.load(Clipboard.items(takesAudio: true), takesAudio: model.videoModel?.takesAudio == true))
         check(
           model.audio.url != nil && model.audio.name == "paste check.wav" && model.audio.duration > 0.09,
           "with \(audioModel.file), pasting a WAV file fills the Audio box (\(model.audio.name))")

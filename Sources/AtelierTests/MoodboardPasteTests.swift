@@ -60,10 +60,42 @@ struct MoodboardPasteTests {
     #expect(PastedMedia.kind(types: [.utf8PlainText, .rtf], fileURL: nil) == nil)
     // The first type the copying app offers that's either decides.
     #expect(PastedMedia.kind(types: [.utf8PlainText, .png, .wav], fileURL: nil) == .image)
-    #expect(PastedMedia.payloadType([.utf8PlainText, .jpeg, .png]) == .jpeg)
+    #expect(PastedMedia.payloadType([.utf8PlainText, .jpeg, .png]) == .png)
+  }
+
+  @Test func imageDataIsReadAsATypeImageIODecodes() {
+    #expect(PastedMedia.payloadType([.svg, .jpeg, .png]) == .png)
+    #expect(PastedMedia.payloadType([.svg, .heic, .jpeg]) == .heic)
+    #expect(PastedMedia.payloadType([.svg]) == nil)
+    #expect(PastedMedia.payloadType([.utf8PlainText, .wav]) == .wav)
+    #expect(PastedMedia.payloadType([.utf8PlainText, .wav], takesAudio: false) == nil)
   }
 
   // MARK: - Reading items
+
+  @Test func aFileWithoutItsExtensionIsReadByItsContents() async throws {
+    let folder = try Self.folder()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let image = folder.appending(path: "picture")
+    try Self.png(width: 40, height: 20).write(to: image)
+    let sound = folder.appending(path: "sound")
+    try FileManager.default.moveItem(at: Self.wav(in: folder), to: sound)
+    let misnamed = folder.appending(path: "actually sound.png")
+    try FileManager.default.copyItem(at: sound, to: misnamed)
+    let batch = await PastedMedia.load(
+      [ClipboardItem(types: [.fileURL], fileURL: image), ClipboardItem(types: [.fileURL], fileURL: sound)],
+      takesAudio: true)
+    defer { PastedMedia.removeCopies(batch.media) }
+    guard batch.media.count == 2, case .image(let decoded) = batch.media[0], case .audio(let copy, _) = batch.media[1] else {
+      Issue.record("an extension-less image and sound should both paste (\(batch.media.count), failed \(batch.failed))")
+      return
+    }
+    #expect(decoded.width == 40)
+    #expect(try AVAudioFile(forReading: copy).length == 4800)
+    let wrong = await PastedMedia.load([ClipboardItem(types: [.fileURL], fileURL: misnamed)], takesAudio: true)
+    defer { PastedMedia.removeCopies(wrong.media) }
+    #expect(wrong.media.count == 1 && wrong.failed == 0)
+  }
 
   @Test func everyImageIsReadInOrderAndFitted() async throws {
     let items = try [
@@ -197,5 +229,28 @@ struct MoodboardPasteTests {
     #expect(clip.url == kept && clip.name == "Pasted Audio.wav")
     #expect(FileManager.default.fileExists(atPath: kept.path))
     #expect(clip.duration > 0.09)
+  }
+
+  @Test func aNewFileReplacesTheClipInPlace() throws {
+    let folder = try Self.folder()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let clip = AudioClip()
+    defer { clip.clear() }
+    try clip.set(Self.wav(in: folder, name: "one.wav"))
+    let first = try #require(clip.url)
+    let aiff = folder.appending(path: "two.aiff")
+    let source = try AVAudioFile(forReading: Self.wav(in: folder, name: "three.wav"))
+    let buffer = try #require(AVAudioPCMBuffer(pcmFormat: source.processingFormat, frameCapacity: 4800))
+    try source.read(into: buffer)
+    try AVAudioFile(forWriting: aiff, settings: [AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 48000, AVNumberOfChannelsKey: 1, AVLinearPCMBitDepthKey: 16, AVLinearPCMIsBigEndianKey: true])
+      .write(from: buffer)
+    try clip.set(aiff)
+    let second = try #require(clip.url)
+    #expect(clip.name == "two.aiff" && second.pathExtension == "aiff")
+    #expect(FileManager.default.fileExists(atPath: second.path))
+    // The previous clip, with its other extension, is gone, and no copy in progress is left.
+    #expect(!FileManager.default.fileExists(atPath: first.path))
+    let left = try FileManager.default.contentsOfDirectory(atPath: second.deletingLastPathComponent().path)
+    #expect(!left.contains { $0.hasPrefix("incoming-") })
   }
 }

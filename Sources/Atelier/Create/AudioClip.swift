@@ -42,12 +42,26 @@ final class AudioClip {
     let access = source.startAccessingSecurityScopedResource()
     defer { if access { source.stopAccessingSecurityScopedResource() } }
     _ = try AVAudioFile(forReading: source)
+    let fileManager = FileManager.default
     let target = Self.folder.appending(path: "current").appendingPathExtension(source.pathExtension)
-    try? FileManager.default.createDirectory(at: Self.folder, withIntermediateDirectories: true)
-    removeFile()
-    // A scripted run starts with no clip, so a previous run's copy isn't `url` and is still here.
-    try? FileManager.default.removeItem(at: target)
-    try FileManager.default.copyItem(at: source, to: target)
+    try? fileManager.createDirectory(at: Self.folder, withIntermediateDirectories: true)
+    // Copied beside the current file first, then swapped in, so a copy that fails leaves the
+    // current audio as it was.
+    let incoming = Self.folder.appending(path: "incoming-\(UUID().uuidString)").appendingPathExtension(source.pathExtension)
+    do {
+      try fileManager.copyItem(at: source, to: incoming)
+      // A scripted run starts with no clip, so a previous run's copy isn't `url` and may be here.
+      if fileManager.fileExists(atPath: target.path) {
+        _ = try fileManager.replaceItemAt(target, withItemAt: incoming)
+      } else {
+        try fileManager.moveItem(at: incoming, to: target)
+      }
+    } catch {
+      try? fileManager.removeItem(at: incoming)
+      throw error
+    }
+    // The previous clip, when it had another extension.
+    if let url, url.standardizedFileURL != target.standardizedFileURL { try? fileManager.removeItem(at: url) }
     load(target, name: name ?? source.lastPathComponent)
     if SessionState.isEnabled { UserDefaults.standard.set(self.name, forKey: "audioClipName") }
   }

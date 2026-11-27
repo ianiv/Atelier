@@ -108,13 +108,15 @@ enum Clipboard {
     pasteboard.changeCount
   }
 
-  /// Every item on the clipboard, with the data the moodboard's Paste reads. Reading data is
-  /// what macOS may ask the user about, so this is only for a paste the user asked for.
-  static var items: [ClipboardItem] {
+  /// Every item on the clipboard, with the data the moodboard's Paste reads (none for audio when
+  /// the model takes none, as it's left out). Reading data is what macOS may ask the user about,
+  /// so this is only for a paste the user asked for.
+  static func items(takesAudio: Bool) -> [ClipboardItem] {
     (pasteboard.pasteboardItems ?? []).map { entry in
       let types = entry.types.compactMap { UTType($0.rawValue) }
       let fileURL = entry.string(forType: .fileURL).flatMap { URL(string: $0) }.flatMap { $0.isFileURL ? $0 : nil }
-      let data = fileURL == nil ? PastedMedia.payloadType(types).flatMap { entry.data(forType: .init($0.identifier)) } : nil
+      let data = fileURL == nil
+        ? PastedMedia.payloadType(types, takesAudio: takesAudio).flatMap { entry.data(forType: .init($0.identifier)) } : nil
       return ClipboardItem(types: types, fileURL: fileURL, data: data)
     }
   }
@@ -131,7 +133,8 @@ enum Clipboard {
         continue
       }
       // Detection runs off the main actor. Nothing else uses this item meanwhile: each check reads
-      // the pasteboard's items afresh.
+      // the pasteboard's items afresh, so an item the clipboard replaced while it was detected
+      // costs no more than one wrong answer, until the next check a second later.
       nonisolated(unsafe) let detecting = entry
       var fileType = (try? await detecting.detectedMetadata(for: [\.contentType]))?.contentType
       // The private pasteboard of scripted runs is Atelier's own, so reading it asks nothing.

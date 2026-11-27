@@ -390,7 +390,7 @@ struct MoodboardColumn: View {
           .menuIndicator(.hidden)
           .fixedSize()
           .help("Add reference images")
-          MoodboardPasteButton { shown = true }
+          MoodboardPasteButton()
         }
         Button(shown ? "Hide Moodboard" : "Show Moodboard", systemImage: "square.stack") {
           shown.toggle()
