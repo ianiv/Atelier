@@ -35,18 +35,21 @@ final class AudioClip {
     load(file, name: UserDefaults.standard.string(forKey: "audioClipName") ?? file.lastPathComponent)
   }
 
-  /// Copies `source` in as the audio file. Jobs already queued keep the copy they took.
-  func set(_ source: URL) throws {
+  /// Copies `source` in as the audio file, named `name` (the file's own name by default: a
+  /// pasted copy has a made-up one). Jobs already queued keep the copy they took. A file
+  /// AVFoundation can't read throws and leaves the current audio as it was.
+  func set(_ source: URL, name: String? = nil) throws {
     let access = source.startAccessingSecurityScopedResource()
     defer { if access { source.stopAccessingSecurityScopedResource() } }
+    _ = try AVAudioFile(forReading: source)
     let target = Self.folder.appending(path: "current").appendingPathExtension(source.pathExtension)
     try? FileManager.default.createDirectory(at: Self.folder, withIntermediateDirectories: true)
     removeFile()
     // A scripted run starts with no clip, so a previous run's copy isn't `url` and is still here.
     try? FileManager.default.removeItem(at: target)
     try FileManager.default.copyItem(at: source, to: target)
-    load(target, name: source.lastPathComponent)
-    if SessionState.isEnabled { UserDefaults.standard.set(name, forKey: "audioClipName") }
+    load(target, name: name ?? source.lastPathComponent)
+    if SessionState.isEnabled { UserDefaults.standard.set(self.name, forKey: "audioClipName") }
   }
 
   /// Puts back the audio a run took (as the project keeps it: PCM in [channels, samples] order).

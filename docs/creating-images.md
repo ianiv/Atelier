@@ -225,6 +225,7 @@ Areas of an image that are transparent are treated as the region to fill in.
 The **Moodboard** column on the right edge of the canvas holds reference images. Only models that take references (the edit models above, and MOSS Image with a MOSS Image Edit LoRA on) use it; with other models, such as MOSS Image on its own, it says "Not used by this model". Collapse or expand it with its own button or from the **View** menu.
 
 - Add images by dropping them on the moodboard, with its **+** button (**Add Images…** for files, **Add from Photos…** for your photo library), or with **Add to Moodboard** from the canvas or the recent strip.
+- **Paste** (the clipboard button next to **+**) adds every image on the clipboard, each as its own moodboard image: images copied in another app, or image files copied in Finder or Files. With a model that takes audio, an audio file or audio on the clipboard goes in the **Audio** box instead (see [Audio](video.md#audio)). The button is dimmed when the clipboard holds nothing it can add. Pasting can't be undone; remove an image you didn't want with its **×**.
 - Click an image to set its **Weight**. 0% leaves it out of the next run. For edit models such as FLUX.2, Kontext and MOSS Image Edit, any weight above 0% counts the same.
 - Right-click an image for **Show on Canvas**, **Remove** and **Clear Moodboard**.
 

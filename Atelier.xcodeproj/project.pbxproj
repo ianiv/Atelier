@@ -179,6 +179,7 @@
 		A1B2C3D4E5F6A7B8C9D0E101 /* LayoutPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E102 /* LayoutPrompt.swift */; };
 		7A1C0E5D00000000000000A1 /* TriggerWords.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A1C0E5D00000000000000A2 /* TriggerWords.swift */; };
 		A1D7E0C1B2F34A5D6E7F8091 /* Moodboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2E8F1D2C3A45B6E7F809102 /* Moodboard.swift */; };
+		3B7A10C0DE00000000000101 /* MoodboardPaste.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B7A10C0DE00000000000102 /* MoodboardPaste.swift */; };
 		800D1F384501DE33108E1679 /* SavedQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A5F014D5E239A1A24374130 /* SavedQueue.swift */; };
 		63C2BBE1CC163EBF41BCA5B2 /* JobQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89CC06C542BAF09E99B9847E /* JobQueue.swift */; };
 		59D4CC0F01D0DEA897EE5065 /* QueueView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D92B5ECE459E2892A7E3C1B7 /* QueueView.swift */; };
@@ -275,6 +276,7 @@
 		F2EE5A000000000000000001 /* EntryTreeFuzzTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2EE5A000000000000000002 /* EntryTreeFuzzTests.swift */; };
 		F2EE5A000000000000000003 /* MoodboardWriterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2EE5A000000000000000004 /* MoodboardWriterTests.swift */; };
 		62A3CF63D6B04C7CA99E52BC /* MoodboardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D3810675097A508C59174F3 /* MoodboardTests.swift */; };
+		3B7A10C0DE00000000000103 /* MoodboardPasteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B7A10C0DE00000000000104 /* MoodboardPasteTests.swift */; };
 		A1B2C3D4E5F60718293A4B5C /* MaskMemoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E4F5A60718293A4B5D /* MaskMemoryTests.swift */; };
 		F7BDCE83BC20EC1A650D038B /* CanvasPaintTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85A51EA9C886F73666DD39F5 /* CanvasPaintTests.swift */; };
 		CA233C72EE664C4483CEEC45 /* CanvasEditTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD3EB2AC39F419465F5DED48 /* CanvasEditTests.swift */; };
@@ -523,6 +525,7 @@
 		A1B2C3D4E5F6A7B8C9D0E102 /* LayoutPrompt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutPrompt.swift; sourceTree = "<group>"; };
 		7A1C0E5D00000000000000A2 /* TriggerWords.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TriggerWords.swift; sourceTree = "<group>"; };
 		B2E8F1D2C3A45B6E7F809102 /* Moodboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Moodboard.swift; sourceTree = "<group>"; };
+		3B7A10C0DE00000000000102 /* MoodboardPaste.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoodboardPaste.swift; sourceTree = "<group>"; };
 		5BA894EB2074F4930E321607 /* Automation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Automation.swift; sourceTree = "<group>"; };
 		5FEF4CE7AD32E77D359D8F85 /* clip_query_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = clip_query_generated.swift; sourceTree = "<group>"; };
 		6269D539CD5602A374ED06B0 /* script_session_data_model_generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = script_session_data_model_generated.swift; sourceTree = "<group>"; };
@@ -643,6 +646,7 @@
 		F2EE5A000000000000000002 /* EntryTreeFuzzTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntryTreeFuzzTests.swift; sourceTree = "<group>"; };
 		F2EE5A000000000000000004 /* MoodboardWriterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoodboardWriterTests.swift; sourceTree = "<group>"; };
 		9D3810675097A508C59174F3 /* MoodboardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoodboardTests.swift; sourceTree = "<group>"; };
+		3B7A10C0DE00000000000104 /* MoodboardPasteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoodboardPasteTests.swift; sourceTree = "<group>"; };
 		B1C2D3E4F5A60718293A4B5D /* MaskMemoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaskMemoryTests.swift; sourceTree = "<group>"; };
 		85A51EA9C886F73666DD39F5 /* CanvasPaintTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasPaintTests.swift; sourceTree = "<group>"; };
 		AD3EB2AC39F419465F5DED48 /* CanvasEditTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasEditTests.swift; sourceTree = "<group>"; };
@@ -886,6 +890,7 @@
 				3A6036FEF93D069A783B09D8 /* CreateModel.swift */,
 				B147BCDA9E5FEDE9CC9B373A /* CreateView.swift */,
 				B2E8F1D2C3A45B6E7F809102 /* Moodboard.swift */,
+				3B7A10C0DE00000000000102 /* MoodboardPaste.swift */,
 				5A3DAA7DA03971183D18CEAA /* SizePreset.swift */,
 				C45342E9A57349CA90D164A4 /* CanvasTools.swift */,
 				5B5CF3B40616D4C363F989DF /* CanvasMerge.swift */,
@@ -1156,6 +1161,7 @@
 				F2EE5A000000000000000002 /* EntryTreeFuzzTests.swift */,
 				F2EE5A000000000000000004 /* MoodboardWriterTests.swift */,
 				9D3810675097A508C59174F3 /* MoodboardTests.swift */,
+				3B7A10C0DE00000000000104 /* MoodboardPasteTests.swift */,
 				9716C5CC927EB4F63FBFC0A9 /* ReCaVSRTests.swift */,
 				B1C2D3E4F5A60718293A4B5D /* MaskMemoryTests.swift */,
 				85A51EA9C886F73666DD39F5 /* CanvasPaintTests.swift */,
@@ -1647,6 +1653,7 @@
 				A1B2C3D4E5F6A7B8C9D0E1F5 /* iPadPlatform.swift in Sources */,
 				4862B9A4F2A7A226E9BB6C7C /* SettingsRegistry.swift in Sources */,
 				A1D7E0C1B2F34A5D6E7F8091 /* Moodboard.swift in Sources */,
+				3B7A10C0DE00000000000101 /* MoodboardPaste.swift in Sources */,
 				F37644302DD33DAC7A1E63B0 /* SizePreset.swift in Sources */,
 				367D99D75A579BE7CCD45664 /* CanvasTools.swift in Sources */,
 				A22FE4A30B0DC7FF13ACDCE6 /* AutoMaskBar.swift in Sources */,
@@ -1786,6 +1793,7 @@
 				F2EE5A000000000000000001 /* EntryTreeFuzzTests.swift in Sources */,
 				F2EE5A000000000000000003 /* MoodboardWriterTests.swift in Sources */,
 				62A3CF63D6B04C7CA99E52BC /* MoodboardTests.swift in Sources */,
+				3B7A10C0DE00000000000103 /* MoodboardPasteTests.swift in Sources */,
 				21E31F9C3FD8B3C49DB10302 /* ReCaVSRTests.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* MaskMemoryTests.swift in Sources */,
 				F7BDCE83BC20EC1A650D038B /* CanvasPaintTests.swift in Sources */,

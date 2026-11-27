@@ -1270,6 +1270,57 @@ final class CreateModel {
     }
   }
 
+  /// What the moodboard's Paste brought (`MoodboardPasteButton`): the images join the board in
+  /// clipboard order, and the first audio replaces the Audio box's, when the model takes audio,
+  /// as dropping a file there does. Like a drop it isn't undoable; the board's change is recorded
+  /// in History as one Moodboard entry (`recordMoodboardChange`). The audio copies are removed.
+  func pasteIntoMoodboard(_ batch: PastedMedia.Batch) {
+    defer { PastedMedia.removeCopies(batch.media) }
+    var images = 0
+    var audioFiles: [(url: URL, name: String)] = []
+    for media in batch.media {
+      switch media {
+      case .image(let image):
+        moodboard.add(image)
+        images += 1
+      case .audio(let url, let name):
+        audioFiles.append((url, name))
+      }
+    }
+    var notes: [String] = []
+    var problems: [String] = []
+    var audioLeftOut = batch.audioLeftOut
+    var audioUsed = false
+    if let first = audioFiles.first {
+      // The model may have changed since the clipboard was read.
+      if videoModel?.takesAudio == true {
+        do {
+          try audio.set(first.url, name: first.name)
+          audioUsed = true
+          let count = audioFiles.count + batch.moreAudio
+          if count > 1 { notes.append("Used the first of \(count) audio files.") }
+        } catch {
+          problems.append("Couldn't use the audio: \(error.localizedDescription)")
+        }
+      } else {
+        audioLeftOut += audioFiles.count + batch.moreAudio
+      }
+    }
+    if batch.failed > 0 {
+      problems.append(
+        batch.failed == 1 ? "Couldn't add one item on the clipboard." : "Couldn't add \(batch.failed) items on the clipboard.")
+    }
+    if audioLeftOut > 0 { notes.append("Left out the audio: this model doesn't take any.") }
+    if images == 0, !audioUsed {
+      errorMessage =
+        (problems + notes).first
+          ?? "There are no images\(videoModel?.takesAudio == true ? " or audio" : "") on the clipboard to add to the moodboard."
+      return
+    }
+    if !problems.isEmpty { errorMessage = problems.joined(separator: " ") }
+    if !notes.isEmpty { statusNote = notes.joined(separator: " ") }
+  }
+
   /// Images chosen in the Open panel: one for the canvas, any number for the moodboard.
   func importImages(_ urls: [URL], into target: ImageImportTarget) {
     for url in urls {
