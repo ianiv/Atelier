@@ -22,6 +22,15 @@ nonisolated enum SelectMode: String, CaseIterable, Sendable {
     }
   }
 
+  /// The segment's tooltip: its name, and what it selects.
+  var help: String {
+    switch self {
+    case .smart: "Smart: SAM 2.1 finds the object you click or drag a box around"
+    case .rectangle: "Rectangle: selects the rectangle you drag"
+    case .lasso: "Lasso: selects the shape you draw around"
+    }
+  }
+
   /// What the canvas's gestures do in this mode, for the Select bar's help.
   var gestureHelp: String {
     #if os(iOS)

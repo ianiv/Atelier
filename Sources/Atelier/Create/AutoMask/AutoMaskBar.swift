@@ -9,6 +9,9 @@ struct AutoMaskBar: View {
   @Environment(CreateModel.self) private var model
   @Environment(\.undoManager) private var undoManager
   private var download = SAMDownload.shared
+  /// The Smart | Rectangle | Lasso segment under the pointer, for that segment's tooltip.
+  @State private var hoveredMode: SelectMode?
+  @State private var modePickerWidth: Double = 0
 
   var body: some View {
     // One row when the canvas is wide enough, else two (an iPad in portrait, a narrow window).
@@ -31,15 +34,27 @@ struct AutoMaskBar: View {
     let paints = model.canPaintMask
     let installed = download.isInstalled(session.size)
     let downloading = download.size
+    // Icons, each mode's name its accessibility label and tooltip. SwiftUI ignores `.help` on a
+    // segmented picker's items (the segments are one platform control), so the picker's own
+    // tooltip follows the segment under the pointer instead; the segments are equal widths.
+    // Hover tracking takes no clicks: the picker keeps its own look, keyboard and VoiceOver.
     Picker("Select", selection: $session.selectMode) {
       ForEach(SelectMode.allCases, id: \.self) { mode in
-        Text(mode.title).tag(mode)
+        Label(mode.title, systemImage: mode.systemImage).tag(mode)
       }
     }
     .pickerStyle(.segmented)
     .labelsHidden()
+    .labelStyle(.iconOnly)
     .fixedSize()
-    .help("What a drag selects: Smart finds the object (SAM 2.1), Rectangle and Lasso select the shape you draw")
+    .onGeometryChange(for: Double.self) { $0.size.width } action: { modePickerWidth = $0 }
+    .onContinuousHover { phase in
+      guard case .active(let location) = phase, modePickerWidth > 0 else { return hoveredMode = nil }
+      let modes = SelectMode.allCases
+      let index = Int(location.x / (modePickerWidth / Double(modes.count)))
+      hoveredMode = modes.indices.contains(index) ? modes[index] : nil
+    }
+    .help(hoveredMode?.help ?? "What a drag selects: Smart, Rectangle or Lasso")
     .disabled(!paints)
     Divider().frame(height: 18)
     Button("Select Subject", systemImage: "person.crop.rectangle") {
