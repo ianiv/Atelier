@@ -116,9 +116,68 @@ struct AgentProtocolTests {
   }
 
   @Test func capabilitiesDeclareSkills() {
-    let capabilities = AgentProtocol.capabilities()
-    #expect(capabilities["resources"] is [String: Any])
-    let extensions = capabilities["extensions"] as? [String: Any]
-    #expect((extensions?[AgentProtocol.skillsExtension] as? [String: Any])?["directoryRead"] as? Bool == true)
+    for modern in [false, true] {
+      let capabilities = AgentProtocol.capabilities(modern: modern)
+      #expect(capabilities["resources"] is [String: Any])
+      let extensions = capabilities["extensions"] as? [String: Any]
+      #expect((extensions?[AgentProtocol.skillsExtension] as? [String: Any])?["directoryRead"] as? Bool == true)
+    }
+  }
+
+  @Test func capabilitiesDeclareTasksOnlyWhenModern() {
+    let modern = AgentProtocol.capabilities(modern: true)["extensions"] as? [String: Any]
+    #expect(modern?[AgentProtocol.tasksExtension] is [String: Any])
+    let legacy = AgentProtocol.capabilities(modern: false)["extensions"] as? [String: Any]
+    #expect(legacy?[AgentProtocol.tasksExtension] == nil, "the extension isn't defined for 2025")
+    #expect(AgentProtocol.capabilities(modern: false)["tasks"] == nil, "no 2025 experimental tasks")
+  }
+
+  @Test func tasksMethodsNeedMcpName() {
+    let id = "job-0f8fad5b-d9cb-469f-a165-70867728950e"
+    for method in ["tasks/get", "tasks/update", "tasks/cancel"] {
+      let params: [String: Any] = ["taskId": id, "_meta": Self.meta]
+      #expect(classify(method, params, Self.modern(method, name: id)) == .success(.modern(version: "2026-07-28")))
+      #expect(failure(classify(method, params, Self.modern(method)))?.code == AgentProtocol.headerMismatch, "\(method) without Mcp-Name")
+      #expect(failure(classify(method, params, Self.modern(method)))?.httpStatus == 400)
+      #expect(failure(classify(method, params, Self.modern(method, name: "job-other")))?.code == AgentProtocol.headerMismatch, "mismatched")
+      let encoded = "=?base64?\(Data(id.utf8).base64EncodedString())?="
+      #expect(classify(method, params, Self.modern(method, name: encoded)) == .success(.modern(version: "2026-07-28")), "base64")
+      #expect(failure(classify(method, ["_meta": Self.meta], Self.modern(method, name: id)))?.code == AgentProtocol.headerMismatch, "no taskId in the body")
+    }
+  }
+
+  @Test func declaresTasks() {
+    let modern = AgentProtocol.Era.modern(version: "2026-07-28")
+    func params(_ extensions: Any?) -> [String: Any] {
+      var capabilities: [String: Any] = [:]
+      if let extensions { capabilities["extensions"] = extensions }
+      return ["_meta": [AgentProtocol.versionKey: "2026-07-28", AgentProtocol.clientCapabilitiesKey: capabilities]]
+    }
+    let declared: [String: Any] = [AgentProtocol.tasksExtension: [String: Any]()]
+    #expect(AgentProtocol.declaresTasks(era: modern, params: params(declared)))
+    #expect(!AgentProtocol.declaresTasks(era: .legacy(version: "2025-11-25"), params: params(declared)), "legacy era never")
+    #expect(!AgentProtocol.declaresTasks(era: modern, params: params(nil)))
+    #expect(!AgentProtocol.declaresTasks(era: modern, params: params([AgentProtocol.skillsExtension: [String: Any]()])))
+    #expect(!AgentProtocol.declaresTasks(era: modern, params: params([AgentProtocol.tasksExtension: true])), "must be an object")
+    #expect(!AgentProtocol.declaresTasks(era: modern, params: ["task": ["ttl": 1000]]), "a 2025 params.task doesn't count")
+  }
+
+  @Test func envelopeKeepsTaskResults() {
+    let info: [String: Any] = ["name": "atelier", "version": "1"]
+    let modern = AgentProtocol.Era.modern(version: "2026-07-28")
+    let created: [String: Any] = ["resultType": "task", "taskId": "job-x", "status": "working", "ttlMs": NSNull()]
+    let call = AgentProtocol.envelope(created, era: modern, method: "tools/call", serverInfo: info)
+    #expect(call["resultType"] as? String == "task")
+    #expect(call["ttlMs"] is NSNull, "the Task's own ttlMs, not a cache one")
+    #expect(call["cacheScope"] == nil)
+    // Only a tools/call answer may be a task.
+    let other = AgentProtocol.envelope(["resultType": "task"], era: modern, method: "tools/list", serverInfo: info)
+    #expect(other["resultType"] as? String == "complete")
+    for method in ["tasks/get", "tasks/update", "tasks/cancel"] {
+      #expect(!AgentProtocol.cacheableMethods.contains(method))
+      let task = AgentProtocol.envelope(["taskId": "job-x", "ttlMs": 5000], era: modern, method: method, serverInfo: info)
+      #expect(task["resultType"] as? String == "complete")
+      #expect(task["ttlMs"] as? Int == 5000 && task["cacheScope"] == nil, "\(method) results are never cached")
+    }
   }
 }

@@ -94,8 +94,10 @@ extension Automation {
   /// Status with Try Again on, and Try Again listens once it's free, for the plain port and an
   /// HTTPS Port; a Compute server of its own taking the automatic HTTPS port moves HTTPS, and each
   /// field refuses the other's port. Every request above is a 2025 client's; `modernChecks` adds a
-  /// 2026-07-28 client's (headers and `_meta`) and the rules between the two. Needs no model and
-  /// changes nothing in the project, the user's settings or Keychain.
+  /// 2026-07-28 client's (headers and `_meta`) and the rules between the two, and `taskChecks`
+  /// the Tasks extension. Needs no model, and leaves the user's settings and Keychain alone; the
+  /// tasks section adds a test image and its edits to the project, so always pass a scratch
+  /// `--project`.
   ///
   ///   Atelier --agent-net-check --project NAME [--quit]
   static func agentNetCheck(_ model: CreateModel, presets: PresetStore) {
@@ -227,6 +229,12 @@ extension Automation {
         "the same path from this Mac is read (\(errorText(localPath.body) ?? "no error"))")
 
       await modernChecks(lan: lan, port: port, token: token, post: { host, message, token, headers in await post(host, message, token: token, headers: headers) }, check: check)
+      // The tasks section saves steps: never into the project you were working in.
+      if let index = args.firstIndex(of: "--project"), index + 1 < args.count {
+        await taskChecks(model, lan: lan, port: port, token: token, post: { host, message, token, headers in await post(host, message, token: token, headers: headers) }, check: check)
+      } else {
+        check(false, "tasks: --project NAME is given (the tasks section saves steps, so it's skipped)")
+      }
 
       started.regenerateToken()
       let old = await post(lan, list, token: token)
@@ -526,6 +534,200 @@ extension Automation {
     let legacyTools = await send(["jsonrpc": "2.0", "id": 52, "method": "tools/list"], [:])
     let legacyResult = legacyTools.body["result"] as? [String: Any]
     check(legacyTools.status == 200 && legacyResult?["tools"] != nil && legacyResult?["resultType"] == nil && legacyResult?["ttlMs"] == nil, "legacy tools/list has no resultType or ttlMs")
+  }
+
+  /// The Tasks extension (`AgentTasks`) on the check's server, with edit_image_look as the job
+  /// (it needs no model) on a test image this adds to the project: server/discover declares it
+  /// and initialize doesn't; a call that doesn't declare it gets its CallToolResult; a declaring
+  /// one, with the Queue paused, gets a task (resultType "task", a job-<UUID> id, working, ttlMs
+  /// null, pollIntervalMs) that get_job and list_jobs (with its status) see too; tasks/get
+  /// without or with the wrong Mcp-Name (-32020), from a request that doesn't declare it
+  /// (400 -32021 naming the extension), for an unknown id (-32602); tasks/update's ack, and -32602
+  /// without inputResponses; tasks/cancel's ack and the task then cancelled, and its ack again
+  /// once it's over; another task polled to completed with the step in its result and an hour's
+  /// ttlMs, read from another device without paths; tasks/result and tasks/list 404 -32601, a
+  /// 2025 tasks/get and tasks/update -32601; an argument error and a tool that isn't a job answered inline. The
+  /// Queue's paused state is put back.
+  @MainActor
+  static func taskChecks(
+    _ model: CreateModel, lan: String, port _: Int, token: String,
+    post: AgentNetPost, check: (Bool, String) -> Void
+  ) async {
+    let tasksID = AgentTasks.extensionID
+    var nextID = 70
+    func message(_ method: String, _ params: [String: Any] = [:], declares: Bool = true) -> [String: Any] {
+      let capabilities: [String: Any] = declares ? ["extensions": [tasksID: [String: Any]()]] : [:]
+      var params = params
+      params["_meta"] = [
+        AgentProtocol.versionKey: "2026-07-28", AgentProtocol.clientCapabilitiesKey: capabilities,
+        "io.modelcontextprotocol/clientInfo": ["name": "agent-net-check", "version": "1"],
+      ]
+      nextID += 1
+      return ["jsonrpc": "2.0", "id": nextID, "method": method, "params": params]
+    }
+    func headers(_ method: String, name: String? = nil) -> [String: String] {
+      var headers = ["MCP-Protocol-Version": "2026-07-28", "Mcp-Method": method]
+      if let name { headers["Mcp-Name"] = name }
+      return headers
+    }
+    func code(_ body: [String: Any]) -> Int? { (body["error"] as? [String: Any])?["code"] as? Int }
+    func result(_ body: [String: Any]) -> [String: Any] { body["result"] as? [String: Any] ?? [:] }
+    func callTool(_ name: String, _ arguments: [String: Any], declares: Bool = true) async -> (status: Int, body: [String: Any], authenticate: String?, raw: String) {
+      await post("127.0.0.1", message("tools/call", ["name": name, "arguments": arguments], declares: declares), nil, headers("tools/call", name: name))
+    }
+    func task(_ method: String, _ id: String, _ extra: [String: Any] = [:], declares: Bool = true, name: String?? = .none, host: String = "127.0.0.1", token: String? = nil) async -> (
+      status: Int, body: [String: Any], authenticate: String?, raw: String
+    ) {
+      var params = extra
+      params["taskId"] = id
+      return await post(host, message(method, params, declares: declares), token, headers(method, name: name ?? id))
+    }
+    /// A legacy (2025) tools/call's JSON answer.
+    func legacyJSON(_ name: String, _ arguments: [String: Any]) async -> Any? {
+      let answer = await post("127.0.0.1", ["jsonrpc": "2.0", "id": 90, "method": "tools/call", "params": ["name": name, "arguments": arguments]], nil, [:])
+      let text = (result(answer.body)["content"] as? [[String: Any]])?.first?["text"] as? String ?? ""
+      return try? JSONSerialization.jsonObject(with: Data(text.utf8))
+    }
+
+    let discover = await post("127.0.0.1", message("server/discover"), nil, headers("server/discover"))
+    let discovered = (result(discover.body)["capabilities"] as? [String: Any])?["extensions"] as? [String: Any]
+    check(discovered?[tasksID] is [String: Any], "server/discover declares \(tasksID)")
+    let initialize = await post("127.0.0.1", ["jsonrpc": "2.0", "id": 69, "method": "initialize", "params": ["protocolVersion": "2025-11-25", "capabilities": [String: Any]()]], nil, [:])
+    let initCapabilities = result(initialize.body)["capabilities"] as? [String: Any]
+    check(
+      initCapabilities != nil && (initCapabilities?["extensions"] as? [String: Any])?[tasksID] == nil && initCapabilities?["tasks"] == nil,
+      "legacy initialize declares no tasks")
+
+    // A step to edit, as the Edit checks make one.
+    var waited = 0
+    while model.settings == nil || !model.history.isLoaded, waited < 600 {
+      try? await Task.sleep(for: .milliseconds(100))
+      waited += 1
+    }
+    guard let settings = model.settings, let image = testImage(width: 640, height: 448), let tensor = ImageTensor.tensor(from: image) else {
+      return check(false, "tasks: the project didn't load or the test image couldn't be made")
+    }
+    var configuration = settings
+    configuration.width = 640
+    configuration.height = 448
+    var request = GenerationEngine.Request(model: model.selectedModel ?? "", prompt: "agent tasks check", negativePrompt: "", seed: 1, configuration: configuration)
+    request.canvas = image
+    request.canvasIsImported = true
+    guard let source = try? await model.history.save(GenerationEngine.Output(frames: [tensor]), request: request, startedAt: Date(), finishedAt: Date())
+    else { return check(false, "tasks: the test image couldn't be added to the project") }
+    let step = Int(source.id.logicalTime)
+    func look(_ amount: Double) -> [String: Any] { ["history_step": step, "options": ["vignette": ["amount": amount]]] }
+
+    let pausedBefore = model.queue.isPaused
+    model.setQueuePaused(false)
+    defer { model.setQueuePaused(pausedBefore) }
+    // Without the extension: the plain CallToolResult, job id and all.
+    let plain = await callTool("edit_image_look", look(0.11), declares: false)
+    let plainResult = result(plain.body)
+    let plainStructured = plainResult["structuredContent"] as? [String: Any]
+    let plainJob = plainStructured?["job_id"] as? String ?? ""
+    check(
+      plainResult["resultType"] as? String == "complete" && plainStructured?["history_step"] is Int && plainJob.hasPrefix("job-")
+        && UUID(uuidString: String(plainJob.dropFirst(4))) != nil,
+      "tasks: a call that doesn't declare the extension gets its result, job id \(plainJob)\(plainResult["isError"] as? Bool == true ? " (error: \(plain.raw.prefix(200)))" : "")")
+
+    model.setQueuePaused(true)
+    let created = await callTool("edit_image_look", look(0.12))
+    let createdResult = result(created.body)
+    let taskID = createdResult["taskId"] as? String ?? ""
+    check(
+      created.status == 200 && createdResult["resultType"] as? String == "task" && taskID.hasPrefix("job-") && UUID(uuidString: String(taskID.dropFirst(4))) != nil
+        && createdResult["status"] as? String == "working" && createdResult["ttlMs"] is NSNull && createdResult["pollIntervalMs"] as? Int == 5000
+        && createdResult["createdAt"] is String && createdResult["lastUpdatedAt"] is String && createdResult["result"] == nil,
+      "tasks: a declaring call with the Queue paused gets a working task (\(created.raw.prefix(300)))")
+    let gotJob = await legacyJSON("get_job", ["job_id": taskID, "wait_seconds": 0]) as? [String: Any]
+    check(gotJob?["status"] as? String == "waiting", "tasks: get_job reads the task's job: \(gotJob?["status"] ?? "not found")")
+    let listed = await legacyJSON("list_jobs", [:]) as? [[String: Any]] ?? []
+    check(
+      listed.contains { $0["job_id"] as? String == taskID } && listed.allSatisfy { $0["status"] is String },
+      "tasks: list_jobs lists it, every entry with a status")
+
+    let working = await task("tasks/get", taskID)
+    let workingResult = result(working.body)
+    check(
+      working.status == 200 && workingResult["resultType"] as? String == "complete" && workingResult["status"] as? String == "working"
+        && workingResult["statusMessage"] as? String == "Waiting for the current run to finish" && workingResult["ttlMs"] is NSNull,
+      "tasks/get on the waiting task: working (\(working.raw.prefix(200)))")
+    let noName = await task("tasks/get", taskID, name: .some(nil))
+    check(noName.status == 400 && code(noName.body) == -32020, "tasks/get without Mcp-Name: 400 -32020 (got \(noName.status) \(code(noName.body) ?? 0))")
+    let wrongName = await task("tasks/get", taskID, name: "job-other")
+    check(wrongName.status == 400 && code(wrongName.body) == -32020, "tasks/get with another Mcp-Name: 400 -32020")
+    let undeclared = await task("tasks/get", taskID, declares: false)
+    let required = ((undeclared.body["error"] as? [String: Any])?["data"] as? [String: Any])?["requiredCapabilities"] as? [String: Any]
+    check(
+      undeclared.status == 400 && code(undeclared.body) == -32021 && (required?["extensions"] as? [String: Any])?[tasksID] is [String: Any],
+      "tasks/get from a request that doesn't declare the extension: 400 -32021 naming it (got \(undeclared.status) \(code(undeclared.body) ?? 0))")
+    let unknownID = AgentTasks.newJobID()
+    let unknown = await task("tasks/get", unknownID)
+    check(code(unknown.body) == -32602, "tasks/get for an unknown task: -32602")
+    let update = await task("tasks/update", taskID, ["inputResponses": [String: Any]()])
+    let updated = result(update.body)
+    check(
+      update.status == 200 && updated["resultType"] as? String == "complete" && Set(updated.keys) == ["resultType", "_meta"],
+      "tasks/update: an empty ack (\(update.raw.prefix(200)))")
+    let badUpdate = await task("tasks/update", taskID)
+    check(code(badUpdate.body) == -32602, "tasks/update without inputResponses: -32602")
+    let unknownCancel = await task("tasks/cancel", unknownID)
+    check(code(unknownCancel.body) == -32602, "tasks/cancel for an unknown task: -32602")
+
+    let cancel = await task("tasks/cancel", taskID)
+    check(cancel.status == 200 && result(cancel.body)["resultType"] as? String == "complete", "tasks/cancel: an ack")
+    var cancelledStatus = ""
+    for _ in 0..<50 where cancelledStatus != "cancelled" {
+      cancelledStatus = result(await task("tasks/get", taskID).body)["status"] as? String ?? ""
+      if cancelledStatus != "cancelled" { try? await Task.sleep(for: .milliseconds(200)) }
+    }
+    let cancelledTask = result(await task("tasks/get", taskID).body)
+    check(
+      cancelledStatus == "cancelled" && cancelledTask["result"] == nil && cancelledTask["pollIntervalMs"] == nil && cancelledTask["ttlMs"] is Int,
+      "the cancelled task reads cancelled, with no result (got \(cancelledStatus))")
+    let cancelAgain = await task("tasks/cancel", taskID)
+    check(result(cancelAgain.body)["resultType"] as? String == "complete", "tasks/cancel on a task that's over: an ack")
+
+    // Another one, polled to the end once the Queue runs.
+    let second = result(await callTool("edit_image_look", look(0.13)).body)
+    let secondID = second["taskId"] as? String ?? ""
+    model.setQueuePaused(false)
+    var final: [String: Any] = [:]
+    for _ in 0..<300 {
+      final = result(await task("tasks/get", secondID).body)
+      if final["status"] as? String != "working" { break }
+      try? await Task.sleep(for: .milliseconds(200))
+    }
+    let finalResult = final["result"] as? [String: Any]
+    let finalStructured = finalResult?["structuredContent"] as? [String: Any]
+    check(
+      second["resultType"] as? String == "task" && final["status"] as? String == "completed" && finalStructured?["history_step"] is Int
+        && finalStructured?["job_id"] as? String == secondID && finalResult?["isError"] as? Bool != true
+        && (final["ttlMs"] as? Int ?? 0) >= 3_600_000 && final["pollIntervalMs"] == nil,
+      "tasks/get polls a task to completed, with the step in its result and an hour's ttlMs (\(final["status"] ?? "no status"))")
+    let remote = await task("tasks/get", secondID, host: lan, token: token)
+    check(
+      remote.status == 200 && result(remote.body)["status"] as? String == "completed"
+        && !remote.raw.contains("/Users/") && !remote.raw.contains(NSHomeDirectory()),
+      "tasks/get from another device: the result without paths")
+
+    let taskResult = await task("tasks/result", secondID)
+    check(taskResult.status == 404 && code(taskResult.body) == -32601, "tasks/result: 404 -32601 (got \(taskResult.status))")
+    let taskList = await post("127.0.0.1", message("tasks/list"), nil, headers("tasks/list"))
+    check(taskList.status == 404 && code(taskList.body) == -32601, "tasks/list: 404 -32601 (got \(taskList.status))")
+    let legacy = await post("127.0.0.1", ["jsonrpc": "2.0", "id": 91, "method": "tasks/get", "params": ["taskId": secondID]], nil, [:])
+    check(legacy.status == 200 && code(legacy.body) == -32601, "a 2025 tasks/get: 200 -32601 (got \(legacy.status))")
+    let legacyUpdate = await post(
+      "127.0.0.1", ["jsonrpc": "2.0", "id": 92, "method": "tasks/update", "params": ["taskId": secondID, "inputResponses": [String: Any]()]], nil, [:])
+    check(legacyUpdate.status == 200 && code(legacyUpdate.body) == -32601, "a 2025 tasks/update: 200 -32601 (got \(legacyUpdate.status) \(code(legacyUpdate.body) ?? 0))")
+
+    let badArguments = result(await callTool("edit_image_look", ["history_step": 999_999]).body)
+    check(
+      badArguments["resultType"] as? String == "complete" && badArguments["isError"] as? Bool == true && badArguments["taskId"] == nil,
+      "tasks: a declaring call with bad arguments is answered inline with isError")
+    let notJob = result(await callTool("list_skills", [:]).body)
+    check(notJob["resultType"] as? String == "complete" && notJob["taskId"] == nil, "tasks: a tool that isn't a job answers inline")
   }
 }
 #endif

@@ -25,9 +25,9 @@ final class AgentTools {
     var isQueued = false
   }
 
-  /// One `generate`, `edit_image`, `match_colors` or `edit_image_look` run. A run outlives the call that started it: `background`
-  /// returns its id at once, and a waiting call whose client hangs up leaves it running for
-  /// `get_job`.
+  /// One run of a job tool (`jobTools`). A run outlives the call that started it: `background`
+  /// or a task (`AgentTasks`) returns its id at once, and a waiting call whose client hangs up
+  /// leaves it running for `get_job`.
   @MainActor
   @Observable
   final class Job {
@@ -43,6 +43,8 @@ final class AgentTools {
     /// An extract_depth_map job's image, likewise.
     let depthMap: DepthMap.Job?
     let startedAt = Date()
+    /// When its progress or outcome last changed: a task's `lastUpdatedAt`.
+    var updatedAt = Date()
     var progress = Progress(step: 0, total: nil, message: "Starting", isQueued: true)
     /// Checked its arguments and joined the queue (or failed doing so).
     var accepted = false
@@ -93,9 +95,14 @@ final class AgentTools {
   /// What an agent's run is doing, for the Agents settings tab.
   private(set) var activity: String?
   private(set) var lastResult: String?
-  /// Jobs by id; finished ones are kept for an hour (the newest 20).
+  /// Jobs by id; finished ones are kept for an hour, at most `AgentTasks.finishedLimit` of them.
   @ObservationIgnored private var jobs: [String: Job] = [:]
-  @ObservationIgnored private var jobCount = 0
+
+  /// The tools that run as jobs: the ones get_job, list_jobs and cancel_job know, and the only
+  /// ones that answer a client declaring the Tasks extension with a task.
+  static let jobTools: Set<String> = [
+    "generate", "edit_image", "match_colors", "extract_depth_map", "edit_image_look", "crop_image", "heal_image",
+  ]
 
   /// The Edit screen's profile library when the app hands it over (`grainProfiles`).
   @ObservationIgnored private var injectedGrainProfiles: GrainProfileStore?
@@ -631,16 +638,17 @@ final class AgentTools {
       "name": "get_job",
       "title": "Get job",
       "description": """
-        Checks on a generate, edit_image, match_colors, extract_depth_map or edit_image_look job: waiting (queued behind other runs), running (with step and \
-        total), done (with everything the job's tool returns: for generate and edit_image text, image and structured result), \
-        failed or cancelled. Waits up to wait_seconds for it to finish first, so calling it in a \
-        loop checks in periodically without busy polling.
+        Checks on a generate, edit_image, match_colors, extract_depth_map, edit_image_look, crop_image or heal_image job. \
+        Until it ends it answers with its status (waiting: queued behind other runs; running, with step and total); once \
+        done, with everything the job's tool returns (for generate and edit_image text, image and structured result); \
+        a failed or cancelled job answers with its error. Waits up to wait_seconds for it to finish first, so calling it \
+        in a loop checks in periodically without busy polling. Also takes a task's id: tasks are jobs.
         """,
       "inputSchema": [
         "type": "object",
         "required": ["job_id"],
         "properties": [
-          "job_id": ["type": "string", "description": "From generate, edit_image, match_colors, extract_depth_map or edit_image_look with background, or list_jobs."],
+          "job_id": ["type": "string", "description": "An opaque id from a job tool's answer (background, or a task's taskId) or list_jobs."],
           "wait_seconds": ["type": "integer", "description": "How long to wait for the job to finish before returning its progress, 0–60. Default 30."],
         ],
       ],
@@ -649,14 +657,14 @@ final class AgentTools {
     [
       "name": "list_jobs",
       "title": "List jobs",
-      "description": "Lists generate, edit_image, match_colors, extract_depth_map and edit_image_look jobs from the last hour, newest first: job_id, tool, status, progress, elapsed time and prompt (label for match_colors, extract_depth_map and edit_image_look). A generate or edit_image call that timed out, was cancelled or lost its connection keeps running and shows here.",
+      "description": "Lists generate, edit_image, match_colors, extract_depth_map, edit_image_look, crop_image and heal_image jobs from the last hour, newest first: job_id, tool, status (waiting, running, done, failed or cancelled), progress, elapsed time and prompt (label for the tools other than generate and edit_image). A call that timed out, was cancelled or lost its connection keeps running and shows here.",
       "inputSchema": ["type": "object", "properties": [String: Any]()],
       "annotations": ["readOnlyHint": true],
     ],
     [
       "name": "cancel_job",
       "title": "Cancel job",
-      "description": "Stops a generate, edit_image, match_colors, extract_depth_map or edit_image_look job, like Cancel in Atelier's Queue: a waiting job leaves the queue and a running one stops.",
+      "description": "Stops a generate, edit_image, match_colors, extract_depth_map, edit_image_look, crop_image or heal_image job, like Cancel in Atelier's Queue: a waiting job leaves the queue and a running one stops.",
       "inputSchema": [
         "type": "object",
         "required": ["job_id"],
@@ -714,7 +722,9 @@ final class AgentTools {
     case "generate": return try await startGenerate(arguments, progress: progress)
     case "edit_image": return try await startEditImage(arguments, progress: progress)
     case "get_job": return try await getJob(arguments, progress: progress)
-    case "list_jobs": return try Self.textResult(json: jobs.values.sorted { $0.startedAt > $1.startedAt }.map(Self.summary))
+    case "list_jobs":
+      pruneJobs()
+      return try Self.textResult(json: jobs.values.sorted { $0.startedAt > $1.startedAt }.map(Self.summary))
     case "cancel_job": return try cancelJob(arguments)
     default: throw ToolError("Unknown tool \(name).")
     }
@@ -1183,15 +1193,15 @@ final class AgentTools {
     work: @escaping (@escaping (Progress) -> Void) async throws -> [String: Any]
   ) async throws -> [String: Any] {
     pruneJobs()
-    jobCount += 1
-    let job = Job(id: "job-\(jobCount)", tool: tool, label: label, colorMatch: colorMatch, edit: edit, depthMap: depthMap)
+    let job = Job(id: AgentTasks.newJobID(), tool: tool, label: label, colorMatch: colorMatch, edit: edit, depthMap: depthMap)
     jobs[job.id] = job
-    if !background { job.onProgress = progress }
+    if !background, !ToolContext.current.createsTasks { job.onProgress = progress }
     job.task = Task {
       do {
         let result = try await work { update in
           job.accepted = true
           job.progress = update
+          job.updatedAt = Date()
           job.onProgress?(update)
         }
         job.result = result
@@ -1202,15 +1212,26 @@ final class AgentTools {
       }
       job.accepted = true
       job.finishedAt = Date()
+      job.updatedAt = job.finishedAt ?? Date()
       job.onProgress = nil
     }
 
     return try await answer(job, background: background, progress: progress)
   }
 
-  /// A job call's answer: in the background its summary once its arguments check out, else its
-  /// outcome once it ends.
+  /// A job call's answer: for a call that declared the Tasks extension, a task once its arguments
+  /// check out (the outcome itself if it's already over); in the background its summary then;
+  /// else its outcome once it ends.
   private func answer(_ job: Job, background: Bool, progress: @escaping (Progress) -> Void) async throws -> [String: Any] {
+    if ToolContext.current.createsTasks {
+      // Bad arguments are the call's own error, not a task (no task is made for them), and the
+      // task is only returned once tasks/get can read it (Tasks: Task Creation): it's in `jobs`.
+      await waitUntil { job.accepted }
+      // The call itself was cancelled (its stream closed) before the job checked its arguments.
+      guard job.accepted else { throw CancellationError() }
+      if job.finishedAt != nil { return try Self.outcome(of: job) }
+      return AgentTasks.createResult(Self.snapshot(job), isRemote: ToolContext.current.isRemote)
+    }
     if background {
       // Bad arguments fail here rather than in the first get_job.
       await waitUntil { job.accepted }
@@ -1231,6 +1252,7 @@ final class AgentTools {
   }
 
   private func getJob(_ arguments: [String: Any], progress: @escaping (Progress) -> Void) async throws -> [String: Any] {
+    pruneJobs()
     let job = try job(arguments)
     let wait = Double(min(max(Self.int(arguments["wait_seconds"]) ?? 30, 0), 60))
     if wait > 0 {
@@ -1256,6 +1278,7 @@ final class AgentTools {
   }
 
   private func cancelJob(_ arguments: [String: Any]) throws -> [String: Any] {
+    pruneJobs()
     let job = try job(arguments)
     if job.finishedAt == nil { job.task?.cancel() }
     return try Self.textResult(json: Self.summary(job))
@@ -1267,11 +1290,62 @@ final class AgentTools {
     return job
   }
 
+  /// Drops finished jobs an hour after they ended (a task's `ttlMs`), and the oldest past
+  /// `AgentTasks.finishedLimit`. Runs whenever jobs are started or read, so an expired one is
+  /// never answered.
   private func pruneJobs() {
-    let finished = jobs.values.filter { $0.finishedAt != nil }.sorted { $0.startedAt > $1.startedAt }
-    for (index, job) in finished.enumerated() where index >= 20 || job.finishedAt! < Date().addingTimeInterval(-3600) {
-      jobs[job.id] = nil
+    let finished = jobs.values.compactMap { job in job.finishedAt.map { (id: job.id, finishedAt: $0) } }
+    for id in AgentTasks.expired(finished: finished) {
+      jobs[id] = nil
     }
+  }
+
+  // MARK: - Tasks
+
+  /// tasks/get's DetailedTask for a job, shaped for `context` (the reader's: a reader on another
+  /// device gets no paths, whoever started it), or nil when there's no such job (never was, or
+  /// expired, or Atelier quit since).
+  func task(_ id: String, context: ToolContext) -> [String: Any]? {
+    pruneJobs()
+    guard let job = jobs[id] else { return nil }
+    return ToolContext.$current.withValue(context) {
+      AgentTasks.taskJSON(Self.snapshot(job), detailed: true, isRemote: context.isRemote)
+    }
+  }
+
+  func hasTask(_ id: String) -> Bool {
+    pruneJobs()
+    return jobs[id] != nil
+  }
+
+  /// tasks/cancel: as cancel_job. False when there's no such job; a finished one is left as it
+  /// ended (cancelling is a request, and the ack doesn't promise `cancelled`).
+  func cancelTask(_ id: String) -> Bool {
+    pruneJobs()
+    guard let job = jobs[id] else { return false }
+    if job.finishedAt == nil { job.task?.cancel() }
+    return true
+  }
+
+  /// A job as its task: a finished one's state is what the call would have answered, read
+  /// under the current `ToolContext`.
+  private static func snapshot(_ job: Job) -> AgentTasks.Snapshot {
+    let state: AgentTasks.State
+    if job.finishedAt == nil {
+      state =
+        job.progress.isQueued
+        ? .waiting(message: job.progress.message)
+        : .running(message: job.progress.message, step: job.progress.step, total: job.progress.total)
+    } else {
+      do {
+        state = .done(result: try outcome(of: job))
+      } catch is CancellationError {
+        state = .cancelled
+      } catch {
+        state = .toolError(error.localizedDescription)
+      }
+    }
+    return AgentTasks.Snapshot(id: job.id, state: state, createdAt: job.startedAt, updatedAt: job.updatedAt, finishedAt: job.finishedAt)
   }
 
   /// A finished job's answer: what generate returns, or its error.
@@ -1291,7 +1365,7 @@ final class AgentTools {
 
   private static func summary(_ job: Job) -> [String: Any] {
     var summary: [String: Any] = [
-      "job_id": job.id, "tool": job.tool, job.isLabelled ? "label" : "prompt": shortened(job.label),
+      "job_id": job.id, "tool": job.tool, "status": job.status, job.isLabelled ? "label" : "prompt": shortened(job.label),
       "elapsed_seconds": Int((job.finishedAt ?? Date()).timeIntervalSince(job.startedAt)),
     ]
     if job.finishedAt == nil {

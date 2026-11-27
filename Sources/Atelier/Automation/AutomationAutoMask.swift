@@ -528,7 +528,13 @@ extension Automation {
                 }
                 try? await Task.sleep(for: .milliseconds(30))
                 let stillDecoding = model.autoMask.isBusy
-                _ = try? await tools.call("cancel_job", arguments: ["job_id": "job-1"]) { _ in }
+                // The call hasn't answered yet, so its job's id comes from list_jobs: this
+                // AgentTools has run nothing else.
+                let listed = (try? await tools.call("list_jobs", arguments: [:]) { _ in })
+                  .flatMap { ($0["content"] as? [[String: Any]])?.first?["text"] as? String }
+                  .flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [[String: Any]]
+                let jobID = listed?.first?["job_id"] as? String ?? ""
+                _ = try? await tools.call("cancel_job", arguments: ["job_id": jobID]) { _ in }
                 let cancelledAt = ContinuousClock.now
                 // The main actor stays free: a short sleep comes back about on time.
                 try? await Task.sleep(for: .milliseconds(50))
