@@ -281,11 +281,13 @@ struct CanvasPaintTests {
   @Test func aLongSketchIsKeptWithinTheLimits() throws {
     let dot = CanvasPaint.Stroke(kind: .brush, points: [CGPoint(x: 4, y: 4)], radius: 2, color: Self.red)
     let long = CanvasPaint(strokes: Array(repeating: dot, count: CanvasPaint.maxStrokes / 2 + 1))
-    let kept = long.compacted(for: CGSize(width: 16, height: 16))
+    let kept = long.compacted(for: CGSize(width: 16, height: 16), flatteningLong: true)
     #expect(kept.strokes.count == 1 && kept.strokes.first?.kind == .image)
     #expect(kept.validated(width: 16, height: 16) != nil)
     let layer = try #require(kept.layer(width: 16, height: 16))
     #expect(Self.pixel(layer, 4, 4)[0] > 200)
+    // Other images' paint isn't flattened for its length (that happens off the main actor, for sketches).
+    #expect(long.compacted(for: CGSize(width: 16, height: 16)) == long)
     let short = CanvasPaint(strokes: [dot])
     #expect(short.compacted(for: CGSize(width: 16, height: 16)) == short)
   }
