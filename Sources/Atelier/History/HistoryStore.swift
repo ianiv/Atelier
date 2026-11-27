@@ -1477,8 +1477,13 @@ final class HistoryStore {
   /// step is still there and a sketch. No new step, and the image tensor stays the blank base.
   func saveSketch(_ paint: CanvasPaint?, base: CGImage, forImage tensorId: Int64, in project: Project) async {
     guard let previewId = await Self.writeSketch(paint, base: base, forImage: tensorId, in: project) else { return }
-    // Cached by the file's path: cleared even when `project` isn't the open one any more (a
-    // compaction or rename since swapped the object), so no stale tile is left for it.
+    didRewriteThumbnail(previewId, in: project)
+  }
+
+  /// The preview `previewId` of `project` was rewritten (`saveSketch`, or at quit): its cached
+  /// tiles go, and those showing it reload. Cached by the file's path: cleared even when `project`
+  /// isn't the open one any more (a compaction or rename since swapped the object).
+  func didRewriteThumbnail(_ previewId: Int64, in project: Project) {
     for half in [false, true] { Self.thumbnails.removeObject(forKey: "\(project.url.path)#\(previewId)#\(half)" as NSString) }
     thumbnailRevisions[previewId, default: 0] += 1
   }

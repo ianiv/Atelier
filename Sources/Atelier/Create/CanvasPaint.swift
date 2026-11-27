@@ -201,7 +201,7 @@ nonisolated struct CanvasPaint: Codable, Sendable, Hashable {
   /// (`validated`): far past anything drawn by hand, short of what would stall drawing it.
   static let maxStrokes = 20_000
   static let maxPoints = 200_000
-  static let maxBitmapBytes = 64 << 20
+  static let maxBitmapBytes = 256 << 20
   static let maxBitmapSide = 16_384.0
 
   /// The layer as read from a project file, checked before it's drawn on a `width` × `height`
@@ -241,8 +241,12 @@ nonisolated struct CanvasPaint: Codable, Sendable, Hashable {
   /// The layer to keep with an image of `size` (`HistoryStore.setPaint`): as it is, unless it
   /// holds several bitmaps (each Fill adds one, often a whole-image PNG), which are flattened,
   /// with everything else, into one colour image so the project doesn't keep a stack of them.
+  ///
+  /// A layer nearing what `validated` takes (strokes, or points in one) is flattened the same
+  /// way, so a long sketch is never stored as one a read would refuse.
   func compacted(for size: CGSize?) -> CanvasPaint {
-    guard let size, strokes.count(where: { $0.bitmap != nil }) > 1,
+    let nearLimits = strokes.count > Self.maxStrokes / 2 || strokes.contains { $0.points.count > Self.maxPoints / 2 }
+    guard let size, strokes.count(where: { $0.bitmap != nil }) > 1 || nearLimits,
           let layer = layer(width: Int(size.width), height: Int(size.height)),
           let png = Self.png(layer)
     else { return self }

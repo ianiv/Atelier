@@ -527,6 +527,19 @@ extension Automation {
         refused = true
       } catch {}
       check(refused, "an Edit job on a sketch with strokes is refused")
+      // Add to History saves the drawing after the sketch; opening the sketch again unchanged
+      // opens that step rather than another copy.
+      do {
+        _ = try await edit.addToHistory()
+        while model.isBusy { try? await Task.sleep(for: .milliseconds(100)) }
+        let added = history.items.first { $0.entryReason == .imported && !$0.isSketch && history.parent(of: $0)?.tensorId == newSketch.tensorId }
+        check(added != nil, "Add to History saves the drawing after the sketch")
+        let count = history.items.count
+        await edit.open(item)
+        check(!edit.isFromFile && history.items.count == count, "opening the sketch again, unchanged, opens the step Add to History made")
+      } catch {
+        check(false, "Add to History from the sketch (\(error.localizedDescription))")
+      }
     }
 
     // An agent's edit_image on the sketch, masked: the result keeps the strokes outside the mask.

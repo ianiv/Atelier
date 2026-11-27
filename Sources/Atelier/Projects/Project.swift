@@ -573,7 +573,8 @@ final nonisolated class Project: Sendable {
     guard succeeded, let previewId = written.withLock({ $0 }), isOpen else { return nil }
     setStoredPaint(paint, forImage: tensorId)
     if sketchNode(imageTensorId: tensorId) == nil {
-      setStoredPaint(nil, forImage: tensorId)
+      // Unless another step still shows the image (a Mask entry on the sketch), as pruning keeps it.
+      if workspace.fetch(for: Layer.self).where(Layer.tensorId == tensorId).isEmpty { setStoredPaint(nil, forImage: tensorId) }
       return nil
     }
     return previewId

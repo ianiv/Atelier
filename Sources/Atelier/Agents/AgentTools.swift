@@ -2669,10 +2669,11 @@ final class AgentTools {
     }
     guard step != nil else { return nil }
     let item = try historyItem(step, name: stepName, canvas: false)
+    // A sketch with its strokes (`Project.image(for:)`), kept as an image: its tensor is the blank base.
     guard !item.isVideo, let tensorId = item.imageTensorId,
-          let image = await create.history.project.read({ $0.image(tensorId: tensorId) })
+          let image = await create.history.project.read({ $0.image(for: item) })
     else { throw ToolError("History step \(item.id.logicalTime) has no image to measure (a video, or an input entry with an empty canvas).") }
-    return (image, "Step \(item.id.logicalTime)", tensorId)
+    return (image, "Step \(item.id.logicalTime)", item.isSketch ? nil : tensorId)
   }
 
   /// A profile by library name or from a file.

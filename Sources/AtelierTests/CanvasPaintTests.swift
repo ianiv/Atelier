@@ -275,4 +275,18 @@ struct CanvasPaintTests {
     let many = CanvasPaint(strokes: Array(repeating: good.strokes[0], count: CanvasPaint.maxStrokes + 1))
     #expect(many.validated(width: 32, height: 32) == nil)
   }
+
+  /// A long sketch is kept flattened before it nears what a read takes (`compacted`), so what's
+  /// stored always passes `validated` and the image matches its tile.
+  @Test func aLongSketchIsKeptWithinTheLimits() throws {
+    let dot = CanvasPaint.Stroke(kind: .brush, points: [CGPoint(x: 4, y: 4)], radius: 2, color: Self.red)
+    let long = CanvasPaint(strokes: Array(repeating: dot, count: CanvasPaint.maxStrokes / 2 + 1))
+    let kept = long.compacted(for: CGSize(width: 16, height: 16))
+    #expect(kept.strokes.count == 1 && kept.strokes.first?.kind == .image)
+    #expect(kept.validated(width: 16, height: 16) != nil)
+    let layer = try #require(kept.layer(width: 16, height: 16))
+    #expect(Self.pixel(layer, 4, 4)[0] > 200)
+    let short = CanvasPaint(strokes: [dot])
+    #expect(short.compacted(for: CGSize(width: 16, height: 16)) == short)
+  }
 }

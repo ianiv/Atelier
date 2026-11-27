@@ -25,7 +25,9 @@ extension CreateModel {
     // Its strokes are a paint layer over a blank image: an edit saved after it would name the
     // blank image as its source. Add to History in Edit makes the drawing a step of its own.
     if item.isSketch, job.project == history.project.name, let tensorId = item.imageTensorId,
-       history.project.storedPaint(forImage: tensorId)?.mayHaveColor == true
+       // As History reads it (`Project.sketchImage`): stored paint that doesn't hold up isn't drawn.
+       history.project.storedPaint(forImage: tensorId)?
+         .validated(width: max(item.sidecar.width, 1), height: max(item.sidecar.height, 1))?.mayHaveColor == true
     {
       throw EditJobError.sketch
     }
@@ -195,7 +197,7 @@ extension CreateModel {
       case .stepMissing(let name): "The image is no longer in the project “\(name)”."
       case .failed(let message): message
       case .sketch:
-        "This is a sketch: its strokes aren't part of its saved image. Open it in Edit and use Add to History, then edit the image that adds."
+        "That step is a sketch: its strokes are a paint layer over a blank image, so an edit saved after it would start from the blank image. Make the drawing a step of its own first: get_image it with full_size, put that on the canvas with set_canvas_image (the image as a data: URL), and edit the step that adds."
       }
     }
   }

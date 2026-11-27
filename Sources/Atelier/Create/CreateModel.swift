@@ -5,6 +5,7 @@ import CoreGraphics
 import Foundation
 @preconcurrency import ModelZoo
 import Observation
+import Synchronization
 import UserNotifications
 
 /// State behind the Create screen: the selected model, the inspector values, and the running job.
@@ -1273,11 +1274,14 @@ final class CreateModel {
     moodboard.add(Self.moodboardImage(image, paint: canvasShowsImage ? canvasPaint : nil))
   }
 
-  /// Whether the canvas shows a sketch (New Sketch's entry, `HistoryItem.isSketch`), not a preview.
-  var canvasIsSketch: Bool {
-    guard !imageIsPreview, let imageStep, imageStep.project == history.project.name else { return false }
-    return history.item(tensorId: imageStep.tensorId)?.isSketch == true
+  /// The sketch on the canvas (New Sketch's entry, `HistoryItem.isSketch`), not under a preview.
+  var canvasSketchItem: HistoryItem? {
+    guard !imageIsPreview, let imageStep, imageStep.project == history.project.name else { return nil }
+    return history.item(tensorId: imageStep.tensorId).flatMap { $0.isSketch ? $0 : nil }
   }
+
+  /// Whether the canvas shows a sketch.
+  var canvasIsSketch: Bool { canvasSketchItem != nil }
 
   /// The canvas image as it leaves the canvas (Copy Image, Save Image…, Save to Photos, Share,
   /// Open in Edit, Upscale…): a sketch with its strokes baked in, unfaded and hidden or not, as
@@ -1286,6 +1290,19 @@ final class CreateModel {
     guard let image else { return nil }
     guard canvasIsSketch, canvasShowsImage, let paint = canvasPaint, paint.mayHaveColor else { return image }
     return bakedCanvas(image, paint: paint) ?? image
+  }
+
+  /// Share's export of the canvas image `image`: a sketch's strokes are baked in only when it's
+  /// shared (the menu that offers it is built again after every stroke), else as
+  /// `HistoryStore.canvasShare` has it.
+  func canvasShare(_ image: CGImage) -> PNGExport {
+    guard canvasIsSketch, canvasShowsImage, let paint = canvasPaint, paint.mayHaveColor else {
+      return history.canvasShare(image: image, item: imageItem)
+    }
+    return PNGExport(id: 0, name: history.project.name) {
+      guard let png = ImageTensor.png(Self.moodboardImage(image, paint: paint)) else { throw ProjectError.badImage }
+      return png
+    }
   }
 
   /// `image` with `paint` baked in (`CanvasPaint.baked`, no fade), or `image` itself without paint.
@@ -4244,6 +4261,13 @@ extension CreateModel {
     }
   }
 
+  /// Keeps a sketch save waiting now and waits for it (and the entries before it): before
+  /// something reads the sketch's strokes from the project (opening it in Edit).
+  func keepSketchNow() async {
+    flushSketchSave()
+    await entryChain?.value
+  }
+
   /// At quit the chain may not get another turn: a sketch save not yet taken is written now, off
   /// the main actor while this waits, until `deadline` (`QuitDeadline`, shared with the other quit
   /// writes; a check passes its own, so as not to start that one).
@@ -4252,11 +4276,15 @@ extension CreateModel {
     guard let save = pendingSketchSave else { return }
     pendingSketchSave = nil
     let done = DispatchSemaphore(value: 0)
+    let written = Mutex<Int64?>(nil)
     Task.detached {
       defer { done.signal() }
-      _ = await HistoryStore.writeSketch(save.paint, base: save.base, forImage: save.tensorId, in: save.project)
+      let previewId = await HistoryStore.writeSketch(save.paint, base: save.base, forImage: save.tensorId, in: save.project)
+      written.withLock { $0 = previewId }
     }
     _ = done.wait(timeout: .now() + max(deadline.timeIntervalSinceNow, 0))
+    // Its tile shows the rewrite, should the app go on (a check calls this without quitting).
+    if let previewId = written.withLock({ $0 }) { history.didRewriteThumbnail(previewId, in: save.project) }
   }
 
   /// The image mask and Select steps belong to: the canvas image, or while a run's preview covers
