@@ -173,24 +173,107 @@ extension View {
 /// A brush cursor/outline: the circle of `radius` image pixels at the pointer, drawn at the zoom
 /// (`pointsPerPixel`), dark inside light so it shows on any image. Nothing when there's no pointer.
 /// It takes no hits, so it never comes between the pointer and the tool's gesture.
+///
+/// It stands in for the pointer over a brush's image (the screen hides the system one with
+/// `brushPointerHidden`), so it shows the brush's real footprint: dashed when the stroke erases,
+/// with a faint dashed `innerRadius` where a soft edge begins (Heal's feather), and a small cross
+/// when the circle would be too small to see, so the pointer never vanishes.
 struct BrushOutline: View {
   let center: CGPoint?
   let radius: Double
   let pointsPerPixel: Double
+  /// Where the brush's soft edge begins, in image pixels; nil for a hard brush.
+  var innerRadius: Double?
+  /// The stroke erases (Eraser, or Option with Brush): the ring is dashed.
+  var erases = false
+
+  /// Below this many points across, the ring gives way to a cross: a 4 pt circle reads as a dot
+  /// and hides what's under the pointer.
+  static let minimumDiameter: Double = 6
+
+  /// A brush sized in frame pixels (Create's, which covers the same part of the frame at any
+  /// zoom): its outline at `pointsPerFramePixel`, the canvas's points per frame pixel.
+  init(center: CGPoint?, frameBrushSize size: Double, pointsPerFramePixel points: Double, erases: Bool = false) {
+    self.init(center: center, radius: size / 2, pointsPerPixel: points, erases: erases)
+  }
+
+  init(center: CGPoint?, radius: Double, pointsPerPixel: Double, innerRadius: Double? = nil, erases: Bool = false) {
+    self.center = center
+    self.radius = radius
+    self.pointsPerPixel = pointsPerPixel
+    self.innerRadius = innerRadius
+    self.erases = erases
+  }
+
+  /// A feathered brush's inner radius: full strength up to `radius × (1 − feather)`, as
+  /// `HealBrush.mask` paints it.
+  static func innerRadius(radius: Double, feather: Double) -> Double {
+    max(radius * (1 - min(max(feather, 0), 1)), 0)
+  }
 
   /// The outline's diameter in points.
   var diameter: Double { max(radius * 2 * pointsPerPixel, 0) }
 
+  /// The soft edge's inner ring in points; nil with no feather or when it'd crowd the outline.
+  var innerDiameter: Double? {
+    guard let innerRadius, !isTiny else { return nil }
+    let inner = max(innerRadius * 2 * pointsPerPixel, 0)
+    return inner >= Self.minimumDiameter && inner < diameter - 2 ? inner : nil
+  }
+
+  /// Too small for a ring to show: a cross is drawn instead.
+  var isTiny: Bool { diameter < Self.minimumDiameter }
+
   var body: some View {
-    let diameter = diameter
     ZStack {
-      Circle().stroke(.white.opacity(0.9), lineWidth: 2)
-      Circle().stroke(.black.opacity(0.7), lineWidth: 1)
+      if isTiny {
+        TinyBrushMark()
+      } else {
+        let dash: [CGFloat] = erases ? [4, 3] : []
+        let diameter = diameter
+        ZStack {
+          Circle().stroke(.white.opacity(0.9), style: StrokeStyle(lineWidth: 2, dash: dash))
+          Circle().stroke(.black.opacity(0.7), style: StrokeStyle(lineWidth: 1, dash: dash))
+        }
+        .frame(width: diameter, height: diameter)
+        if let inner = innerDiameter {
+          ZStack {
+            Circle().stroke(.white.opacity(0.45), style: StrokeStyle(lineWidth: 2, dash: [2, 3]))
+            Circle().stroke(.black.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [2, 3]))
+          }
+          .frame(width: inner, height: inner)
+        }
+      }
     }
-    .frame(width: diameter, height: diameter)
     .position(center ?? .zero)
     .opacity(center == nil ? 0 : 1)
     .allowsHitTesting(false)
     .accessibilityHidden(true)
   }
+}
+
+/// A tiny brush's mark: a small cross, white under black as the ring is, at the brush's centre.
+private struct TinyBrushMark: View {
+  var body: some View {
+    let cross = Path { path in
+      path.move(to: CGPoint(x: 5.5, y: 0))
+      path.addLine(to: CGPoint(x: 5.5, y: 11))
+      path.move(to: CGPoint(x: 0, y: 5.5))
+      path.addLine(to: CGPoint(x: 11, y: 5.5))
+    }
+    ZStack {
+      cross.stroke(.white.opacity(0.9), lineWidth: 3)
+      cross.stroke(.black.opacity(0.8), lineWidth: 1)
+    }
+    .frame(width: 11, height: 11)
+  }
+}
+
+/// Where the pointer is over a brush's image, written by the screen's hover and drag and read only
+/// by the cursor view (as `HealDrag.hover` is in Edit): every pointer move then redraws the
+/// cursor, not the screen.
+@MainActor
+@Observable
+final class BrushPointer {
+  var location: CGPoint?
 }

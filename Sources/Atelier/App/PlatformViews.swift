@@ -168,6 +168,27 @@ extension View {
       self
     #endif
   }
+
+  /// Hides the Mac's pointer over a brush's image while `hidden`, where `BrushOutline` stands in
+  /// for it. iPad keeps its own pointer (the trackpad's dot is small and its shape isn't ours to
+  /// change without UIKit); the outline draws beside it.
+  func brushPointerHidden(_ hidden: Bool) -> some View {
+    #if os(macOS)
+      pointerVisibility(hidden ? .hidden : .automatic)
+    #else
+      self
+    #endif
+  }
+
+  /// The Mac's crosshair pointer while `on`, for tools that drag out a shape (Rectangle and Lasso
+  /// select, Crop): `rectSelection` is the SDK's crosshair. iPad's pointer has no such shape.
+  func crosshairPointer(_ on: Bool) -> some View {
+    #if os(macOS)
+      pointerStyle(on ? .rectSelection : nil)
+    #else
+      self
+    #endif
+  }
 }
 
 extension View {

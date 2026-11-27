@@ -47,4 +47,37 @@ struct ToolUITests {
     #expect(BrushOutline(center: nil, radius: 16, pointsPerPixel: 2).diameter == 64)
     #expect(BrushOutline(center: .zero, radius: -1, pointsPerPixel: 1).diameter == 0)
   }
+
+  /// Create's brush is sized in frame pixels: its cursor is the size times the canvas's points per
+  /// frame pixel, whatever the zoom.
+  @Test func frameBrushCursorIsItsOnScreenSize() {
+    #expect(BrushOutline(center: .zero, frameBrushSize: 64, pointsPerFramePixel: 0.5).diameter == 32)
+    #expect(BrushOutline(center: .zero, frameBrushSize: 8, pointsPerFramePixel: 2).diameter == 16)
+    #expect(BrushOutline(center: nil, frameBrushSize: 0, pointsPerFramePixel: 1).diameter == 0)
+    #expect(BrushOutline(center: .zero, frameBrushSize: 16, pointsPerFramePixel: 1, erases: true).erases)
+  }
+
+  /// Below 6 points across, a cross stands in for the ring, so the cursor never vanishes.
+  @Test func tinyBrushFallsBackToACross() {
+    #expect(BrushOutline.minimumDiameter == 6)
+    #expect(BrushOutline(center: .zero, frameBrushSize: 8, pointsPerFramePixel: 0.5).isTiny)
+    #expect(BrushOutline(center: .zero, frameBrushSize: 5.9, pointsPerFramePixel: 1).isTiny)
+    #expect(!BrushOutline(center: .zero, frameBrushSize: 6, pointsPerFramePixel: 1).isTiny)
+    #expect(!BrushOutline(center: .zero, radius: 16, pointsPerPixel: 1).isTiny)
+  }
+
+  /// Heal's inner ring sits where its feather begins, `radius × (1 − feather)`; none for a hard
+  /// brush, a tiny one, or one whose inner ring would crowd the outline.
+  @Test func innerRingMarksTheFeather() {
+    #expect(BrushOutline.innerRadius(radius: 40, feather: 0.25) == 30)
+    #expect(BrushOutline.innerRadius(radius: 40, feather: 0) == 40)
+    #expect(BrushOutline.innerRadius(radius: 40, feather: 2) == 0)
+    #expect(BrushOutline.innerRadius(radius: 40, feather: -1) == 40)
+    let heal = BrushOutline(center: .zero, radius: 40, pointsPerPixel: 0.5, innerRadius: 30)
+    #expect(heal.diameter == 40)
+    #expect(heal.innerDiameter == 30)
+    #expect(BrushOutline(center: .zero, radius: 40, pointsPerPixel: 1).innerDiameter == nil)
+    #expect(BrushOutline(center: .zero, radius: 2, pointsPerPixel: 1, innerRadius: 1.5).innerDiameter == nil)
+    #expect(BrushOutline(center: .zero, radius: 40, pointsPerPixel: 1, innerRadius: 40).innerDiameter == nil)
+  }
 }

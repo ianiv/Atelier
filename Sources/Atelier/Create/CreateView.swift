@@ -176,6 +176,9 @@ struct CanvasView: View {
   @AppStorage(AppSettings.playsVideoPreviewsKey) private var playsVideoPreviews = false
   /// The pointer is over the frame, so a playing preview shows its control (as a clip does).
   @State private var hoveringFrame = false
+  /// The pointer over the canvas (or the stroke's end while painting), for the brush cursor: read
+  /// only by `CanvasBrushCursor`, so moving the pointer doesn't redraw the canvas.
+  @State private var brushPointer = BrushPointer()
   #if os(macOS)
     /// Space is held: a drag moves the image whatever the tool.
     @State private var spaceDown = false
@@ -349,17 +352,28 @@ struct CanvasView: View {
             .position(x: frameRect.midX, y: frameRect.midY)
             .allowsHitTesting(false)
         }
+        // Brush and Eraser show their footprint at the pointer, in place of the Mac's arrow.
+        CanvasBrushCursor(
+          pointer: brushPointer, shows: showsBrushCursor,
+          size: model.canvasLayer == .color ? model.paintBrushSize : model.brushSize, points: points,
+          erases: brushErases)
       }
+      // On iPad too: a trackpad's pointer and a hovering Pencil both move the brush cursor.
       .onContinuousHover { phase in
         if case .active(let location) = phase {
           hoveringFrame = frameRect.contains(location)
+          brushPointer.location = location
         } else {
           hoveringFrame = false
+          brushPointer.location = nil
         }
       }
       .frame(width: geometry.size.width, height: geometry.size.height)
       .clipped()
       .contentShape(.rect)
+      // Over the image only: the tool bars (`toolBarOverlay`, outside this) keep the arrow.
+      .brushPointerHidden(showsBrushCursor)
+      .crosshairPointer(drawsSelectShape)
       .gesture(
         dragGesture(canvas, points: points, center: center, zoom: zoom, frame: frameRect)
           .simultaneously(with: zoomGesture(canvas, frame: frameRect, points: points, in: geometry.size)))
@@ -490,6 +504,37 @@ struct CanvasView: View {
       tool != .select
     #else
       tool.drawsOnLayer
+    #endif
+  }
+
+  /// Whether the brush cursor stands in for the pointer: Brush or Eraser is the tool and can paint
+  /// the picked layer now (as `dragGesture` decides), and on the Mac Space isn't held (Space
+  /// pans, with the arrow).
+  private var showsBrushCursor: Bool {
+    guard model.canvasTool.drawsOnLayer, !panHeld else { return false }
+    return model.canvasLayer == .color ? model.canPaintColor : model.canPaintMask
+  }
+
+  /// Whether the brush erases: Eraser, or Brush with Option held on the Mac.
+  private var brushErases: Bool {
+    #if os(macOS)
+      model.canvasTool == .eraser || optionDown
+    #else
+      model.canvasTool == .eraser
+    #endif
+  }
+
+  /// Whether a drag draws a Rectangle or Lasso selection, for the Mac's crosshair pointer.
+  private var drawsSelectShape: Bool {
+    model.canvasTool == .select && model.autoMask.selectMode != .smart && model.canPaintMask && !panHeld
+  }
+
+  /// Space is held on the Mac: a drag pans. iPad has no such key.
+  private var panHeld: Bool {
+    #if os(macOS)
+      spaceDown
+    #else
+      false
     #endif
   }
 
@@ -664,6 +709,8 @@ struct CanvasView: View {
             } else {
               paint(at: value.location, erases: model.canvasTool == .eraser || optionDown, center: center, zoom: zoom, points: points)
             }
+            // The Mac sends no hover while a button is down: the cursor follows the drag.
+            if !selects { brushPointer.location = value.location }
           } else if liveStroke == nil, livePaint == nil, selectDrag == nil, selectLasso == nil {
             pan(canvas, by: value.translation, points: points)
           }
@@ -707,6 +754,8 @@ struct CanvasView: View {
               pencilMarkedAt = Date()
             }
           } else if let pencil = active.first(where: { $0.kind == .pencil }) {
+            // The cursor follows the Pencil's stroke (hover moves it before and after).
+            brushPointer.location = pencil.location
             if model.canvasLayer == .color {
               guard model.canPaintColor else { return }
               paintColor(at: pencil.location, erases: model.canvasTool == .eraser, center: center, zoom: zoom, points: points)
@@ -721,7 +770,11 @@ struct CanvasView: View {
           } else {
             touchStart = nil
           }
-          if events.contains(where: { $0.kind == .pencil && $0.phase != .active }) { endStroke() }
+          if events.contains(where: { $0.kind == .pencil && $0.phase != .active }) {
+            endStroke()
+            // A Pencil that can't hover leaves no hover to clear it.
+            brushPointer.location = nil
+          }
         }
         .onEnded { events in
           gestureStart = nil
@@ -738,6 +791,7 @@ struct CanvasView: View {
           }
           pencilStart = nil
           selectDrag = nil
+          if liveStroke != nil || livePaint != nil { brushPointer.location = nil }
           endStroke()
         }
     }
@@ -2266,5 +2320,21 @@ private struct PerformancePicker: View {
       Text(setting.title)
       Text(setting.detail)
     }
+  }
+}
+
+/// Brush and Eraser's cursor on the canvas: the brush's footprint (`BrushOutline`) at the pointer.
+/// The pointer's place is read here alone, so following it redraws only this.
+private struct CanvasBrushCursor: View {
+  let pointer: BrushPointer
+  let shows: Bool
+  /// The brush's size in frame pixels.
+  let size: Double
+  /// Points per frame pixel.
+  let points: Double
+  let erases: Bool
+
+  var body: some View {
+    BrushOutline(center: shows ? pointer.location : nil, frameBrushSize: size, pointsPerFramePixel: points, erases: erases)
   }
 }
