@@ -64,6 +64,8 @@ nonisolated enum ProjectMapping {
     var entryMask: CanvasMask?
     /// Written by `Project.appendEntry` (`Profile.inputEntry`).
     var isEntry = false
+    /// An Imported entry made by New Sketch (`Profile.sketch`).
+    var isSketch = false
     /// A video brought in from outside, kept as a file beside the project (`Media`). Kept in
     /// `profile_data`.
     var media: Media.Record?
@@ -116,6 +118,11 @@ nonisolated enum ProjectMapping {
     /// key: only marked steps are input entries, holding the whole moodboard and the canvas mask.
     /// Imported steps written before entries existed, and Draw Things' own, stay plain inputs.
     var inputEntry: Bool?
+    /// Marks an Imported entry made by New Sketch (`sketch`): its image is the blank base, and the
+    /// strokes drawn on it are its paint layer (`Project.storedPaint`), which History shows baked
+    /// into its tile and image. A flag rather than a reason of its own, so Draw Things still reads
+    /// it as the Imported step it is.
+    var sketch: Bool?
     /// The step's scheduler (`Denoiser.Scheduler` case name, as the settings dump has it), only
     /// when not the sampler's own. Draw Things' schema has no field for it, and its configuration
     /// would run the step on the sampler's own schedule.
@@ -156,7 +163,7 @@ nonisolated enum ProjectMapping {
       duration: Double, inputTensorId: Int64?, parentTensorId: Int64?, inputAudioId: Int64? = nil,
       timings: [Timing] = [], refine: RefineRecord? = nil, colorMatch: ColorMatch.Record? = nil,
       edit: Edit.Record? = nil, depthMap: DepthMap.Record? = nil, entryKey: Int64? = nil, entryMask: CanvasMask? = nil,
-      inputEntry: Bool? = nil, scheduler: String? = nil, media: Media.Record? = nil
+      inputEntry: Bool? = nil, sketch: Bool? = nil, scheduler: String? = nil, media: Media.Record? = nil
     ) {
       self.media = media
       self.timings = timings
@@ -171,12 +178,13 @@ nonisolated enum ProjectMapping {
       self.entryKey = entryKey
       self.entryMask = entryMask
       self.inputEntry = inputEntry
+      self.sketch = sketch
       self.scheduler = scheduler
     }
 
     private enum CodingKeys: String, CodingKey {
       case timings, duration, inputTensorId, parentTensorId, inputAudioId, refineRect, refineScale, refineOffset
-      case refineMask, colorMatch, edit, depthMap, entryKey, entryMask, inputEntry, scheduler, media
+      case refineMask, colorMatch, edit, depthMap, entryKey, entryMask, inputEntry, sketch, scheduler, media
     }
 
     /// Lenient past `duration`: a key that doesn't read (written by a later version, say) is left
@@ -200,6 +208,7 @@ nonisolated enum ProjectMapping {
       entryKey = lenient(Int64.self, .entryKey)
       entryMask = lenient(CanvasMask.self, .entryMask)
       inputEntry = lenient(Bool.self, .inputEntry)
+      sketch = lenient(Bool.self, .sketch)
       scheduler = lenient(String.self, .scheduler)
       // Read from a project file: a record that doesn't describe a real video is none.
       media = lenient(Media.Record.self, .media).flatMap { $0.isValid ? $0 : nil }
@@ -289,7 +298,7 @@ nonisolated enum ProjectMapping {
         parentTensorId: step.parentTensorId ?? 0, inputAudioId: step.inputAudioId,
         timings: step.timings?.profileTimings ?? [], refine: step.refine,
         colorMatch: step.colorMatch, edit: step.edit, depthMap: step.depthMap, entryKey: step.entryKey, entryMask: step.entryMask,
-        inputEntry: step.isEntry ? true : nil,
+        inputEntry: step.isEntry ? true : nil, sketch: step.isEntry && step.isSketch ? true : nil,
         scheduler: d.string("scheduler").flatMap { $0 == defaultScheduler ? nil : $0 }, media: step.media
       ).bytes,
       teaCacheStart: i32("teaCacheStart", 5), teaCacheEnd: i32("teaCacheEnd", -1),

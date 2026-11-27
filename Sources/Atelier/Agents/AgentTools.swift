@@ -2267,11 +2267,14 @@ final class AgentTools {
     return create.history.items.prefix(limit).map { item in
       let sidecar = item.sidecar
       if let reason = item.entryReason {
-        return [
+        var entry: [String: Any] = [
           "history_step": item.id.logicalTime, "kind": "input", "reason": reason.rawValue,
           "has_image": item.hasImage, "width": sidecar.width, "height": sidecar.height,
           "has_mask": item.entryMask?.mayHavePaint == true, "moodboard": item.entryMoodboard.count,
         ]
+        // New Sketch's entry: its image is the drawing, strokes baked in.
+        if item.isSketch { entry["sketch"] = true }
+        return entry
       }
       var entry: [String: Any] = [
         "kind": item.isVideo ? "video" : "image",
@@ -2370,7 +2373,10 @@ final class AgentTools {
     }
 
     var text: String
-    if let item, let reason = item.entryReason {
+    if let item, item.isSketch {
+      text =
+        "History step \(item.id.logicalTime) in “\(create.history.project.name)” is a sketch (New Sketch), \(image.width)×\(image.height), with its strokes baked in. It isn't a run, so it has no prompt or settings."
+    } else if let item, let reason = item.entryReason {
       text =
         "History step \(item.id.logicalTime) in “\(create.history.project.name)” is an input entry (\(reason.rawValue)): the canvas as it was before a run, \(image.width)×\(image.height), with \(item.entryMoodboard.count) moodboard image\(item.entryMoodboard.count == 1 ? "" : "s"). It isn't a run, so it has no prompt or settings."
     } else if let item, let media = item.clip?.media, let clip = item.clip {
@@ -2651,7 +2657,8 @@ final class AgentTools {
       }
       return found
     }
-    guard canvas, let onCanvas = create.imageItem else {
+    // A sketch on the canvas too: it's an entry, which `imageItem` leaves out.
+    guard canvas, let onCanvas = create.imageItem ?? create.canvasSketchItem else {
       throw ToolError("The canvas doesn't show a saved image. Pass \(name) (see list_history).")
     }
     return onCanvas
@@ -2669,10 +2676,11 @@ final class AgentTools {
     }
     guard step != nil else { return nil }
     let item = try historyItem(step, name: stepName, canvas: false)
+    // A sketch with its strokes (`Project.image(for:)`), kept as an image: its tensor is the blank base.
     guard !item.isVideo, let tensorId = item.imageTensorId,
-          let image = await create.history.project.read({ $0.image(tensorId: tensorId) })
+          let image = await create.history.project.read({ $0.image(for: item) })
     else { throw ToolError("History step \(item.id.logicalTime) has no image to measure (a video, or an input entry with an empty canvas).") }
-    return (image, "Step \(item.id.logicalTime)", tensorId)
+    return (image, "Step \(item.id.logicalTime)", item.isSketch ? nil : tensorId)
   }
 
   /// A profile by library name or from a file.
@@ -3158,14 +3166,19 @@ final class AgentTools {
       guard let self else { throw CancellationError() }
       update(Progress(step: 0, total: nil, message: "Waiting for the current run to finish", isQueued: true))
       // Named as it's called now: a rename while the job waited moved it.
-      let (saved, savedIn) = try await self.create.edit(forAgent: edit, item: source) { step, message in
+      let (saved, savedIn, drawing) = try await self.create.edit(forAgent: edit, item: source) { step, message in
         update(Progress(step: step, total: 1_000, message: message))
       }
+      // A sketch's edit is saved after its drawing (`CreateModel.sketchDrawing`): that's the source.
       var result: [String: Any] = [
-        "project": savedIn, "history_step": saved.id.logicalTime, "source_step": sourceStep,
+        "project": savedIn, "history_step": saved.id.logicalTime, "source_step": drawing?.id.logicalTime ?? sourceStep,
         "options": Self.lookJSON(saved.sidecar.edit?.options ?? options), "width": saved.sidecar.width, "height": saved.sidecar.height,
       ]
       if editedStep != sourceStep { result["edited_step"] = editedStep }
+      if let drawing {
+        result["drawing_step"] = drawing.id.logicalTime
+        result["sketch_step"] = sourceStep
+      }
       // The crop in the source's pixels, or null for none: coordinates are always the source's.
       result["crop"] = (saved.sidecar.edit?.crop ?? crop).map { Self.cropJSON($0) as Any } ?? NSNull()
       // The strokes the step has, in the source's pixels (each its own offset).

@@ -469,6 +469,19 @@ final class EditModel {
   /// Add to History is saving the entry.
   private(set) var isAdding = false
 
+  /// The sketch the image opened as a file was drawn as (`open(_:)`): Add to History saves the
+  /// drawing after it, so it follows the sketch, and remembers it (`addedSketches`).
+  @ObservationIgnored private var sketchOrigin: SketchOrigin?
+  /// Sketches added to History this session, by the sketch's image, with the strokes they had and
+  /// the entry Add to History made: opening the same drawing again opens that entry.
+  @ObservationIgnored private var addedSketches: [Int64: (project: String, paint: CanvasPaint?, entry: Int64)] = [:]
+
+  private struct SketchOrigin {
+    var project: String
+    var tensorId: Int64
+    var paint: CanvasPaint?
+  }
+
   // MARK: Rendering
 
   /// The preview's zoom: `scale` is screen pixels per image pixel (1 is 100%), `offset` view points.
@@ -604,8 +617,34 @@ final class EditModel {
         note = "The image this edit was made from is no longer in the project, so the edit itself opens."
       }
     }
-    guard let tensorId = sourceItem.imageTensorId,
-          let picture = await project.read({ $0.image(tensorId: tensorId) })
+    // A sketch with strokes opens with them, as an image of its own: its step's image is the
+    // blank base, which a saved edit would name as its source, and the strokes can change after.
+    // Add to History then makes the drawing a step to save edits after.
+    if restored == nil, item.isSketch, let tensorId = item.imageTensorId {
+      // What's drawn last is kept first, so the strokes read are the ones on the canvas.
+      await create.keepSketchNow()
+      let drawn = await project.read { project -> (image: CGImage, paint: CanvasPaint?)? in
+        guard let base = project.image(tensorId: tensorId) else { return nil }
+        let baked = project.sketchImage(base, tensorId: tensorId)
+        return baked === base ? nil : (baked, project.storedPaint(forImage: tensorId))
+      }
+      guard opens.isCurrent(generation) else { return }
+      if let drawn {
+        // Added to History before with these very strokes: that step opens, rather than a copy
+        // that Add to History would store again.
+        if let added = addedSketches[tensorId], added.project == project.name, added.paint == drawn.paint,
+           let entry = create.history.item(tensorId: added.entry), project === create.history.project
+        {
+          return await open(entry)
+        }
+        show(image: drawn.image, name: "Sketch \(item.id.logicalTime)")
+        sketchOrigin = SketchOrigin(project: project.name, tensorId: tensorId, paint: drawn.paint)
+        note = "A sketch opens with its strokes as an image of its own: Add to History to save edits after it."
+        return
+      }
+    }
+    // The step's own image, which a saved edit names as its source (`Edit.Record.sourceTensorId`).
+    guard let tensorId = sourceItem.imageTensorId, let picture = await project.read({ $0.image(tensorId: tensorId) })
     else {
       if opens.isCurrent(generation) { note = "The image couldn't be read." }
       return
@@ -662,6 +701,7 @@ final class EditModel {
 
   /// `open(image:name:)` once the open is known to be the latest.
   private func show(image: CGImage, name: String) {
+    sketchOrigin = nil
     note = nil
     missingDataNote = nil
     setSource(.file(name: name), item: nil, image: image)
@@ -726,7 +766,8 @@ final class EditModel {
   /// Opens what the Create screen's canvas shows: its step, or the image itself when it isn't one.
   func openCanvasImage() async {
     guard let create, canUseCanvasImage, let image = create.image else { return }
-    if let item = create.imageItem {
+    // A sketch opens as History's does: its strokes kept first, then the drawing as an image of its own.
+    if let item = create.imageItem ?? create.canvasSketchItem {
       await open(item)
     } else {
       open(image: image, name: "Canvas Image")
@@ -1109,9 +1150,12 @@ final class EditModel {
     input.canvasImage = image
     input.mask = nil
     input.moodboard = []
-    guard let entry = try await history.saveEntry(input, after: history.currentTensorId, makeCurrent: false) else {
+    // A sketch's drawing follows the sketch, keeping the link to it.
+    let origin = sketchOrigin.flatMap { $0.project == project.name && history.item(tensorId: $0.tensorId) != nil ? $0 : nil }
+    guard let entry = try await history.saveEntry(input, after: origin?.tensorId ?? history.currentTensorId, makeCurrent: false) else {
       throw EditError.notLoaded
     }
+    if let origin { addedSketches[origin.tensorId] = (origin.project, origin.paint, entry.tensorId) }
     // Something else opened meanwhile: the entry is the old image's, not the screen's now.
     guard self.image === image, isFromFile else { throw CancellationError() }
     source = .step(project: project.name, tensorId: entry.tensorId)

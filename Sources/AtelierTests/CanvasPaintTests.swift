@@ -239,4 +239,56 @@ struct CanvasPaintTests {
     let wholeMerge = try #require(CanvasMerge.merge(result, into: whole, input: whole.unpaintedInput, maskBlur: 0, maskBlurOutset: 0))
     #expect(Self.pixel(wholeMerge.image, 4, 4) == [0, 0, 255, 255] && Self.pixel(wholeMerge.image, 40, 40) == Self.pixel(image, 40, 40))
   }
+
+  /// Add to Moodboard takes the canvas image with its paint baked in, unfaded (`moodboardImage`);
+  /// without paint, or with paint that shows nothing, the image itself.
+  @Test func moodboardImageBakesThePaint() throws {
+    let image = try #require(CreateModel.blankImage(width: 16, height: 16))
+    let paint = CanvasPaint(strokes: [.rect(CGRect(x: 0, y: 0, width: 8, height: 16), color: Self.red)])
+    let baked = CreateModel.moodboardImage(image, paint: paint)
+    #expect(baked !== image && baked.width == 16 && baked.height == 16)
+    #expect(Self.pixel(baked, 2, 8) == [255, 0, 0, 255] && Self.pixel(baked, 12, 8) == [255, 255, 255, 255])
+    #expect(CreateModel.moodboardImage(image, paint: nil) === image)
+    #expect(CreateModel.moodboardImage(image, paint: CanvasPaint(strokes: [])) === image)
+  }
+
+  /// A layer read from a project file is drawn only when it holds up for the image
+  /// (`CanvasPaint.validated`): non-finite or far-off points and radii, bad colours, too many
+  /// strokes and bitmaps that don't read are rejected.
+  @Test func storedPaintIsValidatedBeforeItsDrawn() throws {
+    let good = CanvasPaint(strokes: [
+      CanvasPaint.Stroke(kind: .brush, points: [CGPoint(x: 1, y: 2), CGPoint(x: 30, y: 4)], radius: 3, color: Self.red),
+      .rect(CGRect(x: -4, y: -4, width: 40, height: 40), color: Self.blue),
+    ])
+    #expect(good.validated(width: 32, height: 32) == good)
+    #expect(good.validated(width: 0, height: 32) == nil)
+    func with(_ stroke: CanvasPaint.Stroke) -> CanvasPaint { CanvasPaint(strokes: good.strokes + [stroke]) }
+    #expect(with(CanvasPaint.Stroke(kind: .brush, points: [CGPoint(x: CGFloat.nan, y: 0)], radius: 1, color: Self.red)).validated(width: 32, height: 32) == nil)
+    #expect(with(CanvasPaint.Stroke(kind: .brush, points: [CGPoint(x: 1e9, y: 0)], radius: 1, color: Self.red)).validated(width: 32, height: 32) == nil)
+    #expect(with(CanvasPaint.Stroke(kind: .brush, points: [.zero], radius: .infinity, color: Self.red)).validated(width: 32, height: 32) == nil)
+    #expect(with(CanvasPaint.Stroke(kind: .brush, points: [.zero], radius: -1, color: Self.red)).validated(width: 32, height: 32) == nil)
+    #expect(with(CanvasPaint.Stroke(kind: .brush, points: [.zero], radius: 1, color: CanvasPaint.Color(red: 5, green: 0, blue: 0))).validated(width: 32, height: 32) == nil)
+    #expect(with(CanvasPaint.Stroke(kind: .fill, points: [.zero], color: Self.red, bitmap: Data([1, 2, 3]))).validated(width: 32, height: 32) == nil)
+    let png = try #require(CanvasMask.grayPNG([UInt8](repeating: 255, count: 16), width: 4, height: 4))
+    #expect(with(CanvasPaint.Stroke(kind: .fill, points: [.zero], color: Self.red, bitmap: png)).validated(width: 32, height: 32) != nil)
+    #expect(with(CanvasPaint.Stroke(kind: .fill, points: [.zero], color: Self.red, bitmap: png, size: CGSize(width: 1e7, height: 4))).validated(width: 32, height: 32) == nil)
+    let many = CanvasPaint(strokes: Array(repeating: good.strokes[0], count: CanvasPaint.maxStrokes + 1))
+    #expect(many.validated(width: 32, height: 32) == nil)
+  }
+
+  /// A long sketch is kept flattened before it nears what a read takes (`compacted`), so what's
+  /// stored always passes `validated` and the image matches its tile.
+  @Test func aLongSketchIsKeptWithinTheLimits() throws {
+    let dot = CanvasPaint.Stroke(kind: .brush, points: [CGPoint(x: 4, y: 4)], radius: 2, color: Self.red)
+    let long = CanvasPaint(strokes: Array(repeating: dot, count: CanvasPaint.maxStrokes / 2 + 1))
+    let kept = long.compacted(for: CGSize(width: 16, height: 16), flatteningLong: true)
+    #expect(kept.strokes.count == 1 && kept.strokes.first?.kind == .image)
+    #expect(kept.validated(width: 16, height: 16) != nil)
+    let layer = try #require(kept.layer(width: 16, height: 16))
+    #expect(Self.pixel(layer, 4, 4)[0] > 200)
+    // Other images' paint isn't flattened for its length (that happens off the main actor, for sketches).
+    #expect(long.compacted(for: CGSize(width: 16, height: 16)) == long)
+    let short = CanvasPaint(strokes: [dot])
+    #expect(short.compacted(for: CGSize(width: 16, height: 16)) == short)
+  }
 }

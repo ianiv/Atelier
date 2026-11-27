@@ -32,6 +32,11 @@ nonisolated struct HistoryItem: Identifiable, Hashable, Sendable {
   /// Clear or Mask entry is keyed by its own `entry_key` (`tensorId`), since it shows the canvas's
   /// image or none; an Imported one by its image.
   var entryReason: EntryReason?
+  /// An Imported entry New Sketch made (`ProjectMapping.Profile.sketch`): listed and badged as a
+  /// Sketch, even with Show Inputs off, and shown with its strokes (its paint layer) baked in.
+  var isSketch = false
+  /// What its badge and Info call it: Sketch for a sketch, else its reason's title.
+  var entryTitle: String? { isSketch ? "Sketch" : entryReason?.title }
   /// An entry's canvas image, nil for an empty canvas.
   var canvasTensorId: Int64?
   /// An entry's canvas mask, nil for none.
@@ -827,6 +832,8 @@ final class HistoryStore {
     var negativePrompt: String
     var seed: UInt32
     var settings: [String: JSONValue]
+    /// An Imported entry New Sketch makes (`HistoryItem.isSketch`).
+    var sketch = false
   }
 
   /// What an entry would hold, for telling whether it repeats one (`isDuplicate`).
@@ -941,7 +948,7 @@ final class HistoryStore {
       let appended = try await project.appendEntry(
         reason: reason.reason, keyed: reason != .imported, canvas: canvas, mask: mask, moodboard: moodboard,
         thumbnail: thumbnail, model: input.model, prompt: input.prompt, negativePrompt: input.negativePrompt,
-        seed: input.seed, settings: input.settings, createdAt: Date(), after: parent)
+        seed: input.seed, settings: input.settings, createdAt: Date(), after: parent, sketch: input.sketch)
       write?.finish(appended)
       return appended
     } catch {
@@ -982,7 +989,7 @@ final class HistoryStore {
         reason: input.reason.reason, keyed: input.reason != .imported, canvas: canvas, mask: input.mask,
         moodboard: made.moodboard, thumbnail: made.thumbnail, model: input.model, prompt: input.prompt,
         negativePrompt: input.negativePrompt, seed: input.seed, settings: input.settings, createdAt: Date(),
-        after: parent)
+        after: parent, sketch: input.sketch)
       else { return }
       var map = project.moodboardShuffles
       for (mood, shuffleId) in zip(moods, appended.shuffleIds) { map[mood.id] = shuffleId }
@@ -1460,6 +1467,53 @@ final class HistoryStore {
     return line
   }
 
+  /// How many times each preview (by preview id) was rewritten since the project opened
+  /// (`saveSketch`): tiles reload when it changes.
+  private(set) var thumbnailRevisions: [Int64: Int] = [:]
+
+  /// Keeps a sketch's strokes as it's drawn on (`CreateModel`'s sketch saves): `paint` as the paint
+  /// layer of its image `tensorId`, and its tile redrawn from `base` with the strokes baked in
+  /// (`Project.saveSketch`). Into `project`, the one it was drawn in, while it's still open and the
+  /// step is still there and a sketch. No new step, and the image tensor stays the blank base.
+  /// Returns whether the tile was rewritten (the paint was kept too).
+  @discardableResult
+  func saveSketch(_ paint: CanvasPaint?, base: CGImage, forImage tensorId: Int64, in project: Project) async -> Bool {
+    guard let previewId = await Self.writeSketch(paint, base: base, forImage: tensorId, in: project) else { return false }
+    didRewriteThumbnail(previewId, in: project)
+    return true
+  }
+
+  /// The preview `previewId` of `project` was rewritten (`saveSketch`, or at quit): its cached
+  /// tiles go, and those showing it reload. Cached by the file's path: cleared even when `project`
+  /// isn't the open one any more (a compaction or rename since swapped the object).
+  func didRewriteThumbnail(_ previewId: Int64, in project: Project) {
+    for half in [false, true] { Self.thumbnails.removeObject(forKey: "\(project.url.path)#\(previewId)#\(half)" as NSString) }
+    thumbnailRevisions[previewId, default: 0] += 1
+  }
+
+  /// `saveSketch`'s writes, off the main actor (quitting waits on it there): the strokes baked
+  /// into the tile, and the paint layer (`Project.saveSketch`). Returns the preview id rewritten,
+  /// nil when nothing was (closed project, a step that's gone or isn't a sketch).
+  /// A sketch's paint layer alone, when there's no image to draw its tile from (`CreateModel`'s
+  /// backstop as the canvas leaves a sketch whose save didn't run): flattened when it's long, off
+  /// the main actor. Nothing for a closed project or a step that isn't a sketch.
+  @concurrent nonisolated static func keepSketchPaint(_ paint: CanvasPaint?, size: CGSize?, forImage tensorId: Int64, in project: Project) async {
+    guard project.isOpen, project.isSketch(imageTensorId: tensorId) else { return }
+    let kept = paint?.mayHaveColor == true ? paint?.compacted(for: size, flatteningLong: true) : nil
+    guard project.isOpen else { return }
+    project.setStoredPaint(kept, forImage: tensorId)
+  }
+
+  @concurrent nonisolated static func writeSketch(
+    _ paint: CanvasPaint?, base: CGImage, forImage tensorId: Int64, in project: Project
+  ) async -> Int64? {
+    guard project.isOpen else { return nil }
+    let size = CGSize(width: base.width, height: base.height)
+    let kept = paint?.mayHaveColor == true ? paint?.compacted(for: size, flatteningLong: true) : nil
+    let thumbnail = kept.flatMap { $0.baked(onto: base) } ?? base
+    return await project.saveSketch(kept, thumbnail: thumbnail, forImage: tensorId)
+  }
+
   /// The step's JPEG preview (`half` for grids), decoded off the main actor.
   func thumbnail(for item: HistoryItem, half: Bool) async -> CGImage? {
     let key = "\(project.url.path)#\(item.previewId)#\(half)" as NSString
@@ -1784,6 +1838,8 @@ final class HistoryStore {
     let project = project ?? self.project
     let density = AppSettings.exportsFullDetail ? Project.finestDensity : 120
     guard let tensorId = item.imageTensorId else { return nil }
+    // A sketch with its strokes, as History shows it (it has no finer layers).
+    if item.isSketch { return await project.read { $0.image(for: item) } }
     return await project.read { $0.image(tensorId: tensorId, density: density) }
   }
 

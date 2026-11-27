@@ -5,6 +5,7 @@ import CoreGraphics
 import Foundation
 @preconcurrency import ModelZoo
 import Observation
+import Synchronization
 import UserNotifications
 
 /// State behind the Create screen: the selected model, the inspector values, and the running job.
@@ -726,6 +727,14 @@ final class CreateModel {
   /// Input entries being written, one after another (`recordEntry`), and how many.
   @ObservationIgnored private var entryChain: Task<Void, Never>?
   @ObservationIgnored private var entriesPending = 0
+  /// A sketch's paint waiting to be kept, and the delay before it is (`sketchPaintDidChange`).
+  @ObservationIgnored private var pendingSketchSave: SketchSave?
+  @ObservationIgnored private var sketchSaveDelay: Task<Void, Never>?
+  /// Sketch drawings added to History for agents' edits this session (`sketchDrawing`), by the
+  /// sketch's image, with the strokes they had and the entry made.
+  @ObservationIgnored var sketchDrawings: [Int64: (project: String, paint: CanvasPaint?, entry: Int64)] = [:]
+  /// `sketchDrawing`s on their way, by the sketch's image, which calls at once share.
+  @ObservationIgnored var sketchDrawingTasks: [Int64: Task<HistoryItem?, Error>] = [:]
   /// The moodboard changed and that isn't in History yet: it's recorded once it settles
   /// (`moodboardSettle`), or before anything that needs it there first (`recordMoodboardChange`).
   @ObservationIgnored private var moodboardChanged = false
@@ -1164,7 +1173,10 @@ final class CreateModel {
   /// The image goes into History at once as an Imported entry, with the moodboard, and becomes the
   /// canvas's step once it's written (`adoptImport`): masks are kept with it, and a run from it
   /// follows it.
-  func setCanvasImage(_ newImage: CGImage, metadata: ImageMetadata.Embedded? = nil, filling: Bool = false) {
+  ///
+  /// `sketch` marks the entry as New Sketch's (`HistoryItem.isSketch`): what's drawn on it then
+  /// keeps updating that entry (`sketchPaintDidChange`).
+  func setCanvasImage(_ newImage: CGImage, metadata: ImageMetadata.Embedded? = nil, filling: Bool = false, sketch: Bool = false) {
     // A moodboard change made with the canvas before goes in first.
     recordMoodboardChange()
     stopFollowingRun()
@@ -1195,6 +1207,7 @@ final class CreateModel {
       input.canvas = .image(newImage)
       input.canvasImage = newImage
       input.mask = nil
+      input.sketch = sketch
       recordEntry(input) { [weak self] item in self?.adoptImport(newImage, item) }
     }
   }
@@ -1258,8 +1271,49 @@ final class CreateModel {
     canvas.zoomToFit()
   }
 
+  /// The canvas image goes on the moodboard as it looks with its paint: the colours baked in,
+  /// unfaded, even while Hide Mask and Paint hides them (a sketch's strokes are the picture).
+  /// A run's preview has no paint of its own.
   func addCanvasToMoodboard() {
-    if let image { moodboard.add(image) }
+    guard let image else { return }
+    moodboard.add(Self.moodboardImage(image, paint: canvasShowsImage ? canvasPaint : nil))
+  }
+
+  /// The sketch on the canvas (New Sketch's entry, `HistoryItem.isSketch`), not under a preview.
+  var canvasSketchItem: HistoryItem? {
+    guard !imageIsPreview, let imageStep, imageStep.project == history.project.name else { return nil }
+    return history.item(tensorId: imageStep.tensorId).flatMap { $0.isSketch ? $0 : nil }
+  }
+
+  /// Whether the canvas shows a sketch.
+  var canvasIsSketch: Bool { canvasSketchItem != nil }
+
+  /// The canvas image as it leaves the canvas (Copy Image, Save Image…, Save to Photos, Share,
+  /// Open in Edit, Upscale…): a sketch with its strokes baked in, unfaded and hidden or not, as
+  /// History shows it; any other image as it is, its paint being only a run's input.
+  var canvasExportImage: CGImage? {
+    guard let image else { return nil }
+    guard canvasIsSketch, canvasShowsImage, let paint = canvasPaint, paint.mayHaveColor else { return image }
+    return bakedCanvas(image, paint: paint) ?? image
+  }
+
+  /// Share's export of the canvas image `image`: a sketch's strokes are baked in only when it's
+  /// shared (the menu that offers it is built again after every stroke), else as
+  /// `HistoryStore.canvasShare` has it.
+  func canvasShare(_ image: CGImage) -> PNGExport {
+    guard canvasIsSketch, canvasShowsImage, let paint = canvasPaint, paint.mayHaveColor else {
+      return history.canvasShare(image: image, item: imageItem)
+    }
+    return PNGExport(id: 0, name: history.project.name) {
+      guard let png = ImageTensor.png(Self.moodboardImage(image, paint: paint)) else { throw ProjectError.badImage }
+      return png
+    }
+  }
+
+  /// `image` with `paint` baked in (`CanvasPaint.baked`, no fade), or `image` itself without paint.
+  nonisolated static func moodboardImage(_ image: CGImage, paint: CanvasPaint?) -> CGImage {
+    guard let paint, paint.mayHaveColor else { return image }
+    return paint.baked(onto: image) ?? image
   }
 
   func pasteImage() {
@@ -3094,7 +3148,8 @@ final class CreateModel {
 
   /// Queues upscaling the canvas image. The result is a new History entry after it.
   func upscaleCanvasImage(_ upscale: ImageUpscale) {
-    guard canUpscaleCanvasImage, let image else { return }
+    // A sketch with its strokes (it has no item: it's an entry, so the image goes in as one from outside).
+    guard canUpscaleCanvasImage, let image = canvasExportImage else { return }
     self.upscale(image: image, item: imageItem, as: upscale)
   }
 
@@ -3228,7 +3283,9 @@ final class CreateModel {
       return await firstMoodboardImage()
     }
     if let tensorId = item.inputTensorId {
-      // The input's image: an input entry's is its canvas's.
+      // The input's image: an input entry's is its canvas's. Never a sketch's base for a run from
+      // a sketch with strokes: the canvas records a Draw entry with them baked in first, and an
+      // agent's edit_image saves its baked input as a step of its own.
       if let input = await project.read({ $0.input(of: item.id, tensorId: tensorId) }) { return (input.image, input.imageTensorId, nil) }
       // Else the image the recorded input names (an entry's key names its canvas's), if it's still
       // in the project.
@@ -4148,6 +4205,8 @@ extension CreateModel {
   /// from outside the project (not yet a step) remember nothing. Nothing is written when the mask
   /// is the one it arrived with, or when its own hasn't come back yet.
   private func persistCanvasMask(for step: (project: String, tensorId: Int64)) {
+    // A sketch's strokes still to be kept go in now, in turn with the entries.
+    flushSketchSave()
     guard step.project == history.project.name else { return }
     // Its paint layer the same way.
     persistCanvasPaint(for: step)
@@ -4183,6 +4242,28 @@ extension CreateModel {
   /// when its own hasn't come back yet.
   private func persistCanvasPaint(for step: (project: String, tensorId: Int64)) {
     guard step.project == history.project.name else { return }
+    // A sketch keeps its own (`flushSketchSave`, just before this), off the main actor and
+    // flattened when it's long (`CanvasPaint.compacted(for:flatteningLong:)`). As a backstop, when
+    // none is on its way and what it last kept isn't this (its save didn't run, or was skipped),
+    // the paint is kept here: at once when it's short, so even quitting keeps it; off the main
+    // actor, after the entries, when it's long enough to need flattening.
+    if history.item(tensorId: step.tensorId)?.isSketch == true {
+      if pendingSketchSave?.tensorId == step.tensorId { return }
+      if canvasPaint == nil, paintPendingTensorId == step.tensorId { return }
+      if let landedPaint, landedPaint.tensorId == step.tensorId, landedPaint.paint == canvasPaint { return }
+      let paint = canvasPaint, size = canvasStepSize(for: step)
+      landedPaint = (step.tensorId, paint)
+      if let paint, paint.strokes.count > CanvasPaint.maxStrokes / 2 || paint.strokes.contains(where: { $0.points.count > CanvasPaint.maxPoints / 2 }) {
+        let project = history.project, previous = entryChain
+        entryChain = Task {
+          await previous?.value
+          await HistoryStore.keepSketchPaint(paint, size: size, forImage: step.tensorId, in: project)
+        }
+      } else {
+        history.setPaint(paint, forImage: step.tensorId, size: size)
+      }
+      return
+    }
     if canvasPaint == nil, paintPendingTensorId == step.tensorId { return }
     if let landedPaint, landedPaint.tensorId == step.tensorId, landedPaint.paint == canvasPaint { return }
     history.setPaint(canvasPaint, forImage: step.tensorId, size: canvasStepSize(for: step))
@@ -4207,7 +4288,86 @@ extension CreateModel {
   /// The canvas image remembers its mask now (`persistCanvasMask`): before a job is queued from
   /// it, the project changes, or the app goes away.
   func rememberCanvasMask() {
-    if let imageStep { persistCanvasMask(for: imageStep) }
+    if let imageStep { persistCanvasMask(for: imageStep) } else { flushSketchSave() }
+  }
+
+  // MARK: Sketches
+
+  /// A sketch's paint layer waiting to be kept (`sketchPaintDidChange`): the project it was drawn
+  /// in, its image (the blank base, for the tile) and the paint. Whoever takes it first writes it:
+  /// the entry chain, or quitting (`saveSketchBeforeQuit`).
+  struct SketchSave {
+    let id = UUID()
+    var project: Project
+    var tensorId: Int64
+    var base: CGImage
+    var paint: CanvasPaint?
+  }
+
+  /// The canvas's paint changed (`setPaint`: a stroke, a fill, Clear Paint, undo and redo): when
+  /// the canvas image is a sketch (New Sketch's entry, `HistoryItem.isSketch`), its paint layer
+  /// and tile are kept half a second after the last change, so History shows what's drawn. The
+  /// same entry each time: no new step, and its image stays the blank base. Other images keep
+  /// their paint only when the canvas leaves them, as before.
+  func sketchPaintDidChange() {
+    guard let step = imageStep, step.project == history.project.name,
+          history.item(tensorId: step.tensorId)?.isSketch == true, let base = canvasUndoImage
+    else { return }
+    pendingSketchSave = SketchSave(project: history.project, tensorId: step.tensorId, base: base, paint: canvasPaint)
+    sketchSaveDelay?.cancel()
+    sketchSaveDelay = Task { [weak self] in
+      try? await Task.sleep(for: .milliseconds(500))
+      guard !Task.isCancelled else { return }
+      self?.flushSketchSave()
+    }
+  }
+
+  /// Puts the sketch save waiting (`sketchPaintDidChange`) in the entry chain now, after the
+  /// entries on their way: before the canvas leaves the sketch, the project changes or the app
+  /// quits. It's written into the project it was drawn in while that's open (`HistoryStore.saveSketch`).
+  func flushSketchSave() {
+    sketchSaveDelay?.cancel()
+    sketchSaveDelay = nil
+    guard let save = pendingSketchSave else { return }
+    let previous = entryChain
+    entryChain = Task { [weak self] in
+      await previous?.value
+      // A later change took its place, or quitting wrote it.
+      guard let self, pendingSketchSave?.id == save.id else { return }
+      pendingSketchSave = nil
+      // Kept: leaving the sketch with this paint has nothing more to write (`persistCanvasPaint`).
+      if await history.saveSketch(save.paint, base: save.base, forImage: save.tensorId, in: save.project),
+         let imageStep, imageStep.tensorId == save.tensorId, save.project === history.project
+      {
+        landedPaint = (save.tensorId, save.paint)
+      }
+    }
+  }
+
+  /// Keeps a sketch save waiting now and waits for it (and the entries before it): before
+  /// something reads the sketch's strokes from the project (opening it in Edit).
+  func keepSketchNow() async {
+    flushSketchSave()
+    await entryChain?.value
+  }
+
+  /// At quit the chain may not get another turn: a sketch save not yet taken is written now, off
+  /// the main actor while this waits, until `deadline` (`QuitDeadline`, shared with the other quit
+  /// writes; a check passes its own, so as not to start that one).
+  func saveSketchBeforeQuit(deadline: Date = QuitDeadline.date) {
+    sketchSaveDelay?.cancel()
+    guard let save = pendingSketchSave else { return }
+    pendingSketchSave = nil
+    let done = DispatchSemaphore(value: 0)
+    let written = Mutex<Int64?>(nil)
+    Task.detached {
+      defer { done.signal() }
+      let previewId = await HistoryStore.writeSketch(save.paint, base: save.base, forImage: save.tensorId, in: save.project)
+      written.withLock { $0 = previewId }
+    }
+    _ = done.wait(timeout: .now() + max(deadline.timeIntervalSinceNow, 0))
+    // Its tile shows the rewrite, should the app go on (a check calls this without quitting).
+    if let previewId = written.withLock({ $0 }) { history.didRewriteThumbnail(previewId, in: save.project) }
   }
 
   /// The image mask and Select steps belong to: the canvas image, or while a run's preview covers
@@ -4485,6 +4645,7 @@ extension CreateModel {
   /// their way. Before another project opens, and for checks.
   func flushEntries() async {
     recordMoodboardChange()
+    flushSketchSave()
     await entryChain?.value
   }
 
@@ -4520,6 +4681,7 @@ extension CreateModel {
   /// order, off the main actor while this waits, within the deadline every quit handler shares (`QuitDeadline`). One the
   /// chain is already writing finishes on its own, or not at all; it's not written again.
   private func recordEntriesBeforeQuit() {
+    saveSketchBeforeQuit()
     if moodboardChanged {
       moodboardChanged = false
       moodboardSettling?.cancel()
@@ -4665,6 +4827,8 @@ extension CreateModel {
     paintPendingTensorId = nil
     landedPaint = (tensorId, nil)
     canvasPaint = paint
+    // Drawn on before its entry landed: a sketch keeps it now.
+    if paint != nil { sketchPaintDidChange() }
   }
 
   /// The Mask entry Generate writes first, in Generate or Edit mode, when the canvas has an image
@@ -4740,9 +4904,12 @@ extension CreateModel {
     stopFollowingRun()
     let projectName = history.project.name
     history.setCurrent(tensorId: entry.tensorId, exact: true)
-    moodboardRestores += 1
-    let restores = moodboardRestores
-    Task { await restoreMoodboard(from: entry.id, in: projectName, restores: restores) }
+    // A sketch is a picture, not a record of the inputs: opening it leaves the moodboard as it is.
+    if !entry.isSketch {
+      moodboardRestores += 1
+      let restores = moodboardRestores
+      Task { await restoreMoodboard(from: entry.id, in: projectName, restores: restores) }
+    }
     lastSavedTensorId = nil
     canvasIsImported = false
     // A Draw entry opens on the picture it was painted on, with its paint as a layer that can

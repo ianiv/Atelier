@@ -183,7 +183,7 @@ enum Automation {
       return
     }
     if args.contains("--paint-check") {
-      paintCheck(model)
+      paintCheck(model, presets: presets)
       return
     }
     if args.contains("--queue-check") {

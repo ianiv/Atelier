@@ -139,7 +139,7 @@ Zoom with the − and + buttons, ⌘+ and ⌘−, a pinch, or the zoom menu (**Z
 ## Saving
 
 - **Save to History** renders the image at full size with the Heal strokes, the crop and the look and saves it as a new step after the image it was opened from, with that step's settings. The new step is the crop's size; its input stays the whole, unhealed image. It's a job in the [Queue](queue.md) on this device, after what's already waiting, and saves into the image's own project even if you open another before it runs. While it's waiting or running, saving the same look again is unavailable: it would make the same image.
-- **Add to History** is for an image opened from a file or Photos: it puts the image in the current project as an Imported [input entry](history.md#input-entries) and saves the edit after it.
+- **Add to History** is for an image opened from a file or Photos, or a [sketch](creating-images.md#painting-colors) opened with its strokes: it puts the image in the current project as an Imported [input entry](history.md#input-entries) and saves the edit after it.
 - **Export…** saves the edit at full size as a PNG, without the queue (healed and cropped, even while Crop is chosen). For a step it carries the step's settings and the edit's, as History's exports do (unless Settings turns that off).
 
 A project records image sizes in steps of 64 pixels, as Draw Things does, so History lists an edit of a 1600×1200 image as 1600×1152.

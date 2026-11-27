@@ -49,12 +49,13 @@ struct EditInspector: View {
 
   /// A History step as the reference, named by its step when it's in the image's own project.
   private func chooseReference(_ item: HistoryItem) async {
-    guard let tensorId = item.imageTensorId, let image = await create.history.project.read({ $0.image(tensorId: tensorId) }) else {
+    guard let tensorId = item.imageTensorId, let image = await create.history.project.read({ $0.image(for: item) }) else {
       error = "The image couldn't be read."
       return
     }
     let sameProject = if case .step(let project, _) = edit.source { project == create.history.project.name } else { false }
-    await edit.setReference(image: image, name: "Step \(item.id.logicalTime)", tensorId: sameProject ? tensorId : nil)
+    // A sketch's image has its strokes baked in, which its tensor doesn't: it's kept as an image.
+    await edit.setReference(image: image, name: "Step \(item.id.logicalTime)", tensorId: sameProject && !item.isSketch ? tensorId : nil)
   }
 
   /// A menu's label showing a name someone chose (a file's, a profile's): one line, cut in the

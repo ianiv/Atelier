@@ -992,14 +992,14 @@ struct CanvasView: View {
     Button("Show Image Full Size") { model.viewingCanvasImage = true }
       .disabled(model.image == nil)
     Divider()
-    Button("Copy Image") { if let image = model.image { HistoryStore.copy(image) } }
+    Button("Copy Image") { if let image = model.canvasExportImage { HistoryStore.copy(image) } }
       .disabled(model.image == nil)
     Button("Save Image…") { save() }
       .disabled(model.image == nil)
     Button("Save to Photos") { saveToPhotos() }
       .disabled(model.image == nil)
     ShareItem(
-      exports: model.image.map { [history.canvasShare(image: $0, item: model.imageItem)] } ?? [],
+      exports: model.image.map { [model.canvasShare($0)] } ?? [],
       anchor: ShareAnchor.canvas)
     Divider()
     Button("Upscale…") { model.upscalingCanvasImage = true }
@@ -1041,7 +1041,7 @@ struct CanvasView: View {
 
   /// Adds the image to Photos as a PNG carrying its settings, like Save Image.
   private func saveToPhotos() {
-    guard let image = model.image else { return }
+    guard let image = model.canvasExportImage else { return }
     let item = model.imageItem
     Task {
       do {
@@ -1079,7 +1079,7 @@ struct CanvasView: View {
 
   /// Saves as PNG; a finished image carries its settings like History's Export.
   private func save() {
-    guard let image = model.image else { return }
+    guard let image = model.canvasExportImage else { return }
     let item = model.imageItem
     let history = history
     fileDialogs.save = FileDialogs.Save(
@@ -1473,8 +1473,8 @@ struct RecentStrip: View {
       .frame(width: 44, height: 44)
       .clipShape(.rect(cornerRadius: 4))
       .overlay(alignment: .topLeading) {
-        if let reason = item.entryReason {
-          EntryBadge(reason: reason)
+        if item.isEntry {
+          EntryBadge(item: item)
             .scaleEffect(0.8, anchor: .topLeading)
             .padding(1)
         } else if item.isImported {
